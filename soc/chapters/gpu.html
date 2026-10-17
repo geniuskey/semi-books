@@ -1,0 +1,917 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and SoCBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "느린 일꾼 수천 명으로 처리량을 사는 GPU. 삼각형을 끌어 래스터화를 보고, 워프의 분기 발산과 점유율·지연 숨기기, 메모리 병합, 모바일 GPU의 타일 기반 렌더링을 직접 시뮬레이션한다.", "libs": []}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU · SoCBook</title>
+<meta name="description" content="느린 일꾼 수천 명으로 처리량을 사는 GPU. 삼각형을 끌어 래스터화를 보고, 워프의 분기 발산과 점유율·지연 숨기기, 메모리 병합, 모바일 GPU의 타일 기반 렌더링을 직접 시뮬레이션한다.">
+<link rel="canonical" href="https://semi.euiyun.com/soc/chapters/gpu.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#c8285f">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="SoCBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="GPU · SoCBook">
+<meta property="og:description" content="느린 일꾼 수천 명으로 처리량을 사는 GPU. 삼각형을 끌어 래스터화를 보고, 워프의 분기 발산과 점유율·지연 숨기기, 메모리 병합, 모바일 GPU의 타일 기반 렌더링을 직접 시뮬레이션한다.">
+<meta property="og:url" content="https://semi.euiyun.com/soc/chapters/gpu.html">
+<meta property="og:image" content="https://semi.euiyun.com/soc/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/soc/chapters/gpu.html#chapter","name":"GPU","headline":"GPU · SoCBook","description":"느린 일꾼 수천 명으로 처리량을 사는 GPU. 삼각형을 끌어 래스터화를 보고, 워프의 분기 발산과 점유율·지연 숨기기, 메모리 병합, 모바일 GPU의 타일 기반 렌더링을 직접 시뮬레이션한다.","url":"https://semi.euiyun.com/soc/chapters/gpu.html","position":9,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/soc/og.png","dateModified":"2026-10-03","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/soc/#book","name":"SoCBook · 시스템 온 칩 교과서","url":"https://semi.euiyun.com/soc/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"SoCBook","item":"https://semi.euiyun.com/soc/"},{"@type":"ListItem","position":2,"name":"9. GPU","item":"https://semi.euiyun.com/soc/chapters/gpu.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/soc.js"></script>
+<!--head:end-->
+<style>
+  .gp-bars { display: grid; gap: 6px; }
+  .gp-bar { display: grid; grid-template-columns: 92px 1fr 62px; gap: 8px; align-items: center; font-size: 12.5px; color: var(--text-dim); }
+  .gp-bar .tr { height: 12px; background: var(--surface-2); border-radius: 6px; overflow: hidden; }
+  .gp-bar .tr i { display: block; height: 100%; border-radius: 6px; transition: width .25s ease; }
+  .gp-bar b { font-family: var(--mono); font-size: 11.5px; color: var(--text); text-align: right; font-weight: 600; }
+  .gp-bar.lim span:first-child { color: var(--bad); font-weight: 700; }
+  .gp-sub { font-size: 12px; color: var(--text-faint); font-weight: 700; letter-spacing: .08em; margin-bottom: 6px; }
+  .gp-top { padding: 12px 18px 0; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="soc"></script>
+</head>
+<body data-chapter="gpu">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 09</div>
+    <h1>GPU</h1>
+    <p class="lead">화면이 120 Hz인 휴대폰에서 게임을 하면, 칩은 8.3 ms마다 화소 약 450만 개의 색을 새로 정해야 한다. 화소 하나마다 조명·그림자·텍스처를 계산하는 데 수백 번의 연산이 들어가니, 1초에 수천억 번의 계산이다. 4 GHz짜리 CPU 코어 몇 개로는 어림도 없다. 그런데 이 계산에는 특별한 성질이 있다. <strong>화소 하나하나가 서로를 기다리지 않는다.</strong> 그렇다면 아주 빠른 일꾼 몇 명 대신, 느리지만 값싼 일꾼 수천 명을 고용하면 된다. 이것이 <strong>GPU</strong><span class="en">(Graphics Processing Unit)</span>의 출발점이다. 이 장에서는 삼각형 하나가 화소가 되는 과정에서 시작해, 수천 개의 스레드를 묶어 돌리는 SIMT, 메모리를 기다리는 시간을 숨기는 요령, 그리고 배터리로 도는 모바일 GPU만의 비결인 타일 기반 렌더링까지 차례로 만져 본다.</p>
+    <ul class="objectives">
+      <li>지연 시간 중심(CPU)과 처리량 중심(GPU) 설계의 차이를 작업 수와 의존성으로 설명할 수 있다.</li>
+      <li>그래픽 파이프라인(정점 → 삼각형 설정 → 래스터화 → 프래그먼트 → 블렌딩)과 엣지 함수 래스터화를 이해한다.</li>
+      <li>워프·SIMT 실행과 분기 발산이 효율을 떨어뜨리는 원리를 마스크로 따져 본다.</li>
+      <li>레지스터·공유 메모리가 점유율을 정하고, 점유율이 메모리 지연을 숨기는 원리를 리틀의 법칙으로 계산한다.</li>
+      <li>메모리 병합과 타일 기반 지연 렌더링(TBDR)이 DRAM 대역폭과 전력을 아끼는 이유를 수치로 비교한다.</li>
+    </ul>
+    <div class="soc-locator" data-blocks="gpu" data-caption="GPU는 SB-1에서 가장 큰 블록 중 하나다(약 11 mm², 다이의 10% 남짓). 시스템 캐시와 메모리 컨트롤러를 CPU·NPU와 함께 쓴다."></div>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="throughput">
+    <h2>빠른 일꾼 몇 명, 느린 일꾼 수천 명</h2>
+    <p>CPU 코어는 <span class="term">지연 시간</span><span class="en">(Latency)</span>을 줄이도록 만들어졌다. 명령어 하나의 결과를 최대한 빨리 내기 위해 분기 예측기, 비순차 실행 엔진, 큰 캐시에 면적을 쏟는다(<a href="ooo.html">4장</a>). 그 결과 큰 코어 하나가 수 mm²를 차지하고, 실제 계산을 하는 ALU는 그 면적의 작은 일부다.</p>
+    <p>GPU는 반대로 <span class="term">처리량</span><span class="en">(Throughput)</span>, 즉 단위 시간에 끝내는 일의 양을 키우도록 만들어졌다. 일꾼 하나하나는 느리고 단순하다. 분기 예측도, 비순차 실행도 거의 없다. 대신 같은 면적에 ALU를 수십 배 더 넣는다. 일이 충분히 많고 서로 독립적이면 이 전략이 압도적으로 이긴다. 반대로 일이 적거나 앞 결과를 기다려야 하면 느린 일꾼은 그냥 느리다. 아래에서 작업 개수와 종류를 바꿔 두 팀을 경주시켜 보자.</p>
+    <figure class="play" id="fig-crowd">
+      <div class="play-view"><canvas id="cv-crowd"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>작업 개수 <output id="cr-n-out"></output></span><input type="range" id="cr-n" min="0" max="12" step="1" value="6"></label>
+        <div class="seg" id="cr-mode"><button data-value="ind" class="on">독립 작업</button><button data-value="dep">연쇄 작업 (앞 결과 필요)</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">CPU 완료 시간</span><span class="v" id="cr-cpu">—</span></div>
+        <div class="stat"><span class="k">GPU 완료 시간</span><span class="v" id="cr-gpu">—</span></div>
+        <div class="stat"><span class="k">승자</span><span class="v" id="cr-win">—</span></div>
+      </div>
+      <figcaption><b>그림 9-1.</b> <span class="try">만져 보기</span>CPU 팀은 작업 하나를 1틱에 끝내는 일꾼 8명, GPU 팀은 작업 하나에 6틱이 걸리는 일꾼 512명이다. GPU에는 일을 맡기는 준비 시간(커널 실행·데이터 전달) 3틱이 더 붙는다. 작업이 64개 남짓을 넘으면 GPU가 이기기 시작하고, 4,096개면 열 배 가까이 앞선다. 연쇄 작업으로 바꾸면 일꾼 수가 아무 소용이 없다.</figcaption>
+    </figure>
+    <p>그래픽은 GPU에 딱 맞는 일이다. 정점 수십만 개, 화소 수백만 개가 매 프레임 같은 프로그램(<span class="term">셰이더</span><span class="en">(Shader)</span>)을 각자의 데이터로 돌린다. 이런 성질을 <strong>데이터 병렬성</strong><span class="en">(Data parallelism)</span>이라 한다. 2007년 무렵부터는 이 구조를 그래픽이 아닌 일, 예컨대 행렬 곱이나 물리 시뮬레이션에도 쓰기 시작했다(GPGPU, CUDA). 오늘날 AI 학습이 GPU 위에서 도는 것도 같은 이유다.</p>
+    <div class="callout tip"><strong>GPU의 계약</strong><p>GPU는 이렇게 약속한다. "일을 아주 많이, 서로 독립적으로 주면 엄청 빨리 끝내 주겠다. 대신 한 가지 일을 빨리 끝내 달라고는 하지 마라." 이 장의 모든 설계는 이 계약을 지키기 위한 장치다.</p></div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="pipeline">
+    <h2>삼각형이 화소가 되기까지: 그래픽 파이프라인</h2>
+    <p>3D 장면은 수많은 삼각형으로 이루어진다. GPU는 매 프레임 이 삼각형들을 화면 화소로 바꾸는데, 그 과정은 공장 컨베이어처럼 단계가 정해져 있다. 이를 <span class="term">그래픽 파이프라인</span><span class="en">(Graphics pipeline)</span>이라 부른다.</p>
+    <div class="flow">
+      <div><b>정점 셰이더</b>정점마다 좌표 변환(모델→카메라→화면)과 조명 값 계산.</div>
+      <div><b>삼각형 설정</b>정점 셋을 묶고, 화면 밖·뒷면 삼각형을 버리고, 엣지 방정식을 준비.</div>
+      <div><b>래스터화</b>삼각형이 덮는 화소(프래그먼트)를 찾아낸다. 고정 회로.</div>
+      <div><b>프래그먼트 셰이더</b>화소마다 텍스처를 읽고 색을 계산.</div>
+      <div><b>깊이 테스트·블렌딩</b>앞에 있는 것만 남기고, 반투명은 섞어서 프레임 버퍼에 쓴다.</div>
+    </div>
+    <p>이 중 <span class="term">래스터화</span><span class="en">(Rasterization)</span>가 GPU 하드웨어의 핵심 트릭이다. 화소 중심 \(p\)가 삼각형 안에 있는지 판단하려고 GPU는 세 변마다 <strong>엣지 함수</strong><span class="en">(Edge function)</span>를 계산한다.</p>
+    <div class="formula">$$E_{ab}(p) = (b_x - a_x)(p_y - a_y) - (b_y - a_y)(p_x - a_x)$$</div>
+    <p>이 값은 변 \(ab\)와 점 \(p\)가 만드는 평행사변형의 넓이(부호 포함)다. 세 엣지 함수가 모두 같은 부호면 점은 삼각형 안이다. 곱셈 두 번과 뺄셈 몇 번이면 끝나고, 옆 화소로 한 칸 움직이면 값이 상수만큼만 변하므로 덧셈 하나로 갱신된다. 더 좋은 점은 세 값을 삼각형의 부호 있는 넓이의 두 배 E(a,b,c)로 나누면 그대로 <strong>무게 중심 좌표</strong><span class="en">(Barycentric coordinates)</span>가 되어, 정점의 색·텍스처 좌표를 화소마다 보간하는 데 다시 쓰인다는 것이다. 아래에서 꼭짓점을 끌어 보자.</p>
+    <div class="sim" id="sim-raster">
+      <div class="sim-head"><span class="sim-tag">STEP</span><h3>삼각형 래스터화 해부</h3></div>
+      <div class="gp-top"><div class="seg" id="rs-stage">
+        <button data-value="0">① 정점</button><button data-value="1">② 삼각형 설정</button><button data-value="2" class="on">③ 래스터화</button><button data-value="3">④ 프래그먼트</button><button data-value="4">⑤ 블렌딩</button>
+      </div></div>
+      <div class="sim-view"><canvas id="cv-raster"></canvas></div>
+      <div class="info-panel" id="rs-info"></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">검사한 화소 (경계 상자)</span><span class="v" id="rs-bb">—</span></div>
+        <div class="stat"><span class="k">덮인 화소</span><span class="v" id="rs-cov">—</span></div>
+        <div class="stat"><span class="k">검사 효율</span><span class="v" id="rs-eff">—</span></div>
+        <div class="stat"><span class="k">겹쳐 그린 화소</span><span class="v" id="rs-od">—</span></div>
+      </div>
+      <div class="sim-note">꼭짓점(동그라미)을 끌어 삼각형 모양을 바꾸고, 화소 위에 마우스를 올리면(터치하면) 그 화소 중심의 엣지 함수 세 값이 나온다. ⑤ 단계에서는 반투명 삼각형이 하나 더 나타나며 그 꼭짓점도 끌 수 있다. 실제 GPU는 화소를 2×2 묶음(쿼드)이나 8×8 타일 단위로 한꺼번에 검사하고, 경계에 걸친 화소는 "왼쪽 위 규칙"으로 한쪽 삼각형에만 준다.</div>
+    </div>
+    <p>가늘고 긴 삼각형을 만들어 보면 경계 상자 안의 대부분 화소가 헛검사된다. 그래서 하드웨어는 경계 상자를 작은 타일로 나누고, 타일 네 모서리의 엣지 함수만 보고 "완전히 밖" 타일을 통째로 건너뛴다. ⑤ 단계에서는 같은 화소를 두 번 칠하는 <span class="term">오버드로</span><span class="en">(Overdraw)</span>가 생긴다. 불투명 물체라면 뒤에 가려질 화소를 칠하는 일은 순전히 낭비다. 이 낭비를 줄이는 방법이 이 장 뒷부분의 주인공이다.</p>
+    <p>한때 GPU에는 정점 셰이더 전용 유닛과 화소 셰이더 전용 유닛이 따로 있었다. 문제는 장면마다 두 일의 비율이 크게 다르다는 것이다. 2005~2006년(Xbox 360의 Xenos, GeForce 8800)부터는 같은 셰이더 코어가 정점이든 화소든 계산이든 다 맡는 <span class="term">통합 셰이더</span><span class="en">(Unified shader)</span> 구조가 표준이 되었다. 비율을 바꿔 가며 그 이유를 확인해 보자.</p>
+    <figure class="play" id="fig-unified">
+      <div class="play-view"><canvas id="cv-unified"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>전체 일 중 정점 작업 비율 <output id="un-v-out"></output></span><input type="range" id="un-v" min="0" max="100" step="1" value="25"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">분리형 프레임 시간</span><span class="v" id="un-sep">—</span></div>
+        <div class="stat"><span class="k">통합형 프레임 시간</span><span class="v" id="un-uni">—</span></div>
+        <div class="stat"><span class="k">분리형 유닛 사용률</span><span class="v" id="un-util">—</span></div>
+      </div>
+      <figcaption><b>그림 9-2.</b> <span class="try">만져 보기</span>셰이더 유닛 16개, 프레임마다 16유닛·시간어치의 일. 분리형은 정점 전용 4개와 화소 전용 12개로 나뉘어 있다. 정점 비율이 정확히 25%일 때만 모두 바쁘고, 그 밖에서는 한쪽이 놀며 다른 쪽을 기다린다. 통합형은 비율과 상관없이 늘 1.0이다.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="simt">
+    <h2>워프: 32개의 스레드가 한 몸처럼</h2>
+    <p>GPU 셰이더 코어 안을 들여다보면 ALU가 하나씩 따로 움직이지 않는다. 명령어 인출·해독기 하나가 ALU 수십 개를 거느리고, 같은 명령을 동시에 내린다. NVIDIA는 이렇게 한 묶음으로 움직이는 스레드 32개를 <span class="term">워프</span><span class="en">(Warp)</span>라 부른다(AMD는 웨이브프런트, 64 또는 32개. Arm Mali는 16개). 프로그래머는 스레드 하나의 코드만 쓰지만, 하드웨어는 32개를 한 명령으로 돌린다. 이 방식을 <span class="term">SIMT</span><span class="en">(Single Instruction, Multiple Threads)</span>라 한다. 명령 인출·해독 비용을 32개 스레드가 나눠 내니 연산당 에너지가 크게 준다(<a href="overview.html#special">1장의 효율 사다리</a>).</p>
+    <p>문제는 <code>if</code>다. 같은 워프의 스레드들이 서로 다른 길로 가려 하면, 하드웨어는 두 길을 <strong>차례로</strong> 실행한다. 한쪽 길을 실행하는 동안 반대편 스레드는 <span class="term">활성 마스크</span><span class="en">(Active mask)</span>로 꺼 둔다. 이를 <span class="term">분기 발산</span><span class="en">(Branch divergence)</span>이라 한다. 조건을 만족하는 스레드의 분포를 바꿔 가며 워프가 몇 사이클을 쓰는지 보자.</p>
+    <figure class="play" id="fig-diverge">
+      <div class="play-view"><canvas id="cv-diverge"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="dv-pat"><button data-value="first" class="on">앞쪽 스레드</button><button data-value="alt">짝·홀 번갈아</button><button data-value="rand">무작위 데이터</button></div>
+        <label class="ctrl"><span>조건이 참인 스레드 <output id="dv-p-out"></output></span><input type="range" id="dv-p" min="0" max="32" step="1" value="16"></label>
+        <label class="ctrl"><span>if 쪽 명령 수 <output id="dv-a-out"></output></span><input type="range" id="dv-a" min="1" max="8" step="1" value="4"></label>
+        <label class="ctrl"><span>else 쪽 명령 수 <output id="dv-b-out"></output></span><input type="range" id="dv-b" min="1" max="8" step="1" value="3"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">워프가 쓴 사이클</span><span class="v" id="dv-cyc">—</span></div>
+        <div class="stat"><span class="k">스레드당 실제 명령</span><span class="v" id="dv-thr">—</span></div>
+        <div class="stat"><span class="k">SIMD 효율</span><span class="v" id="dv-eff">—</span></div>
+      </div>
+      <figcaption><b>그림 9-3.</b> <span class="try">만져 보기</span>가로는 워프의 스레드(레인) 32개, 세로는 시간(명령 하나 = 한 줄)이다. 색칠된 칸은 그 레인이 실제로 일한 것, 빗금은 마스크로 꺼져 자리만 차지한 것이다. "짝·홀 번갈아"는 조건 비율이 50%로 고정된다. 참인 스레드가 0개나 32개면 한쪽 길을 통째로 건너뛰어 발산이 사라진다.</figcaption>
+    </figure>
+    <div class="predict"><strong>조건이 참인 스레드가 단 1개라면 효율은 어떻게 될까?</strong>
+      <p>if 쪽 4개, else 쪽 3개 명령. 스레드 31개는 else로, 1개만 if로 간다.</p>
+      <details><summary>답 보기</summary><p>워프는 두 길을 모두 실행해야 하므로 사이클 수는 50% 비율일 때와 똑같다(2 + 4 + 3 + 2 = 11). 스레드 한 개를 위해 31개 레인이 4사이클 동안 논다. 혼합 여부가 두 경로를 모두 실행하는 사이클 수를 정한다. 유효 슬롯 효율은 경로 길이가 4와 3으로 다르므로 참 스레드 수에 따라 약 64~72%로 바뀐다. 그래서 GPU 프로그래머는 데이터를 미리 정렬해 같은 길을 가는 스레드를 같은 워프에 모은다. "앞쪽 스레드" 패턴에서 참인 스레드 수를 32의 배수로 맞추는 것이 실전에서는 워프 단위 정렬에 해당한다.</p></details>
+    </div>
+    <p>스레드는 계층으로 묶인다. 워프 여러 개가 <span class="term">스레드 블록</span><span class="en">(Thread block, Workgroup)</span>을 이루고, 한 블록은 한 셰이더 코어(NVIDIA의 <span class="term">SM</span><span class="en">(Streaming Multiprocessor)</span>, Arm의 셰이더 코어, Apple의 GPU 코어)에서만 돈다. 같은 블록의 스레드는 코어 안의 <span class="term">공유 메모리</span><span class="en">(Shared memory, Local memory)</span>로 데이터를 주고받고 동기화할 수 있다. 블록 수천 개로 이루어진 격자(Grid) 전체가 GPU에 던지는 일 하나, 즉 <span class="term">커널</span><span class="en">(Kernel)</span>이다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="occupancy">
+    <h2>기다림을 숨기는 법: 워프 교대와 점유율</h2>
+    <p>GPU에는 CPU 같은 큰 캐시가 없다. 텍스처나 버퍼를 DRAM에서 읽으면 수백 사이클이 걸린다. CPU라면 비순차 실행과 큰 캐시로 이 기다림을 줄이려 하겠지만, GPU는 <strong>줄이지 않고 숨긴다</strong>. 한 워프가 메모리를 기다리는 동안 스케줄러가 다른 워프의 명령을 내보낸다. 워프마다 레지스터를 따로 갖고 있으므로 이 교대에는 비용이 0 사이클이다. CPU의 문맥 전환과 달리 레지스터를 저장하고 복원할 필요가 없다.</p>
+    <p>그렇다면 워프가 몇 개 있어야 기다림을 다 숨길 수 있을까? 워프 하나가 명령 \(c\)개를 내고 나서 지연 \(L\) 사이클짜리 메모리 접근을 한다면, 그동안 스케줄러를 바쁘게 하려면 다른 워프들이 \(L\) 사이클을 메워야 한다.</p>
+    <div class="formula">$$W_{\text{필요}} \;\approx\; 1 + \frac{L}{c+1} \qquad\text{(리틀의 법칙: 동시에 처리 중인 일 = 지연 × 처리량)}$$</div>
+    <p>그런데 워프를 무한정 올릴 수는 없다. 워프마다 레지스터 파일과 공유 메모리를 따로 떼어 줘야 하기 때문이다. 셰이더 코어 하나에 동시에 올라가 있는 워프 수를 최대치로 나눈 값을 <span class="term">점유율</span><span class="en">(Occupancy)</span>이라 한다. 아래 시뮬레이터는 NVIDIA 계열 SM을 단순화했다. 레지스터 64K개(256 KB), 공유 메모리 96 KB, 워프 최대 64개, 블록 최대 16개, 스케줄러 4개. 커널의 자원 사용량을 바꿔 상주 워프 수를 정하고, 스케줄러 하나가 그 워프들을 어떻게 교대로 돌리는지 지켜보자.</p>
+    <div class="sim" id="sim-occ">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>점유율과 지연 숨기기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-occ"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>스레드/블록 <output id="oc-tpb-out"></output></span><input type="range" id="oc-tpb" min="64" max="1024" step="64" value="256"></label>
+          <label class="ctrl"><span>레지스터/스레드 <output id="oc-reg-out"></output></span><input type="range" id="oc-reg" min="16" max="255" step="1" value="32"></label>
+          <label class="ctrl"><span>공유 메모리/블록 <output id="oc-smem-out"></output></span><input type="range" id="oc-smem" min="0" max="64" step="2" value="8"></label>
+          <label class="ctrl"><span>메모리 지연 <output id="oc-lat-out"></output></span><input type="range" id="oc-lat" min="50" max="800" step="10" value="400"></label>
+          <label class="ctrl"><span>로드 사이 연산 명령 수 <output id="oc-c-out"></output></span><input type="range" id="oc-c" min="1" max="64" step="1" value="12"></label>
+          <div><div class="gp-sub">SM 자원 사용 (빨강 = 제한 요인)</div><div class="gp-bars" id="oc-bars"></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">상주 워프 / 점유율</span><span class="v" id="oc-w">—</span></div>
+        <div class="stat"><span class="k">스케줄러당 워프</span><span class="v" id="oc-ws">—</span></div>
+        <div class="stat"><span class="k">필요 워프 (식)</span><span class="v" id="oc-need">—</span></div>
+        <div class="stat"><span class="k">ALU 사용률</span><span class="v" id="oc-util">—</span></div>
+      </div>
+      <div class="sim-note">위 그림의 각 줄이 스케줄러 하나에 배정된 워프다. 진한 칸 = 명령을 낸 사이클, 연한 칸 = 준비됐지만 차례를 기다림, 빈 칸 = 메모리 대기. 아래 곡선은 50사이클 이동 평균 ALU 사용률이다. 스케줄러는 매 사이클 준비된 워프 하나에서 명령 하나를 낸다(가장 오래 기다린 워프 우선). 워프들은 서로 다른 시점에 출발한다고 가정했다. 레지스터는 워프당 256개 단위로 할당한다. 실제 GPU는 한 워프 안에서도 독립 명령을 겹쳐 내고(ILP), 캐시 적중 시 지연이 훨씬 짧다.</div>
+    </div>
+    <p>몇 가지 실험을 해 보자. 레지스터를 32개에서 64개로 늘리면 상주 워프가 절반으로 줄고, 지연이 다 숨겨지지 않아 ALU가 놀기 시작한다. 반대로 로드 사이의 계산을 늘리면(산술 집약도를 높이면) 적은 워프로도 충분하다. 공유 메모리를 블록당 많이 쓰면 블록이 몇 개밖에 못 올라가는 것도 확인할 수 있다.</p>
+    <div class="predict"><strong>지연 400사이클, 로드 사이 명령 12개. 스케줄러 하나에 워프가 몇 개 있어야 ALU가 쉬지 않을까?</strong>
+      <p>식에 넣어 계산해 보고, 시뮬레이터로 확인해 보자. 스케줄러당 워프는 최대 16개다.</p>
+      <details><summary>답 보기</summary><p>\(1 + 400/13 \approx 31.8\), 약 32개가 필요하다. 그런데 스케줄러 하나가 가질 수 있는 워프는 최대 16개다. 즉 이 커널은 점유율 100%로도 지연을 다 숨길 수 없고, ALU 사용률은 대략 \(16 \times 13 / 413 \approx 50\%\)에 머문다. 이것이 <strong>메모리 한계</strong> 커널이다. 해결책은 워프를 늘리는 것이 아니라 메모리 접근 자체를 줄이는 것, 즉 공유 메모리에 데이터를 올려 재사용하는 것이다(<a href="npu.html">10장</a>의 루프라인에서 다시 만난다).</p></details>
+    </div>
+    <div class="callout warn"><strong>점유율이 높을수록 늘 좋은가?</strong><p>아니다. 레지스터를 적게 쓰게 강제하면 컴파일러가 값을 메모리로 내보내는 스필(Spill)이 생겨 오히려 느려질 수 있다. 워프당 독립 명령이 많으면(ILP) 점유율 30~50%로도 충분히 빠르다. 점유율은 지연을 숨기는 수단일 뿐 목표가 아니다.</p></div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="coalescing">
+    <h2>메모리 병합: 32개의 요청을 한 번에</h2>
+    <p>워프의 32개 스레드가 동시에 메모리를 읽으면 요청도 32개일까? GPU의 메모리 유닛은 같은 워프의 주소들을 모아 <strong>같은 32바이트 섹터에 들어가는 것끼리 한 번의 트랜잭션</strong>으로 합친다. 이를 <span class="term">메모리 병합</span><span class="en">(Memory coalescing)</span>이라 한다. 스레드 \(i\)가 배열의 \(i\)번째 원소를 읽으면 4바이트 × 32 = 128바이트, 섹터 4개로 끝난다. 하지만 스레드 \(i\)가 \(i \times s\)번째 원소를 읽으면, 같은 일을 하는데도 섹터를 훨씬 많이 가져와야 한다. 가져온 바이트 중 쓰는 것은 일부뿐이다.</p>
+    <figure class="play" id="fig-coal">
+      <div class="play-view"><canvas id="cv-coal"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>보폭 (원소) <output id="co-s-out"></output></span><input type="range" id="co-s" min="1" max="32" step="1" value="1"></label>
+        <label class="ctrl"><span>시작 위치 어긋남 <output id="co-o-out"></output></span><input type="range" id="co-o" min="0" max="31" step="1" value="0"></label>
+        <div class="seg" id="co-pat"><button data-value="stride" class="on">규칙 보폭</button><button data-value="rand">무작위 (gather)</button></div>
+        <div class="seg" id="co-sz"><button data-value="4" class="on">float 4 B</button><button data-value="8">double 8 B</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">32 B 섹터 수</span><span class="v" id="co-sec">—</span></div>
+        <div class="stat"><span class="k">가져온 바이트 / 쓴 바이트</span><span class="v" id="co-b">—</span></div>
+        <div class="stat"><span class="k">버스 효율</span><span class="v" id="co-eff">—</span></div>
+      </div>
+      <figcaption><b>그림 9-4.</b> <span class="try">만져 보기</span>한 줄이 128바이트 캐시 라인, 굵은 테두리가 32바이트 섹터다. 색칠된 칸이 워프의 스레드 32개가 실제로 원하는 원소(색은 스레드 번호). 보폭 1이면 4섹터, 보폭 2면 8섹터, 보폭 8 이상이면 스레드마다 섹터 하나씩 32섹터가 필요하다. 시작 위치가 어긋나도 섹터가 하나 더 붙는다.</figcaption>
+    </figure>
+    <p>이 때문에 GPU 프로그래머는 데이터를 "구조체의 배열"<span class="en">(AoS)</span>이 아니라 "배열의 구조체"<span class="en">(SoA)</span>로 저장한다. 점의 x, y, z를 한 구조체로 묶으면 스레드들이 x만 읽을 때 보폭 3이 되지만, x만 모은 배열을 따로 두면 보폭 1이 된다. 행렬 전치처럼 피할 수 없는 경우에는 먼저 공유 메모리에 병합된 방식으로 읽어 들인 뒤 공유 메모리 안에서 순서를 바꾼다.</p>
+    <p>GPU의 메모리 계층을 정리하면 이렇다. 스레드마다 <strong>레지스터</strong>(가장 빠르고 가장 크다. SM 하나에 256 KB로 L1보다 크다), 블록이 함께 쓰는 <strong>공유 메모리/L1</strong>(수십~수백 KB), GPU 전체의 <strong>L2</strong>(모바일 수 MB), 그리고 SoC 전체가 함께 쓰는 <strong>시스템 캐시와 DRAM</strong>이다(<a href="cache.html">5장</a>, <a href="dram.html">7장</a>). 모바일 SoC에서 GPU는 CPU와 같은 LPDDR을 나눠 쓰므로 데이터를 복사하지 않고 공유할 수 있지만, 대역폭 60~80 GB/s를 모두가 나눠 가져야 한다. 데스크톱 그래픽 카드가 GDDR로 1 TB/s를 쓰는 것과 비교하면 열 배 이상 적다. 그래서 모바일 GPU는 DRAM 접근을 줄이는 데 집착한다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="tbdr">
+    <h2>모바일 GPU의 비밀: 타일 기반 지연 렌더링</h2>
+    <p>데스크톱 GPU의 전통적인 방식은 <span class="term">즉시 모드 렌더링</span><span class="en">(IMR, Immediate-mode rendering)</span>이다. 삼각형이 들어오는 순서대로 래스터화하고, 화소마다 깊이 버퍼를 읽어 비교하고, 통과하면 색과 깊이를 프레임 버퍼에 쓴다. 프레임 버퍼는 수십 MB라 DRAM에 있다. 같은 화소를 여러 번 덮을수록(오버드로) DRAM 왕복이 늘어난다.</p>
+    <p>모바일 GPU 대부분(Arm Mali, Apple, Imagination PowerVR, Qualcomm Adreno의 binning 모드)은 다른 길을 택했다. 화면을 16×16이나 32×32 화소 크기의 <strong>타일</strong>로 나누고, 두 단계로 그린다.</p>
+    <div class="flow">
+      <div><b>비닝 단계</b>모든 정점을 변환한 뒤, 삼각형마다 어느 타일에 걸치는지 목록(빈)을 만들어 DRAM에 쓴다.</div>
+      <div><b>타일 렌더링 단계</b>타일 하나씩, 그 타일에 걸친 삼각형만 읽어 칩 안의 작은 타일 버퍼(SRAM)에서 깊이 테스트·셰이딩·블렌딩을 끝낸다.</div>
+      <div><b>타일 기록</b>완성된 색만 DRAM 프레임 버퍼에 한 번 쓴다. 깊이와 MSAA 샘플은 칩 안에서 버린다.</div>
+    </div>
+    <p>여기에 "지연"<span class="en">(Deferred)</span>이 붙으면, 타일 안의 모든 삼각형 깊이를 먼저 확정한 다음 <strong>보이는 프래그먼트만</strong> 셰이딩한다(은면 제거, HSR). 오버드로가 아무리 커도 화소당 셰이딩은 거의 한 번이다. 아래 시뮬레이터에서 두 방식이 한 프레임에 DRAM을 얼마나 오가는지 비교해 보자.</p>
+    <div class="sim" id="sim-tbdr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>즉시 모드 vs 타일 기반 렌더링 대역폭</h3></div>
+      <div class="gp-top"><div class="seg" id="tb-mode"><button data-value="imr">즉시 모드 (IMR) 보기</button><button data-value="tbdr" class="on">타일 기반 (TBDR) 보기</button></div></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-tbdr"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>평균 오버드로 <output id="tb-od-out"></output></span><input type="range" id="tb-od" min="1" max="6" step="0.5" value="3"></label>
+          <label class="ctrl"><span>삼각형 / 프레임 <output id="tb-tri-out"></output></span><input type="range" id="tb-tri" min="0.1" max="3" step="0.1" value="0.5"></label>
+          <div><div class="gp-sub">타일 크기</div><div class="seg" id="tb-tile"><button data-value="16">16²</button><button data-value="32" class="on">32²</button><button data-value="64">64²</button></div></div>
+          <div><div class="gp-sub">해상도 · 주사율</div><div class="seg" id="tb-res"><button data-value="fhd" class="on">FHD+ 2400×1080</button><button data-value="qhd">QHD+ 3120×1440</button></div></div>
+          <div class="ctrl-row"><div class="seg" id="tb-fps"><button data-value="60">60 fps</button><button data-value="120" class="on">120 fps</button></div><div class="seg" id="tb-aa"><button data-value="1" class="on">MSAA 끔</button><button data-value="4">4× MSAA</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">IMR DRAM 트래픽</span><span class="v" id="tb-imr">—</span></div>
+        <div class="stat"><span class="k">TBDR DRAM 트래픽</span><span class="v" id="tb-tb">—</span></div>
+        <div class="stat"><span class="k">DRAM 전력 차이 (약)</span><span class="v" id="tb-pw">—</span></div>
+        <div class="stat"><span class="k">타일 버퍼 SRAM</span><span class="v" id="tb-sram">—</span></div>
+      </div>
+      <div class="sim-note">교육용 모델. IMR: 프래그먼트 샘플마다 깊이 읽기 4 B, 앞에 있는 것(무작위 순서면 화소당 약 \(1+\frac12+\cdots+\frac1d\)개)은 깊이·색 쓰기 8 B, MSAA면 해소(resolve) 읽기·쓰기 추가. TBDR: 삼각형마다 변환된 위치 약 16 B와 걸친 타일마다 목록 항목 약 4 B를 쓰고 다시 읽음, 최종 색 4 B/화소만 기록. 두 방식 모두 정점 입력 32 B/삼각형, 텍스처 읽기는 같다고 보고 뺐다. 실제 GPU는 캐시와 프레임 버퍼 압축(AFBC, UBWC 등)으로 수치가 더 작다. DRAM 에너지는 비트당 약 15 pJ(PHY 포함)로 잡았다.</div>
+    </div>
+    <p>오버드로를 올리면 IMR 트래픽은 거의 비례해서 늘지만 TBDR은 거의 그대로다. MSAA를 켜면 차이는 더 벌어진다. 4×MSAA의 샘플 데이터가 IMR에서는 전부 DRAM을 오가지만 TBDR에서는 타일 버퍼 안에서 해소되고 사라지기 때문이다. 대신 TBDR은 삼각형이 많을수록 비닝 데이터가 늘고, 타일이 작을수록 큰 삼각형이 여러 타일에 걸쳐 목록이 길어진다. 타일을 키우면 그 반대로 타일 버퍼 SRAM이 커진다. 칩 면적과 DRAM 트래픽 사이의 전형적인 맞바꿈이다.</p>
+    <div class="callout deep"><strong>그럼 데스크톱 GPU는 왜 IMR을 쓸까?</strong><p>삼각형이 수백만 개인 장면에서는 비닝 데이터 자체가 크고, 비닝 단계와 렌더 단계 사이에 프레임 하나만큼의 지연이 생긴다. 대역폭이 1 TB/s에 전력이 수백 W인 데스크톱에서는 IMR의 단순함이 더 낫다. 다만 최근 데스크톱 GPU도 내부적으로 화면을 작은 영역으로 나눠 캐시 안에서 처리하는 "타일 기반 래스터화"를 섞어 쓴다. 두 세계는 서로를 닮아 가고 있다.</p></div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="numbers">
+    <h2>숫자로 보는 모바일 GPU</h2>
+    <p>GPU 성능을 말할 때 가장 흔히 쓰는 숫자는 초당 부동소수점 연산 수, <span class="term">FLOPS</span>다. ALU 하나가 한 사이클에 곱셈-누산(FMA) 하나, 즉 연산 2개를 하므로</p>
+    <div class="formula">$$\text{최대 FLOPS} = 2 \times N_{\text{ALU}} \times f_{\text{clk}}$$</div>
+    <p>FP16(반정밀도)은 같은 ALU로 두 개씩 묶어 처리하는 경우가 많아 두 배가 된다. 아래에서 직접 GPU를 설계해 보자. 화면 화소 하나당 프레임마다 몇 번의 연산을 쓸 수 있는지도 함께 계산된다.</p>
+    <figure class="play" id="fig-flops">
+      <div class="play-view"><canvas id="cv-flops"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>ALU (FP32 레인) 수 <output id="fl-n-out"></output></span><input type="range" id="fl-n" min="128" max="4096" step="128" value="1536"></label>
+        <label class="ctrl"><span>GPU 클럭 <output id="fl-f-out"></output></span><input type="range" id="fl-f" min="0.3" max="2.5" step="0.05" value="0.9"></label>
+        <div class="seg" id="fl-prec"><button data-value="32" class="on">FP32</button><button data-value="16">FP16 (2배)</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최대 성능</span><span class="v" id="fl-t">—</span></div>
+        <div class="stat"><span class="k">QHD+ 120 Hz 화소당 연산</span><span class="v" id="fl-pp">—</span></div>
+        <div class="stat"><span class="k">DRAM 1 B당 연산 (70 GB/s)</span><span class="v" id="fl-ai">—</span></div>
+      </div>
+      <figcaption><b>그림 9-5.</b> <span class="try">만져 보기</span>막대는 아래 표의 대략값과 내 설계(강조색)를 로그 눈금으로 비교한다. 모바일 GPU는 ALU 수가 적은 대신 클럭을 낮게(1 GHz 안팎) 잡는다. 전압을 낮출 수 있어 같은 연산을 더 적은 에너지로 하기 때문이다(<a href="power.html">12장</a>). 오른쪽 아래 숫자가 크다는 것은, DRAM에서 1바이트를 가져올 때마다 그만큼 계산을 해야 ALU가 놀지 않는다는 뜻이다.</figcaption>
+    </figure>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>GPU (연도)</th><th class="num">FP32 ALU</th><th class="num">클럭</th><th class="num">FP32 성능</th><th class="num">메모리 대역폭</th><th class="num">전력</th></tr></thead>
+        <tbody>
+          <tr><td>Apple A17 Pro GPU, 6코어 (2023)</td><td class="num">약 768</td><td class="num">약 1.4 GHz</td><td class="num">약 2.1 TFLOPS</td><td class="num">약 51 GB/s (공유)</td><td class="num">수 W</td></tr>
+          <tr><td>Qualcomm Adreno 750 (2023)</td><td class="num">약 1,536</td><td class="num">약 0.9 GHz</td><td class="num">약 2.8 TFLOPS</td><td class="num">약 77 GB/s (공유)</td><td class="num">수 W</td></tr>
+          <tr><td>Apple M3 GPU, 10코어 (2023)</td><td class="num">약 1,280</td><td class="num">약 1.4 GHz</td><td class="num">약 3.6 TFLOPS</td><td class="num">약 100 GB/s (공유)</td><td class="num">약 10~20 W</td></tr>
+          <tr><td>NVIDIA GeForce RTX 4090 (2022)</td><td class="num">16,384</td><td class="num">약 2.5 GHz</td><td class="num">약 83 TFLOPS</td><td class="num">약 1,008 GB/s</td><td class="num">약 450 W</td></tr>
+          <tr><td>NVIDIA H100 SXM (2022)</td><td class="num">16,896</td><td class="num">약 2.0 GHz</td><td class="num">약 67 TFLOPS</td><td class="num">약 3,350 GB/s</td><td class="num">약 700 W</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>표의 모바일 수치는 제조사가 ALU 수를 공개하지 않는 경우가 많아 분석 자료를 바탕으로 한 추정값이다. 눈여겨볼 것은 비율이다. 휴대폰 GPU의 FP32 성능은 데스크톱 최고급의 1/30 정도지만, 전력은 1/100 이하다. 또 TFLOPS 대비 메모리 대역폭이 매우 적다. 그래서 모바일 게임은 화소당 연산을 아끼고(해상도를 낮춰 그린 뒤 업스케일링), 텍스처를 압축하고(ASTC), TBDR로 DRAM 왕복을 줄인다. GPU는 행렬 곱도 잘하므로 AI에도 쓰이지만, 휴대폰에서는 같은 일을 훨씬 적은 전력으로 하는 NPU가 따로 있다. 그 이야기는 <a href="npu.html">10장</a>에서 이어진다.</p>
+  </section>
+
+  <section class="keypoints">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>CPU는 지연 시간을, GPU는 처리량을 최적화한다. GPU는 서로 독립적인 일이 많을 때만 이긴다.</li>
+      <li>래스터화는 엣지 함수 세 개의 부호로 화소가 삼각형 안인지 판정하고, 같은 값으로 무게 중심 보간까지 한다.</li>
+      <li>SIMT는 워프(32 스레드 등)에 명령 하나를 내려 제어 비용을 나눈다. 워프 안에서 분기가 갈리면 두 길을 차례로 실행해 효율이 떨어진다.</li>
+      <li>GPU는 메모리 지연을 워프 교대로 숨긴다. 필요한 워프 수 ≈ 1 + L/(c+1). 상주 워프 수(점유율)는 레지스터·공유 메모리 사용량이 정한다.</li>
+      <li>워프의 주소가 연속이면 섹터 몇 개로 병합된다. 모바일 GPU는 타일 기반 렌더링으로 깊이·MSAA·오버드로 트래픽을 칩 안에 가둬 DRAM 대역폭과 전력을 아낀다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. 다음 중 GPU보다 CPU에서 더 빨리 끝날 가능성이 가장 큰 일은?</p>
+        <div class="opts">
+          <button class="opt">이미지 1,000만 화소의 밝기를 각각 1.2배로</button>
+          <button class="opt">행렬 4096×4096 두 개의 곱</button>
+          <button class="opt" data-correct>앞 단계 결과로 다음 단계를 정하는 연결 리스트 1,000노드 순회</button>
+          <button class="opt">입자 100만 개의 위치를 각자 속도로 갱신</button>
+        </div>
+        <div class="quiz-exp">연결 리스트 순회는 매 단계가 앞 결과(다음 포인터)를 기다리는 연쇄 작업이라 병렬성이 없다. 느린 일꾼 수천 명은 쓸모가 없고, 빠른 일꾼 한 명이 낫다.</div></div>
+      <div class="quiz-q"><p>Q2. 엣지 함수 세 값을 삼각형의 (부호 있는) 넓이의 두 배로 나누면 얻는 것은?</p>
+        <div class="opts">
+          <button class="opt" data-correct>그 점의 무게 중심 좌표 — 정점 속성 보간에 쓰인다</button>
+          <button class="opt">그 점의 깊이 값</button>
+          <button class="opt">삼각형의 둘레</button>
+          <button class="opt">그 점까지의 유클리드 거리</button>
+        </div>
+        <div class="quiz-exp">각 엣지 함수는 점과 한 변이 만드는 작은 삼각형 넓이의 두 배다. 전체로 나누면 합이 1인 무게 중심 좌표가 되고, 색·텍스처 좌표·깊이를 보간하는 가중치로 쓰인다.</div></div>
+      <div class="quiz-q"><p>Q3. 워프 32 스레드 중 8개만 if 쪽(명령 6개), 나머지가 else 쪽(명령 6개)을 실행한다. 분기 부분의 SIMD 효율은?</p>
+        <div class="opts">
+          <button class="opt">25%</button><button class="opt" data-correct>50%</button><button class="opt">75%</button><button class="opt">100%</button>
+        </div>
+        <div class="quiz-exp">두 길을 차례로 실행하므로 12사이클 × 32레인 = 384 슬롯 중 실제 일은 8×6 + 24×6 = 192. 효율 50%다. 길이가 같으면 비율과 상관없이 50%가 된다.</div></div>
+      <div class="quiz-q"><p>Q4. 레지스터 64K개인 SM에서 스레드당 레지스터를 32개에서 128개로 늘리면, 다른 제한이 없을 때 상주 가능한 최대 워프 수는?</p>
+        <div class="opts">
+          <button class="opt">64 → 64 (변화 없음)</button><button class="opt">64 → 32</button><button class="opt" data-correct>64 → 16</button><button class="opt">64 → 8</button>
+        </div>
+        <div class="quiz-exp">워프 하나가 128 × 32 = 4,096개 레지스터를 쓰므로 65,536 / 4,096 = 16개. 점유율이 1/4로 떨어져 메모리 지연을 숨길 워프가 줄어든다.</div></div>
+      <div class="quiz-q"><p>Q5. 워프의 스레드 i가 float 배열의 원소 [2i]를 읽는다(시작 정렬됨). 32바이트 섹터 몇 개를 가져와야 하는가?</p>
+        <div class="opts">
+          <button class="opt">4개</button><button class="opt" data-correct>8개</button><button class="opt">16개</button><button class="opt">32개</button>
+        </div>
+        <div class="quiz-exp">주소 범위가 0~252바이트로 256바이트에 걸치므로 섹터 8개. 가져온 256바이트 중 128바이트만 쓰니 효율 50%다.</div></div>
+      <div class="quiz-q"><p>Q6. 타일 기반 렌더링이 4×MSAA에서 특히 유리한 이유는?</p>
+        <div class="opts">
+          <button class="opt">타일마다 클럭을 4배로 올릴 수 있어서</button>
+          <button class="opt">MSAA를 쓰면 삼각형 수가 줄어서</button>
+          <button class="opt">비닝 데이터가 4배 압축되어서</button>
+          <button class="opt" data-correct>샘플 4개 분량의 색·깊이를 칩 안 타일 버퍼에서 해소하고 최종 색만 DRAM에 쓰므로</button>
+        </div>
+        <div class="quiz-exp">IMR에서는 샘플 단위 색·깊이 버퍼가 DRAM에 있어 트래픽이 샘플 수만큼 는다. TBDR은 타일 버퍼 안에서 해소한 뒤 화소당 4바이트만 내보낸다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var P = SB.palette();
+  SB.onTheme(function () { P = SB.palette(); });
+  var GPU = function () { return SOC.color("gpu"); };
+  var BIG = function () { return SOC.color("big"); };
+
+  /* ---------------------------------------------------------------- 1. 일꾼 경주 */
+  (function () {
+    var N = 64, mode = "ind", t = 0, done = false;
+    var TEAMS = [
+      { n: "CPU · 빠른 일꾼 8명", type: "big", W: 8, d: 1, launch: 0 },
+      { n: "GPU · 느린 일꾼 512명", type: "gpu", W: 512, d: 6, launch: 3 },
+    ];
+    function total(L) { return mode === "ind" ? L.launch + L.d * Math.ceil(N / L.W) : L.launch + L.d * N; }
+    function state(L, tt) {
+      var u = tt - L.launch; if (u < 0) return [0, 0];
+      if (mode === "ind") { var k = Math.floor(u / L.d), dn = Math.min(N, k * L.W); return [dn, Math.min(N, dn + L.W) - dn]; }
+      var dn2 = Math.min(N, Math.floor(u / L.d)); return [dn2, dn2 < N ? 1 : 0];
+    }
+    var cv = SB.canvas("#cv-crowd", function (ctx, w, h) {
+      var Tm = Math.max(total(TEAMS[0]), total(TEAMS[1])), lh = h / 2;
+      TEAMS.forEach(function (L, i) {
+        var y0 = i * lh, col = SOC.color(L.type), T = total(L), st = state(L, Math.min(t, T));
+        ctx.fillStyle = P.text; ctx.font = SB.font(12.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "top";
+        ctx.fillText(L.n, 10, y0 + 8);
+        ctx.fillStyle = P.dim; ctx.font = SB.font(11.5, true); ctx.textAlign = "right";
+        ctx.fillText(Math.min(N, st[0]) + "/" + N + (t >= T ? " ✓ " + T + "틱" : ""), w - 10, y0 + 8);
+        var gx = 10, gy = y0 + 28, gw = w - 20, gh = lh - 54;
+        var cols = Math.max(1, Math.ceil(Math.sqrt(N * gw / gh))), rows = Math.ceil(N / cols);
+        var cs = Math.min(gw / cols, gh / rows, 30), pad = cs > 5 ? (cs > 16 ? 2 : 1) : 0;
+        for (var k = 0; k < N; k++) {
+          var cx = gx + (k % cols) * cs, cy = gy + Math.floor(k / cols) * cs;
+          ctx.fillStyle = k < st[0] ? col : k < st[0] + st[1] ? SOC.alpha(col, 0.45) : P.grid;
+          ctx.fillRect(cx, cy, cs - pad, cs - pad);
+        }
+        // time bar
+        var by = y0 + lh - 18, bw = w - 20;
+        ctx.fillStyle = P.grid; ctx.fillRect(10, by, bw, 6);
+        ctx.fillStyle = col; ctx.fillRect(10, by, bw * Math.min(t, T) / Tm, 6);
+        ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(10 + bw * T / Tm, by - 3); ctx.lineTo(10 + bw * T / Tm, by + 9); ctx.stroke();
+        if (L.launch && t < L.launch) { ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.fillText("준비 중(커널 실행)…", 10, by - 14); }
+      });
+      ctx.strokeStyle = P.border; ctx.beginPath(); ctx.moveTo(0, lh); ctx.lineTo(w, lh); ctx.stroke();
+    }, { aspect: 0.5, minHeight: 280, maxHeight: 400 });
+    function upd() {
+      var a = total(TEAMS[0]), b = total(TEAMS[1]);
+      SB.stat("cr-cpu", a + "<small>틱</small>"); SB.stat("cr-gpu", b + "<small>틱</small>");
+      SB.stat("cr-win", a < b ? "CPU <small>" + (b / a).toFixed(1) + "배</small>" : a > b ? "GPU <small>" + (a / b).toFixed(1) + "배</small>" : "무승부");
+      t = 0; done = false;
+    }
+    SB.range("cr-n", function (v) { return Math.pow(2, v) + "개"; }, function (v) { N = Math.pow(2, v); upd(); });
+    SB.seg("cr-mode", function (v) { mode = v; upd(); });
+    upd();
+    var hold = 0;
+    SB.loop(document.getElementById("cv-crowd"), function (dt) {
+      var Tm = Math.max(total(TEAMS[0]), total(TEAMS[1]));
+      if (t < Tm) { t = Math.min(Tm, t + dt * Tm / 3.2); cv.redraw(); hold = 0; }
+      else { hold += dt; if (hold > 2.5) { t = 0; hold = 0; } if (!done) { done = true; cv.redraw(); } }
+    });
+  })();
+
+  /* ---------------------------------------------------------------- 2. 래스터화 */
+  (function () {
+    var GW = 32, GH = 20;
+    var V = [
+      { x: 4.3, y: 17.2, c: [235, 70, 80] }, { x: 26.6, y: 13.4, c: [60, 190, 110] }, { x: 12.2, y: 2.6, c: [70, 120, 240] },
+      { x: 17.5, y: 18.5, c: [250, 190, 40] }, { x: 30.2, y: 4.4, c: [250, 190, 40] }, { x: 21.5, y: 1.5, c: [250, 190, 40] },
+    ];
+    var stage = 2, hover = null, drag = -1, geo = null;
+    var info = document.getElementById("rs-info");
+    function E(a, b, px, py) { return (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x); }
+    function tri(o) {
+      var a = V[o], b = V[o + 1], c = V[o + 2];
+      var area = E(a, b, c.x, c.y), s = area >= 0 ? 1 : -1;
+      return {
+        a: a, b: b, c: c, area: area, s: s,
+        x0: Math.max(0, Math.floor(Math.min(a.x, b.x, c.x))), x1: Math.min(GW - 1, Math.ceil(Math.max(a.x, b.x, c.x)) - 1),
+        y0: Math.max(0, Math.floor(Math.min(a.y, b.y, c.y))), y1: Math.min(GH - 1, Math.ceil(Math.max(a.y, b.y, c.y)) - 1),
+        ev: function (px, py) { return [s * E(b, c, px, py), s * E(c, a, px, py), s * E(a, b, px, py)]; },
+      };
+    }
+    function inside(e) { return e[0] >= 0 && e[1] >= 0 && e[2] >= 0; }
+    function shade(T, e) { var A = Math.abs(T.area) || 1; return [0, 1, 2].map(function (k) { return Math.round((e[0] * T.a.c[k] + e[1] * T.b.c[k] + e[2] * T.c.c[k]) / A); }); }
+    var cv = SB.canvas("#cv-raster", function (ctx, w, h) {
+      var cs = Math.min((w - 16) / GW, (h - 16) / GH), ox = (w - cs * GW) / 2, oy = (h - cs * GH) / 2;
+      geo = { cs: cs, ox: ox, oy: oy };
+      var X = function (x) { return ox + x * cs; }, Y = function (y) { return oy + y * cs; };
+      var T1 = tri(0), T2 = tri(3), bb = 0, cov = 0, od = 0;
+      // pixels
+      for (var j = 0; j < GH; j++) for (var i = 0; i < GW; i++) {
+        var px = i + 0.5, py = j + 0.5, e1 = T1.ev(px, py), in1 = inside(e1), inB = i >= T1.x0 && i <= T1.x1 && j >= T1.y0 && j <= T1.y1;
+        if (inB) bb++; if (in1) cov++;
+        var fill = null;
+        if (stage === 2 && in1) fill = SOC.alpha(GPU(), 0.55);
+        if (stage >= 3 && in1) { var c = shade(T1, e1); fill = "rgb(" + c.join(",") + ")"; }
+        if (stage === 4) {
+          var e2 = T2.ev(px, py);
+          if (inside(e2)) {
+            var base = in1 ? shade(T1, e1) : null, cb = T2.a.c;
+            if (base) { od++; fill = "rgb(" + [0, 1, 2].map(function (k) { return Math.round(0.5 * cb[k] + 0.5 * base[k]); }).join(",") + ")"; }
+            else fill = SOC.alpha("rgb(" + cb.join(",") + ")", 0.55);
+          }
+        }
+        if (fill) { ctx.fillStyle = fill; ctx.fillRect(X(i), Y(j), cs, cs); }
+        if (stage === 4 && in1 && inside(T2.ev(px, py)) && cs > 9) { ctx.strokeStyle = SB.isDark() ? "rgba(255,255,255,.75)" : "rgba(0,0,0,.55)"; ctx.lineWidth = 1.2; ctx.strokeRect(X(i) + 1.5, Y(j) + 1.5, cs - 3, cs - 3); }
+        if ((stage === 1 || stage === 2) && inB) {
+          ctx.beginPath(); ctx.arc(X(px), Y(py), Math.max(1.4, cs * 0.12), 0, 7);
+          if (stage === 2 && in1) { ctx.fillStyle = P.text; ctx.fill(); } else { ctx.strokeStyle = P.faint; ctx.lineWidth = 1; ctx.stroke(); }
+        }
+      }
+      // grid
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1; ctx.beginPath();
+      for (var gi = 0; gi <= GW; gi++) { ctx.moveTo(X(gi), Y(0)); ctx.lineTo(X(gi), Y(GH)); }
+      for (var gj = 0; gj <= GH; gj++) { ctx.moveTo(X(0), Y(gj)); ctx.lineTo(X(GW), Y(gj)); }
+      ctx.stroke();
+      // bbox
+      if (stage === 1 || stage === 2) { ctx.setLineDash([5, 4]); ctx.strokeStyle = P.accent2; ctx.lineWidth = 1.5; ctx.strokeRect(X(T1.x0), Y(T1.y0), (T1.x1 - T1.x0 + 1) * cs, (T1.y1 - T1.y0 + 1) * cs); ctx.setLineDash([]); }
+      // hover pixel
+      if (hover) { ctx.strokeStyle = P.accent; ctx.lineWidth = 2; ctx.strokeRect(X(hover[0]), Y(hover[1]), cs, cs); }
+      // edges
+      function drawTri(T, col, labels, arrows) {
+        ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(T.a.x), Y(T.a.y)); ctx.lineTo(X(T.b.x), Y(T.b.y)); ctx.lineTo(X(T.c.x), Y(T.c.y)); ctx.closePath(); ctx.stroke();
+        if (arrows) {
+          [[T.a, T.b], [T.b, T.c], [T.c, T.a]].forEach(function (pr, k) {
+            var a = T.s > 0 ? pr[0] : pr[1], b = T.s > 0 ? pr[1] : pr[0];
+            var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+            SOC.arrow(ctx, X(mx - dx / L * 0.8), Y(my - dy / L * 0.8), X(mx + dx / L * 0.8), Y(my + dy / L * 0.8), P.accent2, 2, 8);
+            // inner normal tick (inside side)
+            var nx = -dy / L * T.s * (T.s > 0 ? 1 : -1), ny = dx / L * T.s * (T.s > 0 ? 1 : -1);
+            ctx.fillStyle = P.accent2; ctx.font = SB.font(11, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.fillText("E" + ["₂", "₀", "₁"][k] + "+", X(mx + nx * 1.4), Y(my + ny * 1.4));
+          });
+        }
+        if (labels) [T.a, T.b, T.c].forEach(function (v, k) {
+          ctx.fillStyle = "rgb(" + v.c.join(",") + ")"; ctx.strokeStyle = P.bg; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(X(v.x), Y(v.y), 8, 0, 7); ctx.fill(); ctx.stroke();
+          ctx.fillStyle = "#fff"; ctx.font = SB.font(10, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(labels[k], X(v.x), Y(v.y) + 0.5);
+        });
+      }
+      drawTri(T1, P.text, ["0", "1", "2"], stage === 1);
+      if (stage === 4) drawTri(T2, SB.isDark() ? "#f5c542" : "#a87800", ["3", "4", "5"], false);
+      SB.stat("rs-bb", bb); SB.stat("rs-cov", cov); SB.stat("rs-eff", bb ? Math.round(cov / bb * 100) + "<small>%</small>" : "—");
+      SB.stat("rs-od", stage === 4 ? od + "<small>화소</small>" : "<small>⑤에서</small>");
+    }, { aspect: 0.62, minHeight: 230, maxHeight: 520 });
+    var STAGE_TXT = [
+      "<b>① 정점.</b> 정점 셰이더가 정점마다 변환을 끝낸 뒤의 화면 좌표와 색(빨강·초록·파랑)이다. 아직 화소는 하나도 정해지지 않았다.",
+      "<b>② 삼각형 설정.</b> 세 변의 엣지 함수 계수를 준비하고 경계 상자(점선)를 구한다. 화살표는 변의 방향, E+ 표시는 엣지 함수가 양수인 쪽(삼각형 안쪽)이다. 상자 안의 화소 중심(작은 원)만 검사하면 된다.",
+      "<b>③ 래스터화.</b> 화소 중심마다 E₀, E₁, E₂를 계산해 셋 다 0 이상이면 덮인 것으로 본다(채운 점). 덮인 화소 하나가 프래그먼트 하나가 된다.",
+      "<b>④ 프래그먼트 셰이딩.</b> 엣지 함수를 기준 삼각형의 부호 있는 넓이의 두 배로 나눈 무게 중심 좌표로 세 정점의 색을 섞었다. 실제로는 여기서 텍스처를 읽고 조명을 계산하는 프로그램이 화소마다 돈다.",
+      "<b>⑤ 블렌딩.</b> 노란 반투명 삼각형(꼭짓점 3·4·5)이 위에 그려진다. 겹친 화소(테두리)는 프레임 버퍼의 기존 색을 읽어 50%씩 섞어 다시 쓴다. 같은 화소를 두 번 처리하는 오버드로다.",
+    ];
+    function setInfo() {
+      var s = STAGE_TXT[stage];
+      if (hover) {
+        var T = tri(0), e = T.ev(hover[0] + 0.5, hover[1] + 0.5), A = Math.abs(T.area) || 1;
+        s += '<br><span class="pill">화소 (' + hover[0] + ", " + hover[1] + ")</span> E₀ = " + e[0].toFixed(1) + ", E₁ = " + e[1].toFixed(1) + ", E₂ = " + e[2].toFixed(1) +
+          " → " + (inside(e) ? '<b style="color:var(--ok)">안</b>' : '<b style="color:var(--bad)">밖</b>') + (inside(e) ? " · 무게 중심 (" + e.map(function (v) { return (v / A).toFixed(2); }).join(", ") + ")" : "");
+      }
+      info.innerHTML = s;
+    }
+    SB.seg("rs-stage", function (v) { stage = +v; cv.redraw(); setInfo(); });
+    var cvEl = document.getElementById("cv-raster");
+    function toGrid(x, y) { return [(x - geo.ox) / geo.cs, (y - geo.oy) / geo.cs]; }
+    SOC.pointer(cvEl, {
+      down: function (x, y) {
+        if (!geo) return; var best = -1, bd = 18, n = stage === 4 ? 6 : 3;
+        for (var k = 0; k < n; k++) { var d = Math.hypot(geo.ox + V[k].x * geo.cs - x, geo.oy + V[k].y * geo.cs - y); if (d < bd) { bd = d; best = k; } }
+        drag = best;
+        if (best < 0) { var g = toGrid(x, y); var gi = Math.floor(g[0]), gj = Math.floor(g[1]); hover = gi >= 0 && gj >= 0 && gi < GW && gj < GH ? [gi, gj] : null; setInfo(); cv.redraw(); }
+      },
+      move: function (x, y, down) {
+        if (!geo) return;
+        var g = toGrid(x, y);
+        if (down && drag >= 0) { V[drag].x = SB.clamp(g[0], 0, GW); V[drag].y = SB.clamp(g[1], 0, GH); cv.redraw(); setInfo(); return; }
+        var gi = Math.floor(g[0]), gj = Math.floor(g[1]);
+        var nh = gi >= 0 && gj >= 0 && gi < GW && gj < GH ? [gi, gj] : null;
+        if (String(nh) !== String(hover)) { hover = nh; setInfo(); cv.redraw(); }
+        var near = false; for (var k = 0; k < (stage === 4 ? 6 : 3); k++) if (Math.hypot(geo.ox + V[k].x * geo.cs - x, geo.oy + V[k].y * geo.cs - y) < 18) near = true;
+        cvEl.style.cursor = near ? "grab" : "crosshair";
+      },
+      up: function () { drag = -1; },
+      leave: function () { hover = null; setInfo(); cv.redraw(); },
+    }, { drag: true });
+    setInfo();
+  })();
+
+  /* ---------------------------------------------------------------- 3. 통합 셰이더 */
+  (function () {
+    var v = 0.25;
+    var cv = SB.canvas("#cv-unified", function (ctx, w, h) {
+      var V = 16 * v, Pp = 16 * (1 - v);
+      var tSep = Math.max(V / 4, Pp / 12), uV = tSep ? (V / 4) / tSep : 0, uP = tSep ? (Pp / 12) / tSep : 0;
+      var rows = [{ n: "분리형", units: [] }, { n: "통합형", units: [] }];
+      for (var i = 0; i < 16; i++) rows[0].units.push(i < 4 ? { k: "v", u: uV } : { k: "p", u: uP });
+      for (var j = 0; j < 16; j++) rows[1].units.push({ k: "mix", u: 1 });
+      var lx = w < 480 ? 54 : 70, top = 24, rh = (h - top - 10) / 2;
+      var cw = (w - lx - 14) / 16;
+      ctx.font = SB.font(11.5, false, 700); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillStyle = P.accent2; ctx.fillRect(lx, 8, 10, 10); ctx.fillStyle = P.dim; ctx.fillText("정점 작업", lx + 14, 13);
+      ctx.fillStyle = GPU(); ctx.fillRect(lx + 90, 8, 10, 10); ctx.fillStyle = P.dim; ctx.fillText("화소 작업", lx + 104, 13);
+      rows.forEach(function (r, ri) {
+        var y = top + ri * rh + 8, bh = rh - 22;
+        ctx.fillStyle = P.text; ctx.font = SB.font(12.5, false, 700); ctx.textAlign = "left"; ctx.fillText(r.n, 6, y + bh / 2);
+        r.units.forEach(function (u, k) {
+          var x = lx + k * cw + 1, ww = cw - 2;
+          ctx.fillStyle = P.grid; ctx.fillRect(x, y, ww, bh);
+          if (u.k === "mix") {
+            ctx.fillStyle = P.accent2; ctx.fillRect(x, y + bh * (1 - v), ww, bh * v);
+            ctx.fillStyle = GPU(); ctx.fillRect(x, y, ww, bh * (1 - v));
+          } else {
+            ctx.fillStyle = u.k === "v" ? P.accent2 : GPU(); ctx.fillRect(x, y + bh * (1 - u.u), ww, bh * u.u);
+            if (u.u < 0.98 && cw > 14) { ctx.fillStyle = P.faint; ctx.font = SB.font(9.5, true); ctx.textAlign = "center"; ctx.fillText("쉼", x + ww / 2, y + 9); }
+          }
+        });
+        ctx.fillStyle = P.dim; ctx.font = SB.font(10.5); ctx.textAlign = "left";
+        if (ri === 0) { ctx.fillText("정점 전용 ×4", lx, y + bh + 9); ctx.textAlign = "right"; ctx.fillText("화소 전용 ×12", lx + 16 * cw, y + bh + 9); }
+      });
+      SB.stat("un-sep", tSep.toFixed(2) + "<small>× 이상적</small>");
+      SB.stat("un-uni", "1.00<small>×</small>");
+      SB.stat("un-util", Math.round(16 / (16 * tSep) * 100) + "<small>%</small>");
+    }, { aspect: 0.36, minHeight: 200, maxHeight: 280 });
+    SB.range("un-v", function (x) { return x + "%"; }, function (x) { v = x / 100; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 4. 분기 발산 */
+  (function () {
+    var pat = "first", k = 16, nA = 4, nB = 3, cur = 0, acc = 0;
+    var rnd = []; (function () { var r = SB.rng(7); for (var i = 0; i < 32; i++) rnd.push(r()); })();
+    function cond() {
+      var c = [];
+      for (var i = 0; i < 32; i++) {
+        if (pat === "first") c.push(i < k);
+        else if (pat === "alt") c.push(i % 2 === 0);
+        else { var order = rnd.map(function (v, j) { return [v, j]; }).sort(function (a, b) { return a[0] - b[0]; }); c = new Array(32).fill(false); for (var q = 0; q < k; q++) c[order[q][1]] = true; return c; }
+      }
+      return c;
+    }
+    function program() {
+      var c = cond(), all = c.map(function () { return true; }), nT = c.filter(Boolean).length, rows = [];
+      rows.push({ l: "x = data[tid]", m: all, kind: "c" }); rows.push({ l: "if (x > t)", m: all, kind: "c" });
+      if (nT > 0) for (var i = 0; i < nA; i++) rows.push({ l: "  A" + (i + 1), m: c, kind: "a" });
+      if (nT < 32) for (var j = 0; j < nB; j++) rows.push({ l: "  B" + (j + 1), m: c.map(function (x) { return !x; }), kind: "b" });
+      rows.push({ l: "y = …", m: all, kind: "c" }); rows.push({ l: "out[tid] = y", m: all, kind: "c" });
+      return { rows: rows, c: c, nT: nT };
+    }
+    var cv = SB.canvas("#cv-diverge", function (ctx, w, h) {
+      var pr = program(), rows = pr.rows, lx = w < 480 ? 80 : 100, top = 20, cw = (w - lx - 10) / 32, rh = Math.min(30, (h - top - 8) / Math.max(12, rows.length));
+      var col = { c: P.faint, a: GPU(), b: P.accent2 };
+      ctx.font = SB.font(9.5, true); ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      for (var i = 0; i < 32; i++) {
+        if (cw >= 12 || i % 4 === 0) ctx.fillText(i, lx + i * cw + cw / 2, 9);
+        ctx.fillStyle = pr.c[i] ? GPU() : P.accent2; ctx.fillRect(lx + i * cw + 1, 15, cw - 2, 2); ctx.fillStyle = P.dim;
+      }
+      rows.forEach(function (r, ri) {
+        var y = top + ri * rh, on = ri <= cur;
+        ctx.fillStyle = ri === cur ? P.accent : on ? P.text : P.faint; ctx.font = SB.font(w < 480 ? 10 : 11, true, ri === cur ? 700 : 400); ctx.textAlign = "left";
+        ctx.fillText(r.l, 4, y + rh / 2);
+        for (var i = 0; i < 32; i++) {
+          var x = lx + i * cw + 0.5, ww = cw - 1;
+          if (!on) { ctx.fillStyle = P.grid; ctx.fillRect(x, y + 1, ww, rh - 2); continue; }
+          if (r.m[i]) { ctx.fillStyle = r.kind === "c" ? SOC.alpha(P.text, 0.35) : col[r.kind]; ctx.fillRect(x, y + 1, ww, rh - 2); }
+          else { SOC.hatch(ctx, x, y + 1, ww, rh - 2, P.faint); }
+        }
+        if (ri === cur) { ctx.strokeStyle = P.accent; ctx.lineWidth = 1.5; ctx.strokeRect(lx - 1, y, 32 * cw + 2, rh); }
+      });
+      var act = 0; rows.forEach(function (r) { r.m.forEach(function (m) { if (m) act++; }); });
+      SB.stat("dv-cyc", rows.length + "<small>사이클</small>");
+      var thr = 4 + (pr.nT * nA + (32 - pr.nT) * nB) / 32;
+      SB.stat("dv-thr", thr.toFixed(1) + "<small>개 (평균)</small>");
+      SB.stat("dv-eff", Math.round(act / (32 * rows.length) * 100) + "<small>%</small>");
+    }, { aspect: 0.55, minHeight: 300, maxHeight: 460 });
+    var pEl = SB.range("dv-p", function (v) { return pat === "alt" ? "16 / 32 (고정)" : v + " / 32"; }, function (v) { k = v; cur = 0; cv.redraw(); });
+    SB.range("dv-a", function (v) { return v + "개"; }, function (v) { nA = v; cur = 0; cv.redraw(); });
+    SB.range("dv-b", function (v) { return v + "개"; }, function (v) { nB = v; cur = 0; cv.redraw(); });
+    SB.seg("dv-pat", function (v) { pat = v; if (v === "alt") k = 16; pEl.set(k); cur = 0; cv.redraw(); });
+    SB.loop(document.getElementById("cv-diverge"), function (dt) {
+      acc += dt; if (acc < 0.32) return; acc = 0;
+      var n = program().rows.length; cur = cur >= n + 3 ? 0 : cur + 1; cv.redraw();
+    });
+  })();
+
+  /* ---------------------------------------------------------------- 5. 점유율 시뮬레이터 */
+  (function () {
+    var S = { tpb: 256, reg: 32, smem: 8, lat: 400, c: 12 };
+    var LIM = { regs: 65536, warps: 64, blocks: 16, smem: 96 };
+    var TC = 1500, res = null, prog = 0;
+    function occupancy() {
+      var wpb = S.tpb / 32;
+      var regPerWarp = Math.ceil(S.reg * 32 / 256) * 256;
+      var byW = Math.floor(LIM.warps / wpb), byR = Math.floor(LIM.regs / (regPerWarp * wpb)), byB = LIM.blocks, byS = S.smem > 0 ? Math.floor(LIM.smem / S.smem) : 99;
+      var blocks = Math.min(byW, byR, byB, byS), lim = blocks === byR ? "레지스터" : blocks === byS ? "공유 메모리" : blocks === byW ? "워프 슬롯" : "블록 수";
+      if (blocks === byW && byW <= Math.min(byR, byS, byB)) lim = "워프 슬롯";
+      var warps = blocks * wpb;
+      return { wpb: wpb, blocks: blocks, warps: warps, lim: lim, regUse: blocks * wpb * regPerWarp, smemUse: blocks * S.smem, byW: byW, byR: byR, byS: byS };
+    }
+    function simulate(W) {
+      var st = new Uint8Array(W * TC), rem = [], wake = [], last = [], issued = new Uint8Array(TC);
+      for (var i = 0; i < W; i++) { rem.push(S.c); wake.push(Math.round(i * (S.c + 1 + S.lat) / W)); last.push(-i); }
+      for (var t = 0; t < TC; t++) {
+        var pick = -1, best = 1e9;
+        for (var w = 0; w < W; w++) { if (wake[w] <= t) { st[w * TC + t] = 1; if (last[w] < best) { best = last[w]; pick = w; } } }
+        if (pick >= 0) {
+          st[pick * TC + t] = 2; issued[t] = 1; last[pick] = t;
+          if (rem[pick] > 0) rem[pick]--; else { wake[pick] = t + 1 + S.lat; rem[pick] = S.c; }
+        }
+      }
+      var u = 0; for (var q = 0; q < TC; q++) u += issued[q];
+      var u2 = 0; for (var q2 = Math.floor(TC / 2); q2 < TC; q2++) u2 += issued[q2];
+      return { st: st, W: W, issued: issued, util: u / TC, utilSS: u2 / (TC - Math.floor(TC / 2)) };
+    }
+    var barsEl = document.getElementById("oc-bars");
+    function recompute() {
+      var o = occupancy(), Wsch = Math.max(1, Math.ceil(o.warps / 4));
+      if (o.warps === 0) Wsch = 0;
+      res = Wsch ? simulate(Wsch) : null; res && (res.o = o); prog = 0;
+      var rows = [
+        ["워프 슬롯", o.warps / LIM.warps, o.warps + "/64", o.lim === "워프 슬롯"],
+        ["레지스터", o.regUse / LIM.regs, Math.round(o.regUse / 1024) + "K/64K", o.lim === "레지스터"],
+        ["공유 메모리", o.smemUse / LIM.smem, o.smemUse + "/96KB", o.lim === "공유 메모리"],
+        ["블록", o.blocks / LIM.blocks, o.blocks + "/16", o.lim === "블록 수"],
+      ];
+      barsEl.innerHTML = rows.map(function (r) { return '<div class="gp-bar' + (r[3] ? " lim" : "") + '"><span>' + r[0] + '</span><span class="tr"><i style="width:' + Math.min(100, r[1] * 100).toFixed(1) + "%;background:" + (r[3] ? "var(--bad)" : "var(--b-gpu)") + '"></i></span><b>' + r[2] + "</b></div>"; }).join("");
+      SB.stat("oc-w", o.warps + "<small>개 · " + Math.round(o.warps / 64 * 100) + "%</small>");
+      SB.stat("oc-ws", Wsch + "<small>개</small>");
+      var need = 1 + S.lat / (S.c + 1);
+      SB.stat("oc-need", need.toFixed(1) + "<small>개</small>");
+      SB.stat("oc-util", res ? Math.round(res.utilSS * 100) + "<small>%</small>" : "0<small>% (블록 0개)</small>");
+      cv.redraw();
+    }
+    var cv = SB.canvas("#cv-occ", function (ctx, w, h) {
+      if (!res) { ctx.fillStyle = P.bad; ctx.font = SB.font(14, false, 700); ctx.textAlign = "center"; ctx.fillText("자원이 부족해 블록이 하나도 올라가지 못한다", w / 2, h / 2); return; }
+      var lx = 34, top = 10, chartH = Math.max(70, h * 0.24), gh = h - top - chartH - 30, rh = Math.min(20, gh / res.W), gw = w - lx - 10;
+      var show = Math.min(TC, Math.floor(prog));
+      var cyc2x = function (c) { return lx + c / TC * gw; };
+      var cIssue = GPU(), cReady = SOC.alpha(GPU(), 0.22);
+      for (var wi = 0; wi < res.W; wi++) {
+        var y = top + wi * rh;
+        ctx.fillStyle = P.dim; ctx.font = SB.font(Math.min(10.5, rh * 0.75), true); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+        if (rh >= 9 || wi % 2 === 0) ctx.fillText("w" + wi, lx - 4, y + rh / 2);
+        ctx.fillStyle = P.grid; ctx.fillRect(lx, y + 1, gw, rh - 2);
+        // runs
+        var base = wi * TC, s0 = 0, cs = res.st[base];
+        for (var t = 1; t <= show; t++) {
+          var v = t < show ? res.st[base + t] : -1;
+          if (v !== cs) {
+            if (cs > 0) { ctx.fillStyle = cs === 2 ? cIssue : cReady; ctx.fillRect(cyc2x(s0), y + 1, Math.max(0.8, cyc2x(t) - cyc2x(s0)), rh - 2); }
+            s0 = t; cs = v;
+          }
+        }
+      }
+      // utilization chart
+      var cy0 = top + res.W * rh + 18, cyh = h - cy0 - 18;
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(lx, cy0); ctx.lineTo(lx, cy0 + cyh); ctx.lineTo(lx + gw, cy0 + cyh); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10, true); ctx.textAlign = "right"; ctx.fillText("100%", lx - 3, cy0 + 4); ctx.fillText("0", lx - 3, cy0 + cyh);
+      ctx.textAlign = "left"; ctx.fillText("ALU 사용률", lx + 4, cy0 - 7);
+      ctx.textAlign = "right"; ctx.fillText(show + " / " + TC + " 사이클", lx + gw, cy0 - 7);
+      ctx.strokeStyle = SOC.alpha(P.text, 0.25); ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(lx, cy0); ctx.lineTo(lx + gw, cy0); ctx.stroke(); ctx.setLineDash([]);
+      ctx.strokeStyle = P.accent; ctx.lineWidth = 2; ctx.beginPath();
+      var win = 50, sum = 0;
+      for (var t2 = 0; t2 < show; t2++) {
+        sum += res.issued[t2]; if (t2 >= win) sum -= res.issued[t2 - win];
+        var u = sum / Math.min(win, t2 + 1), px = cyc2x(t2), py = cy0 + cyh * (1 - u);
+        t2 ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+      }
+      ctx.stroke();
+    }, { aspect: 0.72, minHeight: 320, maxHeight: 520 });
+    var fmtKB = function (v) { return v + " KB"; };
+    SB.range("oc-tpb", function (v) { return v + " (워프 " + v / 32 + ")"; }, function (v) { S.tpb = v; recompute(); });
+    SB.range("oc-reg", function (v) { return v + "개"; }, function (v) { S.reg = v; recompute(); });
+    SB.range("oc-smem", fmtKB, function (v) { S.smem = v; recompute(); });
+    SB.range("oc-lat", function (v) { return v + " 사이클"; }, function (v) { S.lat = v; recompute(); });
+    SB.range("oc-c", function (v) { return v + "개"; }, function (v) { S.c = v; recompute(); });
+    recompute();
+    SB.loop(document.getElementById("cv-occ"), function (dt) { if (res && prog < TC) { prog = Math.min(TC, prog + dt * TC / 2.5); cv.redraw(); } });
+  })();
+
+  /* ---------------------------------------------------------------- 6. 메모리 병합 */
+  (function () {
+    var s = 1, off = 0, pat = "stride", sz = 4;
+    var rnd = []; (function () { var r = SB.rng(11); for (var i = 0; i < 32; i++) rnd.push(Math.floor(r() * 512)); })();
+    function addrs() { var a = []; for (var i = 0; i < 32; i++) a.push(pat === "rand" ? rnd[i] * sz : (off + i * s) * sz); return a; }
+    function tcol(ti) { return SB.isDark() ? "hsl(" + (ti * 11) + ",70%,62%)" : "hsl(" + (ti * 11) + ",65%,46%)"; }
+    var cv = SB.canvas("#cv-coal", function (ctx, w, h) {
+      var A = addrs(), secs = {}, lines = {};
+      A.forEach(function (a) { for (var b = 0; b < sz; b += 4) { secs[Math.floor((a + b) / 32)] = 1; lines[Math.floor((a + b) / 128)] = 1; } });
+      var lineIds = Object.keys(lines).map(Number).sort(function (a, b) { return a - b; });
+      var nSec = Object.keys(secs).length;
+      var lx = w < 480 ? 46 : 64, gw = w - lx - 10, cw = gw / 32;
+      var ty = 22, my = 86, rh = 22, maxRows = Math.max(1, Math.min(lineIds.length, Math.floor((h - my - 24) / rh)));
+      // threads
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillText("워프의 스레드 0~31", lx, 13);
+      ctx.textAlign = "right"; ctx.font = SB.font(10, true); ctx.fillText("스레드", lx - 6, ty + 10);
+      for (var i = 0; i < 32; i++) { ctx.fillStyle = tcol(i); ctx.fillRect(lx + i * cw + 1, ty, cw - 2, 14); }
+      ctx.fillText("주소", lx - 6, my - 6);
+      var byWord = {}; A.forEach(function (a, i) { for (var b = 0; b < sz; b += 4) byWord[(a + b) / 4] = i; });
+      var rowOf = {}; lineIds.slice(0, maxRows).forEach(function (L, r) { rowOf[L] = r; });
+      // links
+      ctx.lineWidth = 1;
+      A.forEach(function (a, i) {
+        var L = Math.floor(a / 128), r = rowOf[L], x0 = lx + i * cw + cw / 2;
+        ctx.strokeStyle = SOC.alpha(P.text, 0.28);
+        ctx.beginPath(); ctx.moveTo(x0, ty + 15);
+        if (r == null) { ctx.lineTo(x0, ty + 34); ctx.stroke(); return; }
+        var q = (a / 4) % 32, x1 = lx + q * cw + cw / 2, y1 = my + r * rh + 2;
+        ctx.bezierCurveTo(x0, ty + 45, x1, my - 30, x1, y1); ctx.stroke();
+      });
+      for (var r = 0; r < maxRows; r++) {
+        var L = lineIds[r], y = my + r * rh;
+        ctx.fillStyle = P.dim; ctx.font = SB.font(10, true); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+        ctx.fillText(String(L * 128), lx - 6, y + rh / 2);
+        for (var q = 0; q < 32; q++) {
+          var wd = L * 32 + q, ti = byWord[wd];
+          ctx.fillStyle = ti != null ? tcol(ti) : secs[Math.floor(wd / 8)] ? SOC.alpha(P.text, 0.14) : P.grid;
+          ctx.fillRect(lx + q * cw + 0.5, y + 2, cw - 1, rh - 4);
+        }
+        for (var sc = 0; sc < 4; sc++) {
+          var sid = L * 4 + sc, x2 = lx + sc * 8 * cw;
+          ctx.strokeStyle = secs[sid] ? P.accent : P.border; ctx.lineWidth = secs[sid] ? 2 : 1;
+          ctx.strokeRect(x2 + 1, y + 1, 8 * cw - 2, rh - 2);
+        }
+      }
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillText("128 B 라인 " + lineIds.length + "개 · 섹터 " + nSec + "개" + (lineIds.length > maxRows ? " (앞 " + maxRows + "줄만 표시)" : ""), lx, h - 8);
+      var used = 32 * sz, got = nSec * 32;
+      SB.stat("co-sec", nSec + "<small>개</small>");
+      SB.stat("co-b", got + " / " + used);
+      SB.stat("co-eff", Math.round(used / got * 100) + "<small>%</small>");
+    }, { aspect: 0.34, minHeight: 250, maxHeight: 300 });
+    SB.range("co-s", function (v) { return v; }, function (v) { s = v; cv.redraw(); });
+    SB.range("co-o", function (v) { return v + " 원소"; }, function (v) { off = v; cv.redraw(); });
+    SB.seg("co-pat", function (v) { pat = v; cv.redraw(); });
+    SB.seg("co-sz", function (v) { sz = +v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 7. TBDR */
+  (function () {
+    var S = { od: 3, tri: 0.5, tile: 32, res: "fhd", fps: 120, aa: 1, mode: "tbdr" };
+    var RES = { fhd: [2400, 1080], qhd: [3120, 1440] };
+    var anim = 0, M = null;
+    // scene triangles (normalized) for illustration
+    var scene = []; (function () { var r = SB.rng(5); for (var i = 0; i < 40; i++) { var cx = r(), cy = r(), s = 0.08 + r() * 0.22; scene.push([[cx + (r() - 0.5) * s * 2, cy + (r() - 0.5) * s * 2], [cx + (r() - 0.5) * s * 2, cy + (r() - 0.5) * s * 2], [cx + (r() - 0.5) * s * 2, cy + (r() - 0.5) * s * 2]]); } })();
+    function model() {
+      var R = RES[S.res], Px = R[0] * R[1], tris = S.tri * 1e6, d = S.od, aa = S.aa;
+      var Hd = 0; for (var k = 1; k <= Math.round(d); k++) Hd += 1 / k; Hd = Math.min(d, Hd + (d - Math.round(d)) * 0.3);
+      var vin = tris * 32;
+      var imr = { geo: vin, depth: Px * aa * d * 4 + Px * aa * Hd * 4, color: Px * aa * Hd * 4 + (aa > 1 ? Px * aa * 4 + Px * 4 : 0), bin: 0 };
+      var triArea = Px * d / tris, side = Math.sqrt(2 * triArea), tpt = Math.pow(side / S.tile + 1, 2);
+      var tb = { geo: vin, depth: 0, color: Px * 4, bin: tris * (16 + 4 * tpt) * 2 };
+      var sum = function (o) { return o.geo + o.depth + o.color + o.bin; };
+      return { imr: imr, tb: tb, I: sum(imr), T: sum(tb), tpt: tpt, sram: S.tile * S.tile * aa * 8, R: R };
+    }
+    var cv = SB.canvas("#cv-tbdr", function (ctx, w, h) {
+      M = M || model();
+      var narrow = true;
+      var sw = w - 20, sh = Math.min(sw * 0.45, h - 205);
+      var sx = 10, sy = 26;
+      ctx.fillStyle = P.text; ctx.font = SB.font(12, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillText(S.mode === "imr" ? "즉시 모드: 삼각형 순서대로 화면 전체에" : "타일 기반: 타일 하나씩 칩 안에서", sx, 16);
+      ctx.fillStyle = SB.isDark() ? "#0a0e16" : "#e9edf5"; ctx.fillRect(sx, sy, sw, sh);
+      var nT = Math.min(scene.length, Math.round(8 + S.od * 5));
+      var tilesX = Math.round(RES[S.res][0] / S.tile / 6), tilesY = Math.max(2, Math.round(tilesX * 0.45));
+      tilesX = Math.max(4, Math.min(40, tilesX)); tilesY = Math.max(2, Math.min(20, tilesY));
+      var tw = sw / tilesX, th = sh / tilesY, nTiles = tilesX * tilesY;
+      var phase = anim % 1;
+      ctx.save(); ctx.beginPath(); ctx.rect(sx, sy, sw, sh); ctx.clip();
+      if (S.mode === "imr") {
+        var shown = Math.floor(phase * (nT + 4));
+        for (var i = 0; i < Math.min(nT, shown); i++) {
+          var tr = scene[i]; ctx.beginPath(); tr.forEach(function (p, k) { var X = sx + p[0] * sw, Y = sy + p[1] * sh; k ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); ctx.closePath();
+          ctx.fillStyle = SOC.alpha(GPU(), i === shown - 1 ? 0.7 : 0.25); ctx.fill(); ctx.strokeStyle = SOC.alpha(GPU(), 0.6); ctx.lineWidth = 1; ctx.stroke();
+          if (i === shown - 1) { ctx.strokeStyle = P.accent; ctx.lineWidth = 2; ctx.stroke(); }
+        }
+      } else {
+        var curTile = Math.floor(phase * nTiles * 1.05);
+        for (var j = 0; j < nT; j++) {
+          var tr2 = scene[j]; ctx.beginPath(); tr2.forEach(function (p, k) { var X = sx + p[0] * sw, Y = sy + p[1] * sh; k ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); ctx.closePath();
+          ctx.fillStyle = SOC.alpha(GPU(), 0.25); ctx.fill(); ctx.strokeStyle = SOC.alpha(GPU(), 0.6); ctx.lineWidth = 1; ctx.stroke();
+        }
+        ctx.fillStyle = SB.isDark() ? "rgba(10,14,22,.55)" : "rgba(233,237,245,.6)";
+        for (var t = 0; t < nTiles; t++) { if (t >= curTile) ctx.fillRect(sx + (t % tilesX) * tw, sy + Math.floor(t / tilesX) * th, tw, th); }
+        if (curTile < nTiles) { ctx.strokeStyle = P.accent; ctx.lineWidth = 2; ctx.strokeRect(sx + (curTile % tilesX) * tw, sy + Math.floor(curTile / tilesX) * th, tw, th); }
+      }
+      ctx.strokeStyle = SOC.alpha(P.text, 0.12); ctx.lineWidth = 1; ctx.beginPath();
+      for (var gx = 1; gx < tilesX; gx++) { ctx.moveTo(sx + gx * tw, sy); ctx.lineTo(sx + gx * tw, sy + sh); }
+      for (var gy = 1; gy < tilesY; gy++) { ctx.moveTo(sx, sy + gy * th); ctx.lineTo(sx + sw, sy + gy * th); }
+      ctx.stroke(); ctx.restore();
+      ctx.strokeStyle = P.border; ctx.strokeRect(sx, sy, sw, sh);
+      // DRAM arrow flash
+      var dy = sy + sh + 8;
+      ctx.fillStyle = SOC.color("mem"); SOC.roundRect(ctx, sx, dy + 18, sw, 18, 5); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.font = SB.font(11, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("DRAM (LPDDR)", sx + sw / 2, dy + 27);
+      var nArrows = S.mode === "imr" ? 7 : 2;
+      for (var a = 0; a < nArrows; a++) {
+        var ax = sx + sw * (a + 0.5) / nArrows, up = ((anim * 3 + a * 0.37) % 1);
+        ctx.globalAlpha = 0.35 + 0.65 * Math.sin(up * Math.PI);
+        SOC.arrow(ctx, ax, dy + 16, ax, dy + 1, P.accent, 2, 6); ctx.globalAlpha = 1;
+      }
+      // bars
+      var bx = 10, by = dy + 58, bw = w - 20;
+      var parts = [["정점 입력", "geo", P.faint], ["비닝", "bin", P.warn], ["깊이", "depth", P.accent2], ["색", "color", GPU()]];
+      var mx = Math.max(M.I, M.T) * 1.05, rows = [["IMR", M.imr, M.I], ["TBDR", M.tb, M.T]];
+      var rH = 26;
+      ctx.fillStyle = P.text; ctx.font = SB.font(12, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillText("프레임당 DRAM 트래픽", bx, by - 6);
+      rows.forEach(function (r, ri) {
+        var y = by + 4 + ri * (rH + 12), x = bx + 44, ww = bw - 44 - 70, acc = 0;
+        ctx.fillStyle = P.text; ctx.font = SB.font(12, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(r[0], bx, y + rH / 2);
+        parts.forEach(function (p) { var v = r[1][p[1]], pw = ww * v / mx; ctx.fillStyle = p[2]; ctx.fillRect(x + acc, y, pw, rH); acc += pw; });
+        ctx.fillStyle = P.text; ctx.font = SB.font(11, true, 600); ctx.textAlign = "left"; ctx.fillText(SB.bytes(r[2], 3, false), x + acc + 6, y + rH / 2);
+      });
+      var ly = by + 4 + 2 * (rH + 12) + 8, lxx = bx;
+      ctx.font = SB.font(11); ctx.textBaseline = "middle";
+      parts.forEach(function (p) { var tw2 = ctx.measureText(p[0]).width; if (lxx + tw2 + 14 > bx + bw) { lxx = bx; ly += 18; } ctx.fillStyle = p[2]; ctx.fillRect(lxx, ly - 5, 10, 10); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.fillText(p[0], lxx + 14, ly); lxx += tw2 + 28; });
+      ctx.fillStyle = P.dim; ctx.fillText("삼각형당 걸친 타일 ≈ " + M.tpt.toFixed(1) + "개 · 타일 버퍼 " + SB.bytes(M.sram, 3), bx, ly + 20);
+    }, { aspect: 0.78, minHeight: 360, maxHeight: 520 });
+    function upd() {
+      M = model();
+      var gI = M.I * S.fps, gT = M.T * S.fps;
+      SB.stat("tb-imr", (gI / 1e9).toFixed(1) + "<small>GB/s</small>");
+      SB.stat("tb-tb", (gT / 1e9).toFixed(1) + "<small>GB/s</small>");
+      var dP = (gI - gT) * 8 * 15e-12, aP = Math.abs(dP);
+      SB.stat("tb-pw", (aP >= 1 ? aP.toFixed(2) + "<small>W</small>" : Math.round(aP * 1000) + "<small>mW</small>") + "<small>" + (dP >= 0 ? " TBDR 절약" : " IMR 쪽이 적음") + "</small>");
+      SB.stat("tb-sram", SB.bytes(M.sram, 3));
+      cv.redraw();
+    }
+    SB.range("tb-od", function (v) { return v.toFixed(1) + "×"; }, function (v) { S.od = v; upd(); });
+    SB.range("tb-tri", function (v) { return v.toFixed(1) + " M"; }, function (v) { S.tri = v; upd(); });
+    SB.seg("tb-tile", function (v) { S.tile = +v; upd(); });
+    SB.seg("tb-res", function (v) { S.res = v; upd(); });
+    SB.seg("tb-fps", function (v) { S.fps = +v; upd(); });
+    SB.seg("tb-aa", function (v) { S.aa = +v; upd(); });
+    SB.seg("tb-mode", function (v) { S.mode = v; anim = 0; cv.redraw(); });
+    upd();
+    SB.loop(document.getElementById("cv-tbdr"), function (dt) { anim += dt / 6; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 8. FLOPS 계산기 */
+  (function () {
+    var n = 1536, f = 0.9, prec = 32;
+    var REF = [["A17 Pro", 2.1], ["Adreno 750", 2.8], ["M3 10코어", 3.6], ["RTX 4090", 83], ["H100", 67]];
+    var cv = SB.canvas("#cv-flops", function (ctx, w, h) {
+      var mine = 2 * n * f * 1e9 * (prec === 16 ? 2 : 1) / 1e12;
+      var rows = REF.map(function (r) { return { n: r[0], v: r[1] * (prec === 16 ? (r[0] === "RTX 4090" ? 1 : r[0] === "H100" ? 2 * 1.0 : 2) : 1), me: false }; });
+      rows.push({ n: "내 설계", v: mine, me: true });
+      rows.sort(function (a, b) { return a.v - b.v; });
+      var lx = w < 480 ? 76 : 96, top = 22, rh = (h - top - 26) / rows.length, mn = Math.log10(0.05), mxv = Math.log10(400);
+      var X = function (v) { return lx + (Math.log10(Math.max(0.05, v)) - mn) / (mxv - mn) * (w - lx - 70); };
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText("최대 성능 (TFLOPS " + (prec === 16 ? "FP16" : "FP32") + ", 로그)", lx, 10);
+      [0.1, 1, 10, 100].forEach(function (t) { var x = X(t); ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, h - 20); ctx.stroke(); ctx.fillStyle = P.faint; ctx.font = SB.font(10, true); ctx.textAlign = "center"; ctx.fillText(t, x, h - 10); });
+      rows.forEach(function (r, i) {
+        var y = top + i * rh + rh / 2, mobile = /A17|Adreno|M3/.test(r.n);
+        ctx.fillStyle = r.me ? P.accent : mobile ? GPU() : SOC.alpha(GPU(), 0.45);
+        ctx.fillRect(lx, y - rh * 0.3, X(r.v) - lx, rh * 0.6);
+        ctx.fillStyle = r.me ? P.accent : P.text; ctx.font = SB.font(11.5, false, r.me ? 700 : 500); ctx.textAlign = "right"; ctx.fillText(r.n, lx - 6, y);
+        ctx.font = SB.font(11, true); ctx.textAlign = "left"; ctx.fillText(SB.fmt(r.v, 2), X(r.v) + 5, y);
+      });
+      var pix = 3120 * 1440 * 120;
+      SB.stat("fl-t", SB.fmt(mine, 3) + "<small>TFLOPS</small>");
+      SB.stat("fl-pp", Math.round(mine * 1e12 / pix).toLocaleString() + "<small>FLOP</small>");
+      SB.stat("fl-ai", (mine * 1e12 / 70e9).toFixed(0) + "<small>FLOP/B</small>");
+    }, { aspect: 0.42, minHeight: 230, maxHeight: 300 });
+    SB.range("fl-n", function (v) { return v.toLocaleString() + "개"; }, function (v) { n = v; cv.redraw(); });
+    SB.range("fl-f", function (v) { return v.toFixed(2) + " GHz"; }, function (v) { f = v; cv.redraw(); });
+    SB.seg("fl-prec", function (v) { prec = +v; cv.redraw(); });
+  })();
+})();
+</script>
+</body>
+</html>

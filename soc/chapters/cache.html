@@ -1,0 +1,1102 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and SoCBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "레지스터에서 플래시까지 지연의 사다리, SRAM 셀의 읽기·쓰기, 지역성과 주소 쪼개기. 캐시 크기·연관도·줄 크기·교체 정책을 바꾸며 적중률과 3C 미스, 평균 접근 시간, 타일링과 프리페치를 직접 시뮬레이션한다.", "libs": []}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>캐시와 메모리 계층 · SoCBook</title>
+<meta name="description" content="레지스터에서 플래시까지 지연의 사다리, SRAM 셀의 읽기·쓰기, 지역성과 주소 쪼개기. 캐시 크기·연관도·줄 크기·교체 정책을 바꾸며 적중률과 3C 미스, 평균 접근 시간, 타일링과 프리페치를 직접 시뮬레이션한다.">
+<link rel="canonical" href="https://semi.euiyun.com/soc/chapters/cache.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#c8285f">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="SoCBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="캐시와 메모리 계층 · SoCBook">
+<meta property="og:description" content="레지스터에서 플래시까지 지연의 사다리, SRAM 셀의 읽기·쓰기, 지역성과 주소 쪼개기. 캐시 크기·연관도·줄 크기·교체 정책을 바꾸며 적중률과 3C 미스, 평균 접근 시간, 타일링과 프리페치를 직접 시뮬레이션한다.">
+<meta property="og:url" content="https://semi.euiyun.com/soc/chapters/cache.html">
+<meta property="og:image" content="https://semi.euiyun.com/soc/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/soc/chapters/cache.html#chapter","name":"캐시와 메모리 계층","headline":"캐시와 메모리 계층 · SoCBook","description":"레지스터에서 플래시까지 지연의 사다리, SRAM 셀의 읽기·쓰기, 지역성과 주소 쪼개기. 캐시 크기·연관도·줄 크기·교체 정책을 바꾸며 적중률과 3C 미스, 평균 접근 시간, 타일링과 프리페치를 직접 시뮬레이션한다.","url":"https://semi.euiyun.com/soc/chapters/cache.html","position":5,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/soc/og.png","dateModified":"2026-10-03","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/soc/#book","name":"SoCBook · 시스템 온 칩 교과서","url":"https://semi.euiyun.com/soc/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"SoCBook","item":"https://semi.euiyun.com/soc/"},{"@type":"ListItem","position":2,"name":"5. 캐시와 메모리 계층","item":"https://semi.euiyun.com/soc/chapters/cache.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/soc.js"></script>
+<!--head:end-->
+<style>
+  .ca-addr { display: flex; flex-wrap: wrap; gap: 4px; }
+  .ca-addr button { font: inherit; font-family: var(--mono); font-size: 13px; min-width: 34px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+  .ca-addr button:hover { border-color: var(--accent); }
+  .sim-controls select { width: 100%; min-width: 0; }
+  .ca-sub { font-size: 12px; color: var(--text-faint); font-weight: 700; letter-spacing: .06em; margin-bottom: 4px; }
+  .ca-legend i { height: 10px !important; width: 10px !important; border-radius: 3px !important; }
+  .ca-log { font-size: 13.5px; color: var(--text-dim); padding: 8px 18px; border-top: 1px solid var(--border); background: var(--surface); min-height: 2.6em; line-height: 1.55; }
+  .ca-log b { color: var(--text); }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="soc"></script>
+</head>
+<body data-chapter="cache">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 05</div>
+    <h1>캐시와 메모리 계층</h1>
+    <p class="lead">4 GHz로 도는 CPU 코어에게 1클럭은 0.25 ns다. 이 코어가 DRAM에 값 하나를 물어보면 대답이 오기까지 100 ns 남짓, 즉 400클럭이 넘게 걸린다. 1클럭을 1초로 늘려 생각하면, 계산은 1초마다 한 번씩 척척 하는데 재료를 가지러 창고에 한 번 다녀오는 데 7분이 걸리는 셈이다. 그런데도 실제 프로그램이 그럭저럭 빠르게 도는 것은 코어 바로 옆에 작고 빠른 기억 장치, <strong>캐시</strong><span class="en">(Cache)</span>가 층층이 놓여 있기 때문이다. 이 장에서는 캐시를 이루는 SRAM 셀 하나에서 출발해, 주소를 쪼개 데이터를 찾는 법, 미스가 생기는 세 가지 이유, 그리고 소프트웨어가 캐시와 손발을 맞추는 법까지 직접 돌려 보며 익힌다.</p>
+    <ul class="objectives">
+      <li>레지스터·L1·L2·L3·SLC·DRAM·플래시의 지연과 용량 차이를 숫자로 감 잡는다.</li>
+      <li>6T SRAM 셀이 값을 읽고 쓰는 과정을 비트라인 전압으로 설명할 수 있다.</li>
+      <li>주소를 태그·인덱스·오프셋으로 나누고, 크기·연관도·줄 크기가 적중률에 주는 영향을 시뮬레이터로 확인한다.</li>
+      <li>미스를 강제·용량·충돌(3C)로 분류하고, 평균 메모리 접근 시간(AMAT)을 계산한다.</li>
+      <li>타일링·프리페치·쓰기 정책처럼 소프트웨어와 하드웨어가 캐시를 잘 쓰는 기법을 이해한다.</li>
+    </ul>
+    <div class="soc-locator" data-blocks="cache l3 slc" data-caption="노란색이 캐시(SRAM)다. 코어 안의 L1·L2는 코어 블록 속에 숨어 있고, 크게 보이는 것은 CPU가 공유하는 L3와 칩 전체가 공유하는 시스템 캐시(SLC)다."></div>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="ladder">
+    <h2>기다림의 사다리</h2>
+    <p>컴퓨터의 기억 장치는 한 가지가 아니다. 빠른 것은 비싸고 작으며, 크고 싼 것은 느리다. 이 둘을 동시에 가질 수 없으니, 설계자는 여러 종류를 층층이 쌓아 <span class="term">메모리 계층</span><span class="en">(Memory hierarchy)</span>을 만든다. 맨 위의 레지스터는 코어가 매 클럭 바로 쓰는 수십 개의 칸이고, 그 아래로 L1, L2, L3 캐시, 칩 전체가 함께 쓰는 시스템 캐시(SLC), 칩 밖의 DRAM, 그리고 전원을 꺼도 지워지지 않는 플래시 저장장치가 이어진다.</p>
+    <p>각 층의 지연을 막대로 늘어놓으면 한 화면에 담기지 않는다. 그래서 아래 그림은 가로축을 <strong>로그 눈금</strong>으로 그렸다. 한 칸이 10배다. 층을 눌러 보고, "사람 시간"으로 바꿔 1클럭(0.25 ns)을 1초로 늘렸을 때 각 층이 얼마나 먼지 느껴 보자.</p>
+    <figure class="play" id="fig-ladder">
+      <div class="play-view"><canvas id="cv-ladder"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="ld-mode"><button data-value="real" class="on">실제 시간</button><button data-value="human">사람 시간 (1클럭 = 1초)</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">고른 층</span><span class="v" id="ld-name" style="font-size:15px">—</span></div>
+        <div class="stat"><span class="k">접근 지연</span><span class="v" id="ld-ns">—</span></div>
+        <div class="stat"><span class="k">4 GHz 클럭으로</span><span class="v" id="ld-cyc">—</span></div>
+        <div class="stat"><span class="k">사람 시간으로</span><span class="v" id="ld-hum">—</span></div>
+        <div class="stat"><span class="k">전형적 용량</span><span class="v" id="ld-cap">—</span></div>
+      </div>
+      <figcaption><b>그림 5-1.</b> <span class="try">만져 보기</span>막대를 누르면 그 층까지 다녀오는 요청(점)이 움직인다. 지연은 2023~2025년 스마트폰 큰 코어 기준의 대략값이다(L1 4클럭, L2 약 14클럭, L3 약 40클럭, SLC 약 25 ns, LPDDR5X 약 110 ns, UFS 무작위 읽기 약 60 µs). 사람 시간으로 보면 L1은 4초, DRAM은 7분, 플래시는 사흘 가까이 걸린다.</figcaption>
+    </figure>
+    <p>사다리에서 눈여겨볼 것은 <strong>간격이 일정하지 않다</strong>는 점이다. L1에서 L3까지는 열 배 남짓 느려지지만, 칩 밖 DRAM으로 나가는 순간 다시 열 배, 플래시로 가면 거기서 또 수백 배가 뛴다. 칩 경계를 넘는 일이 그만큼 비싸다(<a href="overview.html">1장</a>에서 본 "데이터 이동이 비싸다"는 원칙). 그래서 캐시의 목표는 단순하다. <strong>코어가 원하는 데이터를 가능한 한 사다리 위쪽에서 찾게 하는 것</strong>.</p>
+    <div class="callout"><strong>왜 그냥 큰 SRAM 하나를 두지 않나?</strong><p>SRAM이 커질수록 배선이 길어지고, 주소를 해독하고 비트라인을 충전하는 데 시간이 더 든다. 대략 용량이 4배가 되면 접근 시간이 2배쯤 는다. 64 KB짜리 L1은 1 ns 안에 답하지만 16 MB짜리 L3가 같은 속도를 낼 수는 없다. 작고 빠른 것과 크고 느린 것을 섞는 계층 구조가 이 물리적 한계에 대한 답이다.</p></div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="sram">
+    <h2>캐시는 무엇으로 만드나: 6T SRAM 셀</h2>
+    <p>캐시의 비트 하나는 트랜지스터 여섯 개로 만든 <span class="term">SRAM 셀</span><span class="en">(Static RAM cell, 6T)</span>에 저장된다. 가운데에 인버터 두 개가 서로의 출력을 입력으로 물고 있다. 한쪽 노드 Q가 1이면 반대쪽 QB는 0이고, 이 상태는 전원이 있는 한 스스로 유지된다(그래서 "정적" RAM이다. DRAM처럼 새로 고칠 필요가 없다. <a href="dram.html">7장</a>). 나머지 트랜지스터 두 개는 <strong>접근 트랜지스터</strong>로, 가로로 지나가는 <span class="term">워드라인</span><span class="en">(Wordline, WL)</span>이 켜질 때만 셀을 세로 방향의 <span class="term">비트라인</span><span class="en">(Bitline, BL/BLB)</span> 한 쌍에 연결한다.</p>
+    <p>아래 셀을 직접 조작해 보자. WL 선을 누르면 워드라인이 켜지고 꺼진다. 비트라인 아래의 상자를 누르면 그 비트라인을 "프리차지(1로 미리 충전 후 떠 있음)"와 "0으로 강하게 구동" 사이에서 바꾼다. 버튼은 이 조작을 정해진 순서로 대신 해 준다.</p>
+    <figure class="play" id="fig-sram">
+      <div class="play-view"><canvas id="cv-sram"></canvas></div>
+      <div class="play-ctrl">
+        <div class="btn-row"><button class="btn sm" id="sr-wl">WL 켜기/끄기</button><button class="btn sm primary" id="sr-read">읽기 순서 실행</button><button class="btn sm" id="sr-w0">0 쓰기</button><button class="btn sm" id="sr-w1">1 쓰기</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">저장된 값 Q</span><span class="v" id="sr-q">—</span></div>
+        <div class="stat"><span class="k">비트라인 전압 차 ΔV</span><span class="v" id="sr-dv">—</span></div>
+        <div class="stat"><span class="k">감지 증폭기 출력</span><span class="v" id="sr-sa">—</span></div>
+      </div>
+      <div class="ca-log" id="sr-msg"></div>
+      <figcaption><b>그림 5-2.</b> <span class="try">만져 보기</span>읽기는 두 비트라인을 VDD로 충전한 뒤 WL을 켠다. 0을 저장한 쪽 노드가 접근 트랜지스터를 통해 자기 비트라인 전하를 아주 조금씩 빼낸다. 비트라인은 수백 개 셀이 매달린 긴 선이라 정전 용량이 커서 전압이 천천히 내려간다. 차이가 100 mV 남짓 벌어지면 감지 증폭기가 그것을 완전한 0/1로 키운다. 쓰기는 한쪽 비트라인을 0으로 세게 눌러 셀의 상태를 강제로 뒤집는다.</figcaption>
+    </figure>
+    <p>읽기에서 비트라인 전압이 끝까지 내려가기를 기다리지 않는다는 점이 중요하다. 감지 증폭기는 수십~100 mV의 작은 차이만 보고 판단하므로, 그만큼 빨리 읽을 수 있다. 대신 셀 트랜지스터의 크기 비율을 신중하게 맞춰야 한다. 읽는 동안 0 쪽 노드가 비트라인 쪽으로 끌려 올라가 값이 뒤집히면 안 되고(<span class="term">읽기 안정성</span>), 쓰는 동안에는 접근 트랜지스터가 셀 안의 PMOS를 이길 만큼 세야 한다(<span class="term">쓰기 능력</span>). 공정이 미세해질수록 트랜지스터 특성의 편차가 커져 이 균형을 맞추기 어려워진다.</p>
+    <div class="callout deep"><strong>SRAM은 공정 미세화의 혜택을 덜 받는다</strong><p>로직 트랜지스터 밀도는 5 nm에서 3 nm로 가며 1.5배 이상 좋아졌지만, 고밀도 SRAM 셀 면적은 약 0.021 µm²에서 거의 줄지 않았다(2023년 공개 자료 기준). 그래서 SoC에서 캐시가 차지하는 면적 비율이 점점 커지고, 큰 캐시를 별도 다이에 쌓는 3D 적층 캐시 같은 기법이 등장했다(<a href="design.html">17장</a>).</p></div>
+    <p>셀 하나가 1비트이니, 64 KB L1 데이터 캐시에는 데이터 셀만 52만 개가 넘고, 여기에 뒤에서 볼 태그·상태 비트가 더해진다. 셀들은 수백 행 × 수백 열의 작은 배열(서브어레이)로 묶이고, 주소의 일부가 행(워드라인)을, 일부가 열을 고른다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="locality">
+    <h2>캐시가 통하는 이유: 지역성</h2>
+    <p>캐시는 메인 메모리의 아주 작은 일부만 담는다. 스마트폰 DRAM이 12 GB라면 L1은 그 20만분의 1도 안 된다. 그런데도 실제 프로그램에서 L1 적중률은 흔히 95%를 넘는다. 이유는 프로그램의 메모리 접근이 무작위가 아니기 때문이다.</p>
+    <ul>
+      <li><span class="term">시간 지역성</span><span class="en">(Temporal locality)</span>: 방금 쓴 데이터는 곧 다시 쓰일 가능성이 높다. 반복문의 합계 변수, 자주 부르는 함수의 명령어가 그렇다.</li>
+      <li><span class="term">공간 지역성</span><span class="en">(Spatial locality)</span>: 방금 쓴 주소 근처가 곧 쓰일 가능성이 높다. 배열을 차례로 훑는 경우가 대표적이다.</li>
+    </ul>
+    <p>캐시는 공간 지역성을 이용하려고 바이트 하나가 아니라 <span class="term">캐시 줄</span><span class="en">(Cache line, 블록)</span> 단위로 데이터를 가져온다. 요즘 CPU는 대부분 64바이트, 애플의 일부 코어는 128바이트 줄을 쓴다. 아래는 여러 코드 패턴이 메모리를 건드리는 모습이다. 가로가 시간, 세로가 주소이고, 점 색은 1 KB짜리 작은 캐시에서 적중(초록)했는지 미스(빨강)였는지를 뜻한다.</p>
+    <figure class="play" id="fig-loc">
+      <div class="play-ctrl" style="border-top:0;border-bottom:1px solid var(--border)">
+        <div class="seg" id="lc-pat"><button data-value="arr" class="on">배열 합</button><button data-value="row">행렬 행 순회</button><button data-value="col">행렬 열 순회</button><button data-value="tbl">작은 표 조회</button><button data-value="list">연결 리스트</button><button data-value="rand">무작위</button></div>
+      </div>
+      <div class="play-view"><canvas id="cv-loc"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>캐시 줄 크기 <output id="lc-line-out"></output></span><input type="range" id="lc-line" min="4" max="8" step="1" value="6"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">적중률</span><span class="v" id="lc-hit">—</span></div>
+        <div class="stat"><span class="k">건드린 캐시 줄</span><span class="v" id="lc-lines">—</span></div>
+        <div class="stat"><span class="k">가져온 바이트 중 실제 사용</span><span class="v" id="lc-use">—</span></div>
+      </div>
+      <figcaption><b>그림 5-3.</b> <span class="try">만져 보기</span>4바이트 정수 256번 접근, 캐시는 1 KB(완전 연관, LRU). "행렬"은 32×32 정수 배열(행마다 128 B)을 행 우선으로 저장한 것이다. 행 순회는 이웃한 주소를 차례로 밟아 줄 하나에서 여러 번 적중하지만, 열 순회는 매번 128 B씩 건너뛰어 줄을 하나씩 낭비한다. 줄 크기를 바꿔 보자. 순차 접근은 줄이 클수록 좋아지지만, 무작위 접근은 오히려 가져온 데이터 대부분을 버린다.</figcaption>
+    </figure>
+    <div class="predict"><strong>행렬 열 순회에서 줄 크기를 16 B에서 256 B로 키우면 적중률이 오를까?</strong>
+      <p>행 하나가 128 B이고, 열 순회는 같은 열을 위에서 아래로 32번 내려간 뒤 다음 열로 간다.</p>
+      <details><summary>답 보기</summary><p>이 실험의 적중률은 줄 크기 16/32/64/128/256 B 순서로 75/87.5/0/0/50%다. 32 B까지 오르고 64~128 B에서 무너진 뒤 256 B에서는 회복한다. 줄이 128 B 이상이면 줄 하나에 한 행 전체(또는 두 행)가 들어가므로, 다음 열로 넘어갔을 때 앞에서 가져온 32개 행의 줄이 아직 캐시에 남아 있으면 적중한다. 32행 × 128 B = 4 KB가 필요한데 캐시는 1 KB뿐이라 그 전에 쫓겨난다. 256 B 줄은 두 행을 함께 담으므로 다음 행 접근이 즉시 적중해 50%를 회복한다. 다음 열에서의 재사용 실패와 줄 안의 공간 지역성은 구별해야 한다. 같은 용량에서 줄을 키우면 "줄 수"가 줄어든다는 것이 줄 크기의 숨은 비용이다. 이 문제는 뒤의 타일링 절에서 소프트웨어로 푼다.</p></details>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="address">
+    <h2>주소를 쪼개 데이터를 찾는다</h2>
+    <p>캐시는 "이 주소의 데이터가 내 안에 있나?"를 1 ns 안에 답해야 한다. 모든 칸을 하나씩 뒤질 시간은 없다. 그래서 주소를 세 조각으로 나눈다.</p>
+    <ul>
+      <li><span class="term">오프셋</span><span class="en">(Offset)</span>: 줄 안에서 몇 번째 바이트인가. 줄이 64 B면 아래 6비트.</li>
+      <li><span class="term">인덱스</span><span class="en">(Index)</span>: 몇 번 <span class="term">세트</span><span class="en">(Set)</span>를 볼 것인가. 이 비트들이 SRAM 배열의 행을 바로 고른다.</li>
+      <li><span class="term">태그</span><span class="en">(Tag)</span>: 나머지 윗비트. 같은 세트로 오는 여러 주소를 구분하는 이름표로, 데이터와 함께 저장했다가 비교한다.</li>
+    </ul>
+    <p>한 세트에 줄을 몇 개 둘 수 있는지가 <span class="term">연관도</span><span class="en">(Associativity, way 수)</span>다. 1이면 <span class="term">직접 사상</span><span class="en">(Direct-mapped)</span>, 세트가 하나뿐이고 모든 줄이 어디든 들어갈 수 있으면 <span class="term">완전 연관</span><span class="en">(Fully associative)</span>, 그 사이가 <strong>A-way 집합 연관</strong>이다. A-way 캐시는 세트를 고른 뒤 A개의 태그를 동시에 비교한다. 비교기가 A개 필요하고 전력이 들지만, 같은 세트로 몰리는 주소끼리 서로 쫓아내는 일이 줄어든다.</p>
+    <div class="formula">$$ S = \frac{C}{B \cdot A}, \qquad b_{\text{offset}} = \log_2 B, \quad b_{\text{index}} = \log_2 S, \quad b_{\text{tag}} = n - b_{\text{index}} - b_{\text{offset}} $$
+      <div class="where">\(C\): 용량(바이트), \(B\): 줄 크기, \(A\): 연관도, \(S\): 세트 수, \(n\): 주소 비트 수(여기서는 32)</div></div>
+    <figure class="play" id="fig-addr">
+      <div class="play-view"><canvas id="cv-addr"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>용량 C <output id="ad-c-out"></output></span><input type="range" id="ad-c" min="10" max="21" step="1" value="15"></label>
+        <label class="ctrl"><span>연관도 A <output id="ad-a-out"></output></span><input type="range" id="ad-a" min="0" max="4" step="1" value="2"></label>
+        <label class="ctrl"><span>줄 크기 B <output id="ad-b-out"></output></span><input type="range" id="ad-b" min="4" max="7" step="1" value="6"></label>
+        <div class="btn-row"><button class="btn sm" id="ad-rand">무작위 주소</button><button class="btn sm" id="ad-next">+B (다음 줄)</button><button class="btn sm" id="ad-same">+S·B (같은 세트)</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">세트 수 S</span><span class="v" id="ad-s">—</span></div>
+        <div class="stat"><span class="k">태그 · 인덱스 · 오프셋</span><span class="v" id="ad-bits">—</span></div>
+        <div class="stat"><span class="k">이 주소의 세트</span><span class="v" id="ad-set">—</span></div>
+        <div class="stat"><span class="k">태그 저장 부담</span><span class="v" id="ad-ovh">—</span></div>
+      </div>
+      <figcaption><b>그림 5-4.</b> <span class="try">만져 보기</span>위의 비트 칸을 눌러 주소를 바꿔 보자. 파랑이 태그, 분홍이 인덱스, 노랑이 오프셋이다. 아래 격자는 세트들이고 밝은 칸이 이 주소가 가는 세트다(세트가 많으면 한 칸이 여러 세트를 대표한다). "+S·B"를 누르면 인덱스는 그대로이고 태그만 바뀐 주소가 된다. 이런 주소들이 A개보다 많이 동시에 쓰이면 서로를 쫓아낸다. 태그 저장 부담은 줄마다 (태그 + 유효·더티 2비트)를 데이터 비트와 비교한 값이다.</figcaption>
+    </figure>
+    <p>연관도를 1에서 16으로 올리면 세트 수가 1/16로 줄고, 인덱스 비트 4개가 태그로 넘어간다. 줄 크기를 키우면 오프셋이 늘고 줄 수가 줄어 태그 부담이 작아진다. 이처럼 세 매개변수는 서로 얽혀 있다. 실제 L1은 4~8-way, L2는 8~16-way, 큰 L3·SLC는 12~16-way 정도가 흔하다. L1이 연관도를 무작정 키우지 못하는 이유는 태그 비교와 데이터 선택이 1클럭 남짓에 끝나야 하기 때문이다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="sim">
+    <h2>캐시 시뮬레이터와 미스의 세 가지 이유</h2>
+    <p>이제 부품을 모아 캐시 하나를 돌려 보자. 미스는 세 종류로 나누면 원인과 처방이 분명해진다. Mark Hill이 정리한 <span class="term">3C 모델</span>이다.</p>
+    <ul>
+      <li><strong>강제 미스</strong><span class="en">(Compulsory)</span>: 그 줄을 처음 건드릴 때. 캐시가 무한히 커도 생긴다. 처방: 줄 크기 키우기, 프리페치.</li>
+      <li><strong>용량 미스</strong><span class="en">(Capacity)</span>: 쓰는 데이터 전체(작업 집합)가 캐시보다 커서 생기는 미스. 같은 크기의 완전 연관 캐시에서도 생기는 미스로 정의한다. 처방: 캐시 키우기, 작업 집합 줄이기(타일링).</li>
+      <li><strong>충돌 미스</strong><span class="en">(Conflict)</span>: 캐시 전체에는 자리가 있는데 하필 같은 세트로 몰려서 생기는 미스. 완전 연관이면 없었을 미스다. 처방: 연관도 올리기, 데이터 배치 바꾸기.</li>
+    </ul>
+    <div class="sim" id="sim-cache">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>집합 연관 캐시 시뮬레이터</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-cache"></canvas></div>
+        <div class="sim-controls">
+          <div><div class="ca-sub">용량</div><div class="seg" id="cs-size"><button data-value="256">256 B</button><button data-value="512">512 B</button><button data-value="1024" class="on">1 KB</button><button data-value="2048">2 KB</button></div></div>
+          <div><div class="ca-sub">줄 크기</div><div class="seg" id="cs-line"><button data-value="16">16 B</button><button data-value="32" class="on">32 B</button><button data-value="64">64 B</button></div></div>
+          <div><div class="ca-sub">연관도</div><div class="seg" id="cs-ways"><button data-value="1" class="on">1</button><button data-value="2">2</button><button data-value="4">4</button><button data-value="8">8</button><button data-value="0">완전</button></div></div>
+          <div><div class="ca-sub">교체 정책</div><div class="seg" id="cs-repl"><button data-value="lru" class="on">LRU</button><button data-value="fifo">FIFO</button><button data-value="rand">무작위</button></div></div>
+          <label class="ctrl"><span>접근 패턴</span><select id="cs-pat">
+            <option value="conf">두 배열 번갈아: a[i] + b[i]</option>
+            <option value="loop">배열 반복 훑기</option>
+            <option value="stream">큰 배열 한 번 훑기</option>
+            <option value="col">행렬 열 순회</option>
+            <option value="rand">작업 집합 안 무작위</option>
+          </select></label>
+          <label class="ctrl"><span>작업 집합 / 캐시 용량 <output id="cs-ws-out"></output></span><input type="range" id="cs-ws" min="0.25" max="4" step="0.25" value="0.75"></label>
+          <label class="ctrl"><span>자동 속도 <output id="cs-spd-out"></output></span><input type="range" id="cs-spd" min="1" max="200" step="1" value="12"></label>
+          <div class="btn-row"><button class="btn sm" id="cs-1">1번</button><button class="btn sm" id="cs-100">100번</button><button class="btn sm primary" id="cs-run">▶ 자동</button><button class="btn sm" id="cs-reset">초기화</button></div>
+        </div>
+      </div>
+      <div class="legend ca-legend"><span><i style="background:var(--ok)"></i>적중</span><span><i style="background:var(--text-faint)"></i>강제 미스</span><span><i style="background:var(--warn)"></i>용량 미스</span><span><i style="background:var(--bad)"></i>충돌 미스</span><span style="color:var(--text-faint)">격자 칸 밝기 = 최근에 쓴 정도</span></div>
+      <div class="ca-log" id="cs-log">버튼을 눌러 접근을 시작하자.</div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">접근</span><span class="v" id="cs-n">0</span></div>
+        <div class="stat"><span class="k">적중률</span><span class="v" id="cs-hit">—</span></div>
+        <div class="stat"><span class="k">강제 미스</span><span class="v" id="cs-comp">0</span></div>
+        <div class="stat"><span class="k">용량 미스</span><span class="v" id="cs-cap">0</span></div>
+        <div class="stat"><span class="k">충돌 미스</span><span class="v" id="cs-conf">0</span></div>
+      </div>
+      <div class="sim-note">원소는 4바이트 정수다. 미스를 분류하려고 같은 줄 수의 완전 연관 LRU 캐시를 그림자로 함께 돌린다. 처음 보는 줄이면 강제, 그림자 캐시에서도 미스면 용량, 그림자에서는 적중인데 이 캐시에서 미스면 충돌이다. "두 배열" 패턴은 b가 a에서 정확히 캐시 용량의 배수만큼 떨어져 있어, a[i]와 b[i]가 늘 같은 세트로 간다.</div>
+    </div>
+    <div class="predict"><strong>"두 배열 번갈아" 패턴에서 작업 집합이 캐시의 0.75배인데 직접 사상 캐시는 적중률이 거의 0이다. 연관도를 2로 올리면?</strong>
+      <p>a[i]와 b[i]는 인덱스가 같고 태그만 다르다.</p>
+      <details><summary>답 보기</summary><p>충돌 미스가 사라져 적중률이 줄 하나에 든 원소 수만큼 오른다(32 B 줄이면 8개 중 7개 적중, 약 87%). 직접 사상에서는 a[i]를 가져오면 b[i]가 같은 자리를 차지하고 있던 a의 줄을 쫓아내고, 다음 a[i+1]이 다시 b의 줄을 쫓아내는 <strong>핑퐁</strong>이 일어난다. 2-way면 두 줄이 한 세트에 함께 산다. 이처럼 배열 크기가 2의 거듭제곱일 때 충돌이 잘 생기므로, 실무에서는 배열 사이에 일부러 빈칸(패딩)을 넣기도 한다. 작업 집합을 1.5배 이상으로 키우면 이번에는 연관도를 올려도 용량 미스가 남는다. 직접 확인해 보자.</p></details>
+    </div>
+    <h3>교체 정책</h3>
+    <p>세트가 꽉 찼을 때 누구를 내보낼지 정하는 것이 <span class="term">교체 정책</span><span class="en">(Replacement policy)</span>이다. <strong>LRU</strong><span class="en">(Least recently used)</span>는 가장 오래 쓰지 않은 줄을 내보낸다. 시간 지역성에 잘 맞지만, 정확한 LRU 순서를 저장하려면 way가 많을수록 비트가 많이 들어 실제로는 트리 의사 LRU 같은 근사를 쓴다. <strong>FIFO</strong>는 가장 먼저 들어온 줄을, <strong>무작위</strong>는 아무 줄이나 내보낸다. 시뮬레이터에서 "배열 반복 훑기"의 작업 집합을 캐시보다 조금 크게(1.25배) 하고 LRU와 무작위를 비교해 보자. 완전 연관 또는 4/8-way의 이 원소 단위 접근에서는 적중률이 약 87.5%다. 32 B 줄의 첫 4 B 원소는 계속 미스지만 뒤의 7개 원소가 적중하기 때문이다. 캐시 줄 최초 접근만 세면 적중률은 0%이며, 직접 사상·2-way의 이 주소 패턴은 결과가 다르다. 순환 접근에서는 LRU가 언제나 "곧 다시 쓸 줄"을 골라 내보내기 때문이다. 최근 캐시가 RRIP 같은 적응형 정책을 쓰는 이유다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="write">
+    <h2>쓰기는 어떻게 하나: 즉시 쓰기와 나중 쓰기</h2>
+    <p>읽기는 캐시에 사본을 두기만 하면 되지만, 쓰기는 문제가 생긴다. 캐시의 값을 바꾸면 메모리의 원본과 달라진다. 해결책은 두 가지다.</p>
+    <ul>
+      <li><span class="term">즉시 쓰기</span><span class="en">(Write-through)</span>: 캐시와 메모리를 함께 고친다. 메모리가 늘 최신이라 단순하지만, 쓰기마다 아래 계층으로 트래픽이 나간다. 보통 쓰기 미스 때 줄을 가져오지 않는(no-write-allocate) 방식과 짝을 이룬다.</li>
+      <li><span class="term">나중 쓰기</span><span class="en">(Write-back)</span>: 캐시만 고치고 그 줄에 <span class="term">더티 비트</span><span class="en">(Dirty bit)</span>를 켠다. 줄이 쫓겨날 때 더티면 그때 한 번 메모리에 쓴다. 같은 줄에 여러 번 쓰면 트래픽이 크게 준다. 보통 쓰기 미스 때 줄을 가져오는(write-allocate) 방식과 짝을 이룬다.</li>
+    </ul>
+    <p>아래는 4줄짜리 직접 사상 캐시 두 개다. 같은 명령을 두 캐시에 동시에 보내고 메모리 트래픽을 비교한다. A와 E, B와 F, C와 G, D와 H가 각각 같은 세트를 쓴다.</p>
+    <figure class="play" id="fig-write">
+      <div class="play-view"><canvas id="cv-write"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="wr-op"><button data-value="r">읽기</button><button data-value="w" class="on">쓰기</button></div>
+        <div class="ca-addr" id="wr-addr"></div>
+        <div class="btn-row"><button class="btn sm" id="wr-loop">A에 10번 쓰기</button><button class="btn sm" id="wr-rnd">무작위 20번</button><button class="btn sm" id="wr-flush">모두 내보내기</button><button class="btn sm" id="wr-reset">초기화</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">즉시 쓰기: 메모리로 쓴 바이트</span><span class="v" id="wr-wt">0</span></div>
+        <div class="stat"><span class="k">나중 쓰기: 메모리로 쓴 바이트</span><span class="v" id="wr-wb">0</span></div>
+        <div class="stat"><span class="k">줄 가져오기 (즉시 / 나중)</span><span class="v" id="wr-rd">0 / 0</span></div>
+      </div>
+      <div class="ca-log" id="wr-log">주소 버튼을 눌러 보자.</div>
+      <figcaption><b>그림 5-5.</b> <span class="try">만져 보기</span>각 주소에는 숫자 하나가 들어 있고 쓰기는 그 값을 1 올린다. 줄 크기 64 B, 쓰기 한 번은 8 B로 가정했다. "D" 표시가 더티 줄이다. 나중 쓰기 캐시 아래의 메모리 값이 주황색이면 캐시의 값과 다른 <strong>낡은 값</strong>이라는 뜻이다. 다른 코어나 DMA 장치가 이 메모리를 그대로 읽으면 틀린 값을 보게 된다. 이 문제가 <a href="coherence.html">6장</a>의 주제다.</figcaption>
+    </figure>
+    <p>스마트폰 SoC의 L1 데이터 캐시와 L2·L3는 거의 모두 나중 쓰기다. 다만 L1과 L2 사이에는 <span class="term">쓰기 버퍼</span><span class="en">(Write buffer)</span>를 두어, 코어가 쓰기가 끝나기를 기다리지 않고 다음 명령으로 넘어가게 한다. 이 버퍼가 메모리 순서를 미묘하게 바꾸는 이야기도 <a href="coherence.html">6장</a>에서 다룬다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="amat">
+    <h2>여러 층을 합치면: 평균 메모리 접근 시간</h2>
+    <p>캐시 계층의 성능은 <span class="term">평균 메모리 접근 시간</span><span class="en">(AMAT, Average memory access time)</span> 하나로 요약할 수 있다. L1에서 적중하면 L1 지연만, 미스하면 그 아래 층에서 걸리는 시간이 더해진다. 아래 층에도 똑같은 식을 재귀적으로 적용한다.</p>
+    <div class="formula">$$ \text{AMAT} = t_{L1} + m_{L1}\Big(t_{L2} + m_{L2}\big(t_{L3} + m_{L3}\, t_{\text{DRAM}}\big)\Big) $$
+      <div class="where">\(t\): 각 층의 적중 지연, \(m\): 각 층의 <b>지역</b> 미스율(그 층까지 내려온 요청 중 미스 비율). L1 미스 5%, L2 지역 미스 30%, L3 지역 미스 40%면 DRAM까지 가는 비율은 \(0.05 \times 0.3 \times 0.4 = 0.6\%\)다.</div></div>
+    <figure class="play" id="fig-amat">
+      <div class="play-view"><canvas id="cv-amat"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>L1 미스율 <output id="am-m1-out"></output></span><input type="range" id="am-m1" min="0.5" max="20" step="0.5" value="5"></label>
+        <label class="ctrl"><span>L2 지역 미스율 <output id="am-m2-out"></output></span><input type="range" id="am-m2" min="5" max="90" step="1" value="30"></label>
+        <label class="ctrl"><span>L3 지역 미스율 <output id="am-m3-out"></output></span><input type="range" id="am-m3" min="5" max="90" step="1" value="40"></label>
+        <label class="ctrl"><span>DRAM 지연 <output id="am-dr-out"></output></span><input type="range" id="am-dr" min="60" max="200" step="5" value="110"></label>
+        <div class="seg" id="am-l3"><button data-value="on" class="on">L3 있음</button><button data-value="off">L3 없음</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">AMAT</span><span class="v" id="am-amat">—</span></div>
+        <div class="stat"><span class="k">DRAM까지 가는 접근</span><span class="v" id="am-dram">—</span></div>
+        <div class="stat"><span class="k">캐시가 없을 때보다</span><span class="v" id="am-gain">—</span></div>
+      </div>
+      <figcaption><b>그림 5-6.</b> <span class="try">만져 보기</span>왼쪽 점 1,000개는 메모리 접근 1,000번이 각각 어느 층에서 해결되었는지 보여 준다. 오른쪽 막대는 AMAT를 층별 기여로 나눈 것이다. 지연은 4 GHz 기준 L1 4, L2 14, L3 45클럭. DRAM 점은 몇 개 안 되지만 막대에서는 큰 몫을 차지한다. L3를 끄면 L2 미스가 모두 DRAM으로 간다.</figcaption>
+    </figure>
+    <p>AMAT 막대를 보면 왜 캐시 설계가 어려운지 알 수 있다. DRAM까지 가는 접근이 1%도 안 되는데 시간은 수십 %를 차지한다. 그래서 마지막 층의 미스율을 몇 %포인트 줄이는 일이 L1 지연을 1클럭 줄이는 것만큼, 혹은 그보다 더 중요할 수 있다. 실제 코어는 비순차 실행(<a href="ooo.html">4장</a>)으로 미스를 기다리는 동안 다른 명령을 실행하고, 여러 미스를 동시에 보내서(메모리 수준 병렬성) 지연의 일부를 숨긴다. 그래도 숨길 수 없는 DRAM 지연이 많은 프로그램의 성능 한계가 된다.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>계층</th><th>전형적 용량</th><th class="num">지연 (대략)</th><th>연관도·줄</th><th>공유 범위</th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip"><i style="background:var(--b-cache)"></i>L1 명령·데이터</span></td><td>코어당 32~128 KB씩 (애플 큰 코어는 약 128~192 KB)</td><td class="num">3~5클럭 (~1 ns)</td><td>4~8-way, 64 B</td><td>코어 하나</td></tr>
+          <tr><td><span class="chip"><i style="background:var(--b-cache)"></i>L2</span></td><td>코어당 0.5~2 MB, 또는 클러스터 공유 4~16 MB</td><td class="num">10~18클럭</td><td>8~16-way</td><td>코어 하나 또는 클러스터</td></tr>
+          <tr><td><span class="chip"><i style="background:var(--b-cache)"></i>L3</span></td><td>4~16 MB</td><td class="num">30~50클럭 (~10 ns)</td><td>12~16-way</td><td>CPU 클러스터 전체</td></tr>
+          <tr><td><span class="chip"><i style="background:var(--b-cache)"></i>시스템 캐시 (SLC)</span></td><td>4~32 MB</td><td class="num">~20~35 ns</td><td>16-way 안팎</td><td>CPU·GPU·NPU·ISP 등 칩 전체</td></tr>
+          <tr><td><span class="chip"><i style="background:var(--b-mem)"></i>LPDDR5X DRAM</span></td><td>8~24 GB</td><td class="num">~100~150 ns</td><td>—</td><td>칩 전체</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>표의 값은 2023~2025년 플래그십 스마트폰 칩의 공개 사양·분석 자료를 바탕으로 한 대략값이다. 예를 들어 Arm Cortex-X4(2023)는 L1 명령·데이터 각 64 KB, 코어 전용 L2 최대 2 MB를 두고, 클러스터 공유 L3는 DSU에서 최대 32 MB까지 구성할 수 있다. 회사마다 층을 나누는 방식이 달라서, 애플처럼 L2를 클러스터가 크게 공유하고 L3 없이 SLC로 가는 설계도 있다. SB-1은 L3 약 4.8 mm²와 SLC 약 5.3 mm²를 합쳐 다이의 10%가량을 캐시에 쓴다.</p>
+    <div class="callout tip"><strong>SLC는 누구를 위한 캐시인가</strong><p>CPU 입장에서 SLC는 L4쯤 되는 캐시지만, 진짜 고객은 GPU·NPU·ISP·디스플레이 같은 다른 블록이다. 이들이 주고받는 중간 데이터(예: ISP 출력을 NPU가 읽는 것)를 SLC에서 해결하면 DRAM까지 가지 않아 에너지를 아낀다. DRAM 한 번 읽기는 SRAM 읽기보다 수십 배 비싸다. 그래서 SLC는 성능 못지않게 <strong>전력</strong>을 위한 장치다. 블록마다 SLC 공간을 나눠 주는 파티셔닝도 흔하다.</p></div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="software">
+    <h2>소프트웨어와 하드웨어가 손을 맞추면: 타일링과 프리페치</h2>
+    <p>같은 계산이라도 데이터를 건드리는 순서만 바꾸면 미스가 몇 배 줄어든다. 가장 유명한 예가 행렬 곱셈의 <span class="term">타일링</span><span class="en">(Tiling, Blocking)</span>이다. \(C = A \times B\)를 그대로 계산하면 B를 열 방향으로 훑어야 해서, 행렬이 캐시보다 크면 B의 줄이 재사용되기 전에 쫓겨난다. 행렬을 T×T 크기의 작은 타일로 나눠, 타일 세 개(A, B, C 하나씩)가 캐시에 들어가게 하면 한 번 가져온 데이터를 T번씩 재사용할 수 있다.</p>
+    <div class="sim" id="sim-tile">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>행렬 곱셈 타일링 (64×64, double)</h3></div>
+      <div class="sim-view"><canvas id="cv-tile"></canvas></div>
+      <div class="sim-controls">
+        <label class="ctrl"><span>타일 크기 T <output id="tl-t-out"></output></span><input type="range" id="tl-t" min="0" max="5" step="1" value="5"></label>
+        <div><div class="ca-sub">L1 데이터 캐시 용량 (4-way, 64 B 줄)</div><div class="seg" id="tl-c"><button data-value="2048">2 KB</button><button data-value="4096">4 KB</button><button data-value="8192" class="on">8 KB</button><button data-value="16384">16 KB</button></div></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">메모리 접근</span><span class="v" id="tl-acc">—</span></div>
+        <div class="stat"><span class="k">캐시 미스</span><span class="v" id="tl-miss">—</span></div>
+        <div class="stat"><span class="k">아래 계층 트래픽</span><span class="v" id="tl-traffic">—</span></div>
+        <div class="stat"><span class="k">타일 없을 때 대비 시간</span><span class="v" id="tl-speed">—</span></div>
+      </div>
+      <div class="sim-note">세 행렬(각 32 KB)이 메모리에 연이어 놓인 상태에서, 타일 루프(ii, jj, kk) 안에서 i, j, k 순서로 C[i][j] += A[i][k]·B[k][j]를 계산하며 모든 읽기를 실제로 캐시 시뮬레이터에 통과시킨 결과다(약 55만 번 접근). 점선은 타일 세 개가 캐시에 들어가는 한계 \(3T^2 \times 8\,\text{B} \le C\)이다. 시간은 적중 1클럭, 미스 30클럭(L2 적중 가정)으로 어림했다. 오른쪽 그림은 지금 계산 중인 타일 위치를 보여 준다.</div>
+    </div>
+    <p>타일이 너무 작으면 재사용 횟수 T가 작아 이득이 적고, 너무 크면 타일 세 개가 캐시를 넘쳐 다시 미스가 늘어난다. 그래프의 바닥이 대략 점선 근처에 있는 것을 확인하자. 고성능 수학 라이브러리(BLAS)는 이런 타일링을 L1, L2, L3 각 층에 대해 겹겹이 하고, NPU 컴파일러도 같은 일을 온칩 SRAM 크기에 맞춰 한다(<a href="npu.html">10장</a>).</p>
+    <h3>하드웨어가 미리 가져오기: 프리페처</h3>
+    <p>소프트웨어를 고치지 않아도 하드웨어가 접근 패턴을 알아채고 데이터를 미리 가져올 수 있다. 이것이 <span class="term">프리페처</span><span class="en">(Prefetcher)</span>다. 가장 기본적인 <strong>보폭 프리페처</strong><span class="en">(Stride prefetcher)</span>는 주소가 일정한 간격(보폭)으로 늘어나는 것을 두 번 연속 보면, 같은 간격으로 앞의 줄 몇 개를 미리 요청한다. 얼마나 멀리 앞서 요청할지가 <strong>프리페치 거리</strong>다.</p>
+    <figure class="play" id="fig-pf">
+      <div class="play-view"><canvas id="cv-pf"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="pf-pat"><button data-value="seq" class="on">순차</button><button data-value="stride">보폭 3줄</button><button data-value="rand">무작위</button></div>
+        <label class="ctrl"><span>프리페치 거리 (줄) <output id="pf-d-out"></output></span><input type="range" id="pf-d" min="1" max="16" step="1" value="4"></label>
+        <label class="ctrl"><span>원소당 계산 시간 <output id="pf-c-out"></output></span><input type="range" id="pf-c" min="2" max="60" step="1" value="8"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">프리페치 끔</span><span class="v" id="pf-off">—</span></div>
+        <div class="stat"><span class="k">프리페치 켬</span><span class="v" id="pf-on">—</span></div>
+        <div class="stat"><span class="k">빨라진 배수</span><span class="v" id="pf-sp">—</span></div>
+        <div class="stat"><span class="k">미스 감춤 / 헛된 요청</span><span class="v" id="pf-cov">—</span></div>
+      </div>
+      <figcaption><b>그림 5-7.</b> <span class="try">만져 보기</span>8 B 원소 512개를 처리하는 시간을 두 줄로 비교했다. 연한 칸은 계산, 빨간 칸은 데이터를 기다리며 멈춘 시간이다. 메모리 지연 200클럭, 줄 하나를 받는 데 버스가 8클럭씩 쓴다고 가정했다. 계산 시간이 짧을수록 프리페치 거리를 늘려야 지연이 다 가려진다. 무작위 접근에서는 보폭을 찾지 못해 프리페처가 거의 쉬거나, 우연히 잘못 맞춘 보폭으로 헛된 요청을 보낸다.</figcaption>
+    </figure>
+    <p>프리페치 거리는 \(d \approx \lceil t_{\text{mem}} / t_{\text{line}} \rceil\)이면 충분하다. 여기서 \(t_{\text{line}}\)은 줄 하나를 소비하는 데 걸리는 계산 시간이다. 너무 멀리 앞서 가져오면 아직 쓰지 않은 데이터가 캐시를 차지해 쓸모 있는 줄을 쫓아내고(캐시 오염), 쓸모없는 요청이 DRAM 대역폭을 낭비한다. 실제 코어에는 보폭, 공간 패턴, 포인터 추적 등 여러 프리페처가 함께 있고, 정확도를 스스로 측정해 공격성을 조절한다.</p>
+  </section>
+
+  <section class="keypoints">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>메모리 계층은 레지스터 → L1 → L2 → L3 → SLC → DRAM → 플래시로 갈수록 크고 느리다. 칩 밖 DRAM은 L1보다 약 100배, 플래시는 다시 수백 배 느리다.</li>
+      <li>캐시 비트는 6T SRAM 셀에 저장한다. 읽기는 프리차지한 비트라인의 작은 전압 차를 감지 증폭기로 키우고, 쓰기는 비트라인 하나를 0으로 눌러 셀을 뒤집는다.</li>
+      <li>주소는 태그·인덱스·오프셋으로 나뉜다. \(S = C/(B\cdot A)\). 연관도를 올리면 충돌 미스가 줄고, 줄을 키우면 공간 지역성을 더 쓰지만 줄 수가 준다.</li>
+      <li>미스는 강제·용량·충돌(3C)로 나누면 처방이 보인다. 성능은 \(\text{AMAT} = t_{\text{hit}} + m \cdot t_{\text{miss}}\)를 층마다 재귀적으로 적용해 어림한다.</li>
+      <li>타일링으로 작업 집합을 캐시에 맞추고, 프리페처로 지연을 감추고, 나중 쓰기로 쓰기 트래픽을 줄인다. 데이터를 덜 움직이는 것이 곧 성능이고 전력이다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. 32 KB, 8-way, 64 B 줄 캐시의 세트 수와 인덱스 비트 수는?</p>
+        <div class="opts">
+          <button class="opt">512세트, 9비트</button>
+          <button class="opt">256세트, 8비트</button>
+          <button class="opt" data-correct>64세트, 6비트</button>
+          <button class="opt">8세트, 3비트</button>
+        </div>
+        <div class="quiz-exp">\(S = 32768 / (64 \times 8) = 64\), \(\log_2 64 = 6\). 오프셋은 6비트, 32비트 주소라면 태그는 20비트다.</div></div>
+      <div class="quiz-q"><p>Q2. 같은 용량의 완전 연관 캐시로 바꿨더니 사라지는 미스는?</p>
+        <div class="opts">
+          <button class="opt" data-correct>충돌 미스</button><button class="opt">강제 미스</button><button class="opt">용량 미스</button><button class="opt">세 가지 모두</button>
+        </div>
+        <div class="quiz-exp">충돌 미스는 "완전 연관이었다면 적중했을 미스"로 정의된다. 강제 미스는 무한 캐시에서도, 용량 미스는 같은 크기의 완전 연관 캐시에서도 남는다.</div></div>
+      <div class="quiz-q"><p>Q3. 6T SRAM 셀을 읽을 때 비트라인 전압이 끝까지 내려가기 전에 값을 결정할 수 있는 이유는?</p>
+        <div class="opts">
+          <button class="opt">워드라인 전압을 VDD보다 높이기 때문에</button>
+          <button class="opt">셀이 비트라인을 강하게 구동하기 때문에</button>
+          <button class="opt">비트라인이 짧아 정전 용량이 거의 없기 때문에</button>
+          <button class="opt" data-correct>감지 증폭기가 두 비트라인 사이의 작은 전압 차(수십~100 mV)를 증폭하기 때문에</button>
+        </div>
+        <div class="quiz-exp">셀 트랜지스터는 작아서 긴 비트라인을 천천히 방전시킨다. 감지 증폭기 덕분에 작은 차이만 생기면 바로 읽을 수 있어 접근 시간이 짧아진다.</div></div>
+      <div class="quiz-q"><p>Q4. L1 적중 4클럭, L1 미스율 10%, L2 적중 12클럭, L2 지역 미스율 50%, DRAM 400클럭(L3 없음)일 때 AMAT는?</p>
+        <div class="opts">
+          <button class="opt">8클럭</button><button class="opt" data-correct>25.2클럭</button><button class="opt">45.2클럭</button><button class="opt">206클럭</button>
+        </div>
+        <div class="quiz-exp">\(4 + 0.1 \times (12 + 0.5 \times 400) = 4 + 0.1 \times 212 = 25.2\). 미스율 10% 중 절반이 DRAM으로 가며 평균 시간 대부분을 차지한다.</div></div>
+      <div class="quiz-q"><p>Q5. 나중 쓰기(write-back) 캐시에서 더티 비트가 하는 일은?</p>
+        <div class="opts">
+          <button class="opt">줄이 유효한지 표시한다</button>
+          <button class="opt" data-correct>줄이 쫓겨날 때 메모리에 다시 써야 하는지 표시한다</button>
+          <button class="opt">다른 코어가 이 줄을 가졌는지 표시한다</button>
+          <button class="opt">LRU 순서를 저장한다</button>
+        </div>
+        <div class="quiz-exp">캐시에서만 값을 바꾼 줄은 메모리보다 새롭다. 더티 비트가 켜진 줄만 내보낼 때 메모리에 쓰면 되므로, 같은 줄에 여러 번 써도 메모리 쓰기는 한 번이다.</div></div>
+      <div class="quiz-q"><p>Q6. 행렬 곱셈을 타일링하는 주된 목적은?</p>
+        <div class="opts">
+          <button class="opt">곱셈 횟수를 줄이려고</button>
+          <button class="opt">강제 미스를 없애려고</button>
+          <button class="opt" data-correct>한 번에 다루는 작업 집합을 캐시 크기에 맞춰, 가져온 데이터를 여러 번 재사용하려고</button>
+          <button class="opt">캐시 연관도를 높이려고</button>
+        </div>
+        <div class="quiz-exp">곱셈 횟수(\(N^3\))는 그대로다. 타일 세 개가 캐시에 들어가면 각 원소를 T번 재사용하므로 용량 미스가 크게 준다. 강제 미스는 데이터를 처음 가져올 때 생기므로 그대로 남는다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var P = SB.palette();
+  SB.onTheme(function () { P = SB.palette(); });
+  function u(v, unit) { return v + "<small>" + unit + "</small>"; }
+  function fmtNs(ns) { return ns < 1 ? ns.toFixed(2) + " ns" : ns < 1000 ? SB.fmt(ns, 3) + " ns" : SB.fmt(ns / 1000, 3) + " µs"; }
+  function human(s) { return s < 60 ? (s < 10 ? s.toFixed(1) : Math.round(s)) + "초" : s < 3600 ? (s / 60).toFixed(1) + "분" : s < 86400 ? (s / 3600).toFixed(1) + "시간" : (s / 86400).toFixed(1) + "일"; }
+
+  /* ---------------------------------------------------------------- 1. 지연 사다리 */
+  (function () {
+    var L = [
+      { n: "레지스터", ns: 0.25, t: "big", cap: "~1 KB" },
+      { n: "L1 캐시", ns: 1, t: "cache", cap: "64~128 KB" },
+      { n: "L2 캐시", ns: 3.5, t: "cache", cap: "0.5~2 MB" },
+      { n: "L3 캐시", ns: 10, t: "cache", cap: "4~16 MB" },
+      { n: "시스템 캐시", ns: 25, t: "cache", cap: "8~24 MB" },
+      { n: "DRAM", ns: 110, t: "mem", cap: "8~24 GB" },
+      { n: "플래시 (UFS)", ns: 60000, t: "io", cap: "256 GB~1 TB" },
+    ];
+    var sel = 5, mode = "real", anim = 0, geo = { top: 0, rh: 1 };
+    var cv = SB.canvas("#cv-ladder", function (ctx, w, h) {
+      var narrow = w < 520;
+      var lx = narrow ? 84 : 116, rx = w - (narrow ? 66 : 96), top = 30, rh = (h - top - 26) / L.length;
+      geo = { top: top, rh: rh };
+      var mn = Math.log10(0.1), mx = Math.log10(2e5);
+      var X = function (ns) { return lx + (Math.log10(ns) - mn) / (mx - mn) * (rx - lx); };
+      ctx.font = SB.font(10.5, true); ctx.textAlign = "center"; ctx.textBaseline = "top";
+      var tl = ["0.1ns", "1ns", "10ns", "100ns", "1µs", "10µs", "100µs"];
+      for (var e = -1; e <= 5; e++) {
+        var x = X(Math.pow(10, e));
+        ctx.strokeStyle = P.grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, top - 4); ctx.lineTo(x, h - 22); ctx.stroke();
+        if (!narrow || e % 2 === 1) { ctx.fillStyle = P.faint; ctx.fillText(tl[e + 1], x, h - 18); }
+      }
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText(mode === "real" ? "접근 지연 (로그 눈금, 한 칸 = 10배)" : "1클럭을 1초로 늘리면", lx, 13);
+      L.forEach(function (l, i) {
+        var y = top + i * rh + rh / 2, bh = Math.min(22, rh * 0.62), on = i === sel;
+        var col = SOC.color(l.t);
+        ctx.globalAlpha = on ? 1 : 0.45; ctx.fillStyle = col;
+        SOC.roundRect(ctx, lx, y - bh / 2, Math.max(3, X(l.ns) - lx), bh, 4); ctx.fill(); ctx.globalAlpha = 1;
+        ctx.fillStyle = on ? P.text : P.dim; ctx.font = SB.font(narrow ? 11.5 : 12.5, false, on ? 700 : 500); ctx.textAlign = "right";
+        ctx.fillText(l.n, lx - 8, y);
+        ctx.font = SB.font(narrow ? 10.5 : 11.5, true, on ? 700 : 400); ctx.textAlign = "right"; ctx.fillStyle = on ? P.text : P.dim;
+        ctx.fillText(mode === "real" ? fmtNs(l.ns) : human(l.ns / 0.25), w - 6, y);
+        if (on) {
+          var per = 0.7 + 0.45 * Math.log10(l.ns / 0.25 + 1), ph = (anim % per) / per, tri = ph < 0.5 ? ph * 2 : 2 - ph * 2;
+          var px = lx + (X(l.ns) - lx) * tri;
+          ctx.fillStyle = P.text; ctx.beginPath(); ctx.arc(px, y, 4.5, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = P.bg; ctx.lineWidth = 1.5; ctx.stroke();
+        }
+      });
+    }, { aspect: 0.5, minHeight: 290, maxHeight: 380 });
+    function upd() {
+      var l = L[sel];
+      SB.stat("ld-name", l.n);
+      SB.stat("ld-ns", fmtNs(l.ns));
+      SB.stat("ld-cyc", u(SB.fmt(l.ns * 4, 3), "클럭"));
+      SB.stat("ld-hum", human(l.ns / 0.25));
+      SB.stat("ld-cap", l.cap);
+      cv.redraw();
+    }
+    SOC.pointer(cv.canvas, { down: function (x, y) { var i = Math.floor((y - geo.top) / geo.rh); if (i >= 0 && i < L.length) { sel = i; anim = 0; upd(); } } });
+    cv.canvas.style.cursor = "pointer";
+    SB.seg("ld-mode", function (v) { mode = v; upd(); });
+    SB.loop(cv.canvas, function (dt) { anim += dt; cv.redraw(); });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 2. 6T SRAM 셀 */
+  (function () {
+    var S = { q: 1, wl: false, dBL: "pre", dBLB: "pre", vBL: 1, vBLB: 1, sense: null, hist: [], script: [], st: 0, msg: "" };
+    var hitR = {};
+    var msgEl = document.getElementById("sr-msg");
+    function say(m) { S.msg = m; msgEl.innerHTML = m; }
+    var cv = SB.canvas("#cv-sram", function (ctx, w, h) {
+      var narrow = w < 520;
+      var ch = h * 0.66, xBL = w * (narrow ? 0.12 : 0.18), xBLB = w - xBL, yWL = 30, yc = ch * 0.52;
+      var xQ = w * 0.37, xQB = w * 0.63;
+      var vcol = function (v) { return SOC.mix(SB.color("text-faint"), SB.color("accent-2"), v); };
+      // WL
+      ctx.lineWidth = S.wl ? 4 : 2.5; ctx.strokeStyle = S.wl ? P.accent : P.faint;
+      ctx.beginPath(); ctx.moveTo(8, yWL); ctx.lineTo(w - 8, yWL); ctx.stroke();
+      ctx.fillStyle = S.wl ? P.accent : P.dim; ctx.font = SB.font(11.5, true, 700); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      ctx.fillText("WL " + (S.wl ? "켜짐" : "꺼짐") + (narrow ? "" : " (누르기)"), 10, yWL - 4);
+      hitR.wl = yWL;
+      // bitlines
+      [[xBL, S.vBL, "BL"], [xBLB, S.vBLB, "BLB"]].forEach(function (b) {
+        ctx.strokeStyle = vcol(b[1]); ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(b[0], yWL - 14); ctx.lineTo(b[0], ch - 34); ctx.stroke();
+        ctx.fillStyle = P.text; ctx.font = SB.font(11, true, 700); ctx.textAlign = b[2] === "BL" ? "left" : "right"; ctx.textBaseline = "top";
+        ctx.fillText(b[2] + " " + b[1].toFixed(2) + "V", b[0] + (b[2] === "BL" ? 7 : -7), yWL + 8);
+      });
+      // access transistors + wires
+      function acc(xb, xn, gateX) {
+        ctx.strokeStyle = P.dim; ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.moveTo(xb, yc); ctx.lineTo(xn, yc); ctx.stroke();
+        var tw = Math.min(30, Math.abs(xn - xb) * 0.45), tx = gateX - tw / 2;
+        ctx.fillStyle = S.wl ? SOC.alpha(P.accent, 0.25) : P.surface; ctx.strokeStyle = S.wl ? P.accent : P.border; ctx.lineWidth = 1.5;
+        SOC.roundRect(ctx, tx, yc - 9, tw, 18, 3); ctx.fill(); ctx.stroke();
+        ctx.strokeStyle = S.wl ? P.accent : P.faint; ctx.beginPath(); ctx.moveTo(gateX, yWL); ctx.lineTo(gateX, yc - 9); ctx.stroke();
+      }
+      acc(xBL, xQ, (xBL + xQ) / 2); acc(xBLB, xQB, (xBLB + xQB) / 2);
+      // inverters (cross-coupled)
+      function inv(x0, x1, y, dirRight) {
+        var m = (x0 + x1) / 2, s = 13;
+        ctx.strokeStyle = P.dim; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(x0, yc); ctx.lineTo(x0, y); ctx.lineTo(x1, y); ctx.lineTo(x1, yc); ctx.stroke();
+        ctx.fillStyle = P.bg; ctx.strokeStyle = P.text; ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        if (dirRight) { ctx.moveTo(m - s, y - s); ctx.lineTo(m + s, y); ctx.lineTo(m - s, y + s); }
+        else { ctx.moveTo(m + s, y - s); ctx.lineTo(m - s, y); ctx.lineTo(m + s, y + s); }
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.beginPath(); ctx.arc(dirRight ? m + s + 3 : m - s - 3, y, 3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+      inv(xQ, xQB, yc - 30, true); inv(xQ, xQB, yc + 30, false);
+      // nodes
+      [[xQ, S.q, "Q"], [xQB, 1 - S.q, "QB"]].forEach(function (n) {
+        ctx.fillStyle = n[1] ? P.accent2 : P.surface; ctx.strokeStyle = P.accent2; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(n[0], yc, 11, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = n[1] ? "#fff" : P.text; ctx.font = SB.font(12, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(n[1], n[0], yc + 0.5);
+        ctx.fillStyle = P.dim; ctx.font = SB.font(11, true); ctx.textAlign = n[2] === "Q" ? "left" : "right"; ctx.fillText(n[2], n[0] + (n[2] === "Q" ? 15 : -15), yc);
+      });
+      // drivers
+      function drv(x, d, key) {
+        var bw = narrow ? 58 : 74, bh = 26, bx = SB.clamp(x - bw / 2, 4, w - bw - 4), by = ch - 32;
+        ctx.fillStyle = d === "0" ? SOC.alpha(P.bad, 0.18) : P.surface; ctx.strokeStyle = d === "0" ? P.bad : P.border; ctx.lineWidth = 1.4;
+        SOC.roundRect(ctx, bx, by, bw, bh, 6); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = d === "0" ? P.bad : P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(d === "0" ? "0 구동" : "프리차지", bx + bw / 2, by + bh / 2);
+        hitR[key] = { x: bx, y: by, w: bw, h: bh };
+      }
+      drv(xBL, S.dBL, "bl"); drv(xBLB, S.dBLB, "blb");
+      // sense amp
+      var sw = Math.min(150, xBLB - xBL - 150), sx = w / 2 - sw / 2, sy = ch - 32;
+      if (sw > 60) {
+        ctx.fillStyle = S.sense != null ? SOC.alpha(P.ok, 0.18) : P.surface; ctx.strokeStyle = S.sense != null ? P.ok : P.border;
+        SOC.roundRect(ctx, sx, sy, sw, 26, 6); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = S.sense != null ? P.ok : P.dim; ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(S.sense != null ? "감지: " + S.sense : "감지 증폭기", w / 2, sy + 13);
+      }
+      // history plot
+      var py = ch + 8, ph = h - py - 8, px0 = 44, pw = w - px0 - 10;
+      ctx.strokeStyle = P.grid; ctx.strokeRect(px0, py, pw, ph);
+      ctx.fillStyle = P.faint; ctx.font = SB.font(10, true); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      ctx.fillText("1V", px0 - 4, py + 4); ctx.fillText("0", px0 - 4, py + ph - 4);
+      var Hn = S.hist.length, N = 300;
+      ctx.fillStyle = SOC.alpha(P.accent, 0.12);
+      for (var i = 0; i < Hn; i++) if (S.hist[i][2]) ctx.fillRect(px0 + (i + N - Hn) / N * pw, py, pw / N + 0.6, ph);
+      [[0, P.accent2], [1, P.warn]].forEach(function (s) {
+        ctx.strokeStyle = s[1]; ctx.lineWidth = 2; ctx.beginPath();
+        for (var i = 0; i < Hn; i++) { var x = px0 + (i + N - Hn) / N * pw, y = py + ph - S.hist[i][s[0]] * (ph - 4) - 2; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+        ctx.stroke();
+      });
+      ctx.textAlign = "left"; ctx.font = SB.font(10.5, true, 700);
+      ctx.fillStyle = P.accent2; ctx.fillText("BL", px0 + 6, py + 10);
+      ctx.fillStyle = P.warn; ctx.fillText("BLB", px0 + 30, py + 10);
+      ctx.fillStyle = P.accent; ctx.fillText("▮ WL 켜짐", px0 + 66, py + 10);
+    }, { aspect: 0.62, minHeight: 330, maxHeight: 440 });
+
+    function step(dt) {
+      if (S.script.length) {
+        var c = S.script[0];
+        if (!c.started) { c.started = true; S.st = 0; if (c.set) Object.keys(c.set).forEach(function (k) { S[k] = c.set[k]; }); if (c.say) say(c.say); }
+        S.st += dt;
+        if (S.st >= c.dur || (c.until && c.until())) S.script.shift();
+      }
+      ["BL", "BLB"].forEach(function (k) {
+        var d = S["d" + k], node = k === "BL" ? S.q : 1 - S.q, v = S["v" + k];
+        if (d === "0") v -= v * Math.min(1, dt * 14);
+        else if (!S.wl) v += (1 - v) * Math.min(1, dt * 7);
+        else if (node === 0) v = Math.max(0, v - 0.55 * dt);
+        S["v" + k] = v;
+      });
+      if (S.wl && S.vBL < 0.3 && S.q === 1) { S.q = 0; say("<b>쓰기 완료.</b> BL이 0으로 눌리자 접근 트랜지스터가 Q 노드를 끌어내렸고, 교차 결합 인버터가 새 상태(Q=0)를 붙잡았다."); }
+      if (S.wl && S.vBLB < 0.3 && S.q === 0) { S.q = 1; say("<b>쓰기 완료.</b> BLB가 0으로 눌리자 QB가 내려가고 Q가 1로 뒤집혔다."); }
+      var dv = S.vBL - S.vBLB;
+      if (S.wl && S.dBL === "pre" && S.dBLB === "pre" && Math.abs(dv) > 0.1) { if (S.sense == null) say("<b>감지!</b> 두 비트라인 차이가 100 mV를 넘었다. 감지 증폭기가 이를 " + (dv > 0 ? "1" : "0") + "로 확정한다. 비트라인이 바닥까지 내려가길 기다릴 필요가 없다."); S.sense = dv > 0 ? 1 : 0; }
+      if (!S.wl) S.sense = null;
+      S.hist.push([S.vBL, S.vBLB, S.wl]); if (S.hist.length > 300) S.hist.shift();
+    }
+    function readout() {
+      SB.stat("sr-q", String(S.q));
+      SB.stat("sr-dv", u(Math.round(Math.abs(S.vBL - S.vBLB) * 1000), "mV"));
+      SB.stat("sr-sa", S.sense == null ? "—" : String(S.sense));
+    }
+    SOC.pointer(cv.canvas, {
+      down: function (x, y) {
+        var inR = function (r) { return r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; };
+        if (Math.abs(y - hitR.wl) < 14) { S.script = []; S.wl = !S.wl; say(S.wl ? "WL을 켰다. 두 비트라인이 프리차지 상태면 <b>읽기</b>가, 한쪽이 0으로 눌려 있으면 <b>쓰기</b>가 일어난다." : "WL을 껐다. 셀이 비트라인에서 떨어지고, 프리차지 회로가 비트라인을 다시 VDD로 충전한다."); }
+        else if (inR(hitR.bl)) { S.script = []; S.dBL = S.dBL === "0" ? "pre" : "0"; }
+        else if (inR(hitR.blb)) { S.script = []; S.dBLB = S.dBLB === "0" ? "pre" : "0"; }
+      },
+    });
+    cv.canvas.style.cursor = "pointer";
+    document.getElementById("sr-wl").onclick = function () { S.script = []; S.wl = !S.wl; };
+    document.getElementById("sr-read").onclick = function () {
+      S.script = [
+        { set: { wl: false, dBL: "pre", dBLB: "pre" }, dur: 0.5, say: "① 두 비트라인을 VDD로 <b>프리차지</b>하고 떠 있게 둔다." },
+        { set: { wl: true }, dur: 2.5, say: "② WL을 켠다. 0을 저장한 쪽 노드가 자기 비트라인을 천천히 방전시킨다…", until: function () { return S.sense != null && S.st > 0.35; } },
+        { set: {}, dur: 0.3 },
+        { set: { wl: false }, dur: 0.2, say: "③ 값을 읽었으니 WL을 끄고 다시 프리차지한다. 저장된 값은 그대로다(비파괴 읽기)." },
+      ];
+    };
+    function wr(bit) {
+      S.script = [
+        { set: { wl: false, dBL: bit ? "pre" : "0", dBLB: bit ? "0" : "pre" }, dur: 0.4, say: "① " + (bit ? "BLB" : "BL") + "를 0으로 세게 구동하고 반대쪽은 1로 둔다." },
+        { set: { wl: true }, dur: 0.6, say: "② WL을 켠다. 쓰기 드라이버가 셀 안의 PMOS를 이기고 노드를 끌어내린다." },
+        { set: { wl: false }, dur: 0.15 },
+        { set: { dBL: "pre", dBLB: "pre" }, dur: 0.1 },
+      ];
+    }
+    document.getElementById("sr-w0").onclick = function () { wr(0); };
+    document.getElementById("sr-w1").onclick = function () { wr(1); };
+    say("셀에는 지금 <b>1</b>이 저장되어 있다. <b>읽기 순서 실행</b>을 누르거나 WL 선을 직접 눌러 보자.");
+    SB.loop(cv.canvas, function (dt) { step(dt); readout(); cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 3. 지역성 */
+  (function () {
+    var N = 256, pat = "arr", lineLog = 6;
+    var r = SB.rng(11), perm = [];
+    for (var i = 0; i < 64; i++) perm.push(i);
+    for (i = 63; i > 0; i--) { var j = Math.floor(r() * (i + 1)), t = perm[i]; perm[i] = perm[j]; perm[j] = t; }
+    var slot = perm.map(function (p) { return Math.floor(p * 256 + r() * 7) * 32 % 16384; });
+    var r2 = SB.rng(5), rnd = [], tbl = [];
+    for (i = 0; i < N; i++) { rnd.push(Math.floor(r2() * 4096) * 4); tbl.push(Math.floor(r2() * 64) * 4); }
+    var GEN = {
+      arr: function (k) { return 4 * k; },
+      row: function (k) { return 4 * ((k >> 5) * 32 + (k & 31)); },
+      col: function (k) { return 4 * ((k & 31) * 32 + (k >> 5)); },
+      tbl: function (k) { return tbl[k]; },
+      list: function (k) { return slot[k % 64]; },
+      rand: function (k) { return rnd[k]; },
+    };
+    var res = null;
+    function run() {
+      var B = 1 << lineLog, lines = 1024 / B, m = new Map(), out = [], hit = 0, seen = new Set();
+      for (var k = 0; k < N; k++) {
+        var a = GEN[pat](k), la = Math.floor(a / B), h = m.has(la);
+        if (h) { m.delete(la); hit++; }
+        m.set(la, 1); if (m.size > lines) m.delete(m.keys().next().value);
+        seen.add(la); out.push([a, h]);
+      }
+      var mn = Infinity, mx = -Infinity; out.forEach(function (o) { mn = Math.min(mn, o[0]); mx = Math.max(mx, o[0]); });
+      res = { out: out, hit: hit, lines: seen.size, mn: mn, mx: mx + 4, B: B, misses: N - hit };
+      SB.stat("lc-hit", u((hit / N * 100).toFixed(1), "%"));
+      SB.stat("lc-lines", u(seen.size, "줄"));
+      var used = new Set(out.map(function (o) { return o[0]; })).size * 4;
+      SB.stat("lc-use", u(Math.min(100, used / (res.misses * B) * 100).toFixed(0), "%"));
+      cv.redraw();
+    }
+    var cv = SB.canvas("#cv-loc", function (ctx, w, h) {
+      if (!res) return;
+      var x0 = 54, y0 = 12, pw = w - x0 - 12, ph = h - y0 - 30;
+      var span = Math.max(res.mx - res.mn, res.B);
+      var Y = function (a) { return y0 + ph - (a - res.mn) / span * ph; };
+      var nl = span / res.B;
+      if (nl <= 70) {
+        for (var l = 0; l <= nl; l++) { var yy = Y(res.mn - (res.mn % res.B) + l * res.B); if (yy < y0 - 1) continue; ctx.fillStyle = l % 2 ? SOC.alpha(P.accent2, 0.06) : "transparent"; ctx.fillRect(x0, yy - ph / nl, pw, ph / nl); }
+      }
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0, y0 + ph); ctx.lineTo(x0 + pw, y0 + ph); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, true); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      ctx.fillText(SB.bytes(res.mn + span, 3).replace(" ", ""), x0 - 4, y0 + 4); ctx.fillText(SB.bytes(res.mn).replace(" ", ""), x0 - 4, y0 + ph - 4);
+      ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText("시간 (접근 순서) →", x0 + pw / 2, y0 + ph + 8);
+      ctx.save(); ctx.translate(12, y0 + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillText("주소", 0, 0); ctx.restore();
+      var r0 = Math.max(1.6, Math.min(3.2, pw / N * 0.6));
+      res.out.forEach(function (o, k) {
+        ctx.fillStyle = o[1] ? P.ok : P.bad;
+        ctx.beginPath(); ctx.arc(x0 + (k + 0.5) / N * pw, Y(o[0] + 2), r0, 0, Math.PI * 2); ctx.fill();
+      });
+    }, { aspect: 0.42, minHeight: 230, maxHeight: 330 });
+    SB.seg("lc-pat", function (v) { pat = v; run(); });
+    SB.range("lc-line", function (v) { return (1 << v) + " B"; }, function (v) { lineLog = v; run(); });
+    run();
+  })();
+
+  /* ---------------------------------------------------------------- 4. 주소 쪼개기 */
+  (function () {
+    var addr = 0x8001A2C4 >>> 0, cLog = 15, aIdx = 2, bLog = 6;
+    var geo = null;
+    function fields() {
+      var A = 1 << aIdx, lines = Math.pow(2, cLog - bLog), ways = Math.min(A, lines), S = lines / ways;
+      var ib = Math.round(Math.log2(S)), ob = bLog, tb = 32 - ib - ob;
+      return { A: ways, S: S, ib: ib, ob: ob, tb: tb, set: ib ? (addr >>> ob) & (S - 1) : 0, tag: tb >= 32 ? addr : (addr >>> (ob + ib)), off: addr & ((1 << ob) - 1) };
+    }
+    var cv = SB.canvas("#cv-addr", function (ctx, w, h) {
+      var F = fields(), pad = 10, bw = (w - 2 * pad) / 32, by = 40, bh = Math.min(34, bw * 2.2);
+      geo = { pad: pad, bw: bw, by: by, bh: bh };
+      ctx.fillStyle = P.text; ctx.font = SB.font(14, true, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText("주소 0x" + addr.toString(16).toUpperCase().padStart(8, "0"), pad, 16);
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, true); ctx.textAlign = "right";
+      if (w > 420) ctx.fillText("비트 칸을 눌러 바꾸기", w - pad, 16);
+      for (var i = 0; i < 32; i++) {
+        var bit = 31 - i, v = (addr >>> bit) & 1, x = pad + i * bw;
+        var col = bit < F.ob ? P.warn : bit < F.ob + F.ib ? P.accent : P.accent2;
+        ctx.fillStyle = SOC.alpha(col, v ? 0.55 : 0.14); ctx.fillRect(x + 0.5, by, bw - 1, bh);
+        ctx.fillStyle = P.text; ctx.font = SB.font(Math.min(13, bw * 0.75), true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(v, x + bw / 2, by + bh / 2);
+        if (bit % 4 === 0) { ctx.strokeStyle = P.border; ctx.beginPath(); ctx.moveTo(x + bw, by - 3); ctx.lineTo(x + bw, by + bh + 3); ctx.stroke(); }
+      }
+      // brackets
+      var segs = [[31, F.ob + F.ib, "태그 " + F.tb + "b", P.accent2, F.tag], [F.ob + F.ib - 1, F.ob, "인덱스 " + F.ib + "b", P.accent, F.set], [F.ob - 1, 0, "오프셋 " + F.ob + "b", P.warn, F.off]];
+      var ly = by + bh + 6;
+      segs.forEach(function (s, k) {
+        if (s[0] < s[1]) return;
+        var xa = pad + (31 - s[0]) * bw + 1, xb = pad + (32 - s[1]) * bw - 1;
+        ctx.strokeStyle = s[3]; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(xa, ly); ctx.lineTo(xa, ly + 5); ctx.lineTo(xb, ly + 5); ctx.lineTo(xb, ly); ctx.stroke();
+        var txt = s[2], val = (k === 0 ? "0x" + (s[4] >>> 0).toString(16) : String(s[4]));
+        ctx.font = SB.font(11, false, 700); var tw = Math.max(ctx.measureText(txt).width, ctx.measureText(val).width);
+        var cx = SB.clamp((xa + xb) / 2, pad + tw / 2, w - pad - tw / 2);
+        var row = (xb - xa < tw + 4 && k === 2) ? 1 : 0;
+        if (k === 1 && xb - xa < tw + 4) row = 2;
+        ctx.fillStyle = s[3]; ctx.textAlign = "center"; ctx.textBaseline = "top";
+        ctx.fillText(txt, cx, ly + 9 + row * 0);
+        ctx.fillStyle = P.text; ctx.font = SB.font(11, true, 600); ctx.fillText(val, cx, ly + 23);
+      });
+      // set grid
+      var gy = ly + 46, gh = h - gy - 10, nShow = Math.min(F.S, 256), per = F.S / nShow;
+      var cols = Math.min(nShow, w < 500 ? 32 : 64), rows = Math.ceil(nShow / cols);
+      var cw = (w - 2 * pad) / cols, chh = Math.min(cw, 22, (gh - 18) / Math.max(rows, 1));
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("세트 " + F.S.toLocaleString() + "개" + (per > 1 ? " (한 칸 = " + per + "세트)" : "") + " × " + F.A + "-way", pad, gy);
+      var selCell = Math.floor(F.set / per);
+      for (var c = 0; c < nShow; c++) {
+        var gx = pad + (c % cols) * cw, gyy = gy + 18 + Math.floor(c / cols) * chh;
+        ctx.fillStyle = c === selCell ? P.accent : P.surface; ctx.fillRect(gx + 0.5, gyy + 0.5, cw - 1, chh - 1);
+      }
+    }, { aspect: 0.27, minHeight: 230, maxHeight: 250 });
+    function upd() {
+      var F = fields();
+      SB.stat("ad-s", F.S.toLocaleString());
+      SB.stat("ad-bits", F.tb + " · " + F.ib + " · " + F.ob);
+      SB.stat("ad-set", "#" + F.set);
+      var lineBits = (1 << bLog) * 8;
+      SB.stat("ad-ovh", u(((F.tb + 2) / lineBits * 100).toFixed(1), "%"));
+      cv.redraw();
+    }
+    SOC.pointer(cv.canvas, { down: function (x, y) { if (!geo) return; if (y >= geo.by && y <= geo.by + geo.bh) { var i = Math.floor((x - geo.pad) / geo.bw); if (i >= 0 && i < 32) { addr = (addr ^ (1 << (31 - i))) >>> 0; upd(); } } } });
+    cv.canvas.style.cursor = "pointer";
+    SB.range("ad-c", function (v) { return SB.bytes(Math.pow(2, v)); }, function (v) { cLog = v; upd(); });
+    SB.range("ad-a", function (v) { return (1 << v) + "-way"; }, function (v) { aIdx = v; upd(); });
+    SB.range("ad-b", function (v) { return (1 << v) + " B"; }, function (v) { bLog = v; upd(); });
+    var rr = SB.rng(3);
+    document.getElementById("ad-rand").onclick = function () { addr = (Math.floor(rr() * 4294967296)) >>> 0; upd(); };
+    document.getElementById("ad-next").onclick = function () { addr = (addr + (1 << bLog)) >>> 0; upd(); };
+    document.getElementById("ad-same").onclick = function () { var F = fields(); addr = (addr + F.S * (1 << bLog)) >>> 0; upd(); };
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 5. 캐시 시뮬레이터 */
+  (function () {
+    var cfg = { size: 1024, line: 32, ways: 1, repl: "lru", pat: "conf", ws: 0.75, spd: 12 };
+    var C = null, running = false, acc = 0;
+    var logEl = document.getElementById("cs-log");
+    function W() { return Math.max(cfg.line * 2, Math.round(cfg.ws * cfg.size / 8) * 8); }
+    function gen(k) {
+      var ws = W();
+      switch (cfg.pat) {
+        case "loop": return (k * 4) % ws;
+        case "stream": return k * 4;
+        case "conf": { var n = ws / 8, i = Math.floor(k / 2) % n; return (k % 2 ? cfg.size * 4 : 0) + 4 * i; }
+        case "col": { var R = Math.max(cfg.line, Math.floor(ws / 32 / 4) * 4), cols = R / 4, c = Math.floor(k / 32) % cols, r = k % 32; return r * R + 4 * c; }
+        default: return Math.floor(C.rng() * ws / 4) * 4;
+      }
+    }
+    function reset() {
+      var lines = cfg.size / cfg.line, ways = cfg.ways === 0 ? lines : Math.min(cfg.ways, lines), sets = lines / ways;
+      C = { lines: lines, ways: ways, sets: sets, set: [], seen: new Set(), shadow: new Map(), n: 0, hit: 0, comp: 0, cap: 0, conf: 0, recent: [], last: null, clk: 0, rng: SB.rng(7), rrng: SB.rng(9) };
+      for (var s = 0; s < sets; s++) { var a = []; for (var w = 0; w < ways; w++) a.push({ v: false, tag: 0, la: 0, tin: 0, tuse: 0 }); C.set.push(a); }
+      logEl.innerHTML = "캐시 " + SB.bytes(cfg.size) + " = " + lines + "줄 × " + cfg.line + " B, " + sets + "세트 × " + ways + "-way. 작업 집합 " + SB.bytes(W()) + ".";
+      stats(); cv && cv.redraw();
+    }
+    function access() {
+      var addr = gen(C.n), la = Math.floor(addr / cfg.line), s = la % C.sets, tag = Math.floor(la / C.sets);
+      C.clk++;
+      var inSh = C.shadow.has(la); if (inSh) C.shadow.delete(la);
+      C.shadow.set(la, 1); if (C.shadow.size > C.lines) C.shadow.delete(C.shadow.keys().next().value);
+      var set = C.set[s], way = -1, kind, ev = null;
+      for (var w = 0; w < C.ways; w++) if (set[w].v && set[w].tag === tag) way = w;
+      if (way >= 0) { kind = "hit"; C.hit++; set[way].tuse = C.clk; }
+      else {
+        kind = !C.seen.has(la) ? "comp" : !inSh ? "cap" : "conf"; C[kind]++;
+        for (w = 0; w < C.ways; w++) if (!set[w].v) { way = w; break; }
+        if (way < 0) {
+          if (cfg.repl === "rand") way = Math.floor(C.rrng() * C.ways);
+          else { var key = cfg.repl === "lru" ? "tuse" : "tin", m = Infinity; for (w = 0; w < C.ways; w++) if (set[w][key] < m) { m = set[w][key]; way = w; } }
+          ev = set[way].la;
+        }
+        set[way] = { v: true, tag: tag, la: la, tin: C.clk, tuse: C.clk };
+      }
+      C.seen.add(la); C.n++;
+      C.last = { s: s, way: way, kind: kind, addr: addr, la: la, ev: ev, tag: tag };
+      C.recent.push(kind); if (C.recent.length > 64) C.recent.shift();
+    }
+    var KN = { hit: "적중", comp: "강제 미스", cap: "용량 미스", conf: "충돌 미스" };
+    function kcol(k) { return k === "hit" ? P.ok : k === "comp" ? P.faint : k === "cap" ? P.warn : P.bad; }
+    function stats() {
+      SB.stat("cs-n", C.n.toLocaleString());
+      SB.stat("cs-hit", C.n ? u((C.hit / C.n * 100).toFixed(1), "%") : "—");
+      SB.stat("cs-comp", C.comp.toLocaleString()); SB.stat("cs-cap", C.cap.toLocaleString()); SB.stat("cs-conf", C.conf.toLocaleString());
+      var L = C.last;
+      if (L) logEl.innerHTML = "주소 <b>0x" + L.addr.toString(16) + "</b> → 줄 " + L.la + " → 세트 <b>" + L.s + "</b>, 태그 0x" + L.tag.toString(16) + " → <b style=\"color:" + kcol(L.kind) + "\">" + KN[L.kind] + "</b>" + (L.ev != null ? " · 줄 " + L.ev + "을(를) 내보냄" : "");
+    }
+    function many(n) { for (var i = 0; i < n; i++) access(); stats(); cv.redraw(); }
+    var cv = SB.canvas("#cv-cache", function (ctx, w, h) {
+      if (!C) return;
+      var pad = 10, stripH = 26, gx = pad, gy = 24, gw = w - 2 * pad, gh = h - gy - stripH - 22;
+      var cps = Math.min(C.ways, 16), rps = Math.ceil(C.ways / 16), totalRows = C.sets * rps;
+      function lay(G) { var spg = Math.ceil(C.sets / G), lw = (gw / G > 90) ? 26 : 0; return { G: G, spg: spg, lw: lw, cw: (gw - G * lw - (G - 1) * 8) / (G * cps), ch: Math.min(24, gh / (spg * rps)) }; }
+      var best = null;
+      for (var g0 = 1; g0 <= Math.min(8, C.sets); g0++) { var Lo = lay(g0), sc = Math.min(Lo.cw / 2.5, Lo.ch); if (!best || sc > best.sc + 0.01) { best = Lo; best.sc = sc; } }
+      var G = best.G, setsPerG = best.spg, labW = best.lw, cw = best.cw, chh = best.ch;
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText(C.sets + "세트 × " + C.ways + "-way" + (labW ? "  (칸 안: 태그)" : ""), pad, 11);
+      for (var s = 0; s < C.sets; s++) {
+        var g = Math.floor(s / setsPerG), r0 = (s % setsPerG) * rps, ox = gx + g * (labW + cps * cw + 8);
+        if (labW && chh >= 10) { ctx.fillStyle = P.faint; ctx.font = SB.font(Math.min(10, chh * 0.8), true); ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(s, ox + labW - 4, gy + (r0 + 0.5) * chh); }
+        for (var w2 = 0; w2 < C.ways; w2++) {
+          var L = C.set[s][w2], cx = ox + labW + (w2 % 16) * cw, cy = gy + (r0 + Math.floor(w2 / 16)) * chh;
+          if (L.v) {
+            var rec = Math.max(0, 1 - (C.clk - L.tuse) / (C.lines * 2));
+            var base = (cfg.pat === "conf" && L.la * cfg.line >= cfg.size * 4) ? P.accent : P.accent2;
+            ctx.fillStyle = SOC.alpha(base, 0.18 + 0.6 * rec);
+          } else ctx.fillStyle = P.surface;
+          ctx.fillRect(cx + 0.5, cy + 0.5, cw - 1, chh - 1);
+          if (L.v && cw > 30 && chh >= 13) { ctx.fillStyle = P.text; ctx.font = SB.font(Math.min(10.5, chh * 0.7), true); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(L.tag.toString(16), cx + cw / 2, cy + chh / 2 + 0.5); }
+          if (C.last && C.last.s === s && C.last.way === w2) { ctx.strokeStyle = kcol(C.last.kind); ctx.lineWidth = 2.5; ctx.strokeRect(cx + 1, cy + 1, cw - 2, chh - 2); }
+        }
+      }
+      // recent strip
+      var sy = h - stripH - 4, n = C.recent.length, sw = gw / 64;
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      ctx.fillText("최근 접근 64개 (오른쪽이 최신)", pad, sy - 3);
+      for (var i = 0; i < n; i++) { ctx.fillStyle = kcol(C.recent[i]); ctx.fillRect(pad + (64 - n + i) * sw + 0.5, sy, sw - 1, stripH - 6); }
+    }, { aspect: 0.8, minHeight: 360, maxHeight: 560 });
+    SB.seg("cs-size", function (v) { cfg.size = +v; reset(); });
+    SB.seg("cs-line", function (v) { cfg.line = +v; reset(); });
+    SB.seg("cs-ways", function (v) { cfg.ways = +v; reset(); });
+    SB.seg("cs-repl", function (v) { cfg.repl = v; reset(); });
+    document.getElementById("cs-pat").addEventListener("change", function (e) { cfg.pat = e.target.value; reset(); });
+    SB.range("cs-ws", function (v) { return v.toFixed(2) + "×"; }, function (v) { cfg.ws = v; reset(); });
+    SB.range("cs-spd", function (v) { return v + "회/초"; }, function (v) { cfg.spd = v; });
+    document.getElementById("cs-1").onclick = function () { many(1); };
+    document.getElementById("cs-100").onclick = function () { many(100); };
+    var rb = document.getElementById("cs-run");
+    rb.onclick = function () { running = !running; rb.textContent = running ? "❚❚ 멈춤" : "▶ 자동"; };
+    document.getElementById("cs-reset").onclick = function () { reset(); };
+    SB.loop(cv.canvas, function (dt) { if (!running) return; acc += dt * cfg.spd; var n = Math.floor(acc); if (n > 0) { acc -= n; many(n); } });
+    reset(); many(30);
+  })();
+
+  /* ---------------------------------------------------------------- 6. 쓰기 정책 */
+  (function () {
+    var NAMES = "ABCDEFGH".split(""), op = "w", log = document.getElementById("wr-log");
+    var S;
+    function reset() {
+      S = { mem: [0, 0, 0, 0, 0, 0, 0, 0], memB: [0, 0, 0, 0, 0, 0, 0, 0], wt: [null, null, null, null], wb: [null, null, null, null], wtW: 0, wbW: 0, wtR: 0, wbR: 0, hl: -1 };
+      log.innerHTML = "주소 버튼을 눌러 보자."; stats();
+    }
+    function doOp(a, isW, quiet) {
+      var s = a % 4, msg = [];
+      // write-through, no-write-allocate
+      var L = S.wt[s];
+      if (isW) { if (L && L.a === a) { L.val++; } S.mem[a]++; S.wtW += 8; msg.push("즉시: " + (L && L.a === a ? "적중, " : "미스(가져오지 않음), ") + "메모리에 8 B 씀"); }
+      else if (!(L && L.a === a)) { S.wt[s] = { a: a, val: S.mem[a] }; S.wtR += 64; msg.push("즉시: 읽기 미스, 줄 가져옴"); } else msg.push("즉시: 읽기 적중");
+      // write-back, write-allocate
+      var M = S.wb[s], m2 = "";
+      if (!(M && M.a === a)) {
+        if (M && M.d) { S.memB[M.a] = M.val; S.wbW += 64; m2 += NAMES[M.a] + " 내보내며 64 B 씀, "; }
+        S.wb[s] = M = { a: a, val: S.memB[a], d: false }; S.wbR += 64; m2 += "미스, 줄 가져옴";
+      } else m2 += "적중";
+      if (isW) { M.val++; M.d = true; m2 += ", 더티 표시"; }
+      msg.push("나중: " + m2);
+      S.hl = s;
+      if (!quiet) log.innerHTML = "<b>" + (isW ? "쓰기 " : "읽기 ") + NAMES[a] + "</b> (세트 " + s + ") · " + msg.join(" · ");
+    }
+    function stats() {
+      SB.stat("wr-wt", u(S.wtW, "B")); SB.stat("wr-wb", u(S.wbW, "B")); SB.stat("wr-rd", S.wtR + " / " + S.wbR + "<small>B</small>");
+      cv && cv.redraw();
+    }
+    var box = document.getElementById("wr-addr");
+    box.innerHTML = NAMES.map(function (n, i) { return '<button data-a="' + i + '">' + n + "</button>"; }).join("");
+    box.addEventListener("click", function (e) { var b = e.target.closest("button"); if (!b) return; doOp(+b.dataset.a, op === "w"); stats(); });
+    var cv = SB.canvas("#cv-write", function (ctx, w, h) {
+      if (!S) return;
+      var narrow = w < 560, pw = narrow ? w - 20 : (w - 30) / 2, ph = narrow ? (h - 30) / 2 : h - 20;
+      [["즉시 쓰기 (write-through)", S.wt, S.mem, false], ["나중 쓰기 (write-back)", S.wb, S.memB, true]].forEach(function (pn, k) {
+        var x0 = 10 + (narrow ? 0 : k * (pw + 10)), y0 = 10 + (narrow ? k * (ph + 10) : 0);
+        ctx.fillStyle = P.surface; SOC.roundRect(ctx, x0, y0, pw, ph, 8); ctx.fill();
+        ctx.fillStyle = P.text; ctx.font = SB.font(12.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText(pn[0], x0 + 10, y0 + 8);
+        var rh = Math.min(26, (ph - 92) / 4), ry = y0 + 32, cx = x0 + 10, cw = pw - 20;
+        for (var s = 0; s < 4; s++) {
+          var L = pn[1][s], y = ry + s * rh;
+          ctx.fillStyle = S.hl === s ? SOC.alpha(P.accent, 0.16) : P.bg; ctx.fillRect(cx, y + 1, cw, rh - 2);
+          ctx.fillStyle = P.faint; ctx.font = SB.font(11, true); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+          ctx.fillText("세트" + s, cx + 4, y + rh / 2);
+          if (L) {
+            ctx.fillStyle = P.text; ctx.font = SB.font(12, true, 700); ctx.fillText(NAMES[L.a] + " = " + L.val, cx + 52, y + rh / 2);
+            if (pn[3] && L.d) { ctx.fillStyle = P.warn; ctx.fillRect(cx + cw - 28, y + 4, 22, rh - 8); ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.font = SB.font(11, true, 700); ctx.fillText("D", cx + cw - 17, y + rh / 2); }
+          } else { ctx.fillStyle = P.faint; ctx.fillText("(비어 있음)", cx + 52, y + rh / 2); }
+        }
+        var my = ry + 4 * rh + 10, mw = cw / 8;
+        ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("메모리", cx, my);
+        for (var a = 0; a < 8; a++) {
+          var cached = pn[1][a % 4] && pn[1][a % 4].a === a ? pn[1][a % 4].val : null, stale = cached != null && cached !== pn[2][a];
+          ctx.fillStyle = stale ? SOC.alpha(P.warn, 0.3) : P.bg; ctx.fillRect(cx + a * mw + 1, my + 16, mw - 2, 30);
+          ctx.fillStyle = stale ? P.warn : P.text; ctx.font = SB.font(11, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(NAMES[a], cx + a * mw + mw / 2, my + 24); ctx.fillText(pn[2][a], cx + a * mw + mw / 2, my + 38);
+        }
+      });
+    }, { get height() { var el = document.getElementById("cv-write"); return el.parentElement.clientWidth < 560 ? 440 : 226; } });
+    SB.seg("wr-op", function (v) { op = v; });
+    document.getElementById("wr-loop").onclick = function () { for (var i = 0; i < 10; i++) doOp(0, true, true); log.innerHTML = "<b>A에 10번 쓰기</b> · 즉시 쓰기는 10 × 8 B = 80 B를 메모리로 보냈다. 나중 쓰기는 아직 0 B. 줄이 쫓겨날 때 64 B를 한 번만 쓴다."; stats(); };
+    var rr = SB.rng(21);
+    document.getElementById("wr-rnd").onclick = function () { for (var i = 0; i < 20; i++) doOp(Math.floor(rr() * 8), rr() < 0.5, true); log.innerHTML = "<b>무작위 읽기·쓰기 20번</b>을 했다(쓰기 비율 50%)."; stats(); };
+    document.getElementById("wr-flush").onclick = function () { var n = 0; S.wb.forEach(function (M) { if (M && M.d) { S.memB[M.a] = M.val; S.wbW += 64; M.d = false; n++; } }); log.innerHTML = "<b>모두 내보내기</b> · 더티 줄 " + n + "개를 메모리에 썼다. 이제 두 메모리가 같은 값을 갖는다."; stats(); };
+    document.getElementById("wr-reset").onclick = function () { reset(); };
+    reset();
+  })();
+
+  /* ---------------------------------------------------------------- 7. AMAT */
+  (function () {
+    var m1 = 5, m2 = 30, m3 = 40, dr = 110, l3 = true, t1 = 4, t2 = 14, t3 = 45;
+    function calc(withL3) {
+      var tM = dr * 4, a = m1 / 100, b = m2 / 100, c = m3 / 100;
+      if (withL3) return { parts: [t1, a * t2, a * b * t3, a * b * c * tM], fr: [1 - a, a * (1 - b), a * b * (1 - c), a * b * c] };
+      return { parts: [t1, a * t2, 0, a * b * tM], fr: [1 - a, a * (1 - b), 0, a * b] };
+    }
+    var NM = ["L1", "L2", "L3", "DRAM"], TY = ["big", "cache", "noc", "mem"];
+    function cols() { return [P.ok, SOC.color("cache"), P.accent2, SOC.color("mem")]; }
+    var cv = SB.canvas("#cv-amat", function (ctx, w, h) {
+      var R = calc(l3), R0 = calc(!l3), K = cols(), narrow = w < 560;
+      var dw = narrow ? w - 20 : Math.min(w * 0.42, 360), dh = narrow ? h * 0.5 : h - 30, dx = 10, dy = 22;
+      var cols_ = 40, rows = 25, cs = Math.min(dw / cols_, (dh - 10) / rows);
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText("접근 1,000번이 해결된 곳", dx, 11);
+      var counts = R.fr.map(function (f) { return Math.round(f * 1000); });
+      counts[0] = 1000 - counts[1] - counts[2] - counts[3];
+      var idx = 0;
+      for (var lv = 0; lv < 4; lv++) for (var k = 0; k < counts[lv]; k++, idx++) {
+        var x = dx + (idx % cols_) * cs + cs / 2, y = dy + Math.floor(idx / cols_) * cs + cs / 2;
+        ctx.fillStyle = K[lv]; ctx.globalAlpha = lv === 0 ? 0.45 : 1; ctx.beginPath(); ctx.arc(x, y, Math.max(1, cs * (lv === 3 ? 0.48 : 0.36)), 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      // bars
+      var bx = narrow ? 10 : dx + cols_ * cs + 30, by = narrow ? dy + rows * cs + 24 : 34, bw = w - bx - 12;
+      var tot = R.parts.reduce(function (a, b) { return a + b; }, 0), tot0 = R0.parts.reduce(function (a, b) { return a + b; }, 0);
+      var mx = Math.max(tot, tot0) * 1.05;
+      [[l3 ? "L3 있음" : "L3 없음", R, tot], [l3 ? "L3를 빼면" : "L3를 넣으면", R0, tot0]].forEach(function (row, i) {
+        var y = by + i * 58;
+        ctx.fillStyle = i ? P.dim : P.text; ctx.font = SB.font(12, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+        ctx.fillText(row[0] + " · AMAT " + row[2].toFixed(1) + "클럭", bx, y + 2);
+        var x = bx;
+        row[1].parts.forEach(function (p, lv) {
+          var ww = p / mx * bw; if (ww <= 0) return;
+          ctx.fillStyle = K[lv]; ctx.globalAlpha = i ? 0.45 : 1; ctx.fillRect(x, y + 6, ww, 24); ctx.globalAlpha = 1;
+          if (ww > 30 && !i) { ctx.fillStyle = "#fff"; ctx.font = SB.font(10.5, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(NM[lv], x + ww / 2, y + 18); }
+          x += ww;
+        });
+      });
+      // legend
+      var ly = by + 128;
+      if (ly < h - 8) NM.forEach(function (n, lv) { var lx = bx + lv * Math.min(80, bw / 4); ctx.fillStyle = K[lv]; ctx.fillRect(lx, ly - 5, 10, 10); ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(n + (lv ? "" : " 적중"), lx + 14, ly); });
+    }, { aspect: 0.4, minHeight: 290, maxHeight: 300 });
+    function upd() {
+      var R = calc(l3), tot = R.parts.reduce(function (a, b) { return a + b; }, 0);
+      SB.stat("am-amat", u(tot.toFixed(1), "클럭") + " <small>(" + (tot / 4).toFixed(2) + " ns)</small>");
+      SB.stat("am-dram", u((R.fr[3] * 100).toFixed(2), "%"));
+      SB.stat("am-gain", u((dr * 4 / tot).toFixed(1), "배 빠름"));
+      cv.redraw();
+    }
+    SB.range("am-m1", function (v) { return v + "%"; }, function (v) { m1 = v; upd(); });
+    SB.range("am-m2", function (v) { return v + "%"; }, function (v) { m2 = v; upd(); });
+    SB.range("am-m3", function (v) { return v + "%"; }, function (v) { m3 = v; upd(); });
+    SB.range("am-dr", function (v) { return v + " ns"; }, function (v) { dr = v; upd(); });
+    SB.seg("am-l3", function (v) { l3 = v === "on"; upd(); });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 8. 타일링 */
+  (function () {
+    var N = 64, TS = [2, 4, 8, 16, 32, 64], ti = 5, cache = 8192, res = {}, anim = 0;
+    function sim(T, cb) {
+      var ways = 4, lines = cb / 64, sets = lines / ways;
+      var tags = new Int32Array(lines).fill(-1), age = new Uint32Array(lines), clk = 0, miss = 0, accN = 0;
+      var A = 0, B = N * N * 8, Cb = 2 * N * N * 8;
+      function touch(a) {
+        var la = a >> 6, base = (la % sets) * ways; clk++; accN++;
+        for (var w = 0; w < ways; w++) if (tags[base + w] === la) { age[base + w] = clk; return; }
+        miss++; var v = base, m = age[base];
+        for (w = 1; w < ways; w++) if (age[base + w] < m) { m = age[base + w]; v = base + w; }
+        tags[v] = la; age[v] = clk;
+      }
+      for (var ii = 0; ii < N; ii += T) for (var jj = 0; jj < N; jj += T) for (var kk = 0; kk < N; kk += T)
+        for (var i = ii; i < ii + T; i++) for (var j = jj; j < jj + T; j++) {
+          touch(Cb + (i * N + j) * 8);
+          for (var k = kk; k < kk + T; k++) { touch(A + (i * N + k) * 8); touch(B + (k * N + j) * 8); }
+        }
+      return { miss: miss, acc: accN, time: accN + miss * 30 };
+    }
+    function compute() { res = {}; TS.forEach(function (T) { res[T] = sim(T, cache); }); upd(); }
+    var cv = SB.canvas("#cv-tile", function (ctx, w, h) {
+      if (!res[64]) return;
+      var narrow = w < 600, cw = narrow ? w : w * 0.58, chH = narrow ? h * 0.58 : h;
+      var data = TS.map(function (T) { return [T, res[T].miss / res[T].acc * 1000]; });
+      var ymax = Math.max.apply(null, data.map(function (d) { return d[1]; })) * 1.15;
+      var tmax = Math.sqrt(cache / 24);
+      SB.chart(ctx, { x: 58, y: 16, w: cw - 58 - 14, h: chH - 16 - 46 }, {
+        x: [1.6, 80], y: [0, ymax], logX: true, xTicks: TS, xFmt: function (v) { return v === 64 ? "64(없음)" : String(v); },
+        xLabel: "타일 크기 T", yLabel: "1,000번 접근당 미스",
+        series: [{ data: data, color: P.accent2, width: 2 }],
+        points: data.map(function (d, i) { return { x: d[0], y: d[1], color: i === ti ? P.accent : P.accent2, r: i === ti ? 6.5 : 4 }; }),
+        vlines: [{ x: tmax, label: "3T²·8B = 캐시", color: P.warn }],
+      });
+      // matrices
+      var mx0 = narrow ? 10 : cw + 8, my0 = narrow ? chH + 6 : 20, mw = narrow ? w - 20 : w - cw - 18, mh = narrow ? h - chH - 12 : h - 40;
+      var s = Math.min((mw - 30) / 3, mh - 22), T = TS[ti], nT = N / T;
+      var tot = nT * nT * nT, step = Math.floor(anim * (T === 64 ? 0.3 : 3)) % tot;
+      var iT = Math.floor(step / (nT * nT)), jT = Math.floor(step / nT) % nT, kT = step % nT;
+      var names = [["C", iT, jT], ["A", iT, kT], ["B", kT, jT]];
+      names.forEach(function (m, idx) {
+        var x = mx0 + idx * (s + 15), y = my0 + 18;
+        ctx.fillStyle = P.surface; ctx.fillRect(x, y, s, s); ctx.strokeStyle = P.border; ctx.strokeRect(x + 0.5, y + 0.5, s - 1, s - 1);
+        var ts = s / nT;
+        ctx.fillStyle = idx === 0 ? P.accent : P.accent2; ctx.globalAlpha = 0.75;
+        ctx.fillRect(x + m[2] * ts, y + m[1] * ts, Math.max(1.5, ts), Math.max(1.5, ts)); ctx.globalAlpha = 1;
+        ctx.fillStyle = P.text; ctx.font = SB.font(12, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+        ctx.fillText(m[0] + (idx === 0 ? " +=" : idx === 1 ? " ×" : ""), x + s / 2, y - 3);
+      });
+      var ty = my0 + 18 + s + 20, one = T * T * 8;
+      if (ty + 34 < h) {
+        ctx.fillStyle = P.dim; ctx.font = SB.font(12); ctx.textAlign = "left"; ctx.textBaseline = "top";
+        ctx.fillText("타일 하나 " + SB.bytes(one) + " · 세 개 " + SB.bytes(3 * one), mx0, ty);
+        ctx.fillStyle = 3 * one <= cache ? P.ok : P.bad; ctx.font = SB.font(12, false, 700);
+        ctx.fillText(3 * one <= cache ? "캐시(" + SB.bytes(cache) + ")에 들어간다" : "캐시(" + SB.bytes(cache) + ")를 넘친다", mx0, ty + 18);
+        ctx.fillStyle = P.faint; ctx.font = SB.font(11.5);
+        ctx.fillText("타일 " + (step + 1) + " / " + tot + " 조합 계산 중", mx0, ty + 36);
+      }
+    }, { aspect: 0.42, minHeight: 300, maxHeight: 380 });
+    function upd() {
+      var r = res[TS[ti]], r0 = res[64];
+      if (!r) return;
+      SB.stat("tl-acc", u((r.acc / 1e3).toFixed(0), "천"));
+      SB.stat("tl-miss", u(r.miss.toLocaleString(), "회"));
+      SB.stat("tl-traffic", SB.bytes(r.miss * 64));
+      SB.stat("tl-speed", u((r.time / r0.time * 100).toFixed(0), "%"));
+      cv.redraw();
+    }
+    SB.range("tl-t", function (v) { return TS[v] === 64 ? "64 (타일 없음)" : TS[v] + "×" + TS[v]; }, function (v) { ti = v; upd(); });
+    SB.seg("tl-c", function (v) { cache = +v; compute(); });
+    SB.loop(cv.canvas, function (dt) { anim += dt; cv.redraw(); });
+    compute();
+  })();
+
+  /* ---------------------------------------------------------------- 9. 프리페처 */
+  (function () {
+    var pat = "seq", dist = 4, comp = 8, NE = 512, LAT = 200, BUS = 8;
+    var rr = SB.rng(4), rl = []; for (var i = 0; i < NE; i++) rl.push(Math.floor(rr() * 1e6));
+    function lineOf(k) { return pat === "seq" ? Math.floor(k / 8) : pat === "stride" ? k * 3 : rl[k]; }
+    function run(pf) {
+      var t = 0, busFree = 0, ready = new Map(), segs = [], last = null, stride = null, conf = 0, demand = 0, useless = 0, issued = 0, used = new Set();
+      function req(l) { var st = Math.max(t, busFree); busFree = st + BUS; ready.set(l, st + LAT); }
+      for (var k = 0; k < NE; k++) {
+        var l = lineOf(k), stall = 0;
+        if (!ready.has(l)) { req(l); demand++; }
+        var r = ready.get(l); if (r > t) { stall = r - t; t = r; }
+        used.add(l);
+        if (pf && l !== last) {
+          if (last != null) { var s = l - last; if (s === stride) conf++; else { stride = s; conf = 0; } }
+          last = l;
+          if (conf >= 1 && stride) for (var d = 1; d <= dist; d++) { var pl = l + stride * d; if (!ready.has(pl)) { req(pl); issued++; } }
+        }
+        segs.push([stall, comp]); t += comp;
+      }
+      ready.forEach(function (v, key) { if (!used.has(key)) useless++; });
+      return { t: t, segs: segs, demand: demand, issued: issued, useless: useless };
+    }
+    var R0, R1;
+    var cv = SB.canvas("#cv-pf", function (ctx, w, h) {
+      if (!R0) return;
+      var lx = w < 500 ? 10 : 110, top = 14, bw = w - lx - 12, mx = Math.max(R0.t, R1.t);
+      [["프리페치 끔", R0], ["프리페치 켬", R1]].forEach(function (row, i) {
+        var y = top + i * ((h - top - 30) / 2) + (w < 500 ? 18 : 6), bh = Math.min(46, (h - top - 30) / 2 - (w < 500 ? 26 : 14));
+        ctx.fillStyle = P.text; ctx.font = SB.font(12, false, 700); ctx.textAlign = "left"; ctx.textBaseline = w < 500 ? "bottom" : "middle";
+        if (w < 500) ctx.fillText(row[0] + " · " + Math.round(row[1].t).toLocaleString() + "클럭", lx, y - 3);
+        else { ctx.fillText(row[0], 10, y + bh / 2 - 8); ctx.fillStyle = P.dim; ctx.font = SB.font(11, true); ctx.fillText(Math.round(row[1].t).toLocaleString() + "클럭", 10, y + bh / 2 + 9); }
+        var x = lx, sc = bw / mx;
+        ctx.fillStyle = P.surface; ctx.fillRect(lx, y, bw, bh);
+        row[1].segs.forEach(function (sg) {
+          if (sg[0] > 0) { ctx.fillStyle = P.bad; ctx.fillRect(x, y, Math.max(0.6, sg[0] * sc), bh); x += sg[0] * sc; }
+          ctx.fillStyle = SOC.alpha(P.accent2, 0.35); ctx.fillRect(x, y, sg[1] * sc, bh); x += sg[1] * sc;
+        });
+      });
+      ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      ctx.fillStyle = P.faint; ctx.fillText("시간 →", lx, h - 6);
+      ctx.fillStyle = P.bad; ctx.fillRect(lx + 50, h - 16, 10, 10); ctx.fillStyle = P.dim; ctx.fillText("기다림", lx + 64, h - 6);
+      ctx.fillStyle = SOC.alpha(P.accent2, 0.5); ctx.fillRect(lx + 116, h - 16, 10, 10); ctx.fillStyle = P.dim; ctx.fillText("계산", lx + 130, h - 6);
+    }, { aspect: 0.3, minHeight: 200, maxHeight: 250 });
+    function upd() {
+      R0 = run(false); R1 = run(true);
+      SB.stat("pf-off", u(Math.round(R0.t).toLocaleString(), "클럭"));
+      SB.stat("pf-on", u(Math.round(R1.t).toLocaleString(), "클럭"));
+      SB.stat("pf-sp", u((R0.t / R1.t).toFixed(2), "배"));
+      var cov = R0.demand ? Math.max(0, 1 - R1.demand / R0.demand) : 0;
+      SB.stat("pf-cov", Math.round(cov * 100) + "% / " + R1.useless + "<small>줄</small>");
+      cv.redraw();
+    }
+    SB.seg("pf-pat", function (v) { pat = v; upd(); });
+    SB.range("pf-d", function (v) { return v + "줄"; }, function (v) { dist = v; upd(); });
+    SB.range("pf-c", function (v) { return v + "클럭"; }, function (v) { comp = v; upd(); });
+    upd();
+  })();
+})();
+</script>
+</body>
+</html>

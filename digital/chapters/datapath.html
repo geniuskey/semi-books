@@ -1,0 +1,1475 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and DigitalBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "부분곱을 만들고 줄이는 곱셈기(캐리 저장 덧셈, 월리스·다다 트리, radix-4 부스 부호화), 로그·배럴 시프터, 플래그를 내는 ALU, 비교기와 선행 0 검출, 고정·부동소수점(IEEE 754, BF16, FP8)까지 직접 비트를 눌러 가며 데이터패스의 회로를 익힌다."}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>곱셈기·시프터·ALU · DigitalBook</title>
+<meta name="description" content="부분곱을 만들고 줄이는 곱셈기(캐리 저장 덧셈, 월리스·다다 트리, radix-4 부스 부호화), 로그·배럴 시프터, 플래그를 내는 ALU, 비교기와 선행 0 검출, 고정·부동소수점(IEEE 754, BF16, FP8)까지 직접 비트를 눌러 가며 데이터패스의 회로를 익힌다.">
+<link rel="canonical" href="https://semi.euiyun.com/digital/chapters/datapath.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#1971c2">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="DigitalBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="곱셈기·시프터·ALU · DigitalBook">
+<meta property="og:description" content="부분곱을 만들고 줄이는 곱셈기(캐리 저장 덧셈, 월리스·다다 트리, radix-4 부스 부호화), 로그·배럴 시프터, 플래그를 내는 ALU, 비교기와 선행 0 검출, 고정·부동소수점(IEEE 754, BF16, FP8)까지 직접 비트를 눌러 가며 데이터패스의 회로를 익힌다.">
+<meta property="og:url" content="https://semi.euiyun.com/digital/chapters/datapath.html">
+<meta property="og:image" content="https://semi.euiyun.com/digital/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/digital/chapters/datapath.html#chapter","name":"곱셈기·시프터·ALU","headline":"곱셈기·시프터·ALU · DigitalBook","description":"부분곱을 만들고 줄이는 곱셈기(캐리 저장 덧셈, 월리스·다다 트리, radix-4 부스 부호화), 로그·배럴 시프터, 플래그를 내는 ALU, 비교기와 선행 0 검출, 고정·부동소수점(IEEE 754, BF16, FP8)까지 직접 비트를 눌러 가며 데이터패스의 회로를 익힌다.","url":"https://semi.euiyun.com/digital/chapters/datapath.html","position":12,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/digital/og.png","dateModified":"2026-10-10","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/digital/#book","name":"DigitalBook · 디지털 회로 설계 교과서","url":"https://semi.euiyun.com/digital/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"DigitalBook","item":"https://semi.euiyun.com/digital/"},{"@type":"ListItem","position":2,"name":"12. 곱셈기·시프터·ALU","item":"https://semi.euiyun.com/digital/chapters/datapath.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/dig.js"></script>
+<!--head:end-->
+<style>
+  .dp-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--text-dim); padding: 10px 18px 0; }
+  .dp-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 50%; vertical-align: -1px; margin-right: 6px; }
+  .dp-legend i.box { border-radius: 3px; background: transparent !important; border: 2px solid; }
+  .dp-click { cursor: pointer; }
+  .dp-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .dp-in { font-family: var(--mono); font-size: 14px; width: 9em; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elev); color: var(--text); }
+  .dp-ops .seg { flex-wrap: wrap; }
+  .sim-readout .v.dp-small { font-size: 14px; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="digital"></script>
+</head>
+<body data-chapter="datapath">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 12</div>
+    <h1>곱셈기·시프터·ALU</h1>
+    <p class="lead">덧셈기(<a href="adder.html">11장</a>)가 데이터패스의 심장이라면, 곱셈기는 그 심장을 수십 개 겹쳐 놓은 근육이다. 64비트 곱셈 하나에는 부분곱 비트가 4096개 생기고, 이것을 한 클럭 남짓 안에 하나의 수로 합쳐야 한다. 비결은 의외로 단순하다. <b>캐리를 기다리지 않는 것</b>이다. 이 장에서는 손 곱셈의 모양에서 출발해 부분곱을 나무처럼 줄이는 월리스·다다 트리, 부분곱 수를 절반으로 줄이는 부스 부호화를 만지고, 이어서 시프터와 ALU, 비교기, 그리고 AI 가속기가 즐겨 쓰는 BF16·FP8까지 이르는 부동소수점 회로를 차례로 짓는다.</p>
+    <ul class="objectives">
+      <li>부분곱이 AND 행렬임을 알고, 배열 곱셈기와 트리 곱셈기의 지연이 \(O(N)\)과 \(O(\log N)\)으로 갈리는 이유를 설명한다.</li>
+      <li>캐리 저장 덧셈(3:2 압축기)으로 월리스·다다 트리를 짓고, 단계 수·전가산기 수·최종 CPA 폭을 계산한다.</li>
+      <li>radix-4 부스 부호화로 부호 있는 곱셈의 부분곱을 절반으로 줄이는 원리를 익힌다.</li>
+      <li>로그 시프터, 플래그(Z·N·C·V)를 내는 ALU, 비교기·LZC를 짓고, IEEE 754 부동소수점의 형식과 덧셈기 구조를 이해한다.</li>
+    </ul>
+    <div class="dg-ladder" data-level="datapath" data-caption="게이트와 전가산기를 격자와 트리로 엮어 곱셈기·시프터·ALU 같은 데이터패스 블록을 짓는다."></div>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="partial">
+    <h2>곱셈은 덧셈의 묶음: 부분곱</h2>
+    <p>초등학교에서 배운 손 곱셈을 떠올려 보자. 13 × 11을 할 때 승수의 자리마다 피승수에 그 자리 숫자를 곱해 한 칸씩 밀어 적고, 마지막에 세로로 더한다. 각 줄을 <span class="term">부분곱</span><span class="en">(Partial product)</span>이라 한다. 10진수에서는 줄마다 구구단이 필요하지만, 2진수에서는 승수의 자리가 0 아니면 1이다. 그래서 부분곱은 <b>피승수 그대로이거나 0</b>이고, 한 비트로 보면 그냥 AND 게이트다.</p>
+    <div class="formula">$$P = A \times B = \sum_{j=0}^{N-1} \left(A \cdot b_j\right) 2^{j} = \sum_{j=0}^{N-1}\sum_{i=0}^{N-1} \underbrace{(a_i \wedge b_j)}_{\text{부분곱 비트}}\; 2^{\,i+j}$$
+      <div class="where">\(a_i, b_j\): 피승수 A와 승수 B의 i, j번째 비트. N비트 × N비트 곱은 부분곱 비트 \(N^2\)개(= AND 게이트 \(N^2\)개)를 만들고, 결과는 2N비트다.</div></div>
+    <p>아래 그림에서 A와 B의 비트를 눌러 보자. 승수 비트 \(b_j\)가 1인 줄에는 A가 그대로 복사되고, 0인 줄은 통째로 0이 된다. 각 점은 AND 게이트 하나의 출력이며, 같은 세로줄(같은 자리값 \(2^{i+j}\))의 점끼리 더해야 곱이 된다. 이 "점을 세로로 더하는 문제"가 곱셈기 설계의 전부다.</p>
+    <figure class="play" id="fig-pp">
+      <div class="play-view"><canvas id="cv-pp" class="dp-click"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>피승수 A <output id="pp-a-out"></output></span><input type="range" id="pp-a" min="0" max="15" step="1" value="13"></label>
+        <label class="ctrl"><span>승수 B <output id="pp-b-out"></output></span><input type="range" id="pp-b" min="0" max="15" step="1" value="11"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">곱 A×B</span><span class="v" id="pp-p">—</span></div>
+        <div class="stat"><span class="k">0이 아닌 부분곱 줄</span><span class="v" id="pp-rows">—</span></div>
+        <div class="stat"><span class="k">AND 게이트</span><span class="v">16<small>개</small></span></div>
+      </div>
+      <figcaption><b>그림 12-1.</b> <span class="try">해 보기</span>A, B의 비트 칸을 누르거나 슬라이더를 움직이면 부분곱 행렬이 한 줄씩 채워진다. 초록 점은 1, 회색 점은 0이다. 넓은 화면에서는 오른쪽에 같은 곱셈을 10진수 손 곱셈으로 나란히 보여 준다. 2진수의 줄은 "A 아니면 0"뿐이라는 점을 확인하자.</figcaption>
+    </figure>
+    <p>부분곱 행렬은 평행사변형 모양이다. 가운데 자리(자리값 \(2^{N-1}\))에 점이 가장 많아 N개가 쌓이고, 양 끝으로 갈수록 줄어든다. 점을 만드는 데는 AND 게이트 한 단(약 5 ps)이면 충분하다. 비용은 <b>점을 더하는 데</b>서 생긴다.</p>
+    <div class="callout tip"><strong>시프트-덧셈 곱셈기: 시간으로 면적을 산다</strong><p>가장 작은 곱셈기는 덧셈기 하나와 레지스터로 만든다. 매 클럭 B의 한 비트를 보고 A를 더할지 말지 정한 뒤 누산기를 한 칸 민다. N비트 곱에 N 클럭이 걸리지만 면적은 덧셈기 하나다. 작은 마이크로컨트롤러나 암호 가속기의 큰 정수 곱셈에서 지금도 쓰인다. 반대로 고성능 CPU는 N² 개의 점을 한꺼번에 더하는 <b>병렬 곱셈기</b>를 쓰고, 그 방법이 이 장의 나머지 절반이다.</p></div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="array">
+    <h2>배열 곱셈기: 가산기 격자</h2>
+    <p>점을 더하는 가장 직접적인 방법은 부분곱 줄을 하나씩 차례로 더하는 것이다. 덧셈기 N−1개를 위아래로 쌓으면 손 곱셈과 똑같이 생긴 격자가 된다. 이것이 <span class="term">배열 곱셈기</span><span class="en">(Array multiplier)</span>다. 각 줄을 리플 캐리 덧셈기로 만들면 캐리가 옆으로도 흘러 경로가 길어지므로, 보통은 캐리를 옆이 아니라 <b>아래 줄로</b> 넘긴다. 줄마다 전가산기 출력이 합(sum)과 캐리(carry) 두 벡터로 남고, 맨 아래에서 한 번만 캐리를 전파하는 덧셈기로 마무리한다.</p>
+    <p>아래 격자에서 시간을 흘려 보자. 각 칸은 반가산기(HA) 또는 전가산기(FA)이고, 색이 칠해지는 순간이 그 칸의 출력이 확정되는 시각이다. 대각선으로 내려가는 선은 합, 수직선은 캐리다. 신호가 격자를 사선으로 훑으며 내려가고, 마지막 줄의 리플 덧셈에서 다시 옆으로 흐른다.</p>
+    <figure class="play" id="fig-array">
+      <div class="play-view"><canvas id="cv-array"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>비트 폭 N <output id="ar-n-out"></output></span><input type="range" id="ar-n" min="4" max="8" step="1" value="6"></label>
+        <label class="ctrl"><span>시간 <output id="ar-t-out"></output></span><input type="range" id="ar-t" min="0" max="100" step="1" value="100"></label>
+        <div class="ctrl"><span>애니메이션</span><div class="ctrl-row"><button class="btn sm primary" id="ar-play">▶ 재생</button></div></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">셀 수</span><span class="v dp-small" id="ar-cells">—</span></div>
+        <div class="stat"><span class="k">임계 경로</span><span class="v" id="ar-crit">—</span></div>
+        <div class="stat"><span class="k">FO4 환산</span><span class="v" id="ar-fo4">—</span></div>
+      </div>
+      <figcaption><b>그림 12-2.</b> <span class="try">해 보기</span>재생을 누르거나 시간 슬라이더를 끌어 확정되는 칸을 보자. 주황 테두리가 임계 경로다. N을 4에서 8로 늘리면 임계 경로가 거의 2배가 된다. 교육용 지연: AND 5 ps, FA 합 15 ps·캐리 10 ps, HA 합 10 ps·캐리 6 ps(DG-7, FO4 = 7.5 ps).</figcaption>
+    </figure>
+    <div class="formula">$$t_{\text{array}} \approx t_{AND} + (N-1)\,t_{FA} + (N-1)\,t_{carry} \;=\; O(N)$$
+      <div class="where">위 줄 N−1개를 사선으로 지나고(\(t_{FA}\)), 맨 아래 리플 덧셈의 N−1자리를 옆으로 지난다(\(t_{carry}\)). 셀 수는 약 \(N^2\)개로 규칙적이라 레이아웃은 쉽지만, 지연이 비트 폭에 비례한다.</div></div>
+    <p>배열 곱셈기의 장점은 규칙성이다. 같은 셀을 바둑판처럼 깔면 되고 배선이 이웃끼리만 이어진다. 단점은 64비트라면 줄 63개를 지나야 한다는 것이다. DG-7에서 대략 63×15 + 63×10 ≈ 1.6 ns, 4 GHz 클럭 여섯 주기가 넘는다. 줄을 차례로 더하지 말고 <b>한꺼번에 여러 줄씩</b> 줄여야 한다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="tree">
+    <h2>부분곱 줄이기: 캐리 저장 덧셈과 트리</h2>
+    <p>열쇠는 전가산기를 다시 보는 것이다. 전가산기는 같은 자리의 세 비트를 받아 합 비트(같은 자리)와 캐리 비트(한 자리 위)를 낸다. 즉 <b>세 개의 비트를 두 개로 줄이는</b> 장치, <span class="term">3:2 압축기</span><span class="en">(3:2 compressor)</span>다. 전가산기를 자리마다 하나씩 나란히 놓고 캐리를 옆 칸에 넘기지 않으면, 세 개의 수가 합 벡터 S와 캐리 벡터 C 두 개로 줄어든다. 이것이 <span class="term">캐리 저장 덧셈기</span><span class="en">(Carry-save adder, CSA)</span>다.</p>
+    <div class="formula">$$X + Y + Z \;=\; S + 2C, \qquad s_i = x_i \oplus y_i \oplus z_i,\quad c_{i} = \mathrm{MAJ}(x_i, y_i, z_i)$$
+      <div class="where">캐리 \(c_i\)는 자리값이 두 배이므로 한 칸 왼쪽(\(2C\))에 놓인다. 자리끼리 서로 기다리지 않으므로 CSA의 지연은 비트 폭과 무관하게 전가산기 하나(약 15 ps)다.</div></div>
+    <figure class="play" id="fig-csa">
+      <div class="play-view"><canvas id="cv-csa" class="dp-click"></canvas></div>
+      <div class="play-ctrl">
+        <div class="ctrl"><span>입력</span><div class="ctrl-row"><button class="btn sm" id="cs-rand">무작위 세 수</button><button class="btn sm" id="cs-max">모두 255</button></div></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">X + Y + Z</span><span class="v" id="cs-in">—</span></div>
+        <div class="stat"><span class="k">S + 2C</span><span class="v" id="cs-out">—</span></div>
+        <div class="stat"><span class="k">CSA 지연</span><span class="v">1 FA<small> ≈ 15 ps</small></span></div>
+      </div>
+      <figcaption><b>그림 12-3.</b> <span class="try">해 보기</span>X, Y, Z의 비트를 눌러 바꿔 보자. 세로줄 하나마다 전가산기 하나가 있고, 그 캐리는 아래 C 줄에서 한 칸 왼쪽으로 내려앉는다. 어느 열을 바꿔도 이웃 열의 S는 변하지 않는다. 마우스를 열 위에 올리면 그 열의 전가산기가 강조된다.</figcaption>
+    </figure>
+    <p>CSA를 나무처럼 엮으면 N개의 부분곱 줄을 \(N \to \tfrac{2}{3}N \to \tfrac{4}{9}N \to \cdots \to 2\)로 줄일 수 있다. 두 줄이 남으면 그때 단 한 번, 빠른 <span class="term">캐리 전파 덧셈기</span><span class="en">(Carry-propagate adder, CPA)</span>(<a href="adder.html">11장</a>의 프리픽스 덧셈기)로 더한다. 1964년 <span class="term">월리스 트리</span><span class="en">(Wallace tree)</span>는 매 단계 가능한 한 많은 비트를 3개씩 묶어 줄였다. 1965년 다다(Luigi Dadda)는 반대로 <b>필요한 만큼만</b> 줄이는 방법을 제안했다. 높이 목표를 \(2, 3, 4, 6, 9, 13, 19, \ldots\)(앞 값의 1.5배 내림)으로 정하고, 각 단계에서 열 높이가 다음 목표를 넘지 않을 만큼만 전가산기·반가산기를 쓴다. 단계 수는 같지만 반가산기가 훨씬 적다. 이것이 <span class="term">다다 트리</span><span class="en">(Dadda tree)</span>다.</p>
+    <div class="predict"><strong>비트 폭을 4배로 늘리면 트리의 단계 수는?</strong>
+      <p>4×4 곱셈기의 다다 트리는 2단계로 부분곱을 두 줄로 줄인다. 16×16 곱셈기는 몇 단계가 필요할까? 8단계(2배), 6단계, 16단계 중 무엇일까? 아래 시뮬레이터로 확인하기 전에 예측해 보자.</p>
+      <details><summary>답 보기</summary><p>6단계다. 다다 목표 수열 2, 3, 4, 6, 9, 13, 19에서 16을 넘지 않는 가장 큰 값은 13이고, 16 → 13 → 9 → 6 → 4 → 3 → 2로 6번 줄인다. 한 단계마다 높이를 약 2/3로 줄이므로 단계 수는 \(\log_{1.5}(N/2)\)에 비례한다. 폭이 4배가 되어도 단계는 3배밖에 늘지 않고, 64비트에서도 10단계면 된다.</p></details></div>
+    <div class="sim" id="sim-tree">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>점 다이어그램으로 보는 부분곱 축소</h3></div>
+      <div class="sim-view"><canvas id="cv-tree"></canvas></div>
+      <div class="dp-legend"><span><i style="background:var(--text-dim)"></i>부분곱 비트</span><span><i style="background:var(--accent)"></i>합(sum)</span><span><i style="background:var(--accent-2)"></i>캐리(carry)</span><span><i class="box" style="border-color:var(--accent)"></i>전가산기 FA (3→2)</span><span><i class="box" style="border-color:var(--warn)"></i>반가산기 HA (2→2)</span></div>
+      <div class="sim-controls">
+        <label class="ctrl"><span>비트 폭 N <output id="tr-n-out"></output></span><input type="range" id="tr-n" min="4" max="16" step="1" value="8"></label>
+        <div class="ctrl"><span>축소 방식</span><div class="seg" id="tr-m"><button data-value="array">배열</button><button data-value="wallace">월리스</button><button data-value="dadda" class="on">다다</button></div></div>
+        <div class="ctrl"><span>단계 <output id="tr-k-out"></output></span><div class="ctrl-row"><button class="btn sm" id="tr-prev">이전 단계</button><button class="btn sm" id="tr-next">다음 단계</button><button class="btn sm primary" id="tr-play">▶ 재생</button></div></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">축소 단계 수</span><span class="v" id="tr-st">—</span></div>
+        <div class="stat"><span class="k">전가산기 / 반가산기</span><span class="v" id="tr-fa">—</span></div>
+        <div class="stat"><span class="k">최종 CPA 폭</span><span class="v" id="tr-cpa">—</span></div>
+        <div class="stat"><span class="k">추정 지연</span><span class="v" id="tr-t">—</span></div>
+        <div class="stat"><span class="k">열 최대 높이</span><span class="v dp-small" id="tr-h">—</span></div>
+      </div>
+      <div class="sim-note">위쪽은 현재 단계의 점 배열과 이번 단계에서 쓰는 FA(파란 상자, 같은 열의 점 3개 → 합 1개 + 왼쪽 열 캐리 1개)와 HA(노란 점선, 2개 → 2개), 아래쪽은 그 결과다. 오른쪽 끝이 자리값 \(2^0\)이다. 배열 방식은 한 단계에 부분곱 한 줄씩만 받아들인다(흐린 점은 아직 기다리는 줄). 지연 추정(DG-7 교육용): AND 5 ps + 단계당 FA 15 ps + CPA(트리는 프리픽스 덧셈기 \((\lceil\log_2 w\rceil+1)\times 7.5\) ps, 배열은 리플 캐리 \(w\times 10\) ps).</div>
+    </div>
+    <p>세 방식을 비교해 보면 성격이 뚜렷하다. 배열은 단계가 N−2개로 길지만 매 단계 이웃끼리만 연결된다. 월리스는 처음부터 공격적으로 줄여 최종 CPA가 짧아지는 대신 반가산기를 많이 쓴다. 다다는 전가산기 수가 같으면서 반가산기를 최소로 쓰고 대신 최종 CPA가 조금 넓다. 실제 설계에서 셀 수만큼 중요한 것은 <b>배선</b>이다. 트리는 서로 멀리 떨어진 열과 단계를 엮어 배선이 불규칙하고 길어지므로, 레이아웃을 정돈하기 쉬운 <b>4:2 압축기</b> 기반 트리나 단계를 열 단위로 재배치하는 방법이 쓰인다.</p>
+    <div class="formula">$$\text{단계 수} \approx \left\lceil \log_{3/2}\frac{N}{2} \right\rceil, \qquad t_{\text{tree}} \approx t_{AND} + \text{단계 수}\cdot t_{FA} + t_{CPA}(2N) \;=\; O(\log N)$$
+      <div class="where">한 단계에서 높이가 약 2/3로 줄어든다. 16비트 6단계, 32비트 8단계, 64비트 10단계. \(t_{CPA}\)도 프리픽스 덧셈기라면 \(O(\log N)\)이다.</div></div>
+    <div class="callout deep"><strong>4:2 압축기와 단계당 전가산기 두 개</strong><p>전가산기 두 개를 엮으면 같은 열의 비트 4개(+옆 열에서 오는 캐리 1개)를 2개로 줄이는 4:2 압축기가 된다. 옆 열로 나가는 캐리가 들어오는 캐리에 의존하지 않도록 짜면 지연이 FA 두 개가 아니라 XOR 약 3단(≈ 1.5 FA)으로 줄고, 무엇보다 트리가 이진 트리 모양이 되어 배선이 규칙적이다. 64비트 곱셈기의 부분곱 32줄(부스 부호화 후)은 4:2 압축기 4단(32→16→8→4→2)으로 줄일 수 있다. 많은 상용 곱셈기가 이 구조를 쓴다.</p></div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="booth">
+    <h2>부스 부호화: 부분곱을 절반으로</h2>
+    <p>트리의 크기와 깊이는 부분곱 줄 수가 정한다. 줄 수 자체를 줄일 수는 없을까? 승수를 2비트씩 묶어 4진수로 보면 각 자리는 0, 1, 2, 3이다. 0·1·2배는 쉽다(2배는 한 칸 시프트). 문제는 3배다. 3A = 2A + A는 그 자체로 덧셈이 필요한 "어려운 배수"다. <span class="term">부스 부호화</span><span class="en">(Booth encoding)</span>는 3을 4 − 1로 바꿔 쓴다. 다음 자리에 1을 올리고 이 자리에서는 −1을 쓰면, 모든 자리가 \(\{-2, -1, 0, +1, +2\}\) 안에 들어온다.</p>
+    <p>회로로는 더 깔끔하다. 승수 비트를 <b>겹치는 3비트 창</b> \((b_{2i+1}, b_{2i}, b_{2i-1})\)으로 훑고(\(b_{-1} = 0\)), 각 창에서 바로 자리 숫자를 읽는다.</p>
+    <div class="formula">$$d_i = -2\,b_{2i+1} + b_{2i} + b_{2i-1}, \qquad B = \sum_{i=0}^{N/2-1} d_i\,4^{i}, \qquad A\times B = \sum_{i} \left(d_i A\right) 4^{i}$$
+      <div class="where">\(d_i \in \{-2,-1,0,+1,+2\}\). 맨 위 비트 \(b_{N-1}\)에 \(-2\)의 가중치가 붙으므로 2의 보수(부호 있는 수)가 그대로 맞는다. N비트 승수에 부분곱이 N/2줄이다.</div></div>
+    <div class="table-wrap">
+      <table class="tt">
+        <thead><tr><th>\(b_{2i+1}\)</th><th>\(b_{2i}\)</th><th>\(b_{2i-1}\)</th><th>자리 숫자 \(d_i\)</th><th>부분곱</th><th>회로 동작</th></tr></thead>
+        <tbody>
+          <tr><td class="zero">0</td><td class="zero">0</td><td class="zero">0</td><td>0</td><td>0</td><td>0 선택</td></tr>
+          <tr><td class="zero">0</td><td class="zero">0</td><td class="one">1</td><td>+1</td><td>+A</td><td>A 선택</td></tr>
+          <tr><td class="zero">0</td><td class="one">1</td><td class="zero">0</td><td>+1</td><td>+A</td><td>A 선택</td></tr>
+          <tr><td class="zero">0</td><td class="one">1</td><td class="one">1</td><td>+2</td><td>+2A</td><td>A를 한 칸 시프트</td></tr>
+          <tr><td class="one">1</td><td class="zero">0</td><td class="zero">0</td><td>−2</td><td>−2A</td><td>2A 반전 + 1</td></tr>
+          <tr><td class="one">1</td><td class="zero">0</td><td class="one">1</td><td>−1</td><td>−A</td><td>A 반전 + 1</td></tr>
+          <tr><td class="one">1</td><td class="one">1</td><td class="zero">0</td><td>−1</td><td>−A</td><td>A 반전 + 1</td></tr>
+          <tr><td class="one">1</td><td class="one">1</td><td class="one">1</td><td>0</td><td>0</td><td>0 선택</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <figure class="play" id="fig-booth">
+      <div class="play-view"><canvas id="cv-booth"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>피승수 A <output id="bo-a-out"></output></span><input type="range" id="bo-a" min="-128" max="127" step="1" value="45"></label>
+        <label class="ctrl"><span>승수 B <output id="bo-b-out"></output></span><input type="range" id="bo-b" min="-128" max="127" step="1" value="-77"></label>
+        <label class="ctrl"><span>처리한 창 수 <output id="bo-i-out"></output></span><input type="range" id="bo-i" min="1" max="4" step="1" value="4"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">자리 숫자 d₃d₂d₁d₀</span><span class="v dp-small" id="bo-d">—</span></div>
+        <div class="stat"><span class="k">누적 합</span><span class="v" id="bo-sum">—</span></div>
+        <div class="stat"><span class="k">정답 A×B</span><span class="v" id="bo-ans">—</span></div>
+      </div>
+      <figcaption><b>그림 12-4.</b> <span class="try">해 보기</span>8비트 부호 있는 승수 B를 3비트 창(주황 괄호) 네 개가 두 칸씩 겹치며 훑는다. "처리한 창 수"를 1부터 4까지 올리며 부분곱이 한 줄씩 쌓이는 것을 보자. 8줄이 아니라 4줄이다. 흐린 비트는 시프트로 생긴 0과 부호 확장 비트다. B = −1(11111111)이나 B = −128을 넣어 보면 음수 승수도 보정 없이 맞는다.</figcaption>
+    </figure>
+    <p>부스 부호화의 대가는 부분곱 생성기다. 각 줄에서 0, ±A, ±2A 중 하나를 고르는 5:1 MUX와 반전 회로가 필요하고, 음수 부분곱의 "+1"은 다음 줄의 빈자리에 끼워 넣는다. 그래도 트리의 전가산기가 거의 절반으로 줄고 단계도 하나 이상 줄어 이득이 크다. 64비트 곱셈기는 거의 모두 radix-4 부스를 쓴다. radix-8(4비트 창)은 줄을 1/3로 줄이지만 3A라는 어려운 배수를 미리 덧셈으로 만들어 두어야 해서, 지연보다 면적·전력이 중요한 곳에서만 쓰인다.</p>
+    <div class="callout warn"><strong>부호 확장이 트리를 망친다</strong><p>음수 부분곱은 2의 보수라서 맨 위 비트를 결과 폭(2N)까지 복사해야 한다. 그림의 흐린 비트들이다. 그대로 두면 왼쪽 열이 부호 비트로 가득 차 트리가 커진다. 실제 곱셈기는 각 줄의 부호 비트 s를 반전해 \(\bar{s}\)로 두고 앞에 상수 1을 몇 개 붙이는 기법(sign-extension prevention)으로, 모든 줄의 부호 확장을 미리 계산한 상수 하나로 바꾼다. 같은 원리가 부호 있는 배열 곱셈기의 Baugh–Wooley 방식에도 쓰인다.</p></div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="shifter">
+    <h2>시프터: 한 번에 여러 칸 밀기</h2>
+    <p>시프트는 곱셈·나눗셈의 2의 거듭제곱 버전이자, 부동소수점의 정렬과 정규화, 비트 필드 추출에 쓰인다. 조합 회로로 0~N−1칸을 한 번에 미는 방법은 두 가지다. <span class="term">배럴 시프터</span><span class="en">(Barrel shifter)</span>는 출력 비트마다 N:1 MUX를 두어 시프트 양을 디코드한 신호로 한 번에 고른다. 지연은 전송 게이트 하나 수준으로 짧지만 MUX 입력이 \(N^2\)개이고 배선이 격자로 교차한다. <span class="term">로그 시프터</span><span class="en">(Logarithmic shifter)</span>는 시프트 양을 2진수로 보고, 비트 \(k_j\)가 1이면 \(2^j\)칸 미는 2:1 MUX 단을 \(\log_2 N\)개 잇는다.</p>
+    <div class="formula">$$\text{로그 시프터: } N\log_2 N \text{개의 2:1 MUX},\; \log_2 N \text{단}, \qquad \text{배럴 시프터: } N^2 \text{개의 스위치},\; 1\text{단(+ 디코더)}$$
+      <div class="where">64비트에서 로그 시프터는 MUX 384개·6단, 배럴 시프터는 스위치 4096개다. 비트 폭이 크면 로그 시프터가 면적과 배선에서 압도적으로 유리하다.</div></div>
+    <figure class="play" id="fig-shift">
+      <div class="play-view"><canvas id="cv-shift" class="dp-click"></canvas></div>
+      <div class="play-ctrl">
+        <div class="ctrl"><span>연산</span><div class="seg" id="sh-mode"><button data-value="sll" class="on">논리 왼쪽</button><button data-value="srl">논리 오른쪽</button><button data-value="sra">산술 오른쪽</button><button data-value="ror">회전</button></div></div>
+        <label class="ctrl"><span>시프트 양 k <output id="sh-k-out"></output></span><input type="range" id="sh-k" min="0" max="7" step="1" value="5"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">입력</span><span class="v dp-small" id="sh-in">—</span></div>
+        <div class="stat"><span class="k">출력</span><span class="v dp-small" id="sh-out">—</span></div>
+        <div class="stat"><span class="k">켜진 단</span><span class="v dp-small" id="sh-st">—</span></div>
+      </div>
+      <figcaption><b>그림 12-5.</b> <span class="try">해 보기</span>8비트 로그 시프터. 맨 윗줄 입력 비트를 눌러 바꾸고 k를 움직여 보자. k = 5 = 101₂이면 1칸 단과 4칸 단만 켜지고(사선) 2칸 단은 그대로 통과한다(수직선). 산술 오른쪽 시프트는 빈자리를 부호 비트로 채우고(주황), 회전은 밀려난 비트를 반대편으로 되돌린다.</figcaption>
+    </figure>
+    <p>한 회로로 네 연산을 다 하는 것도 어렵지 않다. 오른쪽 시프트는 입력과 출력의 비트 순서를 뒤집은 왼쪽 시프트이고, 회전은 빈자리에 0 대신 밀려난 비트를 넣는 것이며, 산술 시프트는 부호 비트를 넣는 것이다. 각 MUX 단의 "빈자리 채움" 입력만 고르면 된다. 고성능 코어의 시프터는 1클럭 안에 들어가며(64비트 6단 MUX ≈ 6~8 FO4), 부동소수점 덧셈기의 정렬·정규화 시프터도 같은 구조다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="alu">
+    <h2>ALU: 덧셈기 + 논리 + MUX, 그리고 플래그</h2>
+    <p><span class="term">산술 논리 장치</span><span class="en">(Arithmetic logic unit, ALU)</span>는 새로운 회로가 아니다. 덧셈기 하나, 비트별 논리 게이트 묶음, 시프터를 나란히 놓고 결과 MUX로 하나를 고른다. 뺄셈은 따로 만들지 않는다. \(A - B = A + \bar{B} + 1\)이므로 B 앞에 XOR(조건부 반전)를 두고 캐리 입력에 1을 넣으면 같은 덧셈기가 뺄셈기가 된다.</p>
+    <p>결과 옆에는 네 개의 <span class="term">상태 플래그</span><span class="en">(Status flags)</span>가 나온다. 분기 명령은 이 플래그만 보고 판단한다.</p>
+    <div class="formula">$$Z = \overline{r_{N-1} \lor \cdots \lor r_0},\quad N = r_{N-1},\quad C = c_{N},\quad V = c_{N} \oplus c_{N-1} = \left(a_{N-1} \odot b'_{N-1}\right) \wedge \left(r_{N-1} \oplus a_{N-1}\right)$$
+      <div class="where">Z(zero): 결과가 0. N(negative): 결과의 부호 비트. C(carry): 맨 위 자리의 캐리 출력 — 부호 없는 수의 넘침, 뺄셈에서는 "빌림이 없었다(A ≥ B)". V(overflow): 부호 있는 수의 넘침 — 같은 부호끼리 더했는데 결과 부호가 다를 때. \(b'\)는 반전을 거친 B, \(\odot\)는 XNOR.</div></div>
+    <div class="sim" id="sim-alu">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>플래그를 내는 ALU</h3></div>
+      <div class="sim-view"><canvas id="cv-alu" class="dp-click"></canvas></div>
+      <div class="sim-controls">
+        <div class="ctrl"><span>비트 폭</span><div class="seg" id="al-w"><button data-value="4">4비트</button><button data-value="8" class="on">8비트</button></div></div>
+        <div class="ctrl dp-ops"><span>연산</span><div class="seg" id="al-op"><button data-value="add" class="on">ADD</button><button data-value="sub">SUB</button><button data-value="and">AND</button><button data-value="or">OR</button><button data-value="xor">XOR</button><button data-value="slt">SLT</button><button data-value="shl">SHL</button><button data-value="sar">SAR</button></div></div>
+        <label class="ctrl"><span>A <output id="al-a-out"></output></span><input type="range" id="al-a" min="0" max="255" step="1" value="112"></label>
+        <label class="ctrl"><span>B <output id="al-b-out"></output></span><input type="range" id="al-b" min="0" max="255" step="1" value="80"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">결과</span><span class="v dp-small" id="al-r">—</span></div>
+        <div class="stat"><span class="k">부호 없는 / 부호 있는 해석</span><span class="v dp-small" id="al-int">—</span></div>
+        <div class="stat"><span class="k">플래그 Z N C V</span><span class="v" id="al-f">—</span></div>
+        <div class="stat"><span class="k">해설</span><span class="v dp-small" id="al-note">—</span></div>
+      </div>
+      <div class="sim-note">교육용 ALU. 데이터 경로에서 이번 연산이 쓰는 블록과 선이 파랗게 밝아진다. A, B 비트 칸을 눌러 비트를 직접 바꿀 수 있다. SHL·SAR은 A를 B의 아래 3비트(4비트 폭이면 2비트)만큼 민다. SLT는 내부에서 A − B를 계산해 \(N \oplus V\)(부호 있는 A &lt; B)를 0/1로 내보내며, 이때 플래그는 내부 뺄셈의 것이다. 논리 연산은 C = V = 0으로 둔다.</div>
+    </div>
+    <div class="predict"><strong>0x70 + 0x50은 넘쳤을까?</strong>
+      <p>8비트에서 112 + 80 = 192 = 0xC0이다. 부호 없는 수로는 255 이하이니 문제없다. 그렇다면 플래그 C와 V는 각각 무엇일까? 부호 있는 수로 읽으면 결과는 몇인가?</p>
+      <details><summary>답 보기</summary><p>C = 0, V = 1이다. 맨 위 자리에서 캐리가 나가지 않았으므로 부호 없는 덧셈은 정상(192)이다. 그러나 양수(+112) + 양수(+80)인데 결과의 부호 비트가 1이라 부호 있는 수로는 −64가 되었다. 같은 비트 패턴, 같은 덧셈기인데 어떤 플래그를 볼지는 <b>프로그램이 수를 어떻게 해석하는지</b>에 달려 있다. 그래서 C 언어의 unsigned 비교와 signed 비교는 서로 다른 분기 명령(예: ARM의 BHI와 BGT)으로 번역된다.</p></details></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>비교 (A − B 후)</th><th>부호 없는 수</th><th>부호 있는 수</th></tr></thead>
+        <tbody>
+          <tr><td>A = B</td><td colspan="2">Z = 1</td></tr>
+          <tr><td>A &lt; B</td><td>C = 0 (빌림 발생)</td><td>N ⊕ V = 1</td></tr>
+          <tr><td>A ≥ B</td><td>C = 1</td><td>N ⊕ V = 0</td></tr>
+          <tr><td>A &gt; B</td><td>C = 1 그리고 Z = 0</td><td>Z = 0 그리고 N = V</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout tip"><strong>ALU 지연의 대부분은 덧셈기다</strong><p>논리 연산은 게이트 한두 단, 결과 MUX도 두세 단이다. ALU의 임계 경로는 거의 항상 B 반전 XOR → 덧셈기의 캐리 체인 → 결과 MUX → Z 플래그의 OR 트리로 이어진다. 그래서 고성능 코어는 64비트 덧셈기를 프리픽스 구조로 짓고, Z 플래그는 결과가 나오기를 기다리지 않고 A, B에서 직접 "A + B = 0인가"를 계산하는 회로로 앞당기기도 한다. 이 경로가 1클럭(약 15~20 FO4 이내)에 들어가야 연속된 덧셈 명령이 매 클럭 결과를 넘겨받을 수 있다. 데이터패스가 파이프라인과 바이패스 안에서 어떻게 쓰이는지는 SoCBook의 <a href="/soc/chapters/cpu.html">CPU 장</a>에 있다.</p></div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="compare">
+    <h2>비교기, 제로 검출, 선행 0 세기</h2>
+    <p>크기 비교는 ALU의 뺄셈으로 할 수 있지만, 비교만 필요할 때는 더 싼 회로가 있다. <b>같음 비교</b>는 비트마다 XNOR를 하고 전부 AND하면 된다. <b>크기 비교</b>는 맨 위 비트부터 보다가 처음으로 다른 비트에서 결정된다. 그 자리에서 A가 1이면 A가 크다. 이 "처음 다른 자리 찾기"는 덧셈기의 캐리 전파와 같은 모양이라 프리픽스 트리로 \(O(\log N)\)에 끝난다.</p>
+    <p><span class="term">제로 검출</span><span class="en">(Zero detection)</span>은 N비트를 모두 OR한 뒤 반전하는 것, 즉 OR 트리다. <span class="term">선행 0 개수</span><span class="en">(Leading zero count, LZC)</span>는 맨 위에서부터 처음 1이 나오기 전까지 0이 몇 개인지 센다. 부동소수점 덧셈 후 결과를 정규화할 때 "왼쪽으로 몇 칸 밀어야 하는가"가 바로 LZC다. LZC도 트리로 짓는다. 두 반쪽의 (모두 0인가, LZC)를 합치는 규칙이 단순해서 16비트는 4단이면 된다.</p>
+    <figure class="play" id="fig-cmp">
+      <div class="play-view"><canvas id="cv-cmp" class="dp-click"></canvas></div>
+      <div class="play-ctrl">
+        <div class="ctrl"><span>회로</span><div class="seg" id="cm-mode"><button data-value="lzc" class="on">제로 검출·LZC (16비트)</button><button data-value="cmp">크기 비교 (8비트)</button></div></div>
+        <div class="ctrl"><span>입력</span><div class="ctrl-row"><button class="btn sm" id="cm-rand">무작위</button><button class="btn sm" id="cm-zero">모두 0</button></div></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k" id="cm-k1">결과</span><span class="v dp-small" id="cm-r1">—</span></div>
+        <div class="stat"><span class="k" id="cm-k2">—</span><span class="v dp-small" id="cm-r2">—</span></div>
+      </div>
+      <figcaption><b>그림 12-6.</b> <span class="try">해 보기</span>비트 칸을 눌러 바꿔 보자. 제로 검출·LZC 모드에서는 16비트 OR 트리(4단)의 각 노드 값과 선행 1의 위치가 보인다. 크기 비교 모드에서는 맨 위부터 비트를 비교하다가 처음 다른 자리(주황)에서 결과가 정해진다. 그 아래 자리들은 아무리 바꿔도 결과에 영향이 없다.</figcaption>
+    </figure>
+    <div class="callout deep"><strong>부호 있는 비교는 맨 위 비트만 뒤집는다</strong><p>2의 보수에서 부호 비트는 \(-2^{N-1}\)의 가중치를 가진다. 그래서 부호 있는 비교기는 두 수의 맨 위 비트를 반전한 뒤 부호 없는 비교기에 넣으면 된다(−128~127 범위가 0~255로 순서를 유지하며 옮겨진다). 같은 원리로 IEEE 754 부동소수점도 부호 비트만 따로 처리하면 나머지 비트를 정수처럼 비교해 크기 순서를 알 수 있다. 지수가 가수보다 위에 있도록 형식을 설계한 이유 중 하나다.</p></div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="float">
+    <h2>고정소수점과 부동소수점</h2>
+    <p>정수 회로로 실수를 다루는 가장 간단한 방법은 소수점을 한 자리에 고정해 두는 <span class="term">고정소수점</span><span class="en">(Fixed point)</span>이다. Q1.15 형식이라면 16비트 정수를 \(2^{15}\)으로 나눈 값으로 읽는다. 덧셈·곱셈 회로는 정수와 똑같고 곱한 뒤 시프트만 하면 되므로, DSP와 저전력 신호 처리에서 널리 쓰인다. 단점은 범위다. 아주 큰 수와 아주 작은 수를 같은 형식에 담을 수 없다.</p>
+    <p><span class="term">부동소수점</span><span class="en">(Floating point)</span>은 과학 표기법(1.23 × 10⁵)의 2진 버전이다. <span class="term">IEEE 754</span> 형식은 비트를 부호 s, 지수 e, 가수 f 세 칸으로 나눈다. 지수는 바이어스를 더해 부호 없는 정수로 저장하고, 정규화된 수의 맨 앞 1은 항상 1이므로 저장하지 않는다(숨은 비트).</p>
+    <div class="formula">$$x = (-1)^{s} \times 2^{\,e - \text{bias}} \times \left(1 + \frac{f}{2^{M}}\right) \quad (0 < e < e_{\max}), \qquad x = (-1)^{s} \times 2^{\,1-\text{bias}} \times \frac{f}{2^{M}} \quad (e = 0)$$
+      <div class="where">M: 가수 비트 수, bias = \(2^{E-1}-1\)(E: 지수 비트 수). e = 0은 0과 <b>비정규 수</b><span class="en">(Subnormal)</span>, e가 모두 1이면 ∞(f = 0)와 NaN(f ≠ 0). FP32는 E8·M23(bias 127), FP16은 E5·M10(bias 15), BF16은 E8·M7, FP8 E4M3은 E4·M3(bias 7, ∞ 없음).</div></div>
+    <figure class="play" id="fig-fp">
+      <div class="play-view"><canvas id="cv-fp" class="dp-click"></canvas></div>
+      <div class="play-ctrl">
+        <div class="ctrl"><span>형식</span><div class="seg" id="fp-fmt"><button data-value="fp32">FP32</button><button data-value="fp16" class="on">FP16</button><button data-value="bf16">BF16</button><button data-value="e4m3">FP8 E4M3</button></div></div>
+        <div class="ctrl"><span>값 넣기 (반올림해 저장)</span><div class="ctrl-row"><input class="dp-in" id="fp-in" type="text" value="0.1" aria-label="저장할 실수"><button class="btn sm primary" id="fp-go">변환</button></div></div>
+        <div class="ctrl"><span>특별한 수</span><div class="dp-presets" id="fp-pre"><button class="btn sm" data-v="1">1</button><button class="btn sm" data-v="-2.5">−2.5</button><button class="btn sm" data-v="max">최대</button><button class="btn sm" data-v="minn">최소 정규</button><button class="btn sm" data-v="mins">최소 비정규</button><button class="btn sm" data-v="inf">∞</button><button class="btn sm" data-v="nan">NaN</button></div></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">값</span><span class="v dp-small" id="fp-val">—</span></div>
+        <div class="stat"><span class="k">해석</span><span class="v dp-small" id="fp-how">—</span></div>
+        <div class="stat"><span class="k">종류 · 다음 수까지 간격</span><span class="v dp-small" id="fp-cls">—</span></div>
+        <div class="stat"><span class="k">반올림 오차</span><span class="v dp-small" id="fp-err">—</span></div>
+      </div>
+      <figcaption><b>그림 12-7.</b> <span class="try">해 보기</span>비트 칸을 눌러 부호(주황 띠)·지수(파란 띠)·가수(초록 띠)를 바꾸면 값이 바로 해석된다. 0.1을 FP16과 BF16에 넣어 오차를 비교하고, "최대" 버튼으로 두 형식의 범위를 비교해 보자. 아래 막대는 이 형식이 담을 수 있는 크기의 범위(로그 눈금, 노란 부분은 비정규 수)와 현재 값의 위치다.</figcaption>
+    </figure>
+    <p>같은 16비트라도 FP16과 BF16은 성격이 정반대다. FP16은 가수가 10비트라 정밀하지만 최대가 65504에 불과해, 신경망 학습 중 기울기가 쉽게 넘치거나 0으로 사라진다. Google이 TPU에 도입한 <b>BF16</b>(Brain floating point)은 FP32의 지수 8비트를 그대로 두고 가수를 7비트로 잘랐다. 범위는 FP32와 같고 정밀도는 낮다. 신경망은 정밀도보다 범위에 민감해서, BF16은 FP32 학습을 거의 그대로 흉내 내며 곱셈기 면적은 가수 폭의 제곱에 비례하므로(8×8 대 24×24) 약 1/9로 줄어든다.</p>
+    <div class="callout deep"><strong>AI 가속기의 FP8과 블록 스케일링</strong><p>2022년 이후 GPU·NPU는 8비트 부동소수점을 지원한다. E4M3(정밀도 우선, 최대 448)는 추론과 순전파에, E5M2(범위 우선, FP16과 같은 지수)는 역전파 기울기에 쓰는 식이다. 더 나아가 MX(microscaling) 형식은 32개 원소가 지수 하나를 공유하게 해 4~6비트 원소로도 정확도를 지킨다. 형식이 작아질수록 MAC 하나의 면적과 에너지가 빠르게 줄어 같은 칩에 더 많은 곱셈기를 넣을 수 있다. 이런 저정밀 형식을 쓰는 NPU의 MAC 배열과 데이터 흐름은 SoCBook의 <a href="/soc/chapters/npu.html">NPU 장</a>에서 다룬다.</p></div>
+    <h3>부동소수점 덧셈기: 정렬, 덧셈, 정규화, 반올림</h3>
+    <p>부동소수점 곱셈은 의외로 쉽다. 가수끼리 곱하고(정수 곱셈기) 지수끼리 더하면 된다. 어려운 쪽은 덧셈이다. 지수가 다른 두 수는 자리를 맞춰야 더할 수 있다. 덧셈기는 네 단계로 일한다. ① 지수를 비교해 작은 수의 가수를 차이 Δe만큼 오른쪽으로 민다(정렬 시프터). 밀려 나가는 비트는 버리지 않고 가드(G)·라운드(R)·스티키(S) 비트로 요약한다. ② 가수를 더하거나 뺀다. ③ 결과의 맨 앞 1이 제자리에 오도록 민다(캐리가 나면 오른쪽 1칸, 상쇄되어 앞이 0이면 LZC만큼 왼쪽). ④ G·R·S를 보고 <b>가장 가까운 짝수로 반올림</b><span class="en">(Round to nearest, ties to even)</span>한다.</p>
+    <figure class="play" id="fig-fpadd">
+      <div class="play-view"><canvas id="cv-fpadd"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>A <output id="fa-a-out"></output></span><input type="range" id="fa-a" min="-64" max="64" step="0.125" value="12.5"></label>
+        <label class="ctrl"><span>B <output id="fa-b-out"></output></span><input type="range" id="fa-b" min="-64" max="64" step="0.001" value="0.3"></label>
+        <div class="ctrl"><span>예제</span><div class="dp-presets" id="fa-pre"><button class="btn sm" data-a="2048" data-b="1">2048 + 1</button><button class="btn sm" data-a="2048" data-b="3">2048 + 3</button><button class="btn sm" data-a="1.0009765625" data-b="-1">상쇄 (1.001 − 1)</button><button class="btn sm" data-a="1" data-b="1">캐리 (1 + 1)</button><button class="btn sm" data-a="60000" data-b="10000">넘침</button></div></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">지수 차 Δe · 연산</span><span class="v dp-small" id="fa-op">—</span></div>
+        <div class="stat"><span class="k">정규화 · 반올림</span><span class="v dp-small" id="fa-norm">—</span></div>
+        <div class="stat"><span class="k">FP16 결과</span><span class="v dp-small" id="fa-r">—</span></div>
+        <div class="stat"><span class="k">정확한 합과 비교</span><span class="v dp-small" id="fa-ex">—</span></div>
+      </div>
+      <figcaption><b>그림 12-8.</b> <span class="try">해 보기</span>FP16 덧셈기의 내부 가수 경로. 각 줄은 숨은 비트를 포함한 가수 11비트와 G·R·S 3비트이며, 세로 점선이 2진 소수점이다. B를 아주 작게 하면 정렬 단계에서 B가 통째로 스티키 비트로 사라지고, "상쇄" 예제에서는 정규화 시프터가 LZC만큼 왼쪽으로 크게 민다. 슬라이더 값은 가장 가까운 FP16 값으로 반올림되어 들어간다.</figcaption>
+    </figure>
+    <div class="predict"><strong>FP16에서 2048 + 1은?</strong>
+      <p>FP16의 가수는 숨은 비트까지 11비트다. 2048 = 2¹¹에 1을 더하면 2049가 될까? 2048 + 3은?</p>
+      <details><summary>답 보기</summary><p>2048 + 1 = <b>2048</b>이다. 2048 근처에서 FP16의 간격(ulp)은 2라서 2049는 2048과 2050의 정확히 한가운데이고, 짝수 쪽(가수 끝 비트가 0인 2048)으로 반올림된다. 2048 + 3 = 2051도 한가운데지만 이번에는 2052가 짝수 쪽이라 2052가 된다. 반올림 방향이 매번 같으면 오차가 한쪽으로 쌓이므로, IEEE 754는 "짝수로"를 기본으로 정해 평균 오차를 0으로 만든다. 큰 수에 작은 수를 계속 더하는 누산이 저정밀 형식에서 위험한 이유이기도 하다. 그래서 MAC은 곱은 FP8·BF16으로 하더라도 누산은 FP32로 하는 경우가 많다.</p></details></div>
+    <p>현대 프로세서는 곱셈과 덧셈을 따로 하지 않고 \(A\times B + C\)를 반올림 한 번으로 계산하는 <span class="term">융합 곱셈-덧셈</span><span class="en">(Fused multiply-add, FMA)</span>을 기본 연산으로 쓴다. 곱셈기 트리의 마지막 두 줄에 정렬된 C를 세 번째 줄로 넣어 3:2 압축을 한 번 더 하면 되므로, 곱셈 뒤 덧셈을 따로 하는 것보다 빠르고 정확하다. 행렬 곱셈, 즉 AI 연산의 기본 단위인 MAC이 바로 이것이다.</p>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="numbers">
+    <h2>실제 수치: 지연과 에너지</h2>
+    <p>지금까지의 구조가 실제 칩에서 어느 정도 비용인지 대략값으로 보자. 먼저 연산 지연이다. 64비트 정수 곱셈은 부스 부호화 + 압축기 트리 + 128비트 CPA로, 4~5 GHz 코어에서 파이프라인 3~4단(약 0.7~0.9 ns)에 나뉘어 들어간다. 그래도 매 클럭 새 곱셈을 시작할 수 있다(처리량 1/클럭).</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>연산 (64비트 범용 코어)</th><th class="num">지연 (클럭, 약)</th><th class="num">처리량 (약)</th><th>비고</th></tr></thead>
+        <tbody>
+          <tr><td>정수 덧셈·논리·시프트</td><td class="num">1</td><td class="num">클럭당 4개 내외</td><td>ALU 여러 개, 바이패스로 다음 명령이 바로 사용</td></tr>
+          <tr><td>정수 곱셈 (64×64 → 64)</td><td class="num">3~4</td><td class="num">클럭당 1개</td><td>x86 서버·데스크톱 코어 약 3 (2015~), ARM 고성능 코어 약 2~4</td></tr>
+          <tr><td>부동소수점 곱셈·FMA (FP64)</td><td class="num">4~5</td><td class="num">클럭당 2개</td><td>FMA 유닛 두 개가 흔하다 (2015~)</td></tr>
+          <tr><td>정수 나눗셈 (64비트)</td><td class="num">약 15~90</td><td class="num">수십 클럭당 1개</td><td>반복형(SRT 등)이라 값에 따라 다름. 최근 코어일수록 짧다</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>다음은 에너지다. Horowitz가 2014년 ISSCC 기조 강연에서 정리한 45 nm 공정 수치는 지금도 "연산은 싸고 데이터 이동은 비싸다"를 설명할 때 가장 많이 인용된다. 곱셈 에너지가 비트 폭의 제곱에 가깝게 늘고, 부동소수점이 정수보다 비싸며, 그보다 메모리 접근이 수십~수백 배 비싸다는 것을 보자.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>연산 (45 nm, 0.9 V)</th><th class="num">에너지 (약)</th><th class="num">면적 (약)</th></tr></thead>
+        <tbody>
+          <tr><td>8비트 정수 덧셈</td><td class="num">0.03 pJ</td><td class="num">36 µm²</td></tr>
+          <tr><td>32비트 정수 덧셈</td><td class="num">0.1 pJ</td><td class="num">137 µm²</td></tr>
+          <tr><td>8비트 정수 곱셈</td><td class="num">0.2 pJ</td><td class="num">282 µm²</td></tr>
+          <tr><td>32비트 정수 곱셈</td><td class="num">3.1 pJ</td><td class="num">3495 µm²</td></tr>
+          <tr><td>16비트 부동소수점 덧셈</td><td class="num">0.4 pJ</td><td class="num">1360 µm²</td></tr>
+          <tr><td>16비트 부동소수점 곱셈</td><td class="num">1.1 pJ</td><td class="num">1640 µm²</td></tr>
+          <tr><td>32비트 부동소수점 덧셈</td><td class="num">0.9 pJ</td><td class="num">4184 µm²</td></tr>
+          <tr><td>32비트 부동소수점 곱셈</td><td class="num">3.7 pJ</td><td class="num">7700 µm²</td></tr>
+          <tr><td>64비트 캐시(SRAM 8 KB) 읽기</td><td class="num">10 pJ</td><td class="num">—</td></tr>
+          <tr><td>64비트 DRAM 읽기</td><td class="num">1300~2600 pJ</td><td class="num">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:14px;color:var(--text-dim)">출처: M. Horowitz, "Computing's Energy Problem (and what we can do about it)," ISSCC 2014 기조 강연의 45 nm 추정치. 7 nm급(DG-7 수준) 공정에서는 연산 에너지가 대략 3~5배 줄었지만 상대적인 순서는 그대로다. 8비트 곱셈이 32비트 FP 곱셈보다 약 18배 싸다는 사실이 AI 가속기가 INT8·FP8로 내려가는 이유다.</p>
+    <div class="callout warn"><strong>곱셈기를 키우기 전에 데이터를 옮기는 비용을 보라</strong><p>32비트 FP 곱셈 하나(3.7 pJ)보다 그 피연산자를 8 KB짜리 작은 캐시에서 64비트를 읽는 데 더 많은 에너지(약 10 pJ)가 들고, DRAM에서 가져오면 수백 배가 든다. 그래서 MAC 배열은 같은 데이터를 여러 번 재사용하도록(시스톨릭 배열, 가중치 고정 등) 짜고, 곱셈기 하나를 아끼는 것보다 레지스터·SRAM 접근을 줄이는 것이 전력에 더 크게 듣는다. 메모리 회로는 <a href="memory.html">13장</a>, 전력은 <a href="power.html">15장</a>에서 다룬다.</p></div>
+  </section>
+
+  <section class="keypoints">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>2진 곱셈의 부분곱은 AND 행렬이다. N×N 곱은 부분곱 비트 \(N^2\)개를 만들고, 곱셈기 설계는 이 점들을 세로로 더하는 문제다.</li>
+      <li>배열 곱셈기는 규칙적이지만 지연이 \(O(N)\)이다. 전가산기를 3:2 압축기로 쓰는 캐리 저장 덧셈은 캐리를 기다리지 않아 폭과 무관하게 FA 하나의 지연이다.</li>
+      <li>월리스·다다 트리는 높이를 단계마다 약 2/3로 줄여 \(O(\log N)\) 단계(16비트 6단, 64비트 10단) 뒤 최종 CPA 한 번으로 끝낸다. 다다는 반가산기를 최소로 쓴다.</li>
+      <li>radix-4 부스 부호화는 겹치는 3비트 창으로 자리 숫자 \(\{-2,\dots,+2\}\)를 만들어 부분곱을 N/2줄로 줄이고, 부호 있는 곱셈을 보정 없이 처리한다.</li>
+      <li>로그 시프터는 \(\log_2 N\)단의 2:1 MUX로 모든 시프트·회전을 한다. ALU는 덧셈기 + 논리 + 시프터 + MUX이며, 플래그 Z·N·C·V로 부호 없는/있는 비교를 모두 판단한다.</li>
+      <li>비교·제로 검출·LZC는 모두 트리로 \(O(\log N)\)에 끝나며, LZC는 부동소수점 정규화의 시프트 양이다.</li>
+      <li>IEEE 754는 부호·지수·가수로 범위와 정밀도를 나누고, FP 덧셈은 정렬·덧셈·정규화·반올림(짝수로)을 거친다. BF16·FP8은 범위나 면적을 위해 가수를 줄인 형식이며, 메모리 접근이 연산보다 훨씬 비싸다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. 부호 없는 8비트 × 8비트 병렬 곱셈기(부스 부호화 없음)가 만드는 부분곱 비트는 몇 개이고, 곱의 폭은?</p>
+        <div class="opts">
+          <button class="opt">16개, 8비트</button>
+          <button class="opt">8개, 16비트</button>
+          <button class="opt" data-correct>64개, 16비트</button>
+          <button class="opt">64개, 8비트</button>
+        </div>
+        <div class="quiz-exp">\(a_i \wedge b_j\)가 i, j = 0..7 모두에 대해 생기므로 \(8^2 = 64\)개의 AND 게이트 출력이다. 두 8비트 수의 곱은 최대 255² = 65025 &lt; 2¹⁶이므로 16비트다.</div></div>
+      <div class="quiz-q"><p>Q2. 캐리 저장 덧셈기(CSA)의 지연이 비트 폭과 무관한 이유는?</p>
+        <div class="opts">
+          <button class="opt" data-correct>각 자리의 전가산기가 캐리를 옆 자리에 넘기지 않고 출력 벡터로 내보내므로, 자리끼리 서로 기다리지 않는다.</button>
+          <button class="opt">프리픽스 트리로 캐리를 미리 계산하기 때문이다.</button>
+          <button class="opt">전가산기 대신 AND 게이트만 쓰기 때문이다.</button>
+          <button class="opt">입력이 두 개뿐이라 캐리가 생기지 않기 때문이다.</button>
+        </div>
+        <div class="quiz-exp">CSA는 세 수를 합 벡터 S와 캐리 벡터 C로 바꿀 뿐 캐리를 전파하지 않는다. 그래서 FA 하나의 지연으로 끝나고, 전파는 맨 마지막 CPA 한 번에 몰아서 한다.</div></div>
+      <div class="quiz-q"><p>Q3. 열 최대 높이가 9인 점 배열을 다다 방식으로 2줄까지 줄이려면 몇 단계가 필요한가?</p>
+        <div class="opts">
+          <button class="opt">3단계</button>
+          <button class="opt" data-correct>4단계</button>
+          <button class="opt">5단계</button>
+          <button class="opt">7단계</button>
+        </div>
+        <div class="quiz-exp">다다 목표 수열 2, 3, 4, 6, 9에서 9 → 6 → 4 → 3 → 2로 네 번 줄인다. 배열 방식이라면 9 − 2 = 7단계가 걸린다.</div></div>
+      <div class="quiz-q"><p>Q4. radix-4 부스 부호화에서 창 \((b_{2i+1}, b_{2i}, b_{2i-1}) = (1, 1, 0)\)이 고르는 부분곱은?</p>
+        <div class="opts">
+          <button class="opt">+2A</button>
+          <button class="opt">+A</button>
+          <button class="opt">0</button>
+          <button class="opt" data-correct>−A</button>
+        </div>
+        <div class="quiz-exp">\(d_i = -2\cdot1 + 1 + 0 = -1\)이므로 −A다. 회로에서는 A를 반전하고 그 줄의 맨 아래에 1을 더한다.</div></div>
+      <div class="quiz-q"><p>Q5. 8비트 ALU에서 0x90 + 0x90을 계산했다. 플래그 C와 V는?</p>
+        <div class="opts">
+          <button class="opt">C = 0, V = 0</button>
+          <button class="opt">C = 0, V = 1</button>
+          <button class="opt" data-correct>C = 1, V = 1</button>
+          <button class="opt">C = 1, V = 0</button>
+        </div>
+        <div class="quiz-exp">144 + 144 = 288 = 0x120이므로 결과는 0x20이고 맨 위 캐리가 나가 C = 1이다. 부호 있는 수로는 (−112) + (−112) = −224로 범위를 벗어났고, 음수 + 음수에서 결과 부호가 0(양수)이 되었으므로 V = 1이다.</div></div>
+      <div class="quiz-q"><p>Q6. BF16이 FP16보다 신경망 학습에 유리한 가장 큰 이유는?</p>
+        <div class="opts">
+          <button class="opt">가수 비트가 더 많아 정밀하다.</button>
+          <button class="opt" data-correct>지수가 FP32와 같은 8비트라 표현 범위가 FP32와 같다.</button>
+          <button class="opt">비정규 수가 없어 회로가 간단하다.</button>
+          <button class="opt">비트 수가 8비트로 더 적다.</button>
+        </div>
+        <div class="quiz-exp">BF16은 E8·M7로, FP16(E5·M10)보다 정밀도는 낮지만 최대값이 약 3.4×10³⁸로 FP32와 같다. 기울기가 넘치거나 사라지는 문제가 줄어 FP32 학습을 거의 그대로 흉내 낼 수 있다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  var P = SB.palette();
+  function pal() { P = SB.palette(); return P; }
+  SB.onTheme(pal);
+
+  /* ---------------------------------------------------------------- 공통 헬퍼 */
+  function aopt(sel, wide, narrow, bp, extra) {
+    var el = document.querySelector(sel), o = Object.assign({}, extra || {});
+    Object.defineProperty(o, "aspect", { get: function () { return (el.parentElement.clientWidth || 600) < (bp || 560) ? narrow : wide; } });
+    return o;
+  }
+  function T(ctx, s, x, y, o) {
+    o = o || {};
+    ctx.font = SB.font(o.size || 12, o.mono, o.weight);
+    ctx.fillStyle = o.color || P.text; ctx.textAlign = o.align || "left"; ctx.textBaseline = o.base || "middle";
+    ctx.fillText(s, x, y);
+  }
+  /** 비트 칸: 1 = --hi, 0 = --lo */
+  function bit(ctx, x, y, s, v, o) {
+    o = o || {};
+    var c = o.color || DG.lv(v ? 1 : 0);
+    ctx.save();
+    if (o.alpha != null) ctx.globalAlpha = o.alpha;
+    DG.roundRect(ctx, x + 1, y + 1, s - 2, s - 2, Math.min(5, s * 0.2));
+    ctx.fillStyle = DG.alpha(c, v ? 0.24 : 0.1); ctx.fill();
+    ctx.strokeStyle = o.stroke || DG.alpha(c, 0.9); ctx.lineWidth = o.lw || 1.2; ctx.stroke();
+    if (s >= 10) {
+      ctx.fillStyle = c; ctx.font = SB.font(Math.min(15, s * 0.56), true, 700);
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(o.text != null ? o.text : String(v ? 1 : 0), x + s / 2, y + s / 2 + 0.5);
+    }
+    ctx.restore();
+  }
+  function hit(list, x, y) {
+    for (var i = 0; i < list.length; i++) { var g = list[i]; if (x >= g.x && x <= g.x + g.w && y >= g.y && y <= g.y + g.h) return g; }
+    return null;
+  }
+  /** range 값을 콜백 없이 바꾼다(애니메이션용) */
+  function quiet(get, v, txt) {
+    var el = get.el; el.value = v;
+    var pct = ((Number(el.value) - Number(el.min)) / (Number(el.max) - Number(el.min))) * 100;
+    el.style.setProperty("--fill", pct + "%");
+    var out = document.getElementById(el.id + "-out"); if (out && txt != null) out.textContent = txt;
+  }
+  function popcount(v) { var n = 0; while (v) { n += v & 1; v >>>= 1; } return n; }
+  function sgn(v, n) { return DG.signed(v, n); }
+  function hex(v, n) { return "0x" + (v >>> 0).toString(16).toUpperCase().padStart(Math.ceil(n / 4), "0"); }
+
+  /* ---------------------------------------------------------------- 12-1 부분곱 행렬 */
+  (function () {
+    var A = 13, B = 11, fill = 5, geo = [];
+    var fmt = function (v) { return v + " = " + SB.bin(v, 4) + "₂"; };
+    var ga = SB.range("pp-a", fmt, function (v) { A = v; fill = 0; upd(); });
+    var gb = SB.range("pp-b", fmt, function (v) { B = v; fill = 0; upd(); });
+    var el = document.getElementById("cv-pp");
+    var cv = SB.canvas(el, draw, aopt("#cv-pp", 0.44, 1.0, 560));
+    function draw(ctx, w, h) {
+      pal(); geo = [];
+      var wide = w >= 560, lab = wide ? 78 : 52;
+      var gridW = wide ? Math.min(w * 0.6, lab + 8 * 34 + 24) : w - 6;
+      var s = Math.min(34, (gridW - lab - 14) / 8, (h - 30) / 8.3);
+      var right = gridW - 10, gap = s * 0.18;
+      var X = function (k) { return right - (k + 1) * s; };
+      var lx = X(7) - lab + 2;
+      var y = 8, k, j;
+      T(ctx, "A", lx, y + s / 2, { size: 13, weight: 700 });
+      for (k = 0; k < 4; k++) { bit(ctx, X(k), y, s, (A >> k) & 1); geo.push({ x: X(k), y: y, w: s, h: s, t: "a", k: k }); }
+      y += s + gap;
+      T(ctx, "× B", lx, y + s / 2, { size: 13, weight: 700 });
+      for (k = 0; k < 4; k++) { bit(ctx, X(k), y, s, (B >> k) & 1); geo.push({ x: X(k), y: y, w: s, h: s, t: "b", k: k }); }
+      y += s + gap + 2;
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(7), y); ctx.lineTo(right, y); ctx.stroke();
+      y += gap + 2;
+      for (j = 0; j < 4; j++) {
+        var a = SB.clamp(fill - j, 0, 1), bj = (B >> j) & 1;
+        T(ctx, "b" + j + "·A", lx, y + s / 2 - (wide ? 6 : 0), { size: wide ? 12 : 11, mono: true, color: P.dim });
+        if (wide) T(ctx, bj ? "= A" : "= 0", lx, y + s / 2 + 8, { size: 11, mono: true, color: bj ? P.hi : P.lo, weight: 700 });
+        for (k = 0; k < 4; k++) {
+          var cx = X(k + j) + s / 2, cy = y + s / 2, v = ((A >> k) & 1) & bj;
+          ctx.beginPath(); ctx.arc(cx, cy, s * 0.36, 0, Math.PI * 2);
+          ctx.strokeStyle = P.grid; ctx.lineWidth = 1; ctx.stroke();
+          if (a > 0) {
+            ctx.save(); ctx.globalAlpha = a;
+            ctx.beginPath(); ctx.arc(cx, cy, s * 0.36 * (0.6 + 0.4 * a), 0, Math.PI * 2);
+            ctx.fillStyle = DG.alpha(DG.lv(v), v ? 0.85 : 0.35); ctx.fill();
+            if (s >= 16) T(ctx, String(v), cx, cy + 0.5, { size: Math.min(13, s * 0.42), mono: true, weight: 700, align: "center", color: v ? P.bg || "#fff" : P.text });
+            ctx.restore();
+          }
+        }
+        y += s + gap;
+      }
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(X(7), y + 1); ctx.lineTo(right, y + 1); ctx.stroke();
+      y += gap + 3;
+      var pa = SB.clamp(fill - 4, 0, 1), prod = A * B;
+      T(ctx, "P", lx, y + s / 2, { size: 13, weight: 700 });
+      for (k = 0; k < 8; k++) bit(ctx, X(k), y, s, (prod >> k) & 1, { alpha: 0.15 + 0.85 * pa });
+      if (wide) {
+        // 10진 손 곱셈
+        var x0 = gridW + 30, xr = Math.min(w - 30, x0 + 170);
+        ctx.strokeStyle = P.border; ctx.beginPath(); ctx.moveTo(gridW + 8, 14); ctx.lineTo(gridW + 8, h - 14); ctx.stroke();
+        T(ctx, "같은 곱을 10진수로", x0, 20, { size: 12, color: P.dim, weight: 700 });
+        ctx.font = SB.font(17, true, 600);
+        var cw = ctx.measureText("0").width, ly = 50, lh = Math.min(28, (h - 70) / 7);
+        var line = function (str, col, yy) { T(ctx, str, xr, yy, { size: 17, mono: true, align: "right", color: col || P.text }); };
+        line(String(A), null, ly); line("× " + B, null, ly + lh);
+        ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(xr - cw * 6, ly + lh * 1.55); ctx.lineTo(xr, ly + lh * 1.55); ctx.stroke();
+        var digs = String(B).split("").reverse(), yy = ly + lh * 2.2;
+        digs.forEach(function (d, i) {
+          var pp = A * Number(d);
+          T(ctx, String(pp), xr - i * cw, yy, { size: 17, mono: true, align: "right", color: P.accent });
+          T(ctx, A + "×" + d, xr - cw * 7.5, yy, { size: 11, mono: true, color: P.faint, align: "right" });
+          yy += lh;
+        });
+        ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(xr - cw * 6, yy - lh * 0.45); ctx.lineTo(xr, yy - lh * 0.45); ctx.stroke();
+        line(String(prod), null, yy + lh * 0.2);
+        T(ctx, "10진: 줄마다 구구단이 필요하다", x0, h - 38, { size: 11.5, color: P.dim });
+        T(ctx, "2진: 줄은 A 아니면 0 → AND 게이트", x0, h - 20, { size: 11.5, color: P.hi, weight: 700 });
+      }
+    }
+    DG.pointer(el, { down: function (x, y) {
+      var g = hit(geo, x, y); if (!g) return;
+      if (g.t === "a") ga.set(A ^ (1 << g.k)); else gb.set(B ^ (1 << g.k));
+    } });
+    function upd() {
+      SB.stat("pp-p", A * B + " <small>= " + SB.bin(A * B, 8) + "₂</small>");
+      SB.stat("pp-rows", popcount(B) + " <small>/ 4줄</small>");
+      cv.redraw();
+    }
+    SB.loop(el, function (dt) { if (fill < 5) { fill = Math.min(5, fill + dt * 2.6); cv.redraw(); } });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 12-2 배열 곱셈기 */
+  (function () {
+    var N = 6, tf = 1, playing = false, M = null;
+    var TA = 5, FS = 15, FC = 10, HS = 10, HC = 6;
+    function model(N) {
+      var cells = [], r, b, fa = 0, ha = 0;
+      function mk(type, ins) {
+        var tin = 0, pred = null;
+        ins.forEach(function (q) { if (q.t != null && q.t >= tin) { tin = q.t; pred = q.src; } });
+        var c = { type: type, pred: pred };
+        if (type === "AND" || type === "W") { c.ts = TA; c.tc = null; c.pred = null; }
+        else if (type === "FA") { c.ts = tin + FS; c.tc = tin + FC; fa++; }
+        else { c.ts = tin + HS; c.tc = tin + HC; ha++; }
+        return c;
+      }
+      for (r = 0; r < N; r++) {
+        cells.push([]);
+        for (b = 0; b < N; b++) {
+          if (r === 0) { cells[r].push(mk("AND", [])); continue; }
+          var ins = [{ t: TA, src: null }];
+          if (b + 1 < N) ins.push({ t: cells[r - 1][b + 1].ts, src: [r - 1, b + 1, "s"] });
+          if (cells[r - 1][b].tc != null) ins.push({ t: cells[r - 1][b].tc, src: [r - 1, b, "c"] });
+          cells[r].push(mk(ins.length === 3 ? "FA" : ins.length === 2 ? "HA" : "W", ins));
+        }
+      }
+      var cpa = [];
+      for (var k = 0; k < N - 1; k++) {
+        var ii = [{ t: cells[N - 1][k + 1].ts, src: [N - 1, k + 1, "s"] }];
+        if (cells[N - 1][k].tc != null) ii.push({ t: cells[N - 1][k].tc, src: [N - 1, k, "c"] });
+        if (k > 0) ii.push({ t: cpa[k - 1].tc, src: [N, k - 1, "c"] });
+        cpa.push(mk(ii.length === 3 ? "FA" : "HA", ii));
+      }
+      cells.push(cpa);
+      var Tm = cpa[N - 2].tc, end = [N, N - 2];
+      cpa.forEach(function (c, k) { if (c.ts > Tm) { Tm = c.ts; end = [N, k]; } });
+      var crit = {}, cur = end, guard = 0;
+      while (cur && guard++ < 100) { crit[cur[0] + "," + cur[1]] = 1; var cc = cells[cur[0]][cur[1]]; cur = cc.pred; }
+      return { cells: cells, T: Tm, fa: fa, ha: ha, crit: crit };
+    }
+    var el = document.getElementById("cv-array");
+    var gt = SB.range("ar-t", function (v) { return v + "%"; }, function (v) { tf = v / 100; playing = false; cv.redraw(); });
+    SB.range("ar-n", function (v) { return v + "비트"; }, function (v) { N = v; M = model(N); upd(); });
+    var cv = SB.canvas(el, draw, aopt("#cv-array", 0.46, 1.0, 560));
+    function draw(ctx, w, h) {
+      pal(); if (!M) return;
+      var t = tf * M.T, cols = N + 1.6, rows = N + 2.3;
+      var s = Math.min(48, (w - 40) / cols, (h - 34) / rows);
+      var x0 = (w - s * cols) / 2 + s * 0.3, y0 = 24;
+      var CX = function (b) { return x0 + (N - 1 - b) * s + s / 2; };
+      var CY = function (r) { return y0 + r * s + s / 2; };
+      var CXr = function (r, b) { return r === N ? CX(b + 1) : CX(b); };
+      T(ctx, "MSB", CX(N - 1), 10, { size: 10.5, color: P.faint, align: "center" });
+      T(ctx, "LSB", CX(0), 10, { size: 10.5, color: P.faint, align: "center" });
+      var r, b, c;
+      // 연결선
+      for (r = 1; r <= N; r++) for (b = 0; b < M.cells[r].length; b++) {
+        c = M.cells[r][b];
+        var srcs = r < N ? [[r - 1, b + 1, "s"], [r - 1, b, "c"]] : [[N - 1, b + 1, "s"], [N - 1, b, "c"], [N, b - 1, "c"]];
+        srcs.forEach(function (q) {
+          if (q[1] < 0 || q[1] >= M.cells[q[0]].length) return;
+          var sc = M.cells[q[0]][q[1]], tt = q[2] === "s" ? sc.ts : sc.tc;
+          if (tt == null) return;
+          var on = t >= tt, isC = M.crit[r + "," + b] && c.pred && c.pred[0] === q[0] && c.pred[1] === q[1];
+          ctx.strokeStyle = isC ? P.accent2 : on ? DG.alpha(P.accent, 0.65) : P.grid;
+          ctx.lineWidth = isC ? 2.4 : 1.4;
+          ctx.beginPath(); ctx.moveTo(CXr(q[0], q[1]), CY(q[0])); ctx.lineTo(CXr(r, b), CY(r)); ctx.stroke();
+        });
+      }
+      // 셀
+      for (r = 0; r <= N; r++) for (b = 0; b < M.cells[r].length; b++) {
+        c = M.cells[r][b];
+        var cx = CXr(r, b), cy = CY(r), out = c.tc != null ? Math.max(c.ts, c.tc) : c.ts, done = t >= out, fresh = done && t - out < 14 && tf < 1;
+        var cs = c.type === "W" ? s * 0.3 : s * 0.72;
+        DG.roundRect(ctx, cx - cs / 2, cy - cs / 2, cs, cs, c.type === "W" ? cs / 2 : 5);
+        ctx.fillStyle = fresh ? DG.alpha(P.accent2, 0.45) : done ? DG.alpha(P.accent, 0.22) : P.surface; ctx.fill();
+        var cr = M.crit[r + "," + b];
+        ctx.strokeStyle = cr ? P.accent2 : done ? P.accent : P.border; ctx.lineWidth = cr ? 2.4 : 1.2; ctx.stroke();
+        if (s >= 26 && c.type !== "W") T(ctx, c.type === "AND" ? "&" : c.type, cx, cy + 0.5, { size: Math.min(12, s * 0.3), weight: 700, align: "center", color: done ? P.text : P.faint });
+      }
+      // 곱 비트 출력
+      ctx.font = SB.font(10, true);
+      for (r = 0; r < N; r++) { var on0 = t >= M.cells[r][0].ts; T(ctx, "p" + r, CX(0) + s * 0.55, CY(r), { size: Math.min(11, s * 0.3), mono: true, color: on0 ? P.hi : P.faint }); }
+      for (b = 0; b < N - 1; b++) { var oc = M.cells[N][b]; T(ctx, "p" + (N + b), CX(b + 1), CY(N) + s * 0.62, { size: Math.min(11, s * 0.3), mono: true, align: "center", color: t >= oc.ts ? P.hi : P.faint }); }
+      T(ctx, "CPA", x0 - s * 0.25, CY(N), { size: 10.5, color: P.dim, align: "right", weight: 700 });
+      T(ctx, "t = " + t.toFixed(0) + " ps", w - 10, 12, { size: 12, mono: true, align: "right", color: P.accent, weight: 700 });
+    }
+    function upd() {
+      SB.stat("ar-cells", "FA " + M.fa + " · HA " + M.ha);
+      SB.stat("ar-crit", M.T + "<small> ps</small>");
+      SB.stat("ar-fo4", (M.T / 7.5).toFixed(1) + "<small> FO4</small>");
+      cv.redraw();
+    }
+    document.getElementById("ar-play").addEventListener("click", function () { tf = 0; playing = true; });
+    SB.loop(el, function (dt) {
+      if (!playing) return;
+      tf = Math.min(1, tf + dt / 3);
+      if (tf >= 1) playing = false;
+      quiet(gt, Math.round(tf * 100), Math.round(tf * 100) + "%");
+      cv.redraw();
+    });
+    M = model(N); upd();
+  })();
+
+  /* ---------------------------------------------------------------- 12-3 캐리 저장 덧셈기 */
+  (function () {
+    var X = [181, 110, 219], hc = -1, geo = [];
+    var el = document.getElementById("cv-csa");
+    var cv = SB.canvas(el, draw, aopt("#cv-csa", 0.52, 1.02, 560));
+    function SC() {
+      var S = X[0] ^ X[1] ^ X[2], C = ((X[0] & X[1]) | (X[0] & X[2]) | (X[1] & X[2])) << 1;
+      return { S: S, C: C };
+    }
+    function draw(ctx, w, h) {
+      pal(); geo = [];
+      var lab = w < 480 ? 30 : 56;
+      var s = Math.min(34, (w - lab - 20) / 9, (h - 20) / 7.6);
+      var right = Math.min(w - 10, (w + lab + 9 * s) / 2), gap = s * 0.2;
+      var Xc = function (k) { return right - (k + 1) * s; };
+      var lx = Xc(8) - lab;
+      var r = SC(), y = 8, i, k;
+      if (hc >= 0) { ctx.fillStyle = DG.alpha(P.accent, 0.09); ctx.fillRect(Xc(hc), 4, s, (s + gap) * 3 + s * 1.3 + (s + gap)); ctx.fillRect(Xc(hc + 1), 4 + (s + gap) * 3 + s * 1.3 + (s + gap), s, s + gap); }
+      var names = ["X", "Y", "Z"];
+      for (i = 0; i < 3; i++) {
+        T(ctx, names[i], lx + 4, y + s / 2, { size: 13, weight: 700 });
+        for (k = 0; k < 8; k++) { bit(ctx, Xc(k), y, s, (X[i] >> k) & 1); geo.push({ x: Xc(k), y: y, w: s, h: s, i: i, k: k }); }
+        y += s + gap;
+      }
+      // FA 줄
+      var fy = y + s * 0.1, fh = s * 0.95;
+      for (k = 0; k < 8; k++) {
+        var on = k === hc;
+        DG.box(ctx, Xc(k) + 2, fy, s - 4, fh, on ? P.accent : DG.alpha(P.accent, 0.18), s >= 22 ? "FA" : "", { r: 4, size: Math.min(11, s * 0.34), color: on ? "#fff" : P.accent });
+        // 캐리 화살표: 한 칸 왼쪽 아래
+        ctx.strokeStyle = on ? P.accent2 : DG.alpha(P.accent2, 0.45); ctx.lineWidth = on ? 2 : 1.2;
+        ctx.beginPath(); ctx.moveTo(Xc(k) + s * 0.3, fy + fh); ctx.lineTo(Xc(k + 1) + s * 0.5, fy + fh + s + gap * 2 + s * 0.15); ctx.stroke();
+      }
+      T(ctx, "3:2", lx + 4, fy + fh / 2, { size: 11, color: P.accent, weight: 700 });
+      y = fy + fh + gap * 1.4;
+      T(ctx, "S", lx + 4, y + s / 2, { size: 13, weight: 700, color: P.accent });
+      for (k = 0; k < 8; k++) bit(ctx, Xc(k), y, s, (r.S >> k) & 1, { stroke: k === hc ? P.accent : null, lw: k === hc ? 2.4 : 1.2 });
+      y += s + gap;
+      T(ctx, "C", lx + 4, y + s / 2, { size: 13, weight: 700, color: P.accent2 });
+      for (k = 1; k < 9; k++) bit(ctx, Xc(k), y, s, (r.C >> k) & 1, { stroke: k === hc + 1 ? P.accent2 : null, lw: k === hc + 1 ? 2.4 : 1.2 });
+      T(ctx, "0", Xc(0) + s / 2, y + s / 2, { size: 12, mono: true, align: "center", color: P.faint });
+      y += s + gap;
+      if (y + 12 < h) T(ctx, "캐리는 옆 칸으로 전파되지 않고 C 줄로 내려앉는다", right, y + 8, { size: 11, align: "right", color: P.dim });
+    }
+    function upd() {
+      var r = SC();
+      SB.stat("cs-in", X[0] + "+" + X[1] + "+" + X[2] + " = " + (X[0] + X[1] + X[2]));
+      SB.stat("cs-out", r.S + " + " + r.C + " = " + (r.S + r.C) + (r.S + r.C === X[0] + X[1] + X[2] ? " <small class='ok-t'>✓</small>" : ""));
+      cv.redraw();
+    }
+    DG.pointer(el, {
+      down: function (x, y) { var g = hit(geo, x, y); if (!g) return; X[g.i] ^= 1 << g.k; hc = g.k; upd(); },
+      move: function (x, y) { var g = null; for (var i = 0; i < geo.length; i++) if (x >= geo[i].x && x <= geo[i].x + geo[i].w) { g = geo[i]; break; } var n = g ? g.k : -1; if (n !== hc) { hc = n; cv.redraw(); } },
+      leave: function () { hc = -1; cv.redraw(); },
+    });
+    document.getElementById("cs-rand").addEventListener("click", function () { X = [0, 1, 2].map(function () { return Math.floor(Math.random() * 256); }); upd(); });
+    document.getElementById("cs-max").addEventListener("click", function () { X = [255, 255, 255]; upd(); });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 시뮬레이터: 부분곱 축소 트리 */
+  function buildTree(N, method) {
+    var W = 2 * N, cols = [], r, b, i;
+    for (i = 0; i < W; i++) cols.push([]);
+    for (r = 0; r < N; r++) for (b = 0; b < N; b++) cols[r + b].push({ k: "pp", r: r });
+    var stages = [], nFA = 0, nHA = 0, step = 0;
+    var DS = [2]; while (DS[DS.length - 1] < 4 * N) DS.push(Math.floor(DS[DS.length - 1] * 1.5));
+    function isAct(d, s) { return method !== "array" || d.k !== "pp" || d.r <= s + 2; }
+    function maxAct(c, s) { var m = 0; c.forEach(function (col) { var n = 0; col.forEach(function (d) { if (isAct(d, s)) n++; }); if (n > m) m = n; }); return m; }
+    function pending(c, s) { return c.some(function (col) { return col.some(function (d) { return !isAct(d, s); }); }); }
+    var guard = 0;
+    while ((maxAct(cols, step) > 2 || pending(cols, step)) && guard++ < 40) {
+      var mh = maxAct(cols, step), d = 2;
+      if (method === "dadda") { for (i = DS.length - 1; i >= 0; i--) if (DS[i] < mh) { d = DS[i]; break; } }
+      var groups = [], next = [], ordered = [], carry = 0, fa = 0, ha = 0;
+      for (i = 0; i < W; i++) {
+        var act = [], ina = [];
+        cols[i].forEach(function (dd) { (isAct(dd, step) ? act : ina).push(dd); });
+        ordered.push(act.concat(ina));
+        var f = 0, h2 = 0, n = act.length;
+        if (method === "wallace") { f = Math.floor(n / 3); h2 = n % 3 === 2 ? 1 : 0; }
+        else { var hh = n + carry, av = n; while (hh > d && av >= 2) { if (hh - d >= 2 && av >= 3) { f++; hh -= 2; av -= 3; } else { h2++; hh -= 1; av -= 2; } } }
+        var g = [], p = 0, q;
+        for (q = 0; q < f; q++) { g.push({ t: "FA", a: p, n: 3 }); p += 3; }
+        for (q = 0; q < h2; q++) { g.push({ t: "HA", a: p, n: 2 }); p += 2; }
+        groups.push(g);
+        var nc = act.slice(p).map(function (dd) { return { k: dd.k, r: dd.r }; });
+        for (q = 0; q < f + h2; q++) nc.push({ k: "s" });
+        for (q = 0; q < carry; q++) nc.push({ k: "c" });
+        ina.forEach(function (dd) { nc.push(dd); });
+        next.push(nc);
+        carry = f + h2; fa += f; ha += h2;
+      }
+      stages.push({ cols: ordered, groups: groups, d: d, fa: fa, ha: ha, h: mh, step: step });
+      nFA += fa; nHA += ha; cols = next; step++;
+    }
+    stages.push({ cols: cols, groups: null, d: 2, h: maxAct(cols, step), step: step });
+    var lo = -1, hi = 0;
+    cols.forEach(function (c, i) { if (c.length >= 2 && lo < 0) lo = i; if (c.length) hi = i; });
+    return { stages: stages, fa: nFA, ha: nHA, cpa: lo < 0 ? 0 : hi - lo + 1, lo: lo, hi: hi, n: stages.length - 1, method: method, N: N };
+  }
+
+  (function () {
+    var N = 8, method = "dadda", K = 0, R = null, playing = false, acc = 0;
+    var el = document.getElementById("cv-tree");
+    var topt = { maxHeight: 560 };
+    Object.defineProperty(topt, "aspect", { get: function () {
+      var W = el.parentElement.clientWidth || 600, cw = Math.min(24, (W - 24) / (2 * N));
+      return Math.max(0.3, (70 + cw * (1.75 * N + 1.5)) / W);
+    } });
+    var cv = SB.canvas(el, draw, topt);
+    SB.range("tr-n", function (v) { return v + " × " + v; }, function (v) { N = v; rebuild(); cv.resize(); });
+    SB.seg("tr-m", function (v) { method = v; rebuild(); });
+    document.getElementById("tr-prev").addEventListener("click", function () { playing = false; K = Math.max(0, K - 1); upd(); });
+    document.getElementById("tr-next").addEventListener("click", function () { playing = false; K = Math.min(R.n, K + 1); upd(); });
+    document.getElementById("tr-play").addEventListener("click", function () { K = 0; acc = 0; playing = true; upd(); });
+    function isAct(d, s) { return R.method !== "array" || d.k !== "pp" || d.r <= s + 2; }
+    function dotCol(d, active) {
+      if (!active) return null;
+      return d.k === "s" ? P.accent : d.k === "c" ? P.accent2 : P.dim;
+    }
+    function drawDots(ctx, st, X, y0, py, rad, showGroups) {
+      var W = 2 * R.N;
+      for (var i = 0; i < W; i++) {
+        var col = st.cols[i] || [];
+        col.forEach(function (d, j) {
+          var cx = X(i), cy = y0 + j * py + py / 2, act = isAct(d, st.step);
+          ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+          if (act) { ctx.fillStyle = dotCol(d, true); ctx.fill(); }
+          else { ctx.strokeStyle = P.faint; ctx.lineWidth = 1; ctx.stroke(); }
+        });
+        if (showGroups && st.groups) st.groups[i].forEach(function (g) {
+          var gx = X(i) - py * 0.46, gy = y0 + g.a * py + py * 0.04, gw = py * 0.92, gh = g.n * py - py * 0.08;
+          ctx.save();
+          DG.roundRect(ctx, gx, gy, gw, gh, Math.min(5, py * 0.35));
+          ctx.strokeStyle = g.t === "FA" ? P.accent : P.warn; ctx.lineWidth = py > 12 ? 1.8 : 1.3;
+          if (g.t === "HA") ctx.setLineDash([3, 2]);
+          ctx.stroke(); ctx.restore();
+        });
+      }
+    }
+    function colH(st) { var m = 0; st.cols.forEach(function (c) { if (c.length > m) m = c.length; }); return m; }
+    function draw(ctx, w, h) {
+      pal(); if (!R) return;
+      var W = 2 * R.N, st = R.stages[K], nx = K < R.n ? R.stages[K + 1] : null;
+      var colW = Math.min(24, (w - 24) / W);
+      var h1 = colH(st), h2 = nx ? colH(nx) : 3.2;
+      var py = Math.min(colW, (h - 64) / (h1 + h2 + 0.6));
+      var rad = Math.max(2, Math.min(py, colW) * 0.34);
+      var x0 = (w - W * colW) / 2;
+      var X = function (i) { return x0 + (W - 1 - i) * colW + colW / 2; };
+      // 열 안내선
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+      for (var i = 0; i < W; i += 1) if (i % 4 === 0) { ctx.beginPath(); ctx.moveTo(X(i), 22); ctx.lineTo(X(i), h - 6); ctx.stroke(); }
+      var title = K < R.n ? "단계 " + (K + 1) + " / " + R.n + " · 높이 " + st.h + " → " + nx.h + (R.method === "dadda" ? " (목표 " + st.d + ")" : "") : "축소 끝: 두 줄 → CPA";
+      T(ctx, title, 10, 12, { size: 12.5, weight: 700, color: P.text });
+      if (w >= 420) T(ctx, "2⁰", X(0), 12, { size: 11, color: P.faint, align: "center", mono: true });
+      var yA = 26;
+      drawDots(ctx, st, X, yA, py, rad, true);
+      var yMid = yA + h1 * py + py * 0.3;
+      if (nx) {
+        T(ctx, "↓ FA " + st.fa + " · HA " + st.ha, 10, yMid + 2, { size: 11.5, color: P.dim, mono: true });
+        ctx.strokeStyle = P.border; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(x0, yMid); ctx.lineTo(x0 + W * colW, yMid); ctx.stroke(); ctx.setLineDash([]);
+        drawDots(ctx, nx, X, yMid + py * 0.3, py, rad, false);
+      } else {
+        // CPA 막대와 곱
+        var by = yMid + 6, bh = Math.max(16, py * 1.2);
+        if (R.lo >= 0) {
+          var xl = X(R.hi) - colW / 2, xr = X(R.lo) + colW / 2;
+          DG.box(ctx, xl, by, xr - xl, bh, DG.alpha(P.accent, 0.2), "CPA " + R.cpa + "비트 (캐리 전파는 여기서 한 번)", { stroke: P.accent, size: Math.min(12, bh * 0.6), color: P.accent, r: 5 });
+        }
+        var yb = by + bh + 8, cs = Math.min(colW - 2, 18);
+        for (var j = 0; j < W; j++) {
+          ctx.fillStyle = DG.alpha(P.hi, 0.3); ctx.strokeStyle = P.hi; ctx.lineWidth = 1;
+          ctx.fillRect(X(j) - cs / 2, yb, cs, cs); ctx.strokeRect(X(j) - cs / 2, yb, cs, cs);
+        }
+        T(ctx, "곱 " + W + "비트", x0 + W * colW, yb + cs + 12, { size: 11.5, color: P.dim, align: "right" });
+      }
+    }
+    function rebuild() { R = buildTree(N, method); K = Math.min(K, R.n); upd(); }
+    function upd() {
+      SB.stat("tr-k-out", (K < R.n ? K + 1 : "끝") + " / " + R.n);
+      var o = document.getElementById("tr-k-out"); if (o) o.textContent = (K < R.n ? K + 1 : "끝") + " / " + R.n;
+      SB.stat("tr-st", R.n + "<small> 단계</small>");
+      SB.stat("tr-fa", R.fa + " / " + R.ha);
+      SB.stat("tr-cpa", R.cpa + "<small> 비트</small>");
+      var tc = R.method === "array" ? R.cpa * 10 : (Math.ceil(Math.log2(Math.max(2, R.cpa))) + 1) * 7.5;
+      var tt = 5 + R.n * 15 + tc;
+      SB.stat("tr-t", Math.round(tt) + "<small> ps ≈ " + (tt / 7.5).toFixed(0) + " FO4</small>");
+      SB.stat("tr-h", R.stages.map(function (s) { return s.h; }).join("→"));
+      cv.redraw();
+    }
+    SB.loop(el, function (dt) {
+      if (!playing) return;
+      acc += dt;
+      if (acc > 1.3) { acc = 0; if (K < R.n) { K++; upd(); } else playing = false; }
+    });
+    rebuild();
+  })();
+
+  /* ---------------------------------------------------------------- 12-4 부스 부호화 */
+  (function () {
+    var A = 45, B = -77, I = 4;
+    var el = document.getElementById("cv-booth");
+    var cv = SB.canvas(el, draw, aopt("#cv-booth", 0.31, 0.6, 560));
+    var sfmt = function (v) { return (v > 0 ? "+" : "") + v + " (" + SB.bin(v & 255, 8) + ")"; };
+    SB.range("bo-a", sfmt, function (v) { A = v; upd(); });
+    SB.range("bo-b", sfmt, function (v) { B = v; upd(); });
+    SB.range("bo-i", function (v) { return v + " / 4"; }, function (v) { I = v; upd(); });
+    function bb(i) { return i < 0 ? 0 : ((B & 255) >> i) & 1; }
+    function digit(i) { return -2 * bb(2 * i + 1) + bb(2 * i) + bb(2 * i - 1); }
+    function draw(ctx, w, h) {
+      pal();
+      var wide = w >= 560, lab = wide ? 74 : 50, rt = wide ? 92 : 0;
+      var s = Math.min(26, (w - lab - rt - 12) / 17), gap = 4;
+      var right = w - rt - 8 - s; // 열 0의 오른쪽 끝 (그 오른쪽 한 칸은 b-1)
+      var X = function (k) { return right - (k + 1) * s; };
+      var y = 6, k, i;
+      T(ctx, "승수 B", X(15), y + s / 2, { size: 12, weight: 700, color: P.text });
+      for (k = 0; k < 8; k++) bit(ctx, X(k), y, s, bb(k));
+      bit(ctx, right, y, s, 0, { alpha: 0.5 });
+      if (s >= 16) T(ctx, "b₋₁", right + s / 2, y + s + 7, { size: 9.5, align: "center", color: P.faint });
+      // 창 괄호
+      for (i = 0; i < 4; i++) {
+        var lv = i % 2, xa = X(2 * i + 1) + 3, xb = (i === 0 ? right + s : X(2 * i - 1) + s) - 3, yb = y + s + 4 + lv * 9;
+        var cur = i === I - 1, done = i < I - 1;
+        ctx.strokeStyle = cur ? P.accent2 : done ? DG.alpha(P.accent, 0.7) : P.faint; ctx.lineWidth = cur ? 2.4 : 1.4;
+        ctx.beginPath(); ctx.moveTo(xa, yb - 3); ctx.lineTo(xa, yb); ctx.lineTo(xb, yb); ctx.lineTo(xb, yb - 3); ctx.stroke();
+      }
+      y += s + 26;
+      var sum = 0;
+      for (i = 0; i < 4; i++) {
+        var d = digit(i), val = d * A * Math.pow(4, i), on = i < I, cur = i === I - 1;
+        var lbl = "d" + i + " = " + (d > 0 ? "+" : d < 0 ? "−" : "") + Math.abs(d);
+        T(ctx, lbl, X(15) - 2, y + s / 2, { size: wide ? 12 : 10.5, mono: true, weight: 700, color: !on ? P.faint : cur ? P.accent2 : P.text, align: "right" });
+        if (on) {
+          sum += val;
+          var u = val & 0xffff, top = 2 * i + 9;
+          for (k = 0; k < 16; k++) {
+            var fz = k < 2 * i, ext = k > top;
+            bit(ctx, X(k), y, s, (u >> k) & 1, { alpha: fz || ext ? 0.32 : 1, stroke: cur && !fz && !ext ? P.accent2 : null });
+          }
+          if (wide) T(ctx, (val >= 0 ? "+" : "") + val, w - 8, y + s / 2, { size: 12.5, mono: true, align: "right", color: cur ? P.accent2 : P.dim, weight: 700 });
+        } else {
+          ctx.strokeStyle = P.grid; ctx.strokeRect(X(15) + 1, y + 1, 16 * s - 2, s - 2);
+        }
+        y += s + gap;
+      }
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(15), y + 1); ctx.lineTo(right, y + 1); ctx.stroke();
+      y += gap + 2;
+      T(ctx, "합", X(15) - 2, y + s / 2, { size: 12, weight: 700, align: "right" });
+      var su = sum & 0xffff;
+      for (k = 0; k < 16; k++) bit(ctx, X(k), y, s, (su >> k) & 1, { stroke: I === 4 ? P.ok : null });
+      if (wide) T(ctx, "= " + sum, w - 8, y + s / 2, { size: 13, mono: true, align: "right", color: I === 4 ? P.ok : P.text, weight: 700 });
+      if (wide) T(ctx, "A = " + A, w - 8, 6 + s / 2, { size: 12, mono: true, align: "right", color: P.dim });
+    }
+    function upd() {
+      var ds = [], sum = 0;
+      for (var i = 3; i >= 0; i--) ds.push((digit(i) > 0 ? "+" : digit(i) < 0 ? "−" : "") + Math.abs(digit(i)));
+      for (i = 0; i < I; i++) sum += digit(i) * A * Math.pow(4, i);
+      SB.stat("bo-d", ds.join(" ") + " <small>→ " + (digit(3) * 64 + digit(2) * 16 + digit(1) * 4 + digit(0)) + "</small>");
+      SB.stat("bo-sum", String(sum));
+      SB.stat("bo-ans", A * B + (I === 4 ? (sum === A * B ? " <small class='ok-t'>✓ 일치</small>" : " <small class='bad-t'>불일치</small>") : ""));
+      cv.redraw();
+    }
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 12-5 로그 시프터 */
+  (function () {
+    var IN = 0xb3, k = 5, mode = "sll", geo = [];
+    var el = document.getElementById("cv-shift");
+    var cv = SB.canvas(el, draw, aopt("#cv-shift", 0.46, 1.02, 560));
+    SB.range("sh-k", function (v) { return v + " = " + SB.bin(v, 3) + "₂"; }, function (v) { k = v; upd(); });
+    SB.seg("sh-mode", function (v) { mode = v; upd(); });
+    // 단 하나: 비트 배열 v(0=LSB)를 s칸 → [{v, src, fill}]
+    function stage(v, s, on) {
+      var out = [];
+      for (var i = 0; i < 8; i++) {
+        if (!on) { out.push({ v: v[i], src: i }); continue; }
+        var j;
+        if (mode === "sll") { j = i - s; out.push(j >= 0 ? { v: v[j], src: j } : { v: 0, fill: "0" }); }
+        else if (mode === "srl") { j = i + s; out.push(j < 8 ? { v: v[j], src: j } : { v: 0, fill: "0" }); }
+        else if (mode === "sra") { j = i + s; out.push(j < 8 ? { v: v[j], src: j } : { v: v[7], fill: "s" }); }
+        else { j = (i + s) % 8; out.push({ v: v[j], src: j, wrap: i + s >= 8 }); }
+      }
+      return out;
+    }
+    function compute() {
+      var rows = [], v = [], i;
+      for (i = 0; i < 8; i++) v.push((IN >> i) & 1);
+      rows.push(v.map(function (x) { return { v: x }; }));
+      for (var j = 0; j < 3; j++) {
+        var r = stage(v, 1 << j, (k >> j) & 1);
+        rows.push(r); v = r.map(function (q) { return q.v; });
+      }
+      return rows;
+    }
+    function draw(ctx, w, h) {
+      pal(); geo = [];
+      var lab = w < 480 ? 50 : 84;
+      var s = Math.min(36, (w - lab - 24) / 8);
+      var G = Math.max(30, (h - 4 * s - 16) / 3);
+      var x0 = lab + (w - lab - 8 * s) / 2 - 4;
+      var X = function (i) { return x0 + (7 - i) * s; };
+      var rows = compute(), y = 8;
+      T(ctx, "입력", 8, y + s / 2, { size: 12, weight: 700 });
+      for (var i = 0; i < 8; i++) { bit(ctx, X(i), y, s, rows[0][i].v); geo.push({ x: X(i), y: y, w: s, h: s, i: i }); }
+      for (var j = 0; j < 3; j++) {
+        var on = (k >> j) & 1, ya = y + s, yb = y + s + G;
+        T(ctx, (1 << j) + "칸 단", 8, ya + G / 2 - 7, { size: 11.5, weight: 700, color: on ? P.accent : P.faint });
+        T(ctx, "k" + j + " = " + on, 8, ya + G / 2 + 8, { size: 11, mono: true, color: on ? P.accent : P.faint });
+        rows[j + 1].forEach(function (q, ii) {
+          var xd = X(ii) + s / 2;
+          ctx.save();
+          ctx.strokeStyle = DG.lv(q.v); ctx.lineWidth = on ? 2 : 1.4;
+          if (q.fill) {
+            ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(xd, yb); ctx.lineTo(xd, ya + G * 0.45); ctx.stroke();
+            T(ctx, q.fill === "s" ? "부호" : "0", xd, ya + G * 0.3, { size: q.fill === "s" && s < 30 ? 9 : 11, align: "center", mono: true, weight: 700, color: q.fill === "s" ? P.accent2 : P.dim });
+          } else {
+            if (q.wrap) { ctx.setLineDash([4, 3]); ctx.globalAlpha = 0.7; }
+            ctx.beginPath(); ctx.moveTo(X(q.src) + s / 2, ya); ctx.lineTo(xd, yb); ctx.stroke();
+          }
+          ctx.restore();
+        });
+        y = yb;
+        var last = j === 2;
+        if (last) T(ctx, "출력", 8, y + s / 2, { size: 12, weight: 700 });
+        rows[j + 1].forEach(function (q, ii) { bit(ctx, X(ii), y, s, q.v, { stroke: q.fill === "s" ? P.accent2 : null, lw: q.fill === "s" ? 2.2 : 1.2 }); });
+      }
+    }
+    function upd() {
+      var rows = compute(), out = 0;
+      rows[3].forEach(function (q, i) { out |= q.v << i; });
+      SB.stat("sh-in", SB.bin(IN, 8) + " <small>(" + IN + " / " + sgn(IN, 8) + ")</small>");
+      SB.stat("sh-out", SB.bin(out, 8) + " <small>(" + out + " / " + sgn(out, 8) + ")</small>");
+      var on = []; for (var j = 0; j < 3; j++) if ((k >> j) & 1) on.push((1 << j) + "칸");
+      SB.stat("sh-st", on.length ? on.join(" + ") : "없음 (통과)");
+      cv.redraw();
+    }
+    DG.pointer(el, { down: function (x, y) { var g = hit(geo, x, y); if (!g) return; IN ^= 1 << g.i; upd(); } });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 시뮬레이터: ALU */
+  (function () {
+    var W = 8, op = "add", A = 112, B = 80, geo = [];
+    var el = document.getElementById("cv-alu");
+    var cv = SB.canvas(el, draw, aopt("#cv-alu", 0.44, 1.2, 560));
+    var fmtv = function (v) { return v + " (" + SB.bin(v, W) + ")"; };
+    var ga = SB.range("al-a", fmtv, function (v) { A = v; upd(); });
+    var gb = SB.range("al-b", fmtv, function (v) { B = v; upd(); });
+    SB.seg("al-w", function (v) {
+      W = Number(v); var mask = (1 << W) - 1;
+      ga.el.max = mask; gb.el.max = mask;
+      A = Math.min(A, mask); B = Math.min(B, mask);
+      ga.set(A); gb.set(B); upd();
+    });
+    SB.seg("al-op", function (v) { op = v; upd(); });
+    function compute() {
+      var mask = (1 << W) - 1, msb = W - 1, r = {}, bp, cin;
+      if (op === "add" || op === "sub" || op === "slt") {
+        bp = op === "add" ? B : ~B & mask; cin = op === "add" ? 0 : 1;
+        var full = A + bp + cin, low = (A & (mask >> 1)) + (bp & (mask >> 1)) + cin;
+        r.R = full & mask; r.C = (full >> W) & 1; var c1 = (low >> msb) & 1; r.V = r.C ^ c1;
+        r.bp = bp; r.cin = cin; r.blk = "add";
+        r.N = (r.R >> msb) & 1; r.Z = r.R === 0 ? 1 : 0;
+        if (op === "slt") { r.adder = r.R; r.R = r.N ^ r.V; r.blk = "slt"; }
+      } else if (op === "and" || op === "or" || op === "xor") {
+        r.R = op === "and" ? A & B : op === "or" ? A | B : A ^ B; r.C = 0; r.V = 0; r.blk = "logic";
+      } else {
+        var sh = B & (W - 1); r.sh = sh; r.blk = "shift"; r.V = 0;
+        if (op === "shl") { r.R = (A << sh) & mask; r.C = sh ? (A >> (W - sh)) & 1 : 0; }
+        else { r.R = (sgn(A, W) >> sh) & mask; r.C = sh ? (A >> (sh - 1)) & 1 : 0; }
+      }
+      if (op !== "slt") { r.N = (r.R >> msb) & 1; r.Z = r.R === 0 ? 1 : 0; }
+      // 각 블록의 출력(표시용)
+      var bpA = op === "sub" || op === "slt" ? ~B & mask : B;
+      r.addOut = (A + bpA + (op === "sub" || op === "slt" ? 1 : 0)) & mask;
+      r.logOut = op === "or" ? A | B : op === "xor" ? A ^ B : A & B;
+      var s2 = B & (W - 1);
+      r.shOut = op === "sar" ? (sgn(A, W) >> s2) & mask : (A << s2) & mask;
+      return r;
+    }
+    function draw(ctx, w, h) {
+      pal(); geo = [];
+      var r = compute(), narrow = w < 560;
+      var s = Math.min(28, (w - 60) / (narrow ? W : W * 2 + 3));
+      var row = function (lbl, v, x, y, click) {
+        T(ctx, lbl, x - 8, y + s / 2, { size: 13, weight: 700, align: "right" });
+        for (var i = 0; i < W; i++) { var bx = x + (W - 1 - i) * s; bit(ctx, bx, y, s, (v >> i) & 1); if (click) geo.push({ x: bx, y: y, w: s, h: s, t: click, i: i }); }
+      };
+      var ya = 10, xa, xb, yb;
+      if (narrow) { xa = (w - W * s) / 2 + 10; xb = xa; yb = ya + s + 6; }
+      else { xa = w / 2 - W * s - s; xb = w / 2 + s * 1.5; yb = ya; }
+      row("A", A, xa, ya, "a"); row("B", B, xb, yb, "b");
+      var yTop = yb + s + 12;
+      var avail = h - yTop - 10;
+      var bh = Math.max(50, Math.min(66, avail * 0.2)), gap1 = avail * 0.11, mh = 30, gap2 = avail * 0.1;
+      var yBus = yTop + 4, yBlk = yTop + gap1 + 8, yMux = yBlk + bh + gap2, yR = yMux + mh + gap2 * 0.7, yF = yR + s + gap2 * 0.6;
+      var bw = (w - 32) / 3 - 10, blocks = [
+        { id: "add", t: "가산기", f: op === "sub" || op === "slt" ? "A + ~B + 1" : "A + B", v: r.addOut, on: r.blk === "add" || r.blk === "slt" },
+        { id: "logic", t: "논리 유닛", f: op === "or" ? "A | B" : op === "xor" ? "A ^ B" : "A & B", v: r.logOut, on: r.blk === "logic" },
+        { id: "shift", t: "시프터", f: op === "sar" ? "A >>> B" : "A << B", v: r.shOut, on: r.blk === "shift" },
+      ];
+      var aX = xa + W * s / 2, bX = xb + W * s / 2;
+      // 버스
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = P.dim;
+      ctx.beginPath(); ctx.moveTo(aX, ya + s); ctx.lineTo(aX, yBus); ctx.moveTo(16, yBus); ctx.lineTo(w - 16, yBus); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(bX, yb + s); ctx.lineTo(bX, yBus + 8); ctx.moveTo(16, yBus + 8); ctx.lineTo(w - 16, yBus + 8); ctx.stroke();
+      T(ctx, "A", 16, yBus - 6, { size: 10, color: P.faint }); T(ctx, "B", 16, yBus + 15, { size: 10, color: P.faint });
+      var mx0 = w * 0.18, mx1 = w * 0.82;
+      blocks.forEach(function (b, i) {
+        var bx = 16 + i * (bw + 15), col = b.on ? P.accent : P.faint;
+        ctx.strokeStyle = b.on ? P.accent : P.grid; ctx.lineWidth = b.on ? 2.4 : 1.4;
+        ctx.beginPath(); ctx.moveTo(bx + bw * 0.3, yBus); ctx.lineTo(bx + bw * 0.3, yBlk); ctx.moveTo(bx + bw * 0.7, yBus + 8); ctx.lineTo(bx + bw * 0.7, yBlk); ctx.stroke();
+        DG.dot(ctx, bx + bw * 0.3, yBus, b.on ? P.accent : P.dim, 2.6); DG.dot(ctx, bx + bw * 0.7, yBus + 8, b.on ? P.accent : P.dim, 2.6);
+        if (b.id === "add") {
+          var sub = op === "sub" || op === "slt";
+          DG.box(ctx, bx + bw * 0.7 - 13, yBlk - gap1 * 0.5 - 8, 26, 15, sub ? P.accent2 : P.surface, "⊕", { size: 10, color: sub ? "#fff" : P.faint, r: 3, stroke: sub ? null : P.border });
+        }
+        DG.roundRect(ctx, bx, yBlk, bw, bh, 8);
+        ctx.fillStyle = b.on ? DG.alpha(P.accent, 0.14) : P.surface; ctx.fill();
+        ctx.strokeStyle = b.on ? P.accent : P.border; ctx.lineWidth = b.on ? 2 : 1; ctx.stroke();
+        var fs = narrow ? 10.5 : 12.5;
+        T(ctx, b.t, bx + bw / 2, yBlk + bh * 0.24, { size: fs, weight: 700, align: "center", color: b.on ? P.text : P.dim });
+        T(ctx, b.f, bx + bw / 2, yBlk + bh * 0.52, { size: fs - 1, mono: true, align: "center", color: col });
+        T(ctx, hex(b.v, W), bx + bw / 2, yBlk + bh * 0.8, { size: fs - 0.5, mono: true, align: "center", color: b.on ? P.text : P.faint });
+        var tx = mx0 + (mx1 - mx0) * (0.17 + i * 0.33);
+        ctx.strokeStyle = b.on && !(b.id === "add" && op === "slt") ? P.accent : P.grid; ctx.lineWidth = b.on ? 2.4 : 1.4;
+        ctx.beginPath(); ctx.moveTo(bx + bw / 2, yBlk + bh); ctx.lineTo(tx, yMux); ctx.stroke();
+      });
+      // SLT 경로
+      var slt = op === "slt";
+      ctx.save(); ctx.setLineDash([4, 3]); ctx.strokeStyle = slt ? P.accent2 : P.grid; ctx.lineWidth = slt ? 2.2 : 1.2;
+      ctx.beginPath(); ctx.moveTo(16 + bw * 0.12, yBlk + bh); ctx.lineTo(mx0 + 6, yMux); ctx.stroke(); ctx.restore();
+      T(ctx, "N⊕V", 16 + bw * 0.12 - 2, yBlk + bh + gap2 * 0.5, { size: 10, mono: true, color: slt ? P.accent2 : P.faint, align: "right" });
+      // MUX
+      ctx.beginPath(); ctx.moveTo(mx0, yMux); ctx.lineTo(mx1, yMux); ctx.lineTo(mx1 - 24, yMux + mh); ctx.lineTo(mx0 + 24, yMux + mh); ctx.closePath();
+      ctx.fillStyle = DG.alpha(P.accent, 0.1); ctx.fill(); ctx.strokeStyle = P.accent; ctx.lineWidth = 1.6; ctx.stroke();
+      T(ctx, "결과 MUX ← op = " + op.toUpperCase(), w / 2, yMux + mh / 2, { size: narrow ? 11 : 12, weight: 700, align: "center", color: P.accent });
+      ctx.strokeStyle = P.accent; ctx.lineWidth = 2.4; ctx.beginPath(); ctx.moveTo(w / 2, yMux + mh); ctx.lineTo(w / 2, yR); ctx.stroke();
+      var xr = w / 2 - W * s / 2;
+      row("R", r.R, xr, yR, null);
+      if (!narrow) T(ctx, "= " + hex(r.R, W) + " = " + r.R + " / " + sgn(r.R, W), xr + W * s + 12, yR + s / 2, { size: 12.5, mono: true, color: P.dim });
+      // 플래그
+      var fl = [["Z", r.Z, "OR 트리"], ["N", r.N, "MSB"], ["C", r.C, "캐리 출력"], ["V", r.V, "c_N ⊕ c_N-1"]];
+      var fw = Math.min(70, (w - 40) / 4 - 8), fx0 = w / 2 - (fl.length * (fw + 8) - 8) / 2;
+      fl.forEach(function (f, i) {
+        var fx = fx0 + i * (fw + 8), c = DG.lv(f[1]);
+        DG.roundRect(ctx, fx, yF, fw, 26, 6);
+        ctx.fillStyle = DG.alpha(c, f[1] ? 0.3 : 0.1); ctx.fill(); ctx.strokeStyle = c; ctx.lineWidth = 1.4; ctx.stroke();
+        T(ctx, f[0] + " = " + f[1], fx + fw / 2, yF + 13, { size: 12.5, mono: true, weight: 700, align: "center", color: c });
+        if (yF + 40 < h) T(ctx, f[2], fx + fw / 2, yF + 36, { size: 9.5, align: "center", color: P.faint });
+      });
+    }
+    function lvs(n, v) { return '<span class="lv ' + (v ? "hi" : "lo") + '">' + n + "=" + v + "</span>"; }
+    function upd() {
+      var r = compute(), note;
+      if (op === "add") note = r.V ? "부호 있는 넘침: 같은 부호끼리 더했는데 결과 부호가 다르다" : r.C ? "부호 없는 넘침: 결과가 2^" + W + " 이상이라 캐리가 나갔다" : "넘침 없음";
+      else if (op === "sub") note = (r.C ? "빌림 없음 → 부호 없는 A ≥ B" : "빌림 발생 → 부호 없는 A < B") + (r.V ? " · 부호 있는 넘침" : "");
+      else if (op === "slt") note = "부호 있는 " + sgn(A, W) + " < " + sgn(B, W) + " ? N⊕V = " + r.R + " (플래그는 내부 A−B)";
+      else if (op === "shl" || op === "sar") note = r.sh + "칸 " + (op === "shl" ? "왼쪽" : "산술 오른쪽") + " · C = 마지막으로 밀려난 비트";
+      else note = "비트별 논리 연산: 캐리 경로를 쓰지 않는다";
+      SB.stat("al-r", SB.bin(r.R, W) + " <small>" + hex(r.R, W) + "</small>");
+      SB.stat("al-int", r.R + " / " + sgn(r.R, W) + " <small>(A: " + A + "/" + sgn(A, W) + ", B: " + B + "/" + sgn(B, W) + ")</small>");
+      SB.stat("al-f", lvs("Z", r.Z) + " " + lvs("N", r.N) + " " + lvs("C", r.C) + " " + lvs("V", r.V));
+      SB.stat("al-note", note);
+      cv.redraw();
+    }
+    DG.pointer(el, { down: function (x, y) {
+      var g = hit(geo, x, y); if (!g) return;
+      if (g.t === "a") ga.set(A ^ (1 << g.i)); else gb.set(B ^ (1 << g.i));
+    } });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 12-6 비교기·제로 검출·LZC */
+  (function () {
+    var mode = "lzc", X = 0x0b40, A = 0xb6, B = 0xaf, geo = [];
+    var el = document.getElementById("cv-cmp");
+    var cv = SB.canvas(el, draw, aopt("#cv-cmp", 0.36, 0.86, 560));
+    SB.seg("cm-mode", function (v) { mode = v; upd(); });
+    document.getElementById("cm-rand").addEventListener("click", function () {
+      if (mode === "lzc") X = (Math.floor(Math.random() * 65536) >> Math.floor(Math.random() * 16)) & 0xffff;
+      else { A = Math.floor(Math.random() * 256); B = Math.random() < 0.3 ? A ^ (1 << Math.floor(Math.random() * 4)) : Math.floor(Math.random() * 256); }
+      upd();
+    });
+    document.getElementById("cm-zero").addEventListener("click", function () { if (mode === "lzc") X = 0; else { A = 0; B = 0; } upd(); });
+    function lzc(v, n) { for (var i = n - 1; i >= 0; i--) if ((v >> i) & 1) return n - 1 - i; return n; }
+    function firstDiff() { for (var i = 7; i >= 0; i--) if (((A ^ B) >> i) & 1) return i; return -1; }
+    function draw(ctx, w, h) {
+      pal(); geo = [];
+      if (mode === "lzc") {
+        var s = Math.min(34, (w - 20) / 16), x0 = (w - 16 * s) / 2, y0 = 30, i;
+        var CX = function (i) { return x0 + (15 - i) * s + s / 2; };
+        var lz = lzc(X, 16);
+        if (lz > 0) {
+          var xa = x0 + 2, xb = x0 + lz * s - 2;
+          ctx.strokeStyle = P.accent2; ctx.lineWidth = 1.6;
+          ctx.beginPath(); ctx.moveTo(xa, y0 - 4); ctx.lineTo(xa, y0 - 9); ctx.lineTo(xb, y0 - 9); ctx.lineTo(xb, y0 - 4); ctx.stroke();
+        }
+        T(ctx, "LZC = " + lz, lz > 0 ? Math.min(w - 50, Math.max(40, x0 + lz * s / 2)) : x0 + 30, 12, { size: 12, weight: 700, mono: true, color: P.accent2, align: "center" });
+        for (i = 0; i < 16; i++) {
+          var bx = CX(i) - s / 2;
+          bit(ctx, bx, y0, s, (X >> i) & 1, { stroke: i === 15 - lz ? P.accent2 : null, lw: i === 15 - lz ? 2.6 : 1.2 });
+          geo.push({ x: bx, y: y0, w: s, h: s, t: "x", i: i });
+        }
+        // OR 트리
+        var nodes = []; for (i = 0; i < 16; i++) nodes.push({ x: CX(i), y: y0 + s, v: (X >> i) & 1 });
+        var lev = 0, dy = Math.max(30, (h - y0 - s - 60) / 4);
+        var rad = Math.min(11, s * 0.42);
+        while (nodes.length > 1) {
+          lev++;
+          var nn = [];
+          for (i = 0; i < nodes.length; i += 2) {
+            var a = nodes[i], b = nodes[i + 1], nd = { x: (a.x + b.x) / 2, y: y0 + s + lev * dy, v: a.v | b.v };
+            [a, b].forEach(function (c) { ctx.strokeStyle = DG.lv(c.v); ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(c.x, c.y + (c.y > y0 + s ? rad : 0)); ctx.lineTo(nd.x, nd.y - rad); ctx.stroke(); });
+            nn.push(nd);
+          }
+          nn.forEach(function (nd) {
+            ctx.beginPath(); ctx.arc(nd.x, nd.y, rad, 0, Math.PI * 2);
+            ctx.fillStyle = DG.alpha(DG.lv(nd.v), nd.v ? 0.3 : 0.12); ctx.fill(); ctx.strokeStyle = DG.lv(nd.v); ctx.lineWidth = 1.4; ctx.stroke();
+            if (rad >= 8) T(ctx, String(nd.v), nd.x, nd.y + 0.5, { size: Math.min(11, rad), mono: true, weight: 700, align: "center", color: DG.lv(nd.v) });
+          });
+          T(ctx, lev + "단", 4, y0 + s + lev * dy, { size: 10.5, color: P.faint });
+          nodes = nn;
+        }
+        var root = nodes[0], z = root.v ? 0 : 1, zc = DG.lv(z);
+        ctx.strokeStyle = DG.lv(root.v); ctx.beginPath(); ctx.moveTo(root.x, root.y + rad); ctx.lineTo(root.x, root.y + rad + 10); ctx.stroke();
+        DG.box(ctx, root.x - 46, root.y + rad + 10, 92, 24, DG.alpha(zc, z ? 0.3 : 0.12), "NOT → Z = " + z, { stroke: zc, color: zc, size: 12, mono: true });
+      } else {
+        var s2 = Math.min(38, (w - 80) / 8.5), x1 = (w - 8 * s2) / 2 + 16, fd = firstDiff(), yA = 14, yB = yA + s2 + 8, yC = yB + s2 + 12;
+        var CX2 = function (i) { return x1 + (7 - i) * s2; };
+        if (fd >= 0) { ctx.fillStyle = DG.alpha(P.accent2, 0.15); ctx.fillRect(CX2(fd), yA - 6, s2, yC + s2 - yA + 6); }
+        T(ctx, "A", x1 - 12, yA + s2 / 2, { size: 13, weight: 700, align: "right" });
+        T(ctx, "B", x1 - 12, yB + s2 / 2, { size: 13, weight: 700, align: "right" });
+        for (var j = 0; j < 8; j++) {
+          var dim = fd >= 0 && j < fd ? 0.35 : 1;
+          bit(ctx, CX2(j), yA, s2, (A >> j) & 1, { alpha: dim }); geo.push({ x: CX2(j), y: yA, w: s2, h: s2, t: "a", i: j });
+          bit(ctx, CX2(j), yB, s2, (B >> j) & 1, { alpha: dim }); geo.push({ x: CX2(j), y: yB, w: s2, h: s2, t: "b", i: j });
+          var aj = (A >> j) & 1, bj = (B >> j) & 1, sym = aj === bj ? "=" : aj ? ">" : "<";
+          T(ctx, sym, CX2(j) + s2 / 2, yC + s2 / 2, { size: 16, weight: 700, mono: true, align: "center", color: j === fd ? P.accent2 : aj === bj ? P.faint : P.dim });
+        }
+        T(ctx, "자리별", x1 - 12, yC + s2 / 2, { size: 11, color: P.faint, align: "right" });
+        var res = A > B ? "A > B" : A < B ? "A < B" : "A = B";
+        var why = fd >= 0 ? "비트 " + fd + "에서 처음 다름 → 그 아래는 무관" : "모든 비트가 같다 (XNOR 전부 1)";
+        var yT = yC + s2 + 22;
+        T(ctx, res + " (부호 없는)", w / 2, yT, { size: 15, weight: 700, align: "center", color: P.accent2 });
+        if (yT + 22 < h) T(ctx, why, w / 2, yT + 20, { size: 11.5, align: "center", color: P.dim });
+      }
+    }
+    function upd() {
+      if (mode === "lzc") {
+        var lz = lzc(X, 16);
+        document.getElementById("cm-k1").textContent = "제로 검출";
+        document.getElementById("cm-k2").textContent = "선행 0 개수 (LZC)";
+        SB.stat("cm-r1", X === 0 ? "Z = 1 (모두 0)" : "Z = 0");
+        SB.stat("cm-r2", lz + (X ? " <small>→ 정규화 시 왼쪽으로 " + lz + "칸</small>" : " <small>(1이 없음)</small>"));
+      } else {
+        var sa = sgn(A, 8), sb = sgn(B, 8);
+        document.getElementById("cm-k1").textContent = "부호 없는 비교";
+        document.getElementById("cm-k2").textContent = "부호 있는 비교 (MSB 반전 후)";
+        SB.stat("cm-r1", A + (A > B ? " > " : A < B ? " < " : " = ") + B);
+        SB.stat("cm-r2", sa + (sa > sb ? " > " : sa < sb ? " < " : " = ") + sb);
+      }
+      cv.redraw();
+    }
+    DG.pointer(el, { down: function (x, y) {
+      var g = hit(geo, x, y); if (!g) return;
+      if (g.t === "x") X ^= 1 << g.i; else if (g.t === "a") A ^= 1 << g.i; else B ^= 1 << g.i;
+      upd();
+    } });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 부동소수점 공통 */
+  var FMT = {
+    fp32: { E: 8, M: 23, name: "FP32" }, fp16: { E: 5, M: 10, name: "FP16" },
+    bf16: { E: 8, M: 7, name: "BF16" }, e4m3: { E: 4, M: 3, name: "FP8 E4M3", noInf: true },
+  };
+  Object.keys(FMT).forEach(function (k) {
+    var f = FMT[k]; f.bias = Math.pow(2, f.E - 1) - 1; f.all = Math.pow(2, f.E) - 1; f.emin = 1 - f.bias;
+    f.max = f.noInf ? Math.pow(2, f.all - f.bias) * (1 + (Math.pow(2, f.M) - 2) / Math.pow(2, f.M)) : Math.pow(2, f.all - 1 - f.bias) * (2 - Math.pow(2, -f.M));
+    f.minN = Math.pow(2, f.emin); f.minS = Math.pow(2, f.emin - f.M);
+  });
+  function fpDecode(q, F) {
+    var sg = q.s ? -1 : 1, M2 = Math.pow(2, F.M);
+    if (F.noInf) { if (q.e === F.all && q.f === M2 - 1) return NaN; }
+    else if (q.e === F.all) return q.f ? NaN : sg * Infinity;
+    if (q.e === 0) return sg * Math.pow(2, F.emin) * (q.f / M2);
+    return sg * Math.pow(2, q.e - F.bias) * (1 + q.f / M2);
+  }
+  function rne(x) { var f = Math.floor(x), d = x - f; return d > 0.5 ? f + 1 : d < 0.5 ? f : (f % 2 === 0 ? f : f + 1); }
+  function flog2(a) { var e = Math.floor(Math.log2(a)); if (Math.pow(2, e) > a) e--; if (Math.pow(2, e + 1) <= a) e++; return e; }
+  function fpEncode(x, F) {
+    var M2 = Math.pow(2, F.M), out = { sat: false };
+    if (isNaN(x)) { out.s = 0; out.e = F.all; out.f = F.noInf ? M2 - 1 : M2 / 2; return out; }
+    out.s = x < 0 || (x === 0 && 1 / x < 0) ? 1 : 0;
+    var a = Math.abs(x), r;
+    if (a === 0) { out.e = 0; out.f = 0; return out; }
+    if (a === Infinity) r = Infinity;
+    else { var e = Math.max(flog2(a), F.emin), qu = Math.pow(2, e - F.M); r = rne(a / qu) * qu; }
+    if (r > F.max) {
+      if (F.noInf) { r = F.max; out.sat = true; }
+      else { out.e = F.all; out.f = 0; return out; }
+    }
+    if (r === 0) { out.e = 0; out.f = 0; return out; }
+    if (r < F.minN) { out.e = 0; out.f = Math.round(r / F.minS); }
+    else { var e2 = flog2(r); out.e = e2 + F.bias; out.f = Math.round((r / Math.pow(2, e2) - 1) * M2); }
+    return out;
+  }
+  function fnum(v) {
+    if (isNaN(v)) return "NaN";
+    if (!isFinite(v)) return v > 0 ? "+∞" : "−∞";
+    if (v === 0) return 1 / v < 0 ? "−0" : "0";
+    var a = Math.abs(v);
+    if (a >= 1e6 || a < 1e-4) return v.toExponential(6).replace(/\.?0+e/, "e");
+    return String(Number(v.toPrecision(12)));
+  }
+
+  /* ---------------------------------------------------------------- 12-7 IEEE 754 비트 */
+  (function () {
+    var fk = "fp16", F = FMT.fp16, q = fpEncode(0.1, F), geo = [], src = { x: 0.1 }, note = "";
+    var el = document.getElementById("cv-fp");
+    var cv = SB.canvas(el, draw, aopt("#cv-fp", 0.17, 0.56, 560, { minHeight: 140 }));
+    function bitsArr() {
+      var b = [q.s], i;
+      for (i = F.E - 1; i >= 0; i--) b.push(Math.floor(q.e / Math.pow(2, i)) % 2);
+      for (i = F.M - 1; i >= 0; i--) b.push(Math.floor(q.f / Math.pow(2, i)) % 2);
+      return b;
+    }
+    SB.seg("fp-fmt", function (v) {
+      var val = fpDecode(q, F); fk = v; F = FMT[v];
+      if (src && src.x != null && !isNaN(src.x)) { q = fpEncode(src.x, F); }
+      else q = fpEncode(val, F);
+      upd();
+    });
+    function setVal(x, raw) { src = { x: x, raw: raw }; q = fpEncode(x, F); note = ""; upd(); }
+    document.getElementById("fp-go").addEventListener("click", function () {
+      var t = String(document.getElementById("fp-in").value || "").trim().replace(/−/g, "-").replace(/,/g, "");
+      var x = /^[-+]?nan$/i.test(t) ? NaN : /^[-+]?(inf|infinity|∞)$/i.test(t) ? (t[0] === "-" ? -Infinity : Infinity) : Number(t);
+      if (t === "" || (isNaN(x) && !/nan/i.test(t))) { SB.stat("fp-err", "숫자를 읽을 수 없다"); return; }
+      setVal(x, t);
+    });
+    document.getElementById("fp-in").addEventListener("keydown", function (e) { if (e.key === "Enter") document.getElementById("fp-go").click(); });
+    document.querySelectorAll("#fp-pre button").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var v = b.dataset.v, M2 = Math.pow(2, F.M);
+        src = null; note = "";
+        if (v === "max") q = F.noInf ? { s: 0, e: F.all, f: M2 - 2 } : { s: 0, e: F.all - 1, f: M2 - 1 };
+        else if (v === "minn") q = { s: 0, e: 1, f: 0 };
+        else if (v === "mins") q = { s: 0, e: 0, f: 1 };
+        else if (v === "inf") { if (F.noInf) { q = { s: 0, e: F.all, f: M2 - 2 }; note = "E4M3에는 ∞가 없어 최대값으로 포화"; } else q = { s: 0, e: F.all, f: 0 }; }
+        else if (v === "nan") q = fpEncode(NaN, F);
+        else { setVal(Number(v), v); return; }
+        upd();
+      });
+    });
+    function draw(ctx, w, h) {
+      pal(); geo = [];
+      var b = bitsArr(), nb = b.length, two = nb > 20 && w < 700, per = two ? Math.ceil(nb / 2) : nb;
+      var s = Math.min(30, (w - 16) / per), x0 = (w - per * s) / 2, y0 = 22, rowH = s + 26;
+      var fcol = function (i) { return i === 0 ? P.accent2 : i <= F.E ? P.accent : P.ok; };
+      for (var i = 0; i < nb; i++) {
+        var rr = Math.floor(i / per), cc = i % per, bx = x0 + cc * s, by = y0 + rr * rowH;
+        ctx.fillStyle = DG.alpha(fcol(i), 0.85); ctx.fillRect(bx + 1, by - 6, s - 2, 4);
+        bit(ctx, bx, by, s, b[i]);
+        geo.push({ x: bx, y: by, w: s, h: s, i: i });
+        var first = i === 0 || i === 1 || i === F.E + 1 || cc === 0;
+        if (first) {
+          var lbl = i === 0 ? "s" : i <= F.E ? "지수 " + F.E : "가수 " + F.M;
+          if (cc === 0 && i > 0 && i !== 1 && i !== F.E + 1) lbl = i <= F.E ? "지수…" : "가수…";
+          T(ctx, lbl, bx + 1, by - 14, { size: 10.5, color: fcol(i), weight: 700 });
+        }
+      }
+      // 범위 막대 (로그 눈금)
+      var yb = y0 + (two ? 2 : 1) * rowH + 8, bx0 = 30, bx1 = w - 30;
+      var lo = Math.log2(F.minS), hi = Math.log2(F.max), L = function (v) { return bx0 + (Math.log2(v) - lo) / (hi - lo) * (bx1 - bx0); };
+      ctx.fillStyle = DG.alpha(P.warn, 0.45); ctx.fillRect(bx0, yb, L(F.minN) - bx0, 10);
+      ctx.fillStyle = DG.alpha(P.accent, 0.35); ctx.fillRect(L(F.minN), yb, bx1 - L(F.minN), 10);
+      T(ctx, "2^" + Math.round(lo), bx0, yb + 22, { size: 10, mono: true, color: P.dim, align: "center" });
+      T(ctx, F.max.toPrecision(3).replace("e+", "e"), bx1, yb + 22, { size: 10, mono: true, color: P.dim, align: "center" });
+      if (L(1) - bx0 > 30 && bx1 - L(1) > 30) { ctx.fillStyle = P.dim; ctx.fillRect(L(1) - 0.5, yb - 3, 1, 16); T(ctx, "1", L(1), yb + 22, { size: 10, mono: true, color: P.dim, align: "center" }); }
+      var v = Math.abs(fpDecode(q, F));
+      if (isFinite(v) && v > 0) {
+        var px = L(v); ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.moveTo(px, yb - 2); ctx.lineTo(px - 6, yb - 11); ctx.lineTo(px + 6, yb - 11); ctx.closePath(); ctx.fill();
+      }
+      T(ctx, F.name + " · |값|의 범위", w / 2, yb + 22, { size: 10.5, color: P.faint, align: "center" });
+    }
+    DG.pointer(el, { down: function (x, y) {
+      var g = hit(geo, x, y); if (!g) return;
+      var i = g.i; src = null; note = "";
+      if (i === 0) q.s ^= 1;
+      else if (i <= F.E) { var p = Math.pow(2, F.E - i); q.e = (Math.floor(q.e / p) % 2) ? q.e - p : q.e + p; }
+      else { var p2 = Math.pow(2, F.M - (i - F.E)); q.f = (Math.floor(q.f / p2) % 2) ? q.f - p2 : q.f + p2; }
+      upd();
+    } });
+    function upd() {
+      var v = fpDecode(q, F), M2 = Math.pow(2, F.M), cls, how;
+      if (isNaN(v)) { cls = "NaN (숫자가 아님)"; how = "지수 모두 1, 가수 ≠ 0" + (F.noInf ? " (E4M3은 가수도 모두 1)" : ""); }
+      else if (!isFinite(v)) { cls = "무한대"; how = "지수 모두 1, 가수 = 0"; }
+      else if (q.e === 0) { cls = v === 0 ? "0" : "비정규 수"; how = (q.s ? "−" : "+") + "2^" + F.emin + " × 0." + "f" + " = " + (q.s ? "−" : "") + "2^" + F.emin + " × " + fnum(q.f / M2); }
+      else { cls = "정규 수"; how = (q.s ? "−" : "+") + "2^(" + q.e + "−" + F.bias + ") × " + fnum(1 + q.f / M2) + " = " + (q.s ? "−" : "") + "2^" + (q.e - F.bias) + " × " + fnum(1 + q.f / M2); }
+      var ulp = isFinite(v) && !isNaN(v) ? Math.pow(2, Math.max(q.e, 1) - F.bias - F.M) : null;
+      SB.stat("fp-val", fnum(v));
+      SB.stat("fp-how", how);
+      SB.stat("fp-cls", cls + (ulp ? " <small>· 간격 2^" + (Math.max(q.e, 1) - F.bias - F.M) + " ≈ " + fnum(ulp) + "</small>" : ""));
+      var err = "— <small>(비트를 직접 편집)</small>";
+      if (q.sat) note = "범위를 넘어 최대값으로 포화";
+      if (src && src.x != null && isFinite(src.x) && isFinite(v)) {
+        var d = v - src.x;
+        err = (d === 0 ? "0 (정확히 표현됨)" : (d > 0 ? "+" : "") + fnum(d) + (src.x !== 0 ? " <small>(상대 " + (d / src.x * 100).toPrecision(3) + "%)</small>" : ""));
+      } else if (src && isFinite(src.x) && !isFinite(v)) err = "넘침 → ∞";
+      SB.stat("fp-err", note ? note : err);
+      cv.redraw();
+    }
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 12-8 FP16 덧셈기 */
+  (function () {
+    var F = FMT.fp16, Av = 12.5, Bv = fpDecode(fpEncode(0.3, FMT.fp16), FMT.fp16);
+    var el = document.getElementById("cv-fpadd");
+    var cv = SB.canvas(el, draw, aopt("#cv-fpadd", 0.32, 0.72, 560));
+    function q16(x) { return fpDecode(fpEncode(x, F), F); }
+    var ga = SB.range("fa-a", function (v) { return fnum(q16(v)); }, function (v) { Av = q16(v); upd(); });
+    var gb = SB.range("fa-b", function (v) { return fnum(q16(v)); }, function (v) { Bv = q16(v); upd(); });
+    document.querySelectorAll("#fa-pre button").forEach(function (b) {
+      b.addEventListener("click", function () {
+        Av = q16(Number(b.dataset.a)); Bv = q16(Number(b.dataset.b));
+        quiet(ga, SB.clamp(Av, -64, 64), fnum(Av)); quiet(gb, SB.clamp(Bv, -64, 64), fnum(Bv));
+        upd();
+      });
+    });
+    function unpack(x) {
+      var q = fpEncode(x, F);
+      return q.e === 0 ? { s: q.s, m: q.f, ex: -14 } : { s: q.s, m: q.f + 1024, ex: q.e - 15 };
+    }
+    function add() {
+      var a = unpack(Av), b = unpack(Bv), sw = false;
+      if (b.ex > a.ex || (b.ex === a.ex && b.m > a.m)) { var t = a; a = b; b = t; sw = true; }
+      var d = a.ex - b.ex, Ma = a.m << 3, Mb0 = b.m << 3, Mbs, lostAny = false;
+      if (d === 0) Mbs = Mb0;
+      else if (d >= 15) { Mbs = Mb0 ? 1 : 0; lostAny = !!Mb0; }
+      else { var lost = Mb0 & ((1 << d) - 1); lostAny = !!lost; Mbs = (Mb0 >> d) | (lost ? 1 : 0); }
+      var sub = a.s !== b.s, R = sub ? Ma - Mbs : Ma + Mbs, e = a.ex, sh = 0;
+      var raw = R;
+      if (R !== 0) {
+        if (R >= 1 << 14) { var st = R & 1; R = (R >> 1) | st; e++; sh = 1; }
+        else while (R < 1 << 13 && e > -14) { R <<= 1; e--; sh--; }
+      }
+      var g = (R >> 2) & 1, rr = (R >> 1) & 1, ss = R & 1, lsb = (R >> 3) & 1, up = g && (rr || ss || lsb) ? 1 : 0;
+      var m = (R >> 3) + up;
+      if (m >= 2048) { m >>= 1; e++; }
+      var val = R === 0 ? 0 : (a.s ? -1 : 1) * m * Math.pow(2, e - 10);
+      if (e > 15) val = a.s ? -Infinity : Infinity;
+      return { a: a, b: b, sw: sw, d: d, Ma: Ma, Mb0: Mb0, Mbs: Mbs, sub: sub, raw: raw, R: R, sh: sh, g: g, r: rr, s: ss, up: up, m: m, e: e, val: val, lostAny: lostAny };
+    }
+    function draw(ctx, w, h) {
+      pal();
+      var o = add(), wide = w >= 560, lab = wide ? 76 : 58, rt = wide ? 112 : 0;
+      var s = Math.min(26, (w - lab - rt - 12) / 15), gap = Math.max(4, (h - 26 - 6 * s) / 6.5);
+      var x0 = lab + 4, X = function (k) { return x0 + (14 - k) * s; };
+      var y = 22;
+      T(ctx, "c", X(14) + s / 2, 10, { size: 10, mono: true, align: "center", color: P.faint });
+      ["G", "R", "S"].forEach(function (t, i) { T(ctx, t, X(2 - i) + s / 2, 10, { size: 10, mono: true, align: "center", color: P.warn, weight: 700 }); });
+      ctx.fillStyle = DG.alpha(P.warn, 0.08); ctx.fillRect(X(2), 16, 3 * s, h - 20);
+      var rows = [
+        { l: "A", v: o.Ma, n: "×2^" + o.a.ex },
+        { l: "B", v: o.Mb0, n: "×2^" + o.b.ex, dim: o.d > 0 },
+        { l: "B ≫ " + o.d, v: o.Mbs, n: o.lostAny ? "스티키 S=1" : "정렬" , hl: o.d > 0 },
+        { l: o.sub ? "차" : "합", v: o.raw, n: o.raw >= 1 << 14 ? "캐리 발생" : "" },
+        { l: "정규화", v: o.R, n: o.sh > 0 ? "→1칸" : o.sh < 0 ? "←" + -o.sh + "칸" : "그대로", hl: o.sh !== 0 },
+        { l: "반올림", v: o.m << 3, n: o.up ? "올림 +1" : "버림", fin: true },
+      ];
+      rows.forEach(function (rw) {
+        T(ctx, rw.l, x0 - 8, y + s / 2, { size: wide ? 12 : 10.5, weight: 700, align: "right", color: rw.hl ? P.accent2 : P.text });
+        for (var k = 0; k < 15; k++) {
+          if (rw.fin && k < 3) continue;
+          var bv = (rw.v >> k) & 1;
+          if (k === 14 && !bv) { ctx.strokeStyle = P.grid; ctx.strokeRect(X(k) + 2, y + 2, s - 4, s - 4); continue; }
+          bit(ctx, X(k), y, s, bv, { alpha: rw.dim ? 0.45 : 1, stroke: rw.fin ? P.ok : null });
+        }
+        if (wide && rw.n) T(ctx, rw.n, w - 8, y + s / 2, { size: 11.5, mono: true, align: "right", color: rw.hl ? P.accent2 : P.dim });
+        y += s + gap;
+      });
+      // 2진 소수점
+      ctx.save(); ctx.setLineDash([3, 3]); ctx.strokeStyle = P.accent; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(X(12), 16); ctx.lineTo(X(12), h - 4); ctx.stroke(); ctx.restore();
+    }
+    function bits16(x) { var q = fpEncode(x, F); return q.s + " " + SB.bin(q.e, 5) + " " + SB.bin(q.f, 10); }
+    function upd() {
+      var o = add(), exact = Av + Bv, ref = q16(exact);
+      SB.stat("fa-op", "Δe = " + o.d + " · " + (o.sub ? "가수 뺄셈" : "가수 덧셈") + (o.sw ? " <small>(A, B 교환)</small>" : ""));
+      SB.stat("fa-norm", (o.sh > 0 ? "오른쪽 1칸" : o.sh < 0 ? "왼쪽 " + -o.sh + "칸 (LZC)" : "시프트 없음") + " · GRS=" + o.g + o.r + o.s + " → " + (o.up ? "올림" : "버림"));
+      SB.stat("fa-r", fnum(o.val) + " <small>" + bits16(o.val) + "</small>");
+      var same = Object.is(ref, o.val) || ref === o.val || (ref === 0 && o.val === 0);
+      SB.stat("fa-ex", fnum(Av) + " + " + fnum(Bv) + " = " + fnum(exact) + (same ? " <small class='ok-t'>→ IEEE 반올림과 일치 ✓</small>" : " <small class='bad-t'>→ IEEE: " + fnum(ref) + "</small>"));
+      cv.redraw();
+    }
+    upd();
+  })();
+})();
+</script>
+</body>
+</html>

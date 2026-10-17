@@ -1,0 +1,1376 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and MemoryBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DRAM 동작과 타이밍 · MemoryBook</title>
+<meta name="description" content="채널·랭크·뱅크 조직, ACT·RD·WR·PRE·REF 명령과 로우 버퍼, tRCD·CL·tRP·tRAS·tFAW 타이밍, 주소 매핑, 리프레시 오버헤드, FR-FCFS 스케줄링과 DRAM 전력까지 — DRAM이 시간 속에서 일하는 방식.">
+<link rel="canonical" href="https://semi.euiyun.com/memory/chapters/dram-ops.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#0e9384">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="MemoryBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="DRAM 동작과 타이밍 · MemoryBook">
+<meta property="og:description" content="채널·랭크·뱅크 조직, ACT·RD·WR·PRE·REF 명령과 로우 버퍼, tRCD·CL·tRP·tRAS·tFAW 타이밍, 주소 매핑, 리프레시 오버헤드, FR-FCFS 스케줄링과 DRAM 전력까지 — DRAM이 시간 속에서 일하는 방식.">
+<meta property="og:url" content="https://semi.euiyun.com/memory/chapters/dram-ops.html">
+<meta property="og:image" content="https://semi.euiyun.com/memory/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/memory/chapters/dram-ops.html#chapter","name":"DRAM 동작과 타이밍","headline":"DRAM 동작과 타이밍 · MemoryBook","description":"채널·랭크·뱅크 조직, ACT·RD·WR·PRE·REF 명령과 로우 버퍼, tRCD·CL·tRP·tRAS·tFAW 타이밍, 주소 매핑, 리프레시 오버헤드, FR-FCFS 스케줄링과 DRAM 전력까지 — DRAM이 시간 속에서 일하는 방식.","url":"https://semi.euiyun.com/memory/chapters/dram-ops.html","position":5,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/memory/og.png","dateModified":"2026-10-01","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/memory/#book","name":"MemoryBook · 메모리 반도체 교과서","url":"https://semi.euiyun.com/memory/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"MemoryBook","item":"https://semi.euiyun.com/memory/"},{"@type":"ListItem","position":2,"name":"05. DRAM 동작과 타이밍","item":"https://semi.euiyun.com/memory/chapters/dram-ops.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  .do-hex { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 15px; padding: 7px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-elev); color: var(--text); }
+  .do-hex:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .do-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .do-btns .btn { padding: 6px 10px; }
+  .do-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 8px 16px; border-top: 1px solid var(--border); font-size: 13px; color: var(--text-dim); background: var(--surface); }
+  .do-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  figure.diagram svg.do-narrow { max-width: 640px; margin: 0 auto; display: block; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="memory"></script>
+</head>
+<body data-chapter="dram-ops">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 05</div>
+    <h1>DRAM 동작과 타이밍</h1>
+    <p class="lead">4장에서 1T1C 셀과 센스 앰프가 비트 하나를 어떻게 저장하고 읽어 내는지 보았다. 이 장에서는 시야를 넓혀, 수십억 개의 셀이 <em>채널·랭크·뱅크·로우·컬럼</em>으로 조직된 DRAM 칩이 메모리 컨트롤러의 <span class="term">명령</span>을 받아 <em>나노초 단위의 타이밍 규칙</em>에 따라 움직이는 모습을 따라간다. "DDR5-6400 CL32"라는 숫자가 무엇을 뜻하는지, 왜 대역폭은 10년 사이 4배가 되었는데 지연은 거의 그대로인지, 리프레시와 스케줄러가 성능을 얼마나 좌우하는지가 이 장의 주제다.</p>
+    <ul class="objectives">
+      <li>채널 → 랭크 → 칩 → 뱅크 그룹 → 뱅크 → 로우/컬럼 계층과, 물리 주소가 이 필드들로 쪼개지는 주소 매핑을 설명할 수 있다.</li>
+      <li>ACT·RD·WR·PRE·REF 명령과 로우 버퍼(페이지)의 역할, 오픈/클로즈 페이지 정책의 차이를 이해한다.</li>
+      <li>tRCD, CL, tRP, tRAS, tRC, tCCD, tRRD, tFAW, tWR, tRFC의 의미를 알고, 클럭 사이클과 ns를 오가며 계산할 수 있다.</li>
+      <li>로우 히트·미스·컨플릭트 지연과 뱅크 병렬성으로 평균 지연과 실효 대역폭을 추정할 수 있다.</li>
+      <li>리프레시 오버헤드 \(t_{RFC}/t_{REFI}\)를 계산하고, FR-FCFS 스케줄링과 DRAM 전력 구성 요소를 설명할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="org">
+    <h2>DRAM의 조직: 채널에서 셀까지</h2>
+    <p>CPU의 <span class="term">메모리 컨트롤러</span><span class="en">(IMC, Integrated Memory Controller)</span>가 바라보는 DRAM은 여러 층으로 된 트리다. 각 층은 "무엇을 공유하고, 무엇이 독립적인가"로 구분된다. 이 구분이 곧 <em>병렬성의 단위</em>가 되기 때문에, 타이밍과 스케줄링을 이해하려면 먼저 이 계층을 정확히 알아야 한다.</p>
+    <ul>
+      <li><strong>채널</strong><span class="en">(Channel)</span> — 명령/주소 버스와 데이터 버스를 따로 가진 독립 경로. 채널이 둘이면 두 요청을 완전히 동시에 처리할 수 있다. DDR5 DIMM 하나는 내부적으로 32비트 폭 <span class="term">서브채널</span> 두 개로 나뉜다(ECC 포함 시 40비트).</li>
+      <li><strong>랭크</strong><span class="en">(Rank)</span> — 데이터 버스 폭을 함께 채우는 칩 묶음. ×8 칩 4개가 모이면 32비트 서브채널 하나를 채운다. 한 채널의 랭크들은 버스를 공유하고 칩 선택(CS) 신호로 구분된다.</li>
+      <li><strong>칩</strong><span class="en">(Device)</span> — 랭크 안의 칩들은 <em>같은 명령을 같은 순간에</em> 실행하고, 각자 데이터 버스의 일부(×4/×8/×16)를 담당한다.</li>
+      <li><strong>뱅크 그룹 · 뱅크</strong><span class="en">(Bank Group, Bank)</span> — 뱅크는 자기만의 로우 디코더와 센스 앰프 행(로우 버퍼)을 가진, <em>독립적으로 열고 닫을 수 있는</em> 최소 단위다. DDR4부터는 뱅크 몇 개를 묶은 뱅크 그룹이 칩 내부 I/O 경로를 공유한다.</li>
+      <li><strong>로우 · 컬럼</strong><span class="en">(Row, Column)</span> — 뱅크 안의 2차원 셀 배열. 로우 하나(= 한 워드라인에 달린 셀들)가 한 번에 열리고, 그중 일부 컬럼만 입출력된다.</li>
+    </ul>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 330" role="img" aria-label="DRAM 조직 계층: 컨트롤러, DIMM과 랭크, 칩의 뱅크 그룹, 뱅크 내부">
+        <defs>
+          <marker id="do-a0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <!-- controller -->
+        <rect x="10" y="118" width="124" height="84" rx="10" class="f-acc2-soft"/>
+        <text x="72" y="148" text-anchor="middle" class="t">CPU</text>
+        <text x="72" y="168" text-anchor="middle" class="t">메모리 컨트롤러</text>
+        <text x="72" y="188" text-anchor="middle" class="t-mono">IMC</text>
+        <path d="M134 140 H166" class="s-line" marker-end="url(#do-a0)"/>
+        <path d="M134 180 C150 180 150 300 166 300" class="s-line" style="stroke-dasharray:4 3" marker-end="url(#do-a0)"/>
+        <text x="150" y="132" text-anchor="middle" class="t-mono">채널 A</text>
+        <text x="152" y="318" text-anchor="middle" class="t-mono">채널 B …</text>
+        <!-- DIMM -->
+        <rect x="170" y="54" width="214" height="214" rx="10" class="f-surface"/>
+        <text x="277" y="78" text-anchor="middle" class="t">DIMM (서브채널 32b)</text>
+        <text x="182" y="100" class="t-dim">랭크 0</text>
+        <g class="f-elev">
+          <rect x="186" y="108" width="36" height="46" rx="3"/><rect x="232" y="108" width="36" height="46" rx="3"/>
+          <rect x="278" y="108" width="36" height="46" rx="3"/><rect x="324" y="108" width="36" height="46" rx="3"/>
+        </g>
+        <rect x="324" y="108" width="36" height="46" rx="3" class="f-acc-soft" style="stroke-width:2"/>
+        <text x="182" y="182" class="t-dim">랭크 1</text>
+        <g class="f-elev">
+          <rect x="186" y="190" width="36" height="46" rx="3"/><rect x="232" y="190" width="36" height="46" rx="3"/>
+          <rect x="278" y="190" width="36" height="46" rx="3"/><rect x="324" y="190" width="36" height="46" rx="3"/>
+        </g>
+        <text x="204" y="136" text-anchor="middle" class="t-mono">×8</text><text x="250" y="136" text-anchor="middle" class="t-mono">×8</text>
+        <text x="296" y="136" text-anchor="middle" class="t-mono">×8</text><text x="342" y="136" text-anchor="middle" class="t-mono">×8</text>
+        <text x="277" y="258" text-anchor="middle" class="t-mono">4 칩 × 8b = 32b 데이터</text>
+        <path d="M360 118 L412 50 M360 154 L412 292" class="s-axis" style="stroke-dasharray:3 3"/>
+        <!-- chip -->
+        <rect x="412" y="40" width="186" height="252" rx="10" class="f-surface"/>
+        <text x="505" y="62" text-anchor="middle" class="t">DRAM 칩 16 Gb ×8</text>
+        <g id="do-bg">
+          <rect x="422" y="74" width="38" height="98" rx="5" class="f-acc2-soft"/>
+          <rect x="426" y="80" width="30" height="19" rx="2" class="f-elev"/><rect x="426" y="102" width="30" height="19" rx="2" class="f-elev"/>
+          <rect x="426" y="124" width="30" height="19" rx="2" class="f-elev"/><rect x="426" y="146" width="30" height="19" rx="2" class="f-elev"/>
+        </g>
+        <use href="#do-bg" x="42"/><use href="#do-bg" x="84"/><use href="#do-bg" x="126"/>
+        <use href="#do-bg" y="104"/><use href="#do-bg" x="42" y="104"/><use href="#do-bg" x="84" y="104"/><use href="#do-bg" x="126" y="104"/>
+        <rect x="552" y="80" width="30" height="19" rx="2" class="f-acc-soft" style="stroke-width:2"/>
+        <text x="505" y="284" text-anchor="middle" class="t-mono">8 BG × 4 뱅크 = 32 뱅크</text>
+        <path d="M582 80 L628 48 M582 99 L628 262" class="s-axis" style="stroke-dasharray:3 3"/>
+        <!-- bank -->
+        <rect x="628" y="48" width="18" height="150" rx="3" class="f-acc2-soft"/>
+        <text transform="rotate(-90 637 123)" x="637" y="127" text-anchor="middle" class="t-mono">로우 디코더</text>
+        <rect x="650" y="48" width="140" height="150" rx="3" class="f-elev"/>
+        <path d="M650 63 H790 M650 78 H790 M650 93 H790 M650 108 H790 M650 138 H790 M650 153 H790 M650 168 H790 M650 183 H790" style="stroke:var(--grid);stroke-width:1"/>
+        <path d="M650 123 H790" class="s-acc" style="stroke-width:3"/>
+        <text x="720" y="118" text-anchor="middle" class="t-mono">로우 k (열림)</text>
+        <rect x="650" y="204" width="140" height="24" rx="3" class="f-acc-soft"/>
+        <text x="720" y="221" text-anchor="middle" class="t">로우 버퍼 (S/A)</text>
+        <rect x="650" y="234" width="140" height="18" rx="3" class="f-surface"/>
+        <text x="720" y="247" text-anchor="middle" class="t-mono">컬럼 선택 / I/O</text>
+        <text x="720" y="274" text-anchor="middle" class="t-dim">65,536 로우</text>
+        <text x="720" y="292" text-anchor="middle" class="t-dim">× 1 KB 페이지</text>
+      </svg>
+      <figcaption><b>그림 5-1.</b> DDR5 메모리 조직의 예. 컨트롤러는 채널(서브채널)마다 독립 버스를 갖고, 랭크의 칩 4개(×8)가 32비트 데이터를 나눠 맡는다. 칩 안에는 8개 뱅크 그룹 × 4뱅크 = 32개 뱅크가 있고, 각 뱅크는 65,536개 로우와 1 KB짜리 로우 버퍼(센스 앰프 행)를 가진다.</figcaption>
+    </figure>
+    <p>칩 용량은 이 필드들의 곱이다. 16 Gb ×8 DDR5 칩을 예로 들면</p>
+    <div class="formula">$$ C_{chip} = N_{bank}\times N_{row}\times N_{col}\times W = 32 \times 65{,}536 \times 1{,}024 \times 8 = 2^{34}\ \text{bit} = 16\ \text{Gb} $$
+      <div class="where">\(N_{col}\)은 칩 입장의 컬럼 수, \(W\)는 칩의 데이터 폭(×8). 로우 하나 = \(1024\times 8\) 비트 = 1 KB가 칩 하나의 <span class="term">페이지 크기</span>다. 랭크 전체로 보면 칩 4개가 동시에 열리므로 서브채널의 실효 로우 버퍼는 4 KB가 된다.</div>
+    </div>
+    <p>한 번의 읽기 명령이 내보내는 양은 <span class="term">버스트</span><span class="en">(burst)</span>로 정해진다. DDR5는 버스트 길이 BL16이므로 32비트 × 16 = 512비트 = <strong>64바이트</strong>, 정확히 CPU 캐시 라인 하나(3장)다. DDR4는 64비트 × BL8 = 64바이트로 같은 크기를 다른 방식으로 채웠다. 즉 DRAM은 바이트 단위가 아니라 <em>캐시 라인 단위로</em> 말한다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>계층</th><th>DDR4 예 (8 Gb ×8)</th><th>DDR5 예 (16 Gb ×8)</th><th>공유 / 독립</th></tr></thead>
+      <tbody>
+        <tr><td>채널</td><td>64b (+8b ECC)</td><td>DIMM당 32b 서브채널 × 2</td><td>버스 독립 → 완전 병렬</td></tr>
+        <tr><td>랭크</td><td>×8 칩 8개</td><td>서브채널당 ×8 칩 4개</td><td>데이터 버스 공유, CS로 선택</td></tr>
+        <tr><td>뱅크 그룹 × 뱅크</td><td>4 × 4 = 16</td><td>8 × 4 = 32</td><td>뱅크마다 로우 버퍼 독립</td></tr>
+        <tr><td>로우 / 뱅크</td><td>65,536</td><td>65,536</td><td>뱅크당 한 번에 1개만 열림</td></tr>
+        <tr><td>페이지 (칩 / 랭크)</td><td>1 KB / 8 KB</td><td>1 KB / 4 KB</td><td>ACT 한 번에 열리는 양</td></tr>
+        <tr><td>버스트</td><td>BL8 × 64b = 64 B</td><td>BL16 × 32b = 64 B</td><td>= 캐시 라인</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout tip"><strong>왜 뱅크를 여러 개로 나눌까?</strong> 뱅크 하나는 한 번에 로우 하나만 열 수 있고, 로우를 여닫는 데 수십 ns가 걸린다. 뱅크를 32개로 나누면 한 뱅크가 로우를 여는 동안 다른 뱅크들이 데이터를 내보낼 수 있다. 식당 주방에 화구가 하나가 아니라 32개 있는 셈이다. 이 <em>뱅크 수준 병렬성</em>이 DRAM 대역폭의 숨은 원천이다.</div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="commands">
+    <h2>명령과 로우 버퍼</h2>
+    <p>DRAM은 스스로 판단하지 않는다. 메모리 컨트롤러가 명령/주소(CA) 버스로 보내는 몇 가지 <span class="term">명령</span>을 정해진 시간 간격을 지켜 수행할 뿐이다. 핵심 명령은 다섯 개다.</p>
+    <ul>
+      <li><strong>ACT</strong><span class="en">(Activate)</span> + 뱅크, 로우 주소 — 워드라인을 켜서 로우 전체의 셀을 비트라인에 연결하고, 4장에서 본 전하 공유 → 센스 앰프 증폭을 거쳐 로우의 모든 비트를 센스 앰프 래치에 붙잡는다. 이 센스 앰프 행이 <span class="term">로우 버퍼</span><span class="en">(row buffer, 페이지)</span>다.</li>
+      <li><strong>RD / WR</strong><span class="en">(Read / Write)</span> + 뱅크, 컬럼 주소 — 이미 열린 로우 버퍼에서 컬럼 일부를 골라 DQ 핀으로 내보내거나(읽기), DQ로 받은 데이터를 로우 버퍼에 덮어쓴다(쓰기). 센스 앰프가 비트라인을 계속 구동하므로 셀에도 그대로 기록된다.</li>
+      <li><strong>PRE</strong><span class="en">(Precharge)</span> + 뱅크 — 워드라인을 끄고 비트라인을 \(V_{DD}/2\)로 이퀄라이즈해서, 다음 ACT를 받을 준비를 한다. RD/WR에 자동 프리차지를 붙인 <strong>RDA/WRA</strong>도 있다.</li>
+      <li><strong>REF</strong><span class="en">(Refresh)</span> — 칩 내부 카운터가 가리키는 로우 몇 개를 ACT+PRE해서 셀 전하를 되살린다(7절).</li>
+    </ul>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 270" role="img" aria-label="ACT, RD, PRE 명령에 따른 로우 버퍼 변화">
+        <defs>
+          <marker id="do-a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+          <g id="do-arr">
+            <rect x="0" y="0" width="200" height="120" rx="4" class="f-elev"/>
+            <path d="M0 20 H200 M0 40 H200 M0 60 H200 M0 80 H200 M0 100 H200" style="stroke:var(--grid);stroke-width:1"/>
+            <path d="M25 0 V120 M50 0 V120 M75 0 V120 M100 0 V120 M125 0 V120 M150 0 V120 M175 0 V120" style="stroke:var(--grid);stroke-width:1"/>
+          </g>
+        </defs>
+        <!-- panel 1 ACT -->
+        <text x="130" y="22" text-anchor="middle" class="t-acc">① ACT (로우 3)</text>
+        <use href="#do-arr" x="30" y="36"/>
+        <rect x="30" y="96" width="200" height="20" class="f-acc-soft"/>
+        <text x="20" y="111" text-anchor="end" class="t-mono">WL3</text>
+        <path d="M130 120 V178" class="s-acc" marker-end="url(#do-a1)"/>
+        <rect x="30" y="182" width="200" height="26" rx="4" class="f-acc-soft" style="stroke-width:2"/>
+        <text x="130" y="200" text-anchor="middle" class="t">로우 버퍼 ← 로우 3 전체</text>
+        <text x="130" y="236" text-anchor="middle" class="t-dim">센싱 + 재저장 · tRCD 후 RD 가능</text>
+        <!-- panel 2 RD -->
+        <text x="390" y="22" text-anchor="middle" class="t-acc">② RD (컬럼 5)</text>
+        <use href="#do-arr" x="290" y="36"/>
+        <rect x="290" y="96" width="200" height="20" class="f-acc-soft" style="opacity:.5"/>
+        <rect x="290" y="182" width="200" height="26" rx="4" class="f-acc-soft"/>
+        <rect x="415" y="182" width="25" height="26" class="f-acc"/>
+        <path d="M427 208 V244" class="s-acc" marker-end="url(#do-a1)"/>
+        <text x="350" y="200" text-anchor="middle" class="t-mono">로우 버퍼</text>
+        <text x="440" y="262" text-anchor="middle" class="t">DQ → 64 B 버스트</text>
+        <text x="345" y="236" text-anchor="middle" class="t-dim">CL 후 데이터</text>
+        <!-- panel 3 PRE -->
+        <text x="650" y="22" text-anchor="middle" class="t-acc">③ PRE</text>
+        <use href="#do-arr" x="550" y="36"/>
+        <rect x="550" y="182" width="200" height="26" rx="4" class="f-surface" style="stroke-dasharray:5 4"/>
+        <text x="650" y="200" text-anchor="middle" class="t-dim">비어 있음 (V_DD/2)</text>
+        <path d="M650 176 V124" class="s-line" marker-end="url(#do-a0)" style="stroke-dasharray:4 3"/>
+        <text x="650" y="236" text-anchor="middle" class="t-dim">WL off · 비트라인 이퀄라이즈</text>
+        <text x="650" y="256" text-anchor="middle" class="t-dim">tRP 후 다음 ACT 가능</text>
+      </svg>
+      <figcaption><b>그림 5-2.</b> 로우 버퍼의 한살이. ACT는 로우 전체(칩당 1 KB)를 센스 앰프로 끌어올리고, RD는 그중 일부만 골라 내보내며, PRE는 로우를 닫고 비트라인을 다음 센싱을 위한 중간 전압으로 되돌린다.</figcaption>
+    </figure>
+    <p>여기서 중요한 비대칭이 드러난다. ACT는 <em>1 KB</em>를 여는데, RD 한 번은 칩당 16바이트(×8 × BL16)만 가져간다. 그러니 로우가 열려 있는 동안 <em>같은 로우</em>의 다른 컬럼을 읽으면 ACT 비용 없이 CL만 기다리면 된다. 이것이 <span class="term">로우 히트</span><span class="en">(row hit, page hit)</span>다. 반대로 다른 로우가 필요하면 PRE → ACT → RD를 모두 거쳐야 한다(<span class="term">로우 컨플릭트</span>).</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 300" role="img" aria-label="DRAM 뱅크 상태도">
+        <defs>
+          <marker id="do-a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <ellipse cx="250" cy="150" rx="62" ry="28" class="f-surface"/><text x="250" y="155" text-anchor="middle" class="t">IDLE</text>
+        <ellipse cx="500" cy="150" rx="66" ry="28" class="f-acc-soft"/><text x="500" y="155" text-anchor="middle" class="t">ACTIVE</text>
+        <ellipse cx="680" cy="70" rx="56" ry="24" class="f-acc2-soft"/><text x="680" y="75" text-anchor="middle" class="t">READ</text>
+        <ellipse cx="680" cy="230" rx="56" ry="24" class="f-acc2-soft"/><text x="680" y="235" text-anchor="middle" class="t">WRITE</text>
+        <ellipse cx="375" cy="262" rx="74" ry="24" class="f-bad-soft"/><text x="375" y="267" text-anchor="middle" class="t">PRECHARGING</text>
+        <ellipse cx="250" cy="42" rx="70" ry="24" class="f-warn-soft"/><text x="250" y="47" text-anchor="middle" class="t">REFRESHING</text>
+        <ellipse cx="72" cy="150" rx="62" ry="28" class="f-ok-soft"/><text x="72" y="146" text-anchor="middle" class="t">SELF</text><text x="72" y="164" text-anchor="middle" class="t">REFRESH</text>
+        <path d="M312 144 H430" class="s-line" marker-end="url(#do-a2)"/><text x="372" y="136" text-anchor="middle" class="t-acc">ACT</text><text x="372" y="170" text-anchor="middle" class="t-mono">tRCD</text>
+        <path d="M548 131 Q600 80 626 76" class="s-line" marker-end="url(#do-a2)"/><text x="580" y="92" text-anchor="middle" class="t-mono">RD</text>
+        <path d="M640 88 Q600 130 562 140" class="s-line" style="stroke-dasharray:4 3" marker-end="url(#do-a2)"/>
+        <path d="M548 169 Q600 220 626 224" class="s-line" marker-end="url(#do-a2)"/><text x="580" y="214" text-anchor="middle" class="t-mono">WR</text>
+        <path d="M640 212 Q600 170 562 160" class="s-line" style="stroke-dasharray:4 3" marker-end="url(#do-a2)"/>
+        <path d="M470 175 Q440 240 446 250" class="s-line" marker-end="url(#do-a2)"/><text x="480" y="228" class="t-acc">PRE</text><text x="480" y="246" class="t-mono">(≥ tRAS)</text>
+        <path d="M640 250 Q560 290 452 272" class="s-line" style="stroke-dasharray:2 3" marker-end="url(#do-a2)"/><text x="600" y="292" text-anchor="middle" class="t-mono">WRA (+tWR)</text>
+        <path d="M312 250 Q260 230 252 182" class="s-line" marker-end="url(#do-a2)"/><text x="262" y="232" text-anchor="end" class="t-mono">tRP</text>
+        <path d="M236 122 V70" class="s-line" marker-end="url(#do-a2)"/><text x="228" y="100" text-anchor="end" class="t-acc">REF</text>
+        <path d="M266 68 V120" class="s-line" marker-end="url(#do-a2)"/><text x="274" y="100" class="t-mono">tRFC</text>
+        <path d="M188 142 H138" class="s-line" marker-end="url(#do-a2)"/><text x="163" y="134" text-anchor="middle" class="t-mono">SRE</text>
+        <path d="M136 160 H186" class="s-line" marker-end="url(#do-a2)"/><text x="161" y="180" text-anchor="middle" class="t-mono">SRX</text>
+      </svg>
+      <figcaption><b>그림 5-3.</b> 뱅크 하나의 단순화한 상태도. 모든 화살표에는 최소 대기 시간이 붙어 있다. ACT 후 tRCD가 지나야 RD/WR, ACT 후 tRAS가 지나야 PRE, PRE 후 tRP가 지나야 다시 ACT할 수 있다. REF와 셀프 리프레시는 모든 뱅크가 IDLE일 때만 들어간다(DDR5의 동일 뱅크 리프레시는 예외).</figcaption>
+    </figure>
+    <h3>오픈 페이지 vs 클로즈 페이지</h3>
+    <p>RD가 끝난 뒤 로우를 <em>열어 둘지</em>, <em>바로 닫을지</em>는 컨트롤러의 선택이다.</p>
+    <ul>
+      <li><span class="term">오픈 페이지 정책</span><span class="en">(open-page)</span> — 다음 요청도 같은 로우일 것이라고 기대하고 열어 둔다. 맞으면 히트(CL만), 틀리면 컨플릭트(tRP + tRCD + CL). 순차 접근이 많은 단일 스레드 워크로드에 유리하다.</li>
+      <li><span class="term">클로즈 페이지 정책</span><span class="en">(close-page)</span> — RDA/WRA로 매번 자동 프리차지. 모든 접근이 미스(tRCD + CL)가 되지만 최악의 컨플릭트는 사라진다. 코어가 많아 접근이 뒤섞이는 서버에서 자주 쓴다.</li>
+    </ul>
+    <p>실제 컨트롤러는 둘 사이의 <em>적응형</em> 정책을 쓴다. 일정 시간 동안 히트가 없으면 닫거나(타임아웃), 큐에 같은 로우 요청이 남아 있는지 보고 결정한다. 5절 시뮬레이터에서 두 정책을 직접 비교해 보자.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="timing">
+    <h2>타이밍 파라미터</h2>
+    <p>DRAM 데이터시트의 절반은 <span class="term">타이밍 파라미터</span> 표다. 각 파라미터는 "명령 A 다음에 명령 B를 보내려면 최소 얼마를 기다려야 하는가"라는 규칙이며, 그 뒤에는 모두 물리적 이유가 있다. 비트라인에 전하가 퍼지고 센스 앰프가 증폭하는 시간, 셀이 다시 채워지는 시간, 비트라인이 중간 전압으로 돌아오는 시간, 전원망이 순간 전류를 견디는 한계 같은 것들이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 300" role="img" aria-label="ACT, RD, PRE 기본 타이밍 다이어그램">
+        <defs>
+          <marker id="do-a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <text x="12" y="46" class="t-mono">CLK</text>
+        <text x="12" y="95" class="t-mono">CMD</text>
+        <text x="12" y="141" class="t-mono">BANK</text>
+        <text x="12" y="187" class="t-mono">DQ</text>
+        <path d="M90 50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50 h10 V34 h10 V50" class="s-line" style="stroke-width:1.2"/>
+        <!-- CMD -->
+        <path d="M90 90 H770" class="s-axis" style="stroke-dasharray:2 4"/>
+        <rect x="110" y="77" width="40" height="26" rx="4" class="f-warn-soft"/><text x="130" y="95" text-anchor="middle" class="t">ACT</text>
+        <rect x="250" y="77" width="40" height="26" rx="4" class="f-acc-soft"/><text x="270" y="95" text-anchor="middle" class="t">RD</text>
+        <rect x="510" y="77" width="40" height="26" rx="4" class="f-bad-soft"/><text x="530" y="95" text-anchor="middle" class="t">PRE</text>
+        <rect x="650" y="77" width="40" height="26" rx="4" class="f-warn-soft"/><text x="670" y="95" text-anchor="middle" class="t">ACT</text>
+        <!-- BANK -->
+        <rect x="110" y="126" width="140" height="22" class="f-warn-soft"/><text x="180" y="142" text-anchor="middle" class="t-mono">센싱</text>
+        <rect x="250" y="126" width="260" height="22" class="f-acc-soft"/><text x="380" y="142" text-anchor="middle" class="t-mono">로우 열림 (ACTIVE)</text>
+        <rect x="510" y="126" width="140" height="22" class="f-bad-soft"/><text x="580" y="142" text-anchor="middle" class="t-mono">프리차지</text>
+        <rect x="650" y="126" width="120" height="22" class="f-warn-soft"/><text x="710" y="142" text-anchor="middle" class="t-mono">다음 로우</text>
+        <!-- DQ -->
+        <path d="M90 182 H390 M470 182 H770" class="s-axis"/>
+        <g class="f-acc2-soft">
+          <path d="M390 182 l3 -9 h4 l3 9 l-3 9 h-4 z"/><path d="M400 182 l3 -9 h4 l3 9 l-3 9 h-4 z"/><path d="M410 182 l3 -9 h4 l3 9 l-3 9 h-4 z"/><path d="M420 182 l3 -9 h4 l3 9 l-3 9 h-4 z"/>
+          <path d="M430 182 l3 -9 h4 l3 9 l-3 9 h-4 z"/><path d="M440 182 l3 -9 h4 l3 9 l-3 9 h-4 z"/><path d="M450 182 l3 -9 h4 l3 9 l-3 9 h-4 z"/><path d="M460 182 l3 -9 h4 l3 9 l-3 9 h-4 z"/>
+        </g>
+        <text x="430" y="166" text-anchor="middle" class="t-mono">BL8 = 4 tCK</text>
+        <!-- dims -->
+        <path d="M110 108 V270 M250 108 V222 M390 160 V222 M510 108 V270 M650 108 V282" style="stroke:var(--grid);stroke-width:1;stroke-dasharray:3 3"/>
+        <path d="M112 216 H248" class="s-line" marker-start="url(#do-a3)" marker-end="url(#do-a3)"/><text x="180" y="210" text-anchor="middle" class="t-acc">tRCD</text>
+        <path d="M252 216 H388" class="s-line" marker-start="url(#do-a3)" marker-end="url(#do-a3)"/><text x="320" y="210" text-anchor="middle" class="t-acc">CL</text>
+        <path d="M112 244 H508" class="s-line" marker-start="url(#do-a3)" marker-end="url(#do-a3)"/><text x="310" y="238" text-anchor="middle" class="t">tRAS (셀 재저장 완료까지)</text>
+        <path d="M512 244 H648" class="s-line" marker-start="url(#do-a3)" marker-end="url(#do-a3)"/><text x="580" y="238" text-anchor="middle" class="t-acc">tRP</text>
+        <path d="M112 274 H648" class="s-line" marker-start="url(#do-a3)" marker-end="url(#do-a3)"/><text x="380" y="292" text-anchor="middle" class="t">tRC = tRAS + tRP (같은 뱅크 ACT → ACT)</text>
+      </svg>
+      <figcaption><b>그림 5-4.</b> 한 번의 읽기에 필요한 기본 타이밍(개념도, 축척 아님). ACT 후 tRCD가 지나야 RD, RD 후 CL이 지나야 첫 데이터가 나온다. PRE는 ACT로부터 tRAS 이후에야 가능하고, PRE 후 tRP가 지나야 같은 뱅크에 다시 ACT할 수 있다.</figcaption>
+    </figure>
+    <p>가장 기본이 되는 세 파라미터와 그 관계는 다음과 같다.</p>
+    <div class="formula">$$ t_{RC} = t_{RAS} + t_{RP}, \qquad t_{RAS} \gtrsim t_{RCD} + t_{restore}, \qquad t_{\text{first data}} = t_{RCD} + CL $$
+      <div class="where">\(t_{RCD}\): ACT → RD/WR (전하 공유 + 센스 앰프가 충분히 증폭할 때까지). \(CL\) (CAS Latency, \(t_{AA}\)): RD → 첫 데이터 비트. \(t_{RAS}\): ACT → PRE 최소 간격. 읽기는 셀 전하를 파괴하므로(4장) 센스 앰프가 셀을 완전히 다시 채울 때까지 로우를 닫으면 안 된다. \(t_{RP}\): PRE → ACT. \(t_{RC}\): 같은 뱅크에 연달아 서로 다른 로우를 열 수 있는 최소 주기.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>파라미터</th><th>제약</th><th>물리적 이유</th><th>대표값 (DDR5, 2024~2025)</th></tr></thead>
+      <tbody>
+        <tr><td>tRCD</td><td>ACT → RD/WR</td><td>전하 공유 + 센싱</td><td>~14–16 ns</td></tr>
+        <tr><td>CL (tAA)</td><td>RD → 첫 데이터</td><td>컬럼 디코드, 로컬/글로벌 I/O, 직렬화</td><td>~14–17 ns</td></tr>
+        <tr><td>CWL</td><td>WR → 쓰기 데이터</td><td>수신기 준비</td><td>CL − 2 nCK</td></tr>
+        <tr><td>tRP</td><td>PRE → ACT</td><td>비트라인 이퀄라이즈</td><td>~14–16 ns</td></tr>
+        <tr><td>tRAS</td><td>ACT → PRE</td><td>셀 재저장(restore)</td><td>32 ns</td></tr>
+        <tr><td>tRC</td><td>ACT → ACT (같은 뱅크)</td><td>tRAS + tRP</td><td>~46–48 ns</td></tr>
+        <tr><td>tCCD_S / tCCD_L</td><td>RD → RD (다른 / 같은 BG)</td><td>BG 내부 I/O 경로 공유</td><td>8 nCK / ~5 ns 이상</td></tr>
+        <tr><td>tRRD_S / tRRD_L</td><td>ACT → ACT (다른 뱅크)</td><td>ACT 순간 전류</td><td>8 nCK / ~5 ns 이상</td></tr>
+        <tr><td>tFAW</td><td>연속 ACT 4개가 들어갈 창</td><td>전원망·전하 펌프 한계</td><td>~10–30 ns (페이지 크기·속도 의존)</td></tr>
+        <tr><td>tWR</td><td>마지막 쓰기 데이터 → PRE</td><td>셀에 완전히 기록</td><td>30 ns (DDR4: 15 ns)</td></tr>
+        <tr><td>tRTP</td><td>RD → PRE</td><td>읽기 데이터 확보</td><td>~7.5 ns</td></tr>
+        <tr><td>tWTR</td><td>쓰기 데이터 끝 → RD</td><td>버스 방향 전환</td><td>~2.5–10 ns</td></tr>
+        <tr><td>tRFC</td><td>REF → 다음 ACT</td><td>여러 로우 동시 리프레시</td><td>~295 ns (16 Gb)</td></tr>
+      </tbody>
+    </table></div>
+    <p>표에서 눈여겨볼 점은 <em>BL16 버스트가 버스를 차지하는 시간(8 nCK)</em>과 tCCD_S가 같다는 것이다. 서로 다른 뱅크 그룹을 번갈아 읽으면 데이터 버스를 빈틈없이 채울 수 있지만, 같은 뱅크 그룹을 연달아 읽으면 tCCD_L 때문에 버스트 사이에 틈이 생긴다. 뱅크 그룹이라는 계층이 생긴 이유는 칩 내부 코어 속도가 I/O 속도를 따라가지 못하기 때문이다. 코어는 느린 채로 두고 여러 뱅크 그룹을 번갈아 쓰는 방식으로 I/O 속도를 올린 것이다.</p>
+
+    <div class="sim" id="sim-timing">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>인터랙티브 타이밍 다이어그램</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-tim"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>시나리오</span><div class="seg" id="tim-sc"><button data-value="read" class="on">읽기</button><button data-value="hit">히트 ×4</button><button data-value="conf">컨플릭트</button><button data-value="write">쓰기</button></div></div>
+          <div class="ctrl"><span>속도 (tCK)</span><div class="seg" id="tim-rate"><button data-value="3200">DDR4-3200</button><button data-value="4800" class="on">DDR5-4800</button><button data-value="6400">DDR5-6400</button></div></div>
+          <label class="ctrl"><span>tRCD <output id="tim-rcd-out"></output></span><input type="range" id="tim-rcd" min="8" max="60" value="39"></label>
+          <label class="ctrl"><span>CL <output id="tim-cl-out"></output></span><input type="range" id="tim-cl" min="8" max="60" value="40"></label>
+          <label class="ctrl"><span>tRP <output id="tim-rp-out"></output></span><input type="range" id="tim-rp" min="8" max="60" value="39"></label>
+          <div class="ctrl"><span>버스트 길이</span><div class="seg" id="tim-bl"><button data-value="8">BL8</button><button data-value="16" class="on">BL16</button></div></div>
+          <label class="check"><input type="checkbox" id="tim-alt"> 히트 ×4: 뱅크 그룹 교대 (tCCD_S)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">요청 → 첫 데이터</span><span class="v" id="tim-o1">—</span></div>
+        <div class="stat"><span class="k">버스트 시간</span><span class="v" id="tim-o2">—</span></div>
+        <div class="stat"><span class="k">tRC (tRAS+tRP)</span><span class="v" id="tim-o3">—</span></div>
+        <div class="stat"><span class="k">데이터 버스 점유율</span><span class="v" id="tim-o4">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값은 JEDEC DDR5-4800B(40-39-39)다. 속도를 DDR5-6400으로 바꾸면 같은 사이클 수가 더 짧은 ns가 된다. ② '히트 ×4'에서 BL16은 같은 뱅크 그룹 연속 읽기(tCCD_L ≈ 5 ns)에서 버스트 사이 틈이 생긴다. 체크박스로 뱅크 그룹을 교대하면 틈이 사라지는지 보자. ③ '쓰기'에서 tWR(30 ns) 때문에 PRE가 얼마나 늦어지는지 확인하자. tRAS(32 ns)·tRTP(7.5 ns)·tWR(30 ns)은 ns로 고정되어 속도에 따라 사이클 수가 자동 환산된다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="speed">
+    <h2>속도 등급과 "CL-tRCD-tRP" 표기</h2>
+    <p>메모리 모듈 라벨의 "DDR5-6400 CL32-39-39-102" 같은 표기는 <em>데이터 전송률</em>과 <em>주요 타이밍을 클럭 사이클 수로</em> 적은 것이다. 6400은 핀당 초당 전송 횟수(MT/s)이고, DDR(Double Data Rate)은 클럭의 상승·하강 에지 모두에서 전송하므로 실제 클럭 주파수는 절반인 3200 MHz다. 네 숫자는 순서대로 CL, tRCD, tRP, tRAS다.</p>
+    <div class="formula">$$ t_{CK} = \frac{2}{\text{data rate}} = \frac{2000}{\text{MT/s}}\ \text{ns}, \qquad t[\text{ns}] = N_{cycle}\times t_{CK} $$
+      <div class="where">예: DDR5-6400 → \(t_{CK} = 2000/6400 = 0.3125\) ns. CL32 → \(32\times0.3125 = 10.0\) ns. JEDEC 표준 등급 DDR5-6400(CL46~56)은 약 14.4~17.5 ns다.</div>
+    </div>
+    <p>이 변환을 세대별로 해 보면 놀라운 사실이 드러난다. CL의 사이클 수는 세대마다 크게 늘었지만, <em>ns로 환산한 지연은 거의 제자리</em>다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>규격</th><th>tCK</th><th>CL-tRCD-tRP</th><th>CL [ns]</th><th>tRCD+CL [ns]</th><th>64b 채널 피크 대역폭</th></tr></thead>
+      <tbody>
+        <tr><td>DDR3-1600</td><td>1.25 ns</td><td>11-11-11</td><td>13.75</td><td>27.5</td><td>12.8 GB/s</td></tr>
+        <tr><td>DDR4-2400</td><td>0.833 ns</td><td>17-17-17</td><td>14.17</td><td>28.3</td><td>19.2 GB/s</td></tr>
+        <tr><td>DDR4-3200</td><td>0.625 ns</td><td>22-22-22</td><td>13.75</td><td>27.5</td><td>25.6 GB/s</td></tr>
+        <tr><td>DDR5-4800 (JEDEC B)</td><td>0.417 ns</td><td>40-39-39</td><td>16.67</td><td>32.9</td><td>38.4 GB/s</td></tr>
+        <tr><td>DDR5-6400 (JEDEC)</td><td>0.3125 ns</td><td>46-46-46</td><td>14.38</td><td>28.8</td><td>51.2 GB/s</td></tr>
+        <tr><td>DDR5-6400 (XMP 오버클럭)</td><td>0.3125 ns</td><td>32-39-39</td><td>10.0</td><td>22.2</td><td>51.2 GB/s</td></tr>
+      </tbody>
+    </table></div>
+    <p>10여 년 동안 대역폭은 4배가 되었지만 RD부터 첫 데이터까지의 CAS 지연은 JEDEC 대표 설정에서 약 14~17 ns에 머물러 있다. 빈 뱅크에 ACT를 내리는 시점부터 재면 tRCD가 더해져 약 28~33 ns이며, 행 충돌 때는 프리차지 시간도 추가된다. 지연을 결정하는 것이 I/O 속도가 아니라 <em>셀 어레이의 아날로그 물리</em>, 즉 수십 fF짜리 셀 커패시터가 그보다 몇 배 큰 비트라인 커패시턴스를 흔드는 속도(4장)이기 때문이다. 1장에서 본 <span class="term">메모리 월</span>의 핵심이 바로 이것이다.</p>
+    <div class="callout warn"><strong>"CL이 낮을수록 빠르다"의 함정</strong> CL은 사이클 단위이므로 속도가 다른 두 모듈을 CL 숫자로 비교하면 안 된다. DDR4-3200 CL16(10 ns)은 DDR5-6400 CL32(10 ns)와 첫 워드 지연이 같다. 그러나 64바이트 캐시 라인 하나를 다 받는 시간, 그리고 부하가 걸렸을 때의 실효 지연은 대역폭이 큰 DDR5 쪽이 유리하다. 오버클럭 XMP/EXPO 프로파일은 전압(예: 1.35~1.4 V)을 올려 이런 낮은 타이밍을 얻는다.</div>
+
+    <div class="sim" id="sim-speed">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>속도 등급 → 실제 지연 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-spd"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>프리셋</span><div class="seg" id="spd-pre"><button data-value="0">D3-1600</button><button data-value="1">D4-2400</button><button data-value="2" class="on">D4-3200</button><button data-value="3">D5-4800</button><button data-value="4">D5-6400</button><button data-value="5">D5-6400 XMP</button></div></div>
+          <label class="ctrl"><span>전송률 <output id="spd-rate-out"></output></span><input type="range" id="spd-rate" min="1200" max="8800" step="100" value="3200"></label>
+          <label class="ctrl"><span>CL <output id="spd-cl-out"></output></span><input type="range" id="spd-cl" min="8" max="70" value="22"></label>
+          <label class="ctrl"><span>tRCD = tRP <output id="spd-rcd-out"></output></span><input type="range" id="spd-rcd" min="8" max="70" value="22"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">tCK</span><span class="v" id="spd-o1">—</span></div>
+        <div class="stat"><span class="k">CL (히트 첫 데이터)</span><span class="v" id="spd-o2">—</span></div>
+        <div class="stat"><span class="k">tRCD+CL (미스)</span><span class="v" id="spd-o3">—</span></div>
+        <div class="stat"><span class="k">tRP+tRCD+CL (컨플릭트)</span><span class="v" id="spd-o4">—</span></div>
+        <div class="stat"><span class="k">64b 피크 대역폭</span><span class="v" id="spd-o5">—</span></div>
+        <div class="stat"><span class="k">64 B 전송 시간 (64b)</span><span class="v" id="spd-o6">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: 그래프의 점선은 CL이 같은 ns가 되는 등지연선이다. 프리셋 점들이 대부분 12.5~17.5 ns 띠 안에 모여 있음을 확인하자. 전송률을 두 배로 올렸을 때 같은 ns를 유지하려면 CL 사이클 수도 두 배가 되어야 한다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="locality">
+    <h2>로우 히트·미스·컨플릭트와 뱅크 병렬성</h2>
+    <p>요청이 도착했을 때 해당 뱅크의 상태에 따라 지연은 세 가지로 갈린다.</p>
+    <div class="formula">$$ \begin{aligned} L_{hit} &= CL + t_{BURST} \\ L_{miss} &= t_{RCD} + CL + t_{BURST} \\ L_{conflict} &= t_{RP} + t_{RCD} + CL + t_{BURST} \end{aligned} $$
+      <div class="where">히트: 원하는 로우가 이미 열려 있음. 미스(빈 뱅크): 뱅크가 프리차지되어 있음. 컨플릭트: 다른 로우가 열려 있어 먼저 닫아야 함. \(t_{BURST}\)는 버스트 전송 시간(DDR5 BL16 = 8 nCK, 6400 MT/s에서 2.5 ns).</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 220" role="img" aria-label="로우 히트, 미스, 컨플릭트 지연 비교">
+        <text x="20" y="30" class="t-dim">tRCD = CL = tRP = 14 ns, tBURST = 2.5 ns (1 ns = 11 px)</text>
+        <text x="20" y="72" class="t">로우 히트</text>
+        <rect x="180" y="56" width="154" height="26" class="f-acc-soft"/><text x="257" y="74" text-anchor="middle" class="t-mono">CL</text>
+        <rect x="334" y="56" width="28" height="26" class="f-acc2"/>
+        <text x="374" y="74" class="t-acc">16.5 ns</text>
+        <text x="20" y="122" class="t">로우 미스 (빈 뱅크)</text>
+        <rect x="180" y="106" width="154" height="26" class="f-warn-soft"/><text x="257" y="124" text-anchor="middle" class="t-mono">tRCD</text>
+        <rect x="334" y="106" width="154" height="26" class="f-acc-soft"/><text x="411" y="124" text-anchor="middle" class="t-mono">CL</text>
+        <rect x="488" y="106" width="28" height="26" class="f-acc2"/>
+        <text x="528" y="124" class="t-acc">30.5 ns</text>
+        <text x="20" y="172" class="t">로우 컨플릭트</text>
+        <rect x="180" y="156" width="154" height="26" class="f-bad-soft"/><text x="257" y="174" text-anchor="middle" class="t-mono">tRP</text>
+        <rect x="334" y="156" width="154" height="26" class="f-warn-soft"/><text x="411" y="174" text-anchor="middle" class="t-mono">tRCD</text>
+        <rect x="488" y="156" width="154" height="26" class="f-acc-soft"/><text x="565" y="174" text-anchor="middle" class="t-mono">CL</text>
+        <rect x="642" y="156" width="28" height="26" class="f-acc2"/>
+        <text x="680" y="174" class="t-acc">44.5 ns</text>
+        <text x="348" y="206" text-anchor="middle" class="t-mono">■ 데이터 버스트</text>
+      </svg>
+      <figcaption><b>그림 5-5.</b> 같은 DRAM이라도 뱅크 상태에 따라 지연이 2.7배까지 차이 난다. 로우 버퍼는 사실상 뱅크마다 붙은 1~8 KB짜리 '캐시'이고, 히트율이 성능을 좌우한다.</figcaption>
+    </figure>
+    <p>평균 지연은 세 경우의 가중 평균이다. 히트 60 %, 미스 10 %, 컨플릭트 30 %라면</p>
+    <div class="formula">$$ \bar L = h\,L_{hit} + m\,L_{miss} + c\,L_{conf} = 0.6(16.5) + 0.1(30.5) + 0.3(44.5) \approx 26.3\ \text{ns} $$
+      <div class="where">여기에 컨트롤러 큐 대기, 온칩 네트워크, 캐시 탐색 시간이 더해져 CPU가 체감하는 메모리 지연은 보통 70~120 ns가 된다.</div>
+    </div>
+    <h3>뱅크 병렬성과 인터리빙</h3>
+    <p>지연이 수십 ns라도 대역폭까지 그만큼 나쁜 것은 아니다. 명령 버스는 한 사이클에 명령 하나를 보낼 수 있으므로, 뱅크 0이 tRCD를 기다리는 동안 뱅크 1에 ACT, 뱅크 2에 RD를 보낼 수 있다. 연속된 요청이 서로 다른 뱅크로 흩어지도록 주소를 배치하는 것을 <span class="term">뱅크 인터리빙</span><span class="en">(bank interleaving)</span>이라 한다. 이상적으로는 뱅크 \(N\)개가 tRC를 서로 겹쳐 숨겨서, 데이터 버스가 쉬지 않고 버스트를 내보낸다.</p>
+    <p>하지만 ACT를 무한히 빨리 보낼 수는 없다. ACT 한 번은 로우 전체의 비트라인 수천 개를 한꺼번에 충방전하므로 큰 순간 전류가 흐른다. 그래서 ACT 사이 최소 간격 <strong>tRRD</strong>와, 연속 ACT 4개가 반드시 들어가야 하는 창 <strong>tFAW</strong><span class="en">(Four Activate Window)</span>가 정해져 있다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 200" role="img" aria-label="tRRD와 tFAW 제약">
+        <defs>
+          <marker id="do-a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <path d="M40 110 H740" class="s-axis" marker-end="url(#do-a4)"/><text x="736" y="132" text-anchor="end" class="t-mono">시간</text>
+        <rect x="80" y="84" width="44" height="26" rx="4" class="f-warn-soft"/><text x="102" y="102" text-anchor="middle" class="t-mono">ACT0</text>
+        <rect x="140" y="84" width="44" height="26" rx="4" class="f-warn-soft"/><text x="162" y="102" text-anchor="middle" class="t-mono">ACT1</text>
+        <rect x="200" y="84" width="44" height="26" rx="4" class="f-warn-soft"/><text x="222" y="102" text-anchor="middle" class="t-mono">ACT2</text>
+        <rect x="260" y="84" width="44" height="26" rx="4" class="f-warn-soft"/><text x="282" y="102" text-anchor="middle" class="t-mono">ACT3</text>
+        <rect x="320" y="84" width="60" height="26" rx="4" class="f-bad-soft" style="stroke-dasharray:4 3"/><text x="350" y="102" text-anchor="middle" class="t-mono">금지</text>
+        <rect x="380" y="84" width="44" height="26" rx="4" class="f-warn-soft"/><text x="402" y="102" text-anchor="middle" class="t-mono">ACT4</text>
+        <rect x="440" y="84" width="44" height="26" rx="4" class="f-warn-soft"/><text x="462" y="102" text-anchor="middle" class="t-mono">ACT5</text>
+        <path d="M82 74 H138" class="s-line" marker-start="url(#do-a4)" marker-end="url(#do-a4)"/><text x="110" y="66" text-anchor="middle" class="t-acc">tRRD</text>
+        <path d="M80 140 V160 M380 140 V160" class="s-axis"/>
+        <path d="M82 150 H378" class="s-line" marker-start="url(#do-a4)" marker-end="url(#do-a4)"/><text x="230" y="176" text-anchor="middle" class="t-acc">tFAW: 이 창 안에 ACT는 최대 4개</text>
+        <text x="520" y="80" class="t-dim">ACT4는 ACT0로부터</text>
+        <text x="520" y="100" class="t-dim">tFAW가 지나야 가능</text>
+        <text x="520" y="30" class="t">최대 ACT 속도 = min(1/tRRD, 4/tFAW)</text>
+      </svg>
+      <figcaption><b>그림 5-6.</b> tRRD와 tFAW. 서로 다른 뱅크라도 ACT는 tRRD 간격 이상, 그리고 임의의 tFAW 창 안에 4개 이하로만 보낼 수 있다. 로우 버퍼 히트가 거의 없는 랜덤 접근에서는 이 전력 제약이 대역폭의 상한이 된다.</figcaption>
+    </figure>
+    <p>예를 들어 tFAW를 13 ns로 가정하면 초당 ACT는 최대 \(4/13\ \text{ns} \approx 3.1\times10^8\)회다. 모든 접근이 컨플릭트/미스여서 ACT 한 번에 64바이트만 가져간다면 대역폭 상한은 \(3.1\times10^8\times64 \approx 19.7\) GB/s로, DDR5-6400 서브채널의 피크 25.6 GB/s에 못 미친다. 랜덤 접근이 순차 접근보다 느린 이유가 지연만이 아니라 <em>전력 예산</em>에도 있다는 뜻이다.</p>
+
+    <div class="sim" id="sim-bank">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>뱅크 · 로우 버퍼 시뮬레이터</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-bank"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>요청 패턴</span><div class="seg" id="bk-pat"><button data-value="seq" class="on">순차</button><button data-value="stride">스트라이드</button><button data-value="rand">랜덤</button><button data-value="mix">4-스트림</button></div></div>
+          <label class="ctrl"><span>스트라이드 <output id="bk-stride-out"></output></span><input type="range" id="bk-stride" min="0" max="12" value="6"></label>
+          <div class="ctrl"><span>뱅크 수</span><div class="seg" id="bk-banks"><button data-value="1">1</button><button data-value="4">4</button><button data-value="8">8</button><button data-value="16" class="on">16</button><button data-value="32">32</button></div></div>
+          <div class="ctrl"><span>페이지 정책</span><div class="seg" id="bk-pol"><button data-value="open" class="on">오픈 페이지</button><button data-value="close">클로즈 페이지</button></div></div>
+          <div class="do-btns"><button class="btn" id="bk-new">새 요청열</button><button class="btn" id="bk-replay">다시 재생</button></div>
+        </div>
+      </div>
+      <div class="do-legend"><span><i style="background:var(--bad)"></i>PRE (tRP)</span><span><i style="background:var(--warn)"></i>ACT (tRCD)</span><span><i style="background:var(--accent)"></i>RD → CL</span><span>데이터 버스: <i style="background:var(--ok)"></i>히트 <i style="background:var(--warn)"></i>미스 <i style="background:var(--bad)"></i>컨플릭트</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">로우 히트율</span><span class="v" id="bk-o1">—</span></div>
+        <div class="stat"><span class="k">미스 / 컨플릭트</span><span class="v" id="bk-o2">—</span></div>
+        <div class="stat"><span class="k">평균 서비스 지연</span><span class="v" id="bk-o3">—</span></div>
+        <div class="stat"><span class="k">실효 대역폭</span><span class="v" id="bk-o4">—</span></div>
+        <div class="stat"><span class="k">버스 이용률</span><span class="v" id="bk-o5">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: 모델은 DDR5-6400 서브채널(피크 25.6 GB/s)의 단순화판이다(tRCD=CL=tRP=14 ns, tRAS 32 ns, BL16 2.5 ns, tRRD 2.5 ns, tFAW 13 ns 가정, 요청 256개를 순서대로 발행). 주소는 [로우 | 뱅크 | 컬럼(64줄=4 KB)]로 매핑된다. ① 순차 패턴은 오픈 페이지에서 히트율 ~98 %. ② 스트라이드를 2^6 = 64줄(4 KB)로 두면 매 요청이 다음 뱅크로 넘어가고, 2^6 × 뱅크 수로 두면 모든 요청이 같은 뱅크의 다른 로우를 두드리는 최악의 컨플릭트가 된다. ③ 랜덤 패턴에서는 히트가 거의 없으므로 클로즈 페이지가 서비스 지연을 크게 줄인다(컨플릭트 → 미스). 뱅크 수를 1 → 32로 늘리면 대역폭이 어떻게 변하는지도 보자. 요청을 순서대로만 발행하므로, 바쁜 뱅크 하나가 뒤의 요청까지 막는 현상(head-of-line blocking)도 함께 나타난다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="mapping">
+    <h2>주소 매핑: 물리 주소를 비트로 자르기</h2>
+    <p>CPU가 내는 물리 주소는 그냥 하나의 큰 정수다. 메모리 컨트롤러는 이 주소의 비트들을 잘라 채널·랭크·뱅크 그룹·뱅크·로우·컬럼 필드에 배정한다. 이 배정 규칙, 곧 <span class="term">주소 매핑</span><span class="en">(address mapping)</span>은 하드웨어에 고정된 단순한 배선이지만, 어떤 비트를 어디에 두느냐에 따라 같은 프로그램의 히트율과 병렬성이 크게 달라진다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 210" role="img" aria-label="35비트 물리 주소의 필드 분해">
+        <text x="400" y="24" text-anchor="middle" class="t">35비트 물리 주소 (32 GiB) — 매핑 A: 로우 | 랭크 | BG | BA | 컬럼 | 채널 | 오프셋</text>
+        <rect x="50" y="60" width="320" height="36" class="f-acc2-soft"/>
+        <rect x="370" y="60" width="20" height="36" class="f-warn-soft"/>
+        <rect x="390" y="60" width="60" height="36" class="f-ok-soft"/>
+        <rect x="450" y="60" width="40" height="36" class="f-bad-soft"/>
+        <rect x="490" y="60" width="120" height="36" class="f-acc-soft"/>
+        <rect x="610" y="60" width="20" height="36" class="f-warn-soft"/>
+        <rect x="630" y="60" width="120" height="36" class="f-surface"/>
+        <line x1="69.5" y1="78" x2="750" y2="78" style="stroke:var(--border);stroke-width:36;stroke-dasharray:1 19"/>
+        <text x="210" y="52" text-anchor="middle" class="t">로우 (16)</text>
+        <text x="380" y="52" text-anchor="middle" class="t-mono">Rk</text>
+        <text x="420" y="52" text-anchor="middle" class="t">BG (3)</text>
+        <text x="470" y="52" text-anchor="middle" class="t">BA</text>
+        <text x="550" y="52" text-anchor="middle" class="t">컬럼 (6)</text>
+        <text x="620" y="52" text-anchor="middle" class="t-mono">Ch</text>
+        <text x="690" y="52" text-anchor="middle" class="t">오프셋 (6)</text>
+        <text x="58" y="114" class="t-mono">34</text><text x="362" y="114" text-anchor="end" class="t-mono">19</text>
+        <text x="380" y="114" text-anchor="middle" class="t-mono">18</text><text x="420" y="114" text-anchor="middle" class="t-mono">17:15</text>
+        <text x="470" y="114" text-anchor="middle" class="t-mono">14:13</text><text x="550" y="114" text-anchor="middle" class="t-mono">12:7</text>
+        <text x="620" y="114" text-anchor="middle" class="t-mono">6</text><text x="742" y="114" text-anchor="end" class="t-mono">5:0</text>
+        <text x="690" y="140" text-anchor="middle" class="t-dim">캐시 라인 64 B 안의 바이트</text>
+        <text x="620" y="160" text-anchor="middle" class="t-dim">연속 라인 → 서브채널 교대</text>
+        <text x="550" y="180" text-anchor="middle" class="t-dim">같은 로우 안 64라인 (4 KB)</text>
+        <text x="210" y="140" text-anchor="middle" class="t-dim">상위 비트: 같은 뱅크의 다른 로우</text>
+        <text x="430" y="200" text-anchor="middle" class="t-dim">4 KB × 2채널 = 8 KB마다 다음 뱅크</text>
+      </svg>
+      <figcaption><b>그림 5-7.</b> 매핑의 예(2 서브채널 × 2 랭크 × 32 뱅크, 로우 버퍼 4 KB). 하위 비트일수록 연속 주소에서 빠르게 변한다. 컬럼을 하위에 두면 순차 접근이 같은 로우에 머물러 히트율이 높고, 뱅크를 하위에 두면 연속 요청이 여러 뱅크로 퍼져 병렬성이 높다.</figcaption>
+    </figure>
+    <p>매핑 설계의 기본 원칙은 두 가지다. 첫째, <em>공간 지역성을 로우 버퍼에 담는다</em>. 캐시 라인 몇 개가 연달아 접근될 때 같은 로우에 머물도록 컬럼 비트를 낮은 쪽에 둔다. 둘째, <em>충돌을 여러 뱅크로 흩는다</em>. 행렬의 열 방향 순회처럼 큰 2의 거듭제곱 간격(스트라이드)으로 접근하면, 매핑 A에서는 뱅크 비트가 변하지 않고 로우 비트만 변해서 한 뱅크에서 컨플릭트가 연달아 일어난다. 이를 막기 위해 많은 컨트롤러가 로우 비트 일부를 뱅크 비트에 XOR해 섞는 <span class="term">순열 기반 인터리빙</span><span class="en">(permutation-based / XOR bank hashing)</span>을 쓴다.</p>
+    <div class="formula">$$ BA'_i = BA_i \oplus R_{j(i)}, \qquad BG'_i = BG_i \oplus R_{k(i)} $$
+      <div class="where">XOR은 가역이므로 서로 다른 주소가 같은 (뱅크, 로우)에 겹치지 않는다. 같은 로우의 주소들은 뱅크가 그대로라 히트율은 유지되고, 로우만 다른 주소들은 서로 다른 뱅크로 흩어진다. 실제 CPU의 해시 함수는 대부분 공개되어 있지 않고, 여러 비트를 XOR하는 더 복잡한 형태다.</div>
+    </div>
+
+    <div class="sim" id="sim-map">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>주소 매핑 비트 분해기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-map"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>물리 주소 (16진수)</span><input type="text" class="do-hex" id="map-addr" value="0x2F3A1C4C0" spellcheck="false" autocomplete="off"></label>
+          <div class="do-btns"><button class="btn" id="map-p64">+64 B</button><button class="btn" id="map-p4k">+4 KB</button><button class="btn" id="map-p1m">+1 MB</button><button class="btn" id="map-rnd">랜덤</button></div>
+          <div class="ctrl"><span>매핑 방식</span><div class="seg" id="map-sch"><button data-value="A" class="on">A 로우 우선</button><button data-value="B">B 라인 인터리브</button><button data-value="C">A + XOR</button></div></div>
+          <div class="ctrl"><span>아래 격자: 64회 접근의 간격</span><div class="seg" id="map-str"><button data-value="64" class="on">64 B</button><button data-value="4096">4 KB</button><button data-value="524288">512 KB</button><button data-value="1048576">1 MB</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">채널 / 랭크</span><span class="v" id="map-o1">—</span></div>
+        <div class="stat"><span class="k">BG / 뱅크</span><span class="v" id="map-o2">—</span></div>
+        <div class="stat"><span class="k">로우 / 컬럼</span><span class="v" id="map-o3">—</span></div>
+        <div class="stat"><span class="k">64회 중 쓰인 뱅크</span><span class="v" id="map-o4">—</span></div>
+        <div class="stat"><span class="k">64회 중 로우 히트 가능</span><span class="v" id="map-o5">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: 주소를 직접 입력하거나 버튼으로 움직여 보자. 격자는 현재 주소부터 선택한 간격으로 64번 접근했을 때 128개 (채널, 랭크, 뱅크) 칸에 몇 번씩 떨어지는지 보여 준다. 매핑 A에서 간격 1 MB(= 로우 비트만 바뀜)는 전부 한 뱅크에 몰리고, 'A + XOR'로 바꾸면 여러 뱅크로 흩어진다. 매핑 B는 64 B 순차 접근을 BG 8개로 흩어 tCCD_S를 살리지만 같은 로우에 머무는 비율이 낮아진다.</div>
+    </div>
+    <div class="callout deep"><strong>채널 인터리빙과 NUMA</strong> 채널 비트를 어디에 두는지는 대역폭 분배의 문제다. 채널을 캐시 라인(64 B)이나 256 B 단위로 교대하면 한 스레드도 모든 채널의 대역폭을 쓰고, 4 KB 페이지 단위로 교대하면 OS가 페이지를 특정 채널에 배치하는 <em>페이지 컬러링</em>으로 간섭을 줄일 수 있다. 7장의 HBM은 한 스택에 독립 채널 16개(HBM3: 의사 채널 32개)가 있어 이 문제가 더 두드러진다.</div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="refresh">
+    <h2>리프레시: 잊어버리는 메모리의 대가</h2>
+    <p>4장에서 보았듯 DRAM 셀 커패시터의 전하는 접합 누설, GIDL, 서브스레숄드 누설로 조금씩 빠져나간다. 대부분의 셀은 수 초를 버티지만, 수십억 셀 중 가장 약한 꼬리 분포의 셀까지 지키기 위해 JEDEC는 <em>모든 셀을 정해진 창 안에 한 번씩</em> 다시 써 주도록 규정한다. 이 창이 <span class="term">리프레시 주기</span> \(t_{REFW}\)다.</p>
+    <ul>
+      <li><strong>DDR4</strong>: \(t_{REFW}\) = 64 ms 동안 REF 명령 8192회 → \(t_{REFI}\) = 7.8 µs. 85 °C 이상 고온에서는 누설이 빨라져 두 배로 자주(32 ms, 3.9 µs).</li>
+      <li><strong>DDR5</strong>: 기본 \(t_{REFW}\) = 32 ms, REF 8192회 → \(t_{REFI}\) = 3.9 µs. 고온에서는 1.95 µs.</li>
+    </ul>
+    <p>REF 한 번이 들어오면 칩은 내부 카운터가 가리키는 로우들을 모든 뱅크에서 동시에 ACT·PRE한다. 이 동안(\(t_{RFC}\)) 랭크 전체가 다른 명령을 받을 수 없다. 뱅크당 로우 수를 REF 횟수로 나누면 REF 한 번에 뱅크마다 몇 개의 로우를 새로 고쳐야 하는지 나온다. 16 Gb DDR5 ×8(뱅크당 65,536 로우)이라면 \(65{,}536/8192 = 8\)개다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 210" role="img" aria-label="리프레시 타임라인: tREFI와 tRFC">
+        <defs>
+          <marker id="do-a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <text x="20" y="30" class="t">t_REFW = 32 ms (DDR5) — REF 8192회</text>
+        <rect x="20" y="42" width="740" height="20" rx="3" class="f-surface"/>
+        <path d="M40 42 v20 M60 42 v20 M80 42 v20 M100 42 v20 M120 42 v20 M140 42 v20 M160 42 v20 M180 42 v20 M200 42 v20 M220 42 v20 M240 42 v20 M260 42 v20 M280 42 v20 M300 42 v20 M320 42 v20 M340 42 v20 M360 42 v20 M380 42 v20 M400 42 v20 M420 42 v20 M440 42 v20 M460 42 v20 M480 42 v20 M500 42 v20 M520 42 v20 M540 42 v20 M560 42 v20 M580 42 v20 M600 42 v20 M620 42 v20 M640 42 v20 M660 42 v20 M680 42 v20 M700 42 v20 M720 42 v20 M740 42 v20" style="stroke:var(--warn);stroke-width:2"/>
+        <path d="M20 62 L40 100 M80 62 L760 100" class="s-axis" style="stroke-dasharray:3 3"/>
+        <!-- zoom -->
+        <rect x="40" y="104" width="720" height="34" rx="3" class="f-acc-soft"/>
+        <rect x="40" y="104" width="54" height="34" class="f-warn-soft" style="stroke-width:2"/>
+        <rect x="280" y="104" width="54" height="34" class="f-warn-soft" style="stroke-width:2"/>
+        <rect x="520" y="104" width="54" height="34" class="f-warn-soft" style="stroke-width:2"/>
+        <text x="67" y="126" text-anchor="middle" class="t-mono">REF</text><text x="307" y="126" text-anchor="middle" class="t-mono">REF</text><text x="547" y="126" text-anchor="middle" class="t-mono">REF</text>
+        <text x="187" y="126" text-anchor="middle" class="t-dim">정상 접근 가능</text><text x="427" y="126" text-anchor="middle" class="t-dim">정상 접근 가능</text><text x="667" y="126" text-anchor="middle" class="t-dim">…</text>
+        <path d="M42 156 H278" class="s-line" marker-start="url(#do-a5)" marker-end="url(#do-a5)"/><text x="160" y="176" text-anchor="middle" class="t-acc">t_REFI = 3.9 µs</text>
+        <path d="M282 156 H332" class="s-line" marker-start="url(#do-a5)" marker-end="url(#do-a5)"/><text x="307" y="196" text-anchor="middle" class="t-acc">t_RFC ≈ 295 ns</text>
+        <text x="560" y="176" text-anchor="middle" class="t-dim">(tRFC 폭은 보기 쉽게 과장)</text>
+      </svg>
+      <figcaption><b>그림 5-8.</b> 리프레시 타임라인. 컨트롤러는 평균 t_REFI마다 REF를 보내고, 매 REF 뒤 t_RFC 동안 랭크는 다른 요청을 처리하지 못한다. DDR4는 최대 8개 REF까지 미뤘다가 몰아서 보낼 수 있어 바쁜 순간을 피할 수 있다.</figcaption>
+    </figure>
+    <div class="formula">$$ \text{리프레시 오버헤드} \approx \frac{t_{RFC}}{t_{REFI}}, \qquad t_{REFI} = \frac{t_{REFW}}{8192} $$
+      <div class="where">DDR4 16 Gb: \(550\ \text{ns} / 7.8\ \mu s \approx 7.1\%\) (고온에서는 14 %). DDR5 16 Gb: \(295\ \text{ns}/3.9\ \mu s \approx 7.6\%\). 이 비율만큼 랭크가 '멈춰' 있고, 그 사이 도착한 요청의 지연은 최대 t_RFC만큼 튄다.</div>
+    </div>
+    <p>문제는 이 오버헤드가 <em>용량과 함께 커진다</em>는 것이다. REF 횟수는 8192로 고정인데 칩의 로우 수는 세대마다 두 배로 늘기 때문에, REF 한 번에 더 많은 로우를 처리해야 한다. 한꺼번에 여는 로우를 늘리면 전류 한계(tFAW와 같은 이유)에 걸리므로 tRFC가 길어질 수밖에 없다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>칩 용량</th><th>DDR3 tRFC</th><th>DDR4 tRFC</th><th>DDR5 tRFC (all-bank)</th><th>DDR5 tRFCsb (same-bank)</th></tr></thead>
+      <tbody>
+        <tr><td>4 Gb</td><td>260 ns</td><td>260 ns</td><td>—</td><td>—</td></tr>
+        <tr><td>8 Gb</td><td>350 ns</td><td>350 ns</td><td>195 ns</td><td>~115 ns</td></tr>
+        <tr><td>16 Gb</td><td>—</td><td>550 ns</td><td>295 ns</td><td>~130 ns</td></tr>
+        <tr><td>32 Gb</td><td>—</td><td>—</td><td>~410 ns</td><td>~190 ns</td></tr>
+      </tbody>
+    </table></div>
+    <p>DDR5는 이를 누그러뜨리기 위해 <span class="term">동일 뱅크 리프레시</span><span class="en">(REFsb, same-bank refresh)</span>를 도입했다. REFsb는 모든 뱅크 그룹에서 같은 번호의 뱅크 하나씩(32개 중 8개)만 리프레시하고, 나머지 24개 뱅크는 정상 접근을 계속 받는다. LPDDR의 뱅크별 리프레시(REFpb)도 같은 아이디어다. 이 밖에도 온도 센서로 저온에서 리프레시를 줄이거나, 셀 보존 시간을 측정해 강한 로우는 덜 자주 리프레시하는 연구(RAIDR 등)가 있다.</p>
+    <div class="callout warn"><strong>리프레시와 로우해머</strong> 같은 로우를 짧은 시간에 수만 번 ACT하면 이웃 로우의 셀 전하가 리프레시 전에 빠져 비트가 뒤집히는 <span class="term">로우해머</span><span class="en">(RowHammer)</span> 현상이 생긴다. 미세화로 셀 간격이 좁아질수록 뒤집힘에 필요한 ACT 수가 줄어서, DDR4의 TRR(Target Row Refresh), DDR5의 RFM(Refresh Management) 명령처럼 '추가 리프레시'로 막는 기법이 도입되었다. 자세한 내용은 <a href="reliability.html">11장</a>에서 다룬다.</div>
+
+    <div class="sim" id="sim-ref">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>리프레시 오버헤드 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-ref"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>칩 (프리셋)</span><div class="seg" id="ref-chip"><button data-value="d4-8">DDR4 8Gb</button><button data-value="d4-16">DDR4 16Gb</button><button data-value="d5-16" class="on">DDR5 16Gb</button><button data-value="d5-32">DDR5 32Gb</button></div></div>
+          <label class="ctrl"><span>tRFC (all-bank) <output id="ref-rfc-out"></output></span><input type="range" id="ref-rfc" min="100" max="1200" step="5" value="295"></label>
+          <div class="ctrl"><span>온도</span><div class="seg" id="ref-temp"><button data-value="n" class="on">≤ 85 °C</button><button data-value="h">&gt; 85 °C</button></div></div>
+          <div class="ctrl"><span>리프레시 모드</span><div class="seg" id="ref-mode"><button data-value="ab" class="on">All-bank (REFab)</button><button data-value="sb">Same-bank (REFsb)</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">tREFI</span><span class="v" id="ref-o1">—</span></div>
+        <div class="stat"><span class="k">랭크 정지 비율</span><span class="v" id="ref-o2">—</span></div>
+        <div class="stat"><span class="k">뱅크당 차단 비율</span><span class="v" id="ref-o3">—</span></div>
+        <div class="stat"><span class="k">REF당 뱅크별 로우</span><span class="v" id="ref-o4">—</span></div>
+        <div class="stat"><span class="k">잃는 대역폭 (서브채널)</span><span class="v" id="ref-o5">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: DDR4 16 Gb를 고온으로 바꾸면 랭크가 시간의 14 %를 리프레시로 쓴다. tRFC 슬라이더를 끝까지 올려 64 Gb급 칩을 가정해 보자(tRFC가 1 µs에 가까워지면?). DDR5 프리셋에서 Same-bank 모드로 바꾸면 랭크 전체가 멈추는 시간이 사라지고, 한 번에 8개 뱅크만 짧게(tRFCsb) 막힌다. 아래 막대는 표준 칩들의 all-bank 오버헤드(정상 온도)를 비교한다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="sched">
+    <h2>메모리 컨트롤러와 스케줄링</h2>
+    <p>지금까지의 규칙을 모두 지키면서 요청들을 <em>어떤 순서로</em> 처리할지 정하는 것이 메모리 컨트롤러의 핵심 업무다. 컨트롤러는 코어들로부터 온 읽기/쓰기 요청을 큐에 쌓고, 매 사이클 "지금 타이밍 규칙상 보낼 수 있는 명령들" 중 하나를 골라 명령 버스에 싣는다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 250" role="img" aria-label="메모리 컨트롤러 구조">
+        <defs>
+          <marker id="do-a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <rect x="10" y="40" width="96" height="44" rx="8" class="f-surface"/><text x="58" y="67" text-anchor="middle" class="t">코어 0</text>
+        <rect x="10" y="100" width="96" height="44" rx="8" class="f-surface"/><text x="58" y="127" text-anchor="middle" class="t">코어 1</text>
+        <rect x="10" y="160" width="96" height="44" rx="8" class="f-surface"/><text x="58" y="187" text-anchor="middle" class="t">GPU / DMA</text>
+        <path d="M106 62 L150 100 M106 122 H150 M106 182 L150 144" class="s-line" marker-end="url(#do-a6)"/>
+        <rect x="150" y="30" width="360" height="190" rx="12" class="f-elev"/>
+        <text x="330" y="52" text-anchor="middle" class="t-acc">메모리 컨트롤러</text>
+        <rect x="166" y="66" width="120" height="30" rx="4" class="f-acc-soft"/><text x="226" y="86" text-anchor="middle" class="t-mono">읽기 큐</text>
+        <rect x="166" y="106" width="120" height="30" rx="4" class="f-acc2-soft"/><text x="226" y="126" text-anchor="middle" class="t-mono">쓰기 큐 (버퍼)</text>
+        <rect x="166" y="146" width="120" height="30" rx="4" class="f-warn-soft"/><text x="226" y="166" text-anchor="middle" class="t-mono">리프레시 타이머</text>
+        <rect x="166" y="184" width="120" height="26" rx="4" class="f-surface"/><text x="226" y="202" text-anchor="middle" class="t-mono">주소 매핑</text>
+        <path d="M286 81 H322 M286 121 H322 M286 161 H322" class="s-line" marker-end="url(#do-a6)"/>
+        <rect x="324" y="66" width="170" height="110" rx="8" class="f-acc-soft" style="stroke-width:2"/>
+        <text x="409" y="92" text-anchor="middle" class="t">스케줄러</text>
+        <text x="409" y="114" text-anchor="middle" class="t-mono">FR-FCFS</text>
+        <text x="409" y="136" text-anchor="middle" class="t-dim">뱅크 상태 추적</text>
+        <text x="409" y="156" text-anchor="middle" class="t-dim">타이밍 검사기</text>
+        <path d="M494 100 H620" class="s-line" marker-end="url(#do-a6)"/><text x="557" y="92" text-anchor="middle" class="t-mono">CMD/ADDR</text>
+        <path d="M620 150 H500" class="s-line" style="stroke-dasharray:5 3" marker-end="url(#do-a6)"/><path d="M500 162 H620" class="s-line" style="stroke-dasharray:5 3" marker-end="url(#do-a6)"/>
+        <text x="557" y="182" text-anchor="middle" class="t-mono">DQ (양방향)</text>
+        <rect x="620" y="56" width="150" height="140" rx="10" class="f-surface"/>
+        <text x="695" y="84" text-anchor="middle" class="t">DRAM 랭크</text>
+        <rect x="636" y="96" width="26" height="80" rx="2" class="f-elev"/><rect x="668" y="96" width="26" height="80" rx="2" class="f-elev"/>
+        <rect x="700" y="96" width="26" height="80" rx="2" class="f-elev"/><rect x="732" y="96" width="26" height="80" rx="2" class="f-elev"/>
+        <text x="390" y="244" text-anchor="middle" class="t-dim">요청 → (채널, 랭크, 뱅크, 로우, 컬럼)으로 변환 → 뱅크별로 가능한 명령 중 최선을 선택</text>
+      </svg>
+      <figcaption><b>그림 5-9.</b> 메모리 컨트롤러의 구조. 요청은 주소 매핑을 거쳐 뱅크별로 분류되고, 스케줄러는 뱅크 상태와 모든 타이밍 제약을 추적하면서 매 사이클 보낼 명령을 고른다. 쓰기는 버퍼에 모았다가 한꺼번에 처리한다.</figcaption>
+    </figure>
+    <h3>FCFS와 FR-FCFS</h3>
+    <p>가장 단순한 정책은 도착 순서대로 처리하는 <span class="term">FCFS</span><span class="en">(First-Come First-Served)</span>다. 공정하지만, 로우 A와 로우 B를 번갈아 요청하는 스트림이 오면 매번 컨플릭트가 난다. 2000년 Rixner 등이 제안한 <span class="term">FR-FCFS</span><span class="en">(First-Ready FCFS)</span>는 두 단계 우선순위를 쓴다.</p>
+    <ol>
+      <li><strong>First-Ready</strong>: 지금 열려 있는 로우에 히트하는(= 바로 RD/WR 가능한) 요청을 먼저.</li>
+      <li><strong>FCFS</strong>: 그런 요청이 없으면 가장 오래된 요청.</li>
+    </ol>
+    <p>로우 히트를 몰아서 처리하므로 히트율과 처리량이 크게 오른다. 대가는 <em>공정성</em>이다. 로우 히트를 계속 만들어 내는 스트리밍 스레드가 있으면 다른 스레드의 요청은 한없이 밀릴 수 있다(기아, starvation). 그래서 실제 컨트롤러는 요청 나이 상한(age cap), 한 로우에서 연속 히트 횟수 제한, 스레드별 우선순위(ATLAS, TCM 같은 연구) 등을 더한다.</p>
+    <h3>명령 버스 파이프라이닝과 쓰기 배치</h3>
+    <p>DDR5에서 ACT와 RD/WR은 명령 버스 2사이클을, PRE는 1사이클을 쓴다. 한 뱅크의 tRCD·CL을 기다리는 동안 명령 버스는 다른 뱅크의 명령으로 채워진다. 잘 스케줄된 컨트롤러는 여러 뱅크의 ACT → RD → PRE 사슬을 엇갈려 겹쳐서 데이터 버스를 연속 버스트로 채운다. 한편 데이터 버스는 양방향이라 읽기 ↔ 쓰기 전환 때마다 tWTR·tRTW만큼 버스가 논다. 그래서 컨트롤러는 쓰기를 버퍼에 모았다가 버퍼가 상한(high watermark)에 이르면 한꺼번에 쓰고(write drain), 하한(low watermark)까지 비우면 다시 읽기로 돌아간다.</p>
+
+    <div class="sim" id="sim-sch">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>스케줄러 비교: FCFS vs FR-FCFS</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-sch"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>로우 지역성 (핫 로우 비율) <output id="sch-loc-out"></output></span><input type="range" id="sch-loc" min="0" max="95" step="5" value="60"></label>
+          <label class="ctrl"><span>스케줄러 탐색 창 <output id="sch-win-out"></output></span><input type="range" id="sch-win" min="1" max="32" value="16"></label>
+          <div class="ctrl"><span>뱅크 수</span><div class="seg" id="sch-banks"><button data-value="2">2</button><button data-value="4" class="on">4</button><button data-value="8">8</button></div></div>
+          <div class="do-btns"><button class="btn primary" id="sch-new">새 요청열</button></div>
+        </div>
+      </div>
+      <div class="do-legend"><span>데이터 버스트: <i style="background:var(--ok)"></i>히트 <i style="background:var(--warn)"></i>미스 <i style="background:var(--bad)"></i>컨플릭트</span><span>숫자 = 요청 도착 순번</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">FCFS 완료 시간</span><span class="v" id="sch-o1">—</span></div>
+        <div class="stat"><span class="k">FR-FCFS 완료 시간</span><span class="v" id="sch-o2">—</span></div>
+        <div class="stat"><span class="k">히트율 FCFS / FR</span><span class="v" id="sch-o3">—</span></div>
+        <div class="stat"><span class="k">평균 지연 FCFS / FR</span><span class="v" id="sch-o4">—</span></div>
+        <div class="stat"><span class="k">FR-FCFS에서 더 늦어진 요청 (최대)</span><span class="v" id="sch-o5">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: 요청 40개가 2 ns 간격으로 도착하고, 각 뱅크에는 '핫 로우' 하나와 다른 로우 3개가 섞여 요청된다. 지역성이 높을수록 FR-FCFS는 핫 로우 요청을 앞당겨 묶어서 완료 시간을 줄이지만, 그 대가로 일부 요청은 FCFS 때보다 <em>더 늦게</em> 끝난다(마지막 칸: 개수와 최대 지연 증가량). 데이터 버스트의 숫자(도착 순번)가 뒤섞인 모습에서 재정렬을 확인하자. 히트를 계속 만드는 스트림이 끝없이 들어오면 이렇게 밀린 요청이 기아에 빠진다. 탐색 창을 1로 줄이면 FR-FCFS가 FCFS와 똑같아진다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="power">
+    <h2>DRAM 전력: 활성화, 배경, 셀프 리프레시</h2>
+    <p>서버에서 DRAM은 시스템 전력의 상당 부분(워크로드에 따라 대략 10~30 %)을 차지한다. DRAM 전력은 크게 네 가지로 나뉜다.</p>
+    <ul>
+      <li><strong>활성화 전력</strong> — ACT/PRE마다 로우 전체의 비트라인을 충방전하는 에너지. 1 KB 로우를 열어 64 B만 쓰고 닫으면 대부분이 낭비다. 로우 히트율이 높으면 줄어든다.</li>
+      <li><strong>읽기/쓰기(버스트) 전력</strong> — 컬럼 경로와 I/O 드라이버, ODT(종단 저항)에서 소모. 전송 비트 수에 비례한다.</li>
+      <li><strong>배경 전력</strong> — 아무 일을 하지 않아도 주변 회로, DLL, 클럭 수신기, 내부 전원 발생기가 쓰는 전력. 뱅크가 열려 있으면(active standby) 닫혀 있을 때(precharge standby)보다 크다.</li>
+      <li><strong>리프레시 전력</strong> — tRFC 동안의 큰 전류 × 리프레시 빈도. 용량이 커질수록, 온도가 높을수록 증가한다.</li>
+    </ul>
+    <p>데이터시트는 이를 상태별 전류 IDD로 제공한다. Micron의 전력 계산 방식을 따르면, ACT 한 번의 에너지는 ACT-PRE를 tRC마다 반복할 때의 전류(IDD0)에서 배경 전류를 뺀 것으로 추정한다.</p>
+    <div class="formula">$$ E_{ACT} \approx V_{DD}\left[I_{DD0}\,t_{RC} - \left(I_{DD3N}\,t_{RAS} + I_{DD2N}\,(t_{RC}-t_{RAS})\right)\right] $$
+      <div class="where">가상의 예시값: \(V_{DD}\) = 1.1 V, \(I_{DD0}\) = 60 mA, \(I_{DD3N}\) = 45 mA, \(I_{DD2N}\) = 35 mA, \(t_{RC}\) = 48 ns, \(t_{RAS}\) = 32 ns → \(1.1\times(2880 - 1440 - 560)\ \text{pC} \approx 0.97\) nJ (칩당). 랭크의 칩 4~8개가 동시에 열리므로 ACT 한 번은 수 nJ 수준이다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>IDD</th><th>상태</th><th>상대 크기</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td>IDD0</td><td>ACT-PRE 반복 (tRC 주기)</td><td>중간</td><td>활성화 에너지 추정의 기준</td></tr>
+        <tr><td>IDD2N / IDD2P</td><td>프리차지 스탠바이 / 파워다운</td><td>낮음 / 매우 낮음</td><td>모든 뱅크 닫힘</td></tr>
+        <tr><td>IDD3N / IDD3P</td><td>액티브 스탠바이 / 파워다운</td><td>낮음~중간</td><td>로우가 열린 채 대기</td></tr>
+        <tr><td>IDD4R / IDD4W</td><td>연속 읽기 / 쓰기 버스트</td><td>높음</td><td>대역폭에 비례하는 전력</td></tr>
+        <tr><td>IDD5B</td><td>연속 리프레시 (tRFC 동안)</td><td>가장 높음</td><td>짧은 순간의 피크 전류</td></tr>
+        <tr><td>IDD6</td><td>셀프 리프레시</td><td>최저 (수~수십 mA)</td><td>외부 클럭 없이 데이터 보존</td></tr>
+      </tbody>
+    </table></div>
+    <p><span class="term">셀프 리프레시</span><span class="en">(Self-Refresh)</span>는 시스템이 잠들 때 쓰는 모드다. 컨트롤러가 SRE 명령을 보내면 DRAM은 외부 클럭 없이 내부 발진기로 스스로 리프레시하며 데이터만 지킨다. 노트북의 절전(S3, suspend-to-RAM)이 이 상태다. LPDDR은 여기에 온도에 따라 리프레시 주기를 바꾸는 TCSR, 쓰지 않는 영역은 리프레시하지 않는 부분 어레이 셀프 리프레시(PASR) 같은 기능을 더해 대기 전력을 더 줄인다(6장). 짧은 유휴 구간에는 셀프 리프레시보다 진입·탈출이 빠른 <em>파워다운</em>(입력 버퍼와 클럭 수신 회로 정지)을 쓴다.</p>
+    <div class="callout tip"><strong>에너지로 본 오픈 페이지</strong> 랜덤 접근에서 64 B를 읽는 데 드는 에너지는 대략 [ACT 에너지 + 버스트 에너지]인 반면, 로우 히트는 버스트 에너지만 든다. 그래서 스케줄러가 히트를 몰아 처리하면 성능과 에너지가 동시에 좋아진다. HBM(7장)이 비트당 에너지가 낮은 이유 중 하나도 짧은 배선과 작은 페이지(1 KB 이하)로 활성화·I/O 에너지를 줄였기 때문이다. 메모리 시스템 전체의 전력 설계는 <a href="design.html">13장</a>에서 다시 다룬다.</div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>DRAM은 채널 → 랭크 → 칩 → 뱅크 그룹 → 뱅크 → 로우/컬럼으로 조직된다. 채널은 버스가 독립, 랭크는 버스를 공유, 뱅크는 로우 버퍼가 독립이다. DDR5 16 Gb ×8 칩은 32뱅크 × 64K 로우 × 1 KB 페이지다.</li>
+      <li>ACT는 로우 전체를 로우 버퍼(센스 앰프)로 열고, RD/WR은 그 일부(버스트 64 B)를 입출력하며, PRE는 로우를 닫는다. REF는 셀 전하를 주기적으로 되살린다.</li>
+      <li>tRCD(ACT→RD), CL(RD→데이터), tRP(PRE→ACT), tRAS(ACT→PRE), tRC = tRAS + tRP. tCCD·tRRD·tFAW는 뱅크 그룹 구조와 전력 한계에서 나온다.</li>
+      <li>"CL-tRCD-tRP"는 사이클 수다. \(t_{CK} = 2000/\text{MT/s}\) ns로 환산하면 세대가 바뀌어도 CL은 ~14 ns 근처로 거의 일정하다. 대역폭은 늘었지만 지연은 셀 물리에 묶여 있다.</li>
+      <li>지연은 히트(CL) < 미스(tRCD+CL) < 컨플릭트(tRP+tRCD+CL)로 갈린다. 오픈/클로즈 페이지 정책과 주소 매핑이 히트율을, 뱅크 인터리빙이 병렬성을 결정한다.</li>
+      <li>주소 매핑은 물리 주소 비트를 필드로 자르는 규칙이다. 컬럼 비트를 아래에 두면 로우 지역성을, 뱅크 비트를 아래에 두거나 XOR 해시를 쓰면 병렬성과 스트라이드 내성을 얻는다.</li>
+      <li>리프레시 오버헤드 ≈ tRFC/tREFI (DDR4 16 Gb ~7 %, 고온 ~14 %). 용량이 커질수록 tRFC가 늘어 오버헤드가 커지며, DDR5 동일 뱅크 리프레시(REFsb)가 이를 완화한다.</li>
+      <li>FR-FCFS는 로우 히트를 우선해 처리량과 에너지 효율을 높이지만 기아를 막는 장치가 필요하다. 전력은 활성화·버스트·배경·리프레시로 나뉘고, 셀프 리프레시가 대기 전력을 최소화한다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. DDR5-6400 CL32 모듈의 CAS 지연을 ns로 환산하면?</p><div class="opts">
+        <button class="opt">5 ns</button>
+        <button class="opt" data-correct>10 ns</button>
+        <button class="opt">20 ns</button>
+        <button class="opt">32 ns</button>
+      </div><div class="quiz-exp">6400 MT/s의 클럭은 3200 MHz이므로 \(t_{CK} = 0.3125\) ns. \(32 \times 0.3125 = 10\) ns. DDR4-3200 CL16(16 × 0.625 = 10 ns)과 같은 지연이다.</div></div>
+
+      <div class="quiz-q"><p>2. tRP = tRCD = CL = 14 ns일 때, 다른 로우가 열려 있는 뱅크에 읽기 요청이 오면 첫 데이터까지 최소 얼마가 걸리는가? (버스트 시간 제외)</p><div class="opts">
+        <button class="opt">14 ns</button>
+        <button class="opt">28 ns</button>
+        <button class="opt" data-correct>42 ns</button>
+        <button class="opt">56 ns</button>
+      </div><div class="quiz-exp">로우 컨플릭트는 PRE(tRP) → ACT(tRCD) → RD(CL)를 모두 거친다. 14 × 3 = 42 ns. 같은 로우가 열려 있었다면(히트) 14 ns면 된다. 단, 열린 로우가 ACT된 지 tRAS가 지나지 않았다면 PRE부터 더 기다려야 한다.</div></div>
+
+      <div class="quiz-q"><p>3. DDR4 16 Gb 칩(tRFC = 550 ns)을 85 °C 이하에서 쓸 때 리프레시로 랭크가 멈춰 있는 시간의 비율은 대략?</p><div class="opts">
+        <button class="opt">0.7 %</button>
+        <button class="opt">3.5 %</button>
+        <button class="opt" data-correct>7 %</button>
+        <button class="opt">14 %</button>
+      </div><div class="quiz-exp">\(t_{REFI} = 64\ \text{ms}/8192 = 7.8\ \mu s\), 오버헤드 ≈ 550 ns / 7.8 µs ≈ 7.1 %. 85 °C를 넘으면 tREFI가 3.9 µs로 줄어 약 14 %가 된다.</div></div>
+
+      <div class="quiz-q"><p>4. tFAW 제약이 존재하는 가장 근본적인 이유는?</p><div class="opts">
+        <button class="opt">데이터 버스의 방향 전환 시간 때문에</button>
+        <button class="opt">셀 커패시터의 재저장 시간 때문에</button>
+        <button class="opt" data-correct>ACT가 큰 순간 전류를 흘려서 칩의 전원망·내부 전원 회로가 짧은 시간에 감당할 수 있는 ACT 수가 제한되기 때문에</button>
+        <button class="opt">리프레시 카운터를 갱신해야 하기 때문에</button>
+      </div><div class="quiz-exp">ACT는 로우 전체의 비트라인 수천 개를 동시에 충방전한다. 서로 다른 뱅크라도 짧은 창 안에 ACT가 몰리면 전원 전압이 출렁이므로 tRRD와 tFAW로 속도를 제한한다. 셀 재저장은 tRAS, 버스 전환은 tWTR/tRTW의 이유다.</div></div>
+
+      <div class="quiz-q"><p>5. FR-FCFS 스케줄러에 대한 설명으로 옳은 것은?</p><div class="opts">
+        <button class="opt">항상 가장 오래된 요청부터 처리해 공정성을 보장한다.</button>
+        <button class="opt" data-correct>열린 로우에 히트하는 요청을 먼저 처리해 처리량을 높이지만, 일부 요청이 오래 밀리는 기아가 생길 수 있다.</button>
+        <button class="opt">모든 요청에 자동 프리차지를 붙여 컨플릭트를 없앤다.</button>
+        <button class="opt">리프레시 명령을 우선 처리하는 정책이다.</button>
+      </div><div class="quiz-exp">First-Ready(로우 히트 우선) → FCFS(오래된 순) 두 단계 우선순위다. 히트를 몰아 처리하므로 히트율과 대역폭이 오르지만, 히트를 계속 만드는 스트림이 있으면 다른 요청이 굶을 수 있어 나이 상한 등의 보완책을 둔다.</div></div>
+
+      <div class="quiz-q"><p>6. 매핑 [로우 | 뱅크 | 컬럼 | 오프셋]에서 프로그램이 정확히 '로우 버퍼 크기 × 뱅크 수' 간격으로 메모리를 순회하면 어떤 일이 생기고, 흔한 해결책은?</p><div class="opts">
+        <button class="opt">모든 접근이 로우 히트가 된다 — 해결책이 필요 없다.</button>
+        <button class="opt">접근이 모든 채널로 고르게 퍼진다 — 채널 수를 줄인다.</button>
+        <button class="opt" data-correct>뱅크 비트가 변하지 않아 한 뱅크에서 컨플릭트가 연속된다 — 로우 비트를 뱅크 비트에 XOR하는 해시로 흩는다.</button>
+        <button class="opt">리프레시가 더 자주 필요해진다 — tREFI를 줄인다.</button>
+      </div><div class="quiz-exp">이 간격이면 주소가 바뀔 때 로우 필드만 1씩 증가하고 뱅크·컬럼 필드는 그대로다. 매번 같은 뱅크의 다른 로우를 열어야 해서 tRC마다 한 번씩만 접근할 수 있다. XOR 뱅크 해싱은 로우 비트 변화를 뱅크 변화로 바꿔 요청을 여러 뱅크로 흩는다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+
+  /* ---------------------------------------------------------------- 공통 헬퍼 */
+  function hexA(c, a) {
+    c = (c || "").trim();
+    if (c[0] === "#") {
+      var h = c.slice(1);
+      if (h.length === 3) h = h.split("").map(function (x) { return x + x; }).join("");
+      var n = parseInt(h.slice(0, 6), 16);
+      return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
+    }
+    var m = c.match(/[\d.]+/g);
+    return m ? "rgba(" + m[0] + "," + m[1] + "," + m[2] + "," + a + ")" : c;
+  }
+  function font(px, mono) {
+    var cs = getComputedStyle(document.body);
+    return px + "px " + (mono ? cs.getPropertyValue("--mono") : cs.getPropertyValue("--font"));
+  }
+  function mulberry(seed) {
+    return function () {
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function hexPath(ctx, x0, x1, yc, hh) {
+    var e = Math.min(4, (x1 - x0) / 3);
+    ctx.beginPath(); ctx.moveTo(x0, yc); ctx.lineTo(x0 + e, yc - hh); ctx.lineTo(x1 - e, yc - hh);
+    ctx.lineTo(x1, yc); ctx.lineTo(x1 - e, yc + hh); ctx.lineTo(x0 + e, yc + hh); ctx.closePath();
+  }
+  function niceStep(span, n) {
+    var raw = span / n, steps = [0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
+    for (var i = 0; i < steps.length; i++) if (steps[i] >= raw) return steps[i];
+    return steps[steps.length - 1];
+  }
+
+  /* 단순 DRAM 뱅크 타이밍 모델 (ns 단위, 명령 순서대로 발행) */
+  function dramSim(p) {
+    var S = { banks: [], cmdFree: 0, lastAct: -1e9, acts: [], lastRd: -1e9, busFree: 0, ev: [] };
+    for (var i = 0; i < p.banks; i++) S.banks.push({ row: -1, actT: -1e9, lastRd: -1e9, rdOK: 0, readyAct: 0 });
+    S.serve = function (req, tMin) {
+      var b = S.banks[req.bank], t = Math.max(S.cmdFree, tMin || 0), kind, pre = null, act = null, rd;
+      if (p.policy === "open" && b.row === req.row) { kind = "hit"; rd = Math.max(t, b.rdOK); }
+      else {
+        if (p.policy === "open" && b.row >= 0) {
+          kind = "conf";
+          pre = Math.max(t, b.actT + p.tRAS, b.lastRd + p.tRTP);
+          act = pre + p.tRP;
+        } else { kind = "miss"; act = Math.max(t, b.readyAct); }
+        act = Math.max(act, S.lastAct + p.tRRD);
+        if (S.acts.length >= 4) act = Math.max(act, S.acts[S.acts.length - 4] + p.tFAW);
+        rd = act + p.tRCD;
+      }
+      rd = Math.max(rd, S.lastRd + p.tCCD);
+      var data = Math.max(rd + p.CL, S.busFree); rd = data - p.CL;
+      S.busFree = data + p.tBL;
+      var first = pre !== null ? pre : act !== null ? act : rd;
+      S.cmdFree = first + p.tCMD;
+      if (act !== null) { b.actT = act; S.acts.push(act); S.lastAct = act; }
+      b.lastRd = rd; S.lastRd = rd;
+      var apre = null;
+      if (p.policy === "open") { b.row = req.row; b.rdOK = rd + p.tCCD; }
+      else { apre = Math.max(rd + p.tRTP, b.actT + p.tRAS); b.readyAct = apre + p.tRP; b.row = -1; }
+      var e = { req: req, bank: req.bank, kind: kind, pre: pre, act: act, rd: rd, data: data, end: data + p.tBL, first: first, apre: apre };
+      S.ev.push(e);
+      return e;
+    };
+    return S;
+  }
+  var PDR = { tRCD: 14, CL: 14, tRP: 14, tRAS: 32, tBL: 2.5, tCCD: 2.5, tRRD: 2.5, tFAW: 13, tRTP: 7.5, tCMD: 0.625 };
+  function withP(extra) { var o = {}, k; for (k in PDR) o[k] = PDR[k]; for (k in extra) o[k] = extra[k]; return o; }
+
+  /* 뱅크 레인 타임라인 그리기 */
+  function drawTL(ctx, box, evs, p, nb, T, head, showNum) {
+    var P = MB.palette(), nl = nb + 1, lh = box.h / nl;
+    function X(t) { return box.x + (t / T) * box.w; }
+    ctx.font = font(10, true); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    for (var i = 0; i < nl; i++) {
+      var y = box.y + i * lh;
+      if (i % 2 === 0 || i === nb) { ctx.fillStyle = hexA(P.dim, i === nb ? 0.12 : 0.05); ctx.fillRect(box.x, y, box.w, lh); }
+      if (lh >= 9 || i === nb || i % 2 === 0) { ctx.fillStyle = i === nb ? P.text : P.dim; ctx.fillText(i < nb ? "B" + i : "DQ", box.x - 4, y + lh / 2); }
+    }
+    var ins = Math.min(3, lh * 0.14);
+    function blk(t0, t1, lane, col, a) {
+      if (t0 >= head || t0 > T) return;
+      t1 = Math.min(t1, head, T);
+      var y = box.y + lane * lh + ins;
+      ctx.fillStyle = hexA(col, a);
+      ctx.fillRect(X(t0), y, Math.max(1, X(t1) - X(t0)), lh - 2 * ins);
+    }
+    evs.forEach(function (e) {
+      if (e.bank < nb) {
+        blk(e.rd, e.rd + p.CL, e.bank, P.accent, 0.28);
+        if (e.pre !== null) blk(e.pre, e.pre + p.tRP, e.bank, P.bad, 0.85);
+        if (e.act !== null) blk(e.act, e.act + p.tRCD, e.bank, P.warn, 0.85);
+        blk(e.rd, e.rd + Math.max(0.5, T / 300), e.bank, P.accent, 1);
+        if (e.apre !== null) blk(e.apre, e.apre + p.tRP, e.bank, P.bad, 0.4);
+      }
+      var col = e.kind === "hit" ? P.ok : e.kind === "miss" ? P.warn : P.bad;
+      blk(e.data, e.end, nb, col, 0.92);
+      if (showNum && e.end <= head && X(e.end) - X(e.data) >= 13 && lh >= 13) {
+        ctx.fillStyle = P.bg; ctx.font = font(9, true); ctx.textAlign = "center";
+        ctx.fillText(String(e.req.id + 1), (X(e.data) + X(e.end)) / 2, box.y + nb * lh + lh / 2);
+      }
+    });
+    ctx.strokeStyle = P.axis; ctx.lineWidth = 1;
+    ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.w, box.h);
+    var st = niceStep(T, Math.max(3, Math.floor(box.w / 70)));
+    ctx.fillStyle = P.dim; ctx.font = font(10, true); ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (var tt = 0; tt <= T + 1e-9; tt += st) {
+      var x = X(tt);
+      ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(x, box.y); ctx.lineTo(x, box.y + box.h); ctx.stroke();
+      ctx.fillText(tt + (tt === 0 ? "" : ""), x, box.y + box.h + 3);
+    }
+    ctx.textAlign = "right"; ctx.fillText("ns", box.x + box.w, box.y + box.h + 13);
+    if (head < T) {
+      ctx.strokeStyle = P.text; ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(X(head), box.y); ctx.lineTo(X(head), box.y + box.h); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+
+  /* =====================================================================
+     1) 인터랙티브 타이밍 다이어그램
+     ===================================================================== */
+  (function () {
+    var cv = document.getElementById("cv-tim"); if (!cv) return;
+    var M = null, cur = 0, st = null;
+    var gSc = MB.seg("tim-sc", upd), gRate = MB.seg("tim-rate", upd), gBL = MB.seg("tim-bl", upd);
+    var gRCD = MB.range("tim-rcd", null, upd), gCL = MB.range("tim-cl", null, upd), gRP = MB.range("tim-rp", null, upd);
+    var chk = document.getElementById("tim-alt");
+    chk.addEventListener("change", upd);
+
+    function build() {
+      var rate = Number(gRate()), tCK = 2000 / rate, sc = gSc(), BLc = Number(gBL()) / 2;
+      var RCD = gRCD(), CL = gCL(), RP = gRP();
+      function c(ns) { return Math.ceil(ns / tCK - 1e-9); }
+      var RAS = c(32), RTP = c(7.5), WR = c(30), CWL = CL - 2, CCDS = BLc, CCDL = Math.max(BLc, c(5)), RRD = Math.max(8, c(2.5));
+      var m = { tCK: tCK, BLc: BLc, RAS: RAS, RP: RP, cmds: [], data: [], bank: [], dims: [], t0: -4, first: 0, end: 0 };
+      if (sc === "read") {
+        var Pt = Math.max(RAS, RCD + RTP);
+        m.cmds = [{ t: 0, l: "ACT", k: "act" }, { t: RCD, l: "RD", k: "rd" }, { t: Pt, l: "PRE", k: "pre" }, { t: Pt + RP, l: "ACT", k: "act" }];
+        m.data = [{ t0: RCD + CL, t1: RCD + CL + BLc, k: "rd" }];
+        m.bank = [{ t0: 0, t1: RCD, l: "센싱", k: "act" }, { t0: RCD, t1: Pt, l: "ACTIVE", k: "open" }, { t0: Pt, t1: Pt + RP, l: "프리차지", k: "pre" }, { t0: Pt + RP, t1: Pt + RP + 12, l: "다음", k: "act" }];
+        m.dims = [{ a: 0, b: RCD, l: "tRCD", r: 0 }, { a: RCD, b: RCD + CL, l: "CL", r: 0 }, { a: 0, b: RAS, l: "tRAS", r: 1 }, { a: Pt, b: Pt + RP, l: "tRP", r: 1 }, { a: 0, b: Pt + RP, l: "tRC", r: 2 }];
+        m.first = RCD + CL; m.end = Pt + RP; m.t1 = Pt + RP + 12;
+      } else if (sc === "hit") {
+        var alt = chk.checked, actT = [0, alt ? RRD : 1e9], last = -1e9, lastS = [-1e9, -1e9], rds = [];
+        m.cmds.push({ t: 0, l: alt ? "ACT A" : "ACT", k: "act" });
+        if (alt) m.cmds.push({ t: RRD, l: "ACT B", k: "act" });
+        for (var k = 0; k < 4; k++) {
+          var bg = alt ? k % 2 : 0;
+          var t = Math.max(actT[bg] + RCD, last + CCDS, lastS[bg] + CCDL);
+          last = t; lastS[bg] = t; rds.push(t);
+          m.cmds.push({ t: t, l: alt ? (bg ? "RD B" : "RD A") : "RD", k: "rd" });
+          m.data.push({ t0: t + CL, t1: t + CL + BLc, k: "rd" });
+        }
+        var endD = m.data[3].t1;
+        m.bank = [{ t0: 0, t1: RCD, l: "센싱", k: "act" }, { t0: RCD, t1: endD + 10, l: alt ? "뱅크 A · B 로우 열림" : "ACTIVE (같은 로우)", k: "open" }];
+        m.dims = [{ a: 0, b: RCD, l: "tRCD", r: 0 }, { a: rds[0], b: rds[0] + CL, l: "CL", r: 0 }, { a: rds[0], b: rds[1], l: alt ? "tCCD_S" : "tCCD_L", r: 1 }, { a: rds[0] + CL, b: endD, l: "4 버스트", r: 2 }];
+        m.first = RCD + CL; m.end = endD; m.t1 = endD + 10;
+      } else if (sc === "conf") {
+        m.t0 = -10;
+        m.cmds = [{ t: 0, l: "PRE", k: "pre" }, { t: RP, l: "ACT", k: "act" }, { t: RP + RCD, l: "RD", k: "rd" }];
+        var d0 = RP + RCD + CL;
+        m.data = [{ t0: d0, t1: d0 + BLc, k: "rd" }];
+        m.bank = [{ t0: -10, t1: 0, l: "로우 A", k: "open" }, { t0: 0, t1: RP, l: "프리차지", k: "pre" }, { t0: RP, t1: RP + RCD, l: "센싱", k: "act" }, { t0: RP + RCD, t1: d0 + BLc + 10, l: "로우 B 열림", k: "open" }];
+        m.dims = [{ a: 0, b: RP, l: "tRP", r: 0 }, { a: RP, b: RP + RCD, l: "tRCD", r: 0 }, { a: RP + RCD, b: d0, l: "CL", r: 0 }, { a: 0, b: d0 + BLc, l: "컨플릭트 지연", r: 1 }];
+        m.first = d0; m.end = d0 + BLc; m.t1 = d0 + BLc + 10;
+      } else {
+        var w0 = RCD + CWL, w1 = w0 + BLc, Pw = Math.max(RAS, w1 + WR);
+        m.cmds = [{ t: 0, l: "ACT", k: "act" }, { t: RCD, l: "WR", k: "wr" }, { t: Pw, l: "PRE", k: "pre" }, { t: Pw + RP, l: "ACT", k: "act" }];
+        m.data = [{ t0: w0, t1: w1, k: "wr" }];
+        m.bank = [{ t0: 0, t1: RCD, l: "센싱", k: "act" }, { t0: RCD, t1: Pw, l: "ACTIVE (셀에 기록)", k: "open" }, { t0: Pw, t1: Pw + RP, l: "프리차지", k: "pre" }, { t0: Pw + RP, t1: Pw + RP + 12, l: "다음", k: "act" }];
+        m.dims = [{ a: 0, b: RCD, l: "tRCD", r: 0 }, { a: RCD, b: w0, l: "CWL", r: 0 }, { a: w1, b: Pw, l: "tWR", r: 1 }, { a: Pw, b: Pw + RP, l: "tRP", r: 1 }, { a: 0, b: RAS, l: "tRAS", r: 2 }];
+        m.first = w0; m.end = Pw + RP; m.t1 = Pw + RP + 12;
+      }
+      return m;
+    }
+    function stats() {
+      var t = M.tCK;
+      function ns(cy) { return (cy * t).toFixed(2); }
+      ["rcd", "cl", "rp"].forEach(function (k) {
+        var v = k === "rcd" ? gRCD() : k === "cl" ? gCL() : gRP();
+        var o = document.getElementById("tim-" + k + "-out"); if (o) o.textContent = v + " nCK · " + ns(v) + " ns";
+      });
+      MB.stat("tim-o1", M.first + " nCK · " + ns(M.first) + "<small> ns</small>");
+      MB.stat("tim-o2", M.BLc + " nCK · " + ns(M.BLc) + "<small> ns</small>");
+      MB.stat("tim-o3", (M.RAS + M.RP) + " nCK · " + ns(M.RAS + M.RP) + "<small> ns</small>");
+      var dc = 0; M.data.forEach(function (d) { dc += d.t1 - d.t0; });
+      MB.stat("tim-o4", (100 * dc / Math.max(1, M.end)).toFixed(0) + "<small> %</small>");
+    }
+    function upd() { M = build(); stats(); if (st) st.redraw(); }
+
+    function draw(ctx, w, h) {
+      if (!M) return;
+      var P = MB.palette(), L = 50, R = w - 10, span = M.t1 - M.t0, ppc = (R - L) / span;
+      function X(c) { return L + (c - M.t0) * ppc; }
+      var yC = 22, yM = 50, yB = 90, yD = 126, yDim = 176;
+      ctx.font = font(11, true); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText("CLK", 6, yC + 8); ctx.fillText("CMD", 6, yM + 12); ctx.fillText("BANK", 6, yB + 11); ctx.fillText("DQ", 6, yD + 13);
+      // cycle grid
+      var gstep = ppc >= 4 ? 1 : ppc >= 1.2 ? 4 : 8;
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+      for (var c = Math.ceil(M.t0 / gstep) * gstep; c <= M.t1; c += gstep) {
+        var x = X(c); ctx.beginPath(); ctx.moveTo(x, yC); ctx.lineTo(x, yD + 28); ctx.stroke();
+      }
+      // clock
+      ctx.strokeStyle = P.dim; ctx.lineWidth = 1.1;
+      if (ppc >= 4) {
+        ctx.beginPath(); ctx.moveTo(X(M.t0), yC + 16);
+        for (var cc = Math.ceil(M.t0); cc < M.t1; cc++) {
+          ctx.lineTo(X(cc), yC + 16); ctx.lineTo(X(cc), yC); ctx.lineTo(X(cc + 0.5), yC); ctx.lineTo(X(cc + 0.5), yC + 16);
+        }
+        ctx.lineTo(X(M.t1), yC + 16); ctx.stroke();
+      } else {
+        ctx.fillStyle = hexA(P.dim, 0.18); ctx.fillRect(X(M.t0), yC + 2, X(M.t1) - X(M.t0), 12);
+        ctx.fillStyle = P.dim; ctx.font = font(10, false); ctx.textAlign = "left";
+        ctx.fillText("클럭 " + (1000 / M.tCK / 2 | 0) + " MHz (촘촘해서 띠로 표시, 격자 = " + gstep + " nCK)", X(M.t0) + 4, yC + 8);
+      }
+      // command lane
+      ctx.strokeStyle = P.axis; ctx.setLineDash([2, 4]);
+      ctx.beginPath(); ctx.moveTo(L, yM + 12); ctx.lineTo(R, yM + 12); ctx.stroke(); ctx.setLineDash([]);
+      var times = M.cmds.map(function (q) { return q.t; }).sort(function (a, b) { return a - b; }), gap = 1e9;
+      for (var i = 1; i < times.length; i++) gap = Math.min(gap, times[i] - times[i - 1]);
+      var bw = Math.max(10, Math.min(Math.max(2 * ppc, 34), gap * ppc - 2));
+      M.cmds.forEach(function (q) {
+        var col = q.k === "act" ? P.warn : q.k === "pre" ? P.bad : q.k === "wr" ? P.accent2 : P.accent;
+        var x = X(q.t);
+        ctx.fillStyle = hexA(col, 0.22); ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+        ctx.fillRect(x, yM, bw, 24); ctx.strokeRect(x, yM, bw, 24);
+        ctx.fillStyle = P.text; ctx.font = font(bw < 30 ? 9 : 11, true); ctx.textAlign = "center";
+        ctx.save(); ctx.beginPath(); ctx.rect(x, yM, bw, 24); ctx.clip();
+        ctx.fillText(q.l, x + bw / 2, yM + 12); ctx.restore();
+      });
+      // bank lane
+      M.bank.forEach(function (s) {
+        var col = s.k === "act" ? P.warn : s.k === "open" ? P.accent : s.k === "pre" ? P.bad : P.dim;
+        var x0 = X(Math.max(s.t0, M.t0)), x1 = X(Math.min(s.t1, M.t1));
+        ctx.fillStyle = hexA(col, 0.2); ctx.fillRect(x0, yB, x1 - x0, 22);
+        ctx.strokeStyle = hexA(col, 0.7); ctx.lineWidth = 1; ctx.strokeRect(x0, yB, x1 - x0, 22);
+        ctx.font = font(10, false); ctx.fillStyle = P.text; ctx.textAlign = "center";
+        if (ctx.measureText(s.l).width < x1 - x0 - 4) ctx.fillText(s.l, (x0 + x1) / 2, yB + 11);
+      });
+      // DQ lane
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(L, yD + 13); ctx.lineTo(R, yD + 13); ctx.stroke();
+      M.data.forEach(function (d) {
+        var col = d.k === "wr" ? P.accent2 : P.accent, beats = (d.t1 - d.t0) * 2, bpx = (X(d.t1) - X(d.t0)) / beats;
+        ctx.fillStyle = hexA(col, 0.3); ctx.strokeStyle = col; ctx.lineWidth = 1.2;
+        if (bpx >= 7) {
+          for (var b = 0; b < beats; b++) { hexPath(ctx, X(d.t0) + b * bpx, X(d.t0) + (b + 1) * bpx, yD + 13, 11); ctx.fill(); ctx.stroke(); }
+        } else { hexPath(ctx, X(d.t0), X(d.t1), yD + 13, 11); ctx.fill(); ctx.stroke(); }
+      });
+      if (M.data.length) {
+        var d0 = M.data[0];
+        ctx.fillStyle = P.dim; ctx.font = font(10, true); ctx.textAlign = "left";
+        ctx.fillText((d0.k === "wr" ? "쓰기 " : "읽기 ") + "BL" + M.BLc * 2, X(d0.t0), yD - 5);
+      }
+      // dims
+      M.dims.forEach(function (dm) {
+        var y = yDim + dm.r * 26, x0 = X(dm.a), x1 = X(dm.b);
+        ctx.strokeStyle = P.dim; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.moveTo(x0, y - 5); ctx.lineTo(x0, y + 5); ctx.moveTo(x1, y - 5); ctx.lineTo(x1, y + 5); ctx.stroke();
+        ctx.setLineDash([2, 3]); ctx.strokeStyle = P.grid;
+        ctx.beginPath(); ctx.moveTo(x0, yM + 24); ctx.lineTo(x0, y); ctx.moveTo(x1, yD + 26); ctx.lineTo(x1, y); ctx.stroke(); ctx.setLineDash([]);
+        var txt = dm.l + " " + (dm.b - dm.a);
+        ctx.font = font(11, true); ctx.textAlign = "center";
+        var tw = ctx.measureText(txt).width;
+        if (tw > x1 - x0 - 4) { txt = dm.l; tw = ctx.measureText(txt).width; }
+        ctx.fillStyle = MB.color("canvas-bg"); ctx.fillRect((x0 + x1) / 2 - tw / 2 - 2, y - 17, tw + 4, 13);
+        ctx.fillStyle = P.accent; ctx.fillText(txt, (x0 + x1) / 2, y - 10);
+      });
+      // cursor
+      var xc = X(cur);
+      ctx.strokeStyle = P.text; ctx.globalAlpha = 0.5; ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(xc, yC - 4); ctx.lineTo(xc, yD + 28); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+      ctx.fillStyle = P.dim; ctx.font = font(10, true); ctx.textAlign = "right";
+      ctx.fillText("t = " + Math.round(cur) + " nCK (" + (cur * M.tCK).toFixed(1) + " ns)", R, 9);
+    }
+    M = build(); stats();
+    st = MB.canvas(cv, draw, { height: 262 });
+    MB.loop(cv, function (dt) {
+      if (!M) return;
+      var span = M.t1 - M.t0;
+      cur += dt * span / 6;
+      if (cur > M.t1) cur = M.t0;
+      st.redraw();
+    });
+  })();
+
+  /* =====================================================================
+     6) 속도 등급 → ns 계산기
+     ===================================================================== */
+  (function () {
+    var cv = document.getElementById("cv-spd"); if (!cv) return;
+    var PRE = [[1600, 11, 11, "DDR3-1600"], [2400, 17, 17, "DDR4-2400"], [3200, 22, 22, "DDR4-3200"], [4800, 40, 39, "DDR5-4800"], [6400, 46, 46, "DDR5-6400"], [6400, 32, 39, "XMP"]];
+    var st = null;
+    function upd() { stats(); if (st) st.redraw(); }
+    MB.seg("spd-pre", function (v) { var p = PRE[Number(v)]; gRate.set(p[0]); gCL.set(p[1]); gRCD.set(p[2]); });
+    var gRate = MB.range("spd-rate", function (v) { return v + " MT/s"; }, upd);
+    var gCL = MB.range("spd-cl", function (v) { return v + " nCK"; }, upd);
+    var gRCD = MB.range("spd-rcd", function (v) { return v + " nCK"; }, upd);
+    function stats() {
+      var r = gRate(), t = 2000 / r, cl = gCL() * t, rcd = gRCD() * t;
+      MB.stat("spd-o1", t.toFixed(4) + "<small> ns</small>");
+      MB.stat("spd-o2", cl.toFixed(2) + "<small> ns</small>");
+      MB.stat("spd-o3", (cl + rcd).toFixed(2) + "<small> ns</small>");
+      MB.stat("spd-o4", (cl + 2 * rcd).toFixed(2) + "<small> ns</small>");
+      MB.stat("spd-o5", (r * 8 / 1000).toFixed(1) + "<small> GB/s</small>");
+      MB.stat("spd-o6", (8000 / r).toFixed(2) + "<small> ns</small>");
+    }
+    function draw(ctx, w, h) {
+      var P = MB.palette(), ISO = [10, 12.5, 15, 17.5, 20];
+      var series = ISO.map(function (ns) { return { data: [[1000, ns * 1000 / 2000], [9000, ns * 9000 / 2000]], color: ns === 15 ? P.dim : P.faint, width: 1.2, dash: [5, 4] }; });
+      var pts = PRE.map(function (p) { return { x: p[0], y: p[1], color: P.dim, r: 3.5, label: w > 460 ? p[3] : "" }; });
+      var r = gRate(), c = gCL();
+      pts.push({ x: r, y: c, color: P.accent, r: 6.5 });
+      var ch = MB.chart(ctx, null, { x: [1000, 9000], y: [0, 72], xLabel: "전송률 [MT/s]", yLabel: "CL [사이클]", series: series, points: pts, xFmt: function (v) { return String(v); } });
+      ctx.font = font(10, true); ctx.fillStyle = P.dim; ctx.textAlign = "right"; ctx.textBaseline = "bottom";
+      ISO.forEach(function (ns) {
+        var xe = Math.min(9000, 72 * 2000 / ns);
+        ctx.fillText(ns + " ns", ch.X(xe) - 3, ch.Y(ns * xe / 2000) + (xe < 9000 ? 12 : -2));
+      });
+      ctx.fillStyle = P.accent; ctx.font = font(12, true); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      var lx = ch.X(r) + 9; if (lx > w - 120) { ctx.textAlign = "right"; lx = ch.X(r) - 9; }
+      ctx.fillText((c * 2000 / r).toFixed(1) + " ns", lx, ch.Y(c) - 5);
+    }
+    stats();
+    st = MB.canvas(cv, draw, { aspect: 0.62, minHeight: 260, maxHeight: 400 });
+  })();
+
+  /* =====================================================================
+     2) 뱅크 · 로우 버퍼 시뮬레이터
+     ===================================================================== */
+  (function () {
+    var cv = document.getElementById("cv-bank"); if (!cv) return;
+    var seed = 7, R = null, head = 0, st = null, N = 256, SHOW = 40;
+    var gPat = MB.seg("bk-pat", run), gB = MB.seg("bk-banks", run), gPol = MB.seg("bk-pol", run);
+    var gStr = MB.range("bk-stride", function (v) { return "2^" + v + " 줄 = " + MB.bytes(Math.pow(2, v) * 64, 3, true); }, run);
+    document.getElementById("bk-new").addEventListener("click", function () { seed = (seed * 7919 + 13) % 100003; run(); });
+    document.getElementById("bk-replay").addEventListener("click", function () { head = 0; });
+    function run() {
+      var rnd = mulberry(seed), pat = gPat(), B = Number(gB()), stride = Math.pow(2, gStr());
+      var base = Math.floor(rnd() * 65536) * 64, bases = [0, 1, 2, 3].map(function () { return Math.floor(rnd() * 262144) * 64; });
+      var p = withP({ banks: B, policy: gPol() }), S = dramSim(p);
+      for (var i = 0; i < N; i++) {
+        var a = pat === "seq" ? base + i : pat === "stride" ? base + i * stride : pat === "rand" ? Math.floor(rnd() * 16777216) : bases[i % 4] + Math.floor(i / 4);
+        S.serve({ id: i, bank: Math.floor(a / 64) % B, row: Math.floor(a / (64 * B)) }, 0);
+      }
+      var cnt = { hit: 0, miss: 0, conf: 0 }, svc = 0;
+      S.ev.forEach(function (e) { cnt[e.kind]++; svc += e.end - e.first; });
+      MB.stat("bk-o1", (100 * cnt.hit / N).toFixed(1) + "<small> %</small>");
+      MB.stat("bk-o2", (100 * cnt.miss / N).toFixed(0) + " / " + (100 * cnt.conf / N).toFixed(0) + "<small> %</small>");
+      MB.stat("bk-o3", (svc / N).toFixed(1) + "<small> ns</small>");
+      MB.stat("bk-o4", (N * 64 / S.busFree).toFixed(1) + "<small> GB/s</small>");
+      MB.stat("bk-o5", (100 * N * p.tBL / S.busFree).toFixed(0) + "<small> %</small>");
+      R = { S: S, p: p, B: B, T: S.ev[SHOW - 1].end * 1.02 };
+      head = 0;
+      if (st) st.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!R) return;
+      var P = MB.palette(), nb = Math.min(R.B, 16);
+      var box = { x: 30, y: 20, w: w - 40, h: h - 20 - 24 };
+      ctx.fillStyle = P.dim; ctx.font = font(11, false); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText("처음 " + SHOW + "개 요청의 명령 타임라인" + (R.B > 16 ? " (뱅크 0–15만 표시)" : ""), box.x, 10);
+      drawTL(ctx, box, R.S.ev.slice(0, SHOW), R.p, nb, R.T, head, true);
+    }
+    run();
+    st = MB.canvas(cv, draw, { aspect: 0.66, minHeight: 300, maxHeight: 470 });
+    MB.loop(cv, function (dt) {
+      if (!R || head >= R.T) return;
+      head = Math.min(R.T, head + dt * R.T / 4);
+      st.redraw();
+    });
+  })();
+
+  /* =====================================================================
+     3) 주소 매핑 비트 분해기
+     ===================================================================== */
+  (function () {
+    var cv = document.getElementById("cv-map"); if (!cv) return;
+    var NB = 35, MOD = Math.pow(2, NB), addr = 0, st = null;
+    var SCH = {
+      A: [["row", 16], ["rank", 1], ["bg", 3], ["ba", 2], ["col", 6], ["ch", 1], ["off", 6]],
+      B: [["row", 16], ["col", 6], ["rank", 1], ["ba", 2], ["bg", 3], ["ch", 1], ["off", 6]]
+    };
+    SCH.C = SCH.A;
+    var NAME = { row: "로우", rank: "Rk", bg: "BG", ba: "BA", col: "컬럼", ch: "Ch", off: "오프셋" };
+    var inp = document.getElementById("map-addr");
+    var gSch = MB.seg("map-sch", upd), gStr = MB.seg("map-str", upd);
+    function parse() {
+      var s = inp.value.trim().replace(/^0x/i, "").replace(/_/g, "");
+      if (!/^[0-9a-f]+$/i.test(s)) { inp.style.borderColor = "var(--bad)"; return; }
+      inp.style.borderColor = "";
+      addr = parseInt(s, 16) % MOD;
+    }
+    function setAddr(a) { addr = ((a % MOD) + MOD) % MOD; inp.value = "0x" + addr.toString(16).toUpperCase(); inp.style.borderColor = ""; upd(); }
+    inp.addEventListener("input", function () { parse(); upd(); });
+    document.getElementById("map-p64").addEventListener("click", function () { setAddr(addr + 64); });
+    document.getElementById("map-p4k").addEventListener("click", function () { setAddr(addr + 4096); });
+    document.getElementById("map-p1m").addEventListener("click", function () { setAddr(addr + 1048576); });
+    document.getElementById("map-rnd").addEventListener("click", function () { setAddr(Math.floor(Math.random() * MOD / 64) * 64); });
+    function bitOf(a, i) { return Math.floor(a / Math.pow(2, i)) % 2; }
+    function layout(sch) { // [{k, lo, hi}]
+      var f = SCH[sch], pos = NB, out = [];
+      f.forEach(function (x) { out.push({ k: x[0], hi: pos - 1, lo: pos - x[1] }); pos -= x[1]; });
+      return out;
+    }
+    function decode(a, sch) {
+      var d = {};
+      layout(sch).forEach(function (f) { d[f.k] = Math.floor(a / Math.pow(2, f.lo)) % Math.pow(2, f.hi - f.lo + 1); });
+      if (sch === "C") { d.bg ^= d.row & 7; d.ba ^= (d.row >> 3) & 3; }
+      return d;
+    }
+    function colors(P) { return { row: P.accent2, rank: P.warn, bg: P.ok, ba: P.bad, col: P.accent, ch: P.blue, off: P.dim }; }
+    function upd() {
+      var sch = gSch(), d = decode(addr, sch), stride = Number(gStr());
+      MB.stat("map-o1", d.ch + " / " + d.rank);
+      MB.stat("map-o2", d.bg + " / " + d.ba);
+      MB.stat("map-o3", "0x" + d.row.toString(16).toUpperCase() + " / " + d.col);
+      var used = {}, lastRow = {}, hits = 0;
+      for (var i = 0; i < 64; i++) {
+        var q = decode((addr + i * stride) % MOD, sch), key = q.ch + "-" + q.rank + "-" + q.bg + "-" + q.ba;
+        used[key] = (used[key] || 0) + 1;
+        if (lastRow[key] === q.row) hits++;
+        lastRow[key] = q.row;
+      }
+      MB.stat("map-o4", Object.keys(used).length + "<small> / 128</small>");
+      MB.stat("map-o5", hits + "<small> / 64</small>");
+      if (st) st.redraw();
+    }
+    function draw(ctx, w, h) {
+      var P = MB.palette(), C = colors(P), sch = gSch(), lay = layout(sch), d = decode(addr, sch);
+      var per = w >= 600 ? 35 : 18, rows = Math.ceil(NB / per), bw = Math.min(22, (w - 20) / per), bh = 24;
+      var x0 = (w - per * bw) / 2, y0 = 22;
+      function fieldOf(i) { for (var j = 0; j < lay.length; j++) if (i >= lay[j].lo && i <= lay[j].hi) return lay[j]; return lay[0]; }
+      ctx.fillStyle = P.dim; ctx.font = font(11, false); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText("물리 주소 비트 (35b, MSB → LSB)", 8, 10);
+      for (var n = 0; n < NB; n++) {
+        var i = NB - 1 - n, r = Math.floor(n / per), cidx = n % per;
+        var x = x0 + cidx * bw, y = y0 + r * (bh + 30), f = fieldOf(i), b = bitOf(addr, i);
+        ctx.fillStyle = hexA(C[f.k], b ? 0.55 : 0.16); ctx.fillRect(x, y, bw - 1, bh);
+        ctx.fillStyle = P.text; ctx.font = font(Math.min(13, bw * 0.62), true); ctx.textAlign = "center";
+        ctx.fillText(String(b), x + bw / 2, y + bh / 2);
+        if (i % 5 === 0 || i === NB - 1) { ctx.fillStyle = P.faint; ctx.font = font(9, true); ctx.fillText(String(i), x + bw / 2, y - 6); }
+      }
+      // field labels
+      lay.forEach(function (f) {
+        for (var r = 0; r < rows; r++) {
+          var nHi = NB - 1 - f.hi, nLo = NB - 1 - f.lo, a = Math.max(nHi, r * per), bb = Math.min(nLo, r * per + per - 1);
+          if (a > bb) continue;
+          var xa = x0 + (a % per) * bw, xb = x0 + (bb % per) * bw + bw - 1, y = y0 + r * (bh + 30) + bh + 4;
+          ctx.fillStyle = C[f.k]; ctx.fillRect(xa, y, xb - xa, 3);
+          ctx.font = font(11, false); ctx.textAlign = "center";
+          var lab = NAME[f.k];
+          if (ctx.measureText(lab).width <= xb - xa + 8) { ctx.fillStyle = P.text; ctx.fillText(lab, (xa + xb) / 2, y + 12); }
+        }
+      });
+      var yT = y0 + rows * (bh + 30) + 8;
+      ctx.textAlign = "left"; ctx.font = font(12, true); ctx.fillStyle = P.text;
+      var line = "Ch " + d.ch + " · Rk " + d.rank + " · BG " + d.bg + " · BA " + d.ba + " · 로우 " + d.row + " · 컬럼 " + d.col + " · +" + (addr % 64) + " B";
+      ctx.fillText(line, 8, yT);
+      if (sch === "C") { ctx.fillStyle = P.accent; ctx.font = font(11, true); ctx.fillText("XOR: BG = BG_raw ⊕ row[2:0],  BA = BA_raw ⊕ row[4:3]", 8, yT + 17); }
+      // heat grid
+      var gy = yT + 34, stride = Number(gStr()), cnt = {}, mx = 1;
+      for (var k = 0; k < 64; k++) {
+        var q = decode((addr + k * stride) % MOD, sch), key = (q.ch * 2 + q.rank) * 32 + q.bg * 4 + q.ba;
+        cnt[key] = (cnt[key] || 0) + 1; mx = Math.max(mx, cnt[key]);
+      }
+      var lw = 52, cw = Math.min(22, (w - lw - 10) / 32), chh = Math.min(22, (h - gy - 22) / 4);
+      ctx.fillStyle = P.dim; ctx.font = font(11, false); ctx.textBaseline = "middle";
+      ctx.fillText("64회 접근의 뱅크 분포 (열: BG×4+BA)", 8, gy - 10);
+      for (var rr = 0; rr < 4; rr++) {
+        ctx.fillStyle = P.dim; ctx.font = font(10, true); ctx.textAlign = "left";
+        ctx.fillText("C" + (rr >> 1) + " R" + (rr & 1), 8, gy + rr * chh + chh / 2);
+        for (var cc = 0; cc < 32; cc++) {
+          var v = cnt[rr * 32 + cc] || 0, xx = lw + cc * cw, yy = gy + rr * chh;
+          ctx.fillStyle = v ? hexA(P.accent, 0.2 + 0.8 * v / mx) : hexA(P.dim, 0.07);
+          ctx.fillRect(xx, yy, cw - 1, chh - 1);
+          if (v && cw >= 14) { ctx.fillStyle = v / mx > 0.5 ? P.bg : P.text; ctx.font = font(9, true); ctx.textAlign = "center"; ctx.fillText(String(v), xx + cw / 2, yy + chh / 2); }
+        }
+      }
+      ctx.fillStyle = P.faint; ctx.font = font(10, true); ctx.textAlign = "left";
+      for (var bgi = 0; bgi < 8; bgi++) ctx.fillText("BG" + bgi, lw + bgi * 4 * cw, gy + 4 * chh + 9);
+    }
+    parse(); upd();
+    st = MB.canvas(cv, draw, { aspect: 0.62, minHeight: 330, maxHeight: 420 });
+  })();
+
+  /* =====================================================================
+     4) 리프레시 오버헤드 계산기
+     ===================================================================== */
+  (function () {
+    var cv = document.getElementById("cv-ref"); if (!cv) return;
+    var CH = {
+      "d4-8": { gen: 4, rfc: 350, sb: 0, dens: 8, banks: 16, n: "DDR4 8Gb" },
+      "d4-16": { gen: 4, rfc: 550, sb: 0, dens: 16, banks: 16, n: "DDR4 16Gb" },
+      "d5-16": { gen: 5, rfc: 295, sb: 130, dens: 16, banks: 32, n: "DDR5 16Gb" },
+      "d5-32": { gen: 5, rfc: 410, sb: 190, dens: 32, banks: 32, n: "DDR5 32Gb" }
+    };
+    var STD = [["DDR3 4Gb", 260, 7.8], ["DDR3 8Gb", 350, 7.8], ["DDR4 8Gb", 350, 7.8], ["DDR4 16Gb", 550, 7.8], ["DDR5 8Gb", 195, 3.9], ["DDR5 16Gb", 295, 3.9], ["DDR5 32Gb", 410, 3.9]];
+    var st = null, M = null;
+    var gChip = MB.seg("ref-chip", function (v) { gRfc.set(CH[v].rfc); });
+    var gRfc = MB.range("ref-rfc", function (v) { return v + " ns"; }, upd);
+    var gTemp = MB.seg("ref-temp", upd), gMode = MB.seg("ref-mode", upd);
+    function calc() {
+      var c = CH[gChip()], hot = gTemp() === "h", refi = c.gen === 4 ? (hot ? 3.9 : 7.8) : (hot ? 1.95 : 3.9);
+      var rfc = gRfc(), sbOK = c.gen === 5, sb = sbOK && gMode() === "sb", rfcsb = c.sb * rfc / c.rfc;
+      return { c: c, refi: refi, rfc: rfc, sb: sb, sbOK: sbOK, rfcsb: rfcsb, rank: sb ? 0 : rfc / (refi * 1000), bank: (sb ? rfcsb : rfc) / (refi * 1000) };
+    }
+    function upd() {
+      M = calc();
+      MB.stat("ref-o1", M.refi + "<small> µs</small>");
+      MB.stat("ref-o2", M.sb ? "0<small> % (REFsb)</small>" : (100 * M.rank).toFixed(2) + "<small> %</small>" + (!M.sbOK && gMode() === "sb" ? "<small> · DDR4는 REFsb 없음</small>" : ""));
+      MB.stat("ref-o3", (100 * M.bank).toFixed(2) + "<small> %</small>");
+      MB.stat("ref-o4", (M.c.dens * 16 / M.c.banks) + "<small> 로우</small>");
+      MB.stat("ref-o5", (M.sb ? "~" : "") + (25.6 * (M.sb ? M.bank : M.rank)).toFixed(2) + "<small> GB/s / 25.6</small>");
+      if (st) st.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!M) return;
+      var P = MB.palette(), L = 92, Rr = w - 12, T = 2 * M.refi * 1000;
+      function X(t) { return L + t / T * (Rr - L); }
+      ctx.font = font(11, false); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText("타임라인: tREFI × 2 = " + (2 * M.refi).toFixed(2) + " µs (실제 비율)", 8, 10);
+      var lanes = M.sb ? 4 : 1, lh = M.sb ? 20 : 36, y0 = 24;
+      for (var i = 0; i < lanes; i++) {
+        var y = y0 + i * (lh + 4);
+        ctx.fillStyle = hexA(P.accent, 0.14); ctx.fillRect(L, y, Rr - L, lh);
+        ctx.fillStyle = P.dim; ctx.font = font(10, true); ctx.textAlign = "right";
+        ctx.fillText(M.sb ? "뱅크 " + i + " ×8BG" : "랭크 전체", L - 6, y + lh / 2);
+        for (var k = 0; k < 2; k++) {
+          var t0 = (k + (M.sb ? 0.08 + i * 0.22 : 0.1)) * M.refi * 1000, wd = M.sb ? M.rfcsb : M.rfc;
+          ctx.fillStyle = hexA(P.warn, 0.85); ctx.fillRect(X(t0), y, Math.max(1.5, X(t0 + wd) - X(t0)), lh);
+        }
+      }
+      var yA = y0 + lanes * (lh + 4) + 2;
+      ctx.fillStyle = P.dim; ctx.font = font(10, true); ctx.textAlign = "center"; ctx.textBaseline = "top";
+      var stp = niceStep(T / 1000, 5);
+      for (var tt = 0; tt <= T / 1000 + 1e-9; tt += stp) ctx.fillText(tt.toFixed(stp < 1 ? 1 : 0), X(tt * 1000), yA);
+      ctx.textAlign = "right"; ctx.fillText("µs", Rr, yA + 11);
+      // bars
+      var by = yA + 34, items = STD.map(function (s) { return { n: s[0], v: 100 * s[1] / (s[2] * 1000), cur: false }; });
+      items.push({ n: "현재 설정", v: 100 * (M.sb ? M.bank : M.rank), cur: true });
+      var vmax = Math.max(15, items.reduce(function (a, b) { return Math.max(a, b.v); }, 0) * 1.1);
+      var bh = Math.max(10, Math.min(20, (h - by - 16) / items.length - 4));
+      ctx.textBaseline = "middle"; ctx.fillStyle = P.dim; ctx.font = font(11, false); ctx.textAlign = "left";
+      ctx.fillText("all-bank 리프레시 오버헤드 (정상 온도) — 랭크 정지 비율", 8, by - 12);
+      items.forEach(function (it, j) {
+        var y = by + j * (bh + 4), xw = (Rr - L - 50) * it.v / vmax;
+        ctx.fillStyle = it.cur ? P.text : P.dim; ctx.font = font(10, !it.cur); ctx.textAlign = "right";
+        ctx.fillText(it.n, L - 6, y + bh / 2);
+        ctx.fillStyle = it.cur ? P.accent : hexA(it.n.indexOf("DDR5") === 0 ? P.accent2 : P.dim, 0.55);
+        ctx.fillRect(L, y, Math.max(1, xw), bh);
+        ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.font = font(10, true);
+        ctx.fillText(it.v.toFixed(1) + " %", L + xw + 5, y + bh / 2);
+      });
+    }
+    upd();
+    st = MB.canvas(cv, draw, { aspect: 0.7, minHeight: 330, maxHeight: 420 });
+  })();
+
+  /* =====================================================================
+     5) 스케줄러 비교: FCFS vs FR-FCFS
+     ===================================================================== */
+  (function () {
+    var cv = document.getElementById("cv-sch"); if (!cv) return;
+    var seed = 11, R = null, head = 0, st = null, N = 40;
+    var gLoc = MB.range("sch-loc", function (v) { return v + " %"; }, run);
+    var gWin = MB.range("sch-win", function (v) { return v + " 요청"; }, run);
+    var gB = MB.seg("sch-banks", run);
+    document.getElementById("sch-new").addEventListener("click", function () { seed = (seed * 48271 + 7) % 2147483647; run(); });
+    function sched(reqs, fr, W, p) {
+      var S = dramSim(p), pend = reqs.slice();
+      while (pend.length) {
+        var now = S.cmdFree, cand = [];
+        for (var i = 0; i < Math.min(W, pend.length); i++) if (pend[i].arr <= now) cand.push(pend[i]);
+        if (!cand.length) cand = [pend[0]];
+        var pick = cand[0];
+        if (fr) for (var j = 0; j < cand.length; j++) if (S.banks[cand[j].bank].row === cand[j].row) { pick = cand[j]; break; }
+        pend.splice(pend.indexOf(pick), 1);
+        S.serve(pick, pick.arr);
+      }
+      var hit = 0, sum = 0, mx = 0;
+      S.ev.forEach(function (e) { if (e.kind === "hit") hit++; var l = e.end - e.req.arr; sum += l; mx = Math.max(mx, l); });
+      S.stat = { hit: hit / reqs.length, avg: sum / reqs.length, max: mx };
+      return S;
+    }
+    function run() {
+      var rnd = mulberry(seed), B = Number(gB()), loc = gLoc() / 100, reqs = [];
+      for (var i = 0; i < N; i++) reqs.push({ id: i, bank: Math.floor(rnd() * B), row: rnd() < loc ? 0 : 1 + Math.floor(rnd() * 3), arr: i * 2 });
+      var p = withP({ banks: B, policy: "open" });
+      var A = sched(reqs, false, 1, p), F = sched(reqs, true, gWin(), p);
+      R = { A: A, F: F, p: p, B: B, T: Math.max(A.busFree, F.busFree) * 1.02 };
+      MB.stat("sch-o1", A.busFree.toFixed(0) + "<small> ns</small>");
+      MB.stat("sch-o2", F.busFree.toFixed(0) + "<small> ns (" + (100 * (1 - F.busFree / A.busFree)).toFixed(0) + "% ↓)</small>");
+      MB.stat("sch-o3", (100 * A.stat.hit).toFixed(0) + " / " + (100 * F.stat.hit).toFixed(0) + "<small> %</small>");
+      MB.stat("sch-o4", A.stat.avg.toFixed(0) + " / " + F.stat.avg.toFixed(0) + "<small> ns</small>");
+      var endA = {}, late = 0, worst = 0;
+      A.ev.forEach(function (e) { endA[e.req.id] = e.end; });
+      F.ev.forEach(function (e) { var d = e.end - endA[e.req.id]; if (d > 0.01) { late++; worst = Math.max(worst, d); } });
+      MB.stat("sch-o5", late + "<small> 개 (최대 +" + worst.toFixed(0) + " ns)</small>");
+      head = 0;
+      if (st) st.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!R) return;
+      var P = MB.palette(), ph = (h - 2 * 18 - 2 * 18) / 2;
+      [["FCFS (도착 순서)", R.A], ["FR-FCFS (히트 우선)", R.F]].forEach(function (pr, k) {
+        var y = 18 + k * (ph + 36);
+        ctx.fillStyle = k ? P.accent : P.text; ctx.font = font(12, false); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        ctx.fillText(pr[0] + " — 완료 " + pr[1].busFree.toFixed(0) + " ns", 30, y - 9);
+        drawTL(ctx, { x: 30, y: y, w: w - 40, h: ph }, pr[1].ev, R.p, R.B, R.T, head, true);
+      });
+    }
+    run();
+    st = MB.canvas(cv, draw, { aspect: 0.8, minHeight: 360, maxHeight: 520 });
+    MB.loop(cv, function (dt) {
+      if (!R || head >= R.T) return;
+      head = Math.min(R.T, head + dt * R.T / 5);
+      st.redraw();
+    });
+  })();
+})();
+</script>
+</body>
+</html>

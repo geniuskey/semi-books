@@ -1,0 +1,80 @@
+#!/usr/bin/env node
+/* Copyright (c) 2026 geniuskey and SemiBooks contributors. SPDX-License-Identifier: MIT */
+/* 정적 검사: 장 목록·canonical·sitemap·inline script 문법·id 중복·금지 패턴. 브라우저 검사는 tools/browser-check.cjs */
+"use strict";
+const fs = require("fs");
+const path = require("path");
+const vm = require("vm");
+
+const ROOT = path.resolve(__dirname, "..");
+const ORIGIN = "https://semi.euiyun.com";
+const BOOKS = JSON.parse(fs.readFileSync(path.join(ROOT, "book.json"), "utf8")).books.map((p) => path.dirname(p));
+const WRITING = new Set(BOOKS.filter((book) => JSON.parse(fs.readFileSync(path.join(ROOT, book, "book.json"), "utf8")).status === "writing"));
+const errors = [];
+const warn = [];
+const fail = (m) => errors.push(m);
+
+const sitemap = fs.readFileSync(path.join(ROOT, "sitemap.xml"), "utf8");
+const urlOf = (rel) => `${ORIGIN}/${rel.replace(/(^|\/)index\.html$/, "$1")}`;
+
+function checkPage(rel, opts = {}) {
+  const file = path.join(ROOT, rel);
+  if (!fs.existsSync(file)) { (opts.optional ? warn : errors).push(`missing page: ${rel}`); return; }
+  const html = fs.readFileSync(file, "utf8");
+  const url = urlOf(rel);
+  const canonical = (html.match(/<link\b[^>]*rel="canonical"[^>]*href="([^"]+)"/) || [])[1];
+  if (canonical !== url) fail(`${rel}: canonical ${canonical} ≠ ${url}`);
+  if (!sitemap.includes(`<loc>${url}</loc>`)) fail(`${rel}: not in sitemap.xml`);
+  if (!/<title>[^<]+<\/title>/.test(html)) fail(`${rel}: no <title>`);
+  if (!/<meta name="description" content="[^"]+">/.test(html)) fail(`${rel}: no description`);
+  if (/static\.cloudflareinsights\.com/.test(html)) fail(`${rel}: analytics beacon must be added by the build, not the source`);
+  if (/<script[^>]*type="module"/.test(html)) fail(`${rel}: ES module scripts are not allowed (file:// must work)`);
+  if (rel.startsWith("infra/") && /\bMB\.|class="mb-/.test(html)) fail(`${rel}: uses MemoryBook globals (MB / mb-) — use IB / ib-`);
+  // JavaScript template strings contain reusable id patterns, not static DOM ids.
+  const markup = html.replace(/(<script\b[^>]*>)[\s\S]*?<\/script>/gi, "$1</script>").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+  const ids = new Map();
+  for (const m of markup.matchAll(/\sid="([^"]+)"/g)) ids.set(m[1], (ids.get(m[1]) || 0) + 1);
+  for (const [id, n] of ids) if (n > 1) fail(`${rel}: duplicate id "${id}" ×${n}`);
+  for (const m of html.matchAll(/<script(?![^>]*\bsrc=)(?![^>]*application\/ld\+json)[^>]*>([\s\S]*?)<\/script>/g)) {
+    try { new vm.Script(m[1], { filename: rel }); } catch (e) { fail(`${rel}: script syntax — ${e.message}`); }
+  }
+  for (const m of html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)) {
+    try { JSON.parse(m[1]); } catch (e) { fail(`${rel}: JSON-LD — ${e.message}`); }
+  }
+  if (opts.chapter) {
+    const sims = (html.match(/class="sim"/g) || []).length;
+    const figs = (html.match(/<figure\b/g) || []).length;
+    const quiz = (html.match(/class="quiz-q"/g) || []).length;
+    if (rel.startsWith("infra/") && opts.chapter !== "glossary" && (sims < 6 || figs < 6 || quiz < 6)) warn.push(`${rel}: sims ${sims}, figures ${figs}, quiz ${quiz} (기준 6/6/6)`);
+    if (!html.includes(`data-chapter="${opts.chapter}"`)) fail(`${rel}: body data-chapter should be "${opts.chapter}"`);
+  }
+  for (const m of markup.matchAll(/\b(?:href|src)=["']([^"']+)["']/g)) {
+    const value = m[1].replace(/&amp;/g, "&");
+    if (/^(?:#|data:|mailto:|javascript:|tel:)/i.test(value) || value.includes("${")) continue;
+    const target = new URL(value, `${ORIGIN}/${rel}`);
+    if (target.origin !== ORIGIN) continue;
+    const local = decodeURIComponent(target.pathname).replace(/^\//, "") + (target.pathname.endsWith("/") ? "index.html" : "");
+    if (!fs.existsSync(path.join(ROOT, local))) {
+      const message = `${rel}: missing linked file ${value}`;
+      if (WRITING.has(local.split("/")[0])) warn.push(message); else fail(message);
+    }
+  }
+}
+
+checkPage("index.html");
+for (const book of BOOKS) {
+  checkPage(`${book}/index.html`);
+  const js = fs.readFileSync(path.join(ROOT, book, "js/common.js"), "utf8");
+  const slugs = [...js.matchAll(/\{ slug: "([^"]+)"/g)].map((m) => m[1]);
+  if (!slugs.length) fail(`${book}: no CHAPTERS in js/common.js`);
+  const writing = JSON.parse(fs.readFileSync(path.join(ROOT, book, "book.json"), "utf8")).status === "writing";
+  for (const slug of slugs) checkPage(`${book}/chapters/${slug}.html`, { chapter: slug, optional: writing });
+  const files = fs.readdirSync(path.join(ROOT, book, "chapters")).filter((f) => f.endsWith(".html")).map((f) => f.slice(0, -5));
+  for (const f of files) if (!slugs.includes(f)) fail(`${book}/chapters/${f}.html is not registered in CHAPTERS`);
+}
+try { new vm.Script(fs.readFileSync(path.join(ROOT, "catalog.js"), "utf8")); } catch (e) { fail(`catalog.js: ${e.message}`); }
+
+warn.forEach((w) => console.log("warn  " + w));
+errors.forEach((e) => console.log("ERROR " + e));
+console.log(`${errors.length} error(s), ${warn.length} warning(s)`);
+process.exit(errors.length ? 1 : 0);

@@ -1,0 +1,896 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and SoCBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "전하가 새는 1T1C 셀과 리프레시, 뱅크·행·열과 주소 사상, 행 버퍼와 ACT·RD·PRE 타이밍. CPU·GPU·ISP·디스플레이의 요청을 FCFS·FR-FCFS·QoS로 스케줄링하며 LPDDR 대역폭이 숫자만큼 나오지 않는 이유를 시뮬레이션한다.", "libs": []}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>메모리 컨트롤러와 LPDDR · SoCBook</title>
+<meta name="description" content="전하가 새는 1T1C 셀과 리프레시, 뱅크·행·열과 주소 사상, 행 버퍼와 ACT·RD·PRE 타이밍. CPU·GPU·ISP·디스플레이의 요청을 FCFS·FR-FCFS·QoS로 스케줄링하며 LPDDR 대역폭이 숫자만큼 나오지 않는 이유를 시뮬레이션한다.">
+<link rel="canonical" href="https://semi.euiyun.com/soc/chapters/dram.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#c8285f">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="SoCBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="메모리 컨트롤러와 LPDDR · SoCBook">
+<meta property="og:description" content="전하가 새는 1T1C 셀과 리프레시, 뱅크·행·열과 주소 사상, 행 버퍼와 ACT·RD·PRE 타이밍. CPU·GPU·ISP·디스플레이의 요청을 FCFS·FR-FCFS·QoS로 스케줄링하며 LPDDR 대역폭이 숫자만큼 나오지 않는 이유를 시뮬레이션한다.">
+<meta property="og:url" content="https://semi.euiyun.com/soc/chapters/dram.html">
+<meta property="og:image" content="https://semi.euiyun.com/soc/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/soc/chapters/dram.html#chapter","name":"메모리 컨트롤러와 LPDDR","headline":"메모리 컨트롤러와 LPDDR · SoCBook","description":"전하가 새는 1T1C 셀과 리프레시, 뱅크·행·열과 주소 사상, 행 버퍼와 ACT·RD·PRE 타이밍. CPU·GPU·ISP·디스플레이의 요청을 FCFS·FR-FCFS·QoS로 스케줄링하며 LPDDR 대역폭이 숫자만큼 나오지 않는 이유를 시뮬레이션한다.","url":"https://semi.euiyun.com/soc/chapters/dram.html","position":7,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/soc/og.png","dateModified":"2026-10-03","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/soc/#book","name":"SoCBook · 시스템 온 칩 교과서","url":"https://semi.euiyun.com/soc/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"SoCBook","item":"https://semi.euiyun.com/soc/"},{"@type":"ListItem","position":2,"name":"7. 메모리 컨트롤러와 LPDDR","item":"https://semi.euiyun.com/soc/chapters/dram.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/soc.js"></script>
+<!--head:end-->
+<style>
+  .dr-sub { font-size: 12px; color: var(--text-faint); font-weight: 700; letter-spacing: .06em; margin-bottom: 4px; }
+  .dr-log { font-size: 13.5px; color: var(--text-dim); padding: 8px 18px; border-top: 1px solid var(--border); background: var(--surface); min-height: 2.6em; line-height: 1.6; }
+  .dr-log b { color: var(--text); }
+  .dr-log .w { color: var(--bad); font-weight: 700; }
+  .dr-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sim-controls select { width: 100%; min-width: 0; }
+  .dr-leg i { height: 10px !important; width: 10px !important; border-radius: 3px !important; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="soc"></script>
+</head>
+<body data-chapter="dram">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 07</div>
+    <h1>메모리 컨트롤러와 LPDDR</h1>
+    <p class="lead">스마트폰 사양표에는 "LPDDR5X 8533 MT/s"라고 적혀 있다. 64비트 버스라면 초당 68 GB다. 그런데 실제로 게임을 돌리며 재 보면 그 숫자의 60~80%밖에 나오지 않는다. 나머지는 어디로 갔을까? 답은 DRAM이라는 기억 장치의 독특한 생김새에 있다. DRAM은 수십억 개의 작은 축전기에 전하를 담아 두는데, 그 전하는 저절로 새어 나가고, 한 번에 한 행씩만 꺼내 볼 수 있으며, 행을 바꿀 때마다 수십 ns를 기다려야 한다. 이 까다로운 창고를 관리하는 사람이 SoC 안의 <strong>메모리 컨트롤러</strong><span class="en">(Memory controller)</span>다. 이 장에서는 셀 하나에서 시작해 컨트롤러가 CPU·GPU·카메라·디스플레이의 요청을 어떤 순서로 처리하는지 직접 스케줄링해 본다.</p>
+    <ul class="objectives">
+      <li>1T1C DRAM 셀이 전하로 비트를 저장하고, 누설 때문에 리프레시가 필요한 이유를 온도와 함께 설명한다.</li>
+      <li>채널·뱅크·행·열 구조와 주소 사상이 접근 성능에 주는 영향을 확인한다.</li>
+      <li>행 버퍼 적중·빈 뱅크·충돌의 ACT·RD·PRE 명령 순서와 tRCD·CL·tRP·tRAS를 타이밍 그림으로 읽는다.</li>
+      <li>FCFS·FR-FCFS·QoS 스케줄링이 행 적중률·대역폭·지연·실시간 마감에 주는 효과를 시뮬레이터로 비교한다.</li>
+      <li>최대 대역폭을 계산하고, 리프레시·행 충돌·읽기/쓰기 전환이 실효 대역폭과 비트당 에너지를 깎는 몫을 어림한다.</li>
+    </ul>
+    <div class="soc-locator" data-blocks="mem mc phy0 phy1 phy2 phy3" data-caption="다이 아래쪽 가장자리를 메모리 컨트롤러와 LPDDR5X PHY 네 개(16비트 채널 × 4 = 64비트)가 차지한다. DRAM 칩은 SoC 위에 패키지로 쌓여(PoP) 짧은 배선으로 연결된다."></div>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="cell">
+    <h2>새는 양동이: 1T1C DRAM 셀</h2>
+    <p><a href="cache.html">5장</a>의 SRAM 셀은 트랜지스터 여섯 개로 1비트를 붙잡아 둔다. DRAM은 훨씬 단순하다. 트랜지스터 하나와 축전기 하나, 이른바 <span class="term">1T1C 셀</span>이다. 축전기에 전하가 차 있으면 1, 비어 있으면 0이다. 셀이 작으니 같은 면적에 SRAM보다 수십 배 많은 비트를 담을 수 있다. 스마트폰의 12 GB 메모리를 SRAM으로 만들 수 없는 이유다.</p>
+    <p>대가는 두 가지다. 첫째, 축전기의 전하는 접합 누설과 트랜지스터의 미세한 누설 전류로 <strong>저절로 빠져나간다</strong>. 그래서 일정 시간마다 모든 셀을 읽어 다시 채워 주는 <span class="term">리프레시</span><span class="en">(Refresh)</span>가 필요하다. 둘째, 셀의 전하는 아주 작아서(수 fF) 읽으려고 비트라인에 연결하는 순간 전하가 비트라인과 나뉘어 값이 망가진다. 이를 <strong>파괴적 읽기</strong>라 하고, 감지 증폭기가 읽은 값을 곧바로 다시 써 넣어야 한다. 아래 셀로 실험해 보자. 누설은 온도가 10°C 오를 때마다 대략 두 배로 빨라진다.</p>
+    <figure class="play" id="fig-cell">
+      <div class="play-view"><canvas id="cv-cell"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>온도 <output id="ce-t-out"></output></span><input type="range" id="ce-t" min="25" max="105" step="1" value="45"></label>
+        <div><div class="dr-sub">리프레시 주기</div><div class="seg" id="ce-ref"><button data-value="0">끔</button><button data-value="64">64 ms</button><button data-value="32" class="on">32 ms</button><button data-value="16">16 ms</button></div></div>
+        <div class="dr-btns"><button class="btn sm primary" id="ce-w1">1 쓰기</button><button class="btn sm" id="ce-w0">0 쓰기</button><button class="btn sm" id="ce-rd">읽기</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">축전기 전압 (VDD 대비)</span><span class="v" id="ce-v">—</span></div>
+        <div class="stat"><span class="k">이 온도에서 보존 시간</span><span class="v" id="ce-ret">—</span></div>
+        <div class="stat"><span class="k">저장된 비트</span><span class="v" id="ce-st">—</span></div>
+      </div>
+      <div class="dr-log" id="ce-log">셀에 1이 들어 있다. 리프레시를 끄고 기다려 보자.</div>
+      <figcaption><b>그림 7-1.</b> <span class="try">만져 보기</span>오른쪽 그래프는 지난 0.4초 동안의 축전기 전압이다(화면 1초 = 실제 0.2초). 점선은 감지 증폭기가 1로 읽을 수 있는 한계(VDD의 60%)이고, 세로 눈금은 리프레시다. 여기 셀은 일부러 "약한 셀"로 잡았다. 85°C에서 보존 시간이 약 75 ms다. 온도를 95°C 이상으로 올리면 32 ms 리프레시로도 아슬아슬하고, 105°C에서는 16 ms로 줄여야 버틴다. 실제 LPDDR도 고온에서 리프레시 주기를 2배, 4배로 줄인다.</figcaption>
+    </figure>
+    <p>대부분의 셀은 수 초 이상 전하를 유지하지만, 칩 하나에 수백억 개의 셀이 있으니 가장 약한 셀이 리프레시 주기를 정한다. DDR4는 64 ms, LPDDR4·LPDDR5와 DDR5는 32 ms 안에 모든 행을 한 번씩 리프레시하도록 규정한다. 컨트롤러는 이 일을 한꺼번에 하지 않고, 약 3.9 µs마다 <code>REF</code> 명령을 하나씩 보내 몇 행씩 나눠 처리한다(8,192번이면 한 바퀴).</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="org">
+    <h2>창고의 구조: 채널·뱅크·행·열</h2>
+    <p>DRAM 칩 안의 셀들은 거대한 2차원 배열로 놓여 있다. 가로줄 하나가 <span class="term">행</span><span class="en">(Row, 페이지)</span>, 세로줄이 <span class="term">열</span><span class="en">(Column)</span>이다. 이런 배열이 여러 개 있어 서로 독립적으로 움직이는데, 이 단위를 <span class="term">뱅크</span><span class="en">(Bank)</span>라 한다. LPDDR5X는 16비트 폭 <span class="term">채널</span><span class="en">(Channel)</span> 하나에 뱅크 16개(뱅크 그룹 4개 × 4)를 두고, 행 하나는 2 KB다. SB-1은 이런 채널 네 개를 PHY 네 개로 붙여 64비트 폭을 만든다.</p>
+    <p>컨트롤러는 물리 주소를 쪼개 채널·뱅크·행·열을 정한다. 어느 비트를 어디에 쓰느냐, 즉 <span class="term">주소 사상</span><span class="en">(Address mapping)</span>에 따라 같은 프로그램도 성능이 크게 달라진다. 아래에서 한 채널(1 GB)의 주소를 바꿔 보고, 사상 방식을 바꿔 연속한 16번의 접근이 어느 뱅크로 가는지 보자.</p>
+    <figure class="play" id="fig-org">
+      <div class="play-view"><canvas id="cv-org"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="og-map"><button data-value="rbc" class="on">행:뱅크:열</button><button data-value="rcb">행:열:뱅크</button><button data-value="xor">XOR 해싱</button></div>
+        <div class="dr-btns"><button class="btn sm" id="og-rand">무작위 주소</button><button class="btn sm" id="og-n">+32 B</button><button class="btn sm" id="og-row">+2 KB</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">뱅크 (그룹)</span><span class="v" id="og-b">—</span></div>
+        <div class="stat"><span class="k">행</span><span class="v" id="og-r">—</span></div>
+        <div class="stat"><span class="k">열 (32 B 단위)</span><span class="v" id="og-c">—</span></div>
+        <div class="stat"><span class="k">연속 16번이 쓰는 뱅크</span><span class="v" id="og-s">—</span></div>
+      </div>
+      <figcaption><b>그림 7-2.</b> <span class="try">만져 보기</span>위 비트 칸을 누르면 주소가 바뀌고, 가운데 뱅크 타일을 누르면 그 뱅크·행으로 옮겨 간다. 파랑은 행, 분홍은 뱅크, 노랑은 열, 회색은 버스트(32 B) 안의 위치다. 아래 띠는 지금 주소부터 32 B씩 늘린 16번의 접근이 가는 뱅크다. "행:뱅크:열"은 한 행(2 KB)을 다 쓸 때까지 같은 뱅크에 머물고, "행:열:뱅크"는 접근마다 뱅크를 바꾼다. XOR 해싱은 행 번호 아래 비트를 뱅크 번호에 섞어, 서로 다른 행을 훑는 두 흐름이 같은 뱅크에서 부딪히는 일을 줄인다.</figcaption>
+    </figure>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>항목</th><th class="num">LPDDR5X (대략, 2023~2025년)</th><th>뜻</th></tr></thead>
+        <tbody>
+          <tr><td>채널 폭</td><td class="num">16비트</td><td>스마트폰은 보통 4채널 = 64비트</td></tr>
+          <tr><td>뱅크</td><td class="num">16 (4 그룹 × 4)</td><td>독립적으로 행을 열 수 있는 단위</td></tr>
+          <tr><td>행(페이지) 크기</td><td class="num">2 KB</td><td>ACT 한 번에 감지 증폭기로 옮겨지는 양</td></tr>
+          <tr><td>버스트 길이</td><td class="num">BL16 (32 B)</td><td>RD 명령 하나로 오가는 데이터</td></tr>
+          <tr><td>핀당 속도</td><td class="num">8533 MT/s (최대 ~10.7 GT/s)</td><td>데이터 핀 하나가 초당 옮기는 비트</td></tr>
+          <tr><td>tRCD / tRP / tRAS</td><td class="num">~18 / ~18 / ~42 ns</td><td>행 열기 / 닫기 / 최소 열림 시간</td></tr>
+          <tr><td>리프레시</td><td class="num">tREFI ≈ 3.9 µs, 32 ms</td><td>REF 간격, 전체 한 바퀴 시간(85°C 이하)</td></tr>
+          <tr><td>I/O 전압</td><td class="num">VDDQ ≈ 0.5 V</td><td>낮은 진폭으로 I/O 에너지를 아낀다</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="timing">
+    <h2>행 버퍼: 한 번에 한 행만 꺼내 볼 수 있다</h2>
+    <p>뱅크의 데이터를 읽으려면 세 단계를 거친다. ① <code>ACT</code>(활성화): 행 주소를 주면 그 행의 셀 2 KB가 모두 비트라인을 거쳐 감지 증폭기에 걸린다. 이 감지 증폭기 줄을 <span class="term">행 버퍼</span><span class="en">(Row buffer)</span>라 한다. 행이 열리기까지 <b>tRCD</b>가 걸린다. ② <code>RD</code>(읽기): 열 주소를 주면 행 버퍼에서 32 B를 골라 <b>CL</b>(CAS 지연) 뒤에 데이터 핀으로 내보낸다. ③ <code>PRE</code>(프리차지): 다른 행을 열려면 지금 행을 닫고 비트라인을 다시 충전해야 한다. <b>tRP</b>가 걸리고, 행은 열린 뒤 최소 <b>tRAS</b> 동안은 닫을 수 없다(파괴적 읽기 후 셀에 값을 다시 써 넣는 시간).</p>
+    <p>그래서 요청은 세 종류로 나뉜다. 원하는 행이 이미 열려 있으면 <span class="term">행 적중</span><span class="en">(Row hit)</span>으로 CL만 기다리면 된다. 뱅크가 닫혀 있으면 tRCD + CL, 다른 행이 열려 있으면 <span class="term">행 충돌</span><span class="en">(Row conflict)</span>로 tRP + tRCD + CL이 걸린다. 아래에서 요청을 쌓아 명령 타이밍을 직접 만들어 보자.</p>
+    <div class="formula">$$ t_{\text{hit}} = CL, \qquad t_{\text{empty}} = t_{RCD} + CL, \qquad t_{\text{conflict}} = t_{RP} + t_{RCD} + CL $$
+      <div class="where">LPDDR5X에서 tRCD ≈ tRP ≈ 18 ns, CL은 클럭에 따라 약 15~20 ns. 적중과 충돌은 지연이 세 배 가까이 차이 난다. 여기에 버스트 전송 시간, 컨트롤러·PHY·NoC 지연이 더해져 코어가 보는 DRAM 지연은 100 ns를 넘는다.</div></div>
+    <div class="sim" id="sim-tim">
+      <div class="sim-head"><span class="sim-tag">STEP</span><h3>DRAM 명령 타이밍 만들기</h3></div>
+      <div class="sim-view"><canvas id="cv-tim"></canvas></div>
+      <div class="sim-controls">
+        <div><div class="dr-sub">요청 추가 (최대 8개, 모두 한꺼번에 도착)</div><div class="dr-btns"><button class="btn sm" id="tm-a">뱅크 0 · 행 3</button><button class="btn sm" id="tm-b">뱅크 0 · 행 7</button><button class="btn sm" id="tm-c">뱅크 1 · 행 2</button><button class="btn sm" id="tm-clr">지우기</button></div></div>
+        <div><div class="dr-sub">예제</div><div class="dr-btns"><button class="btn sm" id="tm-p1">적중 연속</button><button class="btn sm" id="tm-p2">충돌 연속</button><button class="btn sm" id="tm-p3">두 뱅크 번갈아</button></div></div>
+        <div><div class="dr-sub">페이지 정책</div><div class="seg" id="tm-pol"><button data-value="open" class="on">열린 페이지 (행을 열어 둠)</button><button data-value="closed">닫힌 페이지 (매번 닫음)</button></div></div>
+      </div>
+      <div class="dr-log" id="tm-log"></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">모두 끝나는 시간</span><span class="v" id="tm-tot">—</span></div>
+        <div class="stat"><span class="k">평균 지연</span><span class="v" id="tm-lat">—</span></div>
+        <div class="stat"><span class="k">적중 / 빈 뱅크 / 충돌</span><span class="v" id="tm-k">—</span></div>
+        <div class="stat"><span class="k">데이터 버스 이용률</span><span class="v" id="tm-u">—</span></div>
+      </div>
+      <div class="sim-note">한 칸은 6 ns. tRCD = tRP = CL = 3칸(18 ns), tRAS = 7칸(42 ns), 버스트 = 2칸으로 단순화했다. 명령 줄의 A·R·P는 ACT·RD·PRE다. 명령 버스는 한 칸에 명령 하나만 실을 수 있고, 데이터는 도착 순서대로 내보낸다. 마지막 요청의 tRP·tRCD·CL 구간을 색으로 표시했다.</div>
+    </div>
+    <div class="predict"><strong>같은 뱅크의 행 3과 행 7을 번갈아 네 번 읽는다. 열린 페이지와 닫힌 페이지 정책 중 무엇이 빠를까?</strong>
+      <p>열린 페이지는 다음 요청이 같은 행일 것이라고 "내기"를 하는 셈이다.</p>
+      <details><summary>답 보기</summary><p>닫힌 페이지가 조금 빠르다. 매번 다른 행이니 열린 페이지의 내기는 늘 지고, 다음 요청이 온 뒤에야 PRE를 시작해 tRP를 고스란히 기다린다. 닫힌 페이지는 읽자마자 미리 닫아 두므로 다음 요청은 tRCD + CL만 기다린다. 반대로 "적중 연속"에서는 열린 페이지가 압도적으로 빠르다. 실제 컨트롤러는 요청 큐를 들여다보고 같은 행 요청이 남아 있는지, 일정 시간 동안 아무도 그 행을 찾지 않는지 보고 행을 닫을 때를 정한다(적응형 페이지 정책).</p></details>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="sched">
+    <h2>누구를 먼저 보낼까: 메모리 컨트롤러 스케줄링</h2>
+    <p>SoC의 메모리 컨트롤러에는 CPU 코어, GPU, 카메라 ISP, 디스플레이 엔진, NPU의 요청이 NoC(<a href="noc.html">8장</a>)를 거쳐 한꺼번에 몰려든다. 컨트롤러는 이 요청들을 큐에 모아 두고, 매 클럭 "지금 보낼 수 있는 명령" 가운데 하나를 고른다. 이 선택이 대역폭과 지연을 좌우한다.</p>
+    <ul>
+      <li><span class="term">FCFS</span><span class="en">(First-come first-served)</span>: 가장 오래된 요청의 명령부터. 공평해 보이지만, 다른 요청이 쓰려던 열린 행을 닫아 버리는 일이 잦다.</li>
+      <li><span class="term">FR-FCFS</span><span class="en">(First-ready FCFS)</span>: 행 적중이라 바로 RD를 보낼 수 있는 요청을 먼저, 그다음 오래된 순. 행 적중률과 대역폭이 크게 오른다. 1990년대 말 제안된 뒤 사실상 표준이 되었다.</li>
+      <li><span class="term">QoS 우선순위</span><span class="en">(Quality of service)</span>: FR-FCFS에 마스터별 우선순위와 마감을 더한다. 디스플레이처럼 정해진 시각까지 데이터가 와야 하는 <b>실시간</b> 요청이 늦어지면 최우선으로 끌어올리고, 지연에 민감한 CPU를 대역폭만 많이 쓰는 GPU보다 앞세운다.</li>
+    </ul>
+    <div class="sim" id="sim-mc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>메모리 컨트롤러 스케줄러 (채널 하나, 뱅크 8개)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-mc"></canvas></div>
+        <div class="sim-controls">
+          <div><div class="dr-sub">스케줄링 정책</div><div class="seg" id="mc-pol"><button data-value="fcfs">FCFS</button><button data-value="frfcfs" class="on">FR-FCFS</button><button data-value="qos">FR-FCFS + QoS</button></div></div>
+          <div><div class="dr-sub">주소 사상</div><div class="seg" id="mc-map"><button data-value="rbc" class="on">행:뱅크:열</button><button data-value="rcb">행:열:뱅크</button><button data-value="xor">XOR</button></div></div>
+          <label class="ctrl"><span>CPU 부하 <output id="mc-cpu-out"></output></span><input type="range" id="mc-cpu" min="0" max="30" step="1" value="8"></label>
+          <label class="ctrl"><span>GPU 부하 <output id="mc-gpu-out"></output></span><input type="range" id="mc-gpu" min="0" max="80" step="1" value="45"></label>
+          <label class="ctrl"><span>ISP 부하 <output id="mc-isp-out"></output></span><input type="range" id="mc-isp" min="0" max="40" step="1" value="15"></label>
+          <div><div class="dr-sub">리프레시</div><div class="seg" id="mc-ref"><button data-value="1" class="on">켬</button><button data-value="0">끔</button></div></div>
+          <label class="ctrl"><span>화면 1초당 클럭 <output id="mc-spd-out"></output></span><input type="range" id="mc-spd" min="1" max="60" step="1" value="12"></label>
+          <div class="btn-row"><button class="btn sm primary" id="mc-play">▶ 자동</button><button class="btn sm" id="mc-ff">2만 클럭 빨리 감기</button><button class="btn sm" id="mc-reset">초기화</button></div>
+        </div>
+      </div>
+      <div class="legend dr-leg" id="mc-leg"></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">행 적중률</span><span class="v" id="mc-hit">—</span></div>
+        <div class="stat"><span class="k">데이터 버스 이용률</span><span class="v" id="mc-bw">—</span></div>
+        <div class="stat"><span class="k">CPU 평균 지연</span><span class="v" id="mc-lcpu">—</span></div>
+        <div class="stat"><span class="k">GPU 평균 지연</span><span class="v" id="mc-lgpu">—</span></div>
+        <div class="stat"><span class="k">디스플레이 마감 위반</span><span class="v" id="mc-miss">—</span></div>
+      </div>
+      <div class="sim-note">부하는 데이터 버스 최대 용량 대비 요청 비율이다(디스플레이는 늘 10%). 한 클럭 ≈ 1 ns, tRCD = tRP = CL = 8, tRAS = 18, 64 B 버스트 = 4클럭, 큐 32칸, 리프레시는 1,950클럭마다 140클럭 동안 채널 전체를 막는다. CPU는 무작위 주소에 가끔 이웃 줄, GPU는 네 개, ISP는 두 개의 순차 흐름, 디스플레이는 하나의 순차 흐름이고 요청 후 600클럭 안에 데이터를 받아야 한다. 위쪽은 큐(색 = 마스터, 숫자 = 뱅크, 테두리 = 지금 행 적중 가능), 가운데는 뱅크별 열린 행, 아래는 최근 240클럭의 명령(A·P·R)과 데이터 버스다.</div>
+    </div>
+    <p>몇 가지 실험을 해 보자. ① <b>FCFS → FR-FCFS</b>: 행 적중률이 눈에 띄게 오르고 같은 부하에서 GPU 지연이 준다. ② 주소 사상을 <b>행:열:뱅크</b>로 바꾸면 순차 흐름이 여러 뱅크로 퍼져 뱅크 병렬성이 커진다. 대신 각 뱅크의 열린 행을 여러 흐름이 나눠 쓰게 되어 충돌이 늘 수 있다. <b>XOR</b>은 흐름끼리 같은 뱅크에서 부딪히는 일을 줄인다. ③ GPU 부하를 70% 이상으로 올리면 큐가 가득 차고, FR-FCFS에서는 행 적중을 몰아주느라 디스플레이 요청이 굶어 <b>마감 위반</b>이 생긴다. <b>QoS</b>로 바꾸면 위반이 사라지는 대신 GPU가 조금 손해를 본다.</p>
+    <div class="predict"><strong>FR-FCFS가 행 적중을 늘 먼저 처리하면 어떤 부작용이 생길까?</strong>
+      <p>한 마스터가 같은 행을 계속 두드린다고 생각해 보자.</p>
+      <details><summary>답 보기</summary><p>같은 행을 연달아 요청하는 스트리밍 마스터(GPU)가 다른 행을 원하는 요청(CPU, 디스플레이)을 오래 굶길 수 있다. 공정성 문제와 실시간 마감 위반이다. 실제 컨트롤러는 행 적중을 몇 번 연속 처리하면 강제로 다른 요청을 섞고(적중 한도), 요청이 일정 나이를 넘으면 우선순위를 올리고(에이징), 마스터별 대역폭 예산과 QoS 등급을 둔다. 스마트폰 SoC는 NoC와 컨트롤러가 함께 QoS 표식을 주고받는다.</p></details>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="qos">
+    <h2>늦으면 화면이 깨진다: 실시간 마스터와 QoS</h2>
+    <p>CPU 요청이 조금 늦으면 프로그램이 조금 느려질 뿐이다. 하지만 디스플레이 엔진은 다르다. 120 Hz 화면은 8.3 ms마다 한 장을 패널로 내보내야 하고, 그동안 한 줄 한 줄을 정해진 속도로 읽어 간다. 엔진 안에는 작은 버퍼(FIFO)가 있어 DRAM 지연의 들쭉날쭉함을 흡수하지만, 버퍼가 바닥나면(<span class="term">언더플로</span><span class="en">(Underflow)</span>) 그 순간 화면에 줄이 가거나 깜빡인다. 카메라 ISP도 센서가 쏟아내는 데이터를 놓치면 프레임을 잃는다. 이런 마스터를 <strong>실시간</strong> 마스터라 부른다.</p>
+    <figure class="play" id="fig-qos">
+      <div class="play-view"><canvas id="cv-qos"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>다른 마스터의 메모리 부하 <output id="qs-l-out"></output></span><input type="range" id="qs-l" min="0" max="95" step="1" value="60"></label>
+        <div class="seg" id="qs-p"><button data-value="same" class="on">모두 같은 우선순위</button><button data-value="disp">디스플레이 우선 (QoS)</button></div>
+        <button class="btn sm" id="qs-reset">초기화</button>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">디스플레이 요청 평균 지연</span><span class="v" id="qs-lat">—</span></div>
+        <div class="stat"><span class="k">FIFO 평균 수위</span><span class="v" id="qs-lv">—</span></div>
+        <div class="stat"><span class="k">언더플로 (화면 깨짐)</span><span class="v" id="qs-u">0</span></div>
+      </div>
+      <figcaption><b>그림 7-3.</b> <span class="try">만져 보기</span>디스플레이는 0.1 µs마다 FIFO에서 한 칸씩 꺼내 쓰고, FIFO가 비면 미리 DRAM에 요청을 보내 4칸씩 채운다(FIFO는 64칸 = 6.4 µs 분량). 요청 지연은 기본 1 µs에 큐에서 기다리는 시간이 더해지는데, 같은 우선순위에서는 부하 ρ가 1에 가까워질수록 대기 시간이 \(\rho/(1-\rho)\)처럼 폭증한다(큐 이론). 위쪽 띠의 빨간 줄이 화면이 깨진 순간이다. 부하 80% 이상에서 QoS를 켜고 끄며 비교해 보자.</figcaption>
+    </figure>
+    <p>QoS를 켜면 디스플레이 요청은 큐에서 다른 요청을 앞지르므로 대기 시간이 부하와 거의 무관해진다. 이처럼 SoC는 마스터마다 등급을 매긴다. 디스플레이·카메라·오디오처럼 마감이 있는 것은 실시간, CPU처럼 지연에 민감한 것은 저지연, GPU·NPU·DMA처럼 처리량만 중요한 것은 최선 노력(best effort)으로 다룬다. 실시간 마스터는 자기 버퍼 수위를 신호로 보내, 버퍼가 비어 갈수록 우선순위를 스스로 올리기도 한다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="bw">
+    <h2>68 GB/s는 어디로 사라지나: 대역폭과 리프레시</h2>
+    <p>DRAM의 최대 대역폭은 단순한 곱셈이다. 데이터 핀 하나가 초당 옮기는 횟수(MT/s, 초당 백만 번 전송)에 버스 폭을 곱하고 8로 나눈다.</p>
+    <div class="formula">$$ BW_{\text{peak}} = \frac{f_{\text{data}} \times W}{8} = \frac{8533 \times 10^6\ \text{/s} \times 64\ \text{bit}}{8} \approx 68.3\ \text{GB/s} $$
+      <div class="where">\(f_{\text{data}}\): 전송 속도(MT/s). DDR은 클럭의 양쪽 가장자리에서 전송하므로 8533 MT/s는 약 4.27 GHz 클럭에 해당한다. \(W\): 버스 폭(비트).</div></div>
+    <figure class="play" id="fig-bw">
+      <div class="play-view"><canvas id="cv-bw"></canvas></div>
+      <div class="play-ctrl">
+        <div><div class="dr-sub">전송 속도 (MT/s)</div><div class="seg" id="bw-r"><button data-value="6400">6400</button><button data-value="7500">7500</button><button data-value="8533" class="on">8533</button><button data-value="9600">9600</button><button data-value="10667">10667</button></div></div>
+        <div><div class="dr-sub">버스 폭</div><div class="seg" id="bw-w"><button data-value="32">32비트</button><button data-value="64" class="on">64비트</button><button data-value="128">128비트</button></div></div>
+        <label class="ctrl"><span>행 적중률 <output id="bw-h-out"></output></span><input type="range" id="bw-h" min="0" max="100" step="1" value="60"></label>
+        <label class="ctrl"><span>쓰기 비율 <output id="bw-wr-out"></output></span><input type="range" id="bw-wr" min="0" max="50" step="1" value="30"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">이론 최대</span><span class="v" id="bw-peak">—</span></div>
+        <div class="stat"><span class="k">실효 대역폭</span><span class="v" id="bw-eff">—</span></div>
+        <div class="stat"><span class="k">효율</span><span class="v" id="bw-pct">—</span></div>
+      </div>
+      <figcaption><b>그림 7-4.</b> <span class="try">만져 보기</span>막대는 최대 대역폭에서 손실을 하나씩 깎아 낸 교육용 근사다. 리프레시는 약 4%, 행 충돌은 (1−적중률)에 비례해 tRP·tRCD 동안 데이터 버스가 노는 몫, 읽기·쓰기 전환은 버스 방향을 바꿀 때마다 수 ns씩 쉬는 몫(쓰기 비율이 50%일 때 가장 크다), 명령·기타는 버스트 사이의 빈틈과 뱅크 제약이다. 여러 뱅크를 겹쳐 쓰면 손실이 줄어드는데 그 효과도 대략 반영했다.</figcaption>
+    </figure>
+    <p>읽기·쓰기 전환이 왜 손실일까? 데이터 핀은 양방향이라, 읽다가 쓰려면 DRAM 쪽 출력 드라이버를 끄고 컨트롤러 쪽을 켜는 동안 버스를 비워야 한다(tWTR, tRTW). 그래서 컨트롤러는 쓰기를 쓰기 큐에 모아 두었다가 일정량이 차면 한꺼번에 처리한다(쓰기 배치). 행 충돌도 마찬가지로, 여러 뱅크에 요청을 고루 흩뜨려 한 뱅크가 행을 바꾸는 동안 다른 뱅크의 데이터를 내보내면 손실이 가려진다.</p>
+    <h3>리프레시의 비용은 용량과 온도에 비례한다</h3>
+    <p>리프레시 명령 하나가 처리하는 동안(<b>tRFC</b>) 그 뱅크들은 아무 요청도 받지 못한다. 칩 용량이 커질수록 한 번에 리프레시할 행이 많아져 tRFC가 길어지고, 온도가 85°C를 넘으면 리프레시를 2배, 4배 자주 해야 한다. 전체 뱅크를 한꺼번에 멈추는 <b>전 뱅크 리프레시</b>(REFab) 대신 뱅크 하나씩 돌아가며 하는 <b>뱅크별 리프레시</b>(REFpb)를 쓰면, 나머지 뱅크는 계속 일할 수 있다.</p>
+    <figure class="play" id="fig-ref">
+      <div class="play-view"><canvas id="cv-ref"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>다이 용량 <output id="rf-d-out"></output></span><input type="range" id="rf-d" min="0" max="5" step="1" value="3"></label>
+        <label class="ctrl"><span>온도 <output id="rf-t-out"></output></span><input type="range" id="rf-t" min="25" max="105" step="5" value="45"></label>
+        <div class="seg" id="rf-m"><button data-value="ab" class="on">전 뱅크 (REFab)</button><button data-value="pb">뱅크별 (REFpb)</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">tRFC (명령 하나)</span><span class="v" id="rf-rfc">—</span></div>
+        <div class="stat"><span class="k">유효 리프레시 간격</span><span class="v" id="rf-refi">—</span></div>
+        <div class="stat"><span class="k">요청이 막히는 시간 비율</span><span class="v" id="rf-ov">—</span></div>
+      </div>
+      <figcaption><b>그림 7-5.</b> <span class="try">만져 보기</span>tRFC 값은 LPDDR5 계열 규격의 대략값이다(4 Gb 약 130 ns, 8 Gb 약 210 ns, 16 Gb 약 280 ns, 32 Gb 약 380 ns). tREFI ≈ 3.9 µs를 85°C 초과에서 1/2, 95°C 초과에서 1/4로 줄였다. 뱅크별 리프레시는 한 번에 뱅크 하나만 약 절반의 시간 동안 막으므로, 이 모형에서 균일한 무작위 요청의 시간 평균 막힘 비율은 전 뱅크 방식의 약 절반이다. 명령은 tREFI/16마다 오지만 목표 뱅크의 재방문 간격은 tREFI이므로 비율은 tRFCpb/tREFI다.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="power">
+    <h2>비트 하나 옮기는 데 드는 에너지와 메모리의 종류</h2>
+    <p><a href="overview.html">1장</a>에서 DRAM 읽기가 덧셈보다 수천 배 비싸다고 했다. 그 에너지는 세 군데에서 나온다. <b>행 활성화</b>: ACT 한 번에 2 KB 행 전체의 비트라인을 충전·감지한다. 그 행에서 32 B만 쓰고 닫으면 대부분이 낭비다. 행 적중이 많을수록 활성화 에너지가 여러 접근에 나뉜다. <b>코어 읽기</b>: 행 버퍼에서 데이터를 골라 칩 가장자리까지 옮기는 내부 배선. <b>I/O</b>: 칩 사이의 배선을 고속으로 흔드는 송수신 회로. 칩 사이가 멀고 신호가 빠를수록 비싸다.</p>
+    <figure class="play" id="fig-energy">
+      <div class="play-view"><canvas id="cv-energy"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>행 적중률 <output id="en-h-out"></output></span><input type="range" id="en-h" min="0" max="95" step="5" value="50"></label>
+        <label class="ctrl"><span>사용하는 대역폭 <output id="en-b-out"></output></span><input type="range" id="en-b" min="5" max="68" step="1" value="30"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">LPDDR5X 비트당 에너지</span><span class="v" id="en-pj">—</span></div>
+        <div class="stat"><span class="k">이 대역폭에서 DRAM 전력</span><span class="v" id="en-w">—</span></div>
+        <div class="stat"><span class="k">적중률 0%일 때보다</span><span class="v" id="en-save">—</span></div>
+      </div>
+      <figcaption><b>그림 7-6.</b> <span class="try">만져 보기</span>메모리 종류별 비트당 접근 에너지를 활성화·코어·I/O로 나눈 대략값(공개 발표·논문 범위를 단순화, 2022~2024년). 활성화 몫은 (1 − 적중률)에 비례한다. 전력 = 대역폭 × 8 × 비트당 에너지. 스마트폰이 게임 중 DRAM에 40 GB/s를 쓰면 메모리만으로 1 W 안팎이 든다. 같은 데이터를 SLC에서 해결하면(<a href="cache.html">5장</a>) 이 전력의 대부분을 아낀다.</figcaption>
+    </figure>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>종류 (대략, 2024~2025년)</th><th class="num">핀당 속도</th><th class="num">폭 (장치당)</th><th class="num">대역폭 (장치·패키지당)</th><th class="num">비트당 에너지</th><th>쓰는 곳</th></tr></thead>
+        <tbody>
+          <tr><td>LPDDR5X</td><td class="num">8.5~10.7 Gb/s</td><td class="num">16비트 × 채널 수</td><td class="num">64비트 패키지 ~68~85 GB/s</td><td class="num">~3~5 pJ</td><td>스마트폰·노트북, 저전력 우선</td></tr>
+          <tr><td>DDR5</td><td class="num">4.8~6.4 Gb/s</td><td class="num">DIMM 64비트 (32 × 2)</td><td class="num">DIMM당 ~38~51 GB/s</td><td class="num">~5~8 pJ</td><td>PC·서버, 큰 용량·교체 가능</td></tr>
+          <tr><td>GDDR6X/GDDR7</td><td class="num">21~32 Gb/s</td><td class="num">32비트</td><td class="num">칩당 ~84~128 GB/s</td><td class="num">~6~8 pJ</td><td>그래픽 카드, 대역폭 우선</td></tr>
+          <tr><td>HBM3/HBM3E</td><td class="num">6.4~9.6 Gb/s</td><td class="num">1024비트</td><td class="num">스택당 ~0.8~1.2 TB/s</td><td class="num">~3~4 pJ</td><td>AI 가속기·HPC, 실리콘 인터포저</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>표는 서로 다른 설계 철학을 보여 준다. GDDR은 핀을 아주 빠르게 흔들어 대역폭을 얻지만 에너지가 크다. HBM은 핀을 천 개 넘게 깔고 대신 천천히 흔든다. DRAM 다이를 SoC 바로 옆 인터포저 위에 쌓아 배선이 mm 단위로 짧으니 가능한 일이다. LPDDR은 그 중간에서 낮은 전압(VDDQ 0.5 V), 짧은 PoP 배선, 깊은 절전 모드로 대기 전력을 최소화한다. 스마트폰은 하루 대부분 화면이 꺼진 채 기다리므로, DRAM이 스스로 리프레시하며 수 mW만 쓰는 <span class="term">셀프 리프레시</span><span class="en">(Self-refresh)</span> 모드가 배터리 시간에 결정적이다.</p>
+    <div class="callout tip"><strong>메모리 컨트롤러 설계자의 체크리스트</strong><p>① 주소 사상으로 요청을 채널·뱅크에 고루 흩뜨린다. ② 행 적중을 우선하되 굶는 요청이 없게 한도와 에이징을 둔다. ③ 쓰기는 모아서 한꺼번에. ④ 실시간 마스터의 마감을 QoS로 지킨다. ⑤ 리프레시는 뱅크별로, 한가할 때 미리. ⑥ 놀 때는 재빨리 절전 모드로. 이 여섯 가지가 같은 DRAM에서 대역폭 10~30%, 전력 수십 %의 차이를 만든다.</p></div>
+  </section>
+
+  <section class="keypoints">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>DRAM 셀은 트랜지스터 하나와 축전기 하나(1T1C)다. 전하가 새므로 32~64 ms 안에 모든 행을 리프레시해야 하고, 고온에서는 더 자주 해야 한다. 읽기는 파괴적이라 감지 증폭기가 다시 써 넣는다.</li>
+      <li>DRAM은 채널 → 뱅크 → 행 → 열로 나뉜다. 주소 사상이 요청을 뱅크에 어떻게 흩뜨리는지가 뱅크 병렬성과 행 적중을 정한다.</li>
+      <li>행 적중은 CL, 빈 뱅크는 tRCD + CL, 행 충돌은 tRP + tRCD + CL을 기다린다. 열린 페이지 정책은 다음 요청이 같은 행이라는 데 거는 내기다.</li>
+      <li>FR-FCFS는 행 적중을 먼저 처리해 대역폭을 높이고, QoS는 디스플레이 같은 실시간 마스터의 마감과 CPU의 지연을 지킨다.</li>
+      <li>최대 대역폭 = 전송 속도 × 폭 ÷ 8(LPDDR5X 8533 × 64비트 ≈ 68 GB/s). 리프레시·행 충돌·읽기/쓰기 전환 때문에 실효는 그 60~85%다. 비트당 에너지는 활성화·코어·I/O로 나뉘며 행 적중이 활성화 에너지를 줄인다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. LPDDR5X 9600 MT/s, 64비트 버스의 이론 최대 대역폭은?</p>
+        <div class="opts">
+          <button class="opt">38.4 GB/s</button><button class="opt">61.4 GB/s</button><button class="opt" data-correct>76.8 GB/s</button><button class="opt">614 GB/s</button>
+        </div>
+        <div class="quiz-exp">9600 × 10⁶ × 64 / 8 = 76.8 × 10⁹ B/s. 실제로는 리프레시·행 충돌·읽기/쓰기 전환 때문에 이보다 낮다.</div></div>
+      <div class="quiz-q"><p>Q2. 원하는 뱅크에 다른 행이 열려 있을 때(행 충돌) 데이터가 나오기까지 필요한 명령 순서는?</p>
+        <div class="opts">
+          <button class="opt" data-correct>PRE → ACT → RD</button><button class="opt">ACT → PRE → RD</button><button class="opt">RD → PRE</button><button class="opt">REF → RD</button>
+        </div>
+        <div class="quiz-exp">열린 행을 닫고(PRE, tRP), 원하는 행을 열고(ACT, tRCD), 열을 읽는다(RD, CL). 지연은 tRP + tRCD + CL이다.</div></div>
+      <div class="quiz-q"><p>Q3. DRAM이 리프레시를 해야 하는 근본 이유는?</p>
+        <div class="opts">
+          <button class="opt">감지 증폭기가 시간이 지나면 값을 잊어서</button>
+          <button class="opt">행 버퍼가 작아서</button>
+          <button class="opt" data-correct>셀 축전기의 전하가 누설 전류로 서서히 빠져나가서</button>
+          <button class="opt">I/O 전압이 낮아서</button>
+        </div>
+        <div class="quiz-exp">축전기 전하는 접합 누설 등으로 새어 나가며, 온도가 높을수록 빨리 샌다. 감지 한계 아래로 떨어지기 전에 읽어서 다시 채워야 한다.</div></div>
+      <div class="quiz-q"><p>Q4. FR-FCFS 스케줄러가 FCFS보다 대역폭이 높은 주된 이유는?</p>
+        <div class="opts">
+          <button class="opt">명령 버스를 두 개 써서</button>
+          <button class="opt">리프레시를 건너뛰어서</button>
+          <button class="opt">버스트 길이를 늘려서</button>
+          <button class="opt" data-correct>이미 열린 행에 적중하는 요청을 먼저 처리해 PRE·ACT 횟수를 줄여서</button>
+        </div>
+        <div class="quiz-exp">행 적중은 CL만 기다리면 되고 데이터 버스를 쉬지 않게 한다. 대신 적중을 계속 몰아주면 다른 요청이 굶을 수 있어 한도·에이징·QoS가 필요하다.</div></div>
+      <div class="quiz-q"><p>Q5. 디스플레이 엔진에 QoS 우선순위를 주는 이유로 가장 알맞은 것은?</p>
+        <div class="opts">
+          <button class="opt">디스플레이가 가장 많은 대역폭을 써서</button>
+          <button class="opt" data-correct>정해진 시각까지 데이터가 오지 않으면 버퍼가 비어 화면이 깨지는 실시간 마스터라서</button>
+          <button class="opt">디스플레이 요청은 행 적중이 없어서</button>
+          <button class="opt">디스플레이는 쓰기만 해서</button>
+        </div>
+        <div class="quiz-exp">디스플레이는 대역폭은 크지 않지만 마감이 있다. 부하가 높을 때 대기 시간이 폭증하면 FIFO 언더플로가 생기므로 우선순위로 대기 시간을 묶어 둔다.</div></div>
+      <div class="quiz-q"><p>Q6. HBM이 GDDR보다 핀당 속도가 낮은데도 장치당 대역폭이 훨씬 큰 이유는?</p>
+        <div class="opts">
+          <button class="opt">행 버퍼가 더 커서</button><button class="opt">리프레시를 하지 않아서</button><button class="opt" data-correct>인터포저 위의 짧은 배선으로 1024비트처럼 아주 넓은 버스를 깔 수 있어서</button><button class="opt">SRAM으로 만들어서</button>
+        </div>
+        <div class="quiz-exp">대역폭 = 속도 × 폭. HBM은 폭을 수십 배 넓혀 대역폭을 얻고, 짧은 배선 덕분에 비트당 I/O 에너지도 낮다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var P = SB.palette();
+  SB.onTheme(function () { P = SB.palette(); });
+  function u(v, unit) { return v + "<small>" + unit + "</small>"; }
+
+  /* ---------------------------------------------------------------- 1. 1T1C 셀 */
+  (function () {
+    var T = 45, refMs = 32, V = 1, bit = 1, t = 0, lastRef = 0, hist = [], refs = [], lost = false, logEl = document.getElementById("ce-log");
+    var TH = 0.6;
+    function tau() { return 147 * Math.pow(2, (85 - T) / 10); }
+    function ret() { return tau() * Math.log(1 / TH); }
+    function say(m) { logEl.innerHTML = m; }
+    var cv = SB.canvas("#cv-cell", function (ctx, w, h) {
+      var narrow = w < 560, sw = narrow ? w : Math.min(260, w * 0.34), sh = narrow ? 150 : h;
+      // schematic
+      var bx = sw * 0.3, wlY = 26, tx = sw * 0.3, ty = narrow ? 64 : h * 0.34, cx = sw * 0.62, capTop = narrow ? 52 : h * 0.24, capH = narrow ? 80 : h * 0.5, capW = Math.min(64, sw * 0.26);
+      ctx.strokeStyle = P.dim; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(bx - 40, 14); ctx.lineTo(bx - 40, sh - 12); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText("BL", bx - 40, sh - 12 > 140 ? sh - 26 : sh - 14);
+      ctx.strokeStyle = P.accent; ctx.beginPath(); ctx.moveTo(8, wlY); ctx.lineTo(sw - 8, wlY); ctx.stroke();
+      ctx.fillStyle = P.accent; ctx.textAlign = "right"; ctx.textBaseline = "bottom"; ctx.fillText("WL", sw - 8, wlY - 3);
+      ctx.strokeStyle = P.dim; ctx.beginPath(); ctx.moveTo(bx - 40, ty); ctx.lineTo(tx - 14, ty); ctx.moveTo(tx + 14, ty); ctx.lineTo(cx, ty); ctx.lineTo(cx, capTop); ctx.stroke();
+      ctx.fillStyle = P.surface; ctx.strokeStyle = P.text; ctx.lineWidth = 1.6; SOC.roundRect(ctx, tx - 14, ty - 10, 28, 20, 3); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = P.accent; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(tx, wlY); ctx.lineTo(tx, ty - 10); ctx.stroke();
+      // capacitor as bucket
+      var cxl = cx - capW / 2;
+      ctx.fillStyle = P.surface; ctx.fillRect(cxl, capTop, capW, capH);
+      var lvl = SB.clamp(V, 0, 1);
+      ctx.fillStyle = lost ? P.bad : P.accent2; ctx.globalAlpha = 0.8; ctx.fillRect(cxl, capTop + capH * (1 - lvl), capW, capH * lvl); ctx.globalAlpha = 1;
+      ctx.strokeStyle = P.text; ctx.lineWidth = 2; ctx.strokeRect(cxl, capTop, capW, capH);
+      ctx.setLineDash([4, 3]); ctx.strokeStyle = P.warn; ctx.beginPath(); ctx.moveTo(cxl - 6, capTop + capH * (1 - TH)); ctx.lineTo(cxl + capW + 6, capTop + capH * (1 - TH)); ctx.stroke(); ctx.setLineDash([]);
+      // leak droplets
+      if (V > 0.02) { var k = (t * 0.01) % 1; ctx.fillStyle = P.accent2; ctx.globalAlpha = 1 - k; ctx.beginPath(); ctx.arc(cx, capTop + capH + 6 + k * 18, 2.5, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1; }
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText("축전기 ~수 fF", cxl + capW + 8, capTop + capH / 2);
+      // chart
+      var gx = narrow ? 44 : sw + 50, gy = narrow ? sh + 10 : 14, gw = w - gx - 12, gh = (narrow ? h - sh - 10 : h - 14) - 34;
+      var tw = 400, t0 = Math.max(0, t - tw);
+      var X = function (tt) { return gx + (tt - t0) / tw * gw; }, Y = function (v) { return gy + gh - v * gh; };
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx, gy + gh); ctx.lineTo(gx + gw, gy + gh); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, true); ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText("VDD", gx - 4, Y(1)); ctx.fillText("0", gx - 4, Y(0));
+      ctx.setLineDash([4, 3]); ctx.strokeStyle = P.warn; ctx.beginPath(); ctx.moveTo(gx, Y(TH)); ctx.lineTo(gx + gw, Y(TH)); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = P.warn; ctx.textAlign = "left"; ctx.fillText("감지 한계", gx + 4, Y(TH) - 8);
+      ctx.strokeStyle = SOC.alpha(P.ok, 0.6);
+      refs.forEach(function (r) { if (r >= t0) { ctx.beginPath(); ctx.moveTo(X(r), gy + gh); ctx.lineTo(X(r), gy + gh - 8); ctx.stroke(); } });
+      ctx.strokeStyle = lost ? P.bad : P.accent2; ctx.lineWidth = 2; ctx.beginPath();
+      hist.forEach(function (p, i) { if (p[0] < t0) return; var x = X(p[0]), y = Y(p[1]); i && hist[i - 1][0] >= t0 ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText("시간 (지난 400 ms)", gx + gw / 2, gy + gh + 8);
+    }, { get height() { var el = document.getElementById("cv-cell"); return el.parentElement.clientWidth < 560 ? 340 : 230; } });
+    function readout() {
+      SB.stat("ce-v", u(Math.round(V * 100), "%"));
+      var r = ret();
+      SB.stat("ce-ret", r >= 1000 ? u((r / 1000).toFixed(1), "s") : u(Math.round(r), "ms"));
+      SB.stat("ce-st", lost ? "<span style=\"color:var(--bad)\">손실 (0으로 바뀜)</span>" : String(bit));
+    }
+    function doRefresh() {
+      if (bit === 1 && !lost) { if (V > TH) V = 1; else { V = 0; lost = true; say("<span class=\"w\">리프레시가 늦었다!</span> 전압이 감지 한계 아래로 내려가서 감지 증폭기가 0으로 읽고, 0을 다시 써 버렸다. 데이터가 사라졌다."); } }
+      refs.push(t); if (refs.length > 80) refs.shift();
+    }
+    SB.loop(cv.canvas, function (dt) {
+      var ms = dt * 200, n = 4, s = ms / n;
+      for (var i = 0; i < n; i++) {
+        t += s;
+        if (bit === 1 && !lost) V *= Math.exp(-s / tau());
+        if (refMs && t - lastRef >= refMs) { lastRef = t; doRefresh(); }
+      }
+      hist.push([t, V]); if (hist.length > 400) hist.shift();
+      readout(); cv.redraw();
+    });
+    SB.range("ce-t", function (v) { return v + "°C"; }, function (v) { T = v; });
+    SB.seg("ce-ref", function (v) { refMs = +v; lastRef = t; say(refMs ? refMs + " ms마다 리프레시한다." : "리프레시를 껐다. 전하가 새는 것을 지켜보자."); });
+    document.getElementById("ce-w1").onclick = function () { V = 1; bit = 1; lost = false; say("1을 썼다. 축전기를 VDD까지 충전했다."); };
+    document.getElementById("ce-w0").onclick = function () { V = 0; bit = 0; lost = false; say("0을 썼다. 빈 축전기는 샐 전하가 없다."); };
+    document.getElementById("ce-rd").onclick = function () {
+      if (bit === 0 || lost) { say("읽기: 0. " + (lost ? "원래는 1이었지만 이미 사라졌다." : "")); return; }
+      if (V > TH) { say("읽기: <b>1</b>. 비트라인과 전하를 나누며 값이 망가졌지만, 감지 증폭기가 1로 판정하고 곧바로 다시 써 넣었다(전압 " + Math.round(V * 100) + "% → 100%)."); V = 1; }
+      else { say("<span class=\"w\">읽기: 0!</span> 전압(" + Math.round(V * 100) + "%)이 감지 한계보다 낮아 1을 0으로 잘못 읽었다."); V = 0; lost = true; }
+    };
+    readout();
+  })();
+
+  /* ---------------------------------------------------------------- 2. 뱅크·행·열 */
+  (function () {
+    var map = "rbc", addr = 0x1A2B3C40 & 0x3fffffff, geo = null;
+    function dec(a) {
+      var off = a & 31, rest = a >>> 5, col, bank, row = a >>> 15;
+      if (map === "rcb") { bank = rest & 15; col = (rest >>> 4) & 63; }
+      else { col = rest & 63; bank = (rest >>> 6) & 15; if (map === "xor") bank ^= (row & 15); }
+      return { off: off, col: col, bank: bank, row: row };
+    }
+    function fields() { return map === "rcb" ? [["행", 29, 15, "accent2"], ["열", 14, 9, "warn"], ["뱅크", 8, 5, "accent"], ["", 4, 0, "faint"]] : [["행", 29, 15, "accent2"], ["뱅크", 14, 11, "accent"], ["열", 10, 5, "warn"], ["", 4, 0, "faint"]]; }
+    function setBankRow(bank, row) {
+      var a = addr & ~(0x7fff << 15); a |= (row & 0x7fff) << 15;
+      if (map === "rcb") a = (a & ~(15 << 5)) | (bank << 5);
+      else { var b = map === "xor" ? bank ^ (row & 15) : bank; a = (a & ~(15 << 11)) | (b << 11); }
+      addr = a >>> 0;
+    }
+    var cv = SB.canvas("#cv-org", function (ctx, w, h) {
+      var D = dec(addr), pad = 10, bw = (w - 2 * pad) / 30, by = 30, bh = Math.min(30, bw * 2.4);
+      ctx.fillStyle = P.text; ctx.font = SB.font(13.5, true, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText("주소 0x" + addr.toString(16).toUpperCase().padStart(8, "0") + " (채널 안 30비트)", pad, 13);
+      var F = fields();
+      for (var i = 0; i < 30; i++) {
+        var bit = 29 - i, v = (addr >>> bit) & 1, x = pad + i * bw, f = F.filter(function (q) { return bit <= q[1] && bit >= q[2]; })[0];
+        ctx.fillStyle = SOC.alpha(P[f[3] === "accent2" ? "accent2" : f[3] === "faint" ? "faint" : f[3]], v ? 0.55 : 0.14);
+        ctx.fillRect(x + 0.5, by, bw - 1, bh);
+        ctx.fillStyle = P.text; ctx.font = SB.font(Math.min(12, bw * 0.75), true, 700); ctx.textAlign = "center"; ctx.fillText(v, x + bw / 2, by + bh / 2);
+      }
+      F.forEach(function (f) {
+        if (!f[0]) return;
+        var xa = pad + (29 - f[1]) * bw + 1, xb = pad + (30 - f[2]) * bw - 1, ly = by + bh + 5, col = P[f[3]];
+        ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(xa, ly); ctx.lineTo(xa, ly + 4); ctx.lineTo(xb, ly + 4); ctx.lineTo(xb, ly); ctx.stroke();
+        ctx.fillStyle = col; ctx.font = SB.font(11, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "top";
+        ctx.fillText(f[0] + (f[0] === "뱅크" && map === "xor" ? "⊕행" : ""), (xa + xb) / 2, ly + 7);
+      });
+      // banks 4x4
+      var gy = by + bh + 44, sh = 30, gh = h - gy - sh - 30, gw = Math.min(w - 2 * pad, gh * 2.2), gx = (w - gw) / 2;
+      var tw = gw / 4, th = gh / 4;
+      geo = { gx: gx, gy: gy, tw: tw, th: th };
+      for (var b = 0; b < 16; b++) {
+        var bgp = b >> 2, bi = b & 3, x0 = gx + bgp * tw, y0 = gy + bi * th, on = b === D.bank;
+        ctx.fillStyle = on ? SOC.alpha(SOC.color("mem"), 0.45) : SOC.alpha(SOC.color("mem"), 0.12 + 0.05 * (bgp % 2));
+        ctx.fillRect(x0 + 2, y0 + 2, tw - 4, th - 4);
+        if (on) {
+          var ry = y0 + 2 + (D.row / 32768) * (th - 4), cx = x0 + 2 + (D.col / 64) * (tw - 4);
+          ctx.strokeStyle = P.accent2; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x0 + 2, ry); ctx.lineTo(x0 + tw - 2, ry); ctx.stroke();
+          ctx.fillStyle = P.warn; ctx.fillRect(cx - 2, ry - 4, Math.max(3, (tw - 4) / 64 * 2), 8);
+        }
+        ctx.fillStyle = on ? P.text : P.dim; ctx.font = SB.font(10.5, true, on ? 700 : 400); ctx.textAlign = "left"; ctx.textBaseline = "top";
+        ctx.fillText("B" + b, x0 + 6, y0 + 5);
+      }
+      ctx.fillStyle = P.faint; ctx.font = SB.font(10.5); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      for (var g = 0; g < 4; g++) ctx.fillText("뱅크 그룹 " + g, gx + g * tw + tw / 2, gy - 2);
+      // strip
+      var sy = h - sh - 8, swd = (w - 2 * pad) / 16, base = addr & ~31, prevRow = null;
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText("+32 B씩 연속 16번 → 뱅크", pad, sy - 2);
+      for (var k = 0; k < 16; k++) {
+        var d = dec((base + 32 * k) & 0x3fffffff), x = pad + k * swd;
+        ctx.fillStyle = SOC.alpha(P.series[d.bank >> 2], 0.35 + 0.15 * (d.bank & 3)); ctx.fillRect(x + 1, sy, swd - 2, sh);
+        ctx.fillStyle = P.text; ctx.font = SB.font(Math.min(12, swd * 0.5), true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(d.bank, x + swd / 2, sy + sh / 2);
+        if (prevRow !== null && d.row !== prevRow) { ctx.strokeStyle = P.bad; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, sy - 3); ctx.lineTo(x, sy + sh + 3); ctx.stroke(); }
+        prevRow = d.row;
+      }
+    }, { aspect: 0.5, minHeight: 330, maxHeight: 400 });
+    function upd() {
+      var D = dec(addr);
+      SB.stat("og-b", D.bank + " <small>(그룹 " + (D.bank >> 2) + ")</small>");
+      SB.stat("og-r", D.row.toLocaleString());
+      SB.stat("og-c", String(D.col));
+      var set = {}, base = addr & ~31; for (var k = 0; k < 16; k++) set[dec((base + 32 * k) & 0x3fffffff).bank] = 1;
+      SB.stat("og-s", u(Object.keys(set).length, "개"));
+      cv.redraw();
+    }
+    SOC.pointer(cv.canvas, { down: function (x, y) {
+      var pad = 10, bw = (cv.w - 2 * pad) / 30, bh = Math.min(30, bw * 2.4);
+      if (y >= 30 && y <= 30 + bh) { var i = Math.floor((x - pad) / bw); if (i >= 0 && i < 30) { addr = (addr ^ (1 << (29 - i))) >>> 0; upd(); } return; }
+      if (geo && x >= geo.gx && x <= geo.gx + 4 * geo.tw && y >= geo.gy && y <= geo.gy + 4 * geo.th) {
+        var bg = Math.floor((x - geo.gx) / geo.tw), bi = Math.floor((y - geo.gy) / geo.th), fy = ((y - geo.gy) - bi * geo.th) / geo.th;
+        setBankRow(bg * 4 + bi, Math.floor(SB.clamp(fy, 0, 0.999) * 32768)); upd();
+      }
+    } });
+    cv.canvas.style.cursor = "pointer";
+    SB.seg("og-map", function (v) { map = v; upd(); });
+    var rr = SB.rng(8);
+    document.getElementById("og-rand").onclick = function () { addr = Math.floor(rr() * 0x40000000) & ~31; upd(); };
+    document.getElementById("og-n").onclick = function () { addr = (addr + 32) & 0x3fffffff; upd(); };
+    document.getElementById("og-row").onclick = function () { addr = (addr + 2048) & 0x3fffffff; upd(); };
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 3. 명령 타이밍 */
+  (function () {
+    var RCD = 3, CL = 3, RP = 3, RAS = 7, BL = 2, NS = 6;
+    var reqs = [{ b: 0, row: 3 }, { b: 0, row: 3 }, { b: 1, row: 2 }, { b: 0, row: 7 }], pol = "open", R = null;
+    var logEl = document.getElementById("tm-log");
+    function schedule() {
+      var cmd = {}, banks = [0, 1].map(function () { return { open: null, actAt: -99, rdOK: 0, actOK: 0, lastRd: -99 }; }), out = [], dataFree = 0;
+      function slot(x) { while (cmd[x]) x++; return x; }
+      reqs.forEach(function (r, i) {
+        var B = banks[r.b], kind = B.open === r.row ? "hit" : B.open === null ? "empty" : "conflict", tt = 0, pre = null, act = null;
+        if (kind === "conflict") { pre = slot(Math.max(tt, B.actAt + RAS, B.lastRd + 1)); cmd[pre] = { c: "P", b: r.b, i: i }; B.open = null; B.actOK = pre + RP; tt = pre + 1; }
+        if (B.open === null) { act = slot(Math.max(tt, B.actOK)); cmd[act] = { c: "A", b: r.b, i: i }; B.open = r.row; B.actAt = act; B.rdOK = act + RCD; tt = act + 1; }
+        var rd = slot(Math.max(tt, B.rdOK, dataFree - CL)); cmd[rd] = { c: "R", b: r.b, i: i }; B.lastRd = rd;
+        var d0 = rd + CL; dataFree = d0 + BL;
+        if (pol === "closed") { var p2 = slot(Math.max(rd + 1, B.actAt + RAS)); cmd[p2] = { c: "P", b: r.b, i: i }; B.open = null; B.actOK = p2 + RP; }
+        out.push({ i: i, kind: kind, pre: pre, act: act, rd: rd, d0: d0, end: d0 + BL });
+      });
+      var end = out.reduce(function (m, o) { return Math.max(m, o.end); }, 0);
+      Object.keys(cmd).forEach(function (k) { end = Math.max(end, +k + 1); });
+      return { cmd: cmd, out: out, end: end };
+    }
+    var cv = SB.canvas("#cv-tim", function (ctx, w, h) {
+      if (!R || !reqs.length) { ctx.fillStyle = P.dim; ctx.font = SB.font(14); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("요청을 추가하자", w / 2, h / 2); return; }
+      var cyc = Math.max(16, R.end + 1);
+      var rowOf = function (b) { var v = []; var open = null; for (var c = 0; c < cyc; c++) { var m = R.cmd[c]; if (m && m.b === b && m.c === "A") open = "행 " + reqs[m.i].row; v.push(open || ""); if (m && m.b === b && m.c === "P") open = null; } return v; };
+      var cmdOf = function (b) { var v = []; for (var c = 0; c < cyc; c++) { var m = R.cmd[c]; v.push(m && m.b === b ? m.c : ""); } return v; };
+      var dq = []; for (var c = 0; c < cyc; c++) dq.push("");
+      R.out.forEach(function (o) { for (var k = o.d0; k < o.end; k++) dq[k] = "D" + (o.i + 1); });
+      var last = R.out[R.out.length - 1], shade = [];
+      if (last.pre != null) shade.push({ c0: last.pre, c1: last.pre + RP, color: SOC.alpha(P.bad, 0.13) });
+      if (last.act != null) shade.push({ c0: last.act, c1: last.act + RCD, color: SOC.alpha(P.warn, 0.15) });
+      shade.push({ c0: last.rd, c1: last.d0, color: SOC.alpha(P.accent2, 0.15) });
+      var marks = [];
+      if (last.pre != null) marks.push({ c: last.pre, color: P.bad, label: "tRP" });
+      if (last.act != null) marks.push({ c: last.act, color: P.warn, label: "tRCD" });
+      marks.push({ c: last.rd, color: P.accent2, label: "CL" });
+      var g = SOC.wave(ctx, { x: 6, y: 18, w: w - 12, h: h - 40 }, {
+        cycles: cyc, nameW: w < 500 ? 54 : 78, shade: shade, marks: marks,
+        signals: [
+          { name: "B0 명령", type: "bus", v: cmdOf(0), color: SOC.color("mem") },
+          { name: "B0 행", type: "bus", v: rowOf(0), color: P.accent2 },
+          { name: "B1 명령", type: "bus", v: cmdOf(1), color: SOC.color("mem") },
+          { name: "B1 행", type: "bus", v: rowOf(1), color: P.accent2 },
+          { name: "데이터", type: "bus", v: dq, color: P.ok },
+        ],
+      });
+      ctx.fillStyle = P.faint; ctx.font = SB.font(10.5, true); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      var stepN = cyc > 30 ? 10 : 5;
+      for (var t = 0; t <= cyc; t += stepN) ctx.fillText(t * NS + "ns", g.X(t), h - 4);
+    }, { aspect: 0.36, minHeight: 230, maxHeight: 300 });
+    function upd() {
+      if (reqs.length) R = schedule(); else R = null;
+      var KN = { hit: "적중", empty: "빈 뱅크", conflict: "충돌" };
+      if (!R) { logEl.innerHTML = "요청이 없다."; ["tm-tot", "tm-lat", "tm-k", "tm-u"].forEach(function (id) { SB.stat(id, "—"); }); cv.redraw(); return; }
+      logEl.innerHTML = R.out.map(function (o) { var r = reqs[o.i]; return "<b>D" + (o.i + 1) + "</b> B" + r.b + "·행" + r.row + " " + KN[o.kind] + " " + o.end * NS + "ns"; }).join(" · ");
+      var cnt = { hit: 0, empty: 0, conflict: 0 }, lat = 0;
+      R.out.forEach(function (o) { cnt[o.kind]++; lat += o.end; });
+      SB.stat("tm-tot", u(R.end * NS, "ns"));
+      SB.stat("tm-lat", u(Math.round(lat / R.out.length * NS), "ns"));
+      SB.stat("tm-k", cnt.hit + " / " + cnt.empty + " / " + cnt.conflict);
+      SB.stat("tm-u", u(Math.round(R.out.length * BL / R.end * 100), "%"));
+      cv.redraw();
+    }
+    function add(b, row) { if (reqs.length >= 8) reqs.shift(); reqs.push({ b: b, row: row }); upd(); }
+    document.getElementById("tm-a").onclick = function () { add(0, 3); };
+    document.getElementById("tm-b").onclick = function () { add(0, 7); };
+    document.getElementById("tm-c").onclick = function () { add(1, 2); };
+    document.getElementById("tm-clr").onclick = function () { reqs = []; upd(); };
+    document.getElementById("tm-p1").onclick = function () { reqs = [{ b: 0, row: 3 }, { b: 0, row: 3 }, { b: 0, row: 3 }, { b: 0, row: 3 }]; upd(); };
+    document.getElementById("tm-p2").onclick = function () { reqs = [{ b: 0, row: 3 }, { b: 0, row: 7 }, { b: 0, row: 3 }, { b: 0, row: 7 }]; upd(); };
+    document.getElementById("tm-p3").onclick = function () { reqs = [{ b: 0, row: 3 }, { b: 1, row: 2 }, { b: 0, row: 7 }, { b: 1, row: 5 }]; upd(); };
+    SB.seg("tm-pol", function (v) { pol = v; upd(); });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 4. 메모리 컨트롤러 */
+  (function () {
+    var TM = { RCD: 8, CL: 8, RP: 8, RAS: 18, BURST: 4, REFI: 1950, RFC: 140 }, NB = 8, QCAP = 32, DEAD = 600, HIST = 240;
+    var MS = [{ k: "cpu", n: "CPU", t: "big" }, { k: "gpu", n: "GPU", t: "gpu" }, { k: "isp", n: "ISP", t: "isp" }, { k: "disp", n: "디스플레이", t: "video" }];
+    var cfg = { pol: "frfcfs", map: "rbc", load: { cpu: 8, gpu: 45, isp: 15, disp: 10 }, ref: true, spd: 12 };
+    var S, playing = false, acc = 0;
+    document.getElementById("mc-leg").innerHTML = MS.map(function (m) { return '<span><i style="background:' + SOC.color(m.t) + '"></i>' + m.n + "</span>"; }).join("") + '<span style="color:var(--text-faint)">A 활성화 · P 프리차지 · R 읽기</span>';
+    function mapA(la) {
+      var col, bank, row = Math.floor(la / 256);
+      if (cfg.map === "rcb") { bank = la % NB; col = Math.floor(la / NB) % 32; }
+      else { col = la % 32; bank = Math.floor(la / 32) % NB; if (cfg.map === "xor") bank ^= (row % NB); }
+      return { bank: bank, row: row, col: col };
+    }
+    function reset() {
+      var r = SB.rng(13);
+      S = { t: 0, q: [], banks: [], dataFree: 0, ref: false, refEnd: 0, nextRef: TM.REFI, cmdH: [], dataH: [], reads: 0, hits: 0, busy: 0, lat: {}, cnt: {}, miss: 0, dispN: 0, r: r, backlog: {}, gen: {} };
+      for (var b = 0; b < NB; b++) S.banks.push({ open: null, rdOK: 0, preOK: 0, actOK: 0, fresh: false });
+      MS.forEach(function (m, i) { S.lat[m.k] = 0; S.cnt[m.k] = 0; S.backlog[m.k] = 0; });
+      S.gen.cpu = { ptr: Math.floor(r() * 4e6) };
+      S.gen.gpu = { s: [0, 1, 2, 3].map(function (i) { return (i + 1) * 1048576 + Math.floor(r() * 4096) * 8; }), rr: 0 };
+      S.gen.isp = { s: [0, 1].map(function (i) { return (i + 9) * 1048576 + Math.floor(r() * 4096) * 8; }), rr: 0 };
+      S.gen.disp = { ptr: 14 * 1048576 + 37 };
+      for (var i = 0; i < HIST; i++) { S.cmdH.push(null); S.dataH.push(null); }
+    }
+    function nextAddr(k) {
+      var g = S.gen[k];
+      if (k === "cpu") { if (S.r() < 0.35) g.ptr++; else g.ptr = Math.floor(S.r() * 4e6); return g.ptr; }
+      if (k === "disp") return g.ptr++;
+      var i = g.rr++ % g.s.length; return g.s[i]++;
+    }
+    function rankList() {
+      var cands = [], t = S.t;
+      for (var qi = 0; qi < S.q.length; qi++) {
+        var r = S.q[qi], B = S.banks[r.bank], c = null;
+        if (B.open === r.row) { if (t >= B.rdOK && t + TM.CL >= S.dataFree) c = "R"; }
+        else if (B.open !== null) { if (t >= B.preOK) c = "P"; }
+        else if (t >= B.actOK) c = "A";
+        if (c) cands.push({ r: r, c: c, qi: qi });
+      }
+      return cands;
+    }
+    function pick(cands) {
+      if (!cands.length) return null;
+      if (cfg.pol === "fcfs") return cands[0];
+      var pend = {};
+      S.q.forEach(function (r) { var B = S.banks[r.bank]; if (B.open === r.row) pend[r.bank] = 1; });
+      var ok = cands.filter(function (c) { return !(c.c === "P" && pend[c.r.bank]); });
+      if (cfg.pol === "qos") {
+        var urg = ok.filter(function (c) { return c.r.m === "disp" && S.t - c.r.arr > DEAD * 0.4; });
+        if (urg.length) return urg[0];
+      }
+      var hit = ok.filter(function (c) { return c.c === "R"; });
+      if (hit.length) {
+        if (cfg.pol === "qos") { var hc = hit.filter(function (c) { return c.r.m === "cpu" || c.r.m === "disp"; }); if (hc.length) return hc[0]; }
+        return hit[0];
+      }
+      if (cfg.pol === "qos") { var cp = ok.filter(function (c) { return c.r.m === "cpu" || c.r.m === "disp"; }); if (cp.length) return cp[0]; }
+      return ok[0] || null;
+    }
+    function step() {
+      var t = S.t, hi = t % HIST;
+      S.cmdH[hi] = null; S.dataH[hi] = null;
+      // arrivals
+      MS.forEach(function (m) {
+        var p = cfg.load[m.k] / 100 / TM.BURST;
+        if (m.k === "disp") { if (t % Math.round(TM.BURST * 100 / cfg.load.disp) === 0) S.backlog.disp++; }
+        else if (S.r() < p) S.backlog[m.k] = Math.min(8, S.backlog[m.k] + 1);
+        while (S.backlog[m.k] > 0 && S.q.length < QCAP) { S.backlog[m.k]--; var la = nextAddr(m.k), A = mapA(la); S.q.push({ m: m.k, bank: A.bank, row: A.row, arr: t }); }
+      });
+      // refresh
+      if (cfg.ref && t >= S.nextRef && !S.ref) { S.ref = true; S.refEnd = t + TM.RFC; S.nextRef += TM.REFI; S.banks.forEach(function (B) { B.open = null; B.actOK = S.refEnd; }); S.cmdH[hi] = { c: "F", m: null }; }
+      if (S.ref && t >= S.refEnd) S.ref = false;
+      if (!S.ref) {
+        var c = pick(rankList());
+        if (c) {
+          var B = S.banks[c.r.bank];
+          if (c.c === "A") { B.open = c.r.row; B.rdOK = t + TM.RCD; B.preOK = t + TM.RAS; B.fresh = true; }
+          else if (c.c === "P") { B.open = null; B.actOK = t + TM.RP; }
+          else {
+            var d0 = t + TM.CL; S.dataFree = d0 + TM.BURST; S.reads++; if (!B.fresh) S.hits++; B.fresh = false;
+            B.preOK = Math.max(B.preOK, t + 2);
+            var lat = S.dataFree - c.r.arr; S.lat[c.r.m] += lat; S.cnt[c.r.m]++;
+            if (c.r.m === "disp") { S.dispN++; if (lat > DEAD) S.miss++; }
+            for (var k = d0; k < S.dataFree; k++) S.dataH[k % HIST] = c.r.m;
+            S.busy += TM.BURST;
+            S.q.splice(c.qi, 1);
+          }
+          S.cmdH[hi] = { c: c.c, m: c.r.m };
+        }
+      }
+      // clear future data slot markers already written: keep
+      S.t++;
+    }
+    function run(n) { for (var i = 0; i < n; i++) step(); }
+    var cv = SB.canvas("#cv-mc", function (ctx, w, h) {
+      if (!S) return;
+      var pad = 10, col = {}; MS.forEach(function (m) { col[m.k] = SOC.color(m.t); });
+      // queue
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("요청 큐 " + S.q.length + "/" + QCAP + (S.ref ? "  · 리프레시 중" : ""), pad, 6);
+      var cw = (w - 2 * pad) / 16, ch = 22;
+      for (var i = 0; i < QCAP; i++) {
+        var x = pad + (i % 16) * cw, y = 22 + Math.floor(i / 16) * (ch + 4), r = S.q[i];
+        if (r) {
+          ctx.fillStyle = col[r.m]; ctx.fillRect(x + 1, y, cw - 2, ch);
+          var hit = S.banks[r.bank].open === r.row;
+          if (hit) { ctx.strokeStyle = P.text; ctx.lineWidth = 2; ctx.strokeRect(x + 2, y + 1, cw - 4, ch - 2); }
+          ctx.fillStyle = "#fff"; ctx.font = SB.font(Math.min(11, cw * 0.5), true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(r.bank, x + cw / 2, y + ch / 2 + 0.5);
+        } else { ctx.fillStyle = P.surface; ctx.fillRect(x + 1, y, cw - 2, ch); }
+      }
+      // banks
+      var by = 22 + 2 * (ch + 4) + 22, bw = (w - 2 * pad) / NB, bh = 44;
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText("뱅크 (열린 행)", pad, by - 4);
+      S.banks.forEach(function (B, b) {
+        var x = pad + b * bw;
+        ctx.fillStyle = S.ref ? SOC.alpha(P.warn, 0.3) : B.open !== null ? SOC.alpha(SOC.color("mem"), 0.55) : P.surface;
+        ctx.fillRect(x + 2, by, bw - 4, bh);
+        ctx.fillStyle = P.text; ctx.font = SB.font(10.5, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText("B" + b, x + bw / 2, by + 4);
+        ctx.font = SB.font(Math.min(11, bw * 0.2), true); ctx.fillStyle = P.dim;
+        ctx.fillText(S.ref ? "REF" : B.open !== null ? String(B.open % 10000) : "닫힘", x + bw / 2, by + 22);
+      });
+      // timeline
+      var ty = by + bh + 26, th = Math.max(20, (h - ty - 30) / 2), tw = w - 2 * pad - 40, sx = tw / HIST;
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText("최근 " + HIST + "클럭", pad, ty - 4);
+      ["명령", "데이터"].forEach(function (nm, k) { ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textBaseline = "middle"; ctx.fillText(nm, pad, ty + k * (th + 6) + th / 2); ctx.fillStyle = P.surface; ctx.fillRect(pad + 40, ty + k * (th + 6), tw, th); });
+      for (var j = 0; j < HIST; j++) {
+        var tt = S.t - HIST + j; if (tt < 0) continue;
+        var idx = ((tt % HIST) + HIST) % HIST, x2 = pad + 40 + j * sx, c = S.cmdH[idx], d = S.dataH[idx];
+        if (c) {
+          ctx.fillStyle = c.c === "F" ? P.warn : col[c.m]; ctx.globalAlpha = c.c === "R" ? 1 : 0.55;
+          ctx.fillRect(x2, ty + (c.c === "R" ? 0 : th * 0.35), Math.max(1, sx), c.c === "R" ? th : th * 0.65); ctx.globalAlpha = 1;
+          if (sx * 3 > 7 && c.c !== "R" && j % 1 === 0 && sx > 2.5) { ctx.fillStyle = P.text; ctx.font = SB.font(9, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText(c.c, x2 + sx / 2, ty + 1); }
+        }
+        if (d && tt < S.t) { ctx.fillStyle = col[d]; ctx.fillRect(x2, ty + th + 6, Math.max(1, sx) + 0.4, th); }
+      }
+    }, { aspect: 0.62, minHeight: 330, maxHeight: 470 });
+    function upd() {
+      SB.stat("mc-hit", S.reads ? u((S.hits / S.reads * 100).toFixed(1), "%") : "—");
+      var bu = S.t ? S.busy / S.t : 0;
+      SB.stat("mc-bw", u((bu * 100).toFixed(0), "%") + " <small>(64비트 환산 ≈ " + (bu * 68.3).toFixed(0) + " GB/s)</small>");
+      SB.stat("mc-lcpu", S.cnt.cpu ? u(Math.round(S.lat.cpu / S.cnt.cpu), "클럭") : "—");
+      SB.stat("mc-lgpu", S.cnt.gpu ? u(Math.round(S.lat.gpu / S.cnt.gpu), "클럭") : "—");
+      SB.stat("mc-miss", S.dispN ? u(S.miss, "회") + " <small>/ " + S.dispN + "</small>" : "—");
+    }
+    function rst() { reset(); run(3000); upd(); cv.redraw(); }
+    SB.seg("mc-pol", function (v) { cfg.pol = v; rst(); });
+    SB.seg("mc-map", function (v) { cfg.map = v; rst(); });
+    ["cpu", "gpu", "isp"].forEach(function (k) { SB.range("mc-" + k, function (v) { return v + "%"; }, SB.debounce(function (v) { cfg.load[k] = v; rst(); }, 120)); });
+    SB.seg("mc-ref", function (v) { cfg.ref = v === "1"; rst(); });
+    SB.range("mc-spd", function (v) { return (v * 60).toLocaleString(); }, function (v) { cfg.spd = v; });
+    var pb = document.getElementById("mc-play");
+    pb.onclick = function () { playing = !playing; pb.textContent = playing ? "❚❚ 멈춤" : "▶ 자동"; };
+    document.getElementById("mc-ff").onclick = function () { run(20000); upd(); cv.redraw(); };
+    document.getElementById("mc-reset").onclick = rst;
+    SB.loop(cv.canvas, function () { if (playing) { run(cfg.spd); upd(); cv.redraw(); } });
+    rst();
+  })();
+
+  /* ---------------------------------------------------------------- 5. QoS: 디스플레이 FIFO */
+  (function () {
+    var load = 60, prio = "same", CAP = 64, S;
+    function reset() { S = { t: 0, fifo: CAP, infl: [], hist: [], glitch: [], under: 0, latS: 0, latN: 0, lvS: 0, r: SB.rng(31) }; }
+    function expo(mean) { return -Math.log(1 - S.r()) * mean; }
+    function tick() {
+      S.t++;
+      var rho = Math.min(0.97, load / 100 + 0.1);
+      // arrivals
+      for (var i = S.infl.length - 1; i >= 0; i--) if (S.infl[i].at <= S.t) { S.fifo = Math.min(CAP, S.fifo + 4); S.infl.splice(i, 1); }
+      // consume
+      if (S.fifo > 0) S.fifo--; else { S.under++; S.glitch.push(S.t); }
+      // request
+      while (S.fifo + S.infl.length * 4 + 4 <= CAP) {
+        var lat = 10 + (prio === "same" ? expo(10 * rho / (1 - rho)) : expo(2 + 2 * rho));
+        S.infl.push({ at: S.t + Math.round(lat) }); S.latS += lat; S.latN++;
+      }
+      S.lvS += S.fifo;
+      S.hist.push(S.fifo); if (S.hist.length > 600) S.hist.shift();
+      while (S.glitch.length && S.glitch[0] < S.t - 600) S.glitch.shift();
+    }
+    var cv = SB.canvas("#cv-qos", function (ctx, w, h) {
+      if (!S) return;
+      var x0 = 44, sy = 8, sh = 22, gy = sy + sh + 14, gh = h - gy - 26, gw = w - x0 - 10;
+      ctx.fillStyle = SOC.alpha(SOC.color("video"), 0.25); ctx.fillRect(x0, sy, gw, sh);
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText("화면", x0 - 6, sy + sh / 2);
+      ctx.fillStyle = P.bad;
+      S.glitch.forEach(function (g) { var x = x0 + (g - (S.t - 600)) / 600 * gw; ctx.fillRect(x - 1, sy, 2.5, sh); });
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x0, gy); ctx.lineTo(x0, gy + gh); ctx.lineTo(x0 + gw, gy + gh); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, true); ctx.textAlign = "right"; ctx.fillText("64", x0 - 4, gy + 4); ctx.fillText("0", x0 - 4, gy + gh - 2);
+      var n = S.hist.length;
+      ctx.beginPath(); ctx.moveTo(x0 + (600 - n) / 600 * gw, gy + gh);
+      S.hist.forEach(function (v, i) { ctx.lineTo(x0 + (i + 600 - n) / 600 * gw, gy + gh - v / CAP * gh); });
+      ctx.lineTo(x0 + gw, gy + gh); ctx.closePath(); ctx.fillStyle = SOC.alpha(P.accent2, 0.25); ctx.fill();
+      ctx.strokeStyle = P.accent2; ctx.lineWidth = 1.6; ctx.beginPath();
+      S.hist.forEach(function (v, i) { var x = x0 + (i + 600 - n) / 600 * gw, y = gy + gh - v / CAP * gh; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText("디스플레이 FIFO 수위 (지난 60 µs)", x0 + gw / 2, gy + gh + 6);
+    }, { aspect: 0.3, minHeight: 200, maxHeight: 240 });
+    function upd() {
+      SB.stat("qs-lat", S.latN ? u((S.latS / S.latN / 10).toFixed(2), "µs") : "—");
+      SB.stat("qs-lv", u(Math.round(S.lvS / Math.max(1, S.t) / CAP * 100), "%"));
+      SB.stat("qs-u", u(S.under, "회"));
+    }
+    SB.range("qs-l", function (v) { return v + "%"; }, function (v) { load = v; reset(); });
+    SB.seg("qs-p", function (v) { prio = v; reset(); });
+    document.getElementById("qs-reset").onclick = function () { reset(); };
+    reset();
+    SB.loop(cv.canvas, function () { for (var i = 0; i < 6; i++) tick(); upd(); cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 6. 대역폭 */
+  (function () {
+    var rate = 8533, width = 64, h = 60, wr = 30;
+    function calc() {
+      var peak = rate * 1e6 * width / 8 / 1e9;
+      var L = [["리프레시", 0.04], ["행 충돌", (1 - h / 100) * 0.28], ["읽기·쓰기 전환", (wr / 100) * (1 - wr / 100) * 0.5], ["명령·기타", 0.06]];
+      var cur = peak, steps = [];
+      L.forEach(function (l) { var loss = cur * l[1]; steps.push([l[0], loss]); cur -= loss; });
+      return { peak: peak, eff: cur, steps: steps };
+    }
+    var cv = SB.canvas("#cv-bw", function (ctx, w, hh) {
+      var R = calc(), x0 = w < 500 ? 10 : 120, bw = w - x0 - 16, sc = bw / Math.max(R.peak, 1), rows = R.steps.length + 2, rh = (hh - 20) / rows;
+      var KC = [P.warn, P.bad, P.accent, P.faint];
+      function row(i, label, a, b, col, txt) {
+        var y = 10 + i * rh, bh = Math.min(22, rh * 0.62);
+        ctx.fillStyle = P.text; ctx.font = SB.font(12, false, 600); ctx.textAlign = w < 500 ? "left" : "right"; ctx.textBaseline = w < 500 ? "bottom" : "middle";
+        if (w < 500) ctx.fillText(label, x0, y + (rh - bh) / 2 + 1); else ctx.fillText(label, x0 - 8, y + rh / 2);
+        var by = w < 500 ? y + (rh - bh) / 2 + 3 : y + (rh - bh) / 2;
+        ctx.fillStyle = col; ctx.fillRect(x0 + a * sc, by, Math.max(1, (b - a) * sc), bh);
+        ctx.fillStyle = P.text; ctx.font = SB.font(11, true, 700); ctx.textBaseline = "middle"; var tx = x0 + b * sc + 6;
+        var inside = tx + 70 > w; ctx.textAlign = inside ? "right" : "left"; if (inside) ctx.fillStyle = "#fff"; ctx.fillText(txt, inside ? x0 + b * sc - 6 : tx, by + bh / 2);
+      }
+      row(0, "이론 최대", 0, R.peak, SOC.color("mem"), R.peak.toFixed(1) + " GB/s");
+      var cur = R.peak;
+      R.steps.forEach(function (s, i) { row(i + 1, "− " + s[0], cur - s[1], cur, KC[i], "−" + s[1].toFixed(1)); cur -= s[1]; });
+      row(R.steps.length + 1, "실효", 0, R.eff, P.ok, R.eff.toFixed(1) + " GB/s");
+    }, { aspect: 0.36, minHeight: 230, maxHeight: 280 });
+    function upd() { var R = calc(); SB.stat("bw-peak", u(R.peak.toFixed(1), "GB/s")); SB.stat("bw-eff", u(R.eff.toFixed(1), "GB/s")); SB.stat("bw-pct", u((R.eff / R.peak * 100).toFixed(0), "%")); cv.redraw(); }
+    SB.seg("bw-r", function (v) { rate = +v; upd(); });
+    SB.seg("bw-w", function (v) { width = +v; upd(); });
+    SB.range("bw-h", function (v) { return v + "%"; }, function (v) { h = v; upd(); });
+    SB.range("bw-wr", function (v) { return v + "%"; }, function (v) { wr = v; upd(); });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 7. 리프레시 오버헤드 */
+  (function () {
+    var DEN = [4, 8, 12, 16, 24, 32], RFC = [130, 210, 280, 280, 380, 380], di = 3, T = 45, mode = "ab";
+    function mult(t) { return t > 95 ? 4 : t > 85 ? 2 : 1; }
+    function ov(i, t, m) { var refi = 3906 / mult(t), rfc = m === "pb" ? RFC[i] / 2 : RFC[i]; var f = rfc / refi; return f; }
+    var cv = SB.canvas("#cv-ref", function (ctx, w, h) {
+      var temps = [[45, "≤85°C"], [90, "85~95°C"], [100, "95~105°C"]], cols = [P.ok, P.warn, P.bad];
+      var series = temps.map(function (tp, k) { return { data: DEN.map(function (d, i) { return [d, ov(i, tp[0], "ab") * 100]; }), color: cols[k], width: 2 }; });
+      series.push({ data: DEN.map(function (d, i) { return [d, ov(i, T, "pb") * 100]; }), color: P.accent2, width: 2, dash: [5, 4] });
+      SB.chart(ctx, null, {
+        x: [4, 32], y: [0, 45], logX: true, xTicks: DEN, xFmt: function (v) { return v + "Gb"; }, xLabel: "다이 용량", yLabel: "막히는 시간 (%)",
+        series: series,
+        points: [{ x: DEN[di], y: ov(di, T, mode) * 100, color: P.accent, r: 6, label: (ov(di, T, mode) * 100).toFixed(mode === "pb" ? 2 : 1) + "%" }],
+      });
+      ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      temps.forEach(function (tp, k) { ctx.fillStyle = cols[k]; ctx.fillRect(70, 22 + k * 16, 12, 3); ctx.fillStyle = P.dim; ctx.fillText("전 뱅크 " + tp[1], 88, 23 + k * 16); });
+      ctx.strokeStyle = P.accent2; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(70, 70); ctx.lineTo(82, 70); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = P.dim; ctx.fillText("뱅크별 (지금 온도)", 88, 71);
+    }, { aspect: 0.45, minHeight: 250, maxHeight: 330 });
+    function upd() {
+      var rfc = mode === "pb" ? RFC[di] / 2 : RFC[di], refi = 3906 / mult(T);
+      SB.stat("rf-rfc", u(rfc, "ns") + (mode === "pb" ? " <small>(뱅크 하나)</small>" : ""));
+      SB.stat("rf-refi", u((mode === "pb" ? refi / 16 : refi).toFixed(0), "ns") + (mode === "pb" ? " <small>(뱅크마다 돌아가며)</small>" : ""));
+      SB.stat("rf-ov", u((ov(di, T, mode) * 100).toFixed(mode === "pb" ? 2 : 1), "%"));
+      cv.redraw();
+    }
+    SB.range("rf-d", function (v) { return DEN[v] + " Gb"; }, function (v) { di = v; upd(); });
+    SB.range("rf-t", function (v) { return v + "°C"; }, function (v) { T = v; upd(); });
+    SB.seg("rf-m", function (v) { mode = v; upd(); });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 8. 에너지 */
+  (function () {
+    var hr = 50, bw = 30;
+    var TY = [{ n: "LPDDR5X", a: 2.0, c: 0.8, io: 1.2 }, { n: "DDR5", a: 2.4, c: 1.0, io: 3.2 }, { n: "GDDR6X", a: 2.2, c: 1.0, io: 4.2 }, { n: "HBM3", a: 1.6, c: 0.8, io: 1.0 }];
+    function e(t) { return { a: t.a * (1 - hr / 100), c: t.c, io: t.io }; }
+    var cv = SB.canvas("#cv-energy", function (ctx, w, h) {
+      var x0 = w < 480 ? 70 : 96, bwid = w - x0 - 70, mx = 9, rh = (h - 44) / TY.length;
+      var KC = [P.warn, P.accent2, P.accent];
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("비트당 에너지 (pJ/bit)", x0, 4);
+      TY.forEach(function (t, i) {
+        var E = e(t), y = 24 + i * rh, bh = Math.min(26, rh * 0.62), x = x0;
+        ctx.fillStyle = i === 0 ? P.text : P.dim; ctx.font = SB.font(12.5, false, i === 0 ? 700 : 500); ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(t.n, x0 - 8, y + bh / 2);
+        [E.a, E.c, E.io].forEach(function (v, k) { var ww = v / mx * bwid; ctx.fillStyle = KC[k]; ctx.globalAlpha = i === 0 ? 1 : 0.6; ctx.fillRect(x, y, ww, bh); ctx.globalAlpha = 1; x += ww; });
+        ctx.fillStyle = P.text; ctx.font = SB.font(11.5, true, 700); ctx.textAlign = "left"; ctx.fillText((E.a + E.c + E.io).toFixed(1), x + 6, y + bh / 2);
+      });
+      var ly = h - 14; ["활성화", "코어", "I/O"].forEach(function (n, k) { var lx = x0 + k * 74; ctx.fillStyle = KC[k]; ctx.fillRect(lx, ly - 5, 10, 10); ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(n, lx + 14, ly); });
+    }, { aspect: 0.34, minHeight: 220, maxHeight: 260 });
+    function upd() {
+      var E = e(TY[0]), pj = E.a + E.c + E.io, pj0 = TY[0].a + TY[0].c + TY[0].io;
+      SB.stat("en-pj", u(pj.toFixed(2), "pJ/bit"));
+      var W = bw * 1e9 * 8 * pj * 1e-12;
+      SB.stat("en-w", u(W >= 1 ? W.toFixed(2) : Math.round(W * 1000), W >= 1 ? "W" : "mW"));
+      SB.stat("en-save", u(((1 - pj / pj0) * 100).toFixed(0), "% 절약"));
+      cv.redraw();
+    }
+    SB.range("en-h", function (v) { return v + "%"; }, function (v) { hr = v; upd(); });
+    SB.range("en-b", function (v) { return v + " GB/s"; }, function (v) { bw = v; upd(); });
+    upd();
+  })();
+})();
+</script>
+</body>
+</html>

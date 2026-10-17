@@ -1,0 +1,911 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and SoCBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "카메라 원시 데이터가 사진이 되는 ISP 파이프라인을 단계마다 켜고 끄며, 라인 버퍼·움직임 추정·DCT 양자화·FIR 필터·디스플레이 합성을 직접 돌려 본다. 전용 회로가 CPU보다 수십~수백 배 효율적인 이유.", "libs": []}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ISP·DSP·코덱: 전용 하드웨어 · SoCBook</title>
+<meta name="description" content="카메라 원시 데이터가 사진이 되는 ISP 파이프라인을 단계마다 켜고 끄며, 라인 버퍼·움직임 추정·DCT 양자화·FIR 필터·디스플레이 합성을 직접 돌려 본다. 전용 회로가 CPU보다 수십~수백 배 효율적인 이유.">
+<link rel="canonical" href="https://semi.euiyun.com/soc/chapters/media.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#c8285f">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="SoCBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="ISP·DSP·코덱: 전용 하드웨어 · SoCBook">
+<meta property="og:description" content="카메라 원시 데이터가 사진이 되는 ISP 파이프라인을 단계마다 켜고 끄며, 라인 버퍼·움직임 추정·DCT 양자화·FIR 필터·디스플레이 합성을 직접 돌려 본다. 전용 회로가 CPU보다 수십~수백 배 효율적인 이유.">
+<meta property="og:url" content="https://semi.euiyun.com/soc/chapters/media.html">
+<meta property="og:image" content="https://semi.euiyun.com/soc/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/soc/chapters/media.html#chapter","name":"ISP·DSP·코덱: 전용 하드웨어","headline":"ISP·DSP·코덱: 전용 하드웨어 · SoCBook","description":"카메라 원시 데이터가 사진이 되는 ISP 파이프라인을 단계마다 켜고 끄며, 라인 버퍼·움직임 추정·DCT 양자화·FIR 필터·디스플레이 합성을 직접 돌려 본다. 전용 회로가 CPU보다 수십~수백 배 효율적인 이유.","url":"https://semi.euiyun.com/soc/chapters/media.html","position":11,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/soc/og.png","dateModified":"2026-10-03","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/soc/#book","name":"SoCBook · 시스템 온 칩 교과서","url":"https://semi.euiyun.com/soc/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"SoCBook","item":"https://semi.euiyun.com/soc/"},{"@type":"ListItem","position":2,"name":"11. ISP·DSP·코덱: 전용 하드웨어","item":"https://semi.euiyun.com/soc/chapters/media.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/soc.js"></script>
+<!--head:end-->
+<style>
+  .md-top { padding: 12px 18px 0; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+  .md-sub { font-size: 12px; color: var(--text-faint); font-weight: 700; letter-spacing: .08em; margin-bottom: 6px; }
+  .md-stages { display: grid; gap: 6px; }
+  .md-stages .check { justify-content: space-between; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); }
+  .md-stages .check span { flex: 1; }
+  .md-stages .check small { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+  .md-stages .check.off { opacity: .6; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="soc"></script>
+</head>
+<body data-chapter="media">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 11</div>
+    <h1>ISP·DSP·코덱: 전용 하드웨어</h1>
+    <p class="lead">휴대폰 카메라 앱을 켜면 화면에 바로 세상이 비친다. 별일 아닌 것 같지만, 그 사이 칩 안에서는 이미지 센서가 보낸 이상한 격자무늬 숫자들이 열 단계 넘는 처리를 거쳐 사진이 되고, 초당 30~60장씩 화면으로, 동시에 영상 압축기로 흘러간다. 이 일을 CPU에게 시키면 큰 코어 여러 개가 수 와트를 쓰고도 따라가지 못한다. 그런데 SoC 구석의 손톱만 한 회로들, 즉 <strong>ISP</strong><span class="en">(Image Signal Processor)</span>, <strong>비디오 코덱</strong>, <strong>DSP</strong><span class="en">(Digital Signal Processor)</span>, <strong>디스플레이 엔진</strong>은 같은 일을 수백 mW로 해낸다. 이 장에서는 이 "한 가지 일만 하는 회로"들이 무슨 계산을 하는지 단계마다 직접 켜고 끄며 확인하고, 왜 그렇게 효율적인지 따져 본다.</p>
+    <ul class="objectives">
+      <li>베이어 원시 데이터가 블랙 레벨·결함 화소·렌즈 음영·디모자이크·화이트 밸런스·색 보정·노이즈 제거·톤 매핑·선명화를 거쳐 사진이 되는 과정을 설명할 수 있다.</li>
+      <li>ISP가 프레임 전체가 아니라 라인 버퍼 몇 줄로 스트리밍 처리하는 이유와 필요한 SRAM 크기를 계산한다.</li>
+      <li>비디오 코덱의 움직임 추정(SAD 탐색)과 DCT·양자화가 압축률과 화질을 맞바꾸는 원리를 이해한다.</li>
+      <li>DSP의 FIR 필터와 VLIW·MAC 구조, 디스플레이 합성의 대역폭과 VSync를 계산한다.</li>
+      <li>고정 기능 회로가 CPU보다 수십~수백 배 에너지 효율이 좋은 이유를 명령어 처리 비용과 데이터 이동으로 설명한다.</li>
+    </ul>
+    <div class="soc-locator" data-blocks="isp dsp video disp" data-caption="ISP, 디스플레이 엔진, 비디오 코덱, DSP는 SB-1의 오른쪽 아래에 모여 있다. 넷을 합쳐도 약 8 mm²로 GPU보다 작다."></div>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="why">
+    <h2>한 가지 일만 하는 회로가 이기는 이유</h2>
+    <p>CPU가 덧셈 하나를 할 때 실제 덧셈기의 에너지는 전체의 몇 %에 불과하다는 것을 <a href="overview.html#special">1장</a>에서 보았다. 나머지는 명령어를 가져오고, 해독하고, 레지스터 파일을 읽고 쓰고, 파이프라인을 제어하는 데 쓰인다. 2010년 스탠퍼드의 Hameed 등은 H.264 인코더를 범용 프로세서에서 돌린 것과 전용 회로(ASIC)로 만든 것을 비교했는데, 에너지 차이가 약 500배였다. 범용 프로세서에 SIMD 확장과 몇 가지 맞춤 명령을 더해도 차이를 수십 배까지밖에 줄이지 못했다.</p>
+    <p>전용 회로가 이기는 이유는 세 가지다. ① <strong>명령어가 없다</strong>. 무엇을 할지가 배선으로 정해져 있다. ② <strong>데이터가 흐르는 길이 짧다</strong>. 한 단계의 출력이 바로 옆 단계의 입력 레지스터로 간다. 캐시도, 레지스터 파일도 거치지 않는다. ③ <strong>필요한 만큼의 비트만 쓴다</strong>. 화소가 10비트면 10비트 덧셈기를, 계수가 상수면 곱셈기 대신 시프트와 덧셈을 쓴다. 아래에서 작업을 골라 블록마다 같은 일을 하는 데 드는 전력을 비교해 보자.</p>
+    <figure class="play" id="fig-eff">
+      <div class="play-view"><canvas id="cv-eff"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="ef-task"><button data-value="dec" class="on">4K60 영상 재생 (HEVC)</button><button data-value="isp">12 MP 카메라 30 fps</button><button data-value="kws">음성 호출어 대기</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">CPU 대비 전용 회로</span><span class="v" id="ef-ratio">—</span></div>
+        <div class="stat"><span class="k">전용 회로로 배터리(19 Wh) 시간</span><span class="v" id="ef-bat">—</span></div>
+        <div class="stat"><span class="k">CPU로 배터리 시간</span><span class="v" id="ef-cpu">—</span></div>
+      </div>
+      <figcaption><b>그림 11-1.</b> <span class="try">만져 보기</span>막대는 각 블록이 그 일을 지속할 때의 전력(로그 눈금, 블록 자체만, 대략값)이다. CPU로 4K60 HEVC를 소프트웨어 디코딩하면 큰 코어 여러 개가 수 와트를 쓰고, 12 MP 카메라 처리는 아예 실시간이 불가능하다(빗금). 공개된 측정과 논문(Hameed 2010 등)을 바탕으로 한 교육용 어림값이다.</figcaption>
+    </figure>
+    <p>대가는 유연성이다. 전용 회로는 설계할 때 정한 일만 한다. H.264 디코더는 AV1을 풀지 못한다. 그래서 전용 블록은 "자주, 오래, 많이" 하는 일, 그리고 표준이 정해져 오래 쓰이는 일에만 만든다. 카메라, 영상 압축, 화면 표시, 오디오가 대표적이다. 그 사이의 중간 지대를 프로그램 가능한 DSP가 메운다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="isp">
+    <h2>카메라 ISP: 빛이 사진이 되기까지</h2>
+    <p>이미지 센서의 화소는 색을 모른다. 들어온 빛의 양만 잴 뿐이다. 그래서 화소마다 빨강·초록·파랑 중 하나만 통과시키는 작은 색 필터를 올린다. 가장 흔한 배열은 2×2 칸에 R, G, G, B를 놓는 <span class="term">베이어 패턴</span><span class="en">(Bayer pattern)</span>(Bryce Bayer, 1976)이다. 초록이 두 개인 이유는 사람 눈이 밝기를 주로 초록 파장으로 느끼기 때문이다. 결국 센서가 보내는 <span class="term">원시 데이터</span><span class="en">(RAW)</span>는 화소마다 10~14비트 숫자 하나씩이고, 각 화소에서 빠진 두 색은 이웃에게서 추측해야 한다.</p>
+    <p>ISP는 이 원시 데이터를 받아 다음과 같은 단계를 고정 회로로 차례로 처리한다. 아래 시뮬레이터는 가상의 장면을 만든 뒤, 실제 센서처럼 따뜻한 조명(약 3,500 K), 색 필터의 겹침, 렌즈 주변부 어두워짐, 광자 잡음과 읽기 잡음, 결함 화소까지 넣어 원시 데이터를 만든다. 이제 ISP 단계를 하나씩 켜고 끄며 사진이 완성되는 과정을 보자. 그림 위를 누르거나 끌면 오른쪽 돋보기가 따라온다.</p>
+    <div class="sim" id="sim-isp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>ISP 파이프라인</h3></div>
+      <div class="md-top">
+        <div class="seg" id="isp-view"><button data-value="out" class="on">ISP 결과</button><button data-value="raw">원시 RAW</button><button data-value="gt">정답 장면</button></div>
+        <div class="btn-row"><button class="btn sm" id="isp-all">모두 켜기</button><button class="btn sm" id="isp-none">모두 끄기</button></div>
+      </div>
+      <div class="sim-view"><canvas id="cv-isp"></canvas></div>
+      <div class="sim-body">
+        <div class="sim-controls">
+          <div><div class="md-sub">ISP 단계 (숫자 = 화소당 연산, 대략)</div><div class="md-stages" id="isp-stages"></div></div>
+          <div style="display:grid;gap:14px;align-content:start"><div><div class="md-sub">디모자이크</div><div class="seg" id="isp-dm"><button data-value="none">안 함</button><button data-value="near">최근접</button><button data-value="bil" class="on">쌍선형</button></div></div>
+          <label class="ctrl"><span>화이트 밸런스 색온도 <output id="isp-wb-out"></output></span><input type="range" id="isp-wb" min="2500" max="7500" step="100" value="3500"></label>
+          <label class="ctrl"><span>노이즈 제거 세기 <output id="isp-nr-out"></output></span><input type="range" id="isp-nr" min="0" max="1" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span>선명화 세기 <output id="isp-sh-out"></output></span><input type="range" id="isp-sh" min="0" max="2" step="0.1" value="0.6"></label></div>
+        </div>
+      </div>
+      <div class="info-panel" id="isp-info"></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">정답 대비 PSNR</span><span class="v" id="isp-psnr">—</span></div>
+        <div class="stat"><span class="k">켠 단계</span><span class="v" id="isp-n">—</span></div>
+        <div class="stat"><span class="k">화소당 연산 (대략)</span><span class="v" id="isp-ops">—</span></div>
+        <div class="stat"><span class="k">12 MP · 30 fps 연산량</span><span class="v" id="isp-gops">—</span></div>
+      </div>
+      <div class="sim-note">장면은 192×128 화소로 작게 만들어 매번 브라우저에서 실제로 처리한다. 오른쪽 위는 해, 왼쪽 아래는 색 견본판(맨 아래 줄은 회색 단계), 오른쪽 아래 동심원 무늬는 디모자이크 잘못(지퍼 무늬·가짜 색)을 드러내는 시험 무늬다. PSNR은 정답 장면을 같은 톤 곡선으로 표시한 것과 비교한 값이다. 실제 ISP는 이 밖에도 3A(자동 노출·초점·화이트 밸런스) 통계, 여러 장 합성(HDR), 왜곡 보정, 크기 변환 단계를 갖는다.</div>
+    </div>
+    <p>몇 가지 실험을 해 보자. <b>블랙 레벨 보정</b>을 끄면 검은색이 회색으로 뜬다. 센서는 0 근처의 잡음을 표현하려고 일부러 바닥값(여기서는 1023 중 64)을 더해 보내기 때문이다. <b>화이트 밸런스</b>를 끄거나 색온도를 틀리게 맞추면 회색 견본이 노랗거나 파랗게 물든다. 사람 눈은 조명에 저절로 적응하지만 센서는 그렇지 않다. <b>디모자이크</b>를 "안 함"으로 두면 원시 격자가 그대로 보이고, "최근접"이면 동심원 무늬 주변에 계단과 가짜 색이 생긴다. <b>색 보정 행렬</b>(CCM)을 끄면 색 필터끼리 파장이 겹친 탓에 색이 바랜다. <b>톤 매핑</b>을 끄면 선형 데이터를 그대로 화면에 보내 사진이 어둡고 해가 하얗게 날아간다.</p>
+    <div class="predict"><strong>노이즈 제거를 세게 걸면 PSNR은 계속 좋아질까?</strong>
+      <p>노이즈 제거 세기를 0에서 1까지 올리며 PSNR과 돋보기 속 동심원 무늬를 지켜보자.</p>
+      <details><summary>답 보기</summary><p>아니다. 처음에는 잡음이 줄어 PSNR이 오르지만, 너무 세면 가는 무늬와 질감까지 뭉개져(과도한 평활화) 다시 나빠진다. 노이즈 제거와 선명화는 늘 이 줄다리기다. 그래서 실제 ISP는 가장자리를 감지해 평평한 곳만 세게 다듬고(가장자리 보존 필터), 밝기에 따라 세기를 바꾸고(어두운 곳은 광자 잡음이 크다), 요즘은 NPU의 신경망 노이즈 제거와 함께 쓴다(<a href="npu.html">10장</a>).</p></details>
+    </div>
+    <p>단계마다 화소 하나에 드는 연산은 수~수십 번이지만, 12 MP 센서를 초당 30장 처리하면 화소가 초당 3억 6천만 개다. 단계 전부를 합치면 초당 수천억 번의 연산이 된다. ISP는 단계마다 화소를 클럭당 1~4개씩 처리하는 전용 파이프라인을 깔아 이를 수백 MHz 클럭과 수백 mW로 해낸다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="linebuf">
+    <h2>프레임이 아니라 줄 단위로: 라인 버퍼</h2>
+    <p>ISP의 단계 대부분은 화소 하나를 계산하는 데 주변 \(K\times K\) 이웃만 본다(디모자이크 5×5, 노이즈 제거 5×5~9×9 등). 센서는 화소를 왼쪽 위부터 한 줄씩 보낸다(래스터 순서). 그렇다면 프레임 전체를 저장할 필요가 없다. 지금 들어오는 줄과 바로 위 \(K-1\)줄만 칩 안 SRAM에 갖고 있으면, 창(window)이 미끄러지며 계산할 수 있다. 이 SRAM을 <span class="term">라인 버퍼</span><span class="en">(Line buffer)</span>라 부른다.</p>
+    <figure class="play" id="fig-lb">
+      <div class="play-view"><canvas id="cv-lb"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="lb-k"><button data-value="3">3×3</button><button data-value="5" class="on">5×5</button><button data-value="7">7×7</button></div>
+        <label class="ctrl"><span>실제 센서 가로 화소 <output id="lb-w-out"></output></span><input type="range" id="lb-w" min="1920" max="8192" step="64" value="4032"></label>
+        <label class="ctrl"><span>파이프라인 단계 수 <output id="lb-n-out"></output></span><input type="range" id="lb-n" min="1" max="12" step="1" value="8"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">단계당 라인 버퍼</span><span class="v" id="lb-one">—</span></div>
+        <div class="stat"><span class="k">전체 ISP 라인 버퍼</span><span class="v" id="lb-all">—</span></div>
+        <div class="stat"><span class="k">프레임 버퍼였다면</span><span class="v" id="lb-fb">—</span></div>
+        <div class="stat"><span class="k">출력 지연</span><span class="v" id="lb-lat">—</span></div>
+      </div>
+      <figcaption><b>그림 11-2.</b> <span class="try">만져 보기</span>화소가 래스터 순서로 들어온다(파란 칸 = 라인 버퍼에 저장 중, 연한 칸 = 이미 쓰고 버림, 빈칸 = 아직 안 옴). 빨간 틀이 지금 계산하는 \(K\times K\) 창, 가운데 점이 지금 내보내는 출력 화소다. 출력은 입력보다 \((K-1)/2\)줄 늦다. 계산에서 화소당 2바이트(12비트 원시 데이터를 담는 크기)를 가정했다. 4,032×3,024 센서(12 MP)라면 프레임 버퍼는 약 24 MB지만 5×5 라인 버퍼는 단계당 약 32 KB다.</figcaption>
+    </figure>
+    <p>라인 버퍼 덕분에 ISP는 프레임을 DRAM에 내렸다 올리지 않고 센서 → ISP → (필요하면) NPU·코덱으로 줄 단위로 흘려 보낼 수 있다. DRAM 왕복 한 번에 12 MP 프레임이면 수십 MB, 초당 30장이면 1 GB/s가 넘는다(<a href="dram.html">7장</a>). 이것을 아끼는 것이 카메라 전력의 핵심이다. 대신 이 구조는 "위에서 아래로 한 번" 처리하는 연산에만 맞는다. 여러 장을 합치는 HDR이나 큰 영역을 보는 처리는 결국 DRAM의 프레임 버퍼가 필요하다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="motion">
+    <h2>비디오 코덱 ①: 움직임을 찾아라</h2>
+    <p>4K 영상(3840×2160, 4:2:0, 8비트)을 압축 없이 저장하면 초당 30장에 약 3 Gb/s다. 스트리밍 영상은 이것을 10~20 Mb/s, 즉 1/150~1/300로 줄인다. 비결의 첫째는 <strong>이웃한 프레임이 거의 같다</strong>는 것이다. 현재 프레임을 작은 블록으로 나누고, 각 블록이 이전 프레임의 어디에서 왔는지 찾아 그 <span class="term">움직임 벡터</span><span class="en">(Motion vector)</span>와 작은 차이(잔차)만 보낸다. 찾는 일을 <span class="term">움직임 추정</span><span class="en">(Motion estimation)</span>이라 한다.</p>
+    <p>가장 단순한 방법은 탐색 범위 안의 모든 위치에서 블록을 겹쳐 보고 화소 차이의 절댓값 합, <span class="term">SAD</span><span class="en">(Sum of Absolute Differences)</span>가 가장 작은 곳을 고르는 것이다.</p>
+    <div class="formula">$$\mathrm{SAD}(d_x,d_y) = \sum_{i,j \in \text{블록}} \big|\,\text{현재}(x+i,\,y+j) - \text{이전}(x+i+d_x,\,y+j+d_y)\,\big|$$</div>
+    <div class="sim" id="sim-me">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>블록 움직임 추정</h3></div>
+      <div class="md-top">
+        <div class="seg" id="me-b"><button data-value="8">블록 8×8</button><button data-value="16" class="on">블록 16×16</button></div>
+        <div class="seg" id="me-cam"><button data-value="0" class="on">카메라 고정</button><button data-value="1">카메라 패닝</button></div>
+        <label class="check"><input type="checkbox" id="me-all"> 모든 블록의 벡터 보기</label>
+      </div>
+      <div class="sim-view"><canvas id="cv-me"></canvas></div>
+      <div class="sim-controls">
+        <label class="ctrl"><span>탐색 범위 ±R <output id="me-r-out"></output></span><input type="range" id="me-r" min="1" max="16" step="1" value="8"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">찾은 벡터 (dx, dy)</span><span class="v" id="me-v">—</span></div>
+        <div class="stat"><span class="k">SAD 최소 / 제자리</span><span class="v" id="me-sad">—</span></div>
+        <div class="stat"><span class="k">블록당 SAD 연산</span><span class="v" id="me-ops">—</span></div>
+        <div class="stat"><span class="k">4K60 전역 탐색이면</span><span class="v" id="me-4k">—</span></div>
+      </div>
+      <div class="sim-note">오른쪽(현재 프레임)에서 블록을 누르면 왼쪽(이전 프레임)에서 탐색 창(점선)과 가장 비슷한 위치(실선)를 보여 준다. 아래 지도는 탐색 창 안 모든 후보의 SAD다(어두울수록 작음, ◆ = 최소). 공은 오른쪽 아래로, 상자는 왼쪽으로 움직였다. 탐색 범위가 실제 움직임보다 작으면 엉뚱한 곳을 고른다. 무늬가 없는 평평한 영역(하늘)은 SAD 지도가 밋밋해 벡터가 불안정하다.</div>
+    </div>
+    <p>블록당 SAD 화소 처리는 \((2R+1)^2 \times B^2\)번이며 각 처리에 뺄셈·절댓값·덧셈이 들어간다. ±16 범위, 16×16 블록이면 블록 하나에 약 28만 화소 처리, 4K60이면 초당 약 0.54조 SAD 화소 처리다. 세 기본 연산을 따로 세면 초당 약 1.63조 연산이다. 그래서 실제 인코더는 전역 탐색 대신 다이아몬드 탐색 같은 빠른 탐색, 축소 영상에서 먼저 찾는 계층 탐색, 이웃 블록의 벡터에서 출발하는 예측을 쓴다. 하드웨어는 SAD 계산기 수백 개를 배열로 깔고, 이전 프레임의 탐색 창을 칩 안 SRAM에 올려 이웃 블록끼리 재사용한다. NPU의 시스톨릭 배열과 닮은 구조다(<a href="npu.html#systolic">10장</a>).</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="dct">
+    <h2>비디오 코덱 ②: 변환과 양자화</h2>
+    <p>움직임으로 예측하고 남은 잔차(또는 예측 없이 압축하는 I 프레임의 블록)는 <span class="term">이산 코사인 변환</span><span class="en">(DCT, Discrete Cosine Transform)</span>으로 주파수 성분으로 바꾼다. 자연 영상의 에너지는 대부분 낮은 주파수(왼쪽 위 계수)에 몰려 있다. 그다음 <span class="term">양자화</span><span class="en">(Quantization)</span>로 계수를 큰 간격으로 나눠 반올림하면, 높은 주파수 계수 대부분이 0이 된다. 0이 길게 이어지면 엔트로피 부호화로 아주 적은 비트로 표현할 수 있다. <strong>정보를 버리는 단계는 양자화 하나뿐</strong>이고, 압축률과 화질은 양자화 간격, 즉 <span class="term">QP</span><span class="en">(Quantization Parameter)</span>로 조절한다. H.264·HEVC에서 QP가 6 오를 때마다 양자화 간격이 두 배가 된다.</p>
+    <figure class="play" id="fig-dct">
+      <div class="play-view"><canvas id="cv-dct"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>QP (양자화 세기) <output id="dc-qp-out"></output></span><input type="range" id="dc-qp" min="0" max="51" step="1" value="30"></label>
+        <div class="seg" id="dc-w"><button data-value="flat" class="on">균일 양자화</button><button data-value="jpeg">주파수 가중 (JPEG 표)</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">0이 아닌 계수</span><span class="v" id="dc-nz">—</span></div>
+        <div class="stat"><span class="k">추정 비트</span><span class="v" id="dc-bits">—</span></div>
+        <div class="stat"><span class="k">압축률 (512비트 대비)</span><span class="v" id="dc-cr">—</span></div>
+        <div class="stat"><span class="k">블록 PSNR</span><span class="v" id="dc-psnr">—</span></div>
+      </div>
+      <figcaption><b>그림 11-3.</b> <span class="try">만져 보기</span>왼쪽 그림에서 8×8 블록을 눌러 고른다. 가운데 격자는 양자화된 DCT 계수(숫자 = 양자화 단계 수, 빈칸 = 0)이고, 오른쪽은 그 계수로 복원한 블록이다. 평평한 블록은 QP가 낮아도 계수가 한두 개뿐이고, 가장자리나 무늬가 있는 블록은 계수가 많다. QP를 40 넘게 올리면 블록이 평평한 사각형이 되는 "블록 현상"이 보인다. 비트는 지수 골롬 부호를 흉내 낸 어림값이다.</figcaption>
+    </figure>
+    <p>실제 코덱은 프레임을 세 종류로 섞는다. <b>I 프레임</b>은 다른 프레임을 참조하지 않고 혼자 압축한다(가장 크다). <b>P 프레임</b>은 이전 프레임에서 움직임을 예측한다. <b>B 프레임</b>은 앞뒤 프레임을 모두 참조해 가장 작다. I 프레임 사이의 묶음을 <span class="term">GOP</span><span class="en">(Group of Pictures)</span>라 한다. GOP를 길게 하면 비트레이트가 줄지만, 중간부터 재생하거나 전송 오류에서 회복하기가 어려워진다.</p>
+    <figure class="play" id="fig-gop">
+      <div class="play-view"><canvas id="cv-gop"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>GOP 길이 (I 프레임 간격) <output id="gp-n-out"></output></span><input type="range" id="gp-n" min="1" max="60" step="1" value="30"></label>
+        <label class="ctrl"><span>장면의 움직임 <output id="gp-m-out"></output></span><input type="range" id="gp-m" min="0" max="1" step="0.05" value="0.3"></label>
+        <div class="seg" id="gp-b"><button data-value="0">B 프레임 없음</button><button data-value="2" class="on">B 프레임 2장</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">4K30 평균 비트레이트</span><span class="v" id="gp-br">—</span></div>
+        <div class="stat"><span class="k">무압축 대비</span><span class="v" id="gp-cr">—</span></div>
+        <div class="stat"><span class="k">I 프레임이 차지하는 비트</span><span class="v" id="gp-i">—</span></div>
+      </div>
+      <figcaption><b>그림 11-4.</b> <span class="try">만져 보기</span>막대 하나가 프레임 하나의 크기다(2초 분량, 60프레임). I 프레임 하나를 약 0.5 MB(무압축의 1/25)로 잡고, P 프레임은 움직임에 따라 I의 8~43%, B 프레임은 P의 절반으로 어림했다. 무압축 4K30(4:2:0, 8비트)은 약 3 Gb/s다.</figcaption>
+    </figure>
+    <div class="callout deep"><strong>세대가 바뀔 때마다 압축률이 오르는 이유</strong><p>H.264(2003) → HEVC(2013) → AV1(2018)·VVC(2020)로 갈 때마다 같은 화질에서 비트레이트가 대략 30~50% 준다. 블록 크기를 16×16에서 64×64, 128×128까지 다양하게 나누고, 예측 방향을 수십 가지로 늘리고, 더 정교한 필터와 엔트로피 부호화를 쓰기 때문이다. 그 대가로 인코더의 탐색 연산은 몇 배씩 늘었다. 소프트웨어로는 감당할 수 없어 SoC마다 새 표준용 하드웨어 블록이 들어간다.</p></div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="dsp">
+    <h2>DSP: 곱셈-누산을 위한 프로세서</h2>
+    <p><span class="term">DSP</span><span class="en">(Digital Signal Processor)</span>는 전용 회로와 CPU 사이에 있다. 프로그램을 돌리지만, 그 명령어와 구조가 신호 처리의 단골 연산, 즉 <strong>곱셈-누산(MAC)</strong>에 맞춰져 있다. 오디오 필터, 음성 호출어 감지, 센서 융합, 모뎀의 일부 처리가 DSP에서 돈다. 신호 처리의 기본 연산은 <span class="term">FIR 필터</span><span class="en">(Finite Impulse Response)</span>다. 출력은 최근 입력 \(N\)개에 계수를 곱해 더한 것이다.</p>
+    <div class="formula">$$y[n] = \sum_{k=0}^{N-1} h[k]\; x[n-k]$$</div>
+    <p>탭 수 \(N\)이 곧 샘플당 MAC 수다. 아래에서 저역 통과 필터의 탭 수와 차단 주파수를 바꿔, 낮은 음(220 Hz, 440 Hz)은 남기고 높은 잡음(7 kHz 음과 쉬익 소리)을 지워 보자.</p>
+    <figure class="play" id="fig-fir">
+      <div class="play-view"><canvas id="cv-fir"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>탭 수 N <output id="fr-n-out"></output></span><input type="range" id="fr-n" min="3" max="127" step="2" value="31"></label>
+        <label class="ctrl"><span>차단 주파수 <output id="fr-fc-out"></output></span><input type="range" id="fr-fc" min="200" max="10000" step="100" value="1500"></label>
+        <div class="seg" id="fr-win"><button data-value="rect">사각 창</button><button data-value="ham" class="on">해밍 창</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">샘플당 MAC</span><span class="v" id="fr-mac">—</span></div>
+        <div class="stat"><span class="k">48 kHz에서 MAC/s</span><span class="v" id="fr-macs">—</span></div>
+        <div class="stat"><span class="k">DSP 부하 (4 MAC/클럭, 300 MHz)</span><span class="v" id="fr-load">—</span></div>
+        <div class="stat"><span class="k">7 kHz 감쇠</span><span class="v" id="fr-att">—</span></div>
+      </div>
+      <figcaption><b>그림 11-5.</b> <span class="try">만져 보기</span>위: 입력 신호(연한 선)와 필터 출력(진한 선) 10 ms. 출력은 \((N-1)/2\) 샘플 늦게 나온다. 아래: 필터의 주파수 응답(dB). 세로 점선은 신호 성분(220 Hz, 440 Hz, 7 kHz)이다. 탭이 많을수록 경계가 가팔라지고 감쇠가 깊어지지만 MAC과 지연이 는다. 사각 창은 경계가 가파른 대신 바깥에 물결(새는 성분)이 크다.</figcaption>
+    </figure>
+    <p>DSP는 이런 루프를 빠르게 돌리도록 특별한 장치를 갖는다. 한 클럭에 MAC 여러 개와 메모리 읽기 두 개, 주소 갱신을 동시에 하는 <span class="term">VLIW</span><span class="en">(Very Long Instruction Word)</span> 명령어(컴파일러가 병렬로 실행할 명령을 미리 한 묶음으로 짠다), 오버헤드 없는 하드웨어 반복문, 원형 버퍼 주소 지정, 넘치면 최댓값에 멈추는 포화 연산이다. CPU의 비순차 실행 엔진이 실행 중에 하는 일을 컴파일러가 미리 해 두니, 하드웨어가 단순하고 전력이 낮다. 대신 분기가 많고 예측하기 어려운 코드에는 맞지 않는다. 휴대폰의 저전력 DSP는 화면이 꺼진 동안에도 수 mW로 마이크 신호를 듣고 있다가, 호출어가 들리면 그때 CPU를 깨운다(<a href="overview.html#work">1장</a>).</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="display">
+    <h2>디스플레이 파이프라인: 초당 120번의 합성</h2>
+    <p>화면에 보이는 것은 그림 한 장이 아니라 여러 <strong>층</strong><span class="en">(Layer)</span>이다. 배경화면, 앱 화면, 동영상, 상태 표시줄, 알림이 각자 따로 그려진다. 이 층들을 겹쳐 한 장으로 만드는 일을 <span class="term">합성</span><span class="en">(Composition)</span>이라 한다. GPU로 합성할 수도 있지만, SoC의 <span class="term">디스플레이 엔진</span><span class="en">(Display processing unit)</span>은 층들을 DRAM에서 읽으며 화소 단위로 바로 섞어 패널로 내보낼 수 있다(하드웨어 오버레이). 합성한 결과를 DRAM에 다시 쓰지 않으니 대역폭이 준다.</p>
+    <p>패널은 정해진 박자로 화면을 갱신한다. 그 박자 신호가 <span class="term">VSync</span><span class="en">(Vertical sync)</span>다. 120 Hz 화면이면 8.33 ms마다 새 프레임이 준비되어 있어야 하고, 앱이 늦으면 이전 프레임이 한 번 더 표시된다. 이것이 화면이 "버벅이는" 끊김<span class="en">(Jank)</span>이다.</p>
+    <div class="sim" id="sim-disp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>디스플레이 합성과 VSync</h3></div>
+      <div class="md-top">
+        <div class="seg" id="ds-hz"><button data-value="60">60 Hz</button><button data-value="90">90 Hz</button><button data-value="120" class="on">120 Hz</button><button data-value="144">144 Hz</button></div>
+        <div class="seg" id="ds-comp"><button data-value="dpu" class="on">디스플레이 엔진 오버레이</button><button data-value="gpu">GPU 합성</button></div>
+      </div>
+      <div class="sim-view"><canvas id="cv-disp"></canvas></div>
+      <div class="sim-controls">
+        <label class="ctrl"><span>층 개수 <output id="ds-n-out"></output></span><input type="range" id="ds-n" min="1" max="6" step="1" value="4"></label>
+        <label class="ctrl"><span>앱 프레임 렌더 시간 (평균) <output id="ds-rt-out"></output></span><input type="range" id="ds-rt" min="3" max="30" step="0.5" value="7"></label>
+        <div><div class="md-sub">해상도 · 압축</div><div class="ctrl-row"><div class="seg" id="ds-res"><button data-value="fhd" class="on">FHD+</button><button data-value="qhd">QHD+</button></div><label class="check"><input type="checkbox" id="ds-fbc" checked> 프레임 버퍼 압축</label></div></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">프레임 예산</span><span class="v" id="ds-bud">—</span></div>
+        <div class="stat"><span class="k">실제 표시 fps</span><span class="v" id="ds-fps">—</span></div>
+        <div class="stat"><span class="k">끊김 (같은 프레임 반복)</span><span class="v" id="ds-jank">—</span></div>
+        <div class="stat"><span class="k">합성 DRAM 대역폭</span><span class="v" id="ds-bw">—</span></div>
+      </div>
+      <div class="sim-note">위 왼쪽: 겹쳐지는 층(화면 대비 면적), 위 오른쪽: 합성 방식별 DRAM 트래픽(층 읽기, 합성 결과 쓰기·다시 읽기). 화소당 4바이트, 압축을 켜면 약 1/2로 잡았다. 아래: 시간 축. 세로선이 VSync, 막대가 앱의 프레임 렌더링(평균 ±35% 흔들림), 위쪽 칸이 실제로 화면에 나간 프레임 번호다. 빨간 칸은 새 프레임이 없어 이전 것을 반복한 VSync다. 렌더링은 두 개의 버퍼를 번갈아 쓴다고 가정했다.</div>
+    </div>
+    <p>주사율을 120 Hz로 올리면 부드러워지지만 앱이 프레임을 8.3 ms 안에 만들어야 하고, 합성 대역폭과 패널 구동 전력도 두 배가 된다. 그래서 최근 패널(LTPO OLED)은 화면이 멈춰 있을 때 1~10 Hz까지 주사율을 낮추고, 스크롤할 때만 120 Hz로 올린다. 디스플레이 엔진은 이 밖에도 색 공간 변환, HDR 톤 매핑, 화면 크기 변환, 패널 압축(DSC)을 고정 회로로 한다. 사진 한 장이 화면에 나타나기까지 ISP → NPU → 코덱 → 디스플레이 엔진을 거치는 긴 여행은 <a href="overview.html#tour">1장</a>에서 따라가 보았다.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>작업</th><th class="num">데이터 속도 (대략)</th><th class="num">전용 블록 전력 (대략)</th><th>비고</th></tr></thead>
+        <tbody>
+          <tr><td>12 MP 카메라 미리보기·촬영 30 fps</td><td class="num">원시 약 0.5 GB/s</td><td class="num">수백 mW (ISP)</td><td>여러 장 합성(HDR) 시 몇 배</td></tr>
+          <tr><td>4K60 HEVC 디코드</td><td class="num">출력 약 0.75 GB/s</td><td class="num">약 0.1~0.3 W</td><td>입력은 수십 Mb/s</td></tr>
+          <tr><td>4K60 HEVC 인코드 (녹화)</td><td class="num">입력 약 0.75 GB/s</td><td class="num">약 0.3~0.6 W</td><td>움직임 추정이 대부분</td></tr>
+          <tr><td>QHD+ 120 Hz 디스플레이 합성</td><td class="num">약 1~4 GB/s</td><td class="num">약 0.1~0.3 W (엔진)</td><td>패널 자체 전력은 별도로 수백 mW~1 W 이상</td></tr>
+          <tr><td>음성 호출어 감지 (상시)</td><td class="num">16 kHz × 16비트 = 32 KB/s</td><td class="num">약 1 mW 안팎 (DSP)</td><td>2020년대 저전력 DSP·전용 회로</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="keypoints">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>전용 회로는 명령어 처리가 없고, 데이터가 이웃 단계로 바로 흐르고, 필요한 비트만 써서 CPU보다 수십~수백 배 에너지 효율이 좋다. 대가는 유연성이다.</li>
+      <li>ISP는 베이어 원시 데이터를 블랙 레벨 → 결함 화소 → 렌즈 음영 → 디모자이크 → 화이트 밸런스 → 색 보정 → 노이즈 제거 → 톤 매핑 → 선명화 순으로 처리한다.</li>
+      <li>이웃 K×K만 보는 처리는 K−1줄의 라인 버퍼로 스트리밍할 수 있어 프레임 버퍼와 DRAM 왕복이 필요 없다.</li>
+      <li>비디오 압축 = 움직임 추정(SAD 탐색) + DCT + 양자화 + 엔트로피 부호화. 정보를 버리는 것은 양자화뿐이고 QP로 화질과 비트레이트를 맞바꾼다.</li>
+      <li>DSP는 MAC과 VLIW, 하드웨어 반복문으로 FIR 같은 신호 처리를 저전력으로 돌린다. 디스플레이 엔진은 층을 하드웨어로 합성하고 VSync 박자에 맞춰 내보낸다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. 베이어 패턴 센서에서 디모자이크가 필요한 이유는?</p>
+        <div class="opts">
+          <button class="opt">센서의 화소가 너무 커서</button>
+          <button class="opt" data-correct>화소마다 R·G·B 중 한 색만 재므로 빠진 두 색을 이웃에서 보간해야 해서</button>
+          <button class="opt">렌즈가 주변부를 어둡게 만들어서</button>
+          <button class="opt">센서가 흑백만 찍을 수 있어서 색을 새로 만들어야 해서</button>
+        </div>
+        <div class="quiz-exp">색 필터 배열 때문에 각 화소에는 한 색의 값만 있다. 디모자이크는 이웃 화소의 같은 색 값을 이용해 나머지 두 색을 추정한다. 잘못하면 가는 무늬에서 지퍼 무늬와 가짜 색이 생긴다.</div></div>
+      <div class="quiz-q"><p>Q2. 가로 4,000화소, 화소당 2바이트인 영상에 7×7 필터를 스트리밍으로 적용할 때 필요한 라인 버퍼는 대략?</p>
+        <div class="opts">
+          <button class="opt">약 8 KB</button><button class="opt">약 24 MB</button><button class="opt">약 56 KB</button><button class="opt" data-correct>약 48 KB</button>
+        </div>
+        <div class="quiz-exp">(7 − 1)줄 × 4,000화소 × 2바이트 = 48,000바이트. 현재 줄은 들어오는 대로 쓰므로 K−1줄이면 된다. 프레임 전체(수십 MB)에 비하면 아주 작다.</div></div>
+      <div class="quiz-q"><p>Q3. 16×16 블록, 탐색 범위 ±8의 전역 탐색에서 블록 하나에 계산하는 후보 위치 수는?</p>
+        <div class="opts">
+          <button class="opt">64</button><button class="opt">256</button><button class="opt" data-correct>289</button><button class="opt">1,089</button>
+        </div>
+        <div class="quiz-exp">가로·세로 각각 −8~+8로 17개씩, 17² = 289개 위치. 위치마다 256화소의 SAD를 계산하므로 블록 하나에 약 7만 4천 번의 절댓값 차이 누적이 든다.</div></div>
+      <div class="quiz-q"><p>Q4. 비디오 압축에서 화질 손실이 실제로 일어나는 단계는?</p>
+        <div class="opts">
+          <button class="opt">DCT 변환</button><button class="opt" data-correct>양자화</button><button class="opt">엔트로피 부호화</button><button class="opt">움직임 보상</button>
+        </div>
+        <div class="quiz-exp">DCT와 엔트로피 부호화, 움직임 예측은 모두 되돌릴 수 있다. 계수를 큰 간격으로 나눠 반올림하는 양자화만 정보를 버린다. QP가 클수록 많이 버린다.</div></div>
+      <div class="quiz-q"><p>Q5. 63탭 FIR 필터를 48 kHz 오디오 두 채널에 적용할 때 필요한 MAC/s는?</p>
+        <div class="opts">
+          <button class="opt" data-correct>약 600만 MAC/s</button><button class="opt">약 300만 MAC/s</button><button class="opt">약 6,000만 MAC/s</button><button class="opt">약 3,000 MAC/s</button>
+        </div>
+        <div class="quiz-exp">63 × 48,000 × 2 = 6,048,000. 클럭당 MAC 4개인 300 MHz DSP라면 부하는 0.5% 남짓이다. 오디오 필터는 DSP에게 가벼운 일이다.</div></div>
+      <div class="quiz-q"><p>Q6. 하드웨어 오버레이(디스플레이 엔진 합성)가 GPU 합성보다 DRAM 대역폭을 덜 쓰는 이유는?</p>
+        <div class="opts">
+          <button class="opt">층을 읽지 않아도 되어서</button>
+          <button class="opt">주사율을 절반으로 낮춰서</button>
+          <button class="opt" data-correct>층을 읽으며 바로 섞어 패널로 보내므로, 합성 결과를 DRAM에 썼다가 다시 읽는 과정이 없어서</button>
+          <button class="opt">GPU보다 클럭이 높아서</button>
+        </div>
+        <div class="quiz-exp">GPU 합성은 층 읽기 + 결과 프레임 쓰기 + 디스플레이 엔진이 그 프레임을 다시 읽기가 필요하다. 오버레이는 층 읽기만 하면 된다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var P = SB.palette();
+  SB.onTheme(function () { P = SB.palette(); });
+  var C = function (t) { return SOC.color(t); };
+
+  /* ---------------------------------------------------------------- 1. 효율 비교 */
+  (function () {
+    var task = "dec";
+    var D = {
+      dec: { n: "4K60 HEVC 디코드", rows: [["CPU (큰 코어 소프트웨어)", "big", 6.5, false], ["GPU (컴퓨트 셰이더)", "gpu", 2.5, false], ["DSP", "dsp", 1.6, false], ["비디오 코덱 (전용)", "video", 0.18, false]] },
+      isp: { n: "12 MP 30 fps ISP", rows: [["CPU (큰 코어 전부)", "big", 25, true], ["GPU", "gpu", 4.5, false], ["DSP (벡터)", "dsp", 2.2, false], ["ISP (전용)", "isp", 0.4, false]] },
+      kws: { n: "음성 호출어 대기", rows: [["CPU (큰 코어)", "big", 0.25, false], ["CPU (작은 코어)", "little", 0.03, false], ["DSP (저전력)", "dsp", 0.002, false], ["전용 회로", "isp", 0.0004, false]] },
+    };
+    var cv = SB.canvas("#cv-eff", function (ctx, w, h) {
+      var d = D[task], lx = w < 480 ? 116 : 170, top = 26, rh = (h - top - 26) / d.rows.length;
+      var mn = Math.log10(0.0002), mx = Math.log10(50);
+      var X = function (v) { return lx + (Math.log10(v) - mn) / (mx - mn) * (w - lx - 70); };
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(d.n + " · 지속 전력 (로그)", lx, 12);
+      [0.001, 0.01, 0.1, 1, 10].forEach(function (t) { var x = X(t); ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, h - 20); ctx.stroke(); ctx.fillStyle = P.faint; ctx.font = SB.font(10, true); ctx.textAlign = "center"; ctx.fillText(t >= 1 ? t + " W" : t * 1000 + " mW", x, h - 10); });
+      d.rows.forEach(function (r, i) {
+        var y = top + i * rh + rh / 2, x1 = X(r[2]);
+        ctx.fillStyle = C(r[1]); ctx.fillRect(lx, y - rh * 0.3, x1 - lx, rh * 0.6);
+        if (r[3]) SOC.hatch(ctx, lx, y - rh * 0.3, x1 - lx, rh * 0.6, "#ffffff");
+        ctx.fillStyle = P.text; ctx.font = SB.font(w < 480 ? 11 : 12, false, 600); ctx.textAlign = "right"; ctx.fillText(r[0], lx - 6, y);
+        ctx.font = SB.font(11, true); ctx.textAlign = "left"; ctx.fillText((r[2] >= 1 ? r[2] + " W" : SB.fmt(r[2] * 1000, 2) + " mW") + (r[3] ? " ✗" : ""), x1 + 5, y);
+      });
+      var cpu = d.rows[0][2], fx = d.rows[d.rows.length - 1][2];
+      SB.stat("ef-ratio", Math.round(cpu / fx) + "<small>배 적은 전력</small>");
+      var hb = function (p) { var hr = 19 / p; return hr > 48 ? Math.round(hr / 24) + "<small>일</small>" : hr.toFixed(1) + "<small>시간</small>"; };
+      SB.stat("ef-bat", hb(fx)); SB.stat("ef-cpu", d.rows[0][3] ? "<small>실시간 불가</small>" : hb(cpu));
+    }, { aspect: 0.34, minHeight: 200, maxHeight: 260 });
+    SB.seg("ef-task", function (v) { task = v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 2. ISP 파이프라인 */
+  (function () {
+    var IW = 192, IH = 128, N = IW * IH;
+    var GT = new Float32Array(N * 3), RAW = new Uint16Array(N);
+    var MS = [[0.72, 0.22, 0.06], [0.12, 0.76, 0.12], [0.05, 0.25, 0.70]]; // 센서 색 필터 겹침
+    var SCENE_T = 3500, EXPO = 1.3, BL = 64, WL = 1023;
+    var ILL = [[2500, 1, 0.58, 0.25], [3000, 1, 0.67, 0.38], [3500, 1, 0.74, 0.50], [4000, 1, 0.80, 0.61], [4500, 1, 0.85, 0.71], [5000, 1, 0.89, 0.79], [5500, 1, 0.93, 0.87], [6500, 1, 1, 1], [7500, 0.91, 0.95, 1]];
+    function illum(T) { for (var i = 1; i < ILL.length; i++) if (T <= ILL[i][0]) { var a = ILL[i - 1], b = ILL[i], u = (T - a[0]) / (b[0] - a[0]); return [1, 2, 3].map(function (k) { return a[k] + (b[k] - a[k]) * u; }); } return ILL[ILL.length - 1].slice(1); }
+    function mv(M, v) { return [0, 1, 2].map(function (r) { return M[r][0] * v[0] + M[r][1] * v[1] + M[r][2] * v[2]; }); }
+    function inv3(m) {
+      var a = m[0][0], b = m[0][1], c = m[0][2], d = m[1][0], e = m[1][1], f = m[1][2], g = m[2][0], h = m[2][1], i = m[2][2];
+      var A = e * i - f * h, B = -(d * i - f * g), Cc = d * h - e * g, det = a * A + b * B + c * Cc;
+      return [[A / det, -(b * i - c * h) / det, (b * f - c * e) / det], [B / det, (a * i - c * g) / det, -(a * f - c * d) / det], [Cc / det, -(a * h - b * g) / det, (a * e - b * d) / det]];
+    }
+    var CCM = inv3(MS);
+    var s2l = function (v) { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    var vign = function (x, y) { var dx = (x - IW / 2) / (IW / 2), dy = (y - IH / 2) / (IW / 2); return 1 - 0.55 * (dx * dx + dy * dy); };
+    var CFA = function (x, y) { return (y & 1) === 0 ? ((x & 1) === 0 ? 0 : 1) : ((x & 1) === 0 ? 1 : 2); };
+    (function makeScene() {
+      var r = SB.rng(42), noise = [];
+      for (var q = 0; q < 64; q++) noise.push(r());
+      var vn = function (x, y) { var xi = Math.floor(x) & 7, yi = Math.floor(y) & 7, fx = x - Math.floor(x), fy = y - Math.floor(y); var n00 = noise[yi * 8 + xi], n10 = noise[yi * 8 + ((xi + 1) & 7)], n01 = noise[((yi + 1) & 7) * 8 + xi], n11 = noise[((yi + 1) & 7) * 8 + ((xi + 1) & 7)]; return SB.lerp(SB.lerp(n00, n10, fx), SB.lerp(n01, n11, fx), fy); };
+      var PATCH = [[115, 82, 68], [194, 150, 130], [98, 122, 157], [87, 108, 67], [133, 128, 177], [103, 189, 170], [214, 126, 44], [80, 91, 166], [193, 90, 99], [94, 60, 108], [157, 188, 64], [224, 163, 46], [56, 61, 150], [70, 148, 73], [175, 54, 60], [231, 199, 31], [187, 86, 149], [8, 133, 161], [243, 243, 242], [200, 200, 200], [160, 160, 160], [122, 122, 121], [85, 85, 85], [52, 52, 52]].map(function (c) { return c.map(s2l); });
+      for (var y = 0; y < IH; y++) for (var x = 0; x < IW; x++) {
+        var c;
+        if (y < IH * 0.46) { var t = y / (IH * 0.46); c = [SB.lerp(0.10, 0.45, t), SB.lerp(0.22, 0.55, t), SB.lerp(0.62, 0.75, t)]; }
+        else { var n = vn(x / 6, y / 6) * 0.6 + vn(x / 2.3, y / 2.3) * 0.4; c = [0.07 + 0.08 * n, 0.15 + 0.12 * n, 0.03 + 0.03 * n]; }
+        // hills edge
+        if (y > IH * 0.40 + 6 * Math.sin(x / 17) && y < IH * 0.48 && x > 40) c = [0.06, 0.09, 0.07];
+        // sun
+        var ds = Math.hypot(x - IW * 0.83, y - IH * 0.14);
+        if (ds < 9) c = [9, 8.5, 7]; else { var gl = Math.exp(-(ds - 9) / 7) * 0.9; c = [c[0] + gl, c[1] + gl * 0.9, c[2] + gl * 0.7]; }
+        // checker
+        var px = Math.floor((x - 6) / 12), py = Math.floor((y - 64) / 12);
+        if (px >= 0 && px < 6 && py >= 0 && py < 4 && (x - 6) % 12 < 11 && (y - 64) % 12 < 11) c = PATCH[py * 6 + px].slice();
+        else if (x >= 4 && x < 79 && y >= 62 && y < 113) c = [0.02, 0.02, 0.02];
+        // zone plate
+        var zx = x - 150, zy = y - 92;
+        if (Math.abs(zx) < 34 && Math.abs(zy) < 30) { var zr = zx * zx + zy * zy, v = 0.5 + 0.5 * Math.cos(zr * 0.028); v = 0.04 + 0.6 * v; c = [v, v, v]; }
+        GT[(y * IW + x) * 3] = c[0]; GT[(y * IW + x) * 3 + 1] = c[1]; GT[(y * IW + x) * 3 + 2] = c[2];
+      }
+      // sensor
+      var L = illum(SCENE_T), gauss = function () { return Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(6.2831853 * r()); };
+      for (var y2 = 0; y2 < IH; y2++) for (var x2 = 0; x2 < IW; x2++) {
+        var i = y2 * IW + x2, lit = [GT[i * 3] * L[0], GT[i * 3 + 1] * L[1], GT[i * 3 + 2] * L[2]], cam = mv(MS, lit), ch = CFA(x2, y2);
+        var sig = Math.max(0, cam[ch] * EXPO * vign(x2, y2)) * (WL - BL);
+        var sd = Math.sqrt(0.9 * Math.min(sig, 4000) + 9);
+        var dn = BL + sig + gauss() * sd;
+        var u = r(); if (u < 0.0025) dn = WL; else if (u < 0.0035) dn = BL + 2;
+        RAW[i] = Math.round(SB.clamp(dn, 0, WL));
+      }
+    })();
+    var STAGES = [
+      { k: "blc", n: "블랙 레벨 보정", ops: 2, on: true, d: "센서가 일부러 더한 바닥값 64를 빼고 0~1로 정규화한다. 끄면 검은색이 회색으로 뜨고 대비가 준다." },
+      { k: "dpc", n: "결함 화소 보정", ops: 12, on: true, d: "같은 색 이웃 4개의 중앙값과 크게 다른 화소(항상 켜진 '핫 픽셀', 꺼진 '데드 픽셀')를 중앙값으로 바꾼다. 끄면 하얀·검은 점이 흩어지고, 디모자이크가 그 점을 색 얼룩으로 번지게 한다." },
+      { k: "lsc", n: "렌즈 음영 보정", ops: 2, on: true, d: "렌즈는 가장자리로 갈수록 빛을 덜 모은다(비네팅). 위치별 이득표를 곱해 보정한다. 끄면 네 모서리가 어둡다." },
+      { k: "dm", n: "디모자이크", ops: 8, on: true, d: "화소마다 빠진 두 색을 이웃에서 보간한다. 쌍선형은 가장 단순한 방법이고, 실제 ISP는 가장자리 방향을 보고 보간하는 더 정교한 방법을 쓴다." },
+      { k: "wb", n: "화이트 밸런스", ops: 3, on: true, d: "조명 색을 지워 회색이 회색으로 보이게 R·B 채널에 이득을 곱한다. 이 장면의 조명은 약 3,500 K다. 실제로는 3A 통계로 조명을 추정한다." },
+      { k: "ccm", n: "색 보정 행렬", ops: 9, on: true, d: "센서 색 필터는 파장이 서로 겹친다. 3×3 행렬로 센서 색 공간을 표준(sRGB) 색 공간으로 바꿔 채도를 되살린다." },
+      { k: "nr", n: "노이즈 제거", ops: 75, on: true, d: "5×5 이웃 중 밝기가 비슷한 화소만 평균한다(쌍방 필터). 가장자리는 지키고 평평한 곳의 잡음만 줄인다." },
+      { k: "tm", n: "톤 매핑 · 감마", ops: 4, on: true, d: "센서의 선형 값을 사람 눈과 화면에 맞는 곡선으로 바꾼다. 밝은 해는 부드럽게 눌러 담고, 어두운 곳은 올린다. 보통 표(LUT) 하나로 구현한다." },
+      { k: "sh", n: "선명화", ops: 14, on: true, d: "흐린 버전과의 차이를 더해 가장자리를 강조한다(언샤프 마스크). 너무 세면 가장자리에 흰 테두리(헤일로)가 생긴다." },
+    ];
+    var on = {}; STAGES.forEach(function (s) { on[s.k] = s.on; });
+    var dm = "bil", wbT = 3500, nr = 0.5, sh = 0.6, view = "out", mag = [146, 88], last = null, infoK = "dm";
+    var stEl = document.getElementById("isp-stages"), info = document.getElementById("isp-info");
+    stEl.innerHTML = STAGES.map(function (s) { return '<label class="check" data-k="' + s.k + '"><input type="checkbox" data-k="' + s.k + '"' + (s.on ? " checked" : "") + '><span>' + s.n + '</span><small>' + s.ops + '</small></label>'; }).join("");
+    stEl.addEventListener("change", function (e) { var k = e.target.dataset.k; if (!k) return; on[k] = e.target.checked; infoK = k; run(); });
+    stEl.addEventListener("mouseover", function (e) { var l = e.target.closest("label"); if (l && l.dataset.k !== infoK) { infoK = l.dataset.k; setInfo(); } });
+    function setInfo() { var s = STAGES.find(function (z) { return z.k === infoK; }); info.innerHTML = "<b>" + s.n + "</b> " + (on[s.k] ? '<span class="pill">켜짐</span>' : '<span class="pill">꺼짐</span>') + " " + s.d; }
+    var tone = function (x) { x = Math.max(0, x); var t = x * (1 + x / 6) / (1 + x); return t <= 0.0031308 ? 12.92 * t : 1.055 * Math.pow(t, 1 / 2.4) - 0.055; };
+    var REF = new Uint8ClampedArray(N * 3);
+    (function () { var g = mv(MS, illum(SCENE_T))[1] * EXPO; for (var i = 0; i < N * 3; i++) REF[i] = Math.round(SB.clamp(tone(GT[i] * g * 1.6), 0, 1) * 255); })();
+    function run() {
+      var cfa = new Float32Array(N), x, y, i;
+      for (i = 0; i < N; i++) cfa[i] = on.blc ? (RAW[i] - BL) / (WL - BL) : RAW[i] / WL;
+      if (on.dpc) {
+        var src = cfa.slice(), gg = function (xx, yy) { xx = xx < 0 ? xx + 2 : xx >= IW ? xx - 2 : xx; yy = yy < 0 ? yy + 2 : yy >= IH ? yy - 2 : yy; return src[yy * IW + xx]; };
+        for (y = 0; y < IH; y++) for (x = 0; x < IW; x++) {
+          i = y * IW + x;
+          var nb = [gg(x - 2, y), gg(x + 2, y), gg(x, y - 2), gg(x, y + 2), gg(x - 2, y - 2), gg(x + 2, y - 2), gg(x - 2, y + 2), gg(x + 2, y + 2)].sort(function (a, b) { return a - b; });
+          var med = (nb[3] + nb[4]) / 2, v = src[i];
+          if (v > nb[6] + 0.08 + 0.25 * med || v < nb[1] - 0.08 - 0.25 * med) cfa[i] = med;
+        }
+      }
+      if (on.lsc) for (y = 0; y < IH; y++) for (x = 0; x < IW; x++) cfa[y * IW + x] /= vign(x, y);
+      var rgb = new Float32Array(N * 3);
+      var g = function (xx, yy) { xx = xx < 0 ? -xx : xx >= IW ? 2 * IW - 2 - xx : xx; yy = yy < 0 ? -yy : yy >= IH ? 2 * IH - 2 - yy : yy; return cfa[yy * IW + xx]; };
+      var mode = on.dm ? dm : "none";
+      for (y = 0; y < IH; y++) for (x = 0; x < IW; x++) {
+        i = y * IW + x; var ch = CFA(x, y), v = cfa[i], o = [0, 0, 0];
+        if (mode === "none") o[ch] = v;
+        else if (mode === "near") { var bx = x & ~1, by = y & ~1; o = [g(bx, by), g(bx + 1, by), g(bx + 1, by + 1)]; }
+        else {
+          var cross = (g(x - 1, y) + g(x + 1, y) + g(x, y - 1) + g(x, y + 1)) / 4, diag = (g(x - 1, y - 1) + g(x + 1, y - 1) + g(x - 1, y + 1) + g(x + 1, y + 1)) / 4;
+          var hz = (g(x - 1, y) + g(x + 1, y)) / 2, vt = (g(x, y - 1) + g(x, y + 1)) / 2;
+          if (ch === 0) o = [v, cross, diag]; else if (ch === 2) o = [diag, cross, v];
+          else if ((y & 1) === 0) o = [hz, v, vt]; else o = [vt, v, hz];
+        }
+        rgb[i * 3] = o[0]; rgb[i * 3 + 1] = o[1]; rgb[i * 3 + 2] = o[2];
+      }
+      if (on.wb && mode !== "none") { var cw = mv(MS, illum(wbT)), gr = cw[1] / cw[0], gb = cw[1] / cw[2]; for (i = 0; i < N; i++) { rgb[i * 3] *= gr; rgb[i * 3 + 2] *= gb; } }
+      if (on.ccm && mode !== "none") for (i = 0; i < N; i++) { var a = [rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2]], b = mv(CCM, a); rgb[i * 3] = b[0]; rgb[i * 3 + 1] = b[1]; rgb[i * 3 + 2] = b[2]; }
+      if (on.nr && nr > 0 && mode !== "none") {
+        var s0 = rgb.slice(), sr = 0.01 + 0.09 * nr, inv = 1 / (2 * sr * sr), ss = 0.6 + 1.6 * nr;
+        for (y = 0; y < IH; y++) for (x = 0; x < IW; x++) {
+          i = y * IW + x; var L0 = s0[i * 3] + s0[i * 3 + 1] + s0[i * 3 + 2], ar = 0, ag = 0, ab = 0, wsum = 0;
+          for (var dy = -2; dy <= 2; dy++) { var yy = y + dy; if (yy < 0 || yy >= IH) continue; for (var dx = -2; dx <= 2; dx++) { var xx = x + dx; if (xx < 0 || xx >= IW) continue; var j = yy * IW + xx, Lj = s0[j * 3] + s0[j * 3 + 1] + s0[j * 3 + 2], dl = (Lj - L0) / 3; var wgt = Math.exp(-(dx * dx + dy * dy) / (2 * ss * ss) - dl * dl * inv); ar += s0[j * 3] * wgt; ag += s0[j * 3 + 1] * wgt; ab += s0[j * 3 + 2] * wgt; wsum += wgt; } }
+          rgb[i * 3] = ar / wsum; rgb[i * 3 + 1] = ag / wsum; rgb[i * 3 + 2] = ab / wsum;
+        }
+      }
+      var out = new Float32Array(N * 3), gain = 1.6;
+      for (i = 0; i < N * 3; i++) out[i] = on.tm ? tone(rgb[i] * gain) : SB.clamp(rgb[i], 0, 1);
+      if (on.sh && sh > 0 && mode !== "none") {
+        var s1 = out.slice();
+        for (y = 1; y < IH - 1; y++) for (x = 1; x < IW - 1; x++) {
+          i = y * IW + x;
+          for (var c = 0; c < 3; c++) { var bl = (s1[(i - 1) * 3 + c] + s1[(i + 1) * 3 + c] + s1[(i - IW) * 3 + c] + s1[(i + IW) * 3 + c] + 4 * s1[i * 3 + c]) / 8; out[i * 3 + c] = s1[i * 3 + c] + sh * (s1[i * 3 + c] - bl) * 1.5; }
+        }
+      }
+      var o8 = new Uint8ClampedArray(N * 3); for (i = 0; i < N * 3; i++) o8[i] = Math.round(SB.clamp(out[i], 0, 1) * 255);
+      last = o8;
+      var se = 0; for (i = 0; i < N * 3; i++) { var e = o8[i] - REF[i]; se += e * e; }
+      var psnr = 10 * Math.log10(255 * 255 / (se / (N * 3)));
+      SB.stat("isp-psnr", psnr.toFixed(1) + "<small>dB</small>");
+      var nOn = 0, ops = 0; STAGES.forEach(function (s) { if (on[s.k]) { nOn++; ops += s.k === "dm" ? (dm === "bil" ? 8 : dm === "near" ? 1 : 0) : s.k === "nr" ? (nr > 0 ? s.ops : 0) : s.k === "sh" ? (sh > 0 ? s.ops : 0) : s.ops; } });
+      SB.stat("isp-n", nOn + "<small>/ 9</small>"); SB.stat("isp-ops", ops + "<small>연산</small>");
+      SB.stat("isp-gops", (ops * 12e6 * 30 / 1e9).toFixed(0) + "<small>GOPS</small>");
+      paint(); setInfo(); cv.redraw();
+    }
+    var off = document.createElement("canvas"); off.width = IW; off.height = IH; var octx = off.getContext("2d"), img = octx.createImageData(IW, IH);
+    function paint() {
+      var d = img.data;
+      for (var i = 0; i < N; i++) {
+        var r, g, b;
+        if (view === "gt") { r = REF[i * 3]; g = REF[i * 3 + 1]; b = REF[i * 3 + 2]; }
+        else if (view === "raw") { var x = i % IW, y = (i / IW) | 0, ch = CFA(x, y), v = Math.pow(RAW[i] / WL, 1 / 2.2) * 255; r = ch === 0 ? v : 0; g = ch === 1 ? v : 0; b = ch === 2 ? v : 0; }
+        else { r = last[i * 3]; g = last[i * 3 + 1]; b = last[i * 3 + 2]; }
+        d[i * 4] = r; d[i * 4 + 1] = g; d[i * 4 + 2] = b; d[i * 4 + 3] = 255;
+      }
+      octx.putImageData(img, 0, 0);
+    }
+    var geo = null;
+    var cv = SB.canvas("#cv-isp", function (ctx, w, h) {
+      if (!last) return;
+      var wide = w >= 560, iw = wide ? Math.min(w * 0.66, (h - 8) * IW / IH) : w - 8, ih = iw * IH / IW;
+      var ix = 4, iy = 4;
+      ctx.imageSmoothingEnabled = false; ctx.drawImage(off, ix, iy, iw, ih);
+      var sc = iw / IW; geo = { ix: ix, iy: iy, sc: sc };
+      var R = 10, mx = SB.clamp(Math.round(mag[0]), R, IW - R), my = SB.clamp(Math.round(mag[1]), R, IH - R);
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.strokeRect(ix + (mx - R) * sc, iy + (my - R) * sc, 2 * R * sc, 2 * R * sc);
+      ctx.strokeStyle = "#000"; ctx.lineWidth = 1; ctx.strokeRect(ix + (mx - R) * sc - 1.5, iy + (my - R) * sc - 1.5, 2 * R * sc + 3, 2 * R * sc + 3);
+      var mxp = wide ? ix + iw + 12 : ix, myp = wide ? iy : iy + ih + 10, ms = wide ? Math.min(w - mxp - 4, ih) : Math.min(w - 8, h - myp - 6);
+      if (ms > 40) {
+        ctx.drawImage(off, mx - R, my - R, 2 * R, 2 * R, mxp, myp, ms, ms);
+        ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(mxp, myp, ms, ms);
+        ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(mxp, myp, 92, 18); ctx.fillStyle = "#fff"; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText("돋보기 ×" + Math.round(ms / (2 * R) / sc * sc), mxp + 6, myp + 9);
+      }
+    }, { aspect: 0.46, minHeight: 380, maxHeight: 520 });
+    var el = document.getElementById("cv-isp");
+    function setMag(x, y) { if (!geo) return; var u = (x - geo.ix) / geo.sc, v = (y - geo.iy) / geo.sc; if (u < 0 || v < 0 || u > IW || v > IH) return false; mag = [u, v]; cv.redraw(); return true; }
+    SOC.pointer(el, { down: function (x, y) { setMag(x, y); }, move: function (x, y, d) { if (d) setMag(x, y); } }, { drag: true });
+    el.style.cursor = "crosshair";
+    SB.seg("isp-view", function (v) { view = v; paint(); cv.redraw(); });
+    SB.seg("isp-dm", function (v) { dm = v; infoK = "dm"; run(); });
+    var deb = SB.debounce(run, 30);
+    SB.range("isp-wb", function (v) { return v + " K"; }, function (v) { wbT = v; infoK = "wb"; deb(); });
+    SB.range("isp-nr", function (v) { return Math.round(v * 100) + "%"; }, function (v) { nr = v; infoK = "nr"; deb(); });
+    SB.range("isp-sh", function (v) { return v.toFixed(1); }, function (v) { sh = v; infoK = "sh"; deb(); });
+    function setAll(b) { STAGES.forEach(function (s) { on[s.k] = b; }); [].forEach.call(stEl.querySelectorAll("input"), function (c) { c.checked = b; }); run(); }
+    document.getElementById("isp-all").onclick = function () { setAll(true); };
+    document.getElementById("isp-none").onclick = function () { setAll(false); };
+    run();
+  })();
+
+  /* ---------------------------------------------------------------- 3. 라인 버퍼 */
+  (function () {
+    var K = 5, Wr = 4032, nSt = 8, pos = 0, acc = 0;
+    var GW = 28, GH = 12;
+    var cv = SB.canvas("#cv-lb", function (ctx, w, h) {
+      var cs = Math.min((w - 20) / GW, (h - 34) / GH), ox = (w - cs * GW) / 2, oy = 8;
+      var cy = Math.floor(pos / GW), cx = pos % GW, half = (K - 1) / 2;
+      for (var y = 0; y < GH; y++) for (var x = 0; x < GW; x++) {
+        var idx = y * GW + x, st;
+        if (idx > pos) st = 0; else if (y >= cy - (K - 1) || (y === cy - K && x > cx)) st = 2; else st = 1;
+        if (y === cy - (K - 1) - 1 && x > cx) st = 2;
+        ctx.fillStyle = st === 0 ? P.grid : st === 1 ? SOC.alpha(C("isp"), 0.14) : SOC.alpha(P.accent2, 0.5);
+        ctx.fillRect(ox + x * cs + 0.5, oy + y * cs + 0.5, cs - 1, cs - 1);
+      }
+      // incoming pixel
+      ctx.fillStyle = P.accent2; ctx.fillRect(ox + cx * cs, oy + cy * cs, cs, cs);
+      // window
+      var wy = cy - half, wx = cx - half;
+      if (wy - half >= 0) {
+        ctx.strokeStyle = P.bad; ctx.lineWidth = 2.5; ctx.strokeRect(ox + (wx - half) * cs, oy + (wy - half) * cs, K * cs, K * cs);
+        if (wx >= 0) { ctx.fillStyle = P.bad; ctx.beginPath(); ctx.arc(ox + (wx + 0.5) * cs, oy + (wy + 0.5) * cs, cs * 0.25, 0, 7); ctx.fill(); }
+      }
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillText("입력 (" + cx + ", " + cy + ")  →  출력 (" + wx + ", " + wy + ")   · 라인 버퍼 " + (K - 1) + "줄", ox, h - 8);
+    }, { aspect: 0.42, minHeight: 190, maxHeight: 320 });
+    function upd() {
+      var one = (K - 1) * Wr * 2, H = Math.round(Wr * 3 / 4), fb = Wr * H * 2;
+      SB.stat("lb-one", SB.bytes(one, 3)); SB.stat("lb-all", SB.bytes(one * nSt, 3));
+      SB.stat("lb-fb", SB.bytes(fb, 3, false));
+      SB.stat("lb-lat", ((K - 1) / 2 * nSt) + "<small>줄 (≈" + ((K - 1) / 2 * nSt / H / 30 * 1e6).toFixed(0) + " µs)</small>");
+      cv.redraw();
+    }
+    SB.seg("lb-k", function (v) { K = +v; upd(); });
+    SB.range("lb-w", function (v) { return v + " (12 MP면 4032)"; }, function (v) { Wr = v; upd(); });
+    SB.range("lb-n", function (v) { return v + "단계"; }, function (v) { nSt = v; upd(); });
+    upd();
+    SB.loop(document.getElementById("cv-lb"), function (dt) { acc += dt; if (acc < 0.06) return; acc = 0; pos = (pos + 1) % (GW * GH); cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 4. 움직임 추정 */
+  (function () {
+    var FW = 128, FH = 96, B = 16, R = 8, pan = 0, showAll = false, sel = [3, 2];
+    var A, Bf, field = null;
+    function frames() {
+      var r = SB.rng(9), nz = []; for (var q = 0; q < 256; q++) nz.push(r());
+      var vn = function (x, y) { var xi = Math.floor(x), yi = Math.floor(y), fx = x - xi, fy = y - yi, h = function (a, b) { return nz[((a & 15) * 16 + (b & 15))]; }; return SB.lerp(SB.lerp(h(xi, yi), h(xi + 1, yi), fx), SB.lerp(h(xi, yi + 1), h(xi + 1, yi + 1), fx), fy); };
+      var bg = function (x, y) {
+        if (y < 30) return 0.75 + 0.03 * vn(x / 20, y / 20);
+        var v = 0.25 + 0.35 * vn(x / 5, y / 5) + 0.2 * vn(x / 2, y / 2);
+        if (((x + 300) % 37) < 4 && y > 28) v = 0.12;
+        return v;
+      };
+      var obj = function (x, y, t) {
+        var bx = 38 + 5 * t, by = 44 + 3 * t;
+        if (Math.hypot(x - bx, y - by) < 10) return 0.9 - 0.4 * ((x - bx + y - by) / 20 + 0.5) * (Math.floor((x - bx) / 4 + 10) % 2 ? 1 : 0.6);
+        var rx = 84 - 4 * t, ry = 58;
+        if (x > rx && x < rx + 22 && y > ry && y < ry + 16) return ((Math.floor((x - rx) / 3) + Math.floor((y - ry) / 3)) % 2) ? 0.95 : 0.05;
+        return null;
+      };
+      A = new Float32Array(FW * FH); Bf = new Float32Array(FW * FH);
+      for (var y = 0; y < FH; y++) for (var x = 0; x < FW; x++) {
+        var o0 = obj(x, y, 0), o1 = obj(x, y, 1);
+        A[y * FW + x] = o0 != null ? o0 : bg(x, y);
+        Bf[y * FW + x] = (o1 != null ? o1 : bg(x + 3 * pan, y)) + (r() - 0.5) * 0.04;
+      }
+    }
+    function search(bx, by) {
+      var best = 1e9, bv = [0, 0], map = [], s0 = 0;
+      for (var dy = -R; dy <= R; dy++) { var row = []; for (var dx = -R; dx <= R; dx++) {
+        var x0 = bx + dx, y0 = by + dy, sad;
+        if (x0 < 0 || y0 < 0 || x0 + B > FW || y0 + B > FH) sad = Infinity;
+        else { sad = 0; for (var j = 0; j < B; j++) for (var i = 0; i < B; i++) sad += Math.abs(Bf[(by + j) * FW + bx + i] - A[(y0 + j) * FW + x0 + i]); }
+        row.push(sad); if (sad < best - 1e-9 || (Math.abs(sad - best) < 1e-9 && Math.abs(dx) + Math.abs(dy) < Math.abs(bv[0]) + Math.abs(bv[1]))) { best = sad; bv = [dx, dy]; }
+        if (dx === 0 && dy === 0) s0 = sad;
+      } map.push(row); }
+      return { best: best, v: bv, map: map, s0: s0 };
+    }
+    function computeField() { field = []; for (var by = 0; by + B <= FH; by += B) for (var bx = 0; bx + B <= FW; bx += B) field.push([bx, by, search(bx, by).v]); }
+    var res = null, geo = null;
+    function gray(ctx, F, x0, y0, sc) {
+      var im = ctx.createImageData(FW, FH); for (var i = 0; i < FW * FH; i++) { var v = Math.round(SB.clamp(F[i], 0, 1) * 255); im.data[i * 4] = v; im.data[i * 4 + 1] = v; im.data[i * 4 + 2] = v; im.data[i * 4 + 3] = 255; }
+      var oc = document.createElement("canvas"); oc.width = FW; oc.height = FH; oc.getContext("2d").putImageData(im, 0, 0);
+      ctx.imageSmoothingEnabled = false; ctx.drawImage(oc, x0, y0, FW * sc, FH * sc);
+    }
+    var cv = SB.canvas("#cv-me", function (ctx, w, h) {
+      if (!res) return;
+      var gap = 12, sc = Math.min((w - 8 - gap) / 2 / FW, (h * 0.62) / FH), fw = FW * sc, fh = FH * sc;
+      var ax = (w - 2 * fw - gap) / 2, bx0 = ax + fw + gap, y0 = 20;
+      geo = { bx0: bx0, y0: y0, sc: sc };
+      ctx.fillStyle = P.text; ctx.font = SB.font(12, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillText("이전 프레임 (참조)", ax, 14); ctx.fillText("현재 프레임 — 블록을 누르세요", bx0, 14);
+      gray(ctx, A, ax, y0, sc); gray(ctx, Bf, bx0, y0, sc);
+      // grid on B
+      ctx.strokeStyle = "rgba(255,255,255,.35)"; ctx.lineWidth = 1; ctx.beginPath();
+      for (var gx = B; gx < FW; gx += B) { ctx.moveTo(bx0 + gx * sc, y0); ctx.lineTo(bx0 + gx * sc, y0 + fh); }
+      for (var gy = B; gy < FH; gy += B) { ctx.moveTo(bx0, y0 + gy * sc); ctx.lineTo(bx0 + fw, y0 + gy * sc); }
+      ctx.stroke();
+      var sx = sel[0] * B, sy = sel[1] * B, acc = SB.isDark() ? "#ff7aa2" : "#ff2e7a";
+      if (showAll && field) field.forEach(function (f) { var cx = bx0 + (f[0] + B / 2) * sc, cy = y0 + (f[1] + B / 2) * sc; if (f[2][0] || f[2][1]) SOC.arrow(ctx, cx + f[2][0] * sc, cy + f[2][1] * sc, cx, cy, "#ffd23f", 2, 6); else { ctx.fillStyle = "#ffd23f"; ctx.fillRect(cx - 1.5, cy - 1.5, 3, 3); } });
+      ctx.strokeStyle = acc; ctx.lineWidth = 2.5; ctx.strokeRect(bx0 + sx * sc, y0 + sy * sc, B * sc, B * sc);
+      var v = res.v;
+      if (v[0] || v[1]) SOC.arrow(ctx, bx0 + (sx + B / 2 + v[0]) * sc, y0 + (sy + B / 2 + v[1]) * sc, bx0 + (sx + B / 2) * sc, y0 + (sy + B / 2) * sc, acc, 2.5, 8);
+      // search window on A
+      ctx.save(); ctx.beginPath(); ctx.rect(ax, y0, fw, fh); ctx.clip();
+      ctx.setLineDash([5, 4]); ctx.strokeStyle = "#ffd23f"; ctx.lineWidth = 2; ctx.strokeRect(ax + (sx - R) * sc, y0 + (sy - R) * sc, (B + 2 * R) * sc, (B + 2 * R) * sc); ctx.setLineDash([]);
+      ctx.strokeStyle = "rgba(255,255,255,.6)"; ctx.lineWidth = 1; ctx.strokeRect(ax + sx * sc, y0 + sy * sc, B * sc, B * sc);
+      ctx.strokeStyle = acc; ctx.lineWidth = 2.5; ctx.strokeRect(ax + (sx + v[0]) * sc, y0 + (sy + v[1]) * sc, B * sc, B * sc);
+      ctx.restore();
+      // SAD map
+      var my = y0 + fh + 14, mh = h - my - 6, n = 2 * R + 1, ms = Math.min(mh, w * 0.45), cs = ms / n, mx0 = ax;
+      var fin = []; res.map.forEach(function (r) { r.forEach(function (s) { if (isFinite(s)) fin.push(s); }); });
+      var lo = Math.min.apply(null, fin), hi = Math.max.apply(null, fin);
+      for (var j = 0; j < n; j++) for (var i = 0; i < n; i++) {
+        var s = res.map[j][i];
+        ctx.fillStyle = isFinite(s) ? SOC.heat(Math.pow((s - lo) / (hi - lo + 1e-9), 0.5)) : P.grid;
+        ctx.fillRect(mx0 + i * cs, my + j * cs, Math.ceil(cs), Math.ceil(cs));
+      }
+      ctx.strokeStyle = P.border; ctx.strokeRect(mx0, my, ms, ms);
+      ctx.fillStyle = "#fff"; ctx.font = SB.font(Math.max(9, cs * 0.9), false, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("◆", mx0 + (v[0] + R + 0.5) * cs, my + (v[1] + R + 0.5) * cs);
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.strokeRect(mx0 + R * cs, my + R * cs, cs, cs);
+      var tx = mx0 + ms + 14;
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11.5); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      var lines = ["SAD 지도 (" + n + "×" + n + " 후보)", "가운데 흰 칸 = 제자리 (0, 0)", "◆ = 최소 SAD (" + v[0] + ", " + v[1] + ")", "이 블록의 움직임: " + (v[0] || v[1] ? "(" + (-v[0]) + ", " + (-v[1]) + ") 화소" : "없음")];
+      if (tx + 140 < w) lines.forEach(function (l, k) { ctx.fillStyle = k === 3 ? P.text : P.dim; ctx.fillText(l, tx, my + k * 18); });
+    }, { aspect: 0.66, minHeight: 330, maxHeight: 560 });
+    function upd() {
+      frames();
+      var nb = [Math.floor(FW / B), Math.floor(FH / B)]; sel = [Math.min(sel[0], nb[0] - 1), Math.min(sel[1], nb[1] - 1)];
+      res = search(sel[0] * B, sel[1] * B);
+      if (showAll) computeField(); else field = null;
+      SB.stat("me-v", "(" + res.v[0] + ", " + res.v[1] + ")");
+      SB.stat("me-sad", res.best.toFixed(1) + " / " + (isFinite(res.s0) ? res.s0.toFixed(1) : "—"));
+      var ops = Math.pow(2 * R + 1, 2) * B * B;
+      SB.stat("me-ops", fmt(ops * 3) + "<small>연산</small>");
+      SB.stat("me-4k", fmt(3840 * 2160 * Math.pow(2 * R + 1, 2) * 3 * 60) + "<small>연산/s</small>");
+      cv.redraw();
+    }
+    function fmt(x) { return x >= 1e15 ? (x / 1e15).toFixed(1) + "P" : x >= 1e12 ? (x / 1e12).toFixed(1) + "T" : x >= 1e9 ? (x / 1e9).toFixed(1) + "G" : x >= 1e6 ? (x / 1e6).toFixed(2) + "M" : x >= 1e3 ? (x / 1e3).toFixed(1) + "K" : String(x); }
+    var el = document.getElementById("cv-me");
+    SOC.pointer(el, { down: function (x, y) { if (!geo) return; var u = (x - geo.bx0) / geo.sc, v = (y - geo.y0) / geo.sc; if (u < 0 || v < 0 || u >= FW || v >= FH) return; sel = [Math.floor(u / B), Math.floor(v / B)]; upd(); } });
+    el.style.cursor = "pointer";
+    SB.seg("me-b", function (v) { var c = [(sel[0] + 0.5) * B, (sel[1] + 0.5) * B]; B = +v; sel = [Math.floor(c[0] / B), Math.floor(c[1] / B)]; upd(); });
+    SB.seg("me-cam", function (v) { pan = +v; upd(); });
+    SB.range("me-r", function (v) { return "±" + v; }, function (v) { R = v; upd(); });
+    document.getElementById("me-all").addEventListener("change", function (e) { showAll = e.target.checked; upd(); });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 5. DCT + 양자화 */
+  (function () {
+    var S = 64, img = new Float32Array(S * S), qp = 30, wmode = "flat", sel = [3, 3];
+    var JQ = [16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99];
+    (function () {
+      var r = SB.rng(5);
+      for (var y = 0; y < S; y++) for (var x = 0; x < S; x++) {
+        var v = 60 + 120 * x / S;
+        if (Math.hypot(x - 44, y - 20) < 12) v = 225;
+        if (y > 38 && x < 30) v = ((Math.floor(x / 2) + Math.floor(y / 2)) % 2) ? 210 : 40;
+        if (y > 38 && x >= 30) v = 128 + 70 * Math.sin(x * 0.6) * Math.cos(y * 0.25);
+        img[y * S + x] = SB.clamp(v + (r() - 0.5) * 10, 0, 255);
+      }
+    })();
+    var CS = []; for (var u = 0; u < 8; u++) { CS.push([]); for (var x = 0; x < 8; x++) CS[u].push((u === 0 ? Math.sqrt(1 / 8) : Math.sqrt(2 / 8)) * Math.cos((2 * x + 1) * u * Math.PI / 16)); }
+    function block() { var b = []; for (var y = 0; y < 8; y++) for (var x = 0; x < 8; x++) b.push(img[(sel[1] * 8 + y) * S + sel[0] * 8 + x]); return b; }
+    function dct(b) { var o = []; for (var v = 0; v < 8; v++) for (var u = 0; u < 8; u++) { var s = 0; for (var y = 0; y < 8; y++) for (var x = 0; x < 8; x++) s += CS[u][x] * CS[v][y] * (b[y * 8 + x] - 128); o.push(s); } return o; }
+    function idct(c) { var o = []; for (var y = 0; y < 8; y++) for (var x = 0; x < 8; x++) { var s = 0; for (var v = 0; v < 8; v++) for (var u = 0; u < 8; u++) s += CS[u][x] * CS[v][y] * c[v * 8 + u]; o.push(SB.clamp(s + 128, 0, 255)); } return o; }
+    var geo = null;
+    var cv = SB.canvas("#cv-dct", function (ctx, w, h) {
+      var b = block(), co = dct(b), qs = 0.625 * Math.pow(2, qp / 6);
+      var q = co.map(function (c, k) { var st = wmode === "jpeg" ? qs * JQ[k] / 16 : qs; return Math.round(c / st); });
+      var rc = idct(q.map(function (v, k) { return v * (wmode === "jpeg" ? qs * JQ[k] / 16 : qs); }));
+      var wide = w >= 560, pw = wide ? Math.min((w - 50) / 4, h - 34) : Math.min((w - 24) / 2, (h - 60) / 2);
+      var pos = wide ? [[8, 22], [8 + (pw + 12), 22], [8 + 2 * (pw + 12), 22], [8 + 3 * (pw + 12), 22]] : [[8, 22], [16 + pw, 22], [8, 44 + pw], [16 + pw, 44 + pw]];
+      var titles = ["원본 그림 (블록 선택)", "원본 블록 8×8", "양자화된 DCT 계수", "복원 블록"];
+      ctx.font = SB.font(11.5, false, 700); ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      titles.forEach(function (t, i) { ctx.fillText(t, pos[i][0], pos[i][1] - 7); });
+      // source image
+      var ps = pw / S, p0 = pos[0];
+      for (var y = 0; y < S; y++) for (var x = 0; x < S; x++) { var v = Math.round(img[y * S + x]); ctx.fillStyle = "rgb(" + v + "," + v + "," + v + ")"; ctx.fillRect(p0[0] + x * ps, p0[1] + y * ps, ps + 0.5, ps + 0.5); }
+      ctx.strokeStyle = P.accent; ctx.lineWidth = 2; ctx.strokeRect(p0[0] + sel[0] * 8 * ps, p0[1] + sel[1] * 8 * ps, 8 * ps, 8 * ps);
+      geo = { x: p0[0], y: p0[1], ps: ps };
+      var cs = pw / 8;
+      function blk(p, arr) { for (var k = 0; k < 64; k++) { var v = Math.round(arr[k]); ctx.fillStyle = "rgb(" + v + "," + v + "," + v + ")"; ctx.fillRect(p[0] + (k % 8) * cs, p[1] + Math.floor(k / 8) * cs, cs + 0.5, cs + 0.5); } ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(p[0], p[1], pw, pw); }
+      blk(pos[1], b); blk(pos[3], rc);
+      var p2 = pos[2], mxq = 1; q.forEach(function (v) { mxq = Math.max(mxq, Math.abs(v)); });
+      for (var k = 0; k < 64; k++) {
+        var x2 = p2[0] + (k % 8) * cs, y2 = p2[1] + Math.floor(k / 8) * cs, v2 = q[k];
+        ctx.fillStyle = v2 === 0 ? P.grid : SOC.alpha(v2 > 0 ? P.accent : P.accent2, 0.25 + 0.75 * Math.sqrt(Math.abs(v2) / mxq));
+        ctx.fillRect(x2 + 0.5, y2 + 0.5, cs - 1, cs - 1);
+        if (v2 !== 0 && cs > 13) { ctx.fillStyle = P.text; ctx.font = SB.font(Math.min(11, cs * 0.42), true, 600); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(v2), x2 + cs / 2, y2 + cs / 2); }
+      }
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("← 낮은 주파수 · 높은 주파수 →", p2[0], p2[1] + pw + 4);
+      // stats
+      var nz = 0, bits = 4; q.forEach(function (v) { if (v) { nz++; bits += 2 * Math.floor(Math.log2(Math.abs(v))) + 1 + 3; } });
+      var se = 0; for (var k2 = 0; k2 < 64; k2++) se += Math.pow(b[k2] - rc[k2], 2);
+      var ps2 = se > 0 ? 10 * Math.log10(255 * 255 / (se / 64)) : Infinity;
+      SB.stat("dc-nz", nz + "<small>/ 64</small>"); SB.stat("dc-bits", bits + "<small>비트</small>");
+      SB.stat("dc-cr", (512 / bits).toFixed(1) + "<small>: 1</small>"); SB.stat("dc-psnr", (isFinite(ps2) ? ps2.toFixed(1) : "∞") + "<small>dB</small>");
+    }, { aspect: 0.3, minHeight: 210, maxHeight: 290 });
+    SOC.pointer(document.getElementById("cv-dct"), { down: function (x, y) { if (!geo) return; var u = Math.floor((x - geo.x) / geo.ps / 8), v = Math.floor((y - geo.y) / geo.ps / 8); if (u >= 0 && v >= 0 && u < 8 && v < 8) { sel = [u, v]; cv.redraw(); } } });
+    document.getElementById("cv-dct").style.cursor = "pointer";
+    SB.range("dc-qp", function (v) { return v + " (간격 " + (0.625 * Math.pow(2, v / 6)).toFixed(1) + ")"; }, function (v) { qp = v; cv.redraw(); });
+    SB.seg("dc-w", function (v) { wmode = v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 6. GOP */
+  (function () {
+    var gop = 30, mot = 0.3, nb = 2;
+    var I = 0.5e6;
+    function seq() {
+      var out = [];
+      for (var i = 0; i < 60; i++) {
+        var p = i % gop, t;
+        if (p === 0) t = "I"; else if (nb && (p % (nb + 1)) !== 0 && p < gop) t = "B"; else t = "P";
+        var Pz = I * (0.08 + 0.35 * mot), sz = t === "I" ? I : t === "P" ? Pz : Pz * 0.5;
+        out.push([t, sz]);
+      }
+      return out;
+    }
+    var cv = SB.canvas("#cv-gop", function (ctx, w, h) {
+      var s = seq(), bw = (w - 20) / s.length, top = 18, bh = h - top - 24, mx = I * 1.05;
+      var col = { I: P.accent, P: C("video"), B: P.accent2 };
+      s.forEach(function (f, i) { var hh = Math.max(1.5, f[1] / mx * bh); ctx.fillStyle = col[f[0]]; ctx.fillRect(10 + i * bw + 0.5, top + bh - hh, Math.max(1, bw - 1), hh); if (bw > 11) { ctx.fillStyle = P.dim; ctx.font = SB.font(9, true); ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText(f[0], 10 + (i + 0.5) * bw, top + bh + 4); } });
+      ctx.font = SB.font(11); ctx.textBaseline = "middle"; ctx.textAlign = "left"; var lx = 10;
+      [["I", "I 프레임"], ["P", "P 프레임"], ["B", "B 프레임"]].forEach(function (k) { ctx.fillStyle = col[k[0]]; ctx.fillRect(lx, 4, 10, 10); ctx.fillStyle = P.dim; ctx.fillText(k[1], lx + 14, 9); lx += ctx.measureText(k[1]).width + 30; });
+      var tot = 0, ib = 0; s.forEach(function (f) { tot += f[1]; if (f[0] === "I") ib += f[1]; });
+      var br = tot / 2 * 8;
+      SB.stat("gp-br", (br / 1e6).toFixed(1) + "<small>Mb/s</small>");
+      SB.stat("gp-cr", Math.round(2.986e9 / br) + "<small>분의 1</small>");
+      SB.stat("gp-i", Math.round(ib / tot * 100) + "<small>%</small>");
+    }, { aspect: 0.24, minHeight: 150, maxHeight: 200 });
+    SB.range("gp-n", function (v) { return v === 1 ? "1 (모두 I)" : v + "프레임"; }, function (v) { gop = v; cv.redraw(); });
+    SB.range("gp-m", function (v) { return Math.round(v * 100) + "%"; }, function (v) { mot = v; cv.redraw(); });
+    SB.seg("gp-b", function (v) { nb = +v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 7. FIR */
+  (function () {
+    var Nt = 31, fc = 1500, win = "ham", FS = 48000, NS = 480;
+    var r = SB.rng(77), X = [];
+    for (var n = 0; n < NS + 128; n++) { var t = n / FS; X.push(0.55 * Math.sin(2 * Math.PI * 220 * t) + 0.3 * Math.sin(2 * Math.PI * 440 * t + 1) + 0.22 * Math.sin(2 * Math.PI * 7000 * t) + (r() - 0.5) * 0.35); }
+    function taps() {
+      var h = [], M = (Nt - 1) / 2, f = fc / FS, s = 0;
+      for (var k = 0; k < Nt; k++) { var m = k - M, v = m === 0 ? 2 * f : Math.sin(2 * Math.PI * f * m) / (Math.PI * m); if (win === "ham") v *= 0.54 - 0.46 * Math.cos(2 * Math.PI * k / (Nt - 1)); h.push(v); s += v; }
+      return h.map(function (v) { return v / s; });
+    }
+    function resp(h, f) { var re = 0, im = 0; for (var k = 0; k < h.length; k++) { re += h[k] * Math.cos(2 * Math.PI * f / FS * k); im -= h[k] * Math.sin(2 * Math.PI * f / FS * k); } return Math.hypot(re, im); }
+    var cv = SB.canvas("#cv-fir", function (ctx, w, h) {
+      var hk = taps(), y = [];
+      for (var n = 0; n < NS; n++) { var s = 0; for (var k = 0; k < hk.length; k++) s += hk[k] * X[n + 127 - k]; y.push(s); }
+      var th = h * 0.48, lx = 10, gw = w - 20;
+      ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(lx, th / 2 + 6); ctx.lineTo(lx + gw, th / 2 + 6); ctx.stroke();
+      var Y = function (v) { return th / 2 + 6 - v * th * 0.42; };
+      ctx.strokeStyle = SOC.alpha(P.text, 0.3); ctx.lineWidth = 1; ctx.beginPath();
+      for (var n2 = 0; n2 < NS; n2++) { var px = lx + n2 / NS * gw, py = Y(X[n2 + 127]); n2 ? ctx.lineTo(px, py) : ctx.moveTo(px, py); } ctx.stroke();
+      ctx.strokeStyle = C("dsp"); ctx.lineWidth = 2.2; ctx.beginPath();
+      for (var n3 = 0; n3 < NS; n3++) { var px2 = lx + n3 / NS * gw, py2 = Y(y[n3]); n3 ? ctx.lineTo(px2, py2) : ctx.moveTo(px2, py2); } ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("시간 영역 10 ms · 연한 선 = 입력, 진한 선 = 출력", lx, 2);
+      // freq response
+      var fy0 = th + 22, fh = h - fy0 - 22, dbMin = -80;
+      var FX = function (f) { return lx + f / 24000 * gw; }, FY = function (db) { return fy0 + (Math.max(dbMin, db) / dbMin) * fh; };
+      [0, -20, -40, -60, -80].forEach(function (d) { ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(lx, FY(d)); ctx.lineTo(lx + gw, FY(d)); ctx.stroke(); ctx.fillStyle = P.faint; ctx.font = SB.font(9.5, true); ctx.textAlign = "right"; ctx.textBaseline = "middle"; if (d > -80) ctx.fillText(d + " dB", lx + gw, FY(d) - 6); });
+      [220, 440, 7000].forEach(function (f) { ctx.strokeStyle = P.warn; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(FX(f), fy0); ctx.lineTo(FX(f), fy0 + fh); ctx.stroke(); ctx.setLineDash([]); });
+      ctx.strokeStyle = P.accent; ctx.lineWidth = 2; ctx.beginPath();
+      for (var i = 0; i <= 240; i++) { var f = i / 240 * 24000, db = 20 * Math.log10(resp(hk, f) + 1e-9), X2 = FX(f), Y2 = FY(db); i ? ctx.lineTo(X2, Y2) : ctx.moveTo(X2, Y2); } ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("주파수 응답 |H(f)| 0~24 kHz · 점선 = 신호 성분", lx, fy0 - 16);
+      ctx.textAlign = "center"; ctx.fillText("7 kHz", FX(7000), fy0 + fh + 4);
+      var att = 20 * Math.log10(resp(hk, 7000) + 1e-9);
+      SB.stat("fr-mac", Nt); SB.stat("fr-macs", (Nt * FS / 1e6).toFixed(2) + "<small>M</small>");
+      SB.stat("fr-load", (Nt * FS / 4 / 300e6 * 100).toFixed(2) + "<small>%</small>");
+      SB.stat("fr-att", att.toFixed(0) + "<small>dB</small>");
+    }, { aspect: 0.52, minHeight: 300, maxHeight: 400 });
+    SB.range("fr-n", function (v) { return v + " (지연 " + ((v - 1) / 2 / 48).toFixed(2) + " ms)"; }, function (v) { Nt = v; cv.redraw(); });
+    SB.range("fr-fc", function (v) { return (v / 1000).toFixed(1) + " kHz"; }, function (v) { fc = v; cv.redraw(); });
+    SB.seg("fr-win", function (v) { win = v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 8. 디스플레이 */
+  (function () {
+    var S = { hz: 120, comp: "dpu", n: 4, rt: 7, res: "fhd", fbc: true };
+    var RES = { fhd: 2400 * 1080, qhd: 3120 * 1440 };
+    var LAY = [{ n: "배경화면", f: 1, c: "accent-2" }, { n: "앱 화면", f: 1, c: "ok" }, { n: "동영상", f: 0.32, c: "warn" }, { n: "상태 표시줄", f: 0.04, c: "text-dim" }, { n: "내비게이션 바", f: 0.05, c: "text-faint" }, { n: "알림 팝업", f: 0.12, c: "accent" }];
+    var tl = null, simT = 0;
+    function bw() {
+      var Px = RES[S.res], bpp = S.fbc ? 2 : 4, rd = 0;
+      for (var i = 0; i < S.n; i++) rd += LAY[i].f * Px * bpp;
+      var dpu = rd * S.hz, gpu = (rd + Px * bpp * 2) * S.hz;
+      return { dpu: dpu, gpu: gpu, cur: S.comp === "dpu" ? dpu : gpu };
+    }
+    function timeline() {
+      var r = SB.rng(Math.round(S.rt * 10) + S.hz), per = 1000 / S.hz, frames = [], t = 0, k = 0;
+      while (t < 1100) { var d = S.rt * (0.65 + 0.7 * r()); frames.push({ s: t, e: t + d, id: k++ }); t += Math.max(d, 0.5); }
+      // double buffering: render of frame k+1 can't start before frame k is displayed... simplified: start when done
+      var shown = [], fi = 0, lastId = -1, rep = 0, uniq = 0;
+      for (var v = 1; v * per <= 1000; v++) {
+        var tv = v * per, best = lastId;
+        while (fi < frames.length && frames[fi].e <= tv) { best = frames[fi].id; fi++; }
+        if (best === lastId) rep++; else uniq++;
+        shown.push({ t: tv, id: best, rep: best === lastId }); lastId = best;
+      }
+      return { frames: frames, shown: shown, rep: rep, uniq: uniq, per: per };
+    }
+    var cv = SB.canvas("#cv-disp", function (ctx, w, h) {
+      var B = bw(), narrow = w < 560;
+      var topH = narrow ? 150 : Math.min(190, h * 0.55);
+      // layers (exploded)
+      var lw = narrow ? w * 0.42 : Math.min(w * 0.36, 260), ph = topH - 30, pw = ph * 0.5, x0 = 18, y0 = 22;
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillText("층 " + S.n + "개 → 한 화면", 8, 13);
+      var dx = Math.min(22, (lw - pw - 10) / Math.max(1, S.n)), dy = -6;
+      for (var i = 0; i < S.n; i++) {
+        var L = LAY[i], lx = x0 + i * dx, ly = y0 + 8 + i * -dy * 0 + (S.n - 1 - i) * 0;
+        var hh = L.f >= 1 ? ph : Math.max(8, ph * L.f * (i === 2 ? 1.2 : 1.8)), yy = i === 3 ? ly : i === 4 ? ly + ph - hh : i === 2 ? ly + ph * 0.25 : i === 5 ? ly + 12 : ly;
+        ctx.fillStyle = SOC.alpha(SB.color(L.c), L.f >= 1 ? 0.35 : 0.85); ctx.strokeStyle = SB.color(L.c); ctx.lineWidth = 1.5;
+        ctx.fillRect(lx, yy, pw, hh); ctx.strokeRect(lx, yy, pw, hh);
+      }
+      ctx.font = SB.font(10.5); ctx.textBaseline = "middle";
+      var tx = x0 + pw + S.n * dx + 6;
+      for (var j = 0; j < S.n; j++) { ctx.fillStyle = SB.color(LAY[j].c); ctx.fillRect(tx, y0 + 6 + j * 15, 8, 8); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.fillText(LAY[j].n + " " + Math.round(LAY[j].f * 100) + "%", tx + 12, y0 + 10 + j * 15); }
+      // bandwidth bars
+      var bx = narrow ? 8 : Math.max(tx + 120, w * 0.52), by = narrow ? topH + 6 : 22, bwid = w - bx - 10, mx = Math.max(B.gpu, 1) * 1.1;
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillText("합성 DRAM 트래픽", bx, by - 9 + (narrow ? 8 : 0));
+      [["오버레이", B.dpu, "dpu"], ["GPU 합성", B.gpu, "gpu"]].forEach(function (r, k) {
+        var y = by + (narrow ? 8 : 0) + k * 34, x = bx + 64, ww = (bwid - 64 - 70) * r[1] / mx;
+        ctx.fillStyle = r[2] === S.comp ? P.text : P.dim; ctx.font = SB.font(11.5, false, r[2] === S.comp ? 700 : 400); ctx.textBaseline = "middle"; ctx.fillText(r[0], bx, y + 11);
+        ctx.fillStyle = r[2] === S.comp ? C("video") : SOC.alpha(C("video"), 0.4); ctx.fillRect(x, y, ww, 22);
+        ctx.fillStyle = P.text; ctx.font = SB.font(11, true, 600); ctx.fillText((r[1] / 1e9).toFixed(2) + " GB/s", x + ww + 6, y + 11);
+      });
+      // timeline
+      var t0 = narrow ? topH + 86 : topH + 10, th = h - t0 - 6;
+      if (!tl) return;
+      var win = 100, start = (simT % 900), X = function (t) { return 8 + (t - start) / win * (w - 16); };
+      ctx.save(); ctx.beginPath(); ctx.rect(8, t0, w - 16, th); ctx.clip();
+      ctx.fillStyle = P.grid; ctx.fillRect(8, t0, w - 16, th);
+      var rowS = t0 + 4, rowR = t0 + 26 + (th - 52) / 2;
+      // vsync lines + shown
+      tl.shown.forEach(function (s) {
+        var x = X(s.t); if (x < -40 || x > w + 40) return;
+        ctx.strokeStyle = SOC.alpha(P.text, 0.35); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, t0); ctx.lineTo(x, t0 + th); ctx.stroke();
+        var cw = X(s.t + tl.per) - x;
+        ctx.fillStyle = s.rep ? SOC.alpha(P.bad, 0.75) : SOC.alpha(C("video"), 0.8); ctx.fillRect(x + 1, rowS, cw - 2, 18);
+        if (cw > 18) { ctx.fillStyle = "#fff"; ctx.font = SB.font(10, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(s.id < 0 ? "–" : "#" + s.id, x + cw / 2, rowS + 9); }
+      });
+      tl.frames.forEach(function (f, k) {
+        var x1 = X(f.s), x2 = X(f.e); if (x2 < 0 || x1 > w) return;
+        var yy = rowR + (k % 2) * 14;
+        ctx.fillStyle = SOC.alpha(C("gpu"), 0.85); ctx.fillRect(x1, yy, Math.max(1, x2 - x1 - 1), 11);
+        if (x2 - x1 > 22) { ctx.fillStyle = "#fff"; ctx.font = SB.font(9, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("#" + f.id, (x1 + x2) / 2, yy + 6); }
+      });
+      ctx.restore();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      ctx.fillText("화면에 나간 프레임 (VSync마다)", 12, rowS + 34); ctx.fillText("앱 렌더링 (100 ms 구간)", 12, t0 + th - 2);
+    }, { aspect: 0.62, minHeight: 360, maxHeight: 480 });
+    function upd() {
+      tl = timeline();
+      var B = bw();
+      SB.stat("ds-bud", (1000 / S.hz).toFixed(2) + "<small>ms</small>");
+      SB.stat("ds-fps", tl.uniq + "<small>/ " + S.hz + "</small>");
+      SB.stat("ds-jank", Math.round(tl.rep / tl.shown.length * 100) + "<small>%</small>");
+      SB.stat("ds-bw", (B.cur / 1e9).toFixed(2) + "<small>GB/s · 약 " + Math.round(B.cur * 8 * 15e-12 * 1000) + " mW</small>");
+      cv.redraw();
+    }
+    SB.seg("ds-hz", function (v) { S.hz = +v; upd(); });
+    SB.seg("ds-comp", function (v) { S.comp = v; upd(); });
+    SB.seg("ds-res", function (v) { S.res = v; upd(); });
+    SB.range("ds-n", function (v) { return v + "개"; }, function (v) { S.n = v; upd(); });
+    SB.range("ds-rt", function (v) { return v.toFixed(1) + " ms"; }, function (v) { S.rt = v; upd(); });
+    document.getElementById("ds-fbc").addEventListener("change", function (e) { S.fbc = e.target.checked; upd(); });
+    upd();
+    SB.loop(document.getElementById("cv-disp"), function (dt) { simT += dt * 25; cv.redraw(); });
+  })();
+})();
+</script>
+</body>
+</html>

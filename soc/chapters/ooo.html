@@ -1,0 +1,940 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and SoCBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "한 클럭에 여러 명령을, 순서를 바꿔 가며. 데이터 흐름 그래프로 숨은 병렬성을 재고, 레지스터 이름 바꾸기와 ROB를 한 단계씩 따라가며, 비순차 코어 시뮬레이터와 big.LITTLE 스케줄러로 큰 코어와 작은 코어의 분업을 실험한다.", "libs": []}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>슈퍼스칼라·비순차·big.LITTLE · SoCBook</title>
+<meta name="description" content="한 클럭에 여러 명령을, 순서를 바꿔 가며. 데이터 흐름 그래프로 숨은 병렬성을 재고, 레지스터 이름 바꾸기와 ROB를 한 단계씩 따라가며, 비순차 코어 시뮬레이터와 big.LITTLE 스케줄러로 큰 코어와 작은 코어의 분업을 실험한다.">
+<link rel="canonical" href="https://semi.euiyun.com/soc/chapters/ooo.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#c8285f">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="SoCBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="슈퍼스칼라·비순차·big.LITTLE · SoCBook">
+<meta property="og:description" content="한 클럭에 여러 명령을, 순서를 바꿔 가며. 데이터 흐름 그래프로 숨은 병렬성을 재고, 레지스터 이름 바꾸기와 ROB를 한 단계씩 따라가며, 비순차 코어 시뮬레이터와 big.LITTLE 스케줄러로 큰 코어와 작은 코어의 분업을 실험한다.">
+<meta property="og:url" content="https://semi.euiyun.com/soc/chapters/ooo.html">
+<meta property="og:image" content="https://semi.euiyun.com/soc/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/soc/chapters/ooo.html#chapter","name":"슈퍼스칼라·비순차·big.LITTLE","headline":"슈퍼스칼라·비순차·big.LITTLE · SoCBook","description":"한 클럭에 여러 명령을, 순서를 바꿔 가며. 데이터 흐름 그래프로 숨은 병렬성을 재고, 레지스터 이름 바꾸기와 ROB를 한 단계씩 따라가며, 비순차 코어 시뮬레이터와 big.LITTLE 스케줄러로 큰 코어와 작은 코어의 분업을 실험한다.","url":"https://semi.euiyun.com/soc/chapters/ooo.html","position":4,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/soc/og.png","dateModified":"2026-10-03","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/soc/#book","name":"SoCBook · 시스템 온 칩 교과서","url":"https://semi.euiyun.com/soc/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"SoCBook","item":"https://semi.euiyun.com/soc/"},{"@type":"ListItem","position":2,"name":"4. 슈퍼스칼라·비순차·big.LITTLE","item":"https://semi.euiyun.com/soc/chapters/ooo.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/soc.js"></script>
+<!--head:end-->
+<style>
+  .oo-note { font-size: 13px; color: var(--text-dim); }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="soc"></script>
+</head>
+<body data-chapter="ooo">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 04</div>
+    <h1>슈퍼스칼라·비순차·big.LITTLE</h1>
+    <p class="lead">스마트폰 칩의 프라임 코어는 효율 코어보다 면적이 네 배쯤 크다. 그런데 같은 클럭에서 일을 네 배 빨리 하지는 못한다. 기껏해야 두세 배다. 그 큰 면적은 어디에 쓰였을까? 답은 "기다리지 않기"에 있다. 큰 코어는 한 사이클에 명령을 여덟 개, 열 개씩 들여다보고, 앞 명령이 캐시 미스로 멈춰 있으면 수백 개 뒤의 명령까지 먼저 처리해 둔다. 순서를 마음대로 바꾸면서도 결과는 프로그램에 적힌 순서와 똑같이 보이게 만드는 마법, 그것이 <b>비순차 실행</b>이다. 이 장에서는 그 마법의 부품인 레지스터 이름 바꾸기와 재정렬 버퍼를 직접 돌려 보고, 왜 칩에 큰 코어와 작은 코어를 함께 넣는지까지 실험한다.</p>
+    <ul class="objectives">
+      <li>프로그램의 데이터 흐름 그래프에서 임계 경로를 찾아 명령어 수준 병렬성(ILP)의 한계를 계산한다.</li>
+      <li>순차 슈퍼스칼라가 폭을 늘려도 IPC가 잘 오르지 않는 이유와 비순차 실행의 필요성을 설명한다.</li>
+      <li>레지스터 이름 바꾸기가 WAR·WAW 거짓 의존을 없애는 과정을 RAT와 자유 목록으로 따라간다.</li>
+      <li>ROB 크기·발행 폭·캐시 미스가 IPC와 메모리 수준 병렬성에 미치는 영향을 시뮬레이터로 잰다.</li>
+      <li>Pollack의 법칙과 DVFS 곡선으로 big.LITTLE 이종 코어 구성과 에너지 인식 스케줄링의 이득을 설명한다.</li>
+    </ul>
+    <div class="soc-locator" data-blocks="big little cache" data-caption="큰 코어(진한 빨강)가 이 장의 주인공이다. 작은 코어(연한 빨강)와 함께 쓰는 L3 캐시도 표시했다. 큰 코어 면적의 상당 부분은 계산기가 아니라 명령을 기다리게 하고 줄 세우는 장부(ROB, 스케줄러, 이름 바꾸기 표)와 캐시다."></div>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="ilp">
+    <h2>순서 속에 숨은 병렬성</h2>
+    <p>프로그램은 명령을 한 줄로 늘어놓지만, 명령들이 정말로 그 순서를 지켜야 하는 것은 아니다. <code>a = b + c</code>와 <code>d = e × f</code>는 서로 아무 관계가 없으니 동시에 해도 된다. 반면 <code>g = a + d</code>는 앞의 두 결과를 기다려야 한다. 명령 사이의 이런 "앞 결과를 써야 함" 관계를 화살표로 그리면 <span class="term">데이터 흐름 그래프</span><span class="en">(Dataflow graph)</span>가 된다. 그래프에서 가장 긴 사슬, 즉 <b>임계 경로</b>가 계산 자원이 무한해도 넘을 수 없는 시간의 하한이다. 명령 수를 임계 경로 길이로 나눈 값이 그 프로그램이 원리적으로 가진 <span class="term">명령어 수준 병렬성</span><span class="en">(ILP, Instruction-Level Parallelism)</span>이다.</p>
+    <figure class="play" id="fig-dag">
+      <div class="play-ctrl" style="border-top:0;border-bottom:1px solid var(--border)">
+        <div class="seg" id="dag-prog"><button data-value="expr" class="on">수식 계산</button><button data-value="arr">배열 네 칸 더하기</button><button data-value="list">연결 리스트 따라가기</button></div>
+      </div>
+      <div class="play-view"><canvas id="cv-dag"></canvas></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">명령 수</span><span class="v" id="dag-n">—</span></div>
+        <div class="stat"><span class="k">하나씩 차례로 (지연 합)</span><span class="v" id="dag-seq">—</span></div>
+        <div class="stat"><span class="k">임계 경로</span><span class="v" id="dag-cp">—</span></div>
+        <div class="stat"><span class="k">이상적 IPC (자원 무한)</span><span class="v" id="dag-ilp">—</span></div>
+      </div>
+      <figcaption><b>그림 4-1.</b> <span class="try">눌러 보기</span>왼쪽은 프로그램, 오른쪽은 각 명령이 가장 일찍 시작할 수 있는 사이클에 놓은 데이터 흐름 그래프다(덧셈 1, 곱셈 3, 적재 4사이클). 명령을 누르면 그 명령이 기다려야 하는 조상(파랑)과 그 명령을 기다리는 후손(분홍)이 밝아진다. 분홍 테두리는 임계 경로다. 연결 리스트는 다음 주소를 알려면 앞 적재가 끝나야 해서, 명령이 몇 개든 한 줄로 늘어선다.</figcaption>
+    </figure>
+    <p>실제 프로그램을 이렇게 분석하면, 분기 예측이 완벽하고 계산기가 무한하다는 이상적 조건에서 IPC가 수십~수백에 이르는 경우도 많다. 문제는 그 병렬성이 <b>멀리 흩어져 있다</b>는 것이다. 지금 실행할 수 있는 명령이 수십 줄 뒤에 있을 수 있다. 그것을 찾아내려면 많은 명령을 한꺼번에 들여다볼 수 있어야 한다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="superscalar">
+    <h2>슈퍼스칼라: 한 사이클에 여러 명령</h2>
+    <p><a href="cpu.html">3장</a>의 파이프라인은 매 사이클 명령 하나를 들여보내므로 CPI가 1보다 작아질 수 없었다. 파이프라인을 여러 줄 깔아 한 사이클에 명령을 2개, 4개, 8개씩 인출·해독·실행하면 이 벽을 넘을 수 있다. 이것이 <span class="term">슈퍼스칼라</span><span class="en">(Superscalar)</span>다. 한 사이클에 들여보내는 명령 수를 <span class="term">발행 폭</span><span class="en">(Issue width)</span>이라 한다. 그런데 명령을 <b>프로그램 순서대로만</b> 들여보내면(순차 슈퍼스칼라) 앞 명령 하나가 막히는 순간 뒤의 모든 명령이 같이 멈춘다. 폭을 늘리며 두 방식을 비교해 보자.</p>
+    <figure class="play" id="fig-width">
+      <div class="play-view"><canvas id="cv-width"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>발행 폭 <output id="wd-w-out"></output></span><input type="range" id="wd-w" min="1" max="8" step="1" value="2"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">순차 IPC</span><span class="v" id="wd-in">—</span></div>
+        <div class="stat"><span class="k">비순차 IPC (창 128)</span><span class="v" id="wd-oo">—</span></div>
+        <div class="stat"><span class="k">이 프로그램의 ILP 한계</span><span class="v" id="wd-lim">—</span></div>
+      </div>
+      <figcaption><b>그림 4-2.</b> <span class="try">만져 보기</span>위쪽 두 표는 처음 몇 사이클 동안 매 사이클 어떤 명령(번호)이 발행되었는지 보여 준다. 칸 하나가 발행 슬롯이고, 빈칸은 버려진 슬롯이다(색: 덧셈 초록, 곱셈 주황, 적재 파랑). 아래 그래프는 폭에 따른 IPC다. 순차 방식은 곱셈·적재를 기다리는 동안 뒤의 독립 명령까지 묶여 폭 2~3에서 거의 멈추고, 비순차 방식은 프로그램의 ILP 한계 가까이 올라간다. 계산 장치는 폭만큼 있다고 가정했다.</figcaption>
+    </figure>
+    <p>순차 슈퍼스칼라도 쓸모가 있다. 스마트폰의 효율 코어가 바로 2~3폭 순차 코어다. 단순해서 작고, 전력이 적다. 하지만 폭을 그 이상 늘리는 것은 순차 방식에선 의미가 없다. 그래서 고성능 코어는 명령을 일단 넓은 대기실에 받아 두고, 준비된 것부터 먼저 실행하는 <span class="term">비순차 실행</span><span class="en">(Out-of-order execution)</span>을 쓴다. 그 대기실을 크게 만들려면 먼저 풀어야 할 문제가 하나 있다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="rename">
+    <h2>레지스터 이름 바꾸기: 거짓 의존 지우기</h2>
+    <p>명령 사이 의존에는 세 종류가 있다. 앞 명령이 쓴 값을 뒤가 읽는 <b>RAW</b><span class="en">(Read After Write, 참 의존)</span>, 앞 명령이 읽을 레지스터를 뒤가 덮어쓰는 <b>WAR</b><span class="en">(Write After Read)</span>, 둘이 같은 레지스터에 쓰는 <b>WAW</b><span class="en">(Write After Write)</span>. RAW만 진짜 데이터의 흐름이다. WAR과 WAW는 레지스터 이름이 32개뿐이라 같은 이름을 돌려쓰다 생긴 <b>이름 충돌</b>이다. 순서를 바꾸면 이 충돌 때문에 값이 엉킨다.</p>
+    <p>해법은 이름을 넉넉하게 바꿔 주는 것이다. 코어 안에는 프로그램이 보는 32개의 <b>구조 레지스터</b>보다 훨씬 많은(수백 개) <b>물리 레지스터</b>가 있다. 명령이 레지스터에 쓸 때마다 빈 물리 레지스터를 새로 하나 내주고, "구조 레지스터 r1은 지금 물리 레지스터 p9에 있다"는 대응표, <span class="term">RAT</span><span class="en">(Register Alias Table)</span>를 고친다. 뒤의 명령은 이 표를 보고 올바른 물리 레지스터를 읽는다. 이것이 <span class="term">레지스터 이름 바꾸기</span><span class="en">(Register renaming)</span>다. 한 명령씩 넘기며 표가 어떻게 바뀌는지 보자.</p>
+    <figure class="play" id="fig-rename">
+      <div class="play-view"><canvas id="cv-rename"></canvas></div>
+      <div class="play-ctrl">
+        <div class="ctrl-row"><button class="btn sm" id="rn-reset">⏮ 처음</button><button class="btn sm" id="rn-prev">← 이전</button><button class="btn sm primary" id="rn-next">다음 명령 이름 바꾸기 →</button></div>
+        <div class="seg" id="rn-show"><button data-value="all" class="on">모든 의존 보기</button><button data-value="raw">RAW만</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">RAW (참 의존)</span><span class="v" id="rn-raw">—</span></div>
+        <div class="stat"><span class="k">WAR (거짓)</span><span class="v" id="rn-war">—</span></div>
+        <div class="stat"><span class="k">WAW (거짓)</span><span class="v" id="rn-waw">—</span></div>
+      </div>
+      <figcaption><b>그림 4-3.</b> <span class="try">단계 진행</span>왼쪽은 원래 프로그램(위)과 이름을 바꾼 프로그램(아래)이다. 곡선은 명령 사이 의존이다: 실선 파랑 RAW, 점선 주황 WAR, 점선 빨강 WAW. 이름 바꾸기를 마친 명령 사이에서는 WAR과 WAW가 사라지고 RAW만 남는다. 오른쪽은 RAT(구조 → 물리 레지스터)와 아직 쓰지 않은 물리 레지스터 목록(자유 목록)이다.</figcaption>
+    </figure>
+    <p>이름 바꾸기 뒤에 남은 것은 RAW뿐이므로, 명령은 피연산자가 준비되는 순서대로 아무 때나 실행해도 된다. 물리 레지스터가 언제 다시 자유 목록으로 돌아가는지도 중요하다. r1에 새 값을 쓴 명령이 <b>확정</b>(다음 절)되면 그 전의 r1 값을 담던 물리 레지스터는 더 이상 아무도 읽지 않으므로 반납한다. 물리 레지스터가 바닥나면 이름 바꾸기가 멈추고, 그 뒤로 명령이 들어오지 못한다. 큰 코어가 물리 레지스터를 수백 개씩 두는 이유다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="ooo">
+    <h2>비순차 실행 코어: ROB와 순서대로 확정하기</h2>
+    <p>비순차 코어의 일은 세 박자로 흐른다. ① <b>순서대로 들여보내기</b>: 인출·해독·이름 바꾸기를 거친 명령을 프로그램 순서대로 <span class="term">재정렬 버퍼</span><span class="en">(ROB, Reorder Buffer)</span>의 꼬리에 넣는다. ② <b>순서 없이 실행하기</b>: 대기 중인 명령 가운데 피연산자가 준비되고 계산 장치가 비어 있는 것을 골라 실행한다. 이 대기실을 <b>스케줄러</b>(예약 스테이션)라 하며, 1960년대 IBM 360/91의 Tomasulo 알고리즘이 원형이다. ③ <b>순서대로 확정하기</b>: ROB의 머리, 즉 가장 오래된 명령이 끝났으면 그 결과를 정식으로 확정<span class="en">(Commit, Retire)</span>하고 ROB에서 뺀다.</p>
+    <p>왜 마지막을 순서대로 할까? 중간에 예외(잘못된 메모리 접근, 0으로 나누기)나 분기 예측 실패가 일어나면, 그 명령 <b>앞까지는 모두 끝났고 뒤는 하나도 일어나지 않은</b> 깔끔한 상태로 되돌려야 하기 때문이다(<span class="term">정밀 예외</span><span class="en">(Precise exception)</span>). ROB에 아직 확정되지 않은 결과는 언제든 버릴 수 있다. 결국 비순차 코어는 "속으로는 마음대로, 겉으로는 순서대로"다.</p>
+    <div class="sim" id="sim-ooo">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>비순차 실행 코어</h3></div>
+      <div class="sim-view"><canvas id="cv-ooo"></canvas></div>
+      <div class="sim-controls" style="grid-template-columns:1fr">
+        <div class="ctrl-row">
+          <button class="btn sm" id="oo-reset">⏮ 처음</button>
+          <button class="btn sm primary" id="oo-step">한 사이클 →</button>
+          <button class="btn sm" id="oo-step10">+10 →</button>
+          <button class="btn sm" id="oo-play">▶ 재생</button>
+          <button class="btn sm" id="oo-end">끝까지 ⏭</button>
+        </div>
+        <div class="ctrl-row">
+          <div class="seg" id="oo-prog"><button data-value="arr" class="on">배열 합</button><button data-value="mix">곱셈 섞인 계산</button><button data-value="list">연결 리스트</button></div>
+          <div class="seg" id="oo-view"><button data-value="ooo" class="on">비순차로 보기</button><button data-value="ino">순차로 보기</button></div>
+        </div>
+      </div>
+      <div class="sim-controls">
+        <label class="ctrl"><span>폭 (들여보내기·발행·확정) <output id="oo-w-out"></output></span><input type="range" id="oo-w" min="1" max="8" step="1" value="4"></label>
+        <label class="ctrl"><span>ROB 크기 <output id="oo-rob-out"></output></span><input type="range" id="oo-rob" min="8" max="256" step="8" value="64"></label>
+        <label class="ctrl"><span>정수 ALU 수 <output id="oo-alu-out"></output></span><input type="range" id="oo-alu" min="1" max="6" step="1" value="3"></label>
+        <label class="ctrl"><span>적재·저장 장치 수 <output id="oo-ld-out"></output></span><input type="range" id="oo-ld" min="1" max="4" step="1" value="2"></label>
+        <label class="ctrl"><span>적재의 캐시 미스 비율 <output id="oo-mr-out"></output></span><input type="range" id="oo-mr" min="0" max="50" step="1" value="10"></label>
+        <label class="ctrl"><span>미스 지연 (L2 미스 → DRAM) <output id="oo-ml-out"></output></span><input type="range" id="oo-ml" min="10" max="300" step="10" value="120"></label>
+      </div>
+      <div class="info-panel" id="oo-info"></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">사이클</span><span class="v" id="oo-cyc">—</span></div>
+        <div class="stat"><span class="k">비순차 IPC</span><span class="v" id="oo-ipc">—</span></div>
+        <div class="stat"><span class="k">순차 IPC (같은 설정)</span><span class="v" id="oo-ipc2">—</span></div>
+        <div class="stat"><span class="k">ROB 평균 점유</span><span class="v" id="oo-occ">—</span></div>
+        <div class="stat"><span class="k">동시에 진행한 미스 (최대)</span><span class="v" id="oo-mlp">—</span></div>
+      </div>
+      <div class="sim-note">위 격자가 ROB다(원형 버퍼). 칸 색: 회색 테두리 = 피연산자나 장치를 기다림, 파랑 = 실행 중, 빨강 = 캐시 미스로 메모리를 기다림, 초록 = 실행이 끝나 확정을 기다림, 빈칸 = 비어 있음. 굵은 테두리가 가장 오래된 명령(머리)이다. 칸 글자 L 적재, S 저장, × 곱셈, + 덧셈. 아래 그래프는 확정된 명령 수의 누적으로, 기울기가 IPC다. 분기 예측은 완벽하다고 가정했고, 적재 적중 4사이클, 곱셈 3사이클이다. 프로그램은 같은 반복문을 펼친 명령 300개다.</div>
+    </div>
+    <div class="predict"><strong>미스 비율 10%, 미스 지연 120사이클에서 ROB를 64에서 256으로 늘리면?</strong>
+      <p>"배열 합" 프로그램에서 IPC가 몇 배쯤 될지 먼저 예상해 보자. 그리고 "연결 리스트"에서는?</p>
+      <details><summary>답 보기</summary><p>배열 합에서는 적재 주소가 서로 독립이라 ROB가 클수록 더 많은 미스를 동시에 보낼 수 있다. 미스 여러 개가 겹치면 기다리는 시간이 나누어지므로 IPC가 크게 오른다(시뮬레이터에서 대략 두 배 안팎). 반면 연결 리스트는 다음 주소가 앞 적재 결과라 미스가 하나씩만 진행된다. ROB를 아무리 키워도 IPC가 거의 그대로다. 큰 창이 숨길 수 있는 것은 <b>독립적인</b> 기다림뿐이다.</p></details>
+    </div>
+    <p>시뮬레이터에서 ROB 머리에 빨간 칸(미스)이 걸리면 어떤 일이 일어나는지 지켜보자. 뒤의 명령들은 계속 들어와 실행되고 초록으로 바뀌지만 확정되지 못한다. ROB가 꽉 차는 순간 들여보내기가 멈추고 코어 전체가 서 버린다. 이것이 ROB가 커야 하는 이유이자, 커도 끝이 있는 이유다. DRAM 접근 한 번(100 ns 남짓)은 4 GHz 코어에서 400사이클이고, 8폭 코어라면 그동안 명령 3,200개를 처리할 수 있었다. 어떤 ROB도 그만큼 크지는 않다.</p>
+    <div class="callout deep"><strong>스펙터: 투기 실행의 그림자</strong><p>비순차 코어는 분기 예측을 믿고 아직 확정되지 않은 명령을 미리 실행한다(<b>투기 실행</b>). 틀리면 결과는 버리지만, 그 사이 캐시에 남은 흔적까지 지우지는 않는다. 2018년 공개된 Spectre·Meltdown 공격은 이 흔적의 접근 시간을 재서 비밀 데이터를 빼냈다. 성능을 위한 추측이 보안 구멍이 될 수 있다는 교훈은 <a href="security.html">16장</a>에서 다시 다룬다.</p></div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="mlp">
+    <h2>메모리 수준 병렬성: 기다림을 겹치기</h2>
+    <p>큰 ROB가 주는 가장 큰 선물은 계산의 병렬성이 아니라 <b>기다림의 병렬성</b>이다. 캐시 미스 여러 개를 동시에 메모리로 보내 놓으면, 하나씩 기다릴 때보다 전체 대기 시간이 미스 수만큼 나누어진다. 이를 <span class="term">메모리 수준 병렬성</span><span class="en">(MLP, Memory-Level Parallelism)</span>이라 한다. 아래는 서로 독립인 적재가 일정 간격으로 나오고 모두 DRAM까지 가는 극단적인 경우다. ROB 크기를 바꾸며 미스들이 얼마나 겹치는지 보자.</p>
+    <figure class="play" id="fig-mlp">
+      <div class="play-view"><canvas id="cv-mlp"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>ROB 크기 <output id="ml-rob-out"></output></span><input type="range" id="ml-rob" min="16" max="512" step="16" value="64"></label>
+        <label class="ctrl"><span>미스 사이 명령 수 <output id="ml-k-out"></output></span><input type="range" id="ml-k" min="4" max="64" step="4" value="24"></label>
+        <label class="ctrl"><span>미스 지연 <output id="ml-L-out"></output></span><input type="range" id="ml-L" min="50" max="300" step="10" value="150"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">전체 사이클</span><span class="v" id="ml-cyc">—</span></div>
+        <div class="stat"><span class="k">평균 동시 미스 (MLP)</span><span class="v" id="ml-mlp">—</span></div>
+        <div class="stat"><span class="k">미스를 하나씩 기다렸다면</span><span class="v" id="ml-ser">—</span></div>
+      </div>
+      <figcaption><b>그림 4-4.</b> <span class="try">만져 보기</span>막대 하나가 미스 하나가 메모리를 기다리는 시간이다(4폭 코어, 미스 12개). ROB 크기 ÷ 미스 간격만큼의 미스가 한 창 안에 들어오므로 그만큼 겹친다. 실제로는 L1 캐시가 동시에 처리할 수 있는 미스 수(MSHR, 보통 10~20여 개)와 DRAM 대역폭도 한계가 된다(<a href="cache.html">5장</a>, <a href="dram.html">7장</a>).</figcaption>
+    </figure>
+    <div class="formula">$$\text{MLP} \approx \min\!\left(\frac{\text{ROB 크기}}{\text{미스 간 명령 수}},\; \text{MSHR 수}\right), \qquad T_{\text{미스 총}} \approx \frac{N_{\text{miss}} \cdot L_{\text{miss}}}{\text{MLP}}$$</div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="pollack">
+    <h2>큰 코어의 값: Pollack의 법칙</h2>
+    <p>비순차 실행의 장부들, 즉 ROB, 스케줄러, 이름 바꾸기 표, 물리 레지스터, 넓은 해독기와 큰 분기 예측기는 면적과 전력을 많이 먹는다. 게다가 이 장부들은 크기를 키울수록 비용이 빠르게 는다. 스케줄러는 매 사이클 모든 대기 명령을 동시에 비교해야 하고, 레지스터 파일은 읽기·쓰기 포트 수의 제곱으로 커진다. 인텔의 Fred Pollack은 경험적으로 <b>코어의 성능은 면적의 제곱근에 비례한다</b>고 정리했다. 면적을 4배로 하면 성능은 2배쯤이다. 이것이 <span class="term">Pollack의 법칙</span><span class="en">(Pollack's rule)</span>이다.</p>
+    <p>그렇다면 같은 면적에 큰 코어 하나를 둘까, 작은 코어 여럿을 둘까? 답은 일이 얼마나 병렬화되는가에 달려 있다. Hill과 Marty(2008)는 이 질문을 암달의 법칙과 Pollack의 법칙으로 풀었다. 칩 면적이 작은 코어 \(n\)개분이고, 큰 코어 하나가 작은 코어 \(r\)개분 면적을 쓴다고 하자.</p>
+    <div class="formula">$$\text{perf}(r) = \sqrt{r}, \qquad S_{\text{대칭}} = \frac{1}{\dfrac{1-p}{\text{perf}(r)} + \dfrac{p\, r}{\text{perf}(r)\, n}}, \qquad S_{\text{비대칭}} = \frac{1}{\dfrac{1-p}{\text{perf}(r)} + \dfrac{p}{\text{perf}(r) + n - r}}$$
+      <div class="where">\(p\): 병렬화되는 일의 비율. 대칭은 크기 \(r\)인 코어 \(n/r\)개, 비대칭은 큰 코어(\(r\)) 1개 + 작은 코어 \(n-r\)개. 직렬 구간은 가장 빠른 코어 하나가, 병렬 구간은 모든 코어가 함께 한다.</div></div>
+    <figure class="play" id="fig-pollack">
+      <div class="play-view"><canvas id="cv-pollack"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>병렬화 비율 p <output id="pl-p-out"></output></span><input type="range" id="pl-p" min="0" max="0.999" step="0.001" value="0.9"></label>
+        <label class="ctrl"><span>큰 코어 크기 r (작은 코어 몇 개분) <output id="pl-r-out"></output></span><input type="range" id="pl-r" min="1" max="16" step="1" value="4"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">큰 코어 하나의 성능</span><span class="v" id="pl-s1">—</span></div>
+        <div class="stat"><span class="k">대칭 구성 속도 향상</span><span class="v" id="pl-sym">—</span></div>
+        <div class="stat"><span class="k">비대칭 구성 속도 향상</span><span class="v" id="pl-asy">—</span></div>
+      </div>
+      <figcaption><b>그림 4-5.</b> <span class="try">끌어 보기</span>그래프 위를 좌우로 끌면 큰 코어 크기 \(r\)이 바뀐다. 칩 면적은 작은 코어 16개분이다. 왼쪽 그림은 비대칭 구성의 평면도다. \(p\)가 0.99쯤으로 높으면 작은 코어를 많이 두는 편이 낫고, 0.5처럼 낮으면 큰 코어가 이긴다. 비대칭(큰 코어 하나 + 작은 코어 여럿)은 거의 모든 \(p\)에서 대칭보다 낫다. 스마트폰 SoC가 큰 코어와 작은 코어를 섞는 출발점이 이 계산이다.</figcaption>
+    </figure>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>코어</th><th>연도</th><th>종류</th><th class="num">해독 폭</th><th class="num">ROB (명령)</th><th>비고</th></tr></thead>
+        <tbody>
+          <tr><td>Arm Cortex-A520</td><td>2023</td><td>효율 (순차)</td><td class="num">3</td><td class="num">—</td><td>순차 실행, 두 코어가 벡터 장치를 공유할 수 있음</td></tr>
+          <tr><td>Arm Cortex-A720</td><td>2023</td><td>중간 (비순차)</td><td class="num">5</td><td class="num">약 160</td><td>면적·전력 효율 중심의 "성능 코어"</td></tr>
+          <tr><td>Arm Cortex-X4</td><td>2023</td><td>프라임 (비순차)</td><td class="num">10</td><td class="num">약 384</td><td>8개 ALU 안팎, 큰 L2(최대 2 MB)</td></tr>
+          <tr><td>Apple Firestorm (A14/M1)</td><td>2020</td><td>큰 코어</td><td class="num">8</td><td class="num">약 630 (추정)</td><td>공개 측정 기반 추정값</td></tr>
+          <tr><td>Intel Golden Cove</td><td>2021</td><td>데스크톱 큰 코어</td><td class="num">6</td><td class="num">512</td><td>마이크로옵 캐시에서 최대 8개/사이클</td></tr>
+          <tr><td>AMD Zen 4</td><td>2022</td><td>데스크톱 큰 코어</td><td class="num">4 (+옵 캐시)</td><td class="num">320</td><td>옵 캐시에서 최대 9개/사이클</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:14px;color:var(--text-dim)">수치는 제조사 발표(Arm Tech Day, Hot Chips 등)와 공개 분석의 대략값이다. 비공개 설계(Apple)는 마이크로벤치마크로 추정한 값이라 오차가 클 수 있다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="biglittle">
+    <h2>big.LITTLE: 큰 코어와 작은 코어의 분업</h2>
+    <p>스마트폰의 일은 극단적으로 들쭉날쭉하다. 대부분의 시간은 알림 확인, 음악 재생, 백그라운드 동기화 같은 가벼운 일이고, 가끔 앱을 열거나 화면을 휙 넘길 때 짧고 무거운 일이 몰린다. 큰 코어는 무거운 일을 빨리 끝내지만 가벼운 일에는 낭비가 크다. 작은 코어는 느리지만 같은 일을 훨씬 적은 에너지로 한다. 둘을 함께 두고 일에 따라 골라 쓰는 구조를 Arm은 <span class="term">big.LITTLE</span>이라 불렀고, 지금은 거의 모든 스마트폰 SoC와 노트북 칩(Apple의 P·E 코어, 인텔의 P·E 코어)이 같은 생각을 쓴다. 기준 칩 SB-1에는 큰 코어 3개와 작은 코어 4개가 있다.</p>
+    <p>코어마다 전압과 클럭을 조절하는 <b>DVFS</b>(<a href="power.html">12장</a>)를 생각하면 그림이 더 분명해진다. 각 코어에는 "이만큼의 성능을 내려면 이만큼의 전력이 든다"는 곡선이 있다. 요구 성능을 그래프 위에서 끌어 보며 어느 코어가 더 효율적인지 보자.</p>
+    <figure class="play" id="fig-dvfs">
+      <div class="play-view"><canvas id="cv-dvfs"></canvas></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">요구 성능</span><span class="v" id="dv-perf">—</span></div>
+        <div class="stat"><span class="k">작은 코어로</span><span class="v" id="dv-lit">—</span></div>
+        <div class="stat"><span class="k">큰 코어로</span><span class="v" id="dv-big">—</span></div>
+        <div class="stat"><span class="k">일 하나의 에너지 비</span><span class="v" id="dv-ratio">—</span></div>
+      </div>
+      <figcaption><b>그림 4-6.</b> <span class="try">끌어 보기</span>그래프 위를 좌우로 끌어 요구 성능(가로축)을 정하면, 두 코어가 그 성능을 내는 데 필요한 클럭과 전력(왼쪽), 일 단위 하나에 드는 에너지(오른쪽)를 보여 준다. 성능 단위는 "IPC × GHz"(1 ms에 하는 일의 양). 큰 코어는 IPC 3.0·최대 3.6 GHz, 작은 코어는 IPC 1.2·최대 2.0 GHz, 전압은 클럭에 따라 오른다고 가정한 교육용 모델이다. 작은 코어가 낼 수 있는 성능 범위 안에서는 작은 코어가 일 하나를 두세 배 적은 에너지로 끝낸다.</figcaption>
+    </figure>
+    <p>곡선에서 세 가지가 보인다. 첫째, 같은 코어라도 클럭을 올릴수록 일 하나당 에너지가 커진다(전압이 함께 오르므로 \(CV^2\)가 는다). 둘째, 낮은 성능에서는 작은 코어가 훨씬 효율적이다. 큰 코어는 클럭을 낮춰도 넓은 장부를 굴리는 데 드는 에너지와 누설 전력이 있다. 셋째, 작은 코어가 낼 수 없는 성능은 큰 코어만 낼 수 있다. 그래서 운영체제 스케줄러의 일은 "각 일에 필요한 성능을 내는 가장 효율적인 코어와 클럭"을 고르는 것이 된다. 리눅스(안드로이드)의 <span class="term">에너지 인식 스케줄링</span><span class="en">(EAS, Energy-Aware Scheduling)</span>은 칩 제조사가 제공한 이런 에너지 모델을 보고 일을 배치한다.</p>
+    <div class="sim" id="sim-hmp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>이종 코어 스케줄러</h3></div>
+      <div class="sim-view"><canvas id="cv-hmp"></canvas></div>
+      <div class="sim-controls">
+        <div class="ctrl"><span>상황</span><div class="seg" id="hm-scn"><button data-value="scroll" class="on">화면 넘기기 + 앱 열기</button><button data-value="music">음악 + 동기화</button><button data-value="game">3D 게임</button></div></div>
+        <div class="ctrl"><span>스케줄링 정책</span><div class="seg" id="hm-pol"><button data-value="big">모두 큰 코어</button><button data-value="little">모두 작은 코어</button><button data-value="eas" class="on">에너지 인식</button></div></div>
+        <label class="ctrl"><span>DVFS 여유 (목표 이용률) <output id="hm-m-out"></output></span><input type="range" id="hm-m" min="0.5" max="1" step="0.05" value="0.8"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">CPU 에너지 (1초)</span><span class="v" id="hm-e">—</span></div>
+        <div class="stat"><span class="k">평균 전력</span><span class="v" id="hm-p">—</span></div>
+        <div class="stat"><span class="k">마감을 놓친 일</span><span class="v" id="hm-miss">—</span></div>
+        <div class="stat"><span class="k">평균 응답 시간</span><span class="v" id="hm-lat">—</span></div>
+      </div>
+      <div class="sim-note">1초 동안 일이 도착하고, 정책이 일을 코어에 배정한다. 각 코어는 맡은 일을 마감 안에 끝낼 만큼만 클럭을 올린다(목표 이용률이 낮을수록 여유 있게 높은 클럭). 막대 색은 일의 종류, 진하기는 클럭 높이다. 아래 그래프는 시간에 따른 CPU 전력이다. 에너지 인식 정책은 일마다 "작은 코어로 마감을 지킬 수 있는가"를 먼저 따지고, 안 되면 큰 코어를 쓴다. 코어는 쉴 때 전원을 끈다고 가정했다.</div>
+    </div>
+    <div class="predict"><strong>"모두 큰 코어"가 에너지를 가장 많이 쓸까?</strong>
+      <p>큰 코어는 일을 빨리 끝내고 바로 잠들 수 있다("빨리 끝내고 쉬기", race-to-idle). 그렇다면 오히려 에너지가 적게 들 수도 있지 않을까?</p>
+      <details><summary>답 보기</summary><p>잠든 동안의 전력이 0에 가깝고 일이 아주 무겁다면 race-to-idle이 유리할 때도 있다. 하지만 스마트폰의 가벼운 일 대부분에서는 큰 코어가 낮은 클럭으로 돌아도 작은 코어보다 일 하나당 에너지가 크다(그림 4-6). 시뮬레이터의 "음악 + 동기화"에서 두 정책을 비교해 보자. 반대로 "3D 게임"처럼 무거운 일에서 "모두 작은 코어"를 고르면 에너지는 적어도 마감을 줄줄이 놓친다(프레임이 끊긴다). 정답은 일마다 다르고, 그래서 스케줄러가 필요하다.</p></details>
+    </div>
+    <div class="callout tip"><strong>스마트폰 SoC의 코어 구성</strong><p>2020년대 플래그십 SoC는 보통 "1 + 3 + 4"(프라임 1, 성능 3, 효율 4)나 "1 + 5 + 2" 같은 3단 구성을 쓴다. 프라임 코어는 한 스레드 성능(앱 실행, 웹 자바스크립트)을, 성능 코어는 여러 스레드가 필요한 일을, 효율 코어는 배경 일을 맡는다. 최근에는 효율 코어를 아예 빼고 중간 크기 코어를 여럿 두는 설계도 나왔다. 정답이 고정된 것이 아니라 일의 모양과 공정에 따라 계속 움직인다는 뜻이다.</p></div>
+  </section>
+
+  <section class="keypoints">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>데이터 흐름 그래프의 임계 경로가 ILP의 상한을 정한다. 병렬성은 멀리 흩어져 있어, 많은 명령을 한꺼번에 들여다봐야 찾을 수 있다.</li>
+      <li>순차 슈퍼스칼라는 앞 명령이 막히면 함께 멈춰 폭 2~3에서 포화된다. 비순차 실행은 준비된 명령부터 실행해 ILP 한계에 다가간다.</li>
+      <li>레지스터 이름 바꾸기는 WAR·WAW 거짓 의존을 없앤다. ROB는 결과를 순서대로 확정해 정밀 예외와 분기 복구를 가능하게 한다.</li>
+      <li>큰 ROB의 핵심 이득은 독립적인 캐시 미스를 겹치는 메모리 수준 병렬성이다. 의존적인 미스(연결 리스트)는 창이 커도 숨길 수 없다.</li>
+      <li>성능은 면적의 제곱근에 비례하므로(Pollack), 큰 코어와 작은 코어를 섞고 DVFS 곡선을 아는 스케줄러가 일마다 가장 효율적인 코어를 고르는 것이 이득이다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. 명령 12개로 이루어진 코드의 데이터 흐름 그래프에서 임계 경로가 4사이클이다. 자원이 무한할 때 이상적인 IPC는?</p>
+        <div class="opts">
+          <button class="opt">1</button><button class="opt" data-correct>3</button><button class="opt">4</button><button class="opt">12</button>
+        </div>
+        <div class="quiz-exp">명령 12개를 4사이클 안에 끝낼 수 있으므로 12 ÷ 4 = 3이다. 실제 IPC는 발행 폭, 창 크기, 계산 장치 수에 막혀 이보다 낮다.</div></div>
+      <div class="quiz-q"><p>Q2. 다음 중 레지스터 이름 바꾸기로 없앨 수 <b>없는</b> 의존은?</p>
+        <div class="opts">
+          <button class="opt">WAR</button><button class="opt">WAW</button><button class="opt" data-correct>RAW</button><button class="opt">모두 없앨 수 있다</button>
+        </div>
+        <div class="quiz-exp">RAW는 실제로 값이 흘러가는 참 의존이라 이름을 바꿔도 사라지지 않는다. WAR·WAW는 이름 충돌이라 물리 레지스터를 새로 주면 사라진다.</div></div>
+      <div class="quiz-q"><p>Q3. 비순차 코어가 실행은 순서 없이 하면서도 확정(commit)은 프로그램 순서대로 하는 주된 이유는?</p>
+        <div class="opts">
+          <button class="opt" data-correct>예외나 분기 예측 실패 때 정확한 지점으로 되돌리기 위해(정밀 예외)</button>
+          <button class="opt">계산 장치를 아끼기 위해</button>
+          <button class="opt">캐시 미스를 줄이기 위해</button>
+          <button class="opt">클럭을 높이기 위해</button>
+        </div>
+        <div class="quiz-exp">ROB에 남아 있는 미확정 결과는 언제든 버릴 수 있으므로, 어떤 명령에서 문제가 생기든 그 앞까지만 반영된 상태로 돌아갈 수 있다.</div></div>
+      <div class="quiz-q"><p>Q4. 독립적인 캐시 미스가 명령 32개마다 하나씩 나온다. ROB가 256이고 다른 제약이 없다면 동시에 진행되는 미스는 대략 몇 개인가?</p>
+        <div class="opts">
+          <button class="opt">1개</button><button class="opt">4개</button><button class="opt">32개</button><button class="opt" data-correct>8개</button>
+        </div>
+        <div class="quiz-exp">ROB 창 256개 안에 미스가 256 ÷ 32 = 8개 들어오므로 그만큼 겹친다. 실제로는 MSHR 수와 메모리 대역폭도 한계가 된다.</div></div>
+      <div class="quiz-q"><p>Q5. Pollack의 법칙에 따르면 코어 면적을 9배로 키웠을 때 단일 스레드 성능은 대략?</p>
+        <div class="opts">
+          <button class="opt">9배</button><button class="opt">4.5배</button><button class="opt" data-correct>3배</button><button class="opt">변하지 않는다</button>
+        </div>
+        <div class="quiz-exp">성능 ∝ √면적 이므로 √9 = 3배. 같은 면적이면 작은 코어 9개가 병렬 일에서 9배를 낼 수 있으니, 일의 병렬성에 따라 선택이 갈린다.</div></div>
+      <div class="quiz-q"><p>Q6. 에너지 인식 스케줄러가 가벼운 배경 일을 작은 코어에 보내는 근거로 가장 알맞은 것은?</p>
+        <div class="opts">
+          <button class="opt">작은 코어는 클럭이 더 높아서</button>
+          <button class="opt">큰 코어는 가벼운 일을 실행할 수 없어서</button>
+          <button class="opt">작은 코어는 누설 전류가 0이라서</button>
+          <button class="opt" data-correct>요구 성능이 작은 코어로 충분할 때, 작은 코어가 일 하나를 더 적은 에너지로 끝내서</button>
+        </div>
+        <div class="quiz-exp">DVFS 곡선에서 작은 코어가 낼 수 있는 성능 범위 안에서는 작은 코어의 일당 에너지가 큰 코어보다 낮다. 마감을 못 지킬 때만 큰 코어로 올린다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var P = SB.palette();
+  SB.onTheme(function () { P = SB.palette(); });
+  function aopt(sel, wide, narrow, bp, extra) {
+    var el = document.querySelector(sel), o = Object.assign({}, extra || {});
+    Object.defineProperty(o, "aspect", { get: function () { return (el.parentElement.clientWidth || 600) < (bp || 560) ? narrow : wide; } });
+    return o;
+  }
+  function T(ctx, s, x, y, o) {
+    o = o || {};
+    ctx.font = SB.font(o.size || 12, o.mono, o.weight);
+    ctx.fillStyle = o.color || P.text; ctx.textAlign = o.align || "left"; ctx.textBaseline = o.base || "middle";
+    ctx.fillText(s, x, y);
+  }
+  function inside(r, x, y) { return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
+  function opColor(op) { return op === "mul" ? P.warn : op === "lw" ? P.accent2 : op === "sw" ? SOC.color("npu") : P.ok; }
+  function opChar(op) { return op === "mul" ? "×" : op === "lw" ? "L" : op === "sw" ? "S" : "+"; }
+
+  /* ---------------------------------------------------------------- 공용: 명령 해석 */
+  var LAT = { add: 1, sub: 1, addi: 1, and: 1, or: 1, xor: 1, mul: 3, lw: 4, sw: 1 };
+  function ins(txt) {
+    var m = txt.match(/^(\w+)\s+(.*)$/), op = m[1], a = m[2].split(",").map(function (s) { return s.trim(); }), d = null, s = [];
+    if (op === "lw") { d = a[0]; var mm = /\((\w+)\)/.exec(a[1]); if (mm) s.push(mm[1]); }
+    else if (op === "sw") { s.push(a[0]); var mm2 = /\((\w+)\)/.exec(a[1]); if (mm2) s.push(mm2[1]); }
+    else if (op === "addi") { d = a[0]; s.push(a[1]); }
+    else { d = a[0]; s.push(a[1], a[2]); }
+    s = s.filter(function (r) { return r && r !== "r0"; });
+    return { txt: txt, op: op, d: d === "r0" ? null : d, s: s, lat: LAT[op] || 1 };
+  }
+  function deps(prog) { // RAW 생산자 인덱스
+    var last = {};
+    return prog.map(function (I, i) { var p = []; I.s.forEach(function (r) { if (last[r] != null && p.indexOf(last[r]) < 0) p.push(last[r]); }); if (I.d) last[I.d] = i; return p; });
+  }
+
+  /* ---------------------------------------------------------------- 공용: 비순차/순차 코어 시뮬레이터 */
+  function simulate(tr, cfg) {
+    var n = tr.length, pr = cfg.pr || deps(tr), disp = new Array(n), iss = new Array(n), done = new Array(n), cmt = new Array(n);
+    var head = 0, next = 0, c = 0, occ = 0;
+    var lat = function (i) { var I = tr[i]; if (I.op === "lw") return I.miss ? cfg.missLat : (cfg.hitLat || 4); return I.lat; };
+    while (head < n && c < 40000) {
+      var k = 0;
+      while (k < cfg.W && head < next && done[head] != null && done[head] <= c) { cmt[head] = c; head++; k++; }
+      var used = 0, ua = 0, ul = 0;
+      for (var i = head; i < next && used < cfg.W; i++) {
+        if (iss[i] != null) continue;
+        var ok = disp[i] < c;
+        for (var q = 0; ok && q < pr[i].length; q++) { var p = pr[i][q]; if (done[p] == null || done[p] > c) ok = false; }
+        var mem = tr[i].op === "lw" || tr[i].op === "sw";
+        if (ok) ok = mem ? ul < cfg.ld : ua < cfg.alu;
+        if (ok) { iss[i] = c; done[i] = c + lat(i); used++; if (mem) ul++; else ua++; }
+        else if (cfg.inorder) break;
+      }
+      var d = 0;
+      while (d < cfg.W && next < n && next - head < cfg.rob) { disp[next] = c; next++; d++; }
+      occ += next - head;
+      c++;
+    }
+    // 동시 미스
+    var ev = [];
+    for (var j = 0; j < n; j++) if (tr[j].op === "lw" && tr[j].miss && iss[j] != null) { ev.push([iss[j], 1]); ev.push([done[j], -1]); }
+    ev.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+    var cur = 0, mx = 0; ev.forEach(function (e) { cur += e[1]; mx = Math.max(mx, cur); });
+    var cycles = cmt[n - 1] + 1;
+    return { disp: disp, iss: iss, done: done, cmt: cmt, cycles: cycles, ipc: n / cycles, occ: occ / c, mlp: mx, n: n };
+  }
+
+  /* ---------------------------------------------------------------- 1. 데이터 흐름 그래프 */
+  (function () {
+    var PROGS = {
+      expr: ["lw r1, 0(r9)", "lw r2, 4(r9)", "add r3, r1, r2", "mul r4, r1, r2", "addi r5, r9, 8", "lw r6, 0(r5)", "sub r7, r3, r6", "mul r8, r4, r7", "add r10, r8, r3", "sw r10, 12(r9)"],
+      arr: ["lw r1, 0(r9)", "lw r2, 4(r9)", "lw r3, 8(r9)", "lw r4, 12(r9)", "add r5, r1, r2", "add r6, r3, r4", "add r7, r5, r6", "sw r7, 16(r9)"],
+      list: ["lw r1, 0(r9)", "lw r2, 0(r1)", "lw r3, 0(r2)", "lw r4, 0(r3)", "lw r5, 4(r4)", "add r6, r5, r9"],
+    };
+    var key = "expr", prog, pr, start, fin, crit, sel = -1, hits = [];
+    function build() {
+      prog = PROGS[key].map(ins); pr = deps(prog);
+      start = []; fin = [];
+      prog.forEach(function (I, i) { var s = 0; pr[i].forEach(function (p) { s = Math.max(s, fin[p]); }); start.push(s); fin.push(s + I.lat); });
+      var end = Math.max.apply(null, fin), k = fin.indexOf(end); crit = {};
+      while (k != null && k >= 0) { crit[k] = true; var nk = -1; pr[k].forEach(function (p) { if (fin[p] === start[k]) nk = p; }); k = nk >= 0 ? nk : null; }
+    }
+    function anc(i, set) { pr[i].forEach(function (p) { if (!set[p]) { set[p] = 1; anc(p, set); } }); return set; }
+    function desc(i, set) { prog.forEach(function (I, j) { if (pr[j].indexOf(i) >= 0 && !set[j]) { set[j] = 1; desc(j, set); } }); return set; }
+    build();
+    var cv = SB.canvas("#cv-dag", function (ctx, w, h) {
+      var narrow = w < 560, n = prog.length;
+      var L = narrow ? { x: 8, y: 6, w: w - 16, h: n * 19 + 8 } : { x: 8, y: 10, w: Math.min(220, w * 0.3), h: h - 20 };
+      var G = narrow ? { x: 34, y: L.h + 26, w: w - 46, h: h - L.h - 40 } : { x: L.w + 40, y: 26, w: w - L.w - 56, h: h - 50 };
+      var A = sel >= 0 ? anc(sel, {}) : {}, D = sel >= 0 ? desc(sel, {}) : {};
+      hits = [];
+      var rh = Math.min(24, (L.h - 4) / n);
+      prog.forEach(function (I, i) {
+        var y = L.y + i * rh, on = i === sel, col = on ? P.accent : A[i] ? P.accent2 : D[i] ? P.accent : P.text;
+        if (on) { ctx.fillStyle = SB.color("accent-soft"); ctx.fillRect(L.x, y, L.w, rh); }
+        T(ctx, (i + 1) + ".", L.x + 2, y + rh / 2, { size: 10.5, mono: true, color: P.faint });
+        T(ctx, I.txt, L.x + 22, y + rh / 2, { size: narrow ? 11 : 11.5, mono: true, color: col, weight: on || A[i] || D[i] ? 700 : 400 });
+        hits.push({ x: L.x, y: y, w: L.w, h: rh, i: i });
+      });
+      // 그래프: x = 시작 사이클, y = 같은 시작 사이클 안의 순서
+      var end = Math.max.apply(null, fin), cs = G.w / Math.max(end, 1);
+      var slots = {}, pos = [];
+      prog.forEach(function (I, i) { var k = slots[start[i]] = (slots[start[i]] || 0) + 1; pos.push(k - 1); });
+      var maxRow = Math.max.apply(null, Object.keys(slots).map(function (k) { return slots[k]; }));
+      var nh = Math.min(26, G.h / Math.max(maxRow, 1) - 8), gapY = G.h / Math.max(maxRow, 1);
+      var NX = function (i) { return G.x + start[i] * cs; }, NY = function (i) { return G.y + pos[i] * gapY + (gapY - nh) / 2; };
+      for (var c = 0; c <= end; c++) { ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(G.x + c * cs, G.y - 6); ctx.lineTo(G.x + c * cs, G.y + G.h); ctx.stroke(); if (cs > 14 || c % 2 === 0) T(ctx, String(c), G.x + c * cs, G.y + G.h + 10, { size: 10, mono: true, color: P.dim, align: "center" }); }
+      T(ctx, "사이클 →", G.x + G.w, G.y - 14, { size: 10.5, color: P.dim, align: "right" });
+      prog.forEach(function (I, i) {
+        pr[i].forEach(function (p) {
+          var x0 = NX(p) + prog[p].lat * cs, y0 = NY(p) + nh / 2, x1 = NX(i), y1 = NY(i) + nh / 2, hot = (sel >= 0 && ((A[p] || p === sel) && (A[i] || i === sel))) || (sel >= 0 && (D[i] && (D[p] || p === sel)));
+          ctx.strokeStyle = crit[i] && crit[p] && fin[p] === start[i] ? P.accent : hot ? P.text : SOC.alpha(P.dim, 0.5);
+          ctx.lineWidth = crit[i] && crit[p] && fin[p] === start[i] ? 2.2 : 1.2;
+          ctx.beginPath(); ctx.moveTo(x0, y0); ctx.bezierCurveTo(x0 + 12, y0, x1 - 12, y1, x1, y1); ctx.stroke();
+        });
+      });
+      prog.forEach(function (I, i) {
+        var x = NX(i), y = NY(i), ww = Math.max(10, I.lat * cs - 3), col = opColor(I.op), dim = sel >= 0 && !(A[i] || D[i] || i === sel);
+        ctx.globalAlpha = dim ? 0.3 : 1;
+        ctx.fillStyle = SOC.alpha(col, 0.85); SOC.roundRect(ctx, x + 1, y, ww, nh, 5); ctx.fill();
+        if (crit[i]) { ctx.strokeStyle = P.accent; ctx.lineWidth = 2.2; ctx.stroke(); }
+        if (i === sel) { ctx.strokeStyle = P.text; ctx.lineWidth = 2.5; ctx.stroke(); }
+        T(ctx, (i + 1) + (ww > 34 ? " " + I.op : ""), x + 1 + ww / 2, y + nh / 2 + 0.5, { size: 10.5, mono: true, weight: 700, align: "center", color: "#fff" });
+        ctx.globalAlpha = 1;
+        hits.push({ x: x, y: y, w: ww, h: nh, i: i });
+      });
+    }, aopt("#cv-dag", 0.42, 1.25, 560, { minHeight: 260, maxHeight: 520 }));
+    function upd() {
+      var n = prog.length, seq = prog.reduce(function (a, I) { return a + I.lat; }, 0), cp = Math.max.apply(null, fin);
+      SB.stat("dag-n", n + "<small>개</small>"); SB.stat("dag-seq", seq + "<small>사이클</small>");
+      SB.stat("dag-cp", cp + "<small>사이클</small>"); SB.stat("dag-ilp", (n / cp).toFixed(2));
+      cv.redraw();
+    }
+    SB.seg("dag-prog", function (v) { key = v; sel = -1; build(); upd(); });
+    SOC.pointer(cv.canvas, {
+      down: function (x, y) { var hh = hits.filter(function (r) { return inside(r, x, y); }); var ni = hh.length ? hh[hh.length - 1].i : -1; sel = ni === sel ? -1 : ni; cv.redraw(); },
+      move: function (x, y) { cv.canvas.style.cursor = hits.some(function (r) { return inside(r, x, y); }) ? "pointer" : "default"; },
+    });
+    build(); upd();
+  })();
+
+  /* ---------------------------------------------------------------- 트레이스 생성 */
+  function trace(kind, n, missRate, seed) {
+    var out = [], r = SB.rng(seed || 3), it = 0;
+    var BODY = {
+      arr: function (k) { return ["lw r4, 0(r1)", "add r3, r3, r4", "addi r1, r1, 4"]; },
+      mix: function (k) { return ["lw r4, 0(r1)", "mul r5, r4, r6", "add r7, r5, r8", "mul r9, r4, r4", "addi r1, r1, 4", "sub r10, r9, r7", "add r3, r3, r10"]; },
+      list: function (k) { return ["lw r1, 0(r1)", "lw r4, 4(r1)", "add r3, r3, r4"]; },
+      ilp: function (k) { return ["lw r4, 0(r1)", "mul r5, r2, r6", "add r7, r4, r8", "addi r1, r1, 4", "add r9, r5, r7", "sub r10, r2, r8", "add r3, r3, r9", "mul r11, r10, r10"]; },
+    };
+    while (out.length < n) { BODY[kind](it).forEach(function (t) { if (out.length < n) { var I = ins(t); if (I.op === "lw") I.miss = r() < missRate; out.push(I); } }); it++; }
+    return out;
+  }
+
+  /* ---------------------------------------------------------------- 2. 슈퍼스칼라 폭 */
+  (function () {
+    var W = 2, tr = trace("ilp", 160, 0, 5), pr = deps(tr);
+    var lim = (function () { var fin = []; tr.forEach(function (I, i) { var s = 0; pr[i].forEach(function (p) { s = Math.max(s, fin[p]); }); fin.push(s + I.lat); }); return tr.length / Math.max.apply(null, fin); })();
+    var cache = {};
+    function res(w, ino) { var k = w + (ino ? "i" : "o"); if (!cache[k]) cache[k] = simulate(tr, { W: w, rob: ino ? 16 : 128, alu: w, ld: Math.max(1, Math.ceil(w / 2)), inorder: ino, missLat: 100, pr: pr }); return cache[k]; }
+    var cv = SB.canvas("#cv-width", function (ctx, w, h) {
+      var narrow = w < 560, A = res(W, true), B = res(W, false);
+      var topH = narrow ? h * 0.56 : h * 0.5, nC = 10;
+      function table(R, box, title) {
+        T(ctx, title, box.x, box.y + 6, { size: 12, weight: 700 });
+        var c0 = R.iss[0], rows = {}, cw = Math.min(28, (box.w - 30) / W), rh = Math.min(18, (box.h - 18) / nC);
+        for (var i = 0; i < tr.length; i++) { var c = R.iss[i] - c0; if (c < nC) (rows[c] = rows[c] || []).push(i); }
+        for (var c2 = 0; c2 < nC; c2++) {
+          var y = box.y + 16 + c2 * rh;
+          T(ctx, "c" + (c2 + 1), box.x, y + rh / 2, { size: 9.5, mono: true, color: P.faint });
+          for (var s = 0; s < W; s++) {
+            var x = box.x + 26 + s * cw, idx = (rows[c2] || [])[s];
+            ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, cw - 2, rh - 2);
+            if (idx != null) { ctx.fillStyle = SOC.alpha(opColor(tr[idx].op), 0.85); ctx.fillRect(x + 1, y + 1, cw - 3, rh - 3); if (cw > 16) T(ctx, String(idx + 1), x + cw / 2 - 0.5, y + rh / 2, { size: 9.5, mono: true, color: "#fff", align: "center", weight: 700 }); }
+          }
+        }
+      }
+      var half = (w - 30) / 2;
+      table(A, { x: 10, y: 4, w: half, h: topH - 8 }, "순차 (IPC " + A.ipc.toFixed(2) + ")");
+      table(B, { x: 20 + half, y: 4, w: half, h: topH - 8 }, "비순차 (IPC " + B.ipc.toFixed(2) + ")");
+      var ser1 = [], ser2 = [];
+      for (var k = 1; k <= 8; k++) { ser1.push([k, res(k, true).ipc]); ser2.push([k, res(k, false).ipc]); }
+      var box = { x: 46, y: topH + 10, w: w - 62, h: h - topH - 10 - 40 };
+      SB.chart(ctx, box, {
+        x: [1, 8], y: [0, Math.ceil(Math.max(lim, 4))], xLabel: "발행 폭", xTicks: [1, 2, 3, 4, 5, 6, 7, 8],
+        series: [{ data: ser1, color: SOC.color("little"), width: 2.4 }, { data: ser2, color: SOC.color("big"), width: 2.4 }],
+        hlines: [{ y: lim, color: P.faint, label: "ILP 한계 " + lim.toFixed(1) }],
+        vlines: [{ x: W, color: P.accent }],
+        points: [{ x: W, y: res(W, true).ipc, color: SOC.color("little"), r: 5 }, { x: W, y: res(W, false).ipc, color: SOC.color("big"), r: 5 }],
+      });
+      T(ctx, "IPC — 비순차(진한 빨강), 순차(연한 빨강)", box.x + 6, box.y + 10, { size: 11, color: P.dim, weight: 700 });
+    }, aopt("#cv-width", 0.55, 1.15, 560, { minHeight: 320, maxHeight: 520 }));
+    function upd() { SB.stat("wd-in", res(W, true).ipc.toFixed(2)); SB.stat("wd-oo", res(W, false).ipc.toFixed(2)); SB.stat("wd-lim", lim.toFixed(2)); cv.redraw(); }
+    SB.range("wd-w", function (v) { return v + "개"; }, function (v) { W = v; upd(); });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 3. 레지스터 이름 바꾸기 */
+  (function () {
+    var CODE = ["mul r1, r2, r3", "add r4, r1, r5", "add r1, r6, r7", "sub r5, r1, r4", "add r4, r5, r1", "mul r6, r4, r2"].map(ins);
+    var ARCH = ["r1", "r2", "r3", "r4", "r5", "r6", "r7"];
+    var step = 0, show = "all";
+    function state(k) { // 앞 k개를 이름 바꾼 결과
+      var rat = {}, free = [], ren = [];
+      ARCH.forEach(function (r, i) { rat[r] = "p" + (i + 1); });
+      for (var f = 8; f <= 16; f++) free.push("p" + f);
+      for (var i = 0; i < k; i++) {
+        var I = CODE[i], s = I.s.map(function (r) { return rat[r]; }), old = I.d ? rat[I.d] : null, nd = null;
+        if (I.d) { nd = free.shift(); rat[I.d] = nd; }
+        var parts = I.txt.split(/\s+/), args = [];
+        if (I.op === "addi") args = [nd, s[0]]; else args = [nd].concat(s);
+        ren.push({ txt: I.op + " " + args.join(", "), d: nd, s: s, old: old });
+      }
+      return { rat: rat, free: free, ren: ren };
+    }
+    function edges(list) { // list: [{d, s}] → [{a,b,type}]
+      var E = [];
+      for (var j = 0; j < list.length; j++) for (var i = 0; i < j; i++) {
+        var A = list[i], B = list[j];
+        if (A.d && B.s.indexOf(A.d) >= 0) { // 가장 가까운 쓰기만
+          var closer = false; for (var m = i + 1; m < j; m++) if (list[m].d === A.d) closer = true;
+          if (!closer) E.push({ a: i, b: j, t: "RAW" });
+        }
+        if (B.d && A.s.indexOf(B.d) >= 0) E.push({ a: i, b: j, t: "WAR" });
+        if (A.d && B.d === A.d) E.push({ a: i, b: j, t: "WAW" });
+      }
+      return E;
+    }
+    var cv = SB.canvas("#cv-rename", function (ctx, w, h) {
+      var narrow = w < 600, st = state(step), n = CODE.length;
+      var C = narrow ? { x: 10, y: 8, w: w - 20, h: h * 0.62 } : { x: 10, y: 8, w: w * 0.6, h: h - 16 };
+      var R = narrow ? { x: 10, y: h * 0.62 + 6, w: w - 20, h: h * 0.38 - 12 } : { x: w * 0.6 + 20, y: 8, w: w * 0.4 - 30, h: h - 16 };
+      var half = C.h / 2, rh = Math.min(22, (half - 22) / n), arcX = C.x + 34;
+      function list(items, y0, title, isRen) {
+        T(ctx, title, C.x, y0 + 7, { size: 12, weight: 700 });
+        var E = edges(items.map(function (q) { return { d: q.d, s: q.s }; }));
+        E.forEach(function (e) {
+          if (show === "raw" && e.t !== "RAW") return;
+          var ya = y0 + 20 + e.a * rh + rh / 2, yb = y0 + 20 + e.b * rh + rh / 2, bend = 10 + (e.b - e.a) * 7;
+          ctx.strokeStyle = e.t === "RAW" ? P.accent2 : e.t === "WAR" ? P.warn : P.bad; ctx.lineWidth = 1.6;
+          ctx.setLineDash(e.t === "RAW" ? [] : e.t === "WAR" ? [5, 3] : [2, 3]);
+          ctx.beginPath(); ctx.moveTo(arcX, ya); ctx.bezierCurveTo(arcX - bend, ya, arcX - bend, yb, arcX, yb); ctx.stroke(); ctx.setLineDash([]);
+        });
+        items.forEach(function (q, i) {
+          var y = y0 + 20 + i * rh, cur = isRen && i === step - 1;
+          if (cur) { ctx.fillStyle = SB.color("accent-soft"); ctx.fillRect(arcX + 4, y, C.w - (arcX - C.x) - 4, rh); }
+          T(ctx, (i + 1) + "", arcX + 8, y + rh / 2, { size: 10, mono: true, color: P.faint });
+          T(ctx, q.txt, arcX + 24, y + rh / 2, { size: narrow ? 11.5 : 12.5, mono: true, color: q.pending ? P.faint : P.text, weight: cur ? 700 : 400 });
+        });
+      }
+      var orig = CODE.map(function (I) { return { txt: I.txt, d: I.d, s: I.s }; });
+      list(orig, C.y, "원래 프로그램", false);
+      var ren = st.ren.slice();
+      for (var i = step; i < n; i++) ren.push({ txt: CODE[i].txt + "   (대기)", d: null, s: [], pending: true });
+      list(ren, C.y + half, "이름 바꾼 프로그램 (" + step + "/" + n + ")", true);
+      // RAT
+      T(ctx, "RAT (구조 → 물리)", R.x, R.y + 7, { size: 12, weight: 700 });
+      var cols = narrow ? 7 : 2, cw = R.w / cols, rr = narrow ? 30 : Math.min(26, (R.h - 80) / 4);
+      var last = step > 0 ? CODE[step - 1].d : null;
+      ARCH.forEach(function (a, i) {
+        var cx = R.x + (i % cols) * cw, cy = R.y + 22 + Math.floor(i / cols) * rr;
+        var hot = a === last;
+        ctx.fillStyle = hot ? SB.color("accent-soft") : P.surface; ctx.strokeStyle = hot ? P.accent : P.border;
+        SOC.roundRect(ctx, cx + 2, cy, cw - 4, rr - 4, 5); ctx.fill(); ctx.stroke();
+        if (narrow) { T(ctx, a, cx + cw / 2, cy + 8, { size: 10, mono: true, align: "center", color: P.dim }); T(ctx, st.rat[a], cx + cw / 2, cy + 19, { size: 11, mono: true, align: "center", weight: 700, color: hot ? P.accent : P.text }); }
+        else { T(ctx, a + "  →", cx + 10, cy + (rr - 4) / 2, { size: 12, mono: true, color: P.dim }); T(ctx, st.rat[a], cx + cw - 12, cy + (rr - 4) / 2, { size: 12.5, mono: true, align: "right", weight: 700, color: hot ? P.accent : P.text }); }
+      });
+      var fy = R.y + 22 + Math.ceil(7 / cols) * rr + 10;
+      T(ctx, "자유 목록", R.x, fy, { size: 12, weight: 700 });
+      var fx = R.x, fw = narrow ? 34 : 38;
+      st.free.forEach(function (f, i) { var x = R.x + (i % Math.floor(R.w / fw)) * fw, y = fy + 12 + Math.floor(i / Math.floor(R.w / fw)) * 22; SOC.box(ctx, x, y, fw - 4, 18, SOC.alpha(P.ok, 0.75), f, { size: 10.5, mono: true, r: 4 }); });
+      if (step > 0 && CODE[step - 1].d) {
+        var q = st.ren[step - 1];
+        T(ctx, CODE[step - 1].d + ": " + q.old + " → " + q.d + " (새로 할당)", R.x, R.y + R.h - 8, { size: 11, mono: true, color: P.accent, weight: 700 });
+      }
+    }, aopt("#cv-rename", 0.5, 1.45, 600, { minHeight: 330, maxHeight: 560 }));
+    function upd() {
+      var st = state(step), all = CODE.map(function (I, i) { return i < step ? { d: st.ren[i].d, s: st.ren[i].s } : { d: I.d, s: I.s }; });
+      // 이름을 바꾼 부분과 바꾸지 않은 부분은 이름 공간이 달라 비교 불가 → 바꾼 명령들 끼리 + 원래 명령들 끼리
+      var Ea = edges(st.ren.map(function (q) { return { d: q.d, s: q.s }; })), Eb = edges(CODE.slice(step).map(function (I) { return { d: I.d, s: I.s }; }));
+      var E = Ea.concat(Eb);
+      // 경계를 넘는 의존: 원래 프로그램 기준으로 RAW는 남고 WAR/WAW는 사라진 것으로 센다
+      var Eo = edges(CODE.map(function (I) { return { d: I.d, s: I.s }; }));
+      var cnt = { RAW: 0, WAR: 0, WAW: 0 };
+      Eo.forEach(function (e) { if (e.t === "RAW") cnt.RAW++; else if (e.b >= step) cnt[e.t]++; });
+      SB.stat("rn-raw", cnt.RAW + "<small>개 (남음)</small>");
+      SB.stat("rn-war", cnt.WAR + "<small>개</small>");
+      SB.stat("rn-waw", cnt.WAW + "<small>개</small>");
+      document.getElementById("rn-next").disabled = step >= CODE.length;
+      document.getElementById("rn-prev").disabled = step <= 0;
+      cv.redraw();
+    }
+    document.getElementById("rn-next").onclick = function () { if (step < CODE.length) step++; upd(); };
+    document.getElementById("rn-prev").onclick = function () { if (step > 0) step--; upd(); };
+    document.getElementById("rn-reset").onclick = function () { step = 0; upd(); };
+    SB.seg("rn-show", function (v) { show = v; cv.redraw(); });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 4. 비순차 코어 시뮬레이터 */
+  (function () {
+    var cfg = { W: 4, rob: 64, alu: 3, ld: 2, mr: 0.1, ml: 120 }, prog = "arr", view = "ooo";
+    var tr, A, B, C = 0, playing = false, acc = 0;
+    var info = document.getElementById("oo-info");
+    function recompute(keep) {
+      tr = trace(prog, 300, cfg.mr, 9);
+      var pr = deps(tr);
+      A = simulate(tr, { W: cfg.W, rob: cfg.rob, alu: cfg.alu, ld: cfg.ld, missLat: cfg.ml, pr: pr });
+      B = simulate(tr, { W: cfg.W, rob: cfg.rob, alu: cfg.alu, ld: cfg.ld, missLat: cfg.ml, inorder: true, pr: pr });
+      if (!keep) C = 0;
+      upd();
+    }
+    function R() { return view === "ooo" ? A : B; }
+    var cv = SB.canvas("#cv-ooo", function (ctx, w, h) {
+      if (!A) return;
+      var S = R(), narrow = w < 560, rob = cfg.rob;
+      var cols = Math.min(rob, narrow ? 16 : 32), rows = Math.ceil(rob / cols), gw = w - 20, cs = gw / cols, ch = Math.min(cs, 22);
+      var gridH = rows * ch;
+      T(ctx, "ROB (" + rob + "칸) · 사이클 " + C + (view === "ino" ? " · 순차 실행" : " · 비순차 실행"), 10, 10, { size: 12, weight: 700 });
+      var head = 0; while (head < S.n && S.cmt[head] != null && S.cmt[head] <= C) head++;
+      for (var sI = 0; sI < rob; sI++) {
+        var x = 10 + (sI % cols) * cs, y = 22 + Math.floor(sI / cols) * ch;
+        ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(x + 1, y + 1, cs - 2, ch - 2);
+      }
+      for (var i = head; i < S.n && S.disp[i] != null && S.disp[i] <= C; i++) {
+        var slot = i % rob, x2 = 10 + (slot % cols) * cs, y2 = 22 + Math.floor(slot / cols) * ch, I = tr[i], col, fillA = 0.9;
+        if (S.iss[i] == null || S.iss[i] > C) { col = P.surface; }
+        else if (S.done[i] > C) col = I.op === "lw" && I.miss ? P.bad : P.accent2;
+        else col = P.ok;
+        ctx.fillStyle = col === P.surface ? P.surface : SOC.alpha(col, fillA); ctx.fillRect(x2 + 1.5, y2 + 1.5, cs - 3, ch - 3);
+        if (col === P.surface) { ctx.strokeStyle = P.dim; ctx.strokeRect(x2 + 1.5, y2 + 1.5, cs - 3, ch - 3); }
+        if (I.op === "lw" && I.miss && S.iss[i] != null && S.iss[i] <= C && S.done[i] > C) { var f = (C - S.iss[i]) / (S.done[i] - S.iss[i]); ctx.fillStyle = "rgba(255,255,255,.35)"; ctx.fillRect(x2 + 1.5, y2 + ch - 4, (cs - 3) * f, 2.5); }
+        if (cs >= 13) T(ctx, opChar(I.op), x2 + cs / 2, y2 + ch / 2 + 0.5, { size: Math.min(11, cs * 0.6), mono: true, weight: 700, align: "center", color: col === P.surface ? P.dim : "#fff" });
+        if (i === head) { ctx.strokeStyle = P.text; ctx.lineWidth = 2.5; ctx.strokeRect(x2 + 1, y2 + 1, cs - 2, ch - 2); }
+      }
+      // 누적 확정 그래프
+      var top = 22 + gridH + 16, box = { x: 50, y: top, w: w - 66, h: h - top - 40 };
+      var cyc = Math.max(A.cycles, B.cycles), sa = [], sb = [], step = Math.max(1, Math.floor(cyc / 300));
+      function cum(S2) { var out = [], k = 0; for (var c = 0; c <= cyc; c += step) { while (k < S2.n && S2.cmt[k] <= c) k++; out.push([c, k]); } return out; }
+      sa = cum(A); sb = cum(B);
+      SB.chart(ctx, box, {
+        x: [0, cyc], y: [0, tr.length], xLabel: "사이클",
+        series: [{ data: sb, color: SOC.color("little"), width: 2 }, { data: sa, color: SOC.color("big"), width: 2.4 }],
+        vlines: [{ x: Math.min(C, cyc), color: P.accent }],
+      });
+      T(ctx, "확정된 명령 — 비순차(진한) / 순차(연한)", box.x + 6, box.y + 10, { size: 11, color: P.dim, weight: 700 });
+    }, aopt("#cv-ooo", 0.62, 1.25, 560, { minHeight: 360, maxHeight: 620 }));
+    function upd() {
+      var S = R();
+      C = Math.max(0, Math.min(C, S.cycles));
+      SB.stat("oo-cyc", C + "<small>/ " + S.cycles + "</small>");
+      SB.stat("oo-ipc", A.ipc.toFixed(2));
+      SB.stat("oo-ipc2", B.ipc.toFixed(2) + "<small>(" + (A.ipc / B.ipc).toFixed(2) + "배 차이)</small>");
+      SB.stat("oo-occ", S.occ.toFixed(0) + "<small>/ " + cfg.rob + "</small>");
+      SB.stat("oo-mlp", A.mlp + "<small>개 (순차 " + B.mlp + ")</small>");
+      // 머리 설명
+      var head = 0; while (head < S.n && S.cmt[head] != null && S.cmt[head] <= C) head++;
+      var inRob = 0, doneW = 0; for (var i = head; i < S.n && S.disp[i] != null && S.disp[i] <= C; i++) { inRob++; if (S.done[i] != null && S.done[i] <= C) doneW++; }
+      var msg;
+      if (head >= S.n) msg = "<b>끝.</b> 명령 " + S.n + "개를 " + S.cycles + "사이클에 확정했다.";
+      else {
+        var I = tr[head], st = S.iss[head] == null || S.iss[head] > C ? "피연산자나 장치를 기다리는 중" : S.done[head] > C ? (I.op === "lw" && I.miss ? '<span class="bad-t">캐시 미스로 메모리를 기다리는 중 (' + (S.done[head] - C) + "사이클 남음)</span>" : "실행 중") : "끝나서 확정 직전";
+        msg = "<b>사이클 " + C + "</b> · 머리(가장 오래된 명령) #" + (head + 1) + " <code>" + I.txt + "</code>: " + st + ". ROB에 " + inRob + "개, 그중 " + doneW + "개는 이미 끝났지만 머리 뒤에서 확정을 기다린다." + (inRob >= cfg.rob ? ' <span class="warn-t">ROB가 가득 차서 새 명령이 못 들어온다.</span>' : "");
+      }
+      info.innerHTML = msg;
+      cv.redraw();
+    }
+    document.getElementById("oo-step").onclick = function () { C++; upd(); };
+    document.getElementById("oo-step10").onclick = function () { C += 10; upd(); };
+    document.getElementById("oo-reset").onclick = function () { C = 0; upd(); };
+    document.getElementById("oo-end").onclick = function () { C = R().cycles; upd(); };
+    var pb = document.getElementById("oo-play");
+    pb.onclick = function () { playing = !playing; pb.textContent = playing ? "❚❚ 멈춤" : "▶ 재생"; if (playing && C >= R().cycles) C = 0; };
+    SB.loop(cv.canvas, function (dt) { if (!playing) return; acc += dt; if (acc > 0.08) { acc = 0; if (C < R().cycles) { C++; upd(); } else { playing = false; pb.textContent = "▶ 재생"; } } });
+    SB.seg("oo-prog", function (v) { prog = v; recompute(false); });
+    SB.seg("oo-view", function (v) { view = v; upd(); });
+    SB.range("oo-w", function (v) { return v + "개"; }, function (v) { cfg.W = v; recompute(true); });
+    SB.range("oo-rob", function (v) { return v + "개"; }, function (v) { cfg.rob = v; recompute(true); });
+    SB.range("oo-alu", function (v) { return v + "개"; }, function (v) { cfg.alu = v; recompute(true); });
+    SB.range("oo-ld", function (v) { return v + "개"; }, function (v) { cfg.ld = v; recompute(true); });
+    SB.range("oo-mr", function (v) { return v + "%"; }, function (v) { cfg.mr = v / 100; recompute(true); });
+    SB.range("oo-ml", function (v) { return v + "사이클"; }, function (v) { cfg.ml = v; recompute(true); });
+    recompute(false);
+  })();
+
+  /* ---------------------------------------------------------------- 5. MLP */
+  (function () {
+    var rob = 64, k = 24, L = 150, NM = 12, S = null, tr = null;
+    function build() {
+      tr = [];
+      for (var m = 0; m < NM; m++) { var I = ins("lw r" + (2 + (m % 20)) + ", 0(r1)"); I.miss = true; tr.push(I); for (var j = 1; j < k; j++) tr.push(ins("addi r" + (30 - (j % 6)) + ", r1, " + j)); }
+      S = simulate(tr, { W: 4, rob: rob, alu: 4, ld: 2, missLat: L });
+    }
+    build();
+    var cv = SB.canvas("#cv-mlp", function (ctx, w, h) {
+      var box = { x: 54, y: 12, w: w - 70, h: h - 12 - 42 }, tmax = Math.max(S.cycles, 100);
+      var X = function (c) { return box.x + c / tmax * box.w; }, rh = box.h / NM;
+      ctx.strokeStyle = P.grid; for (var t = 0; t <= tmax; t += Math.max(50, Math.ceil(tmax / 8 / 50) * 50)) { ctx.beginPath(); ctx.moveTo(X(t), box.y); ctx.lineTo(X(t), box.y + box.h); ctx.stroke(); T(ctx, String(t), X(t), box.y + box.h + 10, { size: 10, mono: true, color: P.dim, align: "center" }); }
+      T(ctx, "사이클", box.x + box.w, box.y + box.h + 26, { size: 11, color: P.dim, align: "right" });
+      var mi = 0;
+      tr.forEach(function (I, i) {
+        if (!(I.op === "lw" && I.miss)) return;
+        var y = box.y + mi * rh;
+        T(ctx, "미스 " + (mi + 1), 6, y + rh / 2, { size: 10.5, mono: true, color: P.dim });
+        ctx.fillStyle = SOC.alpha(P.faint, 0.3); ctx.fillRect(X(S.disp[i]), y + rh * 0.3, Math.max(1, X(S.iss[i]) - X(S.disp[i])), rh * 0.4);
+        ctx.fillStyle = SOC.alpha(P.bad, 0.85); ctx.fillRect(X(S.iss[i]), y + rh * 0.15, X(S.done[i]) - X(S.iss[i]), rh * 0.7);
+        mi++;
+      });
+      ctx.strokeStyle = P.accent; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(X(S.cycles), box.y); ctx.lineTo(X(S.cycles), box.y + box.h); ctx.stroke(); ctx.setLineDash([]);
+    }, { aspect: 0.4, minHeight: 240, maxHeight: 340 });
+    function upd() {
+      build();
+      var tot = 0; tr.forEach(function (I, i) { if (I.miss) tot += S.done[i] - S.iss[i]; });
+      SB.stat("ml-cyc", S.cycles + "<small>사이클</small>");
+      SB.stat("ml-mlp", (tot / S.cycles).toFixed(1) + "<small>개</small>");
+      SB.stat("ml-ser", (NM * L + Math.ceil(tr.length / 4)) + "<small>사이클 (약)</small>");
+      cv.redraw();
+    }
+    SB.range("ml-rob", function (v) { return v + "개"; }, function (v) { rob = v; upd(); });
+    SB.range("ml-k", function (v) { return v + "개"; }, function (v) { k = v; upd(); });
+    SB.range("ml-L", function (v) { return v + "사이클"; }, function (v) { L = v; upd(); });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 6. Pollack / Hill-Marty */
+  (function () {
+    var p = 0.9, r = 4, n = 16, box = null;
+    var perf = function (x) { return Math.sqrt(x); };
+    var sym = function (x) { return 1 / ((1 - p) / perf(x) + p * x / (perf(x) * n)); };
+    var asy = function (x) { return 1 / ((1 - p) / perf(x) + p / (perf(x) + n - x)); };
+    var cv = SB.canvas("#cv-pollack", function (ctx, w, h) {
+      var narrow = w < 560;
+      var D = narrow ? { x: 10, y: 8, w: w - 20, h: h * 0.36 } : { x: 10, y: 10, w: Math.min(w * 0.32, h - 20), h: h - 20 };
+      box = narrow ? { x: 48, y: h * 0.36 + 22, w: w - 62, h: h * 0.64 - 22 - 44 } : { x: D.x + D.w + 56, y: 16, w: w - D.x - D.w - 72, h: h - 16 - 44 };
+      // 평면도: 4x4 격자 = 16 BCE
+      var gs = Math.min(D.w, D.h) - 10, cell = gs / 4, ox = D.x + (D.w - gs) / 2, oy = D.y + (D.h - gs) / 2 + 4;
+      ctx.fillStyle = SB.isDark() ? "#1a2030" : "#2a3142"; SOC.roundRect(ctx, ox - 4, oy - 4, gs + 8, gs + 8, 6); ctx.fill();
+      var side = Math.sqrt(r) * cell;
+      SOC.box(ctx, ox + 1, oy + 1, side - 2, side - 2, SOC.color("big"), side > 40 ? "큰 코어" : "", { size: 11, r: 4 });
+      var placed = 0;
+      for (var gy = 0; gy < 4; gy++) for (var gx = 0; gx < 4; gx++) {
+        var cx = ox + gx * cell, cy = oy + gy * cell;
+        if (cx + cell <= ox + side + 0.5 && cy + cell <= oy + side + 0.5) continue;
+        if (placed >= n - r) continue;
+        if (cx < ox + side - 0.5 && cy < oy + side - 0.5) continue;
+        SOC.box(ctx, cx + 2, cy + 2, cell - 4, cell - 4, SOC.color("little"), "", { r: 3 }); placed++;
+      }
+      T(ctx, "비대칭: 큰 코어(" + r + ") + 작은 코어 " + (n - r) + "개", D.x + D.w / 2, oy - 12 > D.y ? oy - 12 : D.y + 2, { size: 10.5, color: P.dim, align: "center" });
+      var s1 = [], s2 = [], s3 = [];
+      for (var x = 1; x <= n; x += 0.25) { s1.push([x, sym(x)]); s2.push([x, asy(x)]); s3.push([x, perf(x)]); }
+      var ym = Math.max.apply(null, s2.map(function (q) { return q[1]; }).concat(s1.map(function (q) { return q[1]; })));
+      SB.chart(ctx, box, {
+        x: [1, n], y: [0, Math.ceil(ym * 1.15)], xLabel: "큰 코어 크기 r (작은 코어 몇 개분)", xTicks: [1, 4, 8, 12, 16],
+        series: [{ data: s3, color: P.faint, width: 1.4, dash: [4, 4] }, { data: s1, color: P.accent2, width: 2.2 }, { data: s2, color: SOC.color("big"), width: 2.6 }],
+        vlines: [{ x: r, color: P.accent }],
+        points: [{ x: r, y: sym(r), color: P.accent2, r: 5 }, { x: r, y: asy(r), color: SOC.color("big"), r: 5 }],
+      });
+      T(ctx, "속도 향상 — 비대칭(빨강) · 대칭(파랑) · √r(점선)", box.x + 6, box.y + 10, { size: 11, color: P.dim, weight: 700 });
+    }, aopt("#cv-pollack", 0.42, 1.2, 560, { minHeight: 280, maxHeight: 520 }));
+    var getR;
+    function upd() {
+      SB.stat("pl-s1", perf(r).toFixed(2) + "<small>× 작은 코어</small>");
+      var bs = 1, bsv = 0, ba = 1, bav = 0; for (var x = 1; x <= n; x++) { if (sym(x) > bsv) { bsv = sym(x); bs = x; } if (asy(x) > bav) { bav = asy(x); ba = x; } }
+      SB.stat("pl-sym", sym(r).toFixed(2) + "<small>× (최적 r=" + bs + ")</small>");
+      SB.stat("pl-asy", asy(r).toFixed(2) + "<small>× (최적 r=" + ba + ")</small>");
+      cv.redraw();
+    }
+    SB.range("pl-p", function (v) { return v.toFixed(3); }, function (v) { p = v; upd(); });
+    getR = SB.range("pl-r", function (v) { return v + "개분"; }, function (v) { r = v; upd(); });
+    function pick(x) { if (!box) return; var v = Math.round(1 + (x - box.x) / box.w * (n - 1)); v = SB.clamp(v, 1, n); if (v !== r) getR.set(v); }
+    SOC.pointer(cv.canvas, { down: function (x, y) { if (box && y >= box.y && x >= box.x - 10) pick(x); }, move: function (x, y, d) { if (d) pick(x); } }, { drag: true });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- DVFS 모델 (그림 4-6, 스케줄러 공용) */
+  var CORE = {
+    big: { ipc: 3.0, fs: [0.6, 1.0, 1.4, 1.8, 2.2, 2.6, 3.0, 3.3, 3.6], v: function (f) { return 0.55 + 0.12 * f; }, ce: 0.9e-9, lk: 0.25, idle: 0.01 },
+    little: { ipc: 1.2, fs: [0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0], v: function (f) { return 0.5 + 0.13 * f; }, ce: 0.15e-9, lk: 0.03, idle: 0.002 },
+  };
+  function power(t, f) { var c = CORE[t], V = c.v(f); return c.ce * V * V * f * 1e9 + c.lk * V * V * V; }
+  function perfOf(t, f) { return CORE[t].ipc * f; }
+  function fFor(t, perf) { var c = CORE[t], f = perf / c.ipc; return f <= c.fs[c.fs.length - 1] + 1e-9 ? Math.max(f, c.fs[0]) : null; }
+
+  /* ---------------------------------------------------------------- 7. DVFS 곡선 */
+  (function () {
+    var req = 2.0, B1 = null, B2 = null;
+    var PMAX = perfOf("big", 3.6);
+    var cv = SB.canvas("#cv-dvfs", function (ctx, w, h) {
+      var narrow = w < 560;
+      B1 = narrow ? { x: 48, y: 22, w: w - 62, h: h / 2 - 22 - 40 } : { x: 52, y: 22, w: w / 2 - 70, h: h - 22 - 46 };
+      B2 = narrow ? { x: 48, y: h / 2 + 18, w: w - 62, h: h / 2 - 18 - 44 } : { x: w / 2 + 48, y: 22, w: w / 2 - 64, h: h - 22 - 46 };
+      var cb = SOC.color("big"), cl = SOC.color("little");
+      function curve(t, fn) { var out = []; var c = CORE[t]; for (var f = c.fs[0]; f <= c.fs[c.fs.length - 1] + 1e-9; f += 0.05) out.push([perfOf(t, f), fn(t, f)]); return out; }
+      var pmaxW = power("big", 3.6);
+      var lf = fFor("little", req), bf = fFor("big", req);
+      var pts1 = [], pts2 = [];
+      if (lf) { pts1.push({ x: req, y: power("little", lf), color: cl, r: 5.5 }); pts2.push({ x: req, y: power("little", lf) / req, color: cl, r: 5.5 }); }
+      if (bf) { pts1.push({ x: req, y: power("big", bf), color: cb, r: 5.5 }); pts2.push({ x: req, y: power("big", bf) / req, color: cb, r: 5.5 }); }
+      SB.chart(ctx, B1, { x: [0, PMAX * 1.02], y: [0, Math.ceil(pmaxW + 0.5)], xLabel: "성능 (IPC × GHz)", series: [{ data: curve("big", power), color: cb, width: 2.6 }, { data: curve("little", power), color: cl, width: 2.6 }], vlines: [{ x: req, color: P.accent }], points: pts1 });
+      T(ctx, "전력 (W)", B1.x + 6, B1.y - 10, { size: 11, color: P.dim, weight: 700 });
+      SB.chart(ctx, B2, { x: [0, PMAX * 1.02], y: [0, 0.45], xLabel: "성능 (IPC × GHz)", series: [{ data: curve("big", function (t, f) { return power(t, f) / perfOf(t, f); }), color: cb, width: 2.6 }, { data: curve("little", function (t, f) { return power(t, f) / perfOf(t, f); }), color: cl, width: 2.6 }], vlines: [{ x: req, color: P.accent }], points: pts2 });
+      T(ctx, "일 단위당 에너지 (mJ)", B2.x + 6, B2.y - 10, { size: 11, color: P.dim, weight: 700 });
+      T(ctx, "큰 코어", B1.x + B1.w - 6, B1.y + 12, { size: 11.5, color: cb, weight: 700, align: "right" });
+      T(ctx, "작은 코어", B1.x + B1.w - 6, B1.y + 28, { size: 11.5, color: cl, weight: 700, align: "right" });
+    }, aopt("#cv-dvfs", 0.44, 1.3, 560, { minHeight: 280, maxHeight: 600 }));
+    function upd() {
+      var lf = fFor("little", req), bf = fFor("big", req);
+      SB.stat("dv-perf", req.toFixed(1));
+      SB.stat("dv-lit", lf ? lf.toFixed(2) + "<small>GHz · " + Math.round(power("little", lf) * 1000) + " mW</small>" : '<span class="bad-t">불가</span><small>최대 ' + perfOf("little", 2).toFixed(1) + "</small>");
+      SB.stat("dv-big", bf ? bf.toFixed(2) + "<small>GHz · " + Math.round(power("big", bf) * 1000) + " mW</small>" : "—");
+      SB.stat("dv-ratio", lf && bf ? (power("big", bf) / power("little", lf)).toFixed(1) + "<small>× (큰 ÷ 작은)</small>" : "큰 코어만 가능");
+      cv.redraw();
+    }
+    function pick(x, y) { var B = B2 && y >= B2.y - 10 && B2.y > B1.y + 10 ? B2 : (B2 && x >= B2.x - 10 && B2.x > B1.x + 10 ? B2 : B1); req = SB.clamp((x - B.x) / B.w * PMAX * 1.02, 0.5, PMAX); upd(); }
+    SOC.pointer(cv.canvas, { down: function (x, y) { pick(x, y); }, move: function (x, y, d) { if (d) pick(x, y); } }, { drag: true });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 8. 이종 코어 스케줄러 */
+  (function () {
+    var scn = "scroll", pol = "eas", margin = 0.8, TM = 1000;
+    var CORES = [{ t: "big", n: "큰 0" }, { t: "big", n: "큰 1" }, { t: "big", n: "큰 2" }, { t: "little", n: "작은 0" }, { t: "little", n: "작은 1" }, { t: "little", n: "작은 2" }, { t: "little", n: "작은 3" }];
+    var KIND = { ui: { n: "UI 프레임", c: "accent" }, heavy: { n: "앱 열기", c: "warn" }, bg: { n: "배경 일", c: "ok" }, game: { n: "게임 로직", c: "accent2" }, rend: { n: "렌더 명령", c: "bad" } };
+    function tasks() {
+      var r = SB.rng(21), out = [];
+      if (scn === "scroll") {
+        for (var t = 0; t < TM; t += 16.7) out.push({ a: Math.round(t), w: 18 + r() * 14, dl: 16, k: "ui" });
+        [180, 600].forEach(function (t0) { for (var j = 0; j < 3; j++) out.push({ a: t0, w: 700 + r() * 200, dl: 180, k: "heavy" }); });
+        for (var b = 0; b < 25; b++) out.push({ a: Math.round(r() * TM), w: 3 + r() * 6, dl: 100, k: "bg" });
+      } else if (scn === "music") {
+        for (var t2 = 0; t2 < TM; t2 += 20) out.push({ a: t2, w: 1.5 + r(), dl: 20, k: "bg" });
+        for (var t3 = 50; t3 < TM; t3 += 250) out.push({ a: t3, w: 25 + r() * 10, dl: 200, k: "bg" });
+      } else {
+        for (var t4 = 0; t4 < TM; t4 += 16.7) { var a = Math.round(t4); out.push({ a: a, w: 95 + r() * 30, dl: 16, k: "game" }); out.push({ a: a, w: 70 + r() * 25, dl: 16, k: "rend" }); for (var q = 0; q < 2; q++) out.push({ a: a, w: 6 + r() * 6, dl: 16, k: "bg" }); }
+      }
+      out.sort(function (x, y) { return x.a - y.a; });
+      out.forEach(function (o, i) { o.id = i; o.left = o.w; o.end = null; });
+      return out;
+    }
+    var run = null;
+    function simulate() {
+      var TS = tasks(), Q = CORES.map(function () { return []; }), tl = CORES.map(function () { return []; }), pw = [], E = 0, ai = 0;
+      var maxP = { big: perfOf("big", 3.6), little: perfOf("little", 2.0) };
+      function load(ci) { return Q[ci].reduce(function (s, o) { return s + o.left; }, 0); }
+      function assign(o) {
+        var cand = [];
+        CORES.forEach(function (c, ci) { if (pol === "big" && c.t !== "big") return; if (pol === "little" && c.t !== "little") return; cand.push(ci); });
+        if (pol === "eas") {
+          // 작은 코어 중 마감을 지킬 수 있는 곳 (여유 margin 반영)
+          var best = null, bestE = Infinity;
+          cand.forEach(function (ci) {
+            var c = CORES[ci], need = (load(ci) + o.w) / Math.max(1, o.dl) / margin;
+            if (need > maxP[c.t]) return;
+            var f = fFor(c.t, Math.max(need, perfOf(c.t, CORE[c.t].fs[0]))), e = f ? power(c.t, f) / perfOf(c.t, f) * o.w : Infinity;
+            if (e < bestE) { bestE = e; best = ci; }
+          });
+          if (best == null) { best = 0; var bl = Infinity; cand.forEach(function (ci) { if (CORES[ci].t === "big" && load(ci) < bl) { bl = load(ci); best = ci; } }); }
+          return best;
+        }
+        var b = cand[0], bl2 = Infinity; cand.forEach(function (ci) { var l = load(ci); if (l < bl2) { bl2 = l; b = ci; } }); return b;
+      }
+      for (var t = 0; t < TM + 400; t++) {
+        while (ai < TS.length && TS[ai].a <= t) { var o = TS[ai]; Q[assign(o)].push(o); ai++; }
+        var pt = 0;
+        CORES.forEach(function (c, ci) {
+          var q = Q[ci];
+          if (!q.length) { pt += CORE[c.t].idle; if (t < TM) tl[ci].push(null); return; }
+          // EDF 순서
+          q.sort(function (x, y) { return (x.a + x.dl) - (y.a + y.dl); });
+          var R = q.reduce(function (s, x) { return s + x.left; }, 0), dl = Math.max(1, q[0].a + q[0].dl - t), need = R / Math.max(1, Math.max(dl, 1)) / margin;
+          // 가장 이른 마감까지 그 일만 끝내면 되도록: 첫 일 기준과 전체 기준 중 큰 값
+          var need1 = q[0].left / dl / margin; need = Math.max(need1, Math.min(need, maxP[c.t]));
+          var fs = CORE[c.t].fs, f = fs[fs.length - 1];
+          for (var k = 0; k < fs.length; k++) if (perfOf(c.t, fs[k]) >= need) { f = fs[k]; break; }
+          var cap = perfOf(c.t, f), pwr = power(c.t, f);
+          pt += pwr;
+          if (t < TM) tl[ci].push({ k: q[0].k, f: f / fs[fs.length - 1] });
+          var left = cap;
+          while (left > 1e-9 && q.length) { var h = q[0], d = Math.min(left, h.left); h.left -= d; left -= d; if (h.left <= 1e-9) { h.end = t + 1 - left / cap; q.shift(); } }
+        });
+        E += pt * 1e-3; // J (1 ms)
+        if (t < TM) pw.push(pt);
+      }
+      var miss = 0, lat = 0, cnt = 0;
+      TS.forEach(function (o) { var e = o.end == null ? TM + 400 : o.end; if (e - o.a > o.dl + 1e-6) miss++; lat += e - o.a; cnt++; });
+      return { tl: tl, pw: pw, E: E, miss: miss, n: TS.length, lat: lat / cnt };
+    }
+    var cv = SB.canvas("#cv-hmp", function (ctx, w, h) {
+      if (!run) return;
+      var narrow = w < 560, lab = narrow ? 40 : 52, gx = 10 + lab, gw = w - gx - 12, rows = CORES.length, rh = Math.min(26, (h * 0.55 - 20) / rows);
+      var X = function (t) { return gx + t / TM * gw; };
+      CORES.forEach(function (c, ci) {
+        var y = 14 + ci * rh;
+        T(ctx, c.n, 10, y + rh / 2, { size: 10.5, color: SOC.color(c.t), weight: 700 });
+        ctx.fillStyle = SOC.alpha(P.faint, 0.12); ctx.fillRect(gx, y + 2, gw, rh - 4);
+        var seg = run.tl[ci], px = gw / TM;
+        for (var t = 0; t < TM; t++) { var s = seg[t]; if (!s) continue; ctx.fillStyle = SOC.alpha(P[KIND[s.k].c], 0.25 + 0.75 * s.f); ctx.fillRect(X(t), y + 2, Math.max(1, px + 0.3), rh - 4); }
+      });
+      // 범례
+      var ly = 14 + rows * rh + 12, lx = gx;
+      Object.keys(KIND).forEach(function (k) { ctx.font = SB.font(11); var tw = ctx.measureText(KIND[k].n).width + 24; if (lx + tw > w - 10) { lx = gx; ly += 16; } ctx.fillStyle = P[KIND[k].c]; ctx.fillRect(lx, ly - 5, 10, 10); T(ctx, KIND[k].n, lx + 14, ly, { size: 11, color: P.dim }); lx += tw; });
+      // 전력 그래프
+      var box = { x: gx, y: ly + 18, w: gw, h: h - ly - 18 - 34 };
+      var pm = Math.max(1, Math.ceil(Math.max.apply(null, run.pw)));
+      var data = run.pw.map(function (v, i) { return [i, v]; });
+      SB.chart(ctx, box, { x: [0, TM], y: [0, pm], xLabel: "", xTicks: [0, 200, 400, 600, 800, 1000], series: [{ data: data, color: P.accent, width: 1.4, fill: SOC.alpha(P.accent, 0.15) }] });
+      T(ctx, "CPU 전력 (W)", box.x + 6, box.y + 10, { size: 11, color: P.dim, weight: 700 });
+      T(ctx, "ms", box.x + box.w, box.y + box.h + 22, { size: 10.5, color: P.dim, align: "right" });
+    }, aopt("#cv-hmp", 0.6, 1.35, 560, { minHeight: 380, maxHeight: 620 }));
+    function upd() {
+      run = simulate();
+      SB.stat("hm-e", (run.E * 1000).toFixed(0) + "<small>mJ</small>");
+      SB.stat("hm-p", (run.E * 1000 / TM).toFixed(2) + "<small>W</small>");
+      SB.stat("hm-miss", '<span class="' + (run.miss ? "bad-t" : "ok-t") + '">' + run.miss + "</span><small>/ " + run.n + "</small>");
+      SB.stat("hm-lat", run.lat.toFixed(1) + "<small>ms</small>");
+      cv.redraw();
+    }
+    SB.seg("hm-scn", function (v) { scn = v; upd(); });
+    SB.seg("hm-pol", function (v) { pol = v; upd(); });
+    SB.range("hm-m", function (v) { return Math.round(v * 100) + "%"; }, function (v) { margin = v; upd(); });
+    upd();
+  })();
+})();
+</script>
+</body>
+</html>

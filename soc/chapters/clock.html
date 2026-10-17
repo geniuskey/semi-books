@@ -1,0 +1,1062 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and SoCBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "수정 발진기와 PLL이 GHz 클럭을 만드는 원리, 클럭 트리의 스큐와 지터, 클럭 게이팅, 준안정과 MTBF, 그레이 코드와 비동기 FIFO, 리셋 동기화. PLL 잠금과 비동기 FIFO를 직접 돌려 본다.", "libs": []}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>클럭·리셋·클럭 도메인 · SoCBook</title>
+<meta name="description" content="수정 발진기와 PLL이 GHz 클럭을 만드는 원리, 클럭 트리의 스큐와 지터, 클럭 게이팅, 준안정과 MTBF, 그레이 코드와 비동기 FIFO, 리셋 동기화. PLL 잠금과 비동기 FIFO를 직접 돌려 본다.">
+<link rel="canonical" href="https://semi.euiyun.com/soc/chapters/clock.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#c8285f">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="SoCBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="클럭·리셋·클럭 도메인 · SoCBook">
+<meta property="og:description" content="수정 발진기와 PLL이 GHz 클럭을 만드는 원리, 클럭 트리의 스큐와 지터, 클럭 게이팅, 준안정과 MTBF, 그레이 코드와 비동기 FIFO, 리셋 동기화. PLL 잠금과 비동기 FIFO를 직접 돌려 본다.">
+<meta property="og:url" content="https://semi.euiyun.com/soc/chapters/clock.html">
+<meta property="og:image" content="https://semi.euiyun.com/soc/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/soc/chapters/clock.html#chapter","name":"클럭·리셋·클럭 도메인","headline":"클럭·리셋·클럭 도메인 · SoCBook","description":"수정 발진기와 PLL이 GHz 클럭을 만드는 원리, 클럭 트리의 스큐와 지터, 클럭 게이팅, 준안정과 MTBF, 그레이 코드와 비동기 FIFO, 리셋 동기화. PLL 잠금과 비동기 FIFO를 직접 돌려 본다.","url":"https://semi.euiyun.com/soc/chapters/clock.html","position":14,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/soc/og.png","dateModified":"2026-10-03","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/soc/#book","name":"SoCBook · 시스템 온 칩 교과서","url":"https://semi.euiyun.com/soc/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"SoCBook","item":"https://semi.euiyun.com/soc/"},{"@type":"ListItem","position":2,"name":"14. 클럭·리셋·클럭 도메인","item":"https://semi.euiyun.com/soc/chapters/clock.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/soc.js"></script>
+<!--head:end-->
+<style>
+  .ck-lamps { display: flex; gap: 8px; flex-wrap: wrap; }
+  .ck-lamp { font-family: var(--mono); font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text-faint); }
+  .ck-lamp.on { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .ck-lamp.on.ok { background: var(--ok); border-color: var(--ok); }
+  .ck-warn { color: var(--bad); font-weight: 700; }
+  .ck-good { color: var(--ok); font-weight: 700; }
+  .ck-gtab { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
+  .ck-gtab th, .ck-gtab td { padding: 3px 6px; text-align: center; border-bottom: 1px solid var(--border); }
+  .ck-gtab th { color: var(--text-dim); font-weight: 600; font-family: var(--font); font-size: 12px; }
+  .ck-gtab td.bad { color: var(--bad); font-weight: 700; }
+  .ck-gwrap { padding: 8px 18px 12px; overflow-x: auto; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="soc"></script>
+</head>
+<body data-chapter="clock">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 14</div>
+    <h1>클럭·리셋·클럭 도메인</h1>
+    <p class="lead">휴대폰 기판 위에는 쌀알만 한 금속 깡통이 하나 있다. 그 안의 얇은 수정 조각이 1초에 3,840만 번 떨린다. SB-1의 큰 코어는 이 떨림을 100배 가까이 부풀린 3.8 GHz로 뛰고, GPU는 1 GHz, 메모리 컨트롤러는 또 다른 박자로 뛴다. 하나의 기준 박자에서 수십 개의 서로 다른 박자를 만들고, 그것을 칩 구석구석 수십억 개의 플립플롭에 몇 ps 오차로 동시에 전하고, 박자가 다른 블록끼리 데이터를 잃지 않고 건네는 일. 이 장은 그 <strong>클럭</strong>의 이야기다. 그리고 모든 것을 깨끗한 출발점에 세우는 <strong>리셋</strong>도 함께 다룬다.</p>
+    <ul class="objectives">
+      <li>PLL이 위상 비교·전하 펌프·VCO·분주기로 기준 클럭의 정수배 주파수에 잠기는 과정을 설명하고, 루프 대역폭이 잠금 시간과 지터에 주는 영향을 확인한다.</li>
+      <li>클럭 트리의 스큐와 지터가 setup·hold 여유를 어떻게 깎는지 계산한다.</li>
+      <li>래치 기반 클럭 게이팅 셀(ICG)이 글리치 없이 클럭을 끄는 원리를 파형으로 읽는다.</li>
+      <li>준안정과 MTBF 식을 이해하고, 2단 동기화기·그레이 코드·비동기 FIFO로 클럭 도메인을 안전하게 건넌다.</li>
+      <li>비동기 인가·동기 해제 리셋과 리셋 동기화기가 필요한 이유를 설명한다.</li>
+    </ul>
+    <div class="soc-locator" data-blocks="pmu" data-caption="이 장은 전력·클럭 관리 블록의 PLL과, 칩 전체에 퍼진 클럭 분배망·도메인 경계를 다룬다."></div>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="pll">
+    <h2>수정 발진기에서 GHz까지: PLL</h2>
+    <p>모든 클럭의 뿌리는 칩 밖의 <span class="term">수정 발진기</span><span class="en">(Crystal oscillator)</span>다. 수정은 압전 효과로 정해진 주파수에서만 기계적으로 공진하므로, 온도가 변해도 주파수가 백만분의 수십(수십 ppm) 이내로 정확하다. 스마트폰은 보통 19.2 MHz나 38.4 MHz 수정(모뎀의 무선 규격과 맞추기 좋은 값)과, 시계용 32.768 kHz 수정을 함께 쓴다. 32,768 = 2<sup>15</sup>이라 15번 반으로 나누면 정확히 1초가 된다.</p>
+    <p>그런데 수정은 수십 MHz 이상을 직접 만들기 어렵다. GHz 클럭은 칩 안의 <span class="term">VCO</span><span class="en">(Voltage-controlled oscillator, 전압 제어 발진기)</span>가 만든다. VCO는 제어 전압에 따라 주파수가 바뀌는 링 발진기나 LC 발진기인데, 혼자 두면 온도와 전압에 따라 주파수가 수 %씩 떠다닌다. 그래서 VCO 출력을 N으로 나눠(분주) 수정 클럭과 비교하고, 어긋나면 제어 전압을 고쳐 주는 되먹임 고리를 만든다. 이것이 <span class="term">위상 고정 루프</span><span class="en">(PLL, Phase-locked loop)</span>다. 고리가 잠기면 나눈 클럭이 기준 클럭과 박자가 같아지므로 \(f_{\text{out}} = N\cdot f_{\text{ref}}\)가 된다.</p>
+    <p>고리의 첫 단계는 <span class="term">위상·주파수 검출기</span><span class="en">(PFD, Phase-frequency detector)</span>다. 기준 클럭 에지가 먼저 오면 UP 펄스를, 되먹임 클럭 에지가 먼저 오면 DN 펄스를 낸다. 펄스 폭이 곧 위상 차다. 아래에서 되먹임 클럭의 주파수와 위상을 바꿔 보자.</p>
+    <figure class="play" id="fig-pfd">
+      <div class="play-view"><canvas id="cv-pfd"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>되먹임 주파수 / 기준 주파수 <output id="pfd-r-out"></output></span><input type="range" id="pfd-r" min="0.8" max="1.2" step="0.01" value="1"></label>
+        <label class="ctrl"><span>되먹임 위상 지연 <output id="pfd-p-out"></output></span><input type="range" id="pfd-p" min="-0.45" max="0.45" step="0.01" value="0.2"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">평균 (UP − DN)</span><span class="v" id="pfd-avg">—</span></div>
+        <div class="stat"><span class="k">PFD의 판정</span><span class="v" id="pfd-say" style="font-size:15px">—</span></div>
+      </div>
+      <figcaption><b>그림 14-1.</b> <span class="try">만져 보기</span>위 두 줄은 기준 클럭(ref)과 VCO를 N으로 나눈 되먹임 클럭(fb), 아래 두 줄은 PFD 출력이다. ref의 상승 에지가 UP을 켜고 fb의 상승 에지가 DN을 켜며, 둘 다 켜지는 순간 둘 다 꺼진다. fb가 늦으면 UP 펄스가 넓어지고(→ VCO를 빠르게), 빠르면 DN 펄스가 넓어진다. 주파수가 다르면 펄스 폭이 매 주기 자라나 한쪽으로 쏠리므로, PFD는 위상뿐 아니라 주파수 차이도 알아챈다.</figcaption>
+    </figure>
+    <p>PFD의 펄스는 <span class="term">전하 펌프</span><span class="en">(Charge pump)</span>를 켜서 작은 전류를 루프 필터 커패시터에 넣거나 뺀다. 커패시터 전압이 VCO의 제어 전압이다. 루프 필터의 저항은 위상 차에 바로 반응하는 비례 항을, 커패시터는 차이를 쌓아 두는 적분 항을 만든다. 결국 PLL은 "위상 오차를 0으로 만드는 PI 제어기"다. 이 제어기의 빠르기가 <span class="term">루프 대역폭</span><span class="en">(Loop bandwidth)</span>, 진동이 얼마나 빨리 가라앉는지가 <span class="term">감쇠 계수</span> \(\zeta\)다.</p>
+    <div class="sim" id="sim-pll">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>PLL 잠금 시뮬레이터</h3></div>
+      <div class="sim-view"><canvas id="cv-pll-blk"></canvas></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-pll"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>분주비 N <output id="pll-n-out"></output></span><input type="range" id="pll-n" min="26" max="96" step="1" value="78"></label>
+          <label class="ctrl"><span>루프 대역폭 fₙ <output id="pll-bw-out"></output></span><input type="range" id="pll-bw" min="0.15" max="3.5" step="0.05" value="1"></label>
+          <label class="ctrl"><span>감쇠 계수 ζ <output id="pll-z-out"></output></span><input type="range" id="pll-z" min="0.2" max="1.5" step="0.05" value="0.7"></label>
+          <label class="ctrl"><span>VCO 잡음 <output id="pll-vn-out"></output></span><input type="range" id="pll-vn" min="0" max="1" step="0.05" value="0.4"></label>
+          <label class="ctrl"><span>기준 클럭 지터 <output id="pll-rn-out"></output></span><input type="range" id="pll-rn" min="0" max="3" step="0.1" value="0.5"></label>
+          <div class="ctrl-row"><button class="btn sm primary" id="pll-go">다시 잠그기</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">잠금 시간 (±0.1%)</span><span class="v" id="pll-lock">—</span></div>
+        <div class="stat"><span class="k">최대 오버슈트</span><span class="v" id="pll-os">—</span></div>
+        <div class="stat"><span class="k">출력 지터 (RMS)</span><span class="v" id="pll-jit">—</span></div>
+        <div class="stat"><span class="k">주파수 단계</span><span class="v" id="pll-step" style="font-size:15px">—</span></div>
+      </div>
+      <div class="sim-note">기준 클럭 38.4 MHz. N을 바꾸면 PLL이 이전 주파수에서 새 주파수로 옮겨 가며 다시 잠기는 과정을 그린다(가로축 µs). 위쪽 그림은 블록도와 지금 순간의 값, 아래 그래프의 연한 곡선은 위상 오차다. 모델은 PFD를 기준 클럭마다 표본화하는 이산 시간 2차 PI 루프이며, 위상 차가 한 주기를 넘으면 PFD가 주기를 건너뛴다(사이클 슬립). <b>대역폭을 넓히면</b> 빨리 잠기고 VCO 잡음을 잘 눌러 주지만, 기준 클럭의 지터(×N)는 그대로 통과시킨다. 두 잡음이 같을 때 지터가 가장 작은 최적 대역폭이 있다. 실제 PLL은 대역폭을 수백 kHz 안팎으로 좁게 두고, 잠그기 전에 VCO의 대역을 고르는 교정 단계를 거치므로 잠금에 수십 µs가 걸린다.</div>
+    </div>
+    <div class="formula">$$ f_{\text{out}} = \frac{N}{M}\,f_{\text{ref}}, \qquad \omega_n = \sqrt{\frac{K_{\text{VCO}} I_{\text{CP}}}{N C}}, \qquad \zeta = \frac{R}{2}\sqrt{\frac{K_{\text{VCO}} I_{\text{CP}} C}{N}} $$
+      <div class="where">\(M\): 기준 분주비, \(K_{\text{VCO}}\): VCO 이득(Hz/V), \(I_{\text{CP}}\): 전하 펌프 전류, \(R, C\): 단순 직렬 RC의 2차 루프 필터 모형(추가 극점은 제외). Hz/V의 VCO 이득을 위상 이득으로 바꾸는 2π와 전하 펌프 A/rad의 2π가 상쇄된다. 안정성을 위해 루프 대역폭은 보통 기준 주파수의 1/10 이하로 잡는다(Gardner의 한계). N을 소수로 바꿔 가며(시그마-델타 변조) 아주 촘촘한 주파수를 만드는 것을 <b>분수 분주 PLL</b><span class="en">(Fractional-N PLL)</span>이라 하며, DVFS로 CPU 클럭을 수십 MHz 단위로 바꾸는 데 쓴다(<a href="power.html">12장</a>).</div>
+    </div>
+    <div class="predict"><strong>ζ를 0.2로 낮추면 잠금 시간은 줄어들까?</strong>
+      <p>감쇠가 작으면 반응이 날카로워진다. 그런데 "±0.1% 안에 들어와 머문다"는 조건을 생각해 보자.</p>
+      <details><summary>답 보기</summary><p>오히려 늘어난다. ζ가 작으면 목표 주파수를 크게 지나쳤다가(오버슈트) 되돌아오기를 여러 번 반복하며 천천히 가라앉는다. 감쇠 진동의 포락선이 \(e^{-\zeta\omega_n t}\)로 줄어들기 때문에 잠금 시간은 대략 \(1/(\zeta\omega_n)\)에 비례한다. ζ가 너무 크면 이번에는 느릿느릿 다가간다. 그래서 설계자는 보통 \(\zeta\approx 0.7\sim1\)을 고른다.</p></details>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="tree">
+    <h2>클럭 트리: 동시에 도착하게 하기</h2>
+    <p>PLL에서 나온 클럭 한 가닥은 수백만 개의 플립플롭에 닿아야 한다. 한 선이 감당할 수 없으니 버퍼를 줄줄이 달아 나무처럼 갈라 퍼뜨린다. 이것이 <span class="term">클럭 트리</span><span class="en">(Clock tree)</span>다. 목표는 단 하나, 모든 잎(플립플롭)에 <b>같은 시각에</b> 도착하는 것이다. 도착 시각의 차이를 <span class="term">클럭 스큐</span><span class="en">(Clock skew)</span>라 한다.</p>
+    <p>가장 단순한 방법은 뿌리에서 각 잎까지 가장 짧은 길로 따로 잇는 것이다. 그러면 가까운 잎은 일찍, 먼 잎은 늦게 받는다. 대칭으로 갈라지는 <span class="term">H-트리</span><span class="en">(H-tree)</span>는 어느 잎까지든 길이가 같다. 아래에서 두 방식을 비교하고, 플립플롭 묶음(동그라미)을 끌어 옮겨 보자.</p>
+    <figure class="play" id="fig-tree">
+      <div class="play-view"><canvas id="cv-tree"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="tr-mode"><button data-value="direct">가장 짧은 길로 따로</button><button data-value="h" class="on">H-트리</button></div>
+        <button class="btn sm" id="tr-reset">원래 자리로</button>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최대 스큐</span><span class="v" id="tr-skew">—</span></div>
+        <div class="stat"><span class="k">삽입 지연 (평균)</span><span class="v" id="tr-ins">—</span></div>
+        <div class="stat"><span class="k">총 배선 길이</span><span class="v" id="tr-len">—</span></div>
+      </div>
+      <figcaption><b>그림 14-2.</b> <span class="try">만져 보기</span>10 mm × 10 mm 영역의 가운데에 클럭 뿌리가 있고 16개의 플립플롭 묶음이 있다. 색은 클럭이 도착하는 시각(파랑 = 빠름, 빨강 = 늦음)이다. 버퍼를 넣은 전역 배선이 mm당 약 50 ps 걸린다고 가정했다. H-트리에서는 처음엔 스큐가 0이지만, 묶음 하나를 잎에서 멀리 끌어내면 그 짧은 꼬리 배선만큼 스큐가 생긴다.</figcaption>
+    </figure>
+    <p>실제 칩에서는 플립플롭이 고르게 퍼져 있지 않고, 블록마다 클럭이 꺼졌다 켜지며, 공정 편차로 같은 길이의 배선도 지연이 조금씩 다르다. 그래서 설계 도구는 <span class="term">클럭 트리 합성</span><span class="en">(CTS, Clock tree synthesis)</span> 단계에서 버퍼 크기와 배선 길이를 조절해 스큐를 수십 ps 이내로 맞춘다. 고성능 CPU는 트리 끝을 촘촘한 그물(<span class="term">클럭 메시</span><span class="en">(Clock mesh)</span>)로 묶어 편차를 평균해 버리기도 한다. 그 대가는 전력이다. 클럭망은 매 주기 두 번씩 전체를 충전·방전하므로 칩 동적 전력의 30~40%를 먹는 경우가 흔하다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="budget">
+    <h2>스큐와 지터는 타이밍 예산을 깎는다</h2>
+    <p><a href="logic.html">2장</a>에서 플립플롭 사이 조합 회로의 지연이 클럭 주기를 넘으면 안 된다는 <b>setup</b> 조건과, 너무 빨리 바뀌어 같은 에지의 데이터를 망치면 안 된다는 <b>hold</b> 조건을 보았다. 거기서는 두 플립플롭이 정확히 같은 순간에 클럭을 받는다고 가정했다. 이제 그 가정을 거두자. 받는 쪽(capture) 클럭이 \(t_{\text{skew}}\)만큼 늦게 도착하면 데이터에게는 시간이 그만큼 더 주어지지만, 같은 에지에서 바로 뒤따라 바뀌는 데이터도 그만큼 더 오래 버텨야 한다.</p>
+    <p>또 하나의 적은 <span class="term">지터</span><span class="en">(Jitter)</span>다. 스큐가 "장소에 따른" 고정된 차이라면, 지터는 "시간에 따라" 매 주기 클럭 에지가 조금씩 흔들리는 것이다. PLL의 잡음, 전원 전압의 출렁임이 원인이다. 주기 하나가 평소보다 짧아질 수 있으니 setup 예산에서 빼 두어야 한다.</p>
+    <figure class="play" id="fig-skew">
+      <div class="play-view"><canvas id="cv-skew"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>클럭 주기 <output id="sk-t-out"></output></span><input type="range" id="sk-t" min="250" max="1000" step="10" value="400"></label>
+        <label class="ctrl"><span>긴 경로 지연 <output id="sk-d-out"></output></span><input type="range" id="sk-d" min="50" max="900" step="10" value="280"></label>
+        <label class="ctrl"><span>짧은 경로 지연 <output id="sk-m-out"></output></span><input type="range" id="sk-m" min="0" max="200" step="5" value="30"></label>
+        <label class="ctrl"><span>스큐 (받는 쪽이 늦으면 +) <output id="sk-s-out"></output></span><input type="range" id="sk-s" min="-120" max="120" step="5" value="0"></label>
+        <label class="ctrl"><span>지터 (피크) <output id="sk-j-out"></output></span><input type="range" id="sk-j" min="0" max="60" step="2" value="10"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">setup 여유</span><span class="v" id="sk-su">—</span></div>
+        <div class="stat"><span class="k">hold 여유</span><span class="v" id="sk-h">—</span></div>
+        <div class="stat"><span class="k">이 경로의 최대 클럭</span><span class="v" id="sk-f">—</span></div>
+      </div>
+      <figcaption><b>그림 14-3.</b> <span class="try">만져 보기</span>보내는 플립플롭(launch)이 0 ps 에지에서 데이터를 내보내면, 받는 플립플롭(capture)의 입력은 \(t_{cq}\)+짧은 경로 지연에 바뀌기 시작해 \(t_{cq}\)+긴 경로 지연에 확정된다(빗금 = 불확실 구간). 다음 capture 에지(주기 + 스큐 − 지터) 전 setup 시간까지 확정되어야 하고, 같은 capture 에지(스큐) 뒤 hold 시간 동안은 바뀌면 안 된다. \(t_{cq}\)=40 ps, \(t_{su}\)=30 ps, \(t_h\)=20 ps.</figcaption>
+    </figure>
+    <div class="formula">$$ \underbrace{T_{\text{clk}} + t_{\text{skew}} - t_{\text{jitter}}}_{\text{주어진 시간}} \;\ge\; t_{cq} + t_{\text{logic,max}} + t_{su}, \qquad t_{cq} + t_{\text{logic,min}} \;\ge\; t_{\text{skew}} + t_h $$
+      <div class="where">왼쪽이 setup, 오른쪽이 hold 조건. 양(+)의 스큐는 setup을 돕고 hold를 해친다. hold 위반은 클럭을 느리게 해도 고쳐지지 않으므로 더 위험하다. 설계 도구는 짧은 경로에 버퍼를 넣어 일부러 늦춘다. 스큐를 일부러 만들어 느린 단계에 시간을 빌려 주는 기법을 <b>유용한 스큐</b><span class="en">(Useful skew)</span>라 한다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="gating">
+    <h2>클럭 게이팅: 일하지 않으면 박자도 끈다</h2>
+    <p>클럭망이 동적 전력의 큰 몫을 먹는다면, 일하지 않는 블록의 클럭을 끄는 것이 가장 효과적인 절전이다. 이것이 <span class="term">클럭 게이팅</span><span class="en">(Clock gating)</span>이다(<a href="power.html">12장</a>). 순진하게 생각하면 AND 게이트 하나면 된다. gclk = clk AND en. 하지만 en은 보통 조합 회로가 만든 신호라 아무 때나 바뀐다. clk가 1인 동안 en이 바뀌면 gclk에 짧은 가시 펄스(<span class="term">글리치</span><span class="en">(Glitch)</span>)가 생기고, 플립플롭은 이것을 진짜 에지로 알고 엉뚱하게 동작한다.</p>
+    <p>해결책은 en을 <b>clk가 0일 때만 통과시키는 래치</b>에 한 번 담는 것이다. clk가 1인 동안에는 래치가 값을 붙잡고 있으므로 gclk 펄스는 언제나 온전한 모양이 된다. 이 래치 + AND를 하나로 묶은 표준 셀을 <span class="term">ICG</span><span class="en">(Integrated clock gating cell)</span>라 한다. 아래 en 줄의 칸(¼주기 단위)을 눌러 en을 아무 때나 바꿔 보자.</p>
+    <figure class="play" id="fig-icg">
+      <div class="play-view"><canvas id="cv-icg"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="icg-pre"><button data-value="a" class="on">예제 1</button><button data-value="b">예제 2</button><button data-value="off">대부분 끄기</button></div>
+        <button class="btn sm" id="icg-rnd">무작위 en</button>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">AND 게이팅 글리치</span><span class="v" id="icg-g1">—</span></div>
+        <div class="stat"><span class="k">ICG 글리치</span><span class="v" id="icg-g2">—</span></div>
+        <div class="stat"><span class="k">꺼진 클럭 펄스</span><span class="v" id="icg-off">—</span></div>
+      </div>
+      <figcaption><b>그림 14-4.</b> <span class="try">만져 보기</span>en 줄의 칸을 누르면 그 ¼주기 동안의 en이 바뀐다. "AND만" 줄은 clk AND en, "ICG" 줄은 clk가 0일 때 투명한 래치를 거친 en(latch_en)과 clk의 AND다. 빨간 표시는 반주기보다 짧은 펄스, 곧 글리치다. ICG 출력은 언제나 온전한 펄스이거나 아예 없다.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="meta">
+    <h2>클럭 도메인을 건널 때: 준안정</h2>
+    <p>SB-1에는 서로 다른 PLL에서 나온 클럭이 수십 개 있다. 같은 클럭을 받는 회로 묶음을 <span class="term">클럭 도메인</span><span class="en">(Clock domain)</span>이라 하는데, 서로 무관한 두 도메인 사이에서는 보내는 쪽 데이터가 받는 쪽 클럭 에지와 언제 겹칠지 알 수 없다. 데이터가 setup·hold 창 안에서 바뀌면 플립플롭은 0도 1도 아닌 중간 전압에 걸려 한동안 머문다. 이것이 <span class="term">준안정</span><span class="en">(Metastability)</span>이다. 언덕 꼭대기에 올려 둔 공처럼, 결국은 어느 한쪽으로 굴러떨어지지만 언제 떨어질지 모른다.</p>
+    <p>플립플롭 안의 교차 결합 인버터는 중간 전압에서 차이를 지수적으로 키운다. 처음 차이가 \(\Delta v_0\)라면 시간 \(t\) 뒤의 차이는 \(\Delta v_0\, e^{t/\tau}\)이고, \(\tau\)는 인버터 고리의 시정수(수~수십 ps)다. 데이터가 클럭 에지에 가까울수록 \(\Delta v_0\)가 작아 해소에 오래 걸린다.</p>
+    <figure class="play" id="fig-meta">
+      <div class="play-view"><canvas id="cv-meta"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>데이터가 에지에서 떨어진 시간 Δt <output id="mt-dt-out"></output></span><input type="range" id="mt-dt" min="-6" max="1.5" step="0.05" value="0"></label>
+        <label class="ctrl"><span>받는 클럭 <output id="mt-f-out"></output></span><input type="range" id="mt-f" min="1" max="8" step="0.25" value="4"></label>
+        <label class="ctrl"><span>시정수 τ <output id="mt-tau-out"></output></span><input type="range" id="mt-tau" min="5" max="40" step="1" value="15"></label>
+        <button class="btn sm primary" id="mt-shower">무작위 데이터 200개</button>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">해소 시간</span><span class="v" id="mt-tr">—</span></div>
+        <div class="stat"><span class="k">다음 에지까지 못 정한 비율</span><span class="v" id="mt-fail">—</span></div>
+      </div>
+      <figcaption><b>그림 14-5.</b> <span class="try">만져 보기</span>가로축은 첫 번째 플립플롭이 데이터를 잡은 클럭 에지 뒤의 시간(받는 클럭 한 주기), 세로축은 출력 전압이다. Δt 슬라이더는 로그 눈금으로 10<sup>Δt</sup> ps다. "무작위 데이터"는 에지 근처 ±30 ps 안에서 무작위로 바뀐 데이터 200개의 궤적을 그린다. 다음 에지(둘째 플립플롭이 이 값을 읽는 순간) 전 setup 시간까지 반쯤 걸린 채로 남은 궤적은 빨간색이다. 클럭을 올리거나 τ를 키우면 빨간 궤적이 늘어난다. 실패 비율은 대략 \(e^{-t_r/\tau}\)에 비례한다.</figcaption>
+    </figure>
+    <p>준안정을 없앨 수는 없다. 할 수 있는 일은 <b>해소할 시간을 충분히 주는 것</b>이다. 비동기 신호를 플립플롭 두 개에 연달아 통과시키면, 첫째가 준안정에 빠져도 둘째가 읽기 전까지 한 주기 동안 해소할 시간이 생긴다. 이것이 <span class="term">2단 동기화기</span><span class="en">(Two-flop synchronizer)</span>다. 실패할 확률은 해소 시간에 지수적으로 줄어든다. 평균 고장 간격 <span class="term">MTBF</span><span class="en">(Mean time between failures)</span>는 다음과 같다.</p>
+    <div class="formula">$$ \text{MTBF} = \frac{e^{\,t_r/\tau}}{T_w\, f_{\text{clk}}\, f_{\text{data}}} $$
+      <div class="where">\(t_r\): 해소에 쓸 수 있는 시간, \(\tau\): 해소 시정수, \(T_w\): 준안정에 빠질 수 있는 시간 창, \(f_{\text{clk}}\): 받는 쪽 클럭, \(f_{\text{data}}\): 데이터가 바뀌는 빈도. 분모는 "1초에 위험한 순간이 몇 번 오는가", 분자는 "그중 해소 못 할 확률의 역수"다.</div>
+    </div>
+    <figure class="play" id="fig-mtbf">
+      <div class="play-view"><canvas id="cv-mtbf"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="mb-n"><button data-value="1">동기화기 없음</button><button data-value="2" class="on">2단</button><button data-value="3">3단</button></div>
+        <label class="ctrl"><span>τ <output id="mb-tau-out"></output></span><input type="range" id="mb-tau" min="5" max="50" step="1" value="15"></label>
+        <label class="ctrl"><span>준안정 창 Tw <output id="mb-tw-out"></output></span><input type="range" id="mb-tw" min="5" max="100" step="1" value="20"></label>
+        <label class="ctrl"><span>받는 클럭 <output id="mb-fc-out"></output></span><input type="range" id="mb-fc" min="8" max="9.6" step="0.02" value="9"></label>
+        <label class="ctrl"><span>데이터 변화 빈도 <output id="mb-fd-out"></output></span><input type="range" id="mb-fd" min="5" max="9" step="0.05" value="7"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">해소 시간 t<sub>r</sub></span><span class="v" id="mb-tr">—</span></div>
+        <div class="stat"><span class="k">MTBF</span><span class="v" id="mb-mtbf">—</span></div>
+        <div class="stat"><span class="k">칩 1억 개 중 하루 고장</span><span class="v" id="mb-fleet">—</span></div>
+      </div>
+      <figcaption><b>그림 14-6.</b> <span class="try">만져 보기</span>로그 눈금 위의 막대가 MTBF다. 동기화기가 없으면 데이터가 플립플롭 뒤의 논리(주기의 70%)를 지나야 해서 해소 시간이 매우 짧고, 단을 하나 늘릴 때마다 해소 시간이 한 주기씩 늘어 MTBF가 \(e^{T/\tau}\)배 뛴다. 오른쪽 아래 숫자는 이 칩이 1억 대 팔렸을 때 하루에 몇 대에서 이 동기화기가 실패하는지다.</figcaption>
+    </figure>
+    <div class="callout warn"><strong>"한 번도 안 났다"는 증거가 아니다</strong><p>MTBF 10년짜리 동기화기는 칩 하나로는 10년에 한 번이지만, 1억 대가 팔리면 하루에 수만 번 어딘가에서 일어난다. 게다가 한 칩에 CDC 경로가 수백~수천 개 있다. 그래서 설계 규칙은 "MTBF가 우주 나이보다 길어야 한다"는 말을 농담처럼 쓴다. 고속 클럭이나 τ가 큰 저전압 동작에서는 3단 동기화기를 쓴다.</p></div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="gray">
+    <h2>여러 비트를 한꺼번에 건네면: 그레이 코드</h2>
+    <p>2단 동기화기는 비트 하나에는 완벽하다. 결과가 이전 값이든 새 값이든 한 주기 늦게 정해질 뿐이다. 그런데 4비트 카운터를 비트마다 동기화기에 통과시키면 어떨까? 배선 길이와 동기화기의 해소 시간이 비트마다 조금씩 달라서, 0111 → 1000처럼 네 비트가 동시에 바뀌는 순간에 읽으면 어떤 비트는 새 값, 어떤 비트는 옛 값으로 읽힐 수 있다. 결과는 1111이나 0000 같은, <b>있지도 않았던 값</b>이다.</p>
+    <p>해결책은 한 번에 <b>한 비트만</b> 바뀌는 <span class="term">그레이 코드</span><span class="en">(Gray code)</span>로 세는 것이다. 이진수 \(b\)의 그레이 코드는 \(g = b \oplus (b \gg 1)\)이다. 그레이 카운터는 어느 순간에 읽어도 옛 값 아니면 새 값이다. 아래에서 비트 사이 지연 편차를 늘려 가며 두 방식을 비교해 보자.</p>
+    <figure class="play" id="fig-gray">
+      <div class="play-view"><canvas id="cv-gray"></canvas></div>
+      <div class="ck-gwrap"><table class="ck-gtab" id="gray-tab"></table></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>비트 사이 지연 편차 (주기 대비) <output id="gr-sk-out"></output></span><input type="range" id="gr-sk" min="0" max="0.5" step="0.01" value="0.2"></label>
+        <button class="btn sm primary" id="gr-play">▶ 자동</button><button class="btn sm" id="gr-step">한 번 읽기</button><button class="btn sm" id="gr-reset">초기화</button>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">이진 카운터 오류</span><span class="v" id="gr-eb">—</span></div>
+        <div class="stat"><span class="k">그레이 카운터 오류</span><span class="v" id="gr-eg">—</span></div>
+        <div class="stat"><span class="k">읽은 횟수</span><span class="v" id="gr-n">—</span></div>
+      </div>
+      <figcaption><b>그림 14-7.</b> <span class="try">만져 보기</span>위 그림은 보내는 쪽 카운터의 각 비트가 실제로 바뀌는 시각(비트마다 다른 지연)과 받는 쪽이 읽는 순간(세로선)이다. 표는 최근 읽기 결과다. "있을 수 없는 값"을 읽으면 빨갛게 표시한다. 편차가 0이 아니면 이진 카운터는 비트가 여럿 바뀌는 순간마다 엉뚱한 값을 읽을 수 있지만, 그레이 카운터는 결코 그러지 않는다.</figcaption>
+    </figure>
+    <div class="callout tip"><strong>CDC의 세 가지 정석</strong><p>① <b>제어 비트 하나</b>: 2단 동기화기. ② <b>펄스나 요청</b>: 토글 신호로 바꿔 동기화하고 받는 쪽에서 에지를 검출, 필요하면 응답을 돌려보내는 핸드셰이크. ③ <b>데이터 묶음</b>: 데이터를 그대로 두고 "유효" 비트 하나만 동기화하거나, 다음 절의 비동기 FIFO. 설계 도구는 CDC 검사기로 이 규칙을 어긴 경로를 찾아낸다.</p></div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="fifo">
+    <h2>비동기 FIFO: 두 박자 사이의 완충지대</h2>
+    <p>NoC가 CPU 도메인에서 메모리 도메인으로 요청을 넘길 때처럼 데이터가 계속 흐르는 경계에는 <span class="term">비동기 FIFO</span><span class="en">(Asynchronous FIFO)</span>를 둔다. 원형 버퍼 하나를 두고, 쓰는 쪽은 자기 클럭으로 쓰기 포인터를, 읽는 쪽은 자기 클럭으로 읽기 포인터를 움직인다. 데이터 자체는 동기화하지 않는다. 대신 <b>포인터만 그레이 코드로 바꿔 상대 도메인으로 동기화</b>한다(Cummings, 2002).</p>
+    <ul>
+      <li><b>EMPTY</b>: 읽는 쪽이 자기 읽기 포인터와 "동기화되어 넘어온" 쓰기 포인터를 비교해 같으면 비었다고 판단한다.</li>
+      <li><b>FULL</b>: 쓰는 쪽이 자기 쓰기 포인터와 동기화된 읽기 포인터를 비교한다. 포인터에 한 비트를 더 두어(깊이 8이면 4비트), 한 바퀴 더 돈 상태(위 두 비트만 다름)를 꽉 찬 것으로 본다.</li>
+    </ul>
+    <p>동기화된 포인터는 두세 클럭 늦은 옛 값이다. 그래서 FULL·EMPTY는 실제보다 늦게 풀린다. 즉 <b>비관적</b>이다. 실제로는 빈 자리가 있는데도 꽉 찼다고 할 수는 있지만, 꽉 찼는데 비었다고 하지는 않는다. 그래서 안전하다. 두 클럭의 주파수와 깊이를 바꿔 가며 돌려 보자.</p>
+    <div class="sim" id="sim-fifo">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>비동기 FIFO</h3><div class="ck-lamps"><span class="ck-lamp" id="ff-full">FULL</span><span class="ck-lamp" id="ff-empty">EMPTY</span></div></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-fifo"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>쓰기 클럭 <output id="ff-fw-out"></output></span><input type="range" id="ff-fw" min="100" max="800" step="10" value="400"></label>
+          <label class="ctrl"><span>읽기 클럭 <output id="ff-fr-out"></output></span><input type="range" id="ff-fr" min="100" max="800" step="10" value="250"></label>
+          <label class="ctrl"><span>쓰기 요청 비율 <output id="ff-pw-out"></output></span><input type="range" id="ff-pw" min="0" max="1" step="0.05" value="0.6"></label>
+          <label class="ctrl"><span>읽기 요청 비율 <output id="ff-pr-out"></output></span><input type="range" id="ff-pr" min="0" max="1" step="0.05" value="0.9"></label>
+          <div class="ctrl"><span>깊이 · 포인터 방식</span><div class="ctrl-row"><div class="seg" id="ff-d"><button data-value="4">4</button><button data-value="8" class="on">8</button><button data-value="16">16</button></div></div><div class="seg" id="ff-mode" style="margin-top:6px"><button data-value="gray" class="on">그레이 + 2단 동기화</button><button data-value="bin">이진 포인터 (잘못된 설계)</button></div></div>
+          <div class="ctrl-row"><div class="seg" id="ff-sp"><button data-value="0.3">느리게</button><button data-value="1" class="on">보통</button><button data-value="40">빠르게</button></div><button class="btn sm" id="ff-reset">초기화</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">실제로 찬 칸</span><span class="v" id="ff-occ">—</span></div>
+        <div class="stat"><span class="k">FULL로 막힌 쓰기</span><span class="v" id="ff-bw">—</span></div>
+        <div class="stat"><span class="k">EMPTY로 쉰 읽기</span><span class="v" id="ff-br">—</span></div>
+        <div class="stat"><span class="k">데이터 오류 (덮어쓰기·빈 읽기)</span><span class="v" id="ff-err">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽 링이 FIFO의 칸들이다. 숫자는 저장된 데이터 번호, 진한 화살표 W·R은 실제 포인터, 흐린 화살표는 <b>상대 도메인에 동기화되어 보이는</b> 포인터다(쓰는 쪽이 보는 R′, 읽는 쪽이 보는 W′). 위 두 줄은 두 클럭의 에지다. "이진 포인터"는 포인터를 그레이 코드로 바꾸지 않고 이진수 그대로 동기화하는 흔한 실수다. 여러 비트가 동시에 바뀌는 순간 잘못 읽힌 포인터 때문에 꽉 찬 FIFO에 쓰거나 빈 FIFO에서 읽는 사고가 난다(예: 쓰기 100 MHz·읽기 800 MHz로 FIFO를 늘 비어 있게 하거나, 반대로 쓰기를 훨씬 빠르게 해 가득 채워 보자). 사고를 잘 보이게 하려고, 비트 사이 도착 시각 차이를 보내는 쪽 주기의 60%로 실제보다 훨씬 크게 잡았다.</div>
+    </div>
+    <div class="predict"><strong>쓰기 400 MHz·읽기 250 MHz로, 쓰기를 계속(비율 1) 하면 깊이 16짜리 FIFO는 얼마나 버틸까?</strong>
+      <p>들어오는 속도와 나가는 속도의 차이를 생각해 보자.</p>
+      <details><summary>답 보기</summary><p>FIFO는 속도 차이를 <b>잠깐</b> 흡수할 뿐이다. 순 유입률이 400 − 250 = 150 M개/s이므로 16칸은 약 107 ns(쓰기 클럭 약 43번) 만에 차고, 그 뒤로는 FULL이 쓰기를 막아(백프레셔) 평균 쓰기 속도가 250 MHz로 떨어진다. 데이터를 잃지는 않는다. 깊이는 "얼마나 긴 폭주를 흡수해야 하는가"와 "동기화 지연 동안 날아다니는 데이터"로 정한다. 지속적인 속도 차이는 깊이로 해결되지 않는다.</p></details>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="reset">
+    <h2>리셋: 모두 같은 출발선에</h2>
+    <p>전원이 들어온 직후 플립플롭들은 아무 값이나 품고 있다. <span class="term">리셋</span><span class="en">(Reset)</span>은 모두를 정해진 값으로 되돌린다. 리셋을 거는 순간(<b>인가</b>)은 클럭과 상관없이 즉시 걸려도 된다. 클럭이 아직 안 돌거나 PLL이 잠기기 전에도 회로를 안전한 상태로 묶어 두어야 하기 때문이다. 문제는 리셋을 <b>푸는 순간</b>이다. 리셋 해제가 클럭 에지와 너무 가까우면(recovery·removal 시간 위반) 플립플롭이 준안정에 빠지거나, 칩 반대편의 플립플롭은 한 주기 늦게 풀린다. 그러면 함께 출발해야 할 상태 기계들이 서로 다른 박자에서 출발한다.</p>
+    <p>그래서 정석은 <span class="term">비동기 인가, 동기 해제</span><span class="en">(Asynchronous assert, synchronous deassert)</span>다. 리셋 입력을 2단 동기화기 같은 <span class="term">리셋 동기화기</span>에 넣되, 인가는 플립플롭의 비동기 리셋 핀으로 즉시 걸고, 해제만 클럭에 맞춰 두 주기 뒤에 내보낸다.</p>
+    <figure class="play" id="fig-reset">
+      <div class="play-view"><canvas id="cv-reset"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>리셋 해제 시각 <output id="rs-t-out"></output></span><input type="range" id="rs-t" min="6" max="16" step="1" value="11"></label>
+        <label class="check"><input type="checkbox" id="rs-sync"> 리셋 동기화기 사용</label>
+      </div>
+      <div class="info-panel" id="rs-info"></div>
+      <figcaption><b>그림 14-8.</b> <span class="try">만져 보기</span>외부 리셋(rst_n, 0이면 리셋)이 칩의 두 카운터 A, B에 도달한다. B는 칩 반대편에 있어 리셋이 ¼주기 늦게 도착한다. 해제 시각을 ¼주기씩 옮겨 보자. 해제가 클럭 에지와 겹치면(붉은 띠, recovery·removal 창) 그 카운터가 언제 풀릴지 알 수 없고, 두 카운터가 한 박자 어긋나 출발할 수 있다. 동기화기를 켜면 두 카운터 모두 동기화된 리셋(rst_sync)을 받아 같은 에지에서 출발한다.</figcaption>
+    </figure>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>항목</th><th class="num">대략값</th><th>비고</th></tr></thead>
+        <tbody>
+          <tr><td>스마트폰 기준 수정</td><td class="num">19.2 / 38.4 MHz</td><td>시계용 32.768 kHz 별도</td></tr>
+          <tr><td>수정 주파수 정확도</td><td class="num">약 ±10~20 ppm</td><td>온도 보상 TCXO는 ±0.5~2 ppm</td></tr>
+          <tr><td>SoC의 PLL 수</td><td class="num">약 10~30개</td><td>CPU 클러스터·GPU·DDR·디스플레이·카메라·모뎀 등 2023~2025년</td></tr>
+          <tr><td>CPU용 PLL 출력 지터 (RMS)</td><td class="num">약 0.5~2 ps</td><td>LC-VCO는 수백 fs까지</td></tr>
+          <tr><td>PLL 잠금 시간</td><td class="num">약 10~100 µs</td><td>DVFS 단계 전환 시간에 포함</td></tr>
+          <tr><td>클럭 스큐 목표 (블록 안)</td><td class="num">약 10~50 ps</td><td>4 GHz면 주기 250 ps의 수~20%</td></tr>
+          <tr><td>클럭망 전력 비중</td><td class="num">동적 전력의 약 30~40%</td><td>게이팅 전 기준, 설계마다 크게 다름</td></tr>
+          <tr><td>플립플롭 해소 시정수 τ</td><td class="num">약 5~20 ps</td><td>저전압일수록 커진다 (7~3 nm급)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="keypoints">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>PLL은 VCO 출력을 N으로 나눠 수정 기준과 비교(PFD)하고, 전하 펌프·루프 필터로 VCO를 고쳐 \(f_{\text{out}}=N f_{\text{ref}}\)에 잠근다. 루프 대역폭은 잠금 속도와 VCO·기준 잡음 사이의 타협이다.</li>
+      <li>클럭 트리는 모든 잎에 같은 시각에 도착하도록 균형을 맞춘다. 스큐는 setup·hold 중 하나를 돕고 다른 하나를 해치며, 지터는 setup 예산에서 빠진다.</li>
+      <li>클럭 게이팅은 래치가 든 ICG 셀로 해야 글리치가 없다. 클럭망은 동적 전력의 큰 몫이라 게이팅 효과가 크다.</li>
+      <li>비동기 경계에서 준안정은 피할 수 없고, 해소 시간을 주어 MTBF를 지수적으로 늘린다. 비트 하나는 2단 동기화기, 여러 비트는 그레이 코드나 비동기 FIFO로 건넌다.</li>
+      <li>리셋은 비동기로 걸고 동기로 푼다. 리셋 동기화기가 모든 플립플롭이 같은 에지에서 출발하게 한다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. 기준 클럭 38.4 MHz인 정수 분주 PLL로 3.072 GHz를 만들려면 N은?</p>
+        <div class="opts">
+          <button class="opt">8</button><button class="opt">64</button><button class="opt" data-correct>80</button><button class="opt">800</button>
+        </div>
+        <div class="quiz-exp">\(3072 / 38.4 = 80\). 잠기면 나눈 클럭과 기준 클럭이 같아지므로 \(f_{\text{out}} = N f_{\text{ref}}\)다.</div></div>
+      <div class="quiz-q"><p>Q2. 받는 쪽 플립플롭의 클럭이 보내는 쪽보다 30 ps 늦게 도착한다(양의 스큐). 옳은 것은?</p>
+        <div class="opts">
+          <button class="opt" data-correct>setup 여유는 30 ps 늘고 hold 여유는 30 ps 준다</button>
+          <button class="opt">setup과 hold 여유가 모두 준다</button>
+          <button class="opt">setup 여유는 줄고 hold 여유는 는다</button>
+          <button class="opt">스큐는 클럭 주기에만 영향을 준다</button>
+        </div>
+        <div class="quiz-exp">받는 에지가 늦으면 데이터가 도착할 시간이 늘어나지만(setup↑), 같은 에지에서 이미 바뀐 새 데이터가 그만큼 더 일찍 들이닥치는 셈이 된다(hold↓).</div></div>
+      <div class="quiz-q"><p>Q3. AND 게이트 하나로 클럭을 게이팅하면 생기는 문제와 해결책은?</p>
+        <div class="opts">
+          <button class="opt">누설 전류가 늘어난다 → 전원 게이팅</button>
+          <button class="opt">클럭 주파수가 반으로 준다 → PLL 사용</button>
+          <button class="opt" data-correct>clk가 1일 때 en이 바뀌면 글리치가 생긴다 → clk가 0일 때만 투명한 래치로 en을 붙잡는 ICG</button>
+          <button class="opt">스큐가 0이 된다 → 버퍼 추가</button>
+        </div>
+        <div class="quiz-exp">래치가 clk=1 동안 en을 붙잡고 있으므로 게이트된 클럭의 펄스는 온전하거나 아예 없다.</div></div>
+      <div class="quiz-q"><p>Q4. 2단 동기화기에서 τ = 20 ps일 때 해소 시간을 200 ps 더 주면 MTBF는 대략 몇 배가 되는가?</p>
+        <div class="opts">
+          <button class="opt">10배</button><button class="opt">약 200배</button><button class="opt">2배</button><button class="opt" data-correct>약 22,000배</button>
+        </div>
+        <div class="quiz-exp">\(e^{200/20} = e^{10} \approx 22{,}026\). 해소 시간을 선형으로 늘리면 MTBF는 지수적으로 는다.</div></div>
+      <div class="quiz-q"><p>Q5. 비동기 FIFO에서 포인터를 그레이 코드로 바꿔 동기화하는 이유는?</p>
+        <div class="opts">
+          <button class="opt">포인터 비트 수를 줄이려고</button>
+          <button class="opt" data-correct>한 번에 한 비트만 바뀌어, 바뀌는 순간에 읽어도 옛 값이나 새 값 중 하나가 되므로</button>
+          <button class="opt">데이터를 암호화하려고</button>
+          <button class="opt">FULL과 EMPTY를 동시에 켜려고</button>
+        </div>
+        <div class="quiz-exp">이진 포인터는 여러 비트가 동시에 바뀌어, 비트마다 지연이 다르면 있지도 않은 값으로 읽힐 수 있다. 그레이 포인터는 오차가 최대 한 칸이고, 그것도 비관적인 쪽으로만 틀린다.</div></div>
+      <div class="quiz-q"><p>Q6. 리셋을 "비동기 인가, 동기 해제"로 하는 이유로 가장 알맞은 것은?</p>
+        <div class="opts">
+          <button class="opt">리셋을 빨리 풀기 위해</button>
+          <button class="opt">클럭이 돌지 않을 때 리셋을 무시하려고</button>
+          <button class="opt">리셋 핀 수를 줄이려고</button>
+          <button class="opt" data-correct>클럭이 없어도 즉시 안전한 상태로 묶고, 해제는 클럭 에지에 맞춰 모든 플립플롭이 같은 박자에 출발하게 하려고</button>
+        </div>
+        <div class="quiz-exp">해제가 클럭 에지 근처에서 일어나면 recovery·removal 위반으로 플립플롭마다 풀리는 주기가 달라지거나 준안정이 생긴다. 리셋 동기화기가 해제를 클럭에 맞춘다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var P = SB.palette();
+  SB.onTheme(function () { P = SB.palette(); });
+
+  /* ---------------------------------------------------------------- 14-1 PFD */
+  (function () {
+    var r = 1, ph = 0.2;
+    var cv = SB.canvas("#cv-pfd", function (ctx, w, h) {
+      var nameW = w < 480 ? 34 : 50, x0 = 8 + nameW, T = 8, X = function (t) { return x0 + t / T * (w - x0 - 10); };
+      var rows = ["ref", "fb", "UP", "DN"], rowH = (h - 16) / 4;
+      // edges
+      var ref = [], fb = [];
+      for (var k = 0; k <= T + 1; k++) ref.push(k);
+      for (var k2 = 0; k2 < 20; k2++) { var t = ph + k2 / r; if (t >= 0 && t <= T) fb.push(t); }
+      // PFD state machine
+      var ev = ref.map(function (t) { return [t, "r"]; }).concat(fb.map(function (t) { return [t, "f"]; })).sort(function (a, b) { return a[0] - b[0]; });
+      var up = 0, dn = 0, tl = [], upT = 0, dnT = 0, last = 0;
+      ev.forEach(function (e) {
+        if (e[0] > T) return;
+        var dt = e[0] - last; if (up) upT += dt; if (dn) dnT += dt; last = e[0];
+        if (e[1] === "r") up = 1; else dn = 1;
+        if (up && dn) { up = 0; dn = 0; }
+        tl.push([e[0], up, dn]);
+      });
+      if (up) upT += T - last; if (dn) dnT += T - last;
+      ctx.font = SB.font(11.5, true); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      rows.forEach(function (nm, i) { ctx.fillStyle = P.dim; ctx.fillText(nm, 8, 8 + i * rowH + rowH / 2); });
+      function clk(y0, edges, col, period) {
+        var top = y0 + rowH * 0.22, bot = y0 + rowH * 0.78;
+        ctx.strokeStyle = col; ctx.lineWidth = 1.8; ctx.beginPath(); ctx.moveTo(X(0), bot);
+        // build high intervals: each edge -> high for period/2
+        var segs = edges.map(function (t) { return [t, t + period / 2]; });
+        var cur = 0;
+        segs.forEach(function (s) { if (s[0] > T) return; ctx.lineTo(X(Math.max(cur, s[0])), bot); ctx.lineTo(X(s[0]), top); ctx.lineTo(X(Math.min(T, s[1])), top); ctx.lineTo(X(Math.min(T, s[1])), bot); cur = s[1]; });
+        ctx.lineTo(X(T), bot); ctx.stroke();
+        ctx.fillStyle = col; edges.forEach(function (t) { if (t <= T) { ctx.beginPath(); ctx.moveTo(X(t), top - 1); ctx.lineTo(X(t) - 3, top + 5); ctx.lineTo(X(t) + 3, top + 5); ctx.fill(); } });
+      }
+      // ref from t=0, but show the low first half as initial state (edges at integers)
+      clk(8, ref, P.accent2, 1);
+      clk(8 + rowH, fb, P.accent, 1 / r);
+      function pulse(y0, idx, col) {
+        var top = y0 + rowH * 0.22, bot = y0 + rowH * 0.78, v = 0, t0 = 0;
+        ctx.strokeStyle = col; ctx.lineWidth = 1.8; ctx.beginPath(); ctx.moveTo(X(0), bot);
+        tl.forEach(function (e) { var nv = e[idx]; if (nv !== v) { var x = X(e[0]); if (v) { ctx.fillStyle = SOC.alpha(col, 0.18); ctx.fillRect(X(t0), top, x - X(t0), bot - top); } ctx.lineTo(x, v ? top : bot); ctx.lineTo(x, nv ? top : bot); v = nv; t0 = e[0]; } });
+        if (v) { ctx.fillStyle = SOC.alpha(col, 0.18); ctx.fillRect(X(t0), top, X(T) - X(t0), bot - top); }
+        ctx.lineTo(X(T), v ? top : bot); ctx.stroke();
+      }
+      pulse(8 + 2 * rowH, 1, P.ok); pulse(8 + 3 * rowH, 2, P.bad);
+      var avg = (upT - dnT) / T;
+      SB.stat("pfd-avg", (avg >= 0 ? "+" : "") + (avg * 100).toFixed(0) + "<small>%</small>");
+      SB.stat("pfd-say", Math.abs(avg) < 0.02 ? '<span class="ck-good">잠김 (그대로)</span>' : avg > 0 ? "VCO를 빠르게 ↑" : "VCO를 느리게 ↓");
+    }, { aspect: 0.32, minHeight: 200, maxHeight: 260 });
+    SB.range("pfd-r", function (v) { return v.toFixed(2) + "×"; }, function (v) { r = v; cv.redraw(); });
+    SB.range("pfd-p", function (v) { return (v >= 0 ? "+" : "") + Math.round(v * 360) + "°"; }, function (v) { ph = v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 14-1 PLL sim */
+  (function () {
+    var FREF = 38.4e6, N = 78, N0 = 60, fn = 1.0, zeta = 0.7, vn = 0.4, rn = 0.5;
+    var res = null, prog = 0;
+    function sim() {
+      var wn = 2 * Math.PI * fn * 1e6;
+      var SUB = 4, dt = 1 / (FREF * SUB), Ttot = Math.min(90e-6, Math.max(12e-6, 26 / (Math.min(zeta, 1) * wn))), steps = Math.round(Ttot / dt);
+      var Kp = 2 * zeta * wn * N, Ki = N * wn * wn;
+      var rng = SB.rng(17), randn = function () { var u = rng() || 1e-9, v = rng(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+      var I = N0 * FREF, e = 0, f = I, ftgt = N * FREF;
+      var cVco = 400 * vn * vn; // cycles^2/s (VCO phase random walk)
+      var sigR = rn * 1e-12 * FREF; // ref jitter in ref cycles (white)
+      var tr = [], er = [], last = 0, osMax = 0, pdev = [], lockT = NaN, thetaV = 0, thetaR = 0, fs = 0, upCnt = 0;
+      var stepD = ftgt - N0 * FREF;
+      for (var i = 0; i < steps; i++) {
+        // ref phase advances SUB samples per ref cycle; PFD updates every SUB
+        var t = i * dt;
+        if (i % SUB === 0) {
+          var refPh = thetaR + sigR * randn();
+          e = refPh - thetaV / N;
+          while (e > 1) { e -= 1; thetaR -= 1; }
+          while (e < -1) { e += 1; thetaR += 1; }
+        }
+        f = I + Kp * e;
+        I += Ki * e * dt;
+        thetaV += f * dt + Math.sqrt(cVco * dt) * randn();
+        thetaR += FREF * dt;
+        if (i % SUB === 0) {
+          tr.push([t * 1e6, f]); er.push([t * 1e6, e]);
+          var dev = (f - ftgt) / ftgt;
+          if (Math.abs(dev) > 1e-3) last = t;
+          if (stepD !== 0) { var o = (f - ftgt) / stepD; if (o > osMax) osMax = o; }
+          pdev.push([t, e * N / ftgt]); // output timing deviation in seconds
+        }
+      }
+      var t0 = Math.max(Ttot * 0.5, last + 4 / (Math.min(zeta, 1) * wn));
+      var win = pdev.filter(function (q) { return q[0] >= t0; });
+      if (win.length < 60) win = pdev.slice(-Math.floor(pdev.length * 0.2));
+      var n = win.length, sx = 0, sy = 0, sxx = 0, sxy = 0;
+      win.forEach(function (q) { sx += q[0]; sy += q[1]; sxx += q[0] * q[0]; sxy += q[0] * q[1]; });
+      var sl = (n * sxy - sx * sy) / Math.max(1e-30, n * sxx - sx * sx), ic = (sy - sl * sx) / n;
+      var rms = Math.sqrt(win.reduce(function (a, q) { var r = q[1] - (ic + sl * q[0]); return a + r * r; }, 0) / n);
+      return { tr: tr, er: er, lock: last, os: osMax, jit: rms, ftgt: ftgt, f0: N0 * FREF, T: Ttot * 1e6 };
+    }
+    function run() { res = sim(); prog = 0; upd(); }
+    function upd() {
+      SB.stat("pll-lock", res.lock * 1e6 > res.T * 0.98 ? '<span class="ck-warn">못 잠김</span>' : (res.lock * 1e6).toFixed(2) + "<small>µs</small>");
+      SB.stat("pll-os", (res.os * 100).toFixed(0) + "<small>%</small>");
+      SB.stat("pll-jit", (res.jit * 1e12).toFixed(2) + "<small>ps</small>");
+      SB.stat("pll-step", (res.f0 / 1e9).toFixed(2) + " → " + (res.ftgt / 1e9).toFixed(3) + " GHz");
+    }
+    var blk = SB.canvas("#cv-pll-blk", function (ctx, w, h) {
+      if (!res) return;
+      var idx = Math.min(res.tr.length - 1, Math.floor(prog * (res.tr.length - 1)));
+      var f = res.tr[idx][1], e = res.er[idx][1];
+      var narrow = w < 560;
+      var names = narrow ? ["기준", "PFD", "CP·LF", "VCO", "÷N"] : ["수정 38.4 MHz", "PFD", "전하펌프·필터", "VCO", "÷ N"];
+      var bw = narrow ? (w - 40) / 4.6 : Math.min(130, (w - 80) / 4.8), bh = narrow ? 30 : 34;
+      var y = 14, gap = (w - 20 - 4 * bw) / 3;
+      var xs = [10, 10 + bw + gap, 10 + 2 * (bw + gap), 10 + 3 * (bw + gap)];
+      var col = [SOC.color("pmu"), P.accent2, P.warn, P.accent];
+      for (var i = 0; i < 4; i++) {
+        SOC.box(ctx, xs[i], y, bw, bh, col[i], names[i], { size: narrow ? 11 : 12.5 });
+        if (i < 3) SOC.arrow(ctx, xs[i] + bw + 2, y + bh / 2, xs[i + 1] - 2, y + bh / 2, P.dim, 1.6, 7);
+      }
+      // divider box below, between PFD and VCO; feedback from VCO output to PFD
+      var dw2 = bw, dx = (xs[1] + xs[3] + bw) / 2 - dw2 / 2, dy = y + bh + 26, dh2 = bh - 6, my = dy + dh2 / 2;
+      SOC.box(ctx, dx, dy, dw2, dh2, SOC.color("noc"), names[4], { size: narrow ? 11 : 12.5 });
+      ctx.strokeStyle = P.dim; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(xs[3] + bw / 2, y + bh); ctx.lineTo(xs[3] + bw / 2, my); ctx.lineTo(dx + dw2 + 2, my); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(dx - 2, my); ctx.lineTo(xs[1] + bw / 2, my); ctx.stroke();
+      SOC.arrow(ctx, xs[1] + bw / 2, my, xs[1] + bw / 2, y + bh + 2, P.dim, 1.6, 7);
+      ctx.font = SB.font(narrow ? 10.5 : 12, true, 600); ctx.textBaseline = "top";
+      ctx.fillStyle = P.text; ctx.textAlign = "right"; ctx.fillText("출력 " + (f / 1e9).toFixed(3) + " GHz", w - 10, narrow ? dy + dh2 + 17 : my + 4);
+      ctx.fillStyle = Math.abs(e) > 0.02 ? (e > 0 ? P.ok : P.bad) : P.dim; ctx.textAlign = "left";
+      ctx.fillText(Math.abs(e) > 0.02 ? (e > 0 ? "UP ▲" : "DN ▼") : "잠김", xs[1] + bw / 2 + 6, y + bh + 6);
+      ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.fillText((f / N / 1e6).toFixed(2) + " MHz", dx + dw2 / 2, dy + dh2 + 3);
+    }, { aspect: 0.16, minHeight: 136, maxHeight: 140 });
+    var cv = SB.canvas("#cv-pll", function (ctx, w, h) {
+      if (!res) return;
+      var n = Math.max(2, Math.floor(prog * res.tr.length));
+      var lo = Math.min(res.f0, res.ftgt), hi = Math.max(res.f0, res.ftgt), span = Math.max(hi - lo, res.ftgt * 0.01);
+      var y0 = (lo - span * 0.5) / 1e9, y1 = (hi + span * 0.6) / 1e9;
+      var data = res.tr.slice(0, n).map(function (p) { return [p[0], p[1] / 1e9]; });
+      var emax = 0; res.er.forEach(function (p) { emax = Math.max(emax, Math.abs(p[1])); }); emax = Math.max(emax, 1e-3);
+      var ed = res.er.slice(0, n).map(function (p) { return [p[0], y0 + (y1 - y0) * (0.12 + 0.12 * p[1] / emax)]; });
+      var band = res.ftgt * 1e-3 / 1e9;
+      var c = SB.chart(ctx, { x: 58, y: 14, w: w - 58 - 14, h: h - 14 - 44 }, {
+        x: [0, res.T], y: [y0, y1], xLabel: "시간 (µs)", yLabel: "VCO 주파수 (GHz)", yFmt: function (v) { return v.toFixed(2); },
+        series: [{ data: ed, color: SOC.alpha(P.warn, 0.7), width: 1 }, { data: data, color: P.accent, width: 2.2 }],
+        hlines: [{ y: res.ftgt / 1e9, color: P.ok, label: "목표 " + (res.ftgt / 1e9).toFixed(3) + " GHz" }],
+        bands: [],
+        vlines: isFinite(res.lock) && res.lock * 1e6 < res.T * 0.98 && prog * res.T >= res.lock * 1e6 ? [{ x: res.lock * 1e6, color: P.ok, label: "잠금" }] : [],
+      });
+      ctx.fillStyle = SOC.alpha(P.ok, 0.12); ctx.fillRect(c.box.x, c.Y(res.ftgt / 1e9 + band), c.box.w, Math.max(1, c.Y(res.ftgt / 1e9 - band) - c.Y(res.ftgt / 1e9 + band)));
+      ctx.fillStyle = P.warn; ctx.font = SB.font(10.5); ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText("위상 오차", c.box.x + 4, c.Y(y0 + (y1 - y0) * 0.27));
+    }, { aspect: 0.55, minHeight: 260, maxHeight: 380 });
+    SB.loop(document.getElementById("cv-pll"), function (dt) { if (!res || prog >= 1) return; prog = Math.min(1, prog + dt / 2.2); cv.redraw(); blk.redraw(); });
+    var rerun = SB.debounce(run, 60);
+    SB.range("pll-n", function (v) { return v + " → " + (v * 38.4 / 1000).toFixed(2) + " GHz"; }, function (v) { N0 = res ? res.ftgt / FREF : N; N = v; rerun(); });
+    SB.range("pll-bw", function (v) { return v.toFixed(2) + " MHz"; }, function (v) { fn = v; N0 = 60; rerun(); });
+    SB.range("pll-z", function (v) { return v.toFixed(2); }, function (v) { zeta = v; N0 = 60; rerun(); });
+    SB.range("pll-vn", function (v) { return Math.round(v * 100) + "%"; }, function (v) { vn = v; rerun(); });
+    SB.range("pll-rn", function (v) { return v.toFixed(1) + " ps"; }, function (v) { rn = v; rerun(); });
+    document.getElementById("pll-go").onclick = function () { N0 = 60; run(); };
+    run();
+  })();
+
+  /* ---------------------------------------------------------------- 14-2 clock tree */
+  (function () {
+    var mode = "h", PS = 50; // ps per mm
+    var home = [];
+    for (var j = 0; j < 4; j++) for (var i = 0; i < 4; i++) home.push([1.25 + i * 2.5, 1.25 + j * 2.5]);
+    var sinks = home.map(function (p) { return p.slice(); });
+    var drag = -1, geo = null;
+    function hLeaves() { return home; }
+    function compute() {
+      var root = [5, 5], arr = [], len = 0;
+      if (mode === "direct") {
+        sinks.forEach(function (s) { var d = Math.abs(s[0] - root[0]) + Math.abs(s[1] - root[1]); arr.push(d * PS); len += d; });
+      } else {
+        // H-tree root->leaf length: level1 2.5+2.5, level2 1.25+1.25 => 7.5 mm
+        var base = 2.5 + 2.5 + 1.25 + 1.25;
+        len = 5 + 2 * 5 + 4 * 2.5 + 8 * 2.5; // H-tree segments: 1 bar 5 mm, 2 x 5 mm, 4 x 2.5 mm, 8 x 2.5 mm
+        sinks.forEach(function (s, k) { var lf = home[k]; var st = Math.abs(s[0] - lf[0]) + Math.abs(s[1] - lf[1]); arr.push((base + st) * PS); len += st; });
+      }
+      return { arr: arr, len: len };
+    }
+    var cv = SB.canvas("#cv-tree", function (ctx, w, h) {
+      var S = Math.min(w - 20, h - 20), ox = (w - S) / 2, oy = (h - S) / 2, k = S / 10;
+      var X = function (v) { return ox + v * k; }, Y = function (v) { return oy + v * k; };
+      geo = { X: X, Y: Y, k: k, ox: ox, oy: oy };
+      ctx.fillStyle = P.surface; ctx.fillRect(ox, oy, S, S);
+      ctx.strokeStyle = P.border; ctx.strokeRect(ox + 0.5, oy + 0.5, S - 1, S - 1);
+      var r = compute(), mn = Math.min.apply(null, r.arr), mx = Math.max.apply(null, r.arr);
+      var wire = SOC.color("pmu");
+      ctx.strokeStyle = wire; ctx.lineCap = "round";
+      function L(a, b, wd) { ctx.lineWidth = wd; ctx.beginPath(); ctx.moveTo(X(a[0]), Y(a[1])); ctx.lineTo(X(b[0]), Y(b[1])); ctx.stroke(); }
+      if (mode === "direct") {
+        sinks.forEach(function (s) { L([5, 5], [s[0], 5], 1.6); L([s[0], 5], s, 1.6); });
+      } else {
+        // H-tree: level1 H centered at (5,5) spanning x 2.5..7.5, y 2.5..7.5
+        L([2.5, 5], [7.5, 5], 4);
+        [[2.5, 5], [7.5, 5]].forEach(function (c) { L([c[0], 2.5], [c[0], 7.5], 3.2); });
+        [[2.5, 2.5], [2.5, 7.5], [7.5, 2.5], [7.5, 7.5]].forEach(function (c) {
+          L([c[0] - 1.25, c[1]], [c[0] + 1.25, c[1]], 2.2);
+          [c[0] - 1.25, c[0] + 1.25].forEach(function (x) { L([x, c[1] - 1.25], [x, c[1] + 1.25], 1.6); });
+        });
+        // stubs
+        ctx.setLineDash([4, 3]);
+        sinks.forEach(function (s, i) { var lf = home[i]; if (Math.abs(s[0] - lf[0]) + Math.abs(s[1] - lf[1]) > 0.01) { L(lf, [s[0], lf[1]], 1.3); L([s[0], lf[1]], s, 1.3); } });
+        ctx.setLineDash([]);
+      }
+      // root
+      SOC.box(ctx, X(5) - 13, Y(5) - 13, 26, 26, SOC.color("pmu"), "PLL", { size: 9.5, stroke: "#fff", lw: 1.5 });
+      sinks.forEach(function (s, i) {
+        var t = mx - mn < 0.5 ? 0.15 : (r.arr[i] - mn) / (mx - mn);
+        ctx.fillStyle = SOC.heat(0.1 + t * 0.85); ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(X(s[0]), Y(s[1]), Math.max(8, k * 0.32), 0, 7); ctx.fill(); ctx.stroke();
+        if (k > 26) { ctx.fillStyle = P.text; ctx.font = SB.font(10, true, 600); ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText(Math.round(r.arr[i]), X(s[0]), Y(s[1]) + k * 0.36); }
+      });
+      SB.stat("tr-skew", Math.round(mx - mn) + "<small>ps</small>");
+      SB.stat("tr-ins", Math.round(r.arr.reduce(function (a, b) { return a + b; }, 0) / r.arr.length) + "<small>ps</small>");
+      SB.stat("tr-len", r.len.toFixed(1) + "<small>mm</small>");
+    }, { aspect: 0.6, minHeight: 280, maxHeight: 420 });
+    var el = document.getElementById("cv-tree");
+    SOC.pointer(el, {
+      down: function (x, y) { if (!geo) return; drag = -1; var best = 1e9; sinks.forEach(function (s, i) { var d = Math.hypot(geo.X(s[0]) - x, geo.Y(s[1]) - y); if (d < best) { best = d; drag = i; } }); if (best > Math.max(22, geo.k * 0.6)) drag = -1; },
+      move: function (x, y, down) { if (!geo) return; if (down && drag >= 0) { sinks[drag] = [SB.clamp((x - geo.ox) / geo.k, 0.3, 9.7), SB.clamp((y - geo.oy) / geo.k, 0.3, 9.7)]; cv.redraw(); } el.style.cursor = drag >= 0 && down ? "grabbing" : "grab"; },
+      up: function () { drag = -1; },
+    }, { drag: true });
+    SB.seg("tr-mode", function (v) { mode = v; cv.redraw(); });
+    document.getElementById("tr-reset").onclick = function () { sinks = home.map(function (p) { return p.slice(); }); cv.redraw(); };
+  })();
+
+  /* ---------------------------------------------------------------- 14-3 setup/hold */
+  (function () {
+    var T = 400, d = 280, dm = 30, s = 0, J = 10, TCQ = 40, TSU = 30, TH = 20;
+    var cv = SB.canvas("#cv-skew", function (ctx, w, h) {
+      var nameW = w < 480 ? 58 : 80, x0 = 8 + nameW, tmin = -60, tmax = w < 600 ? Math.max(T + s, TCQ + d) + 160 : 1250;
+      var X = function (t) { return x0 + (t - tmin) / (tmax - tmin) * (w - x0 - 10); };
+      var rowH = (h - 34) / 3;
+      var rows = ["launch clk", "capture clk", "capture D"];
+      ctx.font = SB.font(11, true); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      rows.forEach(function (nm, i) { ctx.fillStyle = P.dim; ctx.fillText(w < 480 ? ["launch", "capture", "D"][i] : nm, 8, 8 + i * rowH + rowH / 2); });
+      function clock(y0, off, col, jit) {
+        var top = y0 + rowH * 0.25, bot = y0 + rowH * 0.75;
+        ctx.strokeStyle = col; ctx.lineWidth = 1.8; ctx.beginPath();
+        var t = off - T; ctx.moveTo(X(tmin), top);
+        var hi = true; // assume high just before edge? start low
+        ctx.moveTo(X(tmin), bot);
+        for (var k = -1; k < 6; k++) { var e = off + k * T; if (e + T / 2 < tmin) continue; ctx.lineTo(X(Math.max(tmin, e)), bot); ctx.lineTo(X(Math.max(tmin, e)), top); ctx.lineTo(X(Math.min(tmax, e + T / 2)), top); ctx.lineTo(X(Math.min(tmax, e + T / 2)), bot); if (e > tmax) break; }
+        ctx.lineTo(X(tmax), bot); ctx.stroke();
+        if (jit) { for (var k2 = 0; k2 < 6; k2++) { var e2 = off + k2 * T; if (e2 > tmax) break; ctx.fillStyle = SOC.alpha(P.warn, 0.3); ctx.fillRect(X(e2 - J), top - 3, Math.max(1, X(e2 + J) - X(e2 - J)), bot - top + 6); } }
+      }
+      clock(8, 0, P.accent2, false);
+      clock(8 + rowH, s, P.accent, true);
+      // data row
+      var y = 8 + 2 * rowH, top = y + rowH * 0.25, bot = y + rowH * 0.75, mid = (top + bot) / 2;
+      var tA = TCQ + dm, tB = TCQ + d;
+      // required windows
+      var su = T + s - J - TSU, hold = s + TH;
+      var setupSlack = T + s - J - (TCQ + d + TSU), holdSlack = TCQ + dm - (s + TH);
+      ctx.fillStyle = SOC.alpha(setupSlack < 0 ? P.bad : P.ok, 0.25);
+      ctx.fillRect(X(su), top - 6, X(T + s - J) - X(su), bot - top + 12);
+      ctx.fillStyle = SOC.alpha(holdSlack < 0 ? P.bad : P.ok, 0.25);
+      ctx.fillRect(X(s), top - 6, X(hold) - X(s), bot - top + 12);
+      ctx.strokeStyle = P.text; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(X(tmin), top); ctx.lineTo(X(tA), top); ctx.moveTo(X(tmin), bot); ctx.lineTo(X(tA), bot); ctx.stroke();
+      SOC.hatch(ctx, X(tA), top, Math.max(1, X(tB) - X(tA)), bot - top, P.dim);
+      ctx.beginPath(); ctx.moveTo(X(tB), top); ctx.lineTo(X(tmax), top); ctx.moveTo(X(tB), bot); ctx.lineTo(X(tmax), bot); ctx.stroke();
+      ctx.fillStyle = P.text; ctx.font = SB.font(11, true, 600); ctx.textAlign = "center";
+      if (X(Math.min(tA, s)) - X(tmin) > 34) { ctx.textAlign = "left"; ctx.fillText("옛 값", X(tmin) + 3, mid); ctx.textAlign = "center"; }
+      if (X(tmax) - X(tB) > 30) ctx.fillText("새 값", (X(tB) + X(Math.min(tmax, tB + 300))) / 2, mid);
+      // marks
+      [[0, P.accent2], [s, P.accent], [T + s, P.accent]].forEach(function (m) { ctx.strokeStyle = SOC.alpha(m[1], 0.6); ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(X(m[0]), 8); ctx.lineTo(X(m[0]), h - 26); ctx.stroke(); ctx.setLineDash([]); });
+      // slack arrows
+      ctx.font = SB.font(10.5, false, 700); ctx.textBaseline = "top";
+      ctx.fillStyle = setupSlack < 0 ? P.bad : P.ok; ctx.textAlign = "center";
+      ctx.fillText("setup " + (setupSlack >= 0 ? "+" : "") + Math.round(setupSlack), (X(tB) + X(su)) / 2, bot + 8);
+      ctx.fillStyle = holdSlack < 0 ? P.bad : P.ok;
+      ctx.fillText("hold " + (holdSlack >= 0 ? "+" : "") + Math.round(holdSlack), X(s + TH / 2), top - 20 > y ? top - 20 : bot + 22);
+      // axis
+      ctx.fillStyle = P.faint; ctx.font = SB.font(10, true); ctx.textBaseline = "bottom";
+      for (var t = 0; t <= tmax; t += (tmax > 800 ? 200 : 100)) ctx.fillText(t + (t === 0 ? " ps" : ""), X(t), h - 4);
+      SB.stat("sk-su", (setupSlack < 0 ? '<span class="ck-warn">' : '<span class="ck-good">') + (setupSlack >= 0 ? "+" : "") + Math.round(setupSlack) + "</span><small>ps</small>");
+      SB.stat("sk-h", (holdSlack < 0 ? '<span class="ck-warn">' : '<span class="ck-good">') + (holdSlack >= 0 ? "+" : "") + Math.round(holdSlack) + "</span><small>ps</small>");
+      var tmin2 = TCQ + d + TSU + J - s;
+      SB.stat("sk-f", (tmin2 > 0 ? (1000 / tmin2).toFixed(2) : "∞") + "<small>GHz</small>");
+    }, { aspect: 0.36, minHeight: 230, maxHeight: 300 });
+    SB.range("sk-t", function (v) { return v + " ps (" + (1000 / v).toFixed(2) + " GHz)"; }, function (v) { T = v; cv.redraw(); });
+    SB.range("sk-d", function (v) { return v + " ps"; }, function (v) { d = v; cv.redraw(); });
+    SB.range("sk-m", function (v) { return v + " ps"; }, function (v) { dm = v; cv.redraw(); });
+    SB.range("sk-s", function (v) { return (v > 0 ? "+" : "") + v + " ps"; }, function (v) { s = v; cv.redraw(); });
+    SB.range("sk-j", function (v) { return "±" + v + " ps"; }, function (v) { J = v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 14-4 ICG */
+  (function () {
+    var CY = 10, Q = 4, C = CY * Q;
+    var PRE = {
+      a: "1111 1111 1110 0000 0000 0011 1111 1111 1000 0111",
+      b: "0000 0110 0000 1111 1111 1100 0000 0001 1111 1111",
+      off: "1111 0000 0000 0000 0000 0000 0000 0001 1111 0000",
+    };
+    var en = [];
+    function load(k) { en = PRE[k].replace(/ /g, "").split("").map(Number); }
+    load("a");
+    var geo = null;
+    function compute() {
+      var clk = [], g1 = [], le = [], g2 = [], latch = en[0];
+      for (var c = 0; c < C; c++) {
+        clk[c] = (c % Q) < Q / 2 ? 1 : 0;
+        if (!clk[c]) latch = en[c]; // transparent when clk low
+        le[c] = latch;
+        g1[c] = clk[c] & en[c];
+        g2[c] = clk[c] & le[c];
+      }
+      function glitches(g) {
+        var out = [], c = 0;
+        while (c < C) { if (g[c]) { var e = c; while (e < C && g[e]) e++; if (e - c < Q / 2 || c % Q !== 0) out.push([c, e]); c = e; } else c++; }
+        return out;
+      }
+      var off = 0; for (var k = 0; k < CY; k++) if (!g2[k * Q]) off++;
+      return { clk: clk, g1: g1, le: le, g2: g2, gl1: glitches(g1), gl2: glitches(g2), off: off };
+    }
+    var cv = SB.canvas("#cv-icg", function (ctx, w, h) {
+      var r = compute();
+      var shade = r.gl1.map(function (g) { return { c0: g[0], c1: g[1], color: SOC.alpha(P.bad, 0.22) }; });
+      geo = SOC.wave(ctx, { x: 6, y: 8, w: w - 12, h: h - 14 }, {
+        cycles: C, nameW: w < 480 ? 58 : 84, skew: 0.05, shade: shade,
+        signals: [
+          { name: "clk", type: "bit", v: r.clk, color: P.dim },
+          { name: "en", type: "bit", v: en, color: P.accent, fill: true },
+          { name: "AND만", type: "bit", v: r.g1, color: P.bad },
+          { name: "latch_en", type: "bit", v: r.le, color: P.warn },
+          { name: "ICG", type: "bit", v: r.g2, color: P.ok },
+        ],
+      });
+      SB.stat("icg-g1", r.gl1.length ? '<span class="ck-warn">' + r.gl1.length + "개</span>" : "0개");
+      SB.stat("icg-g2", r.gl2.length + "개");
+      SB.stat("icg-off", r.off + " / " + CY + "<small>(" + Math.round(r.off / CY * 100) + "% 절전)</small>");
+    }, { aspect: 0.34, minHeight: 230, maxHeight: 290 });
+    var el = document.getElementById("cv-icg");
+    el.style.cursor = "pointer";
+    SOC.pointer(el, { down: function (x, y) { if (!geo) return; var c = Math.floor(geo.colAt(x)), ry = geo.rowY(1); if (c < 0 || c >= C || y < ry[0] - 4 || y > ry[1] + 4) return; en[c] = en[c] ? 0 : 1; cv.redraw(); } });
+    SB.seg("icg-pre", function (v) { load(v); cv.redraw(); });
+    var rng = SB.rng(9);
+    document.getElementById("icg-rnd").onclick = function () { var v = 1; for (var c = 0; c < C; c++) { if (rng() < 0.18) v = 1 - v; en[c] = v; } cv.redraw(); };
+  })();
+
+  /* ---------------------------------------------------------------- 14-5 metastability */
+  (function () {
+    var lg = 0, tau = 15, shower = [], TCLK = 250, TSU = 20, T0 = 15;
+    function traj(dtps) {
+      // initial imbalance proportional to dt; v = 0.5 + sign * a e^{t/tau}
+      var a0 = Math.min(0.5, Math.abs(dtps) / 60 * 0.5), sgn = dtps >= 0 ? 1 : -1;
+      var tr = a0 > 0 ? tau * Math.log(0.5 / a0) : Infinity;
+      return { a0: a0, sgn: sgn, tr: Math.max(0, tr) + T0 };
+    }
+    var cv = SB.canvas("#cv-meta", function (ctx, w, h) {
+      var box = { x: 48, y: 14, w: w - 48 - 14, h: h - 14 - 36 };
+      var X = function (t) { return box.x + t / TCLK * box.w; }, Y = function (v) { return box.y + box.h - v * box.h; };
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+      [0, 0.5, 1].forEach(function (v) { ctx.beginPath(); ctx.moveTo(box.x, Y(v)); ctx.lineTo(box.x + box.w, Y(v)); ctx.stroke(); });
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, true); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      ctx.fillText("1", box.x - 6, Y(1)); ctx.fillText("½", box.x - 6, Y(0.5)); ctx.fillText("0", box.x - 6, Y(0));
+      // next edge
+      var te = TCLK - TSU;
+      ctx.fillStyle = SOC.alpha(P.bad, 0.1); ctx.fillRect(X(te), box.y, X(TCLK) - X(te), box.h);
+      ctx.strokeStyle = P.bad; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(X(te), box.y); ctx.lineTo(X(te), box.y + box.h); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = P.bad; ctx.textAlign = "right"; ctx.textBaseline = "top"; ctx.font = SB.font(11, false, 700); ctx.fillText("다음 에지", X(te) - 4, box.y + 2);
+      function draw(dtps, col, wd) {
+        var q = traj(dtps);
+        ctx.strokeStyle = col; ctx.lineWidth = wd; ctx.beginPath();
+        for (var t = 0; t <= TCLK; t += TCLK / 240) {
+          var v;
+          if (t < T0) v = 0.5 + q.sgn * q.a0 * t / T0;
+          else v = 0.5 + q.sgn * Math.min(0.5, q.a0 * Math.exp((t - T0) / tau));
+          if (!isFinite(v)) v = 0.5;
+          t ? ctx.lineTo(X(t), Y(v)) : ctx.moveTo(X(t), Y(v));
+        }
+        ctx.stroke();
+        return q;
+      }
+      var fails = 0;
+      shower.forEach(function (d) { var q = traj(d); var bad = q.tr > te; if (bad) fails++; draw(d, SOC.alpha(bad ? P.bad : P.accent2, bad ? 0.8 : 0.25), bad ? 1.6 : 1); });
+      var dtps = Math.pow(10, lg);
+      var q = draw(dtps, P.accent, 2.6);
+      ctx.fillStyle = P.faint; ctx.font = SB.font(10, true); ctx.textAlign = "center"; ctx.textBaseline = "top";
+      var stp = TCLK > 600 ? 200 : TCLK > 300 ? 100 : 50; for (var t = 0; t <= TCLK; t += stp) ctx.fillText(t + (t ? "" : " ps"), X(t), box.y + box.h + 6);
+      SB.stat("mt-tr", isFinite(q.tr) ? (q.tr > TCLK - TSU ? '<span class="ck-warn">' + Math.round(q.tr) + "</span><small>ps (다음 에지 넘김)</small>" : Math.round(q.tr) + "<small>ps</small>") : "∞");
+      SB.stat("mt-fail", shower.length ? (fails / shower.length * 100).toFixed(1) + "<small>% (" + fails + "/" + shower.length + ")</small>" : "—");
+    }, { aspect: 0.4, minHeight: 230, maxHeight: 320 });
+    SB.range("mt-dt", function (v) { var p = Math.pow(10, v); return p < 1 ? (p * 1000).toPrecision(2) + " fs" : p.toPrecision(2) + " ps"; }, function (v) { lg = v; cv.redraw(); });
+    SB.range("mt-tau", function (v) { return v + " ps"; }, function (v) { tau = v; cv.redraw(); });
+    SB.range("mt-f", function (v) { return v + " GHz"; }, function (v) { TCLK = 1000 / v; cv.redraw(); });
+    var rng = SB.rng(4);
+    document.getElementById("mt-shower").onclick = function () { shower = []; for (var i = 0; i < 200; i++) { var d = (rng() * 2 - 1) * 30; shower.push(d); } cv.redraw(); };
+  })();
+
+  /* ---------------------------------------------------------------- 14-5 MTBF */
+  (function () {
+    var n = 2, tau = 15, tw = 20, lfc = 9, lfd = 7;
+    function human(s) {
+      if (s < 1e-6) return SB.si(s, "s");
+      if (s < 60) return SB.fmt(s, 3) + "<small>초</small>";
+      if (s < 3600) return SB.fmt(s / 60, 3) + "<small>분</small>";
+      if (s < 86400) return SB.fmt(s / 3600, 3) + "<small>시간</small>";
+      if (s < 3.156e7) return SB.fmt(s / 86400, 3) + "<small>일</small>";
+      return SB.fmt(s / 3.156e7, 3) + "<small>년</small>";
+    }
+    var cv = SB.canvas("#cv-mtbf", function (ctx, w, h) {
+      var fc = Math.pow(10, lfc), fd = Math.pow(10, lfd), T = 1 / fc;
+      var tr = n === 1 ? 0.3 * T - 30e-12 : (n - 1) * (T - 60e-12);
+      tr = Math.max(0, tr);
+      var mtbf = Math.exp(tr / (tau * 1e-12)) / (tw * 1e-12 * fc * fd);
+      var lmin = -9, lmax = 40;
+      var x0 = 14, x1 = w - 14, X = function (l) { return x0 + (l - lmin) / (lmax - lmin) * (x1 - x0); };
+      var y = h * 0.42, bh = 22;
+      ctx.fillStyle = P.surface; ctx.fillRect(x0, y, x1 - x0, bh);
+      var lm = Math.log10(Math.max(1e-30, mtbf));
+      var good = mtbf > 4.35e17 ? P.ok : mtbf > 3.156e7 * 10 ? P.warn : P.bad;
+      ctx.fillStyle = good; ctx.fillRect(x0, y, Math.max(2, Math.min(x1, X(lm)) - x0), bh);
+      if (lm > lmax) { ctx.fillStyle = P.text; ctx.font = SB.font(12, false, 700); ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText("→ 1e" + Math.round(lm) + " s", x1 - 4, y + bh / 2); }
+      var marks = [[0, "1초"], [Math.log10(86400), "1일"], [Math.log10(3.156e7), "1년"], [Math.log10(3.156e9), "100년"], [Math.log10(4.35e17), "우주 나이"], [-9, "1 ns"], [-3, "1 ms"]];
+      var narrow = w < 520;
+      ctx.font = SB.font(narrow ? 9.5 : 11); ctx.textAlign = "center";
+      marks.forEach(function (m, i) {
+        var x = X(m[0]);
+        ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x, y + bh + 4); ctx.stroke();
+        ctx.fillStyle = P.dim; ctx.textBaseline = i % 2 ? "bottom" : "top";
+        if (narrow && (m[1] === "1일" || m[1] === "100년" || m[1] === "1 ms")) return;
+        ctx.fillText(m[1], x, i % 2 ? y - 6 : y + bh + 6);
+      });
+      ctx.fillStyle = P.faint; ctx.textBaseline = "top"; ctx.textAlign = "left"; ctx.font = SB.font(10.5, true);
+      ctx.fillText("MTBF (로그 눈금, 초)", x0, 6);
+      SB.stat("mb-tr", Math.round(tr * 1e12) + "<small>ps</small>");
+      SB.stat("mb-mtbf", human(mtbf));
+      var fleet = 1e8 * 86400 / mtbf;
+      SB.stat("mb-fleet", fleet >= 1 ? '<span class="ck-warn">' + SB.fmt(fleet, 3) + "대</span>" : fleet > 1e-3 ? SB.fmt(fleet, 2) + "대" : "≈ 0대");
+    }, { aspect: 0.2, minHeight: 130, maxHeight: 160 });
+    SB.seg("mb-n", function (v) { n = +v; cv.redraw(); });
+    SB.range("mb-tau", function (v) { return v + " ps"; }, function (v) { tau = v; cv.redraw(); });
+    SB.range("mb-tw", function (v) { return v + " ps"; }, function (v) { tw = v; cv.redraw(); });
+    SB.range("mb-fc", function (v) { return SB.si(Math.pow(10, v), "Hz", 3); }, function (v) { lfc = v; cv.redraw(); });
+    SB.range("mb-fd", function (v) { return SB.si(Math.pow(10, v), "Hz", 3); }, function (v) { lfd = v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 14-6 gray */
+  (function () {
+    var sk = 0.2, rng = SB.rng(21), cnt = 0, log = [], eb = 0, eg = 0, nread = 0, playing = false, acc = 0;
+    var dly = [0.0, 0.33, 0.66, 1.0]; // relative per-bit delay (scaled by sk)
+    var lastPhase = 0.5;
+    var g = function (b) { return b ^ (b >> 1); }, ug = function (x) { var b = 0; for (; x; x >>= 1) b ^= x; return b; };
+    function sample() {
+      var old = cnt, nw = (cnt + 1) & 15;
+      var ph = rng(); lastPhase = ph; // sampling instant relative to change at 0, within one period window of [0,1)
+      function read(o, n) { var v = 0; for (var i = 0; i < 4; i++) { var bo = (o >> i) & 1, bn = (n >> i) & 1; var t = dly[i] * sk; v |= ((ph < t ? bo : bn) << i); } return v; }
+      var rb = read(old, nw), rgv = read(g(old), g(nw)), rgd = ug(rgv);
+      var okb = rb === old || rb === nw, okg = rgd === old || rgd === nw;
+      if (!okb) eb++; if (!okg) eg++; nread++;
+      log.unshift({ old: old, nw: nw, rb: rb, rg: rgv, rgd: rgd, okb: okb, okg: okg }); if (log.length > 6) log.pop();
+      cnt = nw;
+    }
+    var tab = document.getElementById("gray-tab");
+    function render() {
+      var bits = function (v) { return SB.bin(v, 4); };
+      tab.innerHTML = "<tr><th>바뀌는 순간</th><th>이진 읽음</th><th></th><th>그레이 읽음</th><th>이진으로 풀면</th></tr>" + log.map(function (e) {
+        return "<tr><td>" + e.old + "→" + e.nw + "</td><td class='" + (e.okb ? "" : "bad") + "'>" + bits(e.rb) + " (" + e.rb + ")</td><td>" + (e.okb ? "" : "✗") + "</td><td class='" + (e.okg ? "" : "bad") + "'>" + bits(e.rg) + "</td><td>" + e.rgd + "</td></tr>";
+      }).join("");
+      SB.stat("gr-eb", eb + "<small>회 (" + (nread ? (eb / nread * 100).toFixed(1) : 0) + "%)</small>");
+      SB.stat("gr-eg", eg + "<small>회</small>");
+      SB.stat("gr-n", nread);
+      cv.redraw();
+    }
+    var cv = SB.canvas("#cv-gray", function (ctx, w, h) {
+      var e = log[0];
+      var old = e ? e.old : 0, nw = e ? e.nw : 1;
+      var nameW = w < 480 ? 44 : 60, x0 = 8 + nameW, X = function (t) { return x0 + (t + 0.15) / 1.3 * (w - x0 - 12); };
+      var gh = (h - 6) / 2, rowH = (gh - 18) / 4;
+      ctx.font = SB.font(10.5, true); ctx.textBaseline = "middle";
+      function rows(y0, o, n, label) {
+        ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.font = SB.font(11, false, 700); ctx.textBaseline = "top"; ctx.fillText(label, 8, y0 + 2); ctx.textBaseline = "middle";
+        for (var i = 3; i >= 0; i--) {
+          var y = y0 + 18 + (3 - i) * rowH, bo = (o >> i) & 1, bn = (n >> i) & 1, t = dly[i] * sk;
+          var top = y + rowH * 0.18, bot = y + rowH * 0.82;
+          ctx.fillStyle = (3 - i) % 2 ? "transparent" : SOC.alpha(P.surface, 0.9); ctx.fillRect(x0, y, w - x0 - 10, rowH);
+          ctx.fillStyle = P.dim; ctx.font = SB.font(10, true); ctx.textAlign = "right"; ctx.fillText("b" + i, x0 - 6, (top + bot) / 2);
+          ctx.strokeStyle = bo !== bn ? P.accent : P.faint; ctx.lineWidth = 1.8; ctx.beginPath();
+          ctx.moveTo(X(-0.15), bo ? top : bot); ctx.lineTo(X(t), bo ? top : bot); ctx.lineTo(X(t) + 2, bn ? top : bot); ctx.lineTo(X(1.15), bn ? top : bot); ctx.stroke();
+        }
+      }
+      rows(2, old, nw, "이진 " + SB.bin(old, 4) + "→" + SB.bin(nw, 4));
+      rows(2 + gh, g(old), g(nw), "그레이 " + SB.bin(g(old), 4) + "→" + SB.bin(g(nw), 4));
+      // sampling line
+      ctx.strokeStyle = P.accent2; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(lastPhase), 6); ctx.lineTo(X(lastPhase), h - 4); ctx.stroke();
+      ctx.fillStyle = P.accent2; ctx.font = SB.font(10.5, false, 700); ctx.textAlign = X(lastPhase) > w - 70 ? "right" : "left"; ctx.textBaseline = "top"; ctx.fillText("읽는 순간", X(lastPhase) + (X(lastPhase) > w - 70 ? -4 : 4), 2);
+    }, { aspect: 0.32, minHeight: 230, maxHeight: 280 });
+    SB.range("gr-sk", function (v) { return Math.round(v * 100) + "%"; }, function (v) { sk = v; render(); });
+    document.getElementById("gr-step").onclick = function () { sample(); render(); };
+    document.getElementById("gr-reset").onclick = function () { eb = eg = nread = 0; log = []; render(); };
+    var pb = document.getElementById("gr-play");
+    pb.onclick = function () { playing = !playing; pb.textContent = playing ? "❚❚ 멈춤" : "▶ 자동"; };
+    SB.loop(document.getElementById("cv-gray"), function (dt) { if (!playing) return; acc += dt * 6; if (acc >= 1) { acc = 0; sample(); render(); } });
+    for (var i = 0; i < 6; i++) sample();
+    render();
+  })();
+
+  /* ---------------------------------------------------------------- 14-7 async FIFO */
+  (function () {
+    var st = { fw: 400, fr: 250, pw: 0.6, pr: 0.9, D: 8, mode: "gray", sp: 1 };
+    var S;
+    var g = function (b) { return b ^ (b >> 1); }, ug = function (x) { var b = 0; for (; x; x >>= 1) b ^= x; return b; };
+    function reset() {
+      S = { t: 0, tw: 0, tr: 0.37 / st.fr * 1e3, wbin: 0, rbin: 0, wq1: 0, wq2: 0, rq1: 0, rq2: 0, mem: new Array(16).fill(null), data: 0, bw: 0, br: 0, err: 0, wchg: -1e9, rchg: -1e9, wOld: 0, rOld: 0, edges: [], nW: 0, nR: 0, rng: SB.rng(77), lastRead: -1, full: false, empty: true, wDel: [0, 0, 0, 0, 0], rDel: [0, 0, 0, 0, 0] };
+    }
+    reset();
+    var W = function () { return Math.log2(st.D) + 1; }, MASK = function () { return (1 << W()) - 1; };
+    function enc(b) { return st.mode === "gray" ? g(b) : b; }
+    function dec(x) { return st.mode === "gray" ? ug(x) : x; }
+    function delays(period) { var d = []; for (var i = 0; i < 5; i++) d.push(S.rng() * period * 0.6); return d; } // per-bit arrival skew, fraction of the sender's period
+    function sampleOther(curEnc, oldEnc, chgT, now, del) {
+      // each bit that changed arrives at the other domain after its own delay: old before, new after
+      var v = 0, bits = W();
+      for (var i = 0; i < bits; i++) { var a = (oldEnc >> i) & 1, b = (curEnc >> i) & 1; v |= ((a === b || now - chgT >= del[i] ? b : a) << i); }
+      return v;
+    }
+    function wEdge() {
+      var Tw = 1e3 / st.fw;
+      // sync rptr into write domain
+      S.wq2 = S.wq1; S.wq1 = sampleOther(enc(S.rbin & MASK()), S.rOld, S.rchg, S.t, S.rDel);
+      var rsync = dec(S.wq2) & MASK();
+      var full = ((S.wbin - rsync) & MASK()) >= st.D;
+      // binary-mode: corrupted pointer may make it think not full
+      S.full = full;
+      if (S.rng() < st.pw) {
+        if (full) S.bw++;
+        else {
+          var occ = S.wbin - S.rbin;
+          if (occ >= st.D) S.err++;
+          S.mem[S.wbin % st.D] = S.data++;
+          S.wOld = enc(S.wbin & MASK()); S.wbin++; S.wchg = S.t; S.wDel = delays(1e3 / st.fw); S.nW++;
+        }
+      }
+      S.edges.push([S.t, 0]);
+    }
+    function rEdge() {
+      var Tr = 1e3 / st.fr;
+      S.rq2 = S.rq1; S.rq1 = sampleOther(enc(S.wbin & MASK()), S.wOld, S.wchg, S.t, S.wDel);
+      var wsync = dec(S.rq2) & MASK();
+      var empty = ((wsync - S.rbin) & MASK()) === 0;
+      // binary corruption could also make "occupancy" appear larger than D -> treat as not empty
+      S.empty = empty;
+      if (S.rng() < st.pr) {
+        if (empty) S.br++;
+        else {
+          if (S.wbin - S.rbin <= 0) { S.err++; S.lastRead = -1; }
+          else { S.lastRead = S.mem[S.rbin % st.D]; S.mem[S.rbin % st.D] = null; }
+          S.rOld = enc(S.rbin & MASK()); S.rbin++; S.rchg = S.t; S.rDel = delays(1e3 / st.fr); S.nR++;
+        }
+      }
+      S.edges.push([S.t, 1]);
+    }
+    function advance(dtns) {
+      var tEnd = S.t + dtns;
+      while (true) {
+        var nw = S.tw, nr = S.tr;
+        if (Math.min(nw, nr) > tEnd) break;
+        if (nw <= nr) { S.t = nw; wEdge(); S.tw += 1e3 / st.fw; }
+        else { S.t = nr; rEdge(); S.tr += 1e3 / st.fr; }
+      }
+      S.t = tEnd;
+      var cut = S.t - 40; while (S.edges.length && S.edges[0][0] < cut) S.edges.shift();
+    }
+    var lamps = { f: document.getElementById("ff-full"), e: document.getElementById("ff-empty") };
+    var cv = SB.canvas("#cv-fifo", function (ctx, w, h) {
+      var D = st.D;
+      // clock strips
+      var sy = 8, sh = 16, x0 = 34, xw = w - x0 - 10, span = 40;
+      ctx.font = SB.font(10.5, true); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      ["wclk", "rclk"].forEach(function (nm, k) {
+        var y = sy + k * (sh + 6);
+        ctx.fillStyle = k ? P.accent2 : P.accent; ctx.fillText(nm, 4, y + sh / 2);
+        ctx.fillStyle = P.surface; ctx.fillRect(x0, y, xw, sh);
+        ctx.strokeStyle = k ? P.accent2 : P.accent; ctx.lineWidth = 1.5;
+        S.edges.forEach(function (e) { if (e[1] !== k) return; var x = x0 + (1 - (S.t - e[0]) / span) * xw; if (x < x0) return; ctx.beginPath(); ctx.moveTo(x, y + sh); ctx.lineTo(x, y); ctx.stroke(); });
+      });
+      ctx.fillStyle = P.faint; ctx.textAlign = "right"; ctx.font = SB.font(9.5, true); ctx.fillText("최근 40 ns", w - 10, sy + 2 * (sh + 6) + 6);
+      // ring
+      var cy = sy + 2 * (sh + 6) + (h - (sy + 2 * (sh + 6))) / 2 + 4, cx = w / 2;
+      var R = Math.min(w * 0.36, (h - (sy + 2 * (sh + 6))) / 2 - 22);
+      var slotA = Math.PI * 2 / D;
+      for (var i = 0; i < D; i++) {
+        var a0 = -Math.PI / 2 + i * slotA, a1 = a0 + slotA;
+        ctx.beginPath(); ctx.arc(cx, cy, R, a0 + 0.03, a1 - 0.03); ctx.arc(cx, cy, R * 0.62, a1 - 0.03, a0 + 0.03, true); ctx.closePath();
+        var v = S.mem[i];
+        ctx.fillStyle = v != null ? SOC.alpha(SOC.color("noc"), 0.85) : P.surface; ctx.fill();
+        ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.stroke();
+        if (v != null && R * slotA > 18) { var am = (a0 + a1) / 2; ctx.fillStyle = "#fff"; ctx.font = SB.font(Math.min(12, R * slotA * 0.32), true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(v % 100, cx + Math.cos(am) * R * 0.81, cy + Math.sin(am) * R * 0.81); }
+      }
+      function ptr(pos, col, lab, ghost, rad) {
+        var a = -Math.PI / 2 + ((pos % D) + 0.5) * slotA;
+        var r0 = ghost ? rad - 22 : rad + 18, r1 = ghost ? rad : rad, rl = ghost ? rad - 32 : rad + 27;
+        ctx.globalAlpha = ghost ? 0.6 : 1;
+        SOC.arrow(ctx, cx + Math.cos(a) * r0, cy + Math.sin(a) * r0, cx + Math.cos(a) * r1, cy + Math.sin(a) * r1, col, ghost ? 2.2 : 3, 9);
+        ctx.fillStyle = col; ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(lab, cx + Math.cos(a) * rl, cy + Math.sin(a) * rl);
+        ctx.globalAlpha = 1;
+      }
+      var rsync = dec(S.wq2) & MASK(), wsync = dec(S.rq2) & MASK();
+      ptr(S.wbin, P.accent, "W", false, R + 2);
+      ptr(S.rbin, P.accent2, "R", false, R + 2);
+      ptr(wsync, P.accent, "W′", true, R * 0.62 - 3);
+      ptr(rsync, P.accent2, "R′", true, R * 0.62 - 3);
+      // center: gray code values
+      ctx.fillStyle = P.text; ctx.font = SB.font(Math.max(9.5, Math.min(12, R * 0.12)), true, 600); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      var b = W();
+      if (R > 125) {
+        ctx.fillStyle = P.accent; ctx.fillText("W " + SB.bin(enc(S.wbin & MASK()), b), cx, cy - 9);
+        ctx.fillStyle = P.accent2; ctx.fillText("R " + SB.bin(enc(S.rbin & MASK()), b), cx, cy + 9);
+      }
+      var occ = S.wbin - S.rbin;
+      lamps.f.className = "ck-lamp" + (S.full ? " on" : "");
+      lamps.e.className = "ck-lamp" + (S.empty ? " on" : "");
+      SB.stat("ff-occ", occ + " / " + D);
+      SB.stat("ff-bw", S.bw + "<small>회</small>");
+      SB.stat("ff-br", S.br + "<small>회</small>");
+      SB.stat("ff-err", S.err ? '<span class="ck-warn">' + S.err + "회</span>" : '<span class="ck-good">0회</span>');
+    }, { aspect: 0.85, minHeight: 330, maxHeight: 440 });
+    SB.loop(document.getElementById("cv-fifo"), function (dt) { advance(dt * 12 * st.sp); cv.redraw(); });
+    SB.range("ff-fw", function (v) { return v + " MHz"; }, function (v) { st.fw = v; });
+    SB.range("ff-fr", function (v) { return v + " MHz"; }, function (v) { st.fr = v; });
+    SB.range("ff-pw", function (v) { return Math.round(v * 100) + "%"; }, function (v) { st.pw = v; });
+    SB.range("ff-pr", function (v) { return Math.round(v * 100) + "%"; }, function (v) { st.pr = v; });
+    SB.seg("ff-d", function (v) { st.D = +v; reset(); });
+    SB.seg("ff-mode", function (v) { st.mode = v; reset(); });
+    SB.seg("ff-sp", function (v) { st.sp = +v; });
+    document.getElementById("ff-reset").onclick = reset;
+  })();
+
+  /* ---------------------------------------------------------------- 14-8 reset */
+  (function () {
+    var rel = 11, sync = false, Q = 4, CY = 9, C = CY * Q, DB = 1; // B delay in quarters
+    var geo = null;
+    function compute() {
+      var clk = [], rst = [], rstB = [], rss = [];
+      for (var c = 0; c < C; c++) { clk[c] = c % Q < Q / 2 ? 1 : 0; rst[c] = c >= rel ? 1 : 0; rstB[c] = c >= rel + DB ? 1 : 0; }
+      // a flip-flop leaves reset at the first rising edge e (multiple of Q) after its reset input rises.
+      // if the reset rises exactly at an edge (recovery/removal window), the outcome is uncertain (x).
+      function relEdge(arr) {
+        for (var e = 0; e < C + Q; e += Q) { if (arr < e) return { e: e, x: false }; if (arr === e) return { e: e + Q, x: true }; }
+        return { e: C, x: false };
+      }
+      var A, B;
+      if (sync) {
+        var e1 = relEdge(rel), se = e1.e + Q; // rst_sync rises right after 2nd flop's edge
+        for (var c2 = 0; c2 < C; c2++) rss[c2] = c2 >= se ? 1 : 0;
+        A = { e: se + Q, x: false }; B = { e: se + Q, x: false };
+      } else { A = relEdge(rel); B = relEdge(rel + DB); }
+      function counter(r) {
+        var v = [];
+        for (var c = 0; c < C; c++) v[c] = c < r.e ? (r.x && c >= r.e - Q ? null : "0") : String(1 + Math.floor((c - r.e) / Q));
+        return v;
+      }
+      return { clk: clk, rst: rst, rstB: rstB, rss: rss, A: A, B: B, ca: counter(A), cb: counter(B) };
+    }
+    var cv = SB.canvas("#cv-reset", function (ctx, w, h) {
+      var r = compute();
+      var sigs = [{ name: "clk", type: "bit", v: r.clk, color: P.dim }, { name: "rst_n", type: "bit", v: r.rst, color: P.accent }];
+      if (sync) sigs.push({ name: "rst_sync", type: "bit", v: r.rss, color: P.ok });
+      else sigs.push({ name: "rst_n@B", type: "bit", v: r.rstB, color: P.warn });
+      sigs.push({ name: "카운터 A", type: "bus", v: r.ca, color: P.accent2 }, { name: "카운터 B", type: "bus", v: r.cb, color: P.accent2 });
+      var shade = [];
+      if (!sync) { for (var e = Q; e < C; e += Q) shade.push({ c0: e - 0.35, c1: e + 0.35, color: SOC.alpha(P.bad, 0.14) }); }
+      geo = SOC.wave(ctx, { x: 6, y: 8, w: w - 12, h: h - 14 }, { cycles: C, nameW: w < 480 ? 62 : 84, skew: 0.05, signals: sigs, shade: shade });
+      var info = document.getElementById("rs-info");
+      var aX = r.A.x, bX = r.B.x;
+      if (sync) info.innerHTML = "<b class='ck-good'>동기화기 사용:</b> 외부 리셋이 언제 풀리든, rst_sync는 클럭 에지에 맞춰 두 플립플롭을 지난 뒤에 풀린다. 두 카운터는 같은 에지(" + (r.A.e / Q) + "번째 주기)에서 함께 출발한다. 첫 플립플롭이 준안정에 빠져도 둘째가 읽기 전에 한 주기가 있다.";
+      else if (aX || bX) info.innerHTML = "<b class='ck-warn'>위험:</b> 리셋 해제가 " + (aX && bX ? "두 카운터 모두" : aX ? "카운터 A" : "카운터 B") + "의 클럭 에지와 겹쳤다(붉은 recovery·removal 창). 그 카운터가 이번 에지에 풀릴지 다음 에지에 풀릴지 알 수 없다(빗금 X). 두 카운터가 한 박자 어긋나 출발할 수 있다.";
+      else if (r.A.e !== r.B.e) info.innerHTML = "<b class='ck-warn'>어긋남:</b> 리셋이 B에 늦게 도착해 A는 " + (r.A.e / Q) + "번째, B는 " + (r.B.e / Q) + "번째 에지에서 풀렸다. 함께 세야 할 두 카운터의 값이 영원히 1씩 다르다.";
+      else info.innerHTML = "<b>이번에는 괜찮다.</b> 두 카운터 모두 " + (r.A.e / Q) + "번째 에지에서 풀렸다. 하지만 해제 시각을 ¼주기만 옮겨도 결과가 달라진다. 외부 리셋이 언제 풀릴지는 우리가 고를 수 없다.";
+    }, { aspect: 0.3, minHeight: 220, maxHeight: 270 });
+    SB.range("rs-t", function (v) { return (v / Q).toFixed(2) + " 주기"; }, function (v) { rel = v; cv.redraw(); });
+    document.getElementById("rs-sync").addEventListener("change", function (e) { sync = e.target.checked; cv.redraw(); });
+  })();
+})();
+</script>
+</body>
+</html>

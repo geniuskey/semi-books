@@ -1,0 +1,1015 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and TCADBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "샤페터-거멜 이산화가 왜 필요한지, 뉴턴 반복과 거멜 반복이 어떻게 수렴하고 무너지는지, 띠 LU와 반복 풀이기, 수렴 판정, 바이어스 램프와 예측자를 실제 포아송·드리프트-확산 풀이기로 직접 돌려 보며 익힌다.", "libs": ["d1", "d2"]}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>비선형 해법: 뉴턴과 거멜 · TCADBook</title>
+<meta name="description" content="샤페터-거멜 이산화가 왜 필요한지, 뉴턴 반복과 거멜 반복이 어떻게 수렴하고 무너지는지, 띠 LU와 반복 풀이기, 수렴 판정, 바이어스 램프와 예측자를 실제 포아송·드리프트-확산 풀이기로 직접 돌려 보며 익힌다.">
+<link rel="canonical" href="https://semi.euiyun.com/tcad/chapters/numerics.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#0b7285">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="TCADBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="비선형 해법: 뉴턴과 거멜 · TCADBook">
+<meta property="og:description" content="샤페터-거멜 이산화가 왜 필요한지, 뉴턴 반복과 거멜 반복이 어떻게 수렴하고 무너지는지, 띠 LU와 반복 풀이기, 수렴 판정, 바이어스 램프와 예측자를 실제 포아송·드리프트-확산 풀이기로 직접 돌려 보며 익힌다.">
+<meta property="og:url" content="https://semi.euiyun.com/tcad/chapters/numerics.html">
+<meta property="og:image" content="https://semi.euiyun.com/tcad/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/tcad/chapters/numerics.html#chapter","name":"비선형 해법: 뉴턴과 거멜","headline":"비선형 해법: 뉴턴과 거멜 · TCADBook","description":"샤페터-거멜 이산화가 왜 필요한지, 뉴턴 반복과 거멜 반복이 어떻게 수렴하고 무너지는지, 띠 LU와 반복 풀이기, 수렴 판정, 바이어스 램프와 예측자를 실제 포아송·드리프트-확산 풀이기로 직접 돌려 보며 익힌다.","url":"https://semi.euiyun.com/tcad/chapters/numerics.html","position":5,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/tcad/og.png","dateModified":"2026-10-04","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/tcad/#book","name":"TCADBook · 반도체 TCAD 교과서","url":"https://semi.euiyun.com/tcad/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"TCADBook","item":"https://semi.euiyun.com/tcad/"},{"@type":"ListItem","position":2,"name":"5. 비선형 해법: 뉴턴과 거멜","item":"https://semi.euiyun.com/tcad/chapters/numerics.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/tcad.js"></script>
+<script src="../js/device1d.js"></script>
+<script src="../js/device2d.js"></script>
+<!--head:end-->
+<style>
+  .sim-view canvas.drag { cursor: crosshair; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="tcad"></script>
+</head>
+<body data-chapter="numerics">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 05</div>
+    <h1>비선형 해법: 뉴턴과 거멜</h1>
+    <p class="lead"><a href="mesh.html">4장</a>에서 연속 방정식을 격자점의 방정식으로 바꾸었다. 그 결과는 미지수 수천~수십만 개짜리 연립 비선형 방정식 \(\mathbf{F}(\mathbf{u}) = 0\)이다. 이 장은 그것을 실제로 푸는 법을 다룬다. 전류를 어떻게 이산화해야 해가 출렁이지 않는지, 뉴턴 반복이 왜 빠르고 왜 갑자기 무너지는지, 거멜 반복은 언제 쓸 만한지, 매 반복의 선형 방정식을 무엇으로 푸는지, 그리고 바이어스를 어떻게 올려야 수렴이 끊기지 않는지. 모든 그림은 이 책의 엔진이 실제로 반복하는 과정을 그대로 보여 준다.</p>
+    <ul class="objectives">
+      <li>중앙 차분 전류가 격자 한 칸의 전위 차가 \(2kT/q\)를 넘으면 출렁이는 이유와 샤페터-거멜 지수 맞춤(베르누이 함수)이 그것을 어떻게 고치는지 설명한다.</li>
+      <li>뉴턴 방법의 야코비안, 2차 수렴, 감쇠, 초기값의 역할을 스칼라 문제와 1D 포아송 문제에서 확인한다.</li>
+      <li>결합 뉴턴과 분리형 거멜 반복을 비교하고, 바이어스 영역에 따라 어느 쪽이 유리한지 말한다.</li>
+      <li>띠 LU의 채움(fill-in)과 번호 매기기, 반복 풀이기(야코비·가우스-자이델·CG)와 전처리의 차이를 행렬 수준에서 본다.</li>
+      <li>갱신 크기와 잔차 두 가지 수렴 판정, 바이어스 램프·계단 반으로 줄이기·외삽 예측자로 TN-45를 Vg = Vd = 1 V까지 안전하게 데려간다.</li>
+    </ul>
+  </header>
+
+  <section id="system">
+    <h2>격자 위의 방정식은 하나의 큰 비선형 방정식이다</h2>
+    <p>정상 상태 드리프트-확산 모형은 격자점마다 세 개의 방정식을 갖는다. 포아송 방정식, 전자 연속 방정식, 정공 연속 방정식이다(<a href="equations.html">3장</a>). 미지수를 \(\mathbf{u} = (\psi_i, n_i, p_i)\)로 모으면 박스 적분(<a href="mesh.html">4장</a>)으로 얻은 이산 방정식은 다음 꼴이 된다.</p>
+    <div class="formula">$$\mathbf{F}(\mathbf{u}) = \begin{pmatrix} F_\psi(\psi, n, p) \\ F_n(\psi, n, p) \\ F_p(\psi, n, p)\end{pmatrix} = \mathbf{0}$$<div class="where">\(F_\psi\): 각 제어 체적에서 전기 선속의 합 + 공간 전하, \(F_n, F_p\): 각 제어 체적으로 들어오고 나가는 전자·정공 선속의 합 − 재결합. 격자점 \(N\)개면 미지수는 \(3N\)개(전자만 풀면 \(2N\)개)</div></div>
+    <p>이 방정식은 두 군데에서 강하게 비선형이다. 캐리어 농도가 전위의 지수 함수(\(n = n_i e^{(\psi-\varphi_n)/V_t}\))이고, 이웃 격자점 사이의 전류도 전위 차의 지수 함수로 들어간다. 지수 함수 하나가 열전압 \(V_t \approx 25.9\) mV마다 \(e\)배씩 바뀌므로 전위가 1 V 바뀌면 농도는 \(e^{38.7} \approx 10^{17}\)배 바뀐다. 이런 방정식을 푸는 일의 거의 전부는 "지수 함수를 어떻게 달래며 따라갈 것인가"다.</p>
+    <div class="callout">
+      <strong>이 장은 TCAD 흐름의 어디인가</strong>
+      공정 모사 → 구조·격자 → 물리 모델 → <b>수치 해</b> → 소자 특성 → 보정·활용 가운데 수치 해 단계다. 격자(<a href="mesh.html">4장</a>)와 방정식(<a href="equations.html">3장</a>)이 정해졌다고 보고, 그 연립 방정식을 실제로 푸는 알고리즘을 다룬다. 시간에 따라 푸는 과도 해석은 <a href="transient.html">15장</a>에서 같은 뉴턴 위에 시간 적분을 얹는다.
+    </div>
+  </section>
+
+  <section id="sg">
+    <h2>전류의 이산화: 중앙 차분이 출렁이는 곳</h2>
+    <p>두 격자점 \(i, i+1\) 사이(간격 \(h\))의 전자 전류를 가장 순진하게 쓰면 이렇다. 전계는 구간에서 일정하고, 농도는 두 점의 평균, 기울기는 차분이다.</p>
+    <div class="formula">$$J_{n,i+\frac12} = q\mu_n \frac{n_i + n_{i+1}}{2} E + qD_n\frac{n_{i+1}-n_i}{h} = \frac{qD_n}{h}\Big[n_{i+1}\big(1 - \tfrac{\Delta_i}{2}\big) - n_i\big(1 + \tfrac{\Delta_i}{2}\big)\Big]$$<div class="where">\(\Delta_i = (\psi_{i+1}-\psi_i)/V_t\): 한 칸의 전위 차를 열전압으로 나눈 값, \(E = -(\psi_{i+1}-\psi_i)/h\), 아인슈타인 관계 \(D_n = \mu_n V_t\)</div></div>
+    <p>\(\Delta_i > 2\)이면 \(n_{i+1}\)의 계수 \(1 - \Delta_i/2\)가 음수가 된다. 이웃 농도가 늘면 전류가 줄어드는, 물리적으로 말이 안 되는 결합이다. 이것이 연속 방정식에 들어가면 해가 격자점마다 위아래로 출렁이고 농도가 음수로 내려가기도 한다. 실리콘 소자에서 공핍층은 1 V 남짓을 수십 nm에 걸치므로, 한 칸에 \(2V_t \approx 52\) mV 이하가 걸리게 하려면 격자가 쓸데없이 촘촘해야 한다.</p>
+    <p><span class="term">샤페터-거멜 이산화</span><span class="en">(Scharfetter–Gummel, 1969)</span>는 발상을 바꾼다. 구간 안에서 전류와 전계가 일정하다고 놓고 1차 미분 방정식 \(J = q\mu n E + qD\,dn/dx\)를 <b>정확히</b> 적분한다. 그러면 농도는 구간 안에서 지수 함수 모양이 되고, 선속은 베르누이 함수로 쓰인다.</p>
+    <div class="formula">$$J_{n,i+\frac12} = \frac{qD_n}{h}\Big[n_{i+1}\,B(\Delta_i) - n_i\,B(-\Delta_i)\Big], \qquad B(x) = \frac{x}{e^x - 1}$$<div class="where">\(B(0) = 1\)이면 순수 확산, \(|\Delta| \gg 1\)이면 \(B(\Delta) \to 0\), \(B(-\Delta) \to \Delta\)로 상류 쪽 농도만 남는 드리프트(상류 차분)가 된다. \(B(x) = 1 - x/2 + x^2/12 - \cdots\)이므로 \(|\Delta|\)가 작으면 중앙 차분과 같다</div></div>
+    <p>아래 그림은 한 줄의 격자 위에서 전위가 일정하게 기울어 있을 때 전자 연속 방정식(재결합 없음, 양 끝 농도 고정)을 세 가지 방식으로 푼 결과다. 왼쪽 끝 농도를 1, 오른쪽 끝을 0.2로 두었다. 전위 차를 키우거나 칸 수를 줄여 한 칸의 \(\Delta\)를 2 위로 올려 본다.</p>
+
+    <div class="sim" id="sim-sg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>중앙 차분 대 샤페터-거멜: 한 칸의 전위 차가 2kT/q를 넘으면</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sg-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>전체 전위 차 ΔV <output id="sg-v-out"></output></span><input type="range" id="sg-v" min="0" max="2" step="0.02" value="0.6"></label>
+          <label class="ctrl"><span>칸 수 N <output id="sg-n-out"></output></span><input type="range" id="sg-n" min="4" max="60" step="1" value="10"></label>
+          <label class="check"><input type="checkbox" id="sg-up"> 1차 상류 차분도 그리기</label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--text-dim)"></i>정확해</span><span><i style="background:var(--bad)"></i>중앙 차분</span><span><i style="background:var(--accent)"></i>샤페터-거멜</span><span><i style="background:var(--warn)"></i>상류 차분</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">한 칸의 Δ = Δψ/Vt</span><span class="v" id="sg-o-d">—</span></div>
+        <div class="stat"><span class="k">중앙 차분 최대 오차</span><span class="v" id="sg-o-c">—</span></div>
+        <div class="stat"><span class="k">SG 최대 오차</span><span class="v" id="sg-o-s">—</span></div>
+        <div class="stat"><span class="k">중앙 차분 상태</span><span class="v" id="sg-o-st">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① ΔV 0.6 V, N 10이면 Δ ≈ 2.3이다. 중앙 차분이 오른쪽 끝에서 위아래로 튄다. N을 14로 늘려 Δ를 2 아래로 내리면 출렁임이 사라진다. ② ΔV 2 V, N 10으로 두면 중앙 차분 농도가 음수가 된다. SG는 어떤 Δ에서도 격자점 값이 정확해와 일치한다. ③ 상류 차분을 켠다. 출렁이지는 않지만 경계층이 실제보다 두껍게 번진다(1차 정확도). 오른쪽 그래프에서 중앙 차분의 계수 1 − Δ/2가 Δ = 2에서 0을 지나 음수로 내려가는 것을 본다. (1D, 전위가 직선으로 주어진 전자 연속 방정식, 재결합 없음, 길이 100 nm)</div>
+    </div>
+
+    <p>SG는 전위가 구간에서 직선이라는 가정 아래 <b>격자점 값이 정확하다</b>. 중앙 차분과 상류 차분 사이를 \(\Delta\)에 따라 매끄럽게 넘어가는 지수 맞춤이라 <span class="term">지수 맞춤</span><span class="en">(Exponential fitting)</span>이라고도 부른다. 상업용 TCAD와 이 책의 엔진(1D `TC.dd1d`, 2D `TC.mos2d`) 모두 이 선속을 쓴다. 대가는 비선형성이다. 선속이 \(\psi\)에 대해 지수 함수처럼 바뀌므로 야코비안에는 \(B'(x)\)가 들어가고, \(|x|\)가 매우 크거나 0 근처일 때 넘침과 상쇄 오차를 피하도록 \(B(x)\)를 구간별로 계산해야 한다(엔진의 `TC.bern`은 \(|x| < 10^{-4}\)에서 급수, \(|x| > 700\)에서 점근식을 쓴다).</p>
+  </section>
+
+  <section id="newton">
+    <h2>뉴턴 방법: 접선을 따라 근으로</h2>
+    <p>비선형 방정식 \(\mathbf{F}(\mathbf{u}) = 0\)을 푸는 표준 도구는 <span class="term">뉴턴-랩슨 방법</span><span class="en">(Newton–Raphson)</span>이다. 현재 추정값 \(\mathbf{u}_k\)에서 \(\mathbf{F}\)를 1차 테일러 전개로 직선(고차원에서는 초평면)으로 바꾸고, 그 직선의 근으로 건너뛴다.</p>
+    <div class="formula">$$\mathbf{J}(\mathbf{u}_k)\,\delta\mathbf{u} = -\mathbf{F}(\mathbf{u}_k), \qquad \mathbf{u}_{k+1} = \mathbf{u}_k + t_k\,\delta\mathbf{u}, \qquad J_{ij} = \frac{\partial F_i}{\partial u_j}$$<div class="where">\(\mathbf{J}\): 야코비안 행렬, \(t_k \in (0, 1]\): 감쇠 계수(\(t_k = 1\)이면 순수 뉴턴). 해 근처에서 오차는 \(|e_{k+1}| \le C\,|e_k|^2\), 곧 맞는 자릿수가 반복마다 두 배가 된다(2차 수렴)</div></div>
+    <p>2차 수렴은 강력하지만 조건이 붙는다. "해 근처에서"다. 멀리서 출발하면 접선이 엉뚱한 곳을 가리킨다. 반도체 방정식의 비선형성은 지수 함수이므로 문제를 하나의 격자점으로 줄여 보면 핵심이 다 보인다. 중성 영역의 한 점에서 포아송 방정식은 전하 중성 조건 \(p - n + N_D = 0\), 곧 정규화 전위 \(u = \psi/V_t\)에 대해 \(2\sinh u = N_D/n_i\)가 된다.</p>
+    <p>아래 그림에서 가로축의 손잡이(초기값 \(u_0\))를 끌어 본다. 회색 접선이 다음 추정값을 정한다. 왼쪽에서 출발하면 \(\sinh\)가 평평해서 접선이 아주 멀리 건너뛰고, 그 뒤로는 지수 함수의 가파른 벽을 따라 한 번에 거의 1(곧 \(V_t\))씩만 내려온다.</p>
+
+    <div class="sim" id="sim-nt">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>스칼라 뉴턴: 접선, 2차 수렴, 감쇠</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="nt-cv"></canvas><span class="hint">초기값 손잡이를 좌우로 끈다</span></div>
+        <div class="sim-controls">
+          <div class="seg" id="nt-f"><button data-value="sinh" class="on">2 sinh u = N/nᵢ</button><button data-value="atan">arctan(u − 3) = 0</button></div>
+          <label class="ctrl"><span>도핑 N/nᵢ <output id="nt-r-out"></output></span><input type="range" id="nt-r" min="1" max="8" step="0.5" value="3"></label>
+          <div class="seg" id="nt-d"><button data-value="none" class="on">감쇠 없음</button><button data-value="log">로그 감쇠</button><button data-value="clamp">상한 |δu| ≤ 1</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">초기값 u₀</span><span class="v" id="nt-o-u0">—</span></div>
+        <div class="stat"><span class="k">첫 걸음 u₁</span><span class="v" id="nt-o-u1">—</span></div>
+        <div class="stat"><span class="k">수렴까지 반복</span><span class="v" id="nt-o-k">—</span></div>
+        <div class="stat"><span class="k">상태</span><span class="v" id="nt-o-s">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① N/nᵢ = 10³, u₀를 근 바로 오른쪽에 두면 4~5회 만에 끝난다. 오른쪽 그래프에서 |δu|가 1e-2 → 1e-4 → 1e-8로 지수가 두 배씩 떨어진다(2차 수렴). ② u₀를 0 근처로 끌면 첫 걸음이 u ≈ 500으로 튀고 수백 번에 걸쳐 1씩 내려온다. N/nᵢ를 10⁶ 이상으로 올리면 e^u가 배정밀도를 넘쳐 계산이 NaN으로 끝난다. ③ "로그 감쇠"로 바꾼다. 큰 걸음을 ln(1 + |δu|)로 줄여 어디서 출발해도 십여 번 안에 수렴한다. arctan으로 바꾸면 |u₀ − 3| > 1.39에서 순수 뉴턴이 좌우로 커지며 발산하는 고전적인 예를 볼 수 있다. (u = ψ/Vt, 볼츠만 통계 한 점)</div>
+    </div>
+
+    <p>여기서 본 두 가지 실패, 곧 "평평한 곳에서 너무 멀리 뛰기"와 "지수 함수 벽을 \(V_t\)씩 기어 내려오기"는 2D 소자에서도 그대로 일어난다. 처방도 같다. 걸음의 크기를 제한하는 <span class="term">감쇠</span><span class="en">(Damping)</span>다. 반도체 시뮬레이터에서 자주 쓰는 두 가지는 다음과 같다.</p>
+    <div class="formula">$$\text{로그 감쇠: } \delta\psi' = \operatorname{sign}(\delta\psi)\,V_t \ln\!\Big(1 + \frac{|\delta\psi|}{V_t}\Big), \qquad \text{상한: } t_k = \min\!\Big(1, \frac{\Delta V_{\max}}{\|\delta\psi\|_\infty}\Big)$$<div class="where">로그 감쇠는 노드마다 따로 작용하고 작은 걸음(\(|\delta\psi| \ll V_t\))은 그대로 둔다. 상한은 갱신 전체를 같은 비율로 줄여 방향을 보존한다. 둘 다 해 근처에서는 \(t_k = 1\)로 돌아가므로 마지막 2차 수렴을 해치지 않는다. 더 정교한 방법은 \(\|\mathbf{F}\|\)가 줄어들 때까지 \(t_k\)를 반씩 줄이는 선 탐색(Line search)이다</div></div>
+  </section>
+
+  <section id="poisson">
+    <h2>1D 포아송 방정식을 뉴턴으로</h2>
+    <p>이제 진짜 격자 문제다. 평형 상태 pn 접합(양쪽 \(10^{18}\) cm⁻³, 길이 600 nm, 121점)의 비선형 포아송 방정식을 뉴턴으로 푼다. 평형이므로 \(\varphi_n = \varphi_p = 0\)이고 미지수는 \(\psi_i\)뿐이다. 노드 \(i\)의 잔차와 야코비안은 이렇게 생긴다.</p>
+    <div class="formula">$$F_i = \frac{\varepsilon}{h}(\psi_{i+1} - 2\psi_i + \psi_{i-1}) + q h\,(p_i - n_i + N_i), \qquad \frac{\partial F_i}{\partial \psi_i} = -\frac{2\varepsilon}{h} - \frac{q h}{V_t}(n_i + p_i)$$<div class="where">균일 격자 \(h\), \(n_i = n_i^{\,0} e^{\psi_i/V_t}\), \(p_i = n_i^{\,0} e^{-\psi_i/V_t}\)(진성 농도 \(n_i^{\,0}\)). 야코비안은 삼중 대각이고 대각 성분이 항상 음수로 우세하다. 그래서 1D 포아송의 뉴턴 선형 풀이는 토마스 알고리즘 한 번(\(O(N)\))이면 된다</div></div>
+    <p>아래 시뮬레이터는 엔진의 단계형 풀이기 `TC.poissonSolver1d`를 한 반복씩 돌린다. 위 그래프는 현재 반복의 \(\psi(x)\)와 최종 해(점선), 아래 그래프는 반복마다의 갱신 크기 \(\max|\delta\psi|/V_t\)와 잔차다. 방법과 초기값을 바꿔 가며 "한 걸음"과 "끝까지"를 눌러 본다.</p>
+
+    <div class="sim" id="sim-p1">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>pn 접합 포아송: 초기값·감쇠·피카르</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="p1-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="seg" id="p1-m"><button data-value="a" class="on">뉴턴 · 중성 초기값</button><button data-value="b">뉴턴 · ψ = 0</button><button data-value="c">로그 감쇠 · ψ = 0</button><button data-value="d">피카르</button></div>
+          <div class="btn-row"><button class="btn" id="p1-step">한 걸음</button><button class="btn primary" id="p1-run">끝까지</button><button class="btn" id="p1-re">다시</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">반복</span><span class="v" id="p1-o-k">—</span></div>
+        <div class="stat"><span class="k">갱신 max|δψ|/Vt</span><span class="v" id="p1-o-u">—</span></div>
+        <div class="stat"><span class="k">잔차(행 정규화)</span><span class="v" id="p1-o-r">—</span></div>
+        <div class="stat"><span class="k">상태</span><span class="v" id="p1-o-s">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① "뉴턴 · 중성 초기값": 각 점을 국소 전하 중성 전위(±0.476 V)에서 출발시킨다. 7회 만에 갱신이 9 → 6 → 1 → 0.2 → 4e-3 → 3e-6 → 3e-12로 떨어진다. 마지막 세 걸음이 2차 수렴이다. ② "뉴턴 · ψ = 0": 모든 점을 0에서 출발시키면 첫 걸음이 수백 Vt로 튀고 두 번째에 지수 함수가 넘쳐 NaN이 된다. ③ "로그 감쇠 · ψ = 0": 같은 나쁜 초기값인데도 큰 걸음이 잘려 11회 만에 수렴한다. ④ "피카르": 전하를 지난 반복 값으로 얼리고 선형 포아송만 푼다. 고농도 접합에서는 3회 만에 발산한다. (볼츠만 통계, 오믹 양 끝, 수렴 판정 갱신 < 1e-9 Vt)</div>
+    </div>
+
+    <p>네 경우를 나란히 놓으면 교훈이 분명하다. <b>초기값이 뉴턴의 운명을 정한다.</b> 국소 전하 중성 전위는 중성 영역에서는 이미 정답이고 공핍 영역에서만 틀리므로 거의 모든 시뮬레이터가 평형 풀이의 기본 초기값으로 쓴다. 감쇠는 나쁜 초기값에 대한 보험이다. 피카르 반복<span class="en">(Picard, 고정점 반복)</span>은 야코비안에서 \(\partial(p-n)/\partial\psi\) 항을 버린 것과 같다. 이 항이 바로 공간 전하가 전위 변화를 되밀어 내는 "음의 되먹임"이므로 이를 빼면 고농도에서 반복이 증폭되어 발산한다. 피카르는 저농도·소신호 같은 약한 비선형 문제에서만 쓸 만하다.</p>
+  </section>
+
+  <section id="gummel">
+    <h2>결합 뉴턴과 거멜 반복</h2>
+    <p>포아송만 풀 때는 노드마다 미지수가 하나였다. 드리프트-확산 전체를 풀면 노드마다 \((\psi, n, p)\) 세 개가 엮이고 야코비안은 \(3\times3\) 블록 행렬이 된다. 방법은 두 갈래다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 720 270" role="img" aria-label="결합 뉴턴의 3×3 블록 야코비안과 거멜 반복의 대각 블록 순환">
+        <defs><marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/></marker></defs>
+        <text x="170" y="24" text-anchor="middle" class="lbl-b">결합 뉴턴 (Coupled)</text>
+        <g transform="translate(80,40)">
+          <rect x="0" y="0" width="56" height="56" class="f-acc"/><rect x="62" y="0" width="56" height="56" class="f-acc-soft"/><rect x="124" y="0" width="56" height="56" class="f-acc-soft"/>
+          <rect x="0" y="62" width="56" height="56" class="f-acc-soft"/><rect x="62" y="62" width="56" height="56" class="f-acc"/><rect x="124" y="62" width="56" height="56" class="f-acc-soft"/>
+          <rect x="0" y="124" width="56" height="56" class="f-acc-soft"/><rect x="62" y="124" width="56" height="56" class="f-acc-soft"/><rect x="124" y="124" width="56" height="56" class="f-acc"/>
+          <text x="28" y="33" text-anchor="middle" class="lbl t-mono">∂Fψ/∂ψ</text><text x="90" y="33" text-anchor="middle" class="lbl-dim t-mono">∂Fψ/∂n</text><text x="152" y="33" text-anchor="middle" class="lbl-dim t-mono">∂Fψ/∂p</text>
+          <text x="28" y="95" text-anchor="middle" class="lbl-dim t-mono">∂Fn/∂ψ</text><text x="90" y="95" text-anchor="middle" class="lbl t-mono">∂Fn/∂n</text><text x="152" y="95" text-anchor="middle" class="lbl-dim t-mono">∂Fn/∂p</text>
+          <text x="28" y="157" text-anchor="middle" class="lbl-dim t-mono">∂Fp/∂ψ</text><text x="90" y="157" text-anchor="middle" class="lbl-dim t-mono">∂Fp/∂n</text><text x="152" y="157" text-anchor="middle" class="lbl t-mono">∂Fp/∂p</text>
+        </g>
+        <text x="170" y="245" text-anchor="middle" class="lbl">9개 블록을 한 번에 풀어 (δψ, δn, δp)를 동시에</text>
+        <text x="170" y="263" text-anchor="middle" class="lbl-dim">해 근처 2차 수렴 · 행렬 3배 크기</text>
+        <line x1="360" y1="30" x2="360" y2="250" class="s-dash"/>
+        <text x="545" y="24" text-anchor="middle" class="lbl-b">거멜 반복 (Decoupled)</text>
+        <g transform="translate(455,40)">
+          <rect x="0" y="0" width="56" height="56" class="f-acc"/><rect x="62" y="62" width="56" height="56" class="f-acc2-soft"/><rect x="124" y="124" width="56" height="56" class="f-ok-soft"/>
+          <rect x="62" y="0" width="56" height="56" class="s-dash" fill="none"/><rect x="124" y="0" width="56" height="56" class="s-dash" fill="none"/><rect x="0" y="62" width="56" height="56" class="s-dash" fill="none"/>
+          <rect x="124" y="62" width="56" height="56" class="s-dash" fill="none"/><rect x="0" y="124" width="56" height="56" class="s-dash" fill="none"/><rect x="62" y="124" width="56" height="56" class="s-dash" fill="none"/>
+          <text x="28" y="27" text-anchor="middle" class="lbl t-mono">포아송</text><text x="28" y="43" text-anchor="middle" class="lbl-dim t-mono">φn,φp 고정</text>
+          <text x="90" y="89" text-anchor="middle" class="lbl t-mono">전자</text><text x="90" y="105" text-anchor="middle" class="lbl-dim t-mono">ψ 고정</text>
+          <text x="152" y="151" text-anchor="middle" class="lbl t-mono">정공</text><text x="152" y="167" text-anchor="middle" class="lbl-dim t-mono">ψ 고정</text>
+          <path d="M60,30 C70,40 70,50 66,62" class="s-acc" fill="none" marker-end="url(#ar5)"/>
+          <path d="M122,92 C132,102 132,112 128,124" class="s-acc" fill="none" marker-end="url(#ar5)"/>
+          <path d="M150,182 C120,215 -10,215 -14,100 C-16,60 -10,40 -3,32" class="s-acc2" fill="none" marker-end="url(#ar5)"/>
+        </g>
+        <text x="545" y="245" text-anchor="middle" class="lbl">대각 블록만 차례로 풀고 바깥 고리를 반복</text>
+        <text x="545" y="263" text-anchor="middle" class="lbl-dim">행렬 작음 · 결합이 강하면 선형 수렴으로 느려짐</text>
+      </svg>
+      <figcaption><b>결합 뉴턴과 거멜 반복의 야코비안.</b> 결합 뉴턴은 세 방정식의 상호 미분(연한 블록)까지 넣어 한 번에 푼다. 거멜은 대각 블록만 남기고 나머지 결합을 바깥 반복으로 떠넘긴다.</figcaption>
+    </figure>
+    <p><span class="term">거멜 반복</span><span class="en">(Gummel's method, 1964)</span>은 준페르미 준위 \(\varphi_n, \varphi_p\)를 고정하고 비선형 포아송을 푼 다음(이때 \(n, p\)는 \(\psi\)를 따라 볼츠만 식으로 움직인다), 그 \(\psi\)를 고정하고 전자·정공 연속 방정식을 따로 푼다. \(\psi\)가 고정되면 SG 선속은 \(n\)에 대해 선형이므로 연속 방정식은 선형 삼중 대각(2D에서는 5대각) 풀이 한 번이다. 이것을 바깥 고리로 되풀이한다.</p>
+    <p>거멜의 수렴 속도는 방정식 사이의 결합이 얼마나 약한가에 달려 있다. 전류가 작아 캐리어가 공간 전하에 거의 기여하지 않으면(낮은 순방향, 문턱 아래 MOSFET) 포아송과 연속 방정식이 거의 독립이어서 몇 번 만에 끝난다. 고주입에서는 주입된 캐리어가 전위를 바꾸고, 바뀐 전위가 다시 주입을 바꾸는 결합이 강해 선형 수렴이 매우 느려진다.</p>
+    <p>아래에서 엔진의 1D 다이오드(\(10^{17}/10^{17}\), 2 µm, SRH + 오제)를 평형에서 바로 목표 전압으로 풀며 두 방법을 비교한다. 오른쪽 그래프는 바이어스마다의 반복 횟수를 미리 계산해 둔 것이다.</p>
+
+    <div class="sim" id="sim-gm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>다이오드에서 뉴턴 대 거멜: 반복 횟수와 바이어스</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gm-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>바이어스 Va <output id="gm-v-out"></output></span><input type="range" id="gm-v" min="-2" max="1.1" step="0.05" value="0.6"></label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>결합 뉴턴</span><span><i style="background:var(--accent-2)"></i>거멜</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">뉴턴 반복</span><span class="v" id="gm-o-n">—</span></div>
+        <div class="stat"><span class="k">거멜 반복</span><span class="v" id="gm-o-g">—</span></div>
+        <div class="stat"><span class="k">전류 J</span><span class="v" id="gm-o-j">—</span></div>
+        <div class="stat"><span class="k">두 해의 J 차이</span><span class="v" id="gm-o-d">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① Va = 0.2 V: 두 방법 모두 6회다. 전류가 작아 결합이 약하다. ② Va를 0.6 → 0.8 → 1.0 V로 올린다. 뉴턴은 7~10회로 거의 그대로인데 거멜은 13 → 22 → 38회로 늘어난다. 왼쪽 그래프에서 거멜의 갱신이 직선(선형 수렴)으로, 뉴턴은 마지막에 꺾여 떨어진다(2차 수렴). ③ 역방향 −2 V로 내린다. 전류는 작지만 공핍층의 전위 변화가 커서 거멜도 수십 회가 걸린다(−5 V에서 뉴턴 13회, 거멜 119회). 두 해의 전류는 같다. (1D DD, 볼츠만, τ = 0.1 µs, 반복 판정 갱신 &lt; 1e-9)</div>
+    </div>
+
+    <p>상용 도구가 두 방법을 섞어 쓰는 이유가 여기 있다. 거멜은 한 반복이 싸고(작은 선형 방정식 세 번) 초기값에 관대해서 평형이나 낮은 바이어스의 출발점을 만들기 좋다. 결합 뉴턴은 한 반복이 비싸지만(블록 행렬) 반복 수가 바이어스에 둔감하고 해 근처에서 2차로 수렴한다. 흔한 전략은 "거멜 몇 번으로 초기값을 다듬고 결합 뉴턴으로 마무리"다. 2D 엔진 `TC.mosSolver`는 `method: "gummel"`도 지원한다. TN-45 coarse 격자, Vd = 0.05 V에서 뉴턴은 4~5회, 거멜은 7~8회로 같은 해에 닿는다.</p>
+  </section>
+
+  <section id="linear">
+    <h2>매 반복의 선형 방정식: 직접법과 반복법</h2>
+    <p>뉴턴의 한 반복은 결국 선형 방정식 \(\mathbf{J}\,\delta\mathbf{u} = -\mathbf{F}\) 하나다. 반도체 시뮬레이션 시간의 대부분이 여기에 쓰인다. 2D 격자에서 노드는 이웃 4개(삼각 격자면 평균 6개)와만 결합하므로 행렬은 거의 0인 <span class="term">희소 행렬</span><span class="en">(Sparse matrix)</span>이다. 문제는 그 0의 자리가 가우스 소거를 하면서 채워진다는 것이다.</p>
+    <p>아래 왼쪽은 직사각형 격자와 노드 번호(색이 번호 순서), 오른쪽은 5점 포아송 행렬의 0이 아닌 성분(파랑)과 LU 분해에서 새로 채워지는 성분(빨강)이다. 번호 매기는 방식을 바꿔 본다.</p>
+
+    <div class="sim" id="sim-sp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>희소 행렬과 LU 채움: 번호를 어떻게 매기는가</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>가로 격자점 nx <output id="sp-x-out"></output></span><input type="range" id="sp-x" min="3" max="16" step="1" value="10"></label>
+          <label class="ctrl"><span>세로 격자점 ny <output id="sp-y-out"></output></span><input type="range" id="sp-y" min="2" max="10" step="1" value="5"></label>
+          <div class="seg" id="sp-o"><button data-value="x">가로 먼저</button><button data-value="y" class="on">세로 먼저</button><button data-value="rcm">RCM</button><button data-value="rand">무작위</button></div>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>원래 0이 아닌 성분</span><span><i style="background:var(--bad)"></i>LU 채움</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">미지수 N</span><span class="v" id="sp-o-n">—</span></div>
+        <div class="stat"><span class="k">반대역폭</span><span class="v" id="sp-o-b">—</span></div>
+        <div class="stat"><span class="k">nnz(A)</span><span class="v" id="sp-o-a">—</span></div>
+        <div class="stat"><span class="k">nnz(L+U)</span><span class="v" id="sp-o-f">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① "가로 먼저"(긴 쪽 먼저)는 이웃 행의 노드가 nx만큼 떨어져 반대역폭이 nx다. LU 채움은 띠 안을 거의 다 메운다. ② "세로 먼저"(짧은 쪽 먼저)로 바꾸면 반대역폭이 ny로 줄고 채움도 줄어든다. 엔진의 2D 풀이기가 짧은 쪽 차원으로 번호를 매기는 이유다. ③ "무작위"는 같은 행렬인데도 채움이 폭발한다. RCM(역 커트힐-맥키)은 너비 우선 탐색으로 띠를 자동으로 좁힌다. (5점 라플라시안, 구조적으로 대칭, 피벗 없는 기호 소거)</div>
+    </div>
+
+    <p>소거의 비용은 띠 폭에 달려 있다. 반대역폭 \(b\), 미지수 \(N\)인 띠 행렬의 LU는 메모리 \(O(Nb)\), 연산 \(O(Nb^2)\)이다. 정사각형 2D 격자(\(n\times n\))면 \(b \approx n\)이므로 연산은 \(O(n^4) = O(N^2)\)이다. 이 책의 2D 엔진은 결합 미지수 \((\psi, n)\)을 노드마다 묶고 짧은 쪽(세로 26점)으로 번호를 매긴 띠 LU를 쓴다. TN-45 coarse 격자(29 × 26 = 754 노드, 미지수 1508개)에서 띠 저장은 약 16만 칸으로, 0이 아닌 원래 성분 약 1만 5천 개의 열 배쯤 된다. 이 정도면 한 번 분해가 수 ms다. 3D나 수십만 노드 격자에서는 채움을 최소화하는 순서(최소 차수, 중첩 분할)와 다중 프런트·초노드 희소 직접 풀이기를 쓰거나, 아예 분해하지 않는 반복법으로 간다.</p>
+    <p><span class="term">반복 풀이기</span><span class="en">(Iterative solver)</span>는 행렬-벡터 곱만 써서 해에 다가간다. 야코비와 가우스-자이델은 이웃 값을 평균하는 고전적인 방법인데, 오차 가운데 긴 파장 성분이 아주 천천히 줄어 격자가 \(n\times n\)이면 \(O(n^2)\)번이 걸린다. 켤레 기울기법<span class="en">(Conjugate gradient, CG)</span>은 대칭 양정치 행렬에서 크릴로프 부분 공간의 최적 해를 고르므로 \(O(n)\)번이면 된다. 전처리<span class="en">(Preconditioning)</span>는 \(\mathbf{M}^{-1}\mathbf{A}\)가 단위 행렬에 가깝도록 근사 역행렬 \(\mathbf{M}\)을 곱하는 것이다. 불완전 콜레스키 \(\mathrm{IC}(0)\)는 채움을 버린 LU로 \(\mathbf{M}\)을 만든다.</p>
+
+    <div class="sim" id="sim-it">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2D 포아송 행렬의 반복 풀이: 야코비·가우스-자이델·SOR·CG·ICCG</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="it-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>격자 n × n <output id="it-n-out"></output></span><input type="range" id="it-n" min="8" max="40" step="2" value="16"></label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--text-dim)"></i>야코비</span><span><i style="background:var(--warn)"></i>가우스-자이델</span><span><i style="background:var(--ok)"></i>SOR(최적 ω)</span><span><i style="background:var(--accent)"></i>CG</span><span><i style="background:var(--accent-2)"></i>ICCG(0)</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">야코비 (1e-8까지)</span><span class="v" id="it-o-j">—</span></div>
+        <div class="stat"><span class="k">가우스-자이델</span><span class="v" id="it-o-g">—</span></div>
+        <div class="stat"><span class="k">SOR</span><span class="v" id="it-o-s">—</span></div>
+        <div class="stat"><span class="k">CG / ICCG</span><span class="v" id="it-o-c">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① n = 16에서 야코비는 약 1060회, 가우스-자이델은 그 절반, CG는 28회다. ② n을 두 배(32)로 늘린다. 야코비·가우스-자이델은 반복이 약 4배(n²), SOR와 CG는 약 2배(n)로 늘어난다. 야코비는 3000회 안에 끝나지 못한다. ③ ICCG는 CG보다 반복이 더 적다(n = 16에서 17회). 한 반복이 전처리 풀이만큼 비싸지만 큰 문제일수록 이득이 크다. (균일 격자 5점 라플라시안, 디리클레 경계, 균일한 우변, 상대 잔차 ‖r‖/‖b‖)</div>
+    </div>
+
+    <p>드리프트-확산 야코비안은 포아송 행렬보다 훨씬 다루기 어렵다. 연속 방정식 블록은 비대칭이고(드리프트), 대각 성분의 크기가 노드마다 수십 자릿수 차이 나며, 결합 블록 때문에 양정치도 아니다. 그래서 CG 대신 BiCGSTAB이나 GMRES 같은 비대칭 크릴로프 방법에 ILU 전처리를 붙여 쓰고, 행과 열의 크기를 맞추는 스케일링이 필수다. 2D 소자 대부분은 지금도 희소 직접 풀이기가 더 빠르고 튼튼하며, 반복법은 대형 3D 문제에서 주인공이 된다.</p>
+  </section>
+
+  <section id="criteria">
+    <h2>언제 멈출 것인가: 갱신 크기와 잔차</h2>
+    <p>뉴턴 반복을 멈추는 기준은 두 종류다. 갱신이 작아졌는가, 방정식이 만족되었는가.</p>
+    <div class="formula">$$\frac{\|\delta\psi\|_\infty}{V_t} < \varepsilon_\psi, \quad \frac{\|\delta n\|}{\|n\|} < \varepsilon_n \qquad \text{그리고/또는} \qquad \|\mathbf{F}(\mathbf{u}_k)\| < \varepsilon_F\ \ (\text{또는 } \|\mathbf{F}_k\|/\|\mathbf{F}_0\| < \varepsilon_r)$$<div class="where">전위 갱신은 열전압 단위로 재야 의미가 있다(농도와 전류가 \(e^{\psi/V_t}\)로 따라 움직이므로 \(\delta\psi/V_t\)가 곧 상대 오차다). 잔차는 방정식마다 단위가 달라 행별 스케일링 뒤에 비교한다</div></div>
+    <p>갱신 기준만 쓰면 감쇠가 걸려 걸음이 억지로 작아진 경우를 수렴으로 착각할 수 있다. 잔차 기준만 쓰면 행렬 조건이 나빠 잔차는 작은데 해는 아직 먼 경우를 놓친다. 그래서 둘을 함께 본다. 아래는 다이오드를 결합 뉴턴으로 풀면서 반복마다 단자 전류를 계산한 것이다. 허용 오차를 느슨하게 잡으면 전위는 "거의 맞았는데" 전류가 얼마나 틀리는지 본다.</p>
+
+    <div class="sim" id="sim-cr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>허용 오차와 전류의 정확도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>바이어스 Va <output id="cr-v-out"></output></span><input type="range" id="cr-v" min="0.3" max="1.0" step="0.05" value="0.6"></label>
+          <label class="ctrl"><span>갱신 허용 오차 ε <output id="cr-t-out"></output></span><input type="range" id="cr-t" min="-10" max="0.5" step="0.5" value="0"></label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>갱신 크기</span><span><i style="background:var(--accent-2)"></i>잔차(행 정규화)</span><span><i style="background:var(--bad)"></i>전류 상대 오차</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">멈춘 반복</span><span class="v" id="cr-o-k">—</span></div>
+        <div class="stat"><span class="k">그때 전류 오차</span><span class="v" id="cr-o-e">—</span></div>
+        <div class="stat"><span class="k">그때 잔차</span><span class="v" id="cr-o-r">—</span></div>
+        <div class="stat"><span class="k">수렴 전류 J</span><span class="v" id="cr-o-j">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① Va 0.6 V, ε = 1(갱신이 Vt 하나, 또는 농도 상대 변화 100% 아래)로 두면 4회째에 멈추는데 그때 전류는 약 10% 틀려 있다. 전류가 e^{ψ/Vt}로 움직이므로 0.1 Vt의 전위 오차가 곧 약 10%의 전류 오차다. ② ε를 1e-3으로 조이면 반복이 단 한 번 늘고 전류 오차는 1e-9로 떨어진다. 2차 수렴 덕분에 엄격한 허용 오차가 거의 공짜다. ③ Va를 0.8 V, 1.0 V로 올린다. 고주입에서는 초반 걸음이 길어지지만(1.0 V에서 ε = 1이면 6회째, 전류 오차 2e-4) 마지막 꺾임은 그대로다. (1D DD, 10¹⁷/10¹⁷ 다이오드, 평형에서 바로 목표 전압으로, 갱신은 ψ는 Vt 단위·n, p는 상대값의 최댓값)</div>
+    </div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>기준</th><th>장점</th><th>속는 경우</th><th>대표 값</th></tr></thead>
+      <tbody>
+        <tr><td>전위 갱신 \(\|\delta\psi\|/V_t\)</td><td>물리적 의미가 분명(전류 상대 오차)</td><td>감쇠·걸음 제한으로 갱신이 인위적으로 작을 때</td><td class="num">1e-5 ~ 1e-8</td></tr>
+        <tr><td>농도 상대 갱신 \(\|\delta n/n\|\)</td><td>소수 캐리어까지 확인</td><td>농도가 바닥값(~1e-10 cm⁻³) 근처인 곳</td><td class="num">1e-3 ~ 1e-6</td></tr>
+        <tr><td>잔차 \(\|\mathbf{F}\|\)</td><td>방정식이 실제로 만족되는지</td><td>행렬 조건이 나쁘면 작은 잔차 ≠ 작은 오차, 스케일링에 민감</td><td class="num">초기 대비 1e-8 ~ 1e-12</td></tr>
+        <tr><td>단자 전류 변화</td><td>원하는 출력에 직접</td><td>전류가 매우 작은 꺼짐 상태에서 잡음 수준</td><td class="num">상대 1e-6</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="continuation">
+    <h2>바이어스 램프와 연속법</h2>
+    <p>뉴턴이 해 근처에서만 빠르다면, 해 근처에서 출발하면 된다. <span class="term">연속법</span><span class="en">(Continuation)</span>은 이미 아는 해(평형)에서 출발해 바이어스를 조금씩 올리며 바로 앞의 해를 다음 초기값으로 쓰는 것이다. 바이어스 간격이 작으면 초기값이 해에 가깝고, 크면 뉴턴이 먼 거리를 한 번에 건너야 한다.</p>
+    <p>아래 그림의 왼쪽 위는 바이어스 평면(Vg, Vd)이다. 목표점을 끌어 놓으면 TN-45(coarse 격자 754 노드)를 <b>평형에서 그 바이어스까지 한 번에</b> 결합 뉴턴으로 푼다. 오른쪽은 반복마다의 전자 농도 지도, 아래는 반복마다의 전위 갱신과 잔차다. 전위 갱신 상한 \(\Delta V_{\max}\)를 바꿔 본다.</p>
+
+    <div class="sim" id="sim-jp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>TN-45: 평형에서 한 번에 뛰기와 감쇠</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="jp-cv"></canvas><span class="hint">바이어스 평면의 목표점을 끈다</span></div>
+        <div class="sim-controls">
+          <div class="seg" id="jp-d"><button data-value="0.2">ΔVmax 0.2 V</button><button data-value="0.5" class="on">0.5 V</button><button data-value="2">2 V</button><button data-value="100">제한 없음</button></div>
+          <div class="btn-row"><button class="btn primary" id="jp-go">풀기</button><button class="btn" id="jp-re">지도 지우기</button></div>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>max|δψ| (V)</span><span><i style="background:var(--accent-2)"></i>잔차(포아송 행)</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">목표 (Vg, Vd)</span><span class="v" id="jp-o-b">—</span></div>
+        <div class="stat"><span class="k">반복</span><span class="v" id="jp-o-k">—</span></div>
+        <div class="stat"><span class="k">감쇠 계수 t</span><span class="v" id="jp-o-t">—</span></div>
+        <div class="stat"><span class="k">결과 Id</span><span class="v" id="jp-o-i">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(Vg = Vd = 1 V, ΔVmax 0.5 V)으로 푼다. 처음 네 번은 갱신이 0.5 V로 잘리고(t &lt; 1), 그 뒤 갱신이 25.9 mV(= Vt) 근처에 한동안 머물다 마지막 세 번에 5e-3 → 6e-4 → 6e-6 V로 떨어진다. 19회. ② "제한 없음"으로 같은 목표를 푼다. 첫 걸음이 4 V, 둘째가 12 V로 튀고 잔차가 1e130대로 치솟은 뒤 갱신이 Vt에 붙어 40회 안에 끝나지 않는다. ③ 목표를 Vg = 0인 축(드레인만)으로 옮기면 제한이 없어도 대부분 수렴한다. 게이트를 한 번에 올리는 것이 어렵다. 바이어스 평면에 남는 점(초록: 수렴, 빨강: 실패, 숫자: 반복)으로 수렴 영역 지도를 그려 본다. (2D DD, 전자만, coarse 격자, 이동도 full, 한 반복 약 5 ms)</div>
+    </div>
+
+    <p>갱신이 \(V_t\) 근처에 오래 머무는 현상은 앞의 스칼라 뉴턴에서 본 "지수 함수 벽 기어 내려오기"와 같은 것이다. 노드별로 보면 범인은 n⁺ 다결정 실리콘 게이트다. 게이트 전압이 바뀌면 첫 걸음에서 게이트 안쪽 전위가 해보다 0.4 V쯤 높게 튀고, 그곳의 전자 농도 \(N_\text{poly}\,e^{\delta\psi/V_t}\)가 너무 커서 그 뒤로는 뉴턴이 한 번에 \(V_t\)씩만 내려온다. 엔진의 2D 풀이기는 전역 상한만 쓰고 노드별 로그 감쇠를 쓰지 않으므로 이 벽을 그대로 겪는다. 이 장의 마지막 시뮬레이터에서 볼 것처럼, 초기값에서 게이트 전위를 미리 옮겨 주면 사라진다.</p>
+    <p>실패에 대한 표준 처방은 <span class="term">계단 반으로 줄이기</span><span class="en">(Step halving / bisection)</span>다. 한 바이어스 점이 정해진 반복 안에 수렴하지 못하면 마지막으로 수렴한 해로 돌아가 간격을 반으로 줄여 다시 시도한다. 연달아 쉽게 수렴하면 간격을 다시 늘린다. `TC.mos2d`가 바로 이렇게 걷는다(기본 간격 0.3 V, 실패하면 반, 성공하면 1.5배).</p>
+    <p>더 나은 초기값은 <span class="term">외삽 예측자</span><span class="en">(Predictor)</span>로 만든다. 앞의 두 해로 다음 해를 선형 외삽한다.</p>
+    <div class="formula">$$\mathbf{u}^{\text{pred}}(V_{k+1}) = \mathbf{u}_k + \frac{V_{k+1}-V_k}{V_k - V_{k-1}}\,(\mathbf{u}_k - \mathbf{u}_{k-1})$$<div class="where">\(\mathbf{u}\)는 \(\psi\)와 \(\ln n\)(농도는 로그로 외삽해야 양수가 유지되고 지수적 변화가 직선이 된다). 더 엄밀한 방법은 \(\partial\mathbf{u}/\partial V = -\mathbf{J}^{-1}\,\partial\mathbf{F}/\partial V\)를 이미 분해한 야코비안으로 한 번 더 풀어 접선을 얻는 것이다(접선 예측자)</div></div>
+  </section>
+
+  <section id="failures">
+    <h2>수렴 실패의 유형과 처방</h2>
+    <p>실무에서 만나는 수렴 실패는 대부분 아래 몇 가지로 정리된다. 진단의 첫걸음은 반복마다의 갱신과 잔차 기록(이 장의 아래쪽 그래프들)을 보는 것이다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>증상</th><th>흔한 원인</th><th>처방</th></tr></thead>
+      <tbody>
+        <tr><td>첫 한두 반복에 갱신이 수 V로 튀고 NaN</td><td>나쁜 초기값, 감쇠 없음</td><td>중성 전위 초기값, 로그 감쇠·갱신 상한, 거멜로 시작</td></tr>
+        <tr><td>갱신이 \(V_t\) 근처에서 오래 머문다</td><td>지수 함수 벽을 따라 내려오는 중(과도한 첫 걸음)</td><td>노드별 로그 감쇠, 초기값에서 접촉 전위 이동, 작은 바이어스 간격</td></tr>
+        <tr><td>갱신이 줄었다 늘었다 진동</td><td>속도 포화·이동도의 전계 의존성 미분 누락, 야코비안 오류</td><td>야코비안 검증(유한 차분과 비교), 해 근처에서만 전체 미분 사용</td></tr>
+        <tr><td>선형적으로 아주 느린 수렴</td><td>거멜에서 강한 결합(고주입), 부정확한 야코비안</td><td>결합 뉴턴으로 전환</td></tr>
+        <tr><td>특정 바이어스 이상에서 항상 실패</td><td>항복(충돌 이온화), 래치업, 음의 미분 저항 같은 물리적 전환점</td><td>전류 경계 조건, 직렬 저항을 단 전압원, 호 길이 연속법</td></tr>
+        <tr><td>선형 풀이기 경고(특이 행렬)</td><td>떠 있는 영역(접촉 없는 도체), 0 이동도, 피벗 실패</td><td>구조·접촉 확인, 스케일링, 피벗 있는 풀이기</td></tr>
+        <tr><td>잔차는 작은데 결과가 격자에 따라 크게 달라짐</td><td>수렴 문제가 아니라 이산화 오차</td><td>격자 세분(<a href="mesh.html">4장</a>)</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn">
+      <strong>수렴했다고 맞는 것은 아니다</strong>
+      뉴턴이 수렴했다는 것은 이산 방정식 \(\mathbf{F}(\mathbf{u}) = 0\)을 풀었다는 뜻일 뿐이다. 격자가 성기면 그 이산 방정식 자체가 연속 문제와 다르다. TN-45의 Vt는 coarse 격자에서 0.331 V, normal에서 0.356 V로 25 mV 차이가 나지만 두 경우 모두 1e-6 V까지 완벽히 "수렴"한다.
+    </div>
+  </section>
+
+  <section id="ramp">
+    <h2>종합: TN-45 게이트 램프 설계</h2>
+    <p>이제 지금까지의 도구를 모두 손에 쥐고 TN-45의 Id-Vg 곡선을 실제로 계산한다. 출발점은 Vg = 0, 주어진 Vd에서 수렴한 해다. 게이트를 0에서 1 V까지 올리는데, 바이어스 간격, 다음 점의 초기값을 만드는 방법, 감쇠, 실패할 때의 계단 반으로 줄이기를 직접 고른다. 위 그래프는 계산되는 대로 그려지는 Id-Vg(로그), 아래는 시도한 점마다의 뉴턴 반복 수다(빨강은 실패한 시도). 초기값 방법은 셋이다.</p>
+    <ul>
+      <li><b>이전 해 그대로</b>: 앞 점의 해를 그대로 초기값으로 쓴다. 게이트 접촉만 새 전압으로 바뀐다.</li>
+      <li><b>게이트 전위 이동</b>: 앞 점의 해에서 다결정 실리콘 게이트 안쪽 전위를 \(\Delta V_g\)만큼 미리 올려 둔다(게이트 전체가 같이 움직인다는 물리를 초기값에 넣는다).</li>
+      <li><b>외삽 예측</b>: 앞의 두 해로 \(\psi\)와 \(\ln n\)을 선형 외삽한다(`TC.sweep2d`의 방식). 앞 해가 하나뿐인 첫 점은 게이트 전위 이동을 쓴다.</li>
+    </ul>
+
+    <div class="sim" id="sim-rp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>바이어스 램프 실험실: 간격 · 초기값 · 감쇠 · 계단 반으로</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rp-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="seg" id="rp-s"><button data-value="0.05">ΔVg 0.05</button><button data-value="0.1" class="on">0.1</button><button data-value="0.25">0.25</button><button data-value="0.5">0.5</button><button data-value="1">1 V</button></div>
+          <div class="seg" id="rp-g"><button data-value="plain" class="on">이전 해</button><button data-value="shift">게이트 이동</button><button data-value="extrap">외삽 예측</button></div>
+          <div class="seg" id="rp-vd"><button data-value="0.05">Vd 0.05 V</button><button data-value="1" class="on">Vd 1.0 V</button></div>
+          <label class="check"><input type="checkbox" id="rp-dm" checked> 감쇠 (ΔVmax 0.5 V)</label>
+          <label class="check"><input type="checkbox" id="rp-hv" checked> 실패하면 계단 반으로</label>
+          <div class="btn-row"><button class="btn primary" id="rp-go">램프 시작</button><button class="btn" id="rp-re">멈춤</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">현재 Vg</span><span class="v" id="rp-o-v">—</span></div>
+        <div class="stat"><span class="k">총 뉴턴 반복</span><span class="v" id="rp-o-k">—</span></div>
+        <div class="stat"><span class="k">실패한 시도</span><span class="v" id="rp-o-f">—</span></div>
+        <div class="stat"><span class="k">Id (Vg = 1 V)</span><span class="v" id="rp-o-i">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(ΔVg 0.1 V, 이전 해, 감쇠, Vd 1 V): 점마다 20회, 모두 200회 남짓이다. ② 초기값을 "게이트 이동"으로 바꾼다. 같은 간격에서 점마다 4~5회, 총 48회로 줄어든다. "외삽 예측"은 뒤로 갈수록 3회까지 내려간다. ③ "이전 해"에서 감쇠를 끄고 ΔVg를 0.25 V 이상으로 잡는다. 첫 점부터 실패한다. 계단 반으로 줄이기를 켜면 간격을 0.06 V 근처까지 줄여 가며 버티지만 실패한 시도에 반복을 많이 버린다. 끄면 그 자리에서 멈춘다. ④ "게이트 이동"이나 "외삽"이면 감쇠 없이 1 V를 한 번에 뛰어도 7~9회에 수렴한다. 좋은 초기값이 감쇠보다 강하다. (2D DD, coarse 격자, 점마다 최대 40회, 갱신 판정 1e-5 V)</div>
+    </div>
+
+    <p>네 가지 손잡이가 서로 어떻게 맞물리는지 정리하면 이렇다. 감쇠는 나쁜 초기값으로부터 발산을 막지만 걸음을 잘라 반복을 늘린다. 계단 반으로 줄이기는 실패를 성공으로 바꾸지만 실패한 시도의 반복을 버린다. 좋은 초기값(물리를 넣은 이동, 외삽)은 둘 다 필요 없게 만든다. 실무 설정은 "작지 않은 간격 + 외삽 예측 + 가벼운 감쇠 + 계단 반으로 줄이기를 보험으로"다. 이 결론은 TN-45 하나의 것이 아니라 거의 모든 소자 시뮬레이션에 통한다.</p>
+
+    <div class="casefile">
+      <div class="tag"><b>TARGET TN-45</b><span>타깃 파일 · 5장</span></div>
+      <h4>Vg = Vd = 1 V까지, 몇 번의 뉴턴이 드는가</h4>
+      <p>coarse 격자(754 노드, 미지수 1508개, 띠 LU)에서 결합 뉴턴으로 계산했다. <b>평형에서 한 번에</b> Vg = Vd = 1 V로 뛰면 갱신 상한이 없을 때 첫 두 걸음이 4.4 V, 12 V로 튀고 포아송 잔차가 1e134까지 치솟은 뒤 갱신이 25.9 mV(= Vt)에 붙어 60회가 지나도 수렴하지 않는다. 상한 0.5 V면 19회, 0.2 V면 16회, 2 V면 44회다(normal 격자는 0.5 V로 27회). 세 경로의 Id는 모두 0.793 mA/µm로 1e-10까지 같다.</p>
+      <p><b>게이트 램프</b>(Vd 0.05 V, ΔVg 0.1 V, 상한 0.5 V)는 앞 점의 해를 그대로 쓰면 점마다 20회(총 200회)이고, 마지막 잔차가 줄지 않은 채 Vt 걸음으로 기어 내려온다. 원인은 n⁺ 다결정 게이트 안쪽 전위의 첫 걸음 과도 상승이다. 초기값에서 게이트 전위를 0.1 V 올려 두면 점마다 4~5회(총 43회), 외삽 예측이면 3회까지(총 37회) 줄어든다. 포화 영역 Id-Vg 21점(`TC.sweep2d`, Vd 1 V)은 예측자를 켜면 점당 3회(총 89회, 약 0.5 s), 끄면 점당 9회(총 203회, 약 1.1 s)다.</p>
+      <p><b>드레인 간격</b>: Vg = 0에서 감쇠 없이 Vd를 0.25 V씩 올리면 점마다 6회에 수렴하지만, 0.5 V 한 계단은 40회 안에 수렴하지 못한다(상한 0.5 V를 걸면 26회). 켜진 상태(Vg 1 V)는 훨씬 너그러워서 감쇠 없이도 ΔVd 1 V는 9회, 3 V는 33회가 걸리고 4 V 한 계단에서는 수렴하지 못한다. 수렴은 간격에 단조롭지 않다(Vg = 0에서 1 V 한 계단은 오히려 8회에 끝난다). 그래서 간격은 "작게"가 아니라 "실패하면 줄이는" 규칙으로 정한다.</p>
+      <div class="clue">
+        <div><b>이 장에서 정한 것</b>TN-45 풀이 설정: 결합 뉴턴(ψ, n), SG 선속, 짧은 쪽 번호의 띠 LU, 전위 갱신 상한 0.5 V, 바이어스 간격 0.05~0.3 V, 외삽 예측자, 실패하면 간격을 반으로. 수렴 판정 갱신 1e-5 V(= 4e-4 Vt)·상대 농도 1e-3.</div>
+        <div><b>아직 남은 문제</b>지금까지 TN-45의 도핑은 해석식으로 준 것이었다. 실제 공정 레시피에서 나오는 도핑 분포는 아직 모른다.</div>
+        <div><b>다음 단계</b>공정 모사로 돌아가 웰·할로·확장부·소스/드레인 주입 직후의 분포를 계산한다(<a href="implant.html">6장</a>).</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>격자 위의 드리프트-확산 방정식은 노드마다 (ψ, n, p)가 엮인 큰 비선형 방정식 F(u) = 0이다. 비선형성의 근원은 농도와 전류가 전위의 지수 함수라는 데 있다.</li>
+      <li>중앙 차분 전류는 한 칸의 전위 차가 2kT/q를 넘으면 이웃 계수가 음수가 되어 해가 출렁인다. 샤페터-거멜 이산화는 구간에서 전류를 정확히 적분해 베르누이 함수 B(x) = x/(eˣ − 1)로 선속을 쓰고, 확산과 상류 드리프트 사이를 매끄럽게 잇는다.</li>
+      <li>뉴턴 방법은 야코비안으로 선형화해 건너뛰며 해 근처에서 2차 수렴한다. 멀리서는 과도한 걸음과 지수 함수 벽(Vt씩 내려오기)으로 무너지므로 좋은 초기값(국소 중성 전위)과 감쇠(로그 감쇠, 갱신 상한)가 필요하다.</li>
+      <li>피카르(전하 얼리기)는 공간 전하의 음의 되먹임을 버려 고농도에서 발산한다. 거멜 반복은 포아송과 연속 방정식을 번갈아 풀어 한 반복이 싸고 저전류에서 좋지만, 결합이 강한 고주입·고전계에서 선형 수렴으로 느려진다.</li>
+      <li>뉴턴 한 반복의 핵심 비용은 희소 선형 방정식이다. 직접법(띠·희소 LU)은 번호 매기기에 따라 채움이 크게 달라진다. 반복법은 야코비·가우스-자이델이 O(n²), CG가 O(n) 반복이고 전처리(ILU, IC)가 반복을 더 줄인다. DD 야코비안은 비대칭이라 BiCGSTAB·GMRES를 쓴다.</li>
+      <li>수렴 판정은 Vt 단위의 전위 갱신과 스케일된 잔차를 함께 본다. 0.1 Vt의 전위 오차는 약 10%의 전류 오차다. 2차 수렴 덕분에 엄격한 허용 오차의 비용은 한두 반복이다.</li>
+      <li>바이어스는 연속법으로 올린다. 실패하면 간격을 반으로 줄이고, 외삽 예측자나 물리를 넣은 초기값(게이트 전위 이동)으로 반복을 크게 줄인다. TN-45를 평형에서 Vg = Vd = 1 V로 한 번에 뛰면 감쇠 없이는 수렴하지 못하고, 상한 0.5 V면 19회 만에 수렴한다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q">
+        <p>공핍층에 걸친 1 V를 균일 격자 20칸으로 나누었다(300 K). 전자 전류를 중앙 차분으로 이산화하면 어떤 일이 예상되는가?</p>
+        <div class="opts">
+          <button class="opt">한 칸에 50 mV가 걸리므로 Δ ≈ 1.9로 2보다 작아 문제가 없다</button>
+          <button class="opt">격자 간격과 무관하게 중앙 차분은 항상 2차 정확도로 맞는다</button>
+          <button class="opt" data-correct>Δ ≈ 1.9로 경계선에 있어, 전위가 국소적으로 더 가파른 곳에서는 계수 1 − Δ/2가 음수가 되어 출렁일 수 있다</button>
+          <button class="opt">출렁임은 정공 전류에서만 생기므로 전자 전류는 안전하다</button>
+        </div>
+        <div class="quiz-exp">Δ = 0.05 V / 0.02585 V ≈ 1.93이다. 평균으로는 2 아래지만 실제 공핍층의 전위는 직선이 아니라 접합면에서 가장 가파르므로 국소 Δ는 2를 넘기 쉽다. 그래서 TCAD는 격자를 극단적으로 촘촘히 하는 대신 Δ와 무관하게 안정한 샤페터-거멜 선속을 쓴다.</div>
+      </div>
+      <div class="quiz-q">
+        <p>평형 pn 접합의 포아송 방정식을 모든 노드 ψ = 0에서 출발해 감쇠 없는 뉴턴으로 풀었더니 두 번째 반복에서 NaN이 나왔다. 가장 적절한 처방은?</p>
+        <div class="opts">
+          <button class="opt" data-correct>초기값을 국소 전하 중성 전위로 바꾸거나, 노드별 로그 감쇠를 건다</button>
+          <button class="opt">뉴턴 대신 피카르(전하를 얼린 선형 포아송) 반복으로 바꾼다</button>
+          <button class="opt">수렴 허용 오차를 느슨하게 한다</button>
+          <button class="opt">격자를 두 배로 촘촘히 한다</button>
+        </div>
+        <div class="quiz-exp">ψ = 0에서 시작하면 첫 뉴턴 걸음이 수백 Vt로 튀어 e^{ψ/Vt}가 넘친다. 중성 전위 초기값이면 7회, ψ = 0이라도 로그 감쇠면 11회에 수렴한다. 피카르는 공간 전하의 음의 되먹임을 버려 고농도에서 오히려 3회 만에 발산한다.</div>
+      </div>
+      <div class="quiz-q">
+        <p>다이오드를 높은 순방향 바이어스(고주입)에서 풀 때 거멜 반복이 결합 뉴턴보다 훨씬 많은 반복을 필요로 하는 이유는?</p>
+        <div class="opts">
+          <button class="opt">거멜은 샤페터-거멜 선속을 쓸 수 없기 때문이다</button>
+          <button class="opt">고주입에서는 야코비안이 특이 행렬이 되기 때문이다</button>
+          <button class="opt">거멜은 한 반복에 선형 방정식을 한 번도 풀지 않기 때문이다</button>
+          <button class="opt" data-correct>주입된 캐리어가 공간 전하와 전위를 크게 바꾸는 강한 결합을 거멜은 바깥 반복으로만 반영하므로 선형 수렴이 느려진다</button>
+        </div>
+        <div class="quiz-exp">거멜은 대각 블록만 풀고 ψ와 n, p 사이의 결합 미분을 버린다. 결합이 약한 저전류에서는 몇 번이면 되지만, 고주입에서는 결합 항이 커서 수렴 비율이 1에 가까워진다. 이 장의 다이오드에서 1.0 V는 뉴턴 10회, 거멜 38회였다.</div>
+      </div>
+      <div class="quiz-q">
+        <p>TN-45 Id-Vg 스윕에서 점마다 뉴턴이 20회씩 걸린다. 반복 기록을 보니 갱신이 약 26 mV에서 오래 머문다. 반복을 가장 크게 줄일 방법은?</p>
+        <div class="opts">
+          <button class="opt">갱신 상한 ΔVmax를 0.5 V에서 5 V로 늘린다</button>
+          <button class="opt" data-correct>다음 점의 초기값을 외삽 예측자(또는 게이트 전위를 미리 옮긴 값)로 만든다</button>
+          <button class="opt">수렴 판정을 잔차 대신 갱신 크기로 바꾼다</button>
+          <button class="opt">거멜 반복으로 바꾼다</button>
+        </div>
+        <div class="quiz-exp">26 mV ≈ Vt의 갱신은 지수 함수 벽을 한 걸음에 Vt씩 내려오는 모습이다. 첫 걸음이 과도하지 않도록 초기값을 해 가까이 두면 사라진다. 게이트 전위 이동은 점마다 4~5회, 외삽 예측은 3회로 줄였다. 상한을 늘리면 오히려 첫 걸음이 커져 나빠진다.</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const TAU = Math.PI * 2, VT = TC.vt(300);
+  const narrowEl = (id) => document.getElementById(id).parentElement.clientWidth < 560;
+  const tone = (cls, s) => '<span class="' + cls + '">' + s + "</span>";
+  const sup = (e) => "10" + String(e).replace(/-/g, "⁻").replace(/\d/g, (d) => "⁰¹²³⁴⁵⁶⁷⁸⁹"[d]);
+  const ex = (v, d) => (isFinite(v) ? v.toExponential(d == null ? 1 : d).replace("e+", "e") : "—");
+  function knob(ctx, x, y, P, r) {
+    r = r || 7;
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x, y, r + 3, 0, TAU); ctx.fillStyle = P.bg; ctx.globalAlpha = 0.85; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fillStyle = P.accent; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; ctx.stroke();
+    ctx.restore();
+  }
+  function label(ctx, s, x, y, color, align, base, px) {
+    ctx.font = TB.font(px || 12); ctx.fillStyle = color; ctx.textAlign = align || "left"; ctx.textBaseline = base || "top"; ctx.fillText(s, x, y);
+  }
+  // 두 그래프 배치: 넓으면 좌우, 좁으면 위아래
+  function twoBoxes(w, h, two, split) {
+    split = split || 0.5;
+    if (two) return [{ x: 58, y: 18, w: w * split - 78, h: h - 70 }, { x: w * split + 50, y: 18, w: w * (1 - split) - 68, h: h - 70 }];
+    const hh = (h - 120) / 2;
+    return [{ x: 58, y: 18, w: w - 76, h: hh }, { x: 58, y: hh + 78, w: w - 76, h: hh }];
+  }
+
+  /* ---------------------------------------------------------- 1. 중앙 차분 대 SG */
+  (function () {
+    const L = 100, nR = 0.2;
+    const V = TB.range("sg-v", (v) => v.toFixed(2) + " V", () => cv.redraw());
+    const NN = TB.range("sg-n", (v) => String(v), () => cv.redraw());
+    const up = document.getElementById("sg-up");
+    up.addEventListener("change", () => cv.redraw());
+    function solve(N, D, w) {
+      const a = new Float64Array(N + 1), b = new Float64Array(N + 1), c = new Float64Array(N + 1), d = new Float64Array(N + 1);
+      const [w1, w0] = w(D);
+      b[0] = 1; d[0] = 1; b[N] = 1; d[N] = nR;
+      for (let i = 1; i < N; i++) { a[i] = w0; b[i] = -(w0 + w1); c[i] = w1; }
+      return TC.tridiag(a, b, c, d);
+    }
+    const SCH = {
+      sg: (D) => [TC.bern(D), TC.bern(-D)],
+      cd: (D) => [1 - D / 2, 1 + D / 2],
+      up: (D) => [1 + Math.max(-D, 0), 1 + Math.max(D, 0)],
+    };
+    const exact = (x, a) => (Math.abs(a) < 1e-9 ? 1 + (nR - 1) * x / L : 1 + (nR - 1) * Math.expm1(a * x) / Math.expm1(a * L));
+    const cv = TB.canvas("#sg-cv", (ctx, w, h) => {
+      const P = TB.palette(), N = NN(), dV = V(), D = dV / VT / N, a = dV / VT / L;
+      const [A, B] = twoBoxes(w, h, !narrowEl("sg-cv"), 0.6);
+      const xs = TC.linspace(0, L, N + 1);
+      const ex_ = []; for (let i = 0; i <= 300; i++) { const x = (L * i) / 300; ex_.push([x, exact(x, a)]); }
+      const sg = solve(N, D, SCH.sg), cd = solve(N, D, SCH.cd), uw = solve(N, D, SCH.up);
+      let ec = 0, es = 0, mn = Infinity;
+      for (let i = 0; i <= N; i++) { const e = exact(xs[i], a); ec = Math.max(ec, Math.abs(cd[i] - e)); es = Math.max(es, Math.abs(sg[i] - e)); mn = Math.min(mn, cd[i]); }
+      const ylo = Math.min(-0.2, Math.max(-1.5, mn - 0.1)), yhi = Math.max(1.3, Math.min(3, Math.max(...cd) + 0.1));
+      const ser = [{ data: ex_, color: P.dim, width: 1.5 }, { data: xs.map((x, i) => [x, cd[i]]), color: P.bad, width: 1.6 }];
+      if (up.checked) ser.push({ data: xs.map((x, i) => [x, uw[i]]), color: P.warn, width: 1.6, dash: [5, 3] });
+      ser.push({ data: xs.map((x, i) => [x, sg[i]]), color: P.accent, width: 1.2 });
+      const c = TB.chart(ctx, A, { x: [0, L], y: [ylo, yhi], xLabel: "위치 x (nm)", yLabel: "n / n(0)", series: ser, hlines: [{ y: 0, color: P.faint }] });
+      for (let i = 0; i <= N; i++) {
+        ctx.fillStyle = P.bad; ctx.fillRect(c.X(xs[i]) - 3, c.Y(TB.clamp(cd[i], ylo, yhi)) - 3, 6, 6);
+        ctx.beginPath(); ctx.arc(c.X(xs[i]), c.Y(sg[i]), 3.5, 0, TAU); ctx.fillStyle = P.accent; ctx.fill();
+      }
+      label(ctx, "ψ: 0 → " + dV.toFixed(2) + " V (직선)", A.x + 8, A.y + 4, P.dim, "left", "top", 11);
+      // 베르누이
+      const bd = [], bm = [], cl = [];
+      for (let i = 0; i <= 200; i++) { const x = -8 + (16 * i) / 200; bd.push([x, TC.bern(x)]); bm.push([x, TC.bern(-x)]); cl.push([x, 1 - x / 2]); }
+      const Dc = TB.clamp(D, -8, 8);
+      TB.chart(ctx, B, { x: [-8, 8], y: [-3, 9], xLabel: "Δ = Δψ / Vt", yLabel: "이웃 계수", series: [{ data: bd, color: P.accent, width: 2 }, { data: bm, color: P.accent, width: 1.4, dash: [5, 3] }, { data: cl, color: P.bad, width: 1.6 }],
+        hlines: [{ y: 0, color: P.faint }], vlines: [{ x: 2, color: P.faint, label: "Δ = 2" }],
+        points: [{ x: Dc, y: TC.bern(Dc), color: P.accent, r: 5 }, { x: Dc, y: 1 - Dc / 2, color: P.bad, r: 5 }] });
+      label(ctx, "B(Δ)", B.x + B.w - 6, B.y + B.h - 44, P.accent, "right", "top", 11);
+      label(ctx, "B(−Δ) 점선, 1 − Δ/2 빨강", B.x + 6, B.y + B.h - 18, P.dim, "left", "top", 11);
+      TB.stat("sg-o-d", D.toFixed(2));
+      TB.stat("sg-o-c", ec.toFixed(3));
+      TB.stat("sg-o-s", es < 1e-9 ? "&lt; 1e-9" : ex(es));
+      TB.stat("sg-o-st", mn < -1e-9 ? tone("bad-t", "음수 농도") : D > 2 ? tone("bad-t", "출렁임") : ec > 0.05 ? tone("warn-t", "오차 큼") : tone("ok-t", "안정"));
+    }, { get height() { return narrowEl("sg-cv") ? 560 : 330; } });
+  })();
+
+  /* ---------------------------------------------------------- 2. 스칼라 뉴턴 */
+  (function () {
+    let u0 = 0.5, G = null;
+    const F = TB.seg("nt-f", () => { u0 = F() === "atan" ? 1.2 : 0.5; cv.redraw(); });
+    const R = TB.range("nt-r", (v) => sup(v), () => cv.redraw());
+    const Dm = TB.seg("nt-d", () => cv.redraw());
+    function fun() {
+      if (F() === "atan") return { f: (u) => Math.atan(u - 3), df: (u) => 1 / (1 + (u - 3) * (u - 3)), root: 3 };
+      const r = Math.pow(10, R());
+      return { f: (u) => 2 * Math.sinh(u) - r, df: (u) => 2 * Math.cosh(u), root: Math.asinh(r / 2), r };
+    }
+    function iterate(fn) {
+      const us = [u0], ds = [];
+      let u = u0, status = "max";
+      for (let k = 0; k < 2000; k++) {
+        let d = -fn.f(u) / fn.df(u);
+        if (Dm() === "log") d = Math.sign(d) * Math.log1p(Math.abs(d));
+        else if (Dm() === "clamp") d = TB.clamp(d, -1, 1);
+        if (!isFinite(d)) { status = "nan"; break; }
+        u += d; us.push(u); ds.push(Math.abs(d));
+        if (!isFinite(u) || Math.abs(u) > 1e8) { status = "div"; break; }
+        if (Math.abs(d) < 1e-12) { status = "ok"; break; }
+      }
+      return { us, ds, status };
+    }
+    const cv = TB.canvas("#nt-cv", (ctx, w, h) => {
+      const P = TB.palette(), fn = fun(), it = iterate(fn);
+      const [A, B] = twoBoxes(w, h, !narrowEl("nt-cv"), 0.6);
+      const atan = F() === "atan";
+      const x0 = atan ? -4 : -3, x1 = atan ? 10 : Math.max(6, fn.root + 4);
+      const ylo = atan ? -1.8 : -1.3 * fn.r, yhi = atan ? 1.8 : 1.3 * fn.r;
+      const cur = []; for (let i = 0; i <= 400; i++) { const u = x0 + ((x1 - x0) * i) / 400; cur.push([u, fn.f(u)]); }
+      const c = TB.chart(ctx, A, { x: [x0, x1], y: [ylo, yhi], xLabel: "u = ψ / Vt", yLabel: atan ? "f(u)" : "f(u) = 2 sinh u − N/nᵢ", yFmt: (v) => (atan ? String(Number(v.toPrecision(3))) : ex(v, 0)),
+        series: [{ data: cur, color: P.accent, width: 2.2 }], hlines: [{ y: 0, color: P.faint }], vlines: [{ x: fn.root, color: P.ok, label: "근" }] });
+      G = c;
+      ctx.save(); ctx.beginPath(); ctx.rect(A.x, A.y, A.w, A.h); ctx.clip();
+      const nShow = Math.min(it.us.length - 1, 14);
+      for (let k = 0; k < nShow; k++) {
+        const u = it.us[k], f = fn.f(u), un = it.us[k + 1];
+        if (!isFinite(f)) break;
+        const ut = u - f / fn.df(u);
+        ctx.strokeStyle = P.dim; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+        ctx.beginPath(); ctx.moveTo(c.X(u), c.Y(f)); ctx.lineTo(c.X(ut), c.Y(0)); ctx.stroke(); ctx.setLineDash([]);
+        ctx.strokeStyle = P.faint; ctx.beginPath(); ctx.moveTo(c.X(u), c.Y(0)); ctx.lineTo(c.X(u), c.Y(f)); ctx.stroke();
+        ctx.fillStyle = k === 0 ? P.accent : P.warn; ctx.beginPath(); ctx.arc(c.X(TB.clamp(un, x0, x1)), c.Y(0), 3.5, 0, TAU); ctx.fill();
+      }
+      ctx.restore();
+      const u1 = it.us[1];
+      if (isFinite(u1) && u1 > x1) { label(ctx, "→ u₁ = " + TB.fmt(u1, 3), A.x + A.w - 4, c.Y(0) + 6, P.bad, "right", "top", 12); }
+      knob(ctx, c.X(u0), c.Y(0), P, 8);
+      label(ctx, "u₀", c.X(u0), c.Y(0) + 12, P.text, "center", "top", 12);
+      // 수렴 기록
+      const dd = it.ds.map((d, k) => [k + 1, Math.max(d, 1e-16)]);
+      const kmax = Math.max(8, Math.min(60, it.ds.length + 1));
+      TB.chart(ctx, B, { x: [1, kmax], y: [1e-14, 1e4], logY: true, xLabel: "반복 k", yLabel: "|δu|", yTicks: [1e-12, 1e-8, 1e-4, 1, 1e4],
+        series: [{ data: dd.slice(0, kmax), color: P.accent, width: 2 }], points: dd.slice(0, kmax).map(([k, d]) => ({ x: k, y: d, color: P.accent, r: 2.5 })) });
+      if (it.ds.length > kmax) label(ctx, "… 모두 " + it.ds.length + "회", B.x + B.w - 6, B.y + 4, P.warn, "right", "top", 12);
+      TB.stat("nt-o-u0", u0.toFixed(2));
+      TB.stat("nt-o-u1", isFinite(u1) ? TB.fmt(u1, 4) : "—");
+      TB.stat("nt-o-k", it.status === "ok" ? String(it.ds.length) : "—");
+      TB.stat("nt-o-s", it.status === "ok" ? (it.ds.length > 30 ? tone("warn-t", "느린 수렴") : tone("ok-t", "수렴")) : it.status === "nan" ? tone("bad-t", "넘침(NaN)") : it.status === "div" ? tone("bad-t", "발산") : tone("bad-t", "2000회 초과"));
+    }, { get height() { return narrowEl("nt-cv") ? 560 : 340; } });
+    TB.drag(cv.canvas, { move(x) { if (!G) return; const b = G.box, xx = TB.clamp(x, b.x, b.x + b.w); const t = (xx - b.x) / b.w; const lo = F() === "atan" ? -4 : -3, hi = F() === "atan" ? 10 : Math.max(6, fun().root + 4); u0 = Math.round((lo + t * (hi - lo)) * 20) / 20; cv.redraw(); } });
+  })();
+
+  /* ---------------------------------------------------------- 3. 1D 포아송 뉴턴 */
+  (function () {
+    const base = { L: 600, nodes: 121, net: (x) => (x < 300 ? -1e18 : 1e18) };
+    const CFG = { a: { damping: "none", init: "neutral" }, b: { damping: "none", init: "zero" }, c: { damping: "log", init: "zero" }, d: { method: "picard", init: "neutral" } };
+    const ref = TC.poissonSolver1d(Object.assign({}, base, CFG.a)).run(1e-10, 50);
+    const refPsi = Array.from(ref.psi);
+    let S = null, timer = 0;
+    const M = TB.seg("p1-m", () => reset());
+    function reset() { clearInterval(timer); timer = 0; S = TC.poissonSolver1d(Object.assign({}, base, CFG[M()])); cv.redraw(); }
+    function done() { if (!S) return true; const h = S.history[S.history.length - 1]; return S.diverged || (h && h.upd < 1e-9) || S.it >= 60; }
+    function step() { if (!done()) S.step(); cv.redraw(); }
+    document.getElementById("p1-step").addEventListener("click", step);
+    document.getElementById("p1-run").addEventListener("click", () => { clearInterval(timer); timer = setInterval(() => { step(); if (done()) { clearInterval(timer); timer = 0; } }, 140); });
+    document.getElementById("p1-re").addEventListener("click", reset);
+    const cv = TB.canvas("#p1-cv", (ctx, w, h) => {
+      const P = TB.palette();
+      if (!S) S = TC.poissonSolver1d(Object.assign({}, base, CFG[M()]));
+      const [A, B] = twoBoxes(w, h, false);
+      const cur = S.x.map((x, i) => [x, TB.clamp(S.psi[i], -1.5, 1.5)]);
+      const bad = S.diverged;
+      TB.chart(ctx, A, { x: [0, 600], y: [-0.8, 0.8], xLabel: "위치 x (nm)", yLabel: "ψ (V)",
+        series: [{ data: S.x.map((x, i) => [x, refPsi[i]]), color: P.dim, width: 1.4, dash: [5, 4] }, { data: bad ? [] : cur, color: S.it ? P.accent : P.warn, width: 2.2 }],
+        hlines: [{ y: 0, color: P.faint }], vlines: [{ x: 300, color: P.faint, label: "접합" }] });
+      label(ctx, bad ? "발산: ψ가 수치 범위를 벗어났다" : "반복 " + S.it + (S.it ? "" : " (초기값)"), A.x + A.w - 6, A.y + 4, bad ? P.bad : P.text, "right", "top", 12);
+      label(ctx, "p⁺ 10¹⁸", A.x + 8, A.y + A.h - 20, P.dim, "left", "top", 11);
+      label(ctx, "n⁺ 10¹⁸", A.x + A.w - 8, A.y + A.h - 20, P.dim, "right", "top", 11);
+      const H = S.history;
+      const up = H.map((r) => [r.it, isFinite(r.upd) ? Math.max(r.upd, 1e-15) : NaN]);
+      const rs = H.map((r) => [r.it, isFinite(r.res) ? Math.max(r.res, 1e-17) : NaN]);
+      const kmax = Math.max(8, H.length + 1);
+      TB.chart(ctx, B, { x: [0, kmax], y: [1e-16, 1e4], logY: true, xLabel: "반복", yLabel: "크기", yTicks: [1e-15, 1e-10, 1e-5, 1, 1e4],
+        series: [{ data: up, color: P.accent, width: 2 }, { data: rs, color: P.accent2, width: 2, dash: [5, 3] }],
+        hlines: [{ y: 1e-9, color: P.ok, label: "판정 1e-9" }],
+        points: up.filter((p) => isFinite(p[1])).map(([k, v]) => ({ x: k, y: TB.clamp(v, 1e-16, 1e4), color: P.accent, r: 3 })) });
+      label(ctx, "갱신 max|δψ|/Vt (실선), 잔차 (점선)", B.x + 6, B.y + 4, P.dim, "left", "top", 11);
+      const last = H[H.length - 1];
+      TB.stat("p1-o-k", String(S.it));
+      TB.stat("p1-o-u", last ? ex(last.upd) : "—");
+      TB.stat("p1-o-r", last ? ex(last.res) : "—");
+      TB.stat("p1-o-s", bad ? tone("bad-t", "발산") : last && last.upd < 1e-9 ? tone("ok-t", "수렴") : S.it >= 60 ? tone("bad-t", "60회 초과") : S.it ? tone("warn-t", "진행 중") : "초기값");
+    }, { get height() { return narrowEl("p1-cv") ? 520 : 470; } });
+  })();
+
+  /* ---------------------------------------------------------- 4. 다이오드 뉴턴 대 거멜 */
+  (function () {
+    const dio = TC.diode1d({ Na: 1e17, Nd: 1e17 });
+    const solveAt = (V, m) => {
+      const sv = TC.ddSolver1d(Object.assign({}, dio, { method: m, maxIter: m === "gummel" ? 400 : 40 }));
+      sv.setBias(V, 0);
+      const r = sv.solve(m);
+      return { ok: r.ok, iters: r.iters, hist: sv.history.map((h) => h.upd), J: r.ok ? sv.result().J : NaN };
+    };
+    const curve = { V: [], n: [], g: [] };
+    const list = []; for (let v = -2; v <= 1.1001; v += 0.1) list.push(+v.toFixed(2));
+    let li = 0, cur = null;
+    function bg() {
+      const t0 = performance.now();
+      while (li < list.length && performance.now() - t0 < 25) {
+        const v = list[li++], a = solveAt(v, "newton"), b = solveAt(v, "gummel");
+        curve.V.push(v); curve.n.push(a.ok ? a.iters : NaN); curve.g.push(b.ok ? b.iters : NaN);
+      }
+      cv.redraw();
+      if (li < list.length) requestAnimationFrame(bg);
+    }
+    function compute() { const v = Va(); cur = { v, a: solveAt(v, "newton"), b: solveAt(v, "gummel") }; cv.redraw(); }
+    const Va = TB.range("gm-v", (v) => v.toFixed(2) + " V", TB.debounce(compute, 40));
+    const cv = TB.canvas("#gm-cv", (ctx, w, h) => {
+      const P = TB.palette();
+      if (!cur) cur = { v: Va(), a: solveAt(Va(), "newton"), b: solveAt(Va(), "gummel") };
+      const [A, B] = twoBoxes(w, h, !narrowEl("gm-cv"), 0.55);
+      const hn = cur.a.hist.map((u, k) => [k + 1, Math.max(u, 1e-16)]), hg = cur.b.hist.map((u, k) => [k + 1, Math.max(u, 1e-16)]);
+      const kmax = Math.max(10, hn.length, hg.length) + 1;
+      TB.chart(ctx, A, { x: [1, kmax], y: [1e-15, 1e15], logY: true, xLabel: "반복", yLabel: "갱신 크기", yTicks: [1e-15, 1e-10, 1e-5, 1, 1e5, 1e10, 1e15],
+        series: [{ data: hg, color: P.accent2, width: 2 }, { data: hn, color: P.accent, width: 2.2 }], hlines: [{ y: 1e-9, color: P.ok, label: "판정" }] });
+      label(ctx, "Va = " + cur.v.toFixed(2) + " V", A.x + 8, A.y + 4, P.text, "left", "top", 12);
+      const ymax = Math.max(40, ...curve.g.filter(isFinite)) * 1.1;
+      TB.chart(ctx, B, { x: [-2, 1.1], y: [0, ymax], xLabel: "바이어스 Va (V)", yLabel: "평형에서 반복 수",
+        series: [{ data: curve.V.map((v, i) => [v, curve.g[i]]), color: P.accent2, width: 2 }, { data: curve.V.map((v, i) => [v, curve.n[i]]), color: P.accent, width: 2 }],
+        vlines: [{ x: cur.v, color: P.faint }],
+        points: [{ x: cur.v, y: cur.a.iters, color: P.accent, r: 5 }, { x: cur.v, y: cur.b.iters, color: P.accent2, r: 5 }] });
+      if (li < list.length) label(ctx, "계산 중 " + li + "/" + list.length, B.x + B.w - 6, B.y + 4, P.dim, "right", "top", 11);
+      TB.stat("gm-o-n", cur.a.ok ? String(cur.a.iters) : tone("bad-t", "실패"));
+      TB.stat("gm-o-g", cur.b.ok ? String(cur.b.iters) : tone("bad-t", "실패"));
+      TB.stat("gm-o-j", ex(cur.a.J, 2) + " <small>A/cm²</small>");
+      TB.stat("gm-o-d", isFinite(cur.a.J) && isFinite(cur.b.J) ? ex(Math.abs(cur.a.J - cur.b.J) / Math.abs(cur.a.J)) : "—");
+    }, { get height() { return narrowEl("gm-cv") ? 560 : 330; } });
+    requestAnimationFrame(bg);
+  })();
+
+  /* ---------------------------------------------------------- 5. 희소 행렬과 채움 */
+  (function () {
+    const NX = TB.range("sp-x", String, () => cv.redraw());
+    const NY = TB.range("sp-y", String, () => cv.redraw());
+    const O = TB.seg("sp-o", () => cv.redraw());
+    let cache = null;
+    function build(nx, ny, ord) {
+      const N = nx * ny, nb = (k) => { const i = k % nx, j = (k / nx) | 0, o = []; if (i > 0) o.push(k - 1); if (i < nx - 1) o.push(k + 1); if (j > 0) o.push(k - nx); if (j < ny - 1) o.push(k + nx); return o; };
+      let order = [];
+      if (ord === "x") for (let k = 0; k < N; k++) order.push(k);
+      else if (ord === "y") for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) order.push(j * nx + i);
+      else if (ord === "rand") { const r = TB.rng(7); order = Array.from({ length: N }, (_, k) => k); for (let k = N - 1; k > 0; k--) { const t = Math.floor(r() * (k + 1)); [order[k], order[t]] = [order[t], order[k]]; } }
+      else { // RCM
+        const seen = new Uint8Array(N), q = [0]; seen[0] = 1;
+        while (q.length) { const k = q.shift(); order.push(k); nb(k).filter((m) => !seen[m]).sort((a, b) => nb(a).length - nb(b).length).forEach((m) => { seen[m] = 1; q.push(m); }); }
+        order.reverse();
+      }
+      const pos = new Int32Array(N); order.forEach((k, r) => (pos[k] = r));
+      const A = new Uint8Array(N * N);
+      for (let k = 0; k < N; k++) { const r = pos[k]; A[r * N + r] = 1; nb(k).forEach((m) => (A[r * N + pos[m]] = 1)); }
+      let nnzA = 0, bw = 0;
+      for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (A[r * N + c]) { nnzA++; bw = Math.max(bw, Math.abs(r - c)); }
+      const M = Uint8Array.from(A);
+      for (let k = 0; k < N; k++) for (let i = k + 1; i < N; i++) if (M[i * N + k]) for (let j = k + 1; j < N; j++) if (M[k * N + j]) M[i * N + j] = 1;
+      let nnzLU = 0; for (let t = 0; t < N * N; t++) if (M[t]) nnzLU++;
+      return { nx, ny, N, A, M, pos, nnzA, nnzLU, bw };
+    }
+    const cv = TB.canvas("#sp-cv", (ctx, w, h) => {
+      const P = TB.palette(), nx = NX(), ny = NY(), ord = O();
+      if (!cache || cache.nx !== nx || cache.ny !== ny || cache.ord !== ord) { cache = build(nx, ny, ord); cache.ord = ord; }
+      const R = cache, N = R.N, two = !narrowEl("sp-cv");
+      const gA = two ? { x: 16, y: 30, w: w * 0.42 - 24, h: h - 50 } : { x: 16, y: 30, w: w - 32, h: (h - 60) * 0.36 };
+      const mA = two ? { x: w * 0.42 + 12, y: 30, w: w * 0.58 - 28, h: h - 50 } : { x: 16, y: gA.y + gA.h + 34, w: w - 32, h: h - gA.h - 74 };
+      label(ctx, "격자와 번호(색: 번호 순서)", gA.x, 8, P.dim, "left", "top", 12);
+      const s = Math.min(gA.w / nx, gA.h / ny), ox = gA.x + (gA.w - s * nx) / 2, oy = gA.y + (gA.h - s * ny) / 2;
+      ctx.strokeStyle = P.border; ctx.lineWidth = 1;
+      for (let j = 0; j < ny; j++) { ctx.beginPath(); ctx.moveTo(ox + s / 2, oy + (j + 0.5) * s); ctx.lineTo(ox + (nx - 0.5) * s, oy + (j + 0.5) * s); ctx.stroke(); }
+      for (let i = 0; i < nx; i++) { ctx.beginPath(); ctx.moveTo(ox + (i + 0.5) * s, oy + s / 2); ctx.lineTo(ox + (i + 0.5) * s, oy + (ny - 0.5) * s); ctx.stroke(); }
+      for (let k = 0; k < N; k++) {
+        const i = k % nx, j = (k / nx) | 0, r = R.pos[k];
+        ctx.fillStyle = TC.cmapCss("viridis", r / Math.max(1, N - 1)); ctx.beginPath(); ctx.arc(ox + (i + 0.5) * s, oy + (j + 0.5) * s, Math.max(3, s * 0.32), 0, TAU); ctx.fill();
+        if (s > 22) label(ctx, String(r + 1), ox + (i + 0.5) * s, oy + (j + 0.5) * s, "#fff", "center", "middle", Math.min(11, s * 0.36));
+      }
+      label(ctx, "행렬 패턴 " + N + " × " + N, mA.x, mA.y - 22, P.dim, "left", "top", 12);
+      const q = Math.min(mA.w, mA.h) / N, mx = mA.x + (mA.w - q * N) / 2, my = mA.y;
+      ctx.strokeStyle = P.border; ctx.strokeRect(mx - 0.5, my - 0.5, q * N + 1, q * N + 1);
+      for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+        const t = r * N + c;
+        if (R.A[t]) ctx.fillStyle = P.accent; else if (R.M[t]) ctx.fillStyle = P.bad; else continue;
+        ctx.fillRect(mx + c * q, my + r * q, Math.max(1, q - (q > 3 ? 0.5 : 0)), Math.max(1, q - (q > 3 ? 0.5 : 0)));
+      }
+      TB.stat("sp-o-n", String(N));
+      TB.stat("sp-o-b", String(R.bw));
+      TB.stat("sp-o-a", String(R.nnzA));
+      TB.stat("sp-o-f", R.nnzLU + " <small>(×" + (R.nnzLU / R.nnzA).toFixed(1) + ")</small>");
+    }, { get height() { return narrowEl("sp-cv") ? 620 : 380; } });
+  })();
+
+  /* ---------------------------------------------------------- 6. 반복 풀이기 */
+  (function () {
+    const MAXIT = 3000, TOL = 1e-8;
+    let res = null;
+    function run(n) {
+      const N = n * n, b = new Float64Array(N).fill(1), bn = Math.sqrt(N);
+      const Av = (x, y) => { for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const k = j * n + i; let s = 4 * x[k]; if (i > 0) s -= x[k - 1]; if (i < n - 1) s -= x[k + 1]; if (j > 0) s -= x[k - n]; if (j < n - 1) s -= x[k + n]; y[k] = s; } };
+      const r = new Float64Array(N), norm = (v) => { let s = 0; for (let k = 0; k < N; k++) s += v[k] * v[k]; return Math.sqrt(s); };
+      const resid = (x) => { Av(x, r); for (let k = 0; k < N; k++) r[k] = b[k] - r[k]; return norm(r) / bn; };
+      const out = {};
+      // 야코비
+      { const x = new Float64Array(N), xn = new Float64Array(N), h = [];
+        for (let it = 1; it <= MAXIT; it++) {
+          for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const k = j * n + i; let s = b[k]; if (i > 0) s += x[k - 1]; if (i < n - 1) s += x[k + 1]; if (j > 0) s += x[k - n]; if (j < n - 1) s += x[k + n]; xn[k] = s / 4; }
+          x.set(xn); const e = resid(x); h.push([it, e]); if (e < TOL) break;
+        }
+        out.jac = h; }
+      // GS, SOR
+      const sor = (w) => { const x = new Float64Array(N), h = [];
+        for (let it = 1; it <= MAXIT; it++) {
+          for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const k = j * n + i; let s = b[k]; if (i > 0) s += x[k - 1]; if (i < n - 1) s += x[k + 1]; if (j > 0) s += x[k - n]; if (j < n - 1) s += x[k + n]; x[k] += w * (s / 4 - x[k]); }
+          const e = resid(x); h.push([it, e]); if (e < TOL) break;
+        }
+        return h; };
+      out.gs = sor(1);
+      out.sor = sor(2 / (1 + Math.sin(Math.PI / (n + 1))));
+      // IC(0) 계수
+      const d = new Float64Array(N);
+      for (let k = 0; k < N; k++) { const i = k % n; let v = 4; if (i > 0) v -= 1 / d[k - 1]; if (k >= n) v -= 1 / d[k - n]; d[k] = v; }
+      const ic = (rr, z) => { // (L D⁻¹ Lᵀ) z = r, L 비대각 = −1
+        const y = new Float64Array(N);
+        for (let k = 0; k < N; k++) { const i = k % n; let s = rr[k]; if (i > 0) s += y[k - 1]; if (k >= n) s += y[k - n]; y[k] = s / d[k]; }
+        for (let k = N - 1; k >= 0; k--) { const i = k % n; let s = y[k] * d[k]; if (i < n - 1) s += z[k + 1]; if (k + n < N) s += z[k + n]; z[k] = s / d[k]; }
+      };
+      const cg = (pre) => { const x = new Float64Array(N), rr = Float64Array.from(b), z = new Float64Array(N), p = new Float64Array(N), q = new Float64Array(N), h = [];
+        if (pre) ic(rr, z); else z.set(rr); p.set(z);
+        let rz = 0; for (let k = 0; k < N; k++) rz += rr[k] * z[k];
+        for (let it = 1; it <= MAXIT; it++) {
+          Av(p, q); let pq = 0; for (let k = 0; k < N; k++) pq += p[k] * q[k];
+          const a = rz / pq; for (let k = 0; k < N; k++) { x[k] += a * p[k]; rr[k] -= a * q[k]; }
+          const e = norm(rr) / bn; h.push([it, e]); if (e < TOL) break;
+          if (pre) ic(rr, z); else z.set(rr);
+          let rz2 = 0; for (let k = 0; k < N; k++) rz2 += rr[k] * z[k];
+          const be = rz2 / rz; rz = rz2; for (let k = 0; k < N; k++) p[k] = z[k] + be * p[k];
+        }
+        return h; };
+      out.cg = cg(false); out.iccg = cg(true);
+      return out;
+    }
+    const n = TB.range("it-n", (v) => v + " × " + v, TB.debounce(() => { res = run(n()); cv.redraw(); }, 80));
+    const cnt = (h) => (h[h.length - 1][1] < TOL ? String(h.length) : "&gt;" + MAXIT);
+    const cv = TB.canvas("#it-cv", (ctx, w, h) => {
+      const P = TB.palette();
+      if (!res) res = run(n());
+      const ser = [["jac", P.dim], ["gs", P.warn], ["sor", P.ok], ["cg", P.accent], ["iccg", P.accent2]].map(([k, c]) => ({ data: res[k].map(([i, e]) => [i, Math.max(e, 1e-12)]), color: c, width: 2 }));
+      TB.chart(ctx, { x: 62, y: 18, w: w - 82, h: h - 70 }, { x: [1, MAXIT], y: [1e-9, 2], logX: true, logY: true, xLabel: "반복 수", yLabel: "상대 잔차 ‖r‖/‖b‖", xTicks: [1, 10, 100, 1000],
+        yTicks: [1e-8, 1e-6, 1e-4, 1e-2, 1], series: ser, hlines: [{ y: TOL, color: P.faint, label: "1e-8" }] });
+      TB.stat("it-o-j", cnt(res.jac));
+      TB.stat("it-o-g", cnt(res.gs));
+      TB.stat("it-o-s", cnt(res.sor));
+      TB.stat("it-o-c", cnt(res.cg) + " / " + cnt(res.iccg));
+    }, { get height() { return narrowEl("it-cv") ? 340 : 330; } });
+  })();
+
+  /* ---------------------------------------------------------- 7. 허용 오차와 전류 */
+  (function () {
+    const dio = TC.diode1d({ Na: 1e17, Nd: 1e17 });
+    const cache = {};
+    function trace(V) {
+      const key = V.toFixed(2);
+      if (cache[key]) return cache[key];
+      const sv = TC.ddSolver1d(Object.assign({}, dio, { method: "newton" }));
+      sv.setBias(V, 0);
+      const rows = [];
+      for (let k = 0; k < 40; k++) { const r = sv.step("newton"); rows.push({ k: r.it, upd: r.upd, res: r.res, J: sv.result().J }); if (r.upd < 1e-13 || !(r.upd < 1e30)) break; }
+      const Jf = rows[rows.length - 1].J;
+      rows.forEach((r) => (r.err = Math.abs(r.J - Jf) / Math.abs(Jf)));
+      return (cache[key] = { rows, Jf });
+    }
+    const Vr = TB.range("cr-v", (v) => v.toFixed(2) + " V", () => cv.redraw());
+    const T = TB.range("cr-t", (v) => sup(v), () => cv.redraw());
+    const cv = TB.canvas("#cr-cv", (ctx, w, h) => {
+      const P = TB.palette(), tr = trace(Vr()), tol = Math.pow(10, T()), R = tr.rows;
+      let stop = R.findIndex((r, i) => i > 0 && r.upd < tol);
+      if (stop < 0) stop = R.length - 1;
+      const cl = (v) => Math.max(v, 1e-16);
+      const kmax = R.length + 1;
+      TB.chart(ctx, { x: 62, y: 18, w: w - 82, h: h - 70 }, { x: [1, kmax], y: [1e-16, 1e12], logY: true, xLabel: "뉴턴 반복", yLabel: "크기", yTicks: [1e-15, 1e-10, 1e-5, 1, 1e5, 1e10],
+        series: [{ data: R.map((r) => [r.k, cl(r.upd)]), color: P.accent, width: 2 }, { data: R.map((r) => [r.k, cl(r.res)]), color: P.accent2, width: 2, dash: [5, 3] }, { data: R.map((r) => [r.k, cl(r.err)]), color: P.bad, width: 2.2 }],
+        hlines: [{ y: tol, color: P.ok, label: "ε" }], vlines: [{ x: R[stop].k, color: P.text, label: "멈춤" }],
+        points: [{ x: R[stop].k, y: cl(R[stop].err), color: P.bad, r: 5 }] });
+      const e = R[stop].err;
+      TB.stat("cr-o-k", String(R[stop].k));
+      TB.stat("cr-o-e", e < 1e-15 ? "&lt; 1e-15" : (e >= 0.01 ? tone(e > 0.05 ? "bad-t" : "warn-t", (e * 100).toPrecision(2) + " %") : ex(e)));
+      TB.stat("cr-o-r", ex(R[stop].res));
+      TB.stat("cr-o-j", ex(tr.Jf, 3) + " <small>A/cm²</small>");
+    }, { get height() { return narrowEl("cr-cv") ? 340 : 330; } });
+  })();
+
+  /* ---------------------------------------------------------- 2D 공통: TN-45 coarse */
+  const DEV = TC.tn45Device({ density: "coarse" });
+  let EQ = null;
+  const eq = () => EQ || (EQ = TC.poisson2d(DEV, { vg: 0 }));
+  const VIEW = { x0: -77.5, x1: 77.5, y0: -7.2, y1: 55 };
+  const idStr = (I) => (Math.abs(I) >= 1e-6 ? (Math.abs(I) * 1e3).toPrecision(3) + " <small>mA/µm</small>" : ex(Math.abs(I), 2) + " <small>A/µm</small>");
+
+  /* ---------------------------------------------------------- 8. 평형에서 한 번에 뛰기 */
+  (function () {
+    let tgt = { vg: 1, vd: 1 }, solver = null, raf = 0, G = null;
+    const marks = {};
+    const D = TB.seg("jp-d", () => { stop(); solver = null; cv.redraw(); });
+    function stop() { cancelAnimationFrame(raf); raf = 0; }
+    function go() {
+      stop();
+      solver = TC.mosSolver(DEV, { vg: tgt.vg, vd: tgt.vd }, { init: eq(), dvMax: Number(D()), maxIter: 40 });
+      const tick = () => {
+        const t0 = performance.now();
+        while (!solver.done && performance.now() - t0 < 14) solver.step();
+        if (solver.done) {
+          raf = 0;
+          const key = D(); (marks[key] = marks[key] || []).push({ vg: tgt.vg, vd: tgt.vd, ok: solver.converged, k: solver.iter });
+          if (solver.converged) solver.sol = solver.solution();
+        } else raf = requestAnimationFrame(tick);
+        cv.redraw();
+      };
+      raf = requestAnimationFrame(tick);
+    }
+    document.getElementById("jp-go").addEventListener("click", go);
+    document.getElementById("jp-re").addEventListener("click", () => { stop(); marks[D()] = []; solver = null; cv.redraw(); });
+    const cv = TB.canvas("#jp-cv", (ctx, w, h) => {
+      const P = TB.palette(), two = !narrowEl("jp-cv");
+      let bA, fA, cA;
+      if (two) { const s = Math.min(200, h * 0.5); bA = { x: 50, y: 14, w: s, h: s }; fA = { x: s + 100, y: 14, w: w - s - 170, h: s }; cA = { x: 62, y: s + 74, w: w - 82, h: h - s - 130 }; }
+      else { bA = { x: 50, y: 14, w: Math.min(w - 70, 200), h: Math.min(w - 70, 200) }; fA = { x: 12, y: bA.y + bA.h + 56, w: w - 74, h: (w - 74) * 0.42 }; cA = { x: 62, y: fA.y + fA.h + 30, w: w - 82, h: h - fA.y - fA.h - 86 }; }
+      // 바이어스 평면
+      const pts = (marks[D()] || []).map((m) => ({ x: m.vg, y: m.vd, color: m.ok ? P.ok : P.bad, r: 4 }));
+      const c = TB.chart(ctx, bA, { x: [0, 1.2], y: [0, 1.2], xLabel: "Vg (V)", yLabel: "Vd (V)", xTicks: [0, 0.4, 0.8, 1.2], yTicks: [0, 0.4, 0.8, 1.2], points: pts });
+      G = c;
+      ctx.font = TB.font(10, true); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      (marks[D()] || []).forEach((m) => { ctx.fillStyle = m.ok ? P.ok : P.bad; ctx.fillText(m.ok ? String(m.k) : "×", c.X(m.vg) + 5, c.Y(m.vd) - 2); });
+      ctx.fillStyle = P.dim; ctx.beginPath(); ctx.arc(c.X(0), c.Y(0), 4, 0, TAU); ctx.fill();
+      ctx.strokeStyle = P.faint; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(c.X(0), c.Y(0)); ctx.lineTo(c.X(tgt.vg), c.Y(tgt.vd)); ctx.stroke(); ctx.setLineDash([]);
+      knob(ctx, c.X(tgt.vg), c.Y(tgt.vd), P, 7);
+      // 필드
+      const st = solver ? solver.state : null;
+      const r = st ? TC.drawDevice2d(ctx, fA, DEV, null, { field: "n", data: st.n, log: true, lo: 4, hi: 20.5, view: VIEW, mesh: true, colorbar: { x: fA.x + fA.w + 10, y: fA.y, w: 10, h: fA.h } })
+        : TC.drawDevice2d(ctx, fA, DEV, null, { field: "doping", view: VIEW, mesh: true, colorbar: { x: fA.x + fA.w + 10, y: fA.y, w: 10, h: fA.h } });
+      label(ctx, st ? "전자 농도, 반복 " + solver.iter : "TN-45 도핑과 coarse 격자", fA.x, fA.y + fA.h + 6, P.dim, "left", "top", 11);
+      // 수렴 기록
+      const H = solver ? solver.history : [];
+      const dp = H.map((q) => [q.iter, isFinite(q.dPsi) ? TB.clamp(q.dPsi, 1e-9, 1e3) : 1e3]);
+      const rs = H.map((q) => [q.iter, isFinite(q.res) ? TB.clamp(q.res, 1e-9, 1e150) : 1e150]);
+      const kmax = Math.max(20, H.length + 1), top = Math.pow(10, Math.max(4, Math.ceil(Math.log10(Math.max(1, ...rs.map((q) => q[1]))) / 2) * 2));
+      const yT = []; for (let e = -6; Math.pow(10, e) <= top; e += top > 1e40 ? 30 : top > 1e12 ? 6 : 2) yT.push(Math.pow(10, e));
+      TB.chart(ctx, cA, { x: [1, kmax], y: [1e-8, top], logY: true, xLabel: "뉴턴 반복", yLabel: "크기", yTicks: yT, yFmt: (v) => ex(v, 0),
+        series: [{ data: rs, color: P.accent2, width: 1.8, dash: [5, 3] }, { data: dp, color: P.accent, width: 2.2 }], hlines: [{ y: VT, color: P.faint, label: "Vt" }, { y: 1e-5, color: P.ok }] });
+      const last = H[H.length - 1];
+      TB.stat("jp-o-b", tgt.vg.toFixed(2) + ", " + tgt.vd.toFixed(2) + " <small>V</small>");
+      TB.stat("jp-o-k", solver ? (solver.done ? (solver.converged ? tone("ok-t", solver.iter + "회 수렴") : tone("bad-t", solver.iter + "회 실패")) : String(solver.iter)) : "—");
+      TB.stat("jp-o-t", last ? last.damp.toFixed(2) : "—");
+      TB.stat("jp-o-i", solver && solver.sol ? idStr(solver.sol.Id) : "—");
+    }, { get height() { return narrowEl("jp-cv") ? 700 : 470; } });
+    TB.drag(cv.canvas, {
+      start(x, y, e) { this.on = G && x >= G.box.x - 10 && x <= G.box.x + G.box.w + 10 && y >= G.box.y - 10 && y <= G.box.y + G.box.h + 10; },
+      move(x, y) {
+        if (!this.on || !G) return;
+        const b = G.box;
+        tgt = { vg: Math.round(TB.clamp(((x - b.x) / b.w) * 1.2, 0, 1.2) * 20) / 20, vd: Math.round(TB.clamp(((b.y + b.h - y) / b.h) * 1.2, 0, 1.2) * 20) / 20 };
+        stop(); solver = null; cv.redraw();
+      },
+      end() { if (this.on) go(); this.on = false; },
+    });
+  })();
+
+  /* ---------------------------------------------------------- 9. 종합: 게이트 램프 */
+  (function () {
+    const S0 = {};
+    let run = null, raf = 0;
+    const segS = TB.seg("rp-s"), segG = TB.seg("rp-g"), segV = TB.seg("rp-vd");
+    const dm = document.getElementById("rp-dm"), hv = document.getElementById("rp-hv");
+    function guess(mode, cur, prev, vg) {
+      const g = Object.assign({}, cur, { psi: Float64Array.from(cur.psi), n: Float64Array.from(cur.n), p: Float64Array.from(cur.p) }), d = vg - cur.bias.vg;
+      const shift = () => { for (let k = 0; k < DEV.N; k++) if (DEV.kind[k] === 3) g.psi[k] += d; };
+      if (mode === "shift") shift();
+      else if (mode === "extrap") {
+        if (prev && prev.bias.vg !== cur.bias.vg) {
+          const r = d / (cur.bias.vg - prev.bias.vg);
+          for (let k = 0; k < DEV.N; k++) {
+            g.psi[k] += r * (cur.psi[k] - prev.psi[k]);
+            if (cur.n[k] > 0 && prev.n[k] > 0) g.n[k] *= Math.exp(TB.clamp(r * Math.log(cur.n[k] / prev.n[k]), -5, 5));
+          }
+        } else shift();
+      }
+      return g;
+    }
+    function stop() { cancelAnimationFrame(raf); raf = 0; if (run && !run.end) run.end = "멈춤"; cv.redraw(); }
+    function start() {
+      cancelAnimationFrame(raf);
+      const vd = Number(segV()), dV = Number(segS());
+      run = { vd, dV, h: dV, mode: segG(), dv: dm.checked ? 0.5 : 100, halve: hv.checked, cur: null, prev: null, pts: [], tries: [], total: 0, fails: 0, solver: null, end: null, t0: performance.now() };
+      const tick = () => {
+        const t0 = performance.now();
+        if (!run.cur) {
+          if (!S0[vd]) S0[vd] = TC.mos2d(DEV, { vg: 0, vd });
+          run.cur = S0[vd]; run.pts.push({ vg: 0, id: run.cur.Id });
+        }
+        while (performance.now() - t0 < 16 && !run.end) {
+          if (!run.solver) {
+            const vg = Math.min(1, +(run.cur.bias.vg + run.h).toFixed(6));
+            run.solver = TC.mosSolver(DEV, { vg, vd }, { init: guess(run.mode, run.cur, run.prev, vg), dvMax: run.dv, maxIter: 40 });
+            run.solver.vg = vg;
+          }
+          const s = run.solver;
+          s.step(); run.total++;
+          if (!s.done) continue;
+          run.solver = null;
+          run.tries.push({ vg: s.vg, k: s.iter, ok: s.converged });
+          if (s.converged) {
+            const sol = s.solution();
+            run.prev = run.cur; run.cur = sol; run.pts.push({ vg: s.vg, id: sol.Id });
+            if (run.h < run.dV && s.iter < 10) run.h = Math.min(run.dV, run.h * 1.5);
+            if (s.vg >= 1 - 1e-9) run.end = "완료";
+          } else {
+            run.fails++;
+            if (!run.halve) run.end = "실패로 멈춤";
+            else { run.h /= 2; if (run.h < 0.004 || run.tries.length > 120) run.end = "간격 하한 도달"; }
+          }
+        }
+        cv.redraw();
+        if (!run.end) raf = requestAnimationFrame(tick); else raf = 0;
+      };
+      raf = requestAnimationFrame(tick);
+    }
+    document.getElementById("rp-go").addEventListener("click", start);
+    document.getElementById("rp-re").addEventListener("click", stop);
+    const cv = TB.canvas("#rp-cv", (ctx, w, h) => {
+      const P = TB.palette();
+      const A = { x: 66, y: 18, w: w - 86, h: (h - 120) * 0.55 }, B = { x: 66, y: A.y + A.h + 56, w: w - 86, h: (h - 120) * 0.45 };
+      const pts = run ? run.pts : [];
+      TB.chart(ctx, A, { x: [0, 1], y: [1e-12, 1e-2], logY: true, xLabel: "Vg (V)", yLabel: "Id (A/µm)", yTicks: [1e-12, 1e-10, 1e-8, 1e-6, 1e-4, 1e-2],
+        series: [{ data: pts.map((p) => [p.vg, Math.max(Math.abs(p.id), 1e-13)]), color: P.accent, width: 2.2 }],
+        points: pts.map((p) => ({ x: p.vg, y: Math.max(Math.abs(p.id), 1e-13), color: P.accent, r: 3 })) });
+      if (!run) label(ctx, "램프 시작을 누른다", A.x + A.w / 2, A.y + A.h / 2, P.dim, "center", "middle", 14);
+      else label(ctx, "Vd = " + run.vd + " V · ΔVg " + run.dV + " V · " + ({ plain: "이전 해", shift: "게이트 이동", extrap: "외삽 예측" })[run.mode] + (run.dv < 50 ? " · 감쇠" : " · 감쇠 없음"), A.x + 8, A.y + 4, P.dim, "left", "top", 11);
+      if (run && run.end && run.end !== "완료") label(ctx, run.end, A.x + A.w - 8, A.y + 4, P.bad, "right", "top", 13);
+      const T = run ? run.tries : [], nT = Math.max(10, T.length + (run && run.solver ? 1 : 0));
+      const kmax = Math.max(10, ...T.map((t) => t.k), run && run.solver ? run.solver.iter : 0);
+      const c = TB.chart(ctx, B, { x: [0, nT], y: [0, kmax * 1.1], xLabel: "시도 순서", yLabel: "반복 수" });
+      const bw = Math.max(1.5, Math.min(18, (B.w / nT) * 0.7));
+      T.forEach((t, i) => { ctx.fillStyle = t.ok ? P.accent : P.bad; const x = c.X(i + 0.5), y = c.Y(t.k); ctx.fillRect(x - bw / 2, y, bw, c.Y(0) - y); });
+      if (run && run.solver) { ctx.fillStyle = P.warn; const i = T.length, x = c.X(i + 0.5), y = c.Y(run.solver.iter); ctx.fillRect(x - bw / 2, y, bw, c.Y(0) - y); }
+      const last = pts[pts.length - 1];
+      TB.stat("rp-o-v", last ? last.vg.toFixed(3) + " <small>V</small>" : "—");
+      TB.stat("rp-o-k", run ? String(run.total) : "—");
+      TB.stat("rp-o-f", run ? (run.fails ? tone("bad-t", String(run.fails)) : "0") : "—");
+      TB.stat("rp-o-i", last && last.vg >= 1 - 1e-9 ? idStr(last.id) : "—");
+    }, { get height() { return narrowEl("rp-cv") ? 500 : 470; } });
+  })();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,519 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and DesignBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "정적 타이밍 분석(STA)의 원리. 셋업·홀드 식과 슬랙, 타이밍 그래프의 도착·요구 시간과 임계 경로, NLDM 셀 지연 표 보간, 엘모어 배선 지연과 리피터 삽입, PVT 코너를 시뮬레이터로 익힌다."}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>정적 타이밍 분석 · DesignBook</title>
+<meta name="description" content="정적 타이밍 분석(STA)의 원리. 셋업·홀드 식과 슬랙, 타이밍 그래프의 도착·요구 시간과 임계 경로, NLDM 셀 지연 표 보간, 엘모어 배선 지연과 리피터 삽입, PVT 코너를 시뮬레이터로 익힌다.">
+<link rel="canonical" href="https://semi.euiyun.com/design/chapters/timing.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#6d3fd1">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="DesignBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="정적 타이밍 분석 · DesignBook">
+<meta property="og:description" content="정적 타이밍 분석(STA)의 원리. 셋업·홀드 식과 슬랙, 타이밍 그래프의 도착·요구 시간과 임계 경로, NLDM 셀 지연 표 보간, 엘모어 배선 지연과 리피터 삽입, PVT 코너를 시뮬레이터로 익힌다.">
+<meta property="og:url" content="https://semi.euiyun.com/design/chapters/timing.html">
+<meta property="og:image" content="https://semi.euiyun.com/design/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/design/chapters/timing.html#chapter","name":"정적 타이밍 분석","headline":"정적 타이밍 분석 · DesignBook","description":"정적 타이밍 분석(STA)의 원리. 셋업·홀드 식과 슬랙, 타이밍 그래프의 도착·요구 시간과 임계 경로, NLDM 셀 지연 표 보간, 엘모어 배선 지연과 리피터 삽입, PVT 코너를 시뮬레이터로 익힌다.","url":"https://semi.euiyun.com/design/chapters/timing.html","position":8,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/design/og.png","dateModified":"2026-10-02","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/design/#book","name":"DesignBook · 반도체 설계 교과서","url":"https://semi.euiyun.com/design/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"DesignBook","item":"https://semi.euiyun.com/design/"},{"@type":"ListItem","position":2,"name":"8. 정적 타이밍 분석","item":"https://semi.euiyun.com/design/chapters/timing.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<!--head:end-->
+<style>
+  .dag-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-dim); padding: 8px 18px 0; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="design"></script>
+</head>
+<body data-chapter="timing">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 08</div>
+    <h1>정적 타이밍 분석</h1>
+    <p class="lead">배선이 끝난 칩에는 플립플롭 사이 경로가 수억 개 있다. 이 모든 경로에서 신호가 클럭 한 주기 안에 도착하는지를 시뮬레이션으로 확인하려면 모든 입력 조합을 넣어 봐야 하는데, 그것은 불가능하다. <strong>정적 타이밍 분석</strong><span class="en">(STA, Static Timing Analysis)</span>은 입력 값을 잊고 “가장 늦게, 가장 빨리 도착할 수 있는 시각”만 그래프 위에서 더하고 비교한다. 고정 지연 DAG의 기본 전파에서는 노드·간선 수에 비례하는 O(|V|+|E|) 시간으로 칩 전체의 타이밍을 보증하는, 사인오프의 중심 도구다.</p>
+    <ul class="objectives">
+      <li>타이밍 경로의 종류와 시작점·끝점, 런치·캡처 클럭을 구분한다.</li>
+      <li>셋업·홀드 조건과 슬랙을 식으로 세우고, 클럭 스큐가 둘에 반대로 작용함을 확인한다.</li>
+      <li>타이밍 그래프에서 도착 시간·요구 시간을 전파해 임계 경로를 찾는다.</li>
+      <li>NLDM 표(입력 슬루 × 출력 부하)로 셀 지연을 보간한다.</li>
+      <li>엘모어 지연으로 배선 지연을 계산하고 리피터가 L² 지연을 L로 바꾸는 원리를 안다.</li>
+      <li>PVT 코너, OCV, 타이밍 수정(ECO) 기법을 설명한다.</li>
+    </ul>
+  </header>
+
+  <section id="paths">
+    <h2>타이밍 경로와 두 개의 조건</h2>
+    <p>동기 회로의 모든 경로는 레지스터(플립플롭)에서 출발해 레지스터에서 끝난다. 시작점은 플롭의 클럭 핀이나 칩 입력, 끝점은 플롭의 데이터 핀이나 칩 출력이다. 그래서 경로는 <strong>입력 → 레지스터, 레지스터 → 레지스터, 레지스터 → 출력, 입력 → 출력</strong> 네 종류다. 가장 많은 것은 레지스터 → 레지스터 경로이고, 두 플롭 사이 조합 논리를 지나는 데이터가 다음 클럭 엣지에 맞춰 안정되어 있어야 한다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 200" role="img" aria-label="레지스터 사이 타이밍 경로">
+        <rect x="40" y="60" width="80" height="80" rx="6" class="f-elev"/><text x="80" y="104" text-anchor="middle" class="lbl-b">FF1</text>
+        <rect x="290" y="50" width="200" height="100" rx="40" class="f-acc-soft"/><text x="390" y="96" text-anchor="middle" class="lbl">조합 논리</text><text x="390" y="118" text-anchor="middle" class="lbl-dim">t<tspan baseline-shift="sub" font-size="10">comb</tspan> (최소 ~ 최대)</text>
+        <rect x="660" y="60" width="80" height="80" rx="6" class="f-elev"/><text x="700" y="104" text-anchor="middle" class="lbl-b">FF2</text>
+        <path d="M120 100H290M490 100H660" class="s-line"/><path d="M650 94l10 6l-10 6" class="s-line"/>
+        <text x="200" y="90" text-anchor="middle" class="lbl-dim">Q (t<tspan baseline-shift="sub" font-size="10">cq</tspan>)</text><text x="575" y="90" text-anchor="middle" class="lbl-dim">D (t<tspan baseline-shift="sub" font-size="10">setup</tspan>, t<tspan baseline-shift="sub" font-size="10">hold</tspan>)</text>
+        <path d="M20 180H700V140M80 180V140" class="s-acc2"/><text x="24" y="172" class="lbl-acc2">CLK</text>
+        <text x="430" y="172" class="lbl-dim">캡처 클럭이 Δ(스큐)만큼 늦게 도착</text>
+        <circle cx="700" cy="160" r="9" fill="none" stroke="var(--accent-2)"/><text x="716" y="164" class="lbl-dim">Δ</text>
+      </svg>
+      <figcaption><b>그림 08-1.</b> 레지스터 → 레지스터 경로. 런치 플롭 FF1이 클럭 엣지에서 데이터를 내보내고, 조합 논리를 지나 캡처 플롭 FF2가 다음 엣지에서 받는다. 캡처 쪽 클럭이 늦게 도착하는 만큼(스큐 Δ, 6장) 데이터에 시간이 더 주어진다.</figcaption>
+    </figure>
+    <p>캡처 플롭이 데이터를 안전하게 받으려면 두 가지 조건이 필요하다. 다음 엣지 <strong>전에</strong> 셋업 시간만큼 일찍 도착해야 하고(셋업), 같은 엣지 <strong>뒤에</strong> 홀드 시간 동안은 바뀌지 않아야 한다(홀드). 데이터가 너무 늦으면 셋업 위반, 너무 빠르면 홀드 위반이다.</p>
+    <div class="formula">$$\text{셋업 슬랙} = \big(T + \Delta - t_{\text{setup}}\big) - \big(t_{cq} + t_{\text{comb,max}}\big) \ge 0$$
+      $$\text{홀드 슬랙} = \big(t_{cq} + t_{\text{comb,min}}\big) - \big(\Delta + t_{\text{hold}}\big) \ge 0$$
+      <div class="where">\(T\)는 클럭 주기, \(\Delta\)는 캡처 클럭이 런치 클럭보다 늦게 도착하는 양(스큐). 셋업 슬랙은 “최대 요구 시간 − 늦은 도착 시간”, 홀드 슬랙은 “빠른 도착 시간 − 최소 요구 시간”이며, 각각 음수면 위반이다. 셋업은 주기 \(T\)에 달려 있어 클럭을 늦추면 고칠 수 있지만, 홀드는 \(T\)와 무관하다. <strong>홀드 위반은 클럭을 늦춰도 고쳐지지 않는다</strong>. 그래서 홀드 위반이 남은 칩은 어떤 주파수에서도 동작하지 않는다.</div>
+    </div>
+    <div class="sim" id="sim-td">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>타이밍 다이어그램: 셋업·홀드 슬랙</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="td-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>클럭 주기 T <output id="td-T-out"></output></span><input type="range" id="td-T" min="150" max="1000" step="5" value="500"></label>
+          <label class="ctrl"><span><span>t<sub>cq</sub> (clk→Q)</span> <output id="td-cq-out"></output></span><input type="range" id="td-cq" min="20" max="120" step="1" value="45"></label>
+          <label class="ctrl"><span>조합 지연 최대 <output id="td-mx-out"></output></span><input type="range" id="td-mx" min="0" max="900" step="5" value="380"></label>
+          <label class="ctrl"><span>조합 지연 최소 <output id="td-mn-out"></output></span><input type="range" id="td-mn" min="0" max="300" step="1" value="20"></label>
+          <label class="ctrl"><span><span>t<sub>setup</sub> / t<sub>hold</sub></span> <output id="td-su-out"></output></span><input type="range" id="td-su" min="5" max="80" step="1" value="30"></label>
+          <label class="ctrl"><span>클럭 스큐 Δ (캡처 − 런치) <output id="td-sk-out"></output></span><input type="range" id="td-sk" min="-150" max="150" step="5" value="0"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">셋업 슬랙</span><span class="v" id="td-o-s">—</span></div>
+        <div class="stat"><span class="k">홀드 슬랙</span><span class="v" id="td-o-h">—</span></div>
+        <div class="stat"><span class="k">f<sub>max</sub></span><span class="v" id="td-o-f">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 주기를 줄여 셋업 슬랙이 0이 되는 곳이 f<sub>max</sub>다. ② 스큐를 +로 키우면(캡처 클럭이 늦음) 셋업 슬랙은 늘고 홀드 슬랙은 준다. 이것이 6장의 <b>유용한 스큐</b>(useful skew)이자 동시에 홀드 위험이다. ③ 조합 지연 최소를 0에 가깝게(플롭끼리 바로 연결, 예: 시프트 레지스터) 하고 스큐를 +60 ps 주면 홀드 위반이 생긴다. 주기를 아무리 늘려도 사라지지 않는다. 해결책은 그 경로에 지연 셀(버퍼)을 넣는 것이다. (홀드 시간은 셋업 시간의 절반으로 가정, 단위 ps)</div>
+    </div>
+  </section>
+
+  <section id="graph">
+    <h2>타이밍 그래프와 임계 경로</h2>
+    <p>STA는 넷리스트를 <strong>방향성 비순환 그래프</strong>(DAG)로 본다. 노드는 셀의 핀, 간선은 셀 지연(입력 → 출력)과 배선 지연(출력 → 다음 입력)이다. 계산은 두 번의 훑기로 끝난다.</p>
+    <ol>
+      <li><strong>도착 시간</strong>(AT, Arrival time)을 시작점에서 앞으로 전파한다: \(AT(v) = \max_{u \to v}\big(AT(u) + d_{uv}\big)\). 셋업 분석은 최대, 홀드 분석은 최소를 쓴다.</li>
+      <li><strong>요구 시간</strong>(RT, Required time)을 끝점에서 거꾸로 전파한다: \(RT(u) = \min_{u \to v}\big(RT(v) - d_{uv}\big)\), 끝점의 RT는 \(T - t_{\text{setup}}\).</li>
+      <li>셋업 분석에서 각 노드의 <strong>슬랙</strong> = RT − AT. 홀드 분석에서는 빠른 도착을 전파하고 슬랙 = AT − RT로 판정한다. 슬랙이 가장 작은 노드들을 이으면 <span class="term">임계 경로</span><span class="en">(Critical path)</span>다.</li>
+    </ol>
+    <p>위상 정렬 순서로 한 번씩만 방문하면 되므로 계산량은 간선 수에 비례한다. 경로 수(지수적으로 많다)를 하나씩 세지 않는다는 것이 STA의 핵심이다. 대가는 비관성이다. 실제로는 동시에 일어날 수 없는 조합(거짓 경로)도 최악으로 더하므로, 설계자는 <span class="term">거짓 경로</span><span class="en">(False path)</span>와 <span class="term">멀티사이클 경로</span><span class="en">(Multicycle path)</span>를 SDC로 알려 준다.</p>
+    <div class="sim" id="sim-dag">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>도착·요구 시간 전파와 임계 경로</h3>
+        <div class="seg" id="dag-mode"><button data-value="setup" class="on">셋업 (최대)</button><button data-value="hold">홀드 (최소)</button></div>
+      </div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="dag-cv" style="cursor:pointer"></canvas><span class="hint">게이트를 누르면 지연 +10 ps (Shift: −10)</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>클럭 주기 T <output id="dag-T-out"></output></span><input type="range" id="dag-T" min="150" max="500" step="5" value="320"></label>
+          <label class="ctrl"><span>선택한 게이트 지연 <output id="dag-d-out"></output></span><input type="range" id="dag-d" min="5" max="120" step="1" value="40"></label>
+          <div class="ctrl-row"><button class="btn sm" id="dag-rnd">지연 무작위</button><button class="btn sm" id="dag-up">임계 경로 게이트 업사이징 (−25%)</button></div>
+          <div class="info-box" id="dag-info" style="min-height:5em"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">WNS (최악 슬랙)</span><span class="v" id="dag-o-w">—</span></div>
+        <div class="stat"><span class="k">TNS (음수 슬랙 합)</span><span class="v" id="dag-o-t">—</span></div>
+        <div class="stat"><span class="k">위반 끝점</span><span class="v" id="dag-o-n">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 노드 위의 숫자는 AT/RT, 색은 슬랙(빨강 음수, 초록 여유)이다. 굵은 경로가 임계 경로다. ② 임계 경로 위 게이트 하나를 빠르게 하면 임계 경로가 다른 곳으로 옮겨 간다. 타이밍 수정이 “두더지 잡기”인 이유다. ③ <b>업사이징</b> 버튼을 반복하면 WNS가 좋아지다가 더 이상 좋아지지 않는 지점이 온다. 실제 도구는 큰 셀이 앞단 부하를 늘리는 효과까지 계산한다(여기서는 무시). ④ 홀드 모드로 바꾸면 최소 지연 경로를 본다. 셋업과 홀드의 임계 경로는 서로 다르다. (플롭 t<sub>cq</sub> 40 ps, t<sub>setup</sub> 25 ps, t<sub>hold</sub> 15 ps, 배선 지연은 게이트 지연에 포함)</div>
+    </div>
+  </section>
+
+  <section id="nldm">
+    <h2>셀 지연은 표에서 읽는다</h2>
+    <p>각 셀의 지연은 라이브러리(.lib)에 미리 계산된 표로 들어 있다. 셀 특성화(characterization) 단계에서 SPICE로 수천 번 시뮬레이션해 만든 것이다. 가장 흔한 형식인 <span class="term">NLDM</span><span class="en">(Non-Linear Delay Model)</span>은 지연과 출력 슬루(전이 시간)를 두 변수의 2차원 표로 준다. 행은 <strong>입력 슬루</strong>(앞단이 얼마나 천천히 구동하나), 열은 <strong>출력 부하 커패시턴스</strong>(뒤에 무엇이 달렸나)다. 표 사이의 값은 이중선형 보간으로 얻는다.</p>
+    <pre style="font-family:var(--mono);font-size:12.5px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 14px;overflow-x:auto;line-height:1.5" class="no-math">cell (INV_X1) {
+  area : 0.479 ;
+  pin (A) { direction : input ; capacitance : 0.0010 ; }      /* pF */
+  pin (Y) { direction : output ; function : "!A" ;
+    timing () { related_pin : "A" ;
+      cell_rise (delay_template_5x5) {
+        index_1 ("0.005, 0.02, 0.05, 0.1, 0.2") ;              /* 입력 슬루 ns */
+        index_2 ("0.0005, 0.002, 0.005, 0.01, 0.02") ;         /* 부하 pF */
+        values ("0.008, 0.016, 0.031, 0.056, 0.106", ... ) ;
+      } } } }</pre>
+    <div class="sim" id="sim-nl">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>NLDM 지연 표와 이중선형 보간</h3>
+        <div class="seg" id="nl-cell"><button data-value="1" class="on">INV_X1</button><button data-value="4">INV_X4</button><button data-value="0.7">NAND2_X1</button></div>
+      </div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="nl-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>입력 슬루 <output id="nl-s-out"></output></span><input type="range" id="nl-s" min="5" max="200" step="1" value="40"></label>
+          <label class="ctrl"><span>출력 부하 <output id="nl-c-out"></output></span><input type="range" id="nl-c" min="0.5" max="20" step="0.1" value="4"></label>
+          <div class="info-box" id="nl-info" style="min-height:4em"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">지연 (보간)</span><span class="v" id="nl-o-d">—</span></div>
+        <div class="stat"><span class="k">출력 슬루</span><span class="v" id="nl-o-s">—</span></div>
+        <div class="stat"><span class="k">팬아웃 환산 (부하/입력 C)</span><span class="v" id="nl-o-f">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 표의 색은 지연(ps)이다. 부하가 커질수록 거의 선형으로, 입력 슬루가 커질수록 완만하게 는다. ② X4 셀은 같은 부하에서 지연이 훨씬 작지만 입력 커패시턴스가 4배라 앞단을 느리게 만든다(3장 논리적 노력). ③ 출력 슬루가 다음 셀의 입력 슬루가 된다. 그래서 STA는 지연과 함께 슬루를 전파한다. 슬루가 너무 크면 누설·단락 전류와 잡음 취약성이 커져 라이브러리마다 최대 전이 시간 규칙(max_transition)이 있다. (EDU45 교육용 표: 지연 ≈ p + g·R·C<sub>L</sub> + k·슬루 형태로 생성)</div>
+    </div>
+  </section>
+
+  <section id="wire">
+    <h2>배선 지연: 엘모어와 리피터</h2>
+    <p>공정이 미세해지며 트랜지스터는 빨라졌지만 배선은 오히려 느려졌다. 배선 단면이 줄면 저항이 면적에 반비례해 커지고(크기 효과로 더 빨리, <a href="/process/chapters/metal.html">ProcessBook 11장</a>), 커패시턴스는 그대로이기 때문이다. RC 회로망의 지연은 <span class="term">엘모어 지연</span><span class="en">(Elmore delay)</span>으로 간단히 근사한다.</p>
+    <div class="formula">$$\tau_{\text{Elmore}} = \sum_i R_i \, C_{\text{down},i}, \qquad \tau_{E,\text{wire}} = \frac{1}{2}rcL^2,\quad t_{50\%,\text{wire}} \approx 0.38rcL^2,\quad t_{50\%,\text{lumped}} \approx 0.69RC$$
+      <div class="where">\(R_i\)는 구동점에서 노드 \(i\)까지 경로의 저항 조각, \(C_{\text{down},i}\)는 그 조각 아래쪽에 달린 모든 커패시턴스. 균일 배선의 두 식은 이상적인 계단 입력·수신 부하 없는 분포 RC 기준이며, 0.69RC는 단일 집중 RC의 50% 지연이다. 일반 RC 트리에 0.69τ를 일괄 적용하는 식은 아니다. 길이 \(L\)인 균일 배선의 지연은 \(L^2\)에 비례한다. 길이를 \(k\) 토막으로 나누고 사이에 버퍼(리피터)를 넣으면 토막마다 \((L/k)^2\)이 되어 전체는 \(k\cdot(L/k)^2 = L^2/k\), 리피터 지연이 더해져 최적 \(k\)에서 지연이 \(L\)에 비례하게 된다.</div>
+    </div>
+    <div class="sim" id="sim-rep">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>긴 배선의 지연과 리피터 삽입</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rep-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>배선 길이 L <output id="rep-L-out"></output></span><input type="range" id="rep-L" min="50" max="5000" step="50" value="2000"></label>
+          <div class="ctrl"><span>금속층</span><div class="seg" id="rep-m"><button data-value="m2" class="on">M2 (40 nm 폭)</button><button data-value="m6">M6 (중간)</button><button data-value="m10">M10 (두꺼운)</button></div></div>
+          <label class="ctrl"><span>리피터 수 k <output id="rep-k-out"></output></span><input type="range" id="rep-k" min="0" max="20" step="1" value="0"></label>
+          <label class="ctrl"><span>리피터 크기 <output id="rep-s-out"></output></span><input type="range" id="rep-s" min="1" max="32" step="1" value="8"></label>
+          <button class="btn sm" id="rep-opt">최적 k 찾기</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">배선 R · C</span><span class="v" id="rep-o-rc">—</span></div>
+        <div class="stat"><span class="k">지연 (50%)</span><span class="v" id="rep-o-d">—</span></div>
+        <div class="stat"><span class="k">리피터 없을 때</span><span class="v" id="rep-o-0">—</span></div>
+        <div class="stat"><span class="k">FO4 환산</span><span class="v" id="rep-o-f">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① M2로 5 mm를 리피터 없이 보내면 수 ns, 클럭 수십 주기가 걸린다. 기본 크기 s = 8에서는 리피터 없음 약 3016 ps가 k = 13에서 약 1061 ps로 줄어 약 2.84배 빨라진다. 이 실험의 길이·크기 범위에서는 최대 약 4.04배다. ② 아래 곡선의 리피터 없음(점선)은 L², 최적 리피터(실선)는 L에 비례한다. ③ 같은 길이라도 위층 두꺼운 금속(M10)은 저항이 작아 리피터가 덜 필요하다. 그래서 긴 전역 신호와 클럭은 위층으로 보낸다(7장). (M2: r ≈ 1.2 Ω/µm·c ≈ 0.2 fF/µm, M6: 0.25 Ω/µm·0.2 fF/µm, M10: 0.02 Ω/µm·0.25 fF/µm, 단위 크기 버퍼 R<sub>0</sub> = 8 kΩ·C<sub>0</sub> = 1 fF·p = 7 ps로 가정한 교육용 값)</div>
+    </div>
+  </section>
+
+  <section id="corners">
+    <h2>코너, 변동, 그리고 비관성</h2>
+    <p>같은 회로도 공정·전압·온도(<span class="term">PVT</span>)에 따라 속도가 다르다. 공정 편차는 NMOS·PMOS 각각 느림(S)·보통(T)·빠름(F)으로 묶어 SS·TT·FF·SF·FS <strong>코너</strong>를 만들고, 전압은 ±10%, 온도는 −40~125 °C를 본다. 셋업은 가장 느린 코너(SS, 저전압, 보통 고온)에서, 홀드는 가장 빠른 코너(FF, 고전압, 저온)에서 확인하는 것이 기본이다.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>분석</th><th>공정</th><th>전압</th><th>온도</th><th>배선 RC</th><th>보는 것</th></tr></thead>
+        <tbody>
+          <tr><td>셋업 (최대 지연)</td><td>SS</td><td>0.9 V</td><td>125 °C (또는 −40 °C*)</td><td>Cworst / RCworst</td><td>f<sub>max</sub>, 셋업 슬랙</td></tr>
+          <tr><td>홀드 (최소 지연)</td><td>FF</td><td>1.1 V</td><td>−40 °C</td><td>Cbest</td><td>홀드 슬랙</td></tr>
+          <tr><td>누설 전력</td><td>FF</td><td>1.1 V</td><td>125 °C</td><td>—</td><td>최대 누설 (9장)</td></tr>
+          <tr><td>전형</td><td>TT</td><td>1.0 V</td><td>25 °C</td><td>typical</td><td>보고·참고</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>*미세 공정에서는 낮은 전압에서 문턱 전압의 온도 의존성이 이동도 감소를 이겨 <strong>저온에서 더 느려지는</strong> 온도 역전(temperature inversion)이 나타나, 셋업도 저온 코너를 함께 본다. 칩 안 위치에 따른 편차는 <span class="term">OCV</span><span class="en">(On-chip variation)</span> 디레이트로 다룬다. 런치 경로는 느리게, 캡처 클럭 경로는 빠르게 가정하는 식인데, 두 경로가 공유하는 클럭 구간까지 서로 다르게 가정하는 것은 물리적으로 불가능하므로 그 몫을 되돌려 준다(CPPR, 6장). 경로 깊이·거리에 따라 디레이트를 줄이는 AOCV, 통계적 분포를 쓰는 POCV/SOCV로 비관성을 깎아 낸다.</p>
+    <p>배선 후에는 실제 배선의 저항·커패시턴스를 추출(SPEF)해 지연을 다시 계산한다. 옆 배선이 반대로 스위칭하면 결합 커패시턴스가 실효적으로 두 배가 되는 <strong>크로스토크</strong>도 지연에 더한다(SI-aware STA).</p>
+  </section>
+
+  <section id="eco">
+    <h2>타이밍 고치기</h2>
+    <p>셋업 위반이 남으면 도구와 설계자는 다음을 순서대로 시도한다. 아래로 갈수록 비용이 크다.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>기법</th><th>효과</th><th>대가</th></tr></thead>
+        <tbody>
+          <tr><td>셀 업사이징 (X1 → X2·X4)</td><td>구동력 ↑, 지연 ↓</td><td>면적·입력 C·전력 ↑ (앞단이 느려짐)</td></tr>
+          <tr><td>Vt 교체 (HVT → SVT → LVT)</td><td>같은 면적에서 빠름</td><td>누설 전력 지수적 증가 (9장)</td></tr>
+          <tr><td>버퍼·리피터 삽입, 배선 층 올리기</td><td>긴 배선 지연 ↓</td><td>면적·전력, 배선 자원</td></tr>
+          <tr><td>논리 재구성 (늦은 신호를 출력 가까이)</td><td>논리 깊이 ↓</td><td>재합성</td></tr>
+          <tr><td>유용한 스큐 (6장)</td><td>슬랙을 이웃 단으로 빌림</td><td>홀드·다음 단 슬랙 감소</td></tr>
+          <tr><td>파이프라인 단 추가</td><td>주기 안 논리 깊이 반감</td><td>지연 사이클 증가, RTL 변경</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>홀드 위반은 반대로 지연을 <strong>더한다</strong>. 지연 셀이나 버퍼를 끼우는 것이 정석이며, 셋업 슬랙을 해치지 않는 범위에서만 가능하다. 배선 뒤의 이런 작은 수정을 <span class="term">ECO</span><span class="en">(Engineering change order)</span>라 하고, 마스크 제작 뒤에는 미리 뿌려 둔 예비 셀을 금속층만 바꿔 연결하는 금속 ECO로 비용을 줄인다(12장).</p>
+  </section>
+
+  <section id="go-arcade" data-nonum><h2>직접 맞춰 보기</h2>
+    <div class="callout tip"><strong>도전 과제</strong><p>면적 예산 안에서 셀 크기를 골라 슬랙을 0 이상으로 만드는 <a href="arcade.html#g-timing">15장 타이밍 클로저 퍼즐</a>에 도전해 보자. 업사이징이 앞단을 느리게 만드는 효과까지 들어 있다.</p></div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>STA는 입력 값과 무관하게 최악·최선 도착 시간을 그래프 위에서 전파해 모든 경로를 한 번에 보증한다.</li>
+      <li>셋업 슬랙 = \(T + \Delta - t_{setup} - t_{cq} - t_{comb,max}\), 홀드 슬랙 = \(t_{cq} + t_{comb,min} - \Delta - t_{hold}\). 홀드는 주기와 무관하다.</li>
+      <li>스큐는 셋업에 유리하면 홀드에 불리하다.</li>
+      <li>셀 지연은 NLDM 표(입력 슬루 × 부하)에서 보간하고, 출력 슬루를 함께 전파한다.</li>
+      <li>배선 지연은 엘모어 근사로 L²에 비례하며, 리피터로 L에 비례하게 만든다.</li>
+      <li>셋업은 느린 코너, 홀드는 빠른 코너에서 확인하고, OCV·크로스토크까지 더해 사인오프한다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>T = 500 ps, t<sub>cq</sub> = 50 ps, 조합 지연 최대 400 ps, t<sub>setup</sub> = 30 ps, 스큐 0일 때 셋업 슬랙은?</p><div class="opts">
+        <button class="opt">−20 ps</button><button class="opt" data-correct>+20 ps</button><button class="opt">+50 ps</button><button class="opt">+70 ps</button>
+      </div><div class="quiz-exp">(500 − 30) − (50 + 400) = 470 − 450 = +20 ps.</div></div>
+      <div class="quiz-q"><p>칩이 홀드 위반을 가진 채 제조되었다. 맞는 설명은?</p><div class="opts">
+        <button class="opt">클럭 주파수를 낮추면 동작한다</button><button class="opt">전압을 낮추면 반드시 고쳐진다</button><button class="opt" data-correct>클럭 주기와 무관하므로 주파수를 낮춰도 고쳐지지 않는다</button><button class="opt">홀드 위반은 동작에 영향이 없다</button>
+      </div><div class="quiz-exp">홀드 조건에는 T가 없다. 같은 엣지에서 출발한 데이터가 너무 빨리 도착해 캡처 플롭의 값을 덮어쓰는 문제다.</div></div>
+      <div class="quiz-q"><p>캡처 플롭의 클럭이 런치 플롭보다 50 ps 늦게 도착한다(양의 스큐). 이 스큐는?</p><div class="opts">
+        <button class="opt" data-correct>셋업 슬랙을 50 ps 늘리고 홀드 슬랙을 50 ps 줄인다</button><button class="opt">셋업과 홀드 슬랙을 모두 늘린다</button><button class="opt">셋업 슬랙을 줄이고 홀드 슬랙을 늘린다</button><button class="opt">아무 영향이 없다</button>
+      </div><div class="quiz-exp">데이터가 도착해야 하는 마감이 늦춰지므로 셋업에는 유리하지만, 같은 엣지의 홀드 창도 늦춰져 빠른 데이터와 부딪치기 쉽다.</div></div>
+      <div class="quiz-q"><p>리피터 없이 길이가 2배가 된 균일 RC 배선의 지연은 대략 몇 배인가?</p><div class="opts">
+        <button class="opt">√2배</button><button class="opt">2배</button><button class="opt" data-correct>4배</button><button class="opt">8배</button>
+      </div><div class="quiz-exp">R과 C가 모두 L에 비례하므로 RC ∝ L². 최적 리피터를 넣으면 L에 비례하게 된다.</div></div>
+      <div class="quiz-q"><p>NLDM 표의 두 축은?</p><div class="opts">
+        <button class="opt">전압과 온도</button><button class="opt" data-correct>입력 슬루(전이 시간)와 출력 부하 커패시턴스</button><button class="opt">셀 면적과 구동력</button><button class="opt">클럭 주기와 스큐</button>
+      </div><div class="quiz-exp">PVT는 표가 아니라 라이브러리 파일 자체(코너별 .lib)로 구분한다. 한 표 안의 축은 입력 슬루와 부하다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  function small(v, u) { return v + "<small>" + u + "</small>"; }
+  function ps(v) { return small((v >= 0 ? "+" : "") + Math.round(v), "ps"); }
+  function col(v, P) { return v < 0 ? P.bad : v < 30 ? P.warn : P.ok; }
+
+  /* ---------------- 1. 타이밍 다이어그램 */
+  (function () {
+    var cv, rr = function () { cv && cv.redraw(); };
+    var gT = PB.range("td-T", function (v) { return v + " ps (" + (1000 / v).toFixed(2) + " GHz)"; }, rr);
+    var gCq = PB.range("td-cq", function (v) { return v + " ps"; }, rr);
+    var gMx = PB.range("td-mx", function (v) { return v + " ps"; }, rr);
+    var gMn = PB.range("td-mn", function (v) { return v + " ps"; }, rr);
+    var gSu = PB.range("td-su", function (v) { return v + " / " + Math.round(v / 2) + " ps"; }, rr);
+    var gSk = PB.range("td-sk", function (v) { return (v > 0 ? "+" : "") + v + " ps"; }, rr);
+    cv = PB.canvas("#td-cv", function (ctx, w, h) {
+      var P = PB.palette(), T = gT(), cq = gCq(), mx = Math.max(gMx(), gMn()), mn = Math.min(gMn(), gMx()), su = gSu(), ho = su / 2, sk = gSk();
+      var setup = (T + sk - su) - (cq + mx), hold = (cq + mn) - (sk + ho);
+      var t0 = -80, t1 = Math.max(2 * T + 100, T + sk + 150), L = 92, R = w - 14;
+      var X = function (t) { return L + (t - t0) / (t1 - t0) * (R - L); };
+      var rows = [["CLK 런치", 30], ["FF1 Q", 90], ["FF2 D", 150], ["CLK 캡처", 210]];
+      var hh = 30;
+      ctx.font = PB.font(12); ctx.fillStyle = P.dim; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      rows.forEach(function (r) { ctx.fillText(r[0], L - 10, r[1] + hh / 2); });
+      function clock(y, off) {
+        ctx.strokeStyle = P.accent2; ctx.lineWidth = 2; ctx.beginPath();
+        var t = t0, hi = false; ctx.moveTo(X(t0), y + hh);
+        for (var e = Math.floor((t0 - off) / (T / 2)) * T / 2 + off; e < t1; e += T / 2) {
+          if (e < t0) { hi = Math.round((e - off) / (T / 2)) % 2 === 0; continue; }
+          ctx.lineTo(X(e), hi ? y : y + hh); hi = !hi; ctx.lineTo(X(e), hi ? y : y + hh);
+        }
+        ctx.lineTo(X(t1), hi ? y : y + hh); ctx.stroke();
+      }
+      clock(rows[0][1], 0); clock(rows[3][1], sk);
+      // Q: 안정 → 전환(cq) → 새 값
+      function bus(y, tA, tB, label) {
+        ctx.strokeStyle = P.text; ctx.lineWidth = 1.4; ctx.beginPath();
+        ctx.moveTo(X(t0), y); ctx.lineTo(X(tA), y); ctx.lineTo(X(tB), y + hh); ctx.lineTo(X(t1), y + hh);
+        ctx.moveTo(X(t0), y + hh); ctx.lineTo(X(tA), y + hh); ctx.lineTo(X(tB), y); ctx.lineTo(X(t1), y); ctx.stroke();
+        if (tB > tA + 2) { ctx.fillStyle = PB.color("text-faint"); ctx.globalAlpha = 0.25; ctx.fillRect(X(tA), y, X(tB) - X(tA), hh); ctx.globalAlpha = 1; }
+        if (label) { ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.font = PB.font(11); ctx.fillText(label, X(tB) + 6, y + hh / 2); }
+      }
+      bus(rows[1][1], cq, cq + 1, "새 값");
+      bus(rows[2][1], cq + mn, cq + mx, "");
+      // 창: 셋업 창(다음 엣지 앞), 홀드 창(같은 엣지 뒤)
+      var ec = T + sk, e0 = sk;
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = setup < 0 ? P.bad : P.accent; ctx.fillRect(X(ec - su), rows[2][1] - 6, X(ec) - X(ec - su), hh + 12);
+      ctx.fillStyle = hold < 0 ? P.bad : P.accent; ctx.fillRect(X(e0), rows[2][1] - 6, X(e0 + ho) - X(e0), hh + 12);
+      ctx.globalAlpha = 1;
+      // 수직선
+      [[0, "엣지 0"], [T, "엣지 1 (런치)"], [ec, ""], [e0, ""]].forEach(function (v) { ctx.strokeStyle = P.faint; ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(v[0]), 18); ctx.lineTo(X(v[0]), rows[3][1] + hh + 6); ctx.stroke(); ctx.setLineDash([]); });
+      // 슬랙 화살표
+      function arrow(y, a, b, color, txt) { ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(a), y); ctx.lineTo(X(b), y); ctx.stroke(); ctx.font = PB.font(11.5, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText(txt, (X(a) + X(b)) / 2, y + 4); }
+      var yA = rows[3][1] + hh + 18;
+      arrow(yA, cq + mx, ec - su, col(setup, P), "셋업 슬랙 " + Math.round(setup));
+      arrow(yA + 30, e0 + ho, cq + mn, col(hold, P), "홀드 슬랙 " + Math.round(hold));
+      ctx.fillStyle = P.dim; ctx.font = PB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("회색: 데이터가 바뀌는 구간 (최소~최대 도착) · 색 띠: 셋업·홀드 창", L, h - 18);
+      PB.stat("td-o-s", '<span style="color:' + col(setup, P) + '">' + ps(setup) + "</span>");
+      PB.stat("td-o-h", '<span style="color:' + col(hold, P) + '">' + ps(hold) + "</span>");
+      var Tmin = cq + mx + su - sk;
+      PB.stat("td-o-f", hold < 0 ? '<span style="color:' + P.bad + '">없음 (홀드 위반)</span>' : small((1000 / Tmin).toFixed(2), "GHz"));
+    }, { aspect: 0.6, minHeight: 330, maxHeight: 420 });
+  })();
+
+  /* ---------------- 2. 타이밍 그래프 */
+  (function () {
+    // 노드: 시작점(FF Q, 입력), 게이트, 끝점(FF D)
+    var N = [
+      { id: "S1", t: "src", x: 0, y: 0.12 }, { id: "S2", t: "src", x: 0, y: 0.42 }, { id: "S3", t: "src", x: 0, y: 0.72 }, { id: "S4", t: "src", x: 0, y: 0.95 },
+      { id: "g1", x: 1, y: 0.1, d: 40 }, { id: "g2", x: 1, y: 0.45, d: 55 }, { id: "g3", x: 1, y: 0.85, d: 30 },
+      { id: "g4", x: 2, y: 0.22, d: 60 }, { id: "g5", x: 2, y: 0.6, d: 35 }, { id: "g6", x: 2, y: 0.92, d: 25 },
+      { id: "g7", x: 3, y: 0.15, d: 45 }, { id: "g8", x: 3, y: 0.5, d: 70 }, { id: "g9", x: 3, y: 0.82, d: 30 },
+      { id: "g10", x: 4, y: 0.3, d: 50 }, { id: "g11", x: 4, y: 0.7, d: 40 },
+      { id: "E1", t: "end", x: 5, y: 0.18 }, { id: "E2", t: "end", x: 5, y: 0.5 }, { id: "E3", t: "end", x: 5, y: 0.85 },
+    ];
+    var Ed = [["S1", "g1"], ["S2", "g1"], ["S2", "g2"], ["S3", "g2"], ["S3", "g3"], ["S4", "g3"], ["g1", "g4"], ["g2", "g4"], ["g2", "g5"], ["g3", "g5"], ["g3", "g6"], ["S4", "g6"],
+      ["g4", "g7"], ["g4", "g8"], ["g5", "g8"], ["g5", "g9"], ["g6", "g9"], ["g7", "g10"], ["g8", "g10"], ["g8", "g11"], ["g9", "g11"], ["g7", "E1"], ["g10", "E1"], ["g10", "E2"], ["g11", "E2"], ["g11", "E3"], ["g9", "E3"], ["S1", "g7"]];
+    var by = {}; N.forEach(function (n) { by[n.id] = n; });
+    var D0 = N.map(function (n) { return n.d; });
+    var TCQ = 40, TSU = 25, THO = 15, sel = by.g8, mode = "setup", res = null, cv, lay = null;
+    var gT = PB.range("dag-T", function (v) { return v + " ps"; }, function () { cv.redraw(); });
+    var gD = PB.range("dag-d", function (v) { return v + " ps"; }, function (v) { if (sel && sel.d != null) { sel.d = v; cv.redraw(); } });
+    PB.seg("dag-mode", function (v) { mode = v; cv.redraw(); });
+    document.getElementById("dag-rnd").addEventListener("click", function () { N.forEach(function (n) { if (n.d != null) n.d = Math.round(20 + Math.random() * 70); }); syncSel(); cv.redraw(); });
+    document.getElementById("dag-up").addEventListener("click", function () { if (!res) return; res.crit.forEach(function (id) { var n = by[id]; if (n.d != null) n.d = Math.max(8, Math.round(n.d * 0.75)); }); syncSel(); cv.redraw(); });
+    function syncSel() { if (sel && sel.d != null) gD.set(sel.d); }
+    function analyze(T) {
+      var AT = {}, RT = {}, maxm = mode === "setup";
+      N.forEach(function (n) { AT[n.id] = n.t === "src" ? TCQ : maxm ? -Infinity : Infinity; });
+      // N은 이미 위상 순서(x 증가)
+      var order = N.slice().sort(function (a, b) { return a.x - b.x; });
+      order.forEach(function (n) {
+        if (n.t === "src") return;
+        Ed.forEach(function (e) { if (e[1] !== n.id) return; var v = AT[e[0]] + (n.d || 0); AT[n.id] = maxm ? Math.max(AT[n.id], v) : Math.min(AT[n.id], v); });
+      });
+      N.forEach(function (n) { RT[n.id] = n.t === "end" ? (maxm ? T - TSU : THO) : maxm ? Infinity : -Infinity; });
+      order.slice().reverse().forEach(function (n) {
+        if (n.t === "end") return;
+        Ed.forEach(function (e) { if (e[0] !== n.id) return; var m = by[e[1]], v = RT[e[1]] - (m.d || 0); RT[n.id] = maxm ? Math.min(RT[n.id], v) : Math.max(RT[n.id], v); });
+      });
+      var S = {}; N.forEach(function (n) { S[n.id] = maxm ? RT[n.id] - AT[n.id] : AT[n.id] - RT[n.id]; });
+      // 임계 경로: 슬랙 최소 끝점부터 역추적
+      var ends = N.filter(function (n) { return n.t === "end"; }), worst = ends.reduce(function (a, b) { return S[a.id] <= S[b.id] ? a : b; });
+      var crit = [worst.id], cur = worst;
+      while (cur.t !== "src") {
+        var best = null, bv = maxm ? -Infinity : Infinity;
+        Ed.forEach(function (e) { if (e[1] !== cur.id) return; var v = AT[e[0]]; if (maxm ? v > bv : v < bv) { bv = v; best = e[0]; } });
+        cur = by[best]; crit.push(cur.id);
+      }
+      var wns = Math.min.apply(null, ends.map(function (e) { return S[e.id]; })), tns = ends.reduce(function (s, e) { return s + Math.min(0, S[e.id]); }, 0);
+      return { AT: AT, RT: RT, S: S, crit: crit, wns: wns, tns: tns, nv: ends.filter(function (e) { return S[e.id] < 0; }).length };
+    }
+    cv = PB.canvas("#dag-cv", function (ctx, w, h) {
+      var P = PB.palette(); res = analyze(gT());
+      var px = 34, py = 30, W = w - 2 * px, H = h - 2 * py - 10;
+      lay = function (n) { return [px + n.x / 5 * W, py + n.y * H]; };
+      var cs = {}; for (var i = 0; i < res.crit.length - 1; i++) cs[res.crit[i + 1] + ">" + res.crit[i]] = 1;
+      Ed.forEach(function (e) {
+        var a = lay(by[e[0]]), b = lay(by[e[1]]), c = cs[e[0] + ">" + e[1]];
+        ctx.strokeStyle = c ? P.bad : P.faint; ctx.lineWidth = c ? 3 : 1.1; ctx.globalAlpha = c ? 0.9 : 0.7;
+        ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.bezierCurveTo((a[0] + b[0]) / 2, a[1], (a[0] + b[0]) / 2, b[1], b[0], b[1]); ctx.stroke(); ctx.globalAlpha = 1;
+      });
+      N.forEach(function (n) {
+        var p = lay(n), s = res.S[n.id];
+        ctx.fillStyle = col(s, P); ctx.globalAlpha = 0.2;
+        var r = n.t ? 11 : 15;
+        ctx.beginPath(); n.t ? ctx.rect(p[0] - r, p[1] - r, 2 * r, 2 * r) : ctx.arc(p[0], p[1], r, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+        ctx.strokeStyle = n === sel ? P.accent : col(s, P); ctx.lineWidth = n === sel ? 3 : 1.6; ctx.stroke();
+        ctx.fillStyle = P.text; ctx.font = PB.font(10.5, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(n.t ? n.id : n.d, p[0], p[1]);
+        ctx.font = PB.font(9.5, true); ctx.fillStyle = P.dim;
+        ctx.fillText(Math.round(res.AT[n.id]) + "/" + Math.round(res.RT[n.id]), p[0], p[1] - r - 7);
+      });
+      ctx.fillStyle = P.dim; ctx.font = PB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      ctx.fillText("□ 시작점(FF Q)·끝점(FF D) · ○ 게이트(숫자 = 지연 ps) · 위: AT/RT", px - 20, h - 4);
+      PB.stat("dag-o-w", '<span style="color:' + col(res.wns, P) + '">' + ps(res.wns) + "</span>");
+      PB.stat("dag-o-t", small(Math.round(res.tns), "ps"));
+      PB.stat("dag-o-n", small(res.nv + " / 3", ""));
+      document.getElementById("dag-info").innerHTML = "<b>임계 경로</b> " + res.crit.slice().reverse().join(" → ") + "<br>선택: <b>" + (sel ? sel.id : "—") + "</b>" + (sel ? " · AT " + Math.round(res.AT[sel.id]) + " · RT " + Math.round(res.RT[sel.id]) + " · 슬랙 " + Math.round(res.S[sel.id]) + " ps" : "");
+    }, { aspect: 0.66, minHeight: 330, maxHeight: 460 });
+    var el = document.getElementById("dag-cv");
+    el.addEventListener("click", function (e) {
+      if (!lay) return; var b = el.getBoundingClientRect(), x = e.clientX - b.left, y = e.clientY - b.top;
+      var hit = null; N.forEach(function (n) { var p = lay(n); if (Math.hypot(p[0] - x, p[1] - y) < 18) hit = n; });
+      if (!hit) return;
+      if (hit === sel && hit.d != null) hit.d = PB.clamp(hit.d + (e.shiftKey ? -10 : 10), 5, 120);
+      sel = hit; syncSel(); cv.redraw();
+    });
+  })();
+
+  /* ---------------- 3. NLDM */
+  (function () {
+    var S = [5, 20, 50, 100, 200], CL = [0.5, 2, 5, 10, 20]; // ps, fF
+    var drv = 1, cv;
+    function model(s, c, x) { var R = 7.5 / x, p = 6 * (x === 0.7 ? 1.6 : 1); return p + R * c * (x === 0.7 ? 1.35 : 1) + 0.12 * s + 0.0006 * s * c * R; } // ps
+    function slewOut(s, c, x) { var R = 7.5 / x; return 8 + 1.9 * R * c * (x === 0.7 ? 1.35 : 1) + 0.08 * s; }
+    function table(x, f) { return S.map(function (s) { return CL.map(function (c) { return f(s, c, x); }); }); }
+    function interp(tb, s, c) {
+      var i = 0; while (i < S.length - 2 && s > S[i + 1]) i++;
+      var j = 0; while (j < CL.length - 2 && c > CL[j + 1]) j++;
+      var u = (s - S[i]) / (S[i + 1] - S[i]), v = (c - CL[j]) / (CL[j + 1] - CL[j]);
+      return { val: (1 - u) * (1 - v) * tb[i][j] + u * (1 - v) * tb[i + 1][j] + (1 - u) * v * tb[i][j + 1] + u * v * tb[i + 1][j + 1], i: i, j: j, u: u, v: v };
+    }
+    var rr = function () { cv && cv.redraw(); };
+    var gS = PB.range("nl-s", function (v) { return v + " ps"; }, rr);
+    var gC = PB.range("nl-c", function (v) { return v.toFixed(1) + " fF"; }, rr);
+    PB.seg("nl-cell", function (v) { drv = Number(v); rr(); });
+    cv = PB.canvas("#nl-cv", function (ctx, w, h) {
+      var P = PB.palette(), tb = table(drv, model), ts = table(drv, slewOut), s = gS(), c = gC();
+      var r = interp(tb, s, c), ro = interp(ts, s, c);
+      var lx = 70, ty = 34, cw = (w - lx - 16) / 5, ch = (h - ty - 60) / 5;
+      var lo = tb[0][0], hi = tb[4][4];
+      ctx.font = PB.font(11, true); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      for (var i = 0; i < 5; i++) for (var j = 0; j < 5; j++) {
+        var t = (tb[i][j] - lo) / (hi - lo);
+        ctx.fillStyle = "rgba(109,63,209," + (0.08 + 0.75 * t) + ")";
+        if (PB.isDark()) ctx.fillStyle = "rgba(169,139,255," + (0.08 + 0.7 * t) + ")";
+        ctx.fillRect(lx + j * cw, ty + i * ch, cw - 2, ch - 2);
+        ctx.fillStyle = t > 0.55 ? "#fff" : P.text; ctx.fillText(tb[i][j].toFixed(1), lx + j * cw + cw / 2, ty + i * ch + ch / 2);
+      }
+      ctx.fillStyle = P.dim; ctx.font = PB.font(11);
+      CL.forEach(function (c2, j) { ctx.fillText(c2 + " fF", lx + j * cw + cw / 2, ty - 12); });
+      ctx.textAlign = "right"; S.forEach(function (s2, i) { ctx.fillText(s2 + " ps", lx - 8, ty + i * ch + ch / 2); });
+      ctx.textAlign = "center"; ctx.fillText("출력 부하 →", lx + 2.5 * cw, 10);
+      ctx.save(); ctx.translate(14, ty + 2.5 * ch); ctx.rotate(-Math.PI / 2); ctx.fillText("입력 슬루 →", 0, 0); ctx.restore();
+      // 질의점 (구간 안 선형 위치)
+      var qx = lx + (r.j + 0.5 + r.v) * cw, qy = ty + (r.i + 0.5 + r.u) * ch;
+      ctx.strokeStyle = P.accent2; ctx.lineWidth = 2;
+      ctx.strokeRect(lx + r.j * cw - 1, ty + r.i * ch - 1, 2 * cw, 2 * ch);
+      ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.arc(qx, qy, 6, 0, 7); ctx.fill();
+      ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("● 질의점 · 굵은 테두리: 보간에 쓰는 네 칸 (값은 칸 중심 기준)", lx, h - 22);
+      PB.stat("nl-o-d", small(r.val.toFixed(1), "ps"));
+      PB.stat("nl-o-s", small(ro.val.toFixed(1), "ps"));
+      var cin = drv === 0.7 ? 1.3 : drv;
+      PB.stat("nl-o-f", small((c / cin).toFixed(1), "FO"));
+      document.getElementById("nl-info").innerHTML = "\\(d = (1-u)(1-v)d_{00} + u(1-v)d_{10} + (1-u)v\\,d_{01} + uv\\,d_{11}\\)<br>u = " + r.u.toFixed(2) + ", v = " + r.v.toFixed(2) + " · 입력 C ≈ " + cin.toFixed(1) + " fF";
+      if (window.renderMathInElement) renderMathInElement(document.getElementById("nl-info"), { delimiters: [{ left: "\\(", right: "\\)", display: false }], throwOnError: false });
+    }, { aspect: 0.72, minHeight: 320, maxHeight: 440 });
+  })();
+
+  /* ---------------- 4. 리피터 */
+  (function () {
+    var M = { m2: [1.2, 0.2], m6: [0.25, 0.2], m10: [0.02, 0.25] }, m = "m2", cv;
+    var R0 = 8, C0 = 1, P0 = 7; // kΩ, fF, ps  (kΩ·fF = ps)
+    var rr = function () { cv && cv.redraw(); };
+    var gL = PB.range("rep-L", function (v) { return v >= 1000 ? (v / 1000).toFixed(2) + " mm" : v + " µm"; }, rr);
+    var gK = PB.range("rep-k", function (v) { return v === 0 ? "없음" : v + "개"; }, rr);
+    var gS = PB.range("rep-s", function (v) { return "×" + v; }, rr);
+    PB.seg("rep-m", function (v) { m = v; rr(); });
+    function delay(L, k, s) { // 구동 버퍼(크기 s) + k개 리피터 → k+1 토막
+      var r = M[m][0] / 1000, c = M[m][1]; // kΩ/µm, fF/µm
+      var n = k + 1, l = L / n, Rd = R0 / s, Cg = C0 * s, Rw = r * l, Cw = c * l;
+      // 구동·수신 부하의 집중 RC 항과 배선 자체의 분포 RC 50% 항을 구분한다.
+      var seg = 0.69 * Rd * (Cw + Cg) + 0.38 * Rw * Cw + 0.69 * Rw * Cg + P0;
+      return n * seg;
+    }
+    function best(L, s) { var b = 0, bd = Infinity; for (var k = 0; k <= 60; k++) { var d = delay(L, k, s); if (d < bd) { bd = d; b = k; } } return { k: b, d: bd }; }
+    document.getElementById("rep-opt").addEventListener("click", function () { gK.set(Math.min(20, best(gL(), gS()).k)); });
+    cv = PB.canvas("#rep-cv", function (ctx, w, h) {
+      var P = PB.palette(), L = gL(), k = gK(), s = gS(), d = delay(L, k, s), d0 = delay(L, 0, s);
+      // 위: 배선 그림
+      var y = 34, x0 = 30, x1 = w - 30;
+      ctx.strokeStyle = PB.color("m-cu") || "#cc7a3a"; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+      function buf(x) { ctx.fillStyle = P.accent; ctx.beginPath(); ctx.moveTo(x - 9, y - 10); ctx.lineTo(x + 9, y); ctx.lineTo(x - 9, y + 10); ctx.closePath(); ctx.fill(); }
+      buf(x0);
+      for (var i = 1; i <= k; i++) buf(x0 + (x1 - x0) * i / (k + 1));
+      ctx.fillStyle = P.dim; ctx.font = PB.font(11); ctx.textAlign = "right"; ctx.textBaseline = "top"; ctx.fillText("수신 셀", x1, y + 12);
+      ctx.textAlign = "left"; ctx.fillText("구동 버퍼 + 리피터 " + k + "개", x0 - 10, y + 12);
+      // 아래: 지연 vs 길이
+      var box = { x: 62, y: 80, w: w - 80, h: h - 80 - 46 };
+      var a = [], b = [], c2 = [];
+      for (var L2 = 50; L2 <= 5000; L2 += 50) { a.push([L2, delay(L2, 0, s)]); b.push([L2, best(L2, s).d]); c2.push([L2, delay(L2, k, s)]); }
+      var ymax = Math.max(delay(5000, 0, s) * (m === "m2" ? 0.35 : 1.05), best(5000, s).d * 1.4, d * 1.15);
+      PB.chart(ctx, box, { x: [0, 5000], y: [0, ymax], xLabel: "배선 길이 (µm)", yLabel: "지연 (ps)",
+        series: [{ data: a, color: P.faint, width: 2, dash: [5, 4] }, { data: b, color: P.accent2, width: 2.4 }, { data: c2, color: P.accent, width: 1.6 }],
+        points: [{ x: L, y: d, color: P.accent, r: 5 }] });
+      ctx.font = PB.font(11); ctx.textAlign = "right"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.faint; ctx.fillText("점선: 리피터 없음 (∝ L²)", box.x + box.w - 6, box.y + 4);
+      ctx.fillStyle = P.accent2; ctx.fillText("파랑: 길이마다 최적 리피터 (∝ L)", box.x + box.w - 6, box.y + 20);
+      ctx.fillStyle = P.accent; ctx.fillText("보라: 지금 리피터 수 고정", box.x + box.w - 6, box.y + 36);
+      var r = M[m][0] * L, cc = M[m][1] * L;
+      PB.stat("rep-o-rc", small(r >= 1000 ? (r / 1000).toFixed(2) + " kΩ" : Math.round(r) + " Ω", " · " + (cc >= 1000 ? (cc / 1000).toFixed(2) + " pF" : Math.round(cc) + " fF")));
+      PB.stat("rep-o-d", small(d >= 1000 ? (d / 1000).toFixed(2) : Math.round(d), d >= 1000 ? "ns" : "ps"));
+      PB.stat("rep-o-0", small(d0 >= 1000 ? (d0 / 1000).toFixed(2) : Math.round(d0), d0 >= 1000 ? "ns" : "ps"));
+      PB.stat("rep-o-f", small((d / 15).toFixed(1), "FO4"));
+    }, { aspect: 0.66, minHeight: 330, maxHeight: 460 });
+  })();
+})();
+</script>
+</body>
+</html>

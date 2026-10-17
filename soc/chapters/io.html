@@ -1,0 +1,980 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and SoCBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "CPU가 장치와 대화하는 법: 메모리 맵 I/O, 폴링과 인터럽트, 인터럽트 컨트롤러, DMA와 스캐터-개더, IOMMU, I²C·SPI·UART, 그리고 SerDes·라인 코딩·아이 다이어그램으로 보는 PCIe·UFS·USB 고속 직렬 링크.", "libs": []}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>인터럽트·DMA·고속 I/O · SoCBook</title>
+<meta name="description" content="CPU가 장치와 대화하는 법: 메모리 맵 I/O, 폴링과 인터럽트, 인터럽트 컨트롤러, DMA와 스캐터-개더, IOMMU, I²C·SPI·UART, 그리고 SerDes·라인 코딩·아이 다이어그램으로 보는 PCIe·UFS·USB 고속 직렬 링크.">
+<link rel="canonical" href="https://semi.euiyun.com/soc/chapters/io.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#c8285f">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="SoCBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="인터럽트·DMA·고속 I/O · SoCBook">
+<meta property="og:description" content="CPU가 장치와 대화하는 법: 메모리 맵 I/O, 폴링과 인터럽트, 인터럽트 컨트롤러, DMA와 스캐터-개더, IOMMU, I²C·SPI·UART, 그리고 SerDes·라인 코딩·아이 다이어그램으로 보는 PCIe·UFS·USB 고속 직렬 링크.">
+<meta property="og:url" content="https://semi.euiyun.com/soc/chapters/io.html">
+<meta property="og:image" content="https://semi.euiyun.com/soc/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/soc/chapters/io.html#chapter","name":"인터럽트·DMA·고속 I/O","headline":"인터럽트·DMA·고속 I/O · SoCBook","description":"CPU가 장치와 대화하는 법: 메모리 맵 I/O, 폴링과 인터럽트, 인터럽트 컨트롤러, DMA와 스캐터-개더, IOMMU, I²C·SPI·UART, 그리고 SerDes·라인 코딩·아이 다이어그램으로 보는 PCIe·UFS·USB 고속 직렬 링크.","url":"https://semi.euiyun.com/soc/chapters/io.html","position":15,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/soc/og.png","dateModified":"2026-10-03","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/soc/#book","name":"SoCBook · 시스템 온 칩 교과서","url":"https://semi.euiyun.com/soc/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"SoCBook","item":"https://semi.euiyun.com/soc/"},{"@type":"ListItem","position":2,"name":"15. 인터럽트·DMA·고속 I/O","item":"https://semi.euiyun.com/soc/chapters/io.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/soc.js"></script>
+<!--head:end-->
+<style>
+  .io-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .io-btns button { font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .io-btns button i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .io-btns button:active { transform: translateY(1px); }
+  .io-warn { color: var(--bad); font-weight: 700; }
+  .io-good { color: var(--ok); font-weight: 700; }
+  .io-mono { font-family: var(--mono); font-size: 13px; }
+  .io-reg { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+  .io-reg td { padding: 3px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .io-reg td:first-child { font-family: var(--mono); color: var(--accent-2); white-space: nowrap; }
+  .io-reg td:nth-child(2) { font-family: var(--mono); font-weight: 600; white-space: nowrap; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="soc"></script>
+</head>
+<body data-chapter="io">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 15</div>
+    <h1>인터럽트·DMA·고속 I/O</h1>
+    <p class="lead">화면을 손가락으로 톡 치면, 터치 칩은 1초에 수백 번 좌표를 재다가 "눌렸다"는 사실을 SoC에 알려야 한다. 사진을 찍으면 수십 MB가 저장장치로 흘러가야 하고, 충전기를 꽂으면 USB 선 위로 초당 수십억 비트가 오간다. 그 모든 순간에 CPU가 일일이 장치를 들여다보고 바이트를 하나씩 옮긴다면 CPU는 다른 일을 할 수 없다. 이 장에서는 CPU가 장치와 대화하는 기본 방식(메모리 맵 I/O), 장치가 CPU를 부르는 방법(인터럽트), CPU 대신 데이터를 나르는 일꾼(DMA), 그리고 칩 밖으로 Gb/s를 내보내는 고속 직렬 링크(SerDes)를 차례로 만져 본다.</p>
+    <ul class="objectives">
+      <li>장치 레지스터가 메모리 주소에 매핑되는 원리(MMIO)를 이해하고 SoC 메모리 맵을 읽는다.</li>
+      <li>폴링과 인터럽트의 CPU 사용량·지연을 비교하고, 인터럽트 컨트롤러의 우선순위·중첩·지연을 실험한다.</li>
+      <li>DMA와 스캐터-개더 디스크립터, IOMMU가 CPU를 해방하고 메모리를 보호하는 방식을 설명한다.</li>
+      <li>I²C 파형을 읽고 I²C·SPI·UART의 차이를 비교한다.</li>
+      <li>병렬 버스가 직렬 SerDes에 밀린 이유, 라인 코딩의 오버헤드, 채널 손실·잡음·지터·이퀄라이저가 아이 다이어그램과 BER에 주는 영향을 확인한다.</li>
+    </ul>
+    <div class="soc-locator" data-blocks="io hsio lsio" data-caption="이 장은 칩 가장자리의 I/O 블록, 곧 UFS·PCIe·USB를 잇는 고속 I/O와 I²C·SPI·UART를 맡는 저속 주변장치를 다룬다. 인터럽트 컨트롤러와 DMA는 이들과 CPU 사이에 있다."></div>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="mmio">
+    <h2>장치도 주소를 가진다: 메모리 맵 I/O</h2>
+    <p>CPU가 아는 동작은 사실상 두 가지, 주소에서 읽기(load)와 주소에 쓰기(store)다. 그래서 SoC는 장치를 제어하는 <span class="term">레지스터</span>들에도 주소를 붙인다. CPU가 0x1003_0000번지에 값을 쓰면 그 store는 DRAM이 아니라 NoC(<a href="noc.html">8장</a>)를 타고 GPIO 블록으로 가서 핀의 전압을 바꾼다. 이것이 <span class="term">메모리 맵 I/O</span><span class="en">(MMIO, Memory-mapped I/O)</span>다. 어느 주소가 어느 블록인지 정한 표를 <span class="term">메모리 맵</span><span class="en">(Memory map)</span>이라 한다. 아래 지도에서 영역을 눌러 보고, GPIO 레지스터의 비트를 눌러 LED를 켜 보자.</p>
+    <figure class="play" id="fig-mmap">
+      <div class="play-view"><canvas id="cv-mmap"></canvas></div>
+      <div class="info-panel" id="mm-info"></div>
+      <figcaption><b>그림 15-1.</b> <span class="try">만져 보기</span>왼쪽은 SB-1의 (단순화한) 물리 주소 공간이다. 실제 크기 비율대로 그리면 DRAM 말고는 보이지 않으므로 영역마다 높이를 바꿔 그렸다. 영역을 누르면 아래에 설명과 레지스터가 나온다. 오른쪽 아래 GPIO 데이터 레지스터의 비트 8개를 누르면 그 비트를 쓰는 store 한 번이 LED 하나를 켜고 끈다.</figcaption>
+    </figure>
+    <p>MMIO 주소는 일반 메모리와 다르게 다뤄야 한다. 장치 레지스터는 읽기만 해도 상태가 바뀔 수 있고(예: UART 수신 레지스터를 읽으면 다음 바이트로 넘어간다), 쓰기 순서가 바뀌면 안 된다. 그래서 운영체제는 이 영역을 페이지 테이블에서 <b>캐시 불가·순서 보장</b><span class="en">(Device memory)</span>으로 표시하고, C 코드에서는 <code>volatile</code>로 컴파일러의 최적화를 막는다. 장치 레지스터 한 번 읽기는 NoC를 왕복해야 하므로 수십~수백 ns가 걸린다. CPU 입장에서는 캐시 적중의 수백 배다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="poll">
+    <h2>기다리며 묻기, 아니면 불러 주기: 폴링과 인터럽트</h2>
+    <p>장치에 새 데이터가 왔는지 CPU가 알려면 두 가지 방법이 있다. <span class="term">폴링</span><span class="en">(Polling)</span>은 CPU가 주기적으로 장치의 상태 레지스터를 읽어 보는 것이다. <span class="term">인터럽트</span><span class="en">(Interrupt)</span>는 장치가 신호선을 올려 CPU를 부르는 것이다. CPU는 하던 일을 멈추고 레지스터를 저장한 뒤, 정해진 <span class="term">인터럽트 처리기</span><span class="en">(ISR, Interrupt service routine)</span>로 뛰어간다.</p>
+    <figure class="play" id="fig-poll">
+      <div class="play-view"><canvas id="cv-poll"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>이벤트 빈도 <output id="pl-r-out"></output></span><input type="range" id="pl-r" min="1" max="6" step="0.05" value="3"></label>
+        <label class="ctrl"><span>폴링 간격 <output id="pl-i-out"></output></span><input type="range" id="pl-i" min="0" max="4" step="0.05" value="2"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">폴링: CPU 사용률</span><span class="v" id="pl-pc">—</span></div>
+        <div class="stat"><span class="k">폴링: 평균 지연</span><span class="v" id="pl-pl">—</span></div>
+        <div class="stat"><span class="k">인터럽트: CPU 사용률</span><span class="v" id="pl-ic">—</span></div>
+        <div class="stat"><span class="k">인터럽트: 평균 지연</span><span class="v" id="pl-il">—</span></div>
+      </div>
+      <figcaption><b>그림 15-2.</b> <span class="try">만져 보기</span>위 줄은 폴링, 아래 줄은 인터럽트 방식에서 CPU가 I/O에 쓴 시간이다(빨간 눈금 = 장치에 이벤트가 생긴 순간). 가정: 상태 레지스터 한 번 읽기 0.3 µs, 이벤트 처리 2 µs, 인터럽트 진입·복귀 오버헤드 3 µs. 이벤트가 드물면 인터럽트가 압도적으로 낫다. 이벤트가 초당 수십만 번으로 잦아지면 오히려 인터럽트 오버헤드가 CPU를 잡아먹는다(<b>인터럽트 폭주</b>).</figcaption>
+    </figure>
+    <p>그래서 실제 시스템은 둘을 섞는다. 네트워크 드라이버는 패킷이 뜸할 때는 인터럽트로 깨어나고, 폭주가 시작되면 인터럽트를 끄고 폴링으로 바꾼다(Linux NAPI). 장치 쪽에서 여러 이벤트를 모았다가 한 번에 인터럽트를 거는 <span class="term">인터럽트 병합</span><span class="en">(Interrupt coalescing)</span>도 흔하다. 반대로 지연이 아주 중요한 고속 저장장치(NVMe)에서는 일부러 폴링을 쓰기도 한다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="gic">
+    <h2>인터럽트 교통정리: 인터럽트 컨트롤러</h2>
+    <p>SoC에는 인터럽트 신호가 수백 개 있다. 이것을 모두 CPU에 직접 꽂을 수는 없으니, 중간에 <span class="term">인터럽트 컨트롤러</span>를 둔다. Arm 계열에서는 <span class="term">GIC</span><span class="en">(Generic Interrupt Controller)</span>가 이 일을 한다. GIC는 인터럽트마다 <b>우선순위</b>(숫자가 작을수록 높다)와 <b>목적지 코어</b>를 정해 두고, 대기 중인 것 가운데 가장 높은 것을 CPU에 알린다. CPU가 처리기 안에 있을 때 더 높은 우선순위가 오면 처리기를 멈추고 그것부터 처리하는 것을 <span class="term">중첩</span><span class="en">(Nesting, 선점)</span>이라 한다. 아래 버튼으로 인터럽트를 직접 걸어 보자.</p>
+    <div class="sim" id="sim-gic">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>인터럽트 컨트롤러 타임라인</h3></div>
+      <div style="padding:12px 18px 0"><div class="io-btns" id="gic-btns"></div></div>
+      <div class="sim-view" style="margin-top:10px"><canvas id="cv-gic"></canvas></div>
+      <div class="sim-controls">
+        <div class="ctrl"><span>중첩(선점)</span><div class="seg" id="gic-nest"><button data-value="1" class="on">허용</button><button data-value="0">금지</button></div></div>
+        <label class="check"><input type="checkbox" id="gic-auto" checked> 무작위로 인터럽트 발생</label>
+        <label class="ctrl"><span>무작위 발생 빈도 <output id="gic-rate-out"></output></span><input type="range" id="gic-rate" min="0.2" max="3" step="0.1" value="1"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">모뎀 최악 지연</span><span class="v" id="gic-wm">—</span></div>
+        <div class="stat"><span class="k">저장장치 최악 지연</span><span class="v" id="gic-ws">—</span></div>
+        <div class="stat"><span class="k">합쳐져 잃은 인터럽트</span><span class="v" id="gic-lost">—</span></div>
+        <div class="stat"><span class="k">CPU가 처리기에 쓴 시간</span><span class="v" id="gic-busy">—</span></div>
+      </div>
+      <div class="sim-note">가로축은 최근 600 µs, 맨 위 줄은 CPU가 실행 중인 처리기(높이 = 중첩 깊이)다. 각 줄의 ▼는 인터럽트가 걸린 순간, 가는 막대는 대기 중, 굵은 막대는 처리 중이다. 처리기마다 진입·복귀 오버헤드 2 µs를 포함한다. 같은 인터럽트가 아직 대기 중일 때 또 걸리면 GIC의 대기 비트 하나에 합쳐져 하나를 잃는다(에지 트리거 기준). 중첩을 금지하면 모뎀 같은 급한 인터럽트가 긴 저장장치 처리기 뒤에서 기다려야 한다.</div>
+    </div>
+    <p>GIC는 인터럽트를 종류별로 나눈다. 여러 코어가 공유하는 장치 인터럽트(SPI, Shared Peripheral Interrupt — 직렬 버스 SPI와 다른 뜻이다), 코어마다 따로 있는 타이머 같은 인터럽트(PPI), 코어가 다른 코어를 깨우는 소프트웨어 인터럽트(SGI), 그리고 PCIe 장치가 메모리 쓰기로 보내는 메시지 인터럽트(LPI, MSI)다. 하드웨어가 인터럽트를 코어에 알리는 데는 수십~수백 ns면 되지만, 운영체제가 레지스터를 저장하고 처리기를 찾고 스케줄러를 거쳐 사용자 프로그램까지 깨우는 데는 수~수십 µs가 걸린다. 지연을 줄이려면 처리기는 짧게(급한 일만) 하고 나머지는 나중에 스레드에서 하는 <b>상반부·하반부</b><span class="en">(Top half / bottom half)</span> 구조를 쓴다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="dma">
+    <h2>CPU 대신 나르는 일꾼: DMA</h2>
+    <p>저장장치에서 사진 파일 4 MB를 메모리로 가져온다고 하자. CPU가 장치의 데이터 레지스터를 4바이트씩 읽어 메모리에 쓴다면(PIO, Programmed I/O) 100만 번의 느린 MMIO 읽기를 해야 한다. 대신 <span class="term">DMA</span><span class="en">(Direct Memory Access)</span> 엔진에게 "장치에서 이 주소로 4 MB를 옮겨라"라고 지시만 하면, DMA 엔진이 버스 마스터가 되어 직접 옮기고 끝나면 인터럽트로 알린다. CPU는 그동안 다른 일을 한다.</p>
+    <figure class="play" id="fig-dma">
+      <div class="play-view"><canvas id="cv-dma"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>전송 크기 <output id="dm-s-out"></output></span><input type="range" id="dm-s" min="0" max="12" step="1" value="6"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">CPU 복사(PIO): 걸린 시간</span><span class="v" id="dm-pt">—</span></div>
+        <div class="stat"><span class="k">DMA: 걸린 시간</span><span class="v" id="dm-dt">—</span></div>
+        <div class="stat"><span class="k">DMA: CPU가 쓴 시간</span><span class="v" id="dm-dc">—</span></div>
+        <div class="stat"><span class="k">CPU가 아낀 시간</span><span class="v" id="dm-save">—</span></div>
+      </div>
+      <figcaption><b>그림 15-3.</b> <span class="try">만져 보기</span>막대는 시간(로그 아님)이다. 가정: CPU가 장치 레지스터를 읽어 옮기면 약 200 MB/s, DMA는 장치 속도 2 GB/s로 옮기며 설정에 3 µs, 완료 인터럽트 처리에 3 µs가 든다. 작은 전송에서는 DMA 설정 비용이 아깝지만, 크기가 커지면 DMA가 시간과 CPU를 모두 아낀다. 실제 드라이버도 수백 바이트 이하의 작은 전송은 CPU로 처리하곤 한다.</figcaption>
+    </figure>
+    <p>운영체제가 할당한 버퍼는 가상 주소로는 이어져 있어도 물리 메모리에서는 4 KB 페이지로 흩어져 있다. DMA 엔진은 물리 주소로 일하므로, 조각마다 (주소, 길이, 다음 조각) 정보를 담은 <span class="term">디스크립터</span><span class="en">(Descriptor)</span>를 사슬로 엮어 건네준다. DMA 엔진은 사슬을 따라가며 조각을 차례로 옮긴다. 이것이 <span class="term">스캐터-개더</span><span class="en">(Scatter-gather)</span> DMA다.</p>
+    <figure class="play" id="fig-sg">
+      <div class="play-view"><canvas id="cv-sg"></canvas></div>
+      <div class="play-ctrl">
+        <button class="btn sm primary" id="sg-go">▶ DMA 시작</button>
+        <button class="btn sm" id="sg-rnd">버퍼 다시 할당</button>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">버퍼 크기</span><span class="v" id="sg-sz">—</span></div>
+        <div class="stat"><span class="k">디스크립터 수</span><span class="v" id="sg-nd">—</span></div>
+        <div class="stat"><span class="k">스캐터-개더 없이 필요한 DMA 설정</span><span class="v" id="sg-ns">—</span></div>
+      </div>
+      <figcaption><b>그림 15-4.</b> <span class="try">만져 보기</span>위 칸들은 물리 메모리의 4 KB 페이지다. 칸을 눌러 버퍼에 넣거나 뺄 수 있다. 버퍼 페이지는 번호 순서(가상 주소 순서)대로 장치로 보내야 한다. 물리적으로 이어진 페이지는 디스크립터 하나로 합쳐진다. "DMA 시작"을 누르면 DMA 엔진이 디스크립터 사슬을 따라가며 조각을 나른다.</figcaption>
+    </figure>
+    <p>DMA에는 위험도 있다. DMA 엔진은 아무 물리 주소에나 쓸 수 있으니, 고장 났거나 악의적인 장치(예: 썬더볼트로 꽂은 장치)가 커널 메모리를 덮어쓸 수 있다. 그래서 장치와 메모리 사이에 장치용 MMU, 곧 <span class="term">IOMMU</span><span class="en">(Arm에서는 SMMU)</span>를 둔다. 장치가 쓰는 주소(IOVA)를 운영체제가 허락한 물리 페이지로만 번역해 주고, 허락하지 않은 주소는 막는다.</p>
+    <figure class="play" id="fig-iommu">
+      <div class="play-view"><canvas id="cv-iommu"></canvas></div>
+      <div class="play-ctrl">
+        <label class="check"><input type="checkbox" id="iom-on" checked> IOMMU 켜기</label>
+        <div class="io-btns"><button id="iom-ok">정상 DMA: 버퍼에 쓰기</button><button id="iom-bad">악성 DMA: 커널 영역 주소에 쓰기</button></div>
+      </div>
+      <div class="info-panel" id="iom-info"></div>
+      <figcaption><b>그림 15-5.</b> <span class="try">만져 보기</span>왼쪽은 장치가 보는 주소(IOVA), 가운데는 IOMMU의 변환표, 오른쪽은 물리 메모리다. IOMMU를 끄면 장치 주소가 곧 물리 주소가 되어 아무 곳에나 쓸 수 있다.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="lsio">
+    <h2>센서와 속삭이는 선 두 가닥: I²C, SPI, UART</h2>
+    <p>휴대폰에는 가속도계, 자이로, 조도 센서, 충전 IC, 터치 컨트롤러, 카메라 모듈 설정 포트처럼 데이터는 적지만 수가 많은 칩이 수십 개 있다. 이들에게 고속 링크를 하나씩 줄 수는 없으니 핀을 적게 쓰는 저속 버스로 묶는다. 대표가 <span class="term">I²C</span><span class="en">(Inter-Integrated Circuit)</span>다. 선은 클럭(SCL)과 데이터(SDA) 두 가닥뿐이고, 여러 장치가 같은 두 선을 나눠 쓴다. 각 장치는 7비트 주소를 가진다.</p>
+    <p>I²C 선은 저항으로 1(High)에 끌어올려져 있고, 장치는 선을 0으로 끌어내리기만 한다(오픈 드레인). 그래서 둘이 동시에 말해도 단락되지 않는다. 규칙은 이렇다. SCL이 1인 동안 SDA는 바뀌면 안 된다. 단 두 예외가 <b>시작</b>(SCL=1일 때 SDA가 1→0)과 <b>정지</b>(SCL=1일 때 SDA가 0→1)다. 바이트마다 받는 쪽이 SDA를 끌어내려 <b>ACK</b>로 답한다.</p>
+    <figure class="play" id="fig-i2c">
+      <div class="play-view"><canvas id="cv-i2c"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>장치 주소 (7비트) <output id="i2-a-out"></output></span><input type="range" id="i2-a" min="8" max="119" step="1" value="72"></label>
+        <label class="ctrl"><span>데이터 바이트 <output id="i2-d-out"></output></span><input type="range" id="i2-d" min="0" max="255" step="1" value="165"></label>
+        <div class="seg" id="i2-rw"><button data-value="w" class="on">쓰기</button><button data-value="r">읽기</button></div>
+        <label class="check"><input type="checkbox" id="i2-nack"> 그 주소에 장치 없음</label>
+        <button class="btn sm primary" id="i2-go">▶ 보내기</button>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">SCL 클럭 수</span><span class="v" id="i2-n">—</span></div>
+        <div class="stat"><span class="k">400 kHz에서 걸린 시간</span><span class="v" id="i2-t">—</span></div>
+        <div class="stat"><span class="k">유효 데이터 속도</span><span class="v" id="i2-e">—</span></div>
+      </div>
+      <figcaption><b>그림 15-6.</b> <span class="try">만져 보기</span>주소(기본값 0x48은 흔한 온도 센서 주소)와 데이터를 고르고 "보내기"를 누르자. 파란 부분은 마스터(SoC)가, 초록 부분은 슬레이브(센서)가 SDA를 구동한다. 읽기에서는 데이터 바이트를 센서가 보내고 마스터가 마지막 바이트에 NACK로 "그만"을 알린다. 장치가 없으면 주소 뒤 ACK 자리가 1(NACK)로 남고 마스터는 곧바로 정지 조건을 건다.</figcaption>
+    </figure>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>I²C</th><th>SPI</th><th>UART</th></tr></thead>
+        <tbody>
+          <tr><td>선 수</td><td>2 (SCL, SDA)</td><td>4 (SCLK, MOSI, MISO, CS) + 장치마다 CS</td><td>2 (TX, RX), 클럭 없음</td></tr>
+          <tr><td>속도 (대략)</td><td>100 k / 400 k / 1 MHz (I3C 12.5 MHz)</td><td>수십 MHz (플래시는 100 MHz 이상, 4선 병렬 Quad SPI)</td><td>115.2 kbaud ~ 수 Mbaud</td></tr>
+          <tr><td>장치 선택</td><td>7비트 주소</td><td>칩 선택(CS) 선</td><td>점대점 (일대일)</td></tr>
+          <tr><td>응답 확인</td><td>바이트마다 ACK</td><td>없음</td><td>없음 (패리티 선택)</td></tr>
+          <tr><td>방향</td><td>반이중</td><td>전이중 (보내며 동시에 받음)</td><td>전이중</td></tr>
+          <tr><td>주 쓰임</td><td>센서, 충전 IC, 카메라 설정</td><td>디스플레이 설정, 플래시, 고속 센서</td><td>디버그 콘솔, 블루투스·GPS 칩</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="predict"><strong>I²C 400 kHz로 3축 가속도 데이터(6바이트)를 초당 1,000번 읽으면 버스를 얼마나 쓸까?</strong>
+      <p>읽기 한 번에는 레지스터 주소를 쓰는 단계(시작 + 주소·쓰기 + 레지스터 번호)와 다시 시작해 읽는 단계(주소·읽기 + 6바이트)가 필요하다. 바이트마다 ACK 1비트가 붙는다.</p>
+      <details><summary>답 보기</summary><p>쓰기 단계 2바이트, 읽기 단계 7바이트(주소 1 + 데이터 6)로 9바이트 × 9비트 = 81비트에 시작·재시작·정지 몇 비트를 더해 약 85클럭, 400 kHz면 약 212 µs다. 초당 1,000번이면 버스 시간의 약 21%를 쓴다. 센서가 대여섯 개면 I²C 하나로는 모자라기 시작한다. 그래서 고속 센서는 SPI나 I3C를 쓰고, 센서 쪽에 FIFO를 두어 여러 샘플을 한 번에 읽는다.</p></details>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="serdes">
+    <h2>왜 병렬이 아니라 직렬인가: SerDes</h2>
+    <p>예전 PC의 하드디스크와 프린터는 선 수십 가닥의 두꺼운 <b>병렬</b> 케이블로 연결되었다. 한 번에 여러 비트를 보내니 빠를 것 같지만, 속도를 올리자 문제가 생겼다. 선마다 길이와 전기적 특성이 조금씩 달라 비트들이 도착하는 시각이 어긋난다(<span class="term">스큐</span>). 모든 비트를 하나의 공통 클럭으로 잡으려면, 가장 빠른 선과 가장 느린 선의 차이보다 비트 하나의 시간(<span class="term">UI</span><span class="en">, Unit interval</span>)이 충분히 길어야 한다.</p>
+    <figure class="play" id="fig-par">
+      <div class="play-view"><canvas id="cv-par"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>핀당 속도 <output id="pr-r-out"></output></span><input type="range" id="pr-r" min="0.5" max="16" step="0.1" value="2"></label>
+        <label class="ctrl"><span>선 사이 스큐 폭 <output id="pr-s-out"></output></span><input type="range" id="pr-s" min="0" max="200" step="5" value="80"></label>
+        <label class="check"><input type="checkbox" id="pr-cdr"> 레인마다 클럭 복원(CDR)</label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">UI (비트 하나의 시간)</span><span class="v" id="pr-ui">—</span></div>
+        <div class="stat"><span class="k">모든 선이 유효한 창</span><span class="v" id="pr-w">—</span></div>
+        <div class="stat"><span class="k">공통 클럭 방식의 한계 속도</span><span class="v" id="pr-max">—</span></div>
+      </div>
+      <figcaption><b>그림 15-7.</b> <span class="try">만져 보기</span>8가닥 병렬 버스의 선마다 비트가 바뀌는 시점(X자)이 스큐만큼 어긋나 있다. 지터는 선마다 ±10 ps로 두었다. 초록 띠는 공통 클럭으로 표본을 잡을 수 있는 구간이다. 속도를 올리면 UI가 줄어 띠가 사라진다. "레인마다 CDR"을 켜면 각 선이 자기 데이터에서 클럭을 뽑아내 각자의 한가운데에서 표본을 잡으므로 스큐가 문제되지 않는다. 이것이 직렬 링크의 방식이다.</figcaption>
+    </figure>
+    <p>그래서 고속 I/O는 선 하나(실제로는 잡음에 강한 차동 쌍 한 쌍)에 비트를 몰아 보내고, 받는 쪽에서 신호 자체로부터 클럭을 복원한다. 송신기의 <span class="term">직렬화기</span>와 수신기의 <span class="term">역직렬화기</span>를 합쳐 <span class="term">SerDes</span><span class="en">(Serializer/Deserializer)</span>라 한다. 더 빠르게 하고 싶으면 이런 <b>레인</b><span class="en">(Lane)</span>을 여러 개 묶되, 레인마다 따로 클럭을 복원하고 레인 사이의 어긋남은 버퍼로 맞춘다(디스큐).</p>
+    <p>클럭 복원 회로(CDR)가 일하려면 신호가 자주 바뀌어야 한다. 0이 1,000개 이어지면 언제가 비트 경계인지 알 수 없다. 또 교류 결합 커패시터를 지나는 링크는 1과 0의 수가 평균적으로 같아야(DC 균형) 기준선이 흔들리지 않는다. 이를 위해 데이터를 그대로 보내지 않고 바꿔 보내는 것이 <span class="term">라인 코딩</span><span class="en">(Line coding)</span>이다. <b>8b/10b</b>는 8비트를 10비트 부호로 바꿔 같은 비트가 최대 5개까지만 이어지고 DC 균형을 맞춘다. 대신 20%를 버린다. <b>128b/130b</b>는 데이터를 의사 난수로 뒤섞고(스크램블) 128비트마다 2비트 헤더만 붙여 오버헤드를 1.5%로 줄였다.</p>
+    <figure class="play" id="fig-enc">
+      <div class="play-view"><canvas id="cv-enc"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="en-k"><button data-value="8b10b">8b/10b</button><button data-value="128b130b" class="on">128b/130b</button><button data-value="128b132b">128b/132b</button><button data-value="flit">FLIT (PCIe 6)</button></div>
+        <label class="ctrl"><span>레인당 전송률 <output id="en-r-out"></output></span><input type="range" id="en-r" min="1" max="64" step="0.5" value="16"></label>
+        <div class="seg" id="en-l"><button data-value="1">×1</button><button data-value="2">×2</button><button data-value="4" class="on">×4</button><button data-value="8">×8</button><button data-value="16">×16</button></div>
+        <div class="seg" id="en-p"><button data-value="zero" class="on">데이터 0x00 반복</button><button data-value="rnd">무작위 데이터</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">코딩 효율</span><span class="v" id="en-eff">—</span></div>
+        <div class="stat"><span class="k">한 방향 유효 대역폭</span><span class="v" id="en-bw">—</span></div>
+        <div class="stat"><span class="k">스크램블 전 최장 연속</span><span class="v" id="en-run0">—</span></div>
+        <div class="stat"><span class="k">스크램블 후 최장 연속</span><span class="v" id="en-run1">—</span></div>
+      </div>
+      <figcaption><b>그림 15-8.</b> <span class="try">만져 보기</span>위 파형은 원래 데이터 64비트, 아래는 16비트 LFSR(\(x^{16}+x^5+x^4+x^3+1\), PCIe 1·2세대의 스크램블 다항식)로 뒤섞은 결과다. 0만 이어지는 데이터도 스크램블하면 0과 1이 고르게 섞인다. 받는 쪽은 같은 LFSR로 다시 XOR해 원래 데이터를 되찾는다. 위 계산기는 레인 수 × 전송률 × 코딩 효율로 한 방향 대역폭을 계산한다(FLIT은 PCIe 6.0의 242B/256B 방식, FEC·CRC 포함 대략값).</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="eye">
+    <h2>아이 다이어그램: 신호가 살아서 도착했는가</h2>
+    <p>칩 밖의 배선(패키지, 기판, 커넥터, 케이블)은 높은 주파수일수록 신호를 크게 깎아 먹는 저역 통과 필터다. 비트가 짧아지면 한 비트의 에너지가 다음 비트들 위로 번져 겹친다. 이를 <span class="term">심볼 간 간섭</span><span class="en">(ISI, Inter-symbol interference)</span>이라 한다. 여기에 잡음과 지터가 더해진다. 수신 신호를 UI 두 개 길이로 잘라 겹쳐 그리면 눈 모양이 나오는데, 이것이 <span class="term">아이 다이어그램</span><span class="en">(Eye diagram)</span>이다. 눈이 크게 뜨여 있을수록 0과 1을 구분하기 쉽다.</p>
+    <p>수신기가 깎인 고주파를 되살리는 방법이 <span class="term">이퀄라이저</span><span class="en">(Equalizer)</span>다. 송신기의 <b>FFE</b><span class="en">(Feed-forward equalizer)</span>는 앞뒤 비트를 조금씩 빼서 보내, 채널이 남길 꼬리를 미리 상쇄한다(디엠퍼시스). 아래 시뮬레이터에서 속도와 채널 손실을 올려 눈을 감기게 한 뒤, FFE 탭으로 다시 뜨게 해 보자.</p>
+    <div class="sim" id="sim-eye">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>SerDes 아이 다이어그램</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-eye"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>변조</span><div class="seg" id="ey-m"><button data-value="nrz" class="on">NRZ (2레벨)</button><button data-value="pam4">PAM4 (4레벨)</button></div></div>
+          <label class="ctrl"><span>비트 속도 <output id="ey-r-out"></output></span><input type="range" id="ey-r" min="2" max="64" step="1" value="16"></label>
+          <label class="ctrl"><span>채널 손실 (8 GHz 기준) <output id="ey-l-out"></output></span><input type="range" id="ey-l" min="0" max="30" step="0.5" value="10"></label>
+          <label class="ctrl"><span>잡음 (RMS) <output id="ey-n-out"></output></span><input type="range" id="ey-n" min="0" max="40" step="1" value="8"></label>
+          <label class="ctrl"><span>랜덤 지터 (RMS) <output id="ey-j-out"></output></span><input type="range" id="ey-j" min="0" max="5" step="0.1" value="1"></label>
+          <label class="ctrl"><span>FFE 후 탭 (디엠퍼시스) <output id="ey-c1-out"></output></span><input type="range" id="ey-c1" min="-0.35" max="0" step="0.01" value="0"></label>
+          <label class="ctrl"><span>FFE 앞 탭 <output id="ey-c0-out"></output></span><input type="range" id="ey-c0" min="-0.2" max="0" step="0.01" value="0"></label>
+        </div>
+      </div>
+      <div class="sim-view" style="border-top:1px solid var(--border)"><canvas id="cv-pulse"></canvas></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">나이퀴스트 주파수 · 손실</span><span class="v" id="ey-nq" style="font-size:15px">—</span></div>
+        <div class="stat"><span class="k">눈 높이 (±3σ)</span><span class="v" id="ey-h">—</span></div>
+        <div class="stat"><span class="k">눈 폭 (Q≥3)</span><span class="v" id="ey-w">—</span></div>
+        <div class="stat"><span class="k">추정 BER</span><span class="v" id="ey-ber">—</span></div>
+      </div>
+      <div class="sim-note">무작위 심볼 1,500개를 송신 진폭 ±400 mV로 보내 2극 저역 통과 채널(손실은 주파수에 대략 비례해 커진다), 가우스 잡음, 랜덤 지터를 거친 뒤 겹쳐 그렸다. 아래 막대는 비트 하나만 보냈을 때의 <b>펄스 응답</b>을 UI 간격으로 잰 값(커서)이다. h₀이 신호, h₋₁·h₁·h₂…가 이웃 비트로 번지는 ISI다. 후 탭을 음수로 키우면 h₁이 줄어든다. BER은 가장 좋은 표본 위치에서 0과 1(PAM4는 이웃 레벨) 분포의 \(Q=(\mu_1-\mu_0)/(\sigma_1+\sigma_0)\)로 \(\tfrac12\operatorname{erfc}(Q/\sqrt2)\)를 계산한 추정치다. 실제 PCIe·USB 수신기는 여기에 CTLE와 DFE를 더한다.</div>
+    </div>
+    <div class="predict"><strong>NRZ 32 Gb/s에서 눈이 감겼다. PAM4로 바꾸면 나아질까?</strong>
+      <p>PAM4는 한 심볼에 2비트를 싣는다. 같은 비트 속도에서 나이퀴스트 주파수와 레벨 간격이 어떻게 변하는지 생각해 보자.</p>
+      <details><summary>답 보기</summary><p>PAM4는 심볼 속도가 절반(16 GBd)이라 나이퀴스트 주파수가 8 GHz로 내려가 채널 손실이 크게 준다. 대신 진폭을 세 칸으로 나누므로 눈 하나의 높이가 1/3(약 −9.5 dB)이 되어 잡음에 약하다. 손실이 큰 채널에서는 PAM4가 이기고, 손실은 작은데 잡음이 큰 경우에는 NRZ가 낫다. PCIe 6.0(64 GT/s)과 최신 이더넷이 PAM4로 간 이유가 손실 때문이다. 그 대신 BER이 나빠지는 것을 FEC(전방 오류 정정)로 메운다.</p></details>
+    </div>
+    <div class="formula">$$ \text{BER} \approx \tfrac12\,\operatorname{erfc}\!\left(\frac{Q}{\sqrt2}\right), \qquad Q = \frac{\mu_1-\mu_0}{\sigma_1+\sigma_0}, \qquad Q=7 \Rightarrow \text{BER}\approx 10^{-12} $$
+      <div class="where">고속 링크의 목표 BER은 보통 \(10^{-12}\) 이하다. 16 Gb/s 링크라면 1분에 한 번 남짓 오류가 나는 수준이고, 오류는 CRC로 찾아 재전송한다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="std">
+    <h2>숫자로 보는 고속 I/O</h2>
+    <p>SB-1의 가장자리에는 저장장치(UFS), 외부 연결(USB), 카메라·디스플레이(MIPI), 그리고 노트북·자동차용 칩이라면 PCIe를 위한 SerDes가 늘어서 있다(<a href="overview.html">1장</a>의 다이 아래쪽 띠). 세대가 바뀔 때마다 레인당 속도가 대략 두 배가 되었고, 그 속도를 위해 라인 코딩과 변조가 바뀌었다.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>규격</th><th class="num">레인당 전송률</th><th>코딩·변조</th><th class="num">유효 대역폭 (대략)</th><th>연도</th></tr></thead>
+        <tbody>
+          <tr><td>PCIe 3.0</td><td class="num">8 GT/s</td><td>128b/130b, NRZ</td><td class="num">레인당 약 0.98 GB/s</td><td>2010</td></tr>
+          <tr><td>PCIe 4.0</td><td class="num">16 GT/s</td><td>128b/130b, NRZ</td><td class="num">레인당 약 1.97 GB/s</td><td>2017</td></tr>
+          <tr><td>PCIe 5.0</td><td class="num">32 GT/s</td><td>128b/130b, NRZ</td><td class="num">레인당 약 3.94 GB/s</td><td>2019</td></tr>
+          <tr><td>PCIe 6.0</td><td class="num">64 GT/s</td><td>PAM4, FLIT + FEC</td><td class="num">레인당 약 7.6 GB/s</td><td>2022</td></tr>
+          <tr><td>UFS 3.1 (M-PHY HS-G4)</td><td class="num">11.6 Gb/s × 2레인</td><td>8b/10b</td><td class="num">약 2.3 GB/s (이론)</td><td>2020</td></tr>
+          <tr><td>UFS 4.0 (M-PHY HS-G5)</td><td class="num">23.3 Gb/s × 2레인</td><td>8b/10b</td><td class="num">코딩 후 링크 약 4.66 GB/s, 장치 순차 읽기 대표값 약 4.2 GB/s</td><td>2022</td></tr>
+          <tr><td>USB 3.2 Gen 2</td><td class="num">10 Gb/s</td><td>128b/132b</td><td class="num">약 1.2 GB/s</td><td>2013</td></tr>
+          <tr><td>USB4 (v1 / v2)</td><td class="num">20 Gb/s × 2 / PAM3</td><td>128b/132b 등</td><td class="num">40 / 80 Gb/s 링크</td><td>2019 / 2022</td></tr>
+          <tr><td>MIPI D-PHY v2.5 (카메라)</td><td class="num">약 4.5 Gb/s × 4레인</td><td>소스 동기 클럭</td><td class="num">약 2 GB/s</td><td>2019</td></tr>
+          <tr><td>I²C Fast-mode</td><td class="num">400 kb/s</td><td>오픈 드레인</td><td class="num">수십 kB/s</td><td>1992</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout tip"><strong>비트 하나를 칩 밖으로 보내는 값</strong><p>고속 SerDes는 비트당 수 pJ의 에너지를 쓴다(채널이 길수록 이퀄라이저가 커진다). 16 GT/s × 4레인 링크를 꽉 채우면 SerDes만 수백 mW다. 1장에서 본 "칩 밖은 비싸다"가 여기서도 그대로다. 그래서 링크는 쉴 때 재빨리 저전력 상태(PCIe L1, UFS Hibern8)로 들어가고, 깨어날 때 다시 클럭을 맞추는 시간이 지연에 더해진다(<a href="power.html">12장</a>).</p></div>
+    <div class="callout deep"><strong>클럭은 어디서?</strong><p>SerDes 송신기는 수십 GHz의 깨끗한 클럭이 필요하다. 보통 100 MHz 기준 클럭에서 LC-VCO를 쓰는 저지터 PLL로 만들고(<a href="clock.html">14장</a>), 수신기의 CDR은 들어오는 데이터의 천이를 보며 표본 위치를 계속 미세 조정하는 또 하나의 PLL이다. 앞 시뮬레이터의 랜덤 지터가 바로 이 PLL들의 잡음이다.</p></div>
+  </section>
+
+  <section class="keypoints">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>장치 레지스터는 물리 주소 공간에 매핑되고, CPU는 load/store로 장치를 다룬다(MMIO). 이 영역은 캐시하지 않고 순서를 지킨다.</li>
+      <li>폴링은 이벤트가 잦을 때, 인터럽트는 드물 때 유리하다. 인터럽트 컨트롤러가 우선순위·목적지·중첩을 관리하며, 지연을 줄이려면 처리기를 짧게 한다.</li>
+      <li>DMA는 CPU 대신 데이터를 나르고, 스캐터-개더 디스크립터로 흩어진 페이지를 한 번에 처리한다. IOMMU는 장치의 메모리 접근을 허락된 페이지로 제한한다.</li>
+      <li>I²C는 선 두 가닥에 주소·ACK를 쓰는 저속 공유 버스, SPI는 칩 선택 선을 쓰는 빠른 전이중 버스, UART는 클럭 없는 점대점 링크다.</li>
+      <li>병렬 버스는 선 사이 스큐에 막혀 직렬 SerDes에 자리를 내줬다. 라인 코딩은 클럭 복원과 DC 균형을 위한 것이며, 채널 손실·잡음·지터가 아이를 닫고 이퀄라이저가 다시 연다. 손실이 커지면 PAM4와 FEC로 간다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. MMIO 영역을 일반 메모리처럼 캐시하면 안 되는 이유로 가장 알맞은 것은?</p>
+        <div class="opts">
+          <button class="opt">MMIO 주소가 DRAM보다 커서</button>
+          <button class="opt" data-correct>장치 레지스터는 읽기·쓰기 자체가 동작이고 값이 장치에 의해 바뀌므로, 캐시된 옛 값이나 합쳐진 쓰기는 틀린 동작이 된다</button>
+          <button class="opt">캐시가 장치보다 느려서</button>
+          <button class="opt">MMIO는 가상 주소를 쓰지 않아서</button>
+        </div>
+        <div class="quiz-exp">상태 레지스터는 장치가 바꾸고, 데이터 레지스터는 읽을 때마다 다음 값이 나온다. 캐시하면 CPU가 옛 값을 보거나 쓰기가 늦게·합쳐져 나간다.</div></div>
+      <div class="quiz-q"><p>Q2. 초당 50만 번 이벤트가 생기는 네트워크 장치에서 인터럽트 대신 폴링(또는 병합)을 쓰는 이유는?</p>
+        <div class="opts">
+          <button class="opt">폴링이 지연이 더 길어서</button>
+          <button class="opt">인터럽트는 우선순위를 지원하지 않아서</button>
+          <button class="opt">폴링은 CPU를 전혀 쓰지 않아서</button>
+          <button class="opt" data-correct>이벤트마다 인터럽트 진입·복귀 오버헤드가 붙어 CPU가 처리기만 돌다 끝나므로</button>
+        </div>
+        <div class="quiz-exp">오버헤드 2 µs × 50만 번 = 1초. CPU 하나가 통째로 인터럽트 진입·복귀에만 쓰인다. 이벤트가 잦으면 어차피 매번 할 일이 있으므로 폴링이 낫다.</div></div>
+      <div class="quiz-q"><p>Q3. GIC에서 중첩(선점)을 허용하면 좋아지는 것은?</p>
+        <div class="opts">
+          <button class="opt" data-correct>긴 저우선순위 처리기 도중에도 고우선순위 인터럽트가 바로 처리되어 그 지연이 짧아진다</button>
+          <button class="opt">모든 인터럽트의 지연이 똑같아진다</button>
+          <button class="opt">처리기의 총 실행 시간이 줄어든다</button>
+          <button class="opt">인터럽트를 잃어버리지 않게 된다</button>
+        </div>
+        <div class="quiz-exp">중첩은 급한 인터럽트의 지연을 줄여 주지만, 선점당한 처리기는 그만큼 늦게 끝난다. 총 일의 양은 같다.</div></div>
+      <div class="quiz-q"><p>Q4. 물리적으로 흩어진 4 KB 페이지 여러 개로 된 버퍼를 DMA 한 번으로 보내게 해 주는 것은?</p>
+        <div class="opts">
+          <button class="opt">인터럽트 병합</button><button class="opt">MMIO</button><button class="opt" data-correct>스캐터-개더 디스크립터 사슬</button><button class="opt">8b/10b 코딩</button>
+        </div>
+        <div class="quiz-exp">디스크립터마다 (물리 주소, 길이, 다음)을 담아 사슬로 엮으면 DMA 엔진이 차례로 따라가며 옮긴다.</div></div>
+      <div class="quiz-q"><p>Q5. PCIe 3.0이 8b/10b 대신 128b/130b를 쓰면서 얻은 이득은?</p>
+        <div class="opts">
+          <button class="opt">레인 수가 두 배가 되었다</button>
+          <button class="opt">클럭 복원이 필요 없어졌다</button>
+          <button class="opt">PAM4를 쓸 수 있게 되었다</button>
+          <button class="opt" data-correct>코딩 오버헤드가 20%에서 약 1.5%로 줄어, 8 GT/s로 2.5배 넘는 대신 실효 대역폭이 두 배가 되었다</button>
+        </div>
+        <div class="quiz-exp">PCIe 2.0: 5 GT/s × 0.8 = 4 Gb/s, PCIe 3.0: 8 GT/s × 128/130 ≈ 7.88 Gb/s. 전송률은 1.6배만 올리고 실효 대역폭은 두 배로 만들었다. 대신 천이 밀도는 스크램블러로 확보한다.</div></div>
+      <div class="quiz-q"><p>Q6. 아이 다이어그램에서 송신 FFE의 후 탭(디엠퍼시스)을 키우면 일어나는 일은?</p>
+        <div class="opts">
+          <button class="opt">잡음이 줄어든다</button>
+          <button class="opt" data-correct>바로 다음 비트로 번지는 ISI(h₁)가 상쇄되어, 손실이 큰 채널에서 눈이 다시 열린다(대신 전체 진폭은 줄어든다)</button>
+          <button class="opt">비트 속도가 올라간다</button>
+          <button class="opt">지터가 사라진다</button>
+        </div>
+        <div class="quiz-exp">FFE는 고주파를 상대적으로 키우는 필터다. 채널의 저역 통과 특성을 보상하지만, 송신 진폭 한계 때문에 신호 크기 자체는 줄어든다. 너무 키우면 과보상으로 다시 눈이 닫힌다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var P = SB.palette();
+  SB.onTheme(function () { P = SB.palette(); });
+  function hex(n, d) { var s = n.toString(16).toUpperCase().padStart(d || 8, "0"); return "0x" + (s.length > 4 ? s.slice(0, s.length - 4) + "_" + s.slice(-4) : s); }
+
+  /* ---------------------------------------------------------------- 15-1 memory map */
+  (function () {
+    var REG = [
+      { a: 0x00000000, e: 0x0000FFFF, n: "부트 ROM", t: "sec", h: 1, d: "전원이 켜지면 CPU가 맨 처음 실행하는 64 KB 코드. 제조 때 고정되며 다음 단계 부트로더를 검증한다(<a href=\"security.html\">16장</a>).", regs: [] },
+      { a: 0x00100000, e: 0x0017FFFF, n: "온칩 SRAM", t: "cache", h: 1, d: "512 KB 작업용 메모리. DRAM이 초기화되기 전 부트 단계와 저전력 상태에서 쓴다.", regs: [] },
+      { a: 0x10000000, e: 0x1000FFFF, n: "UART0", t: "io", h: 1, d: "디버그 콘솔. DR에 쓰면 한 바이트가 TX 핀으로 나간다.", regs: [["+0x00", "DR", "데이터. 쓰면 송신, 읽으면 수신 바이트"], ["+0x18", "FR", "상태. bit5 TXFF=송신 FIFO 꽉 참, bit4 RXFE=수신 비어 있음"], ["+0x24", "IBRD", "보율 분주값 (정수부)"]] },
+      { a: 0x10010000, e: 0x1001FFFF, n: "I²C0", t: "io", h: 1, d: "센서·충전 IC용 I²C 마스터.", regs: [["+0x00", "CON", "마스터 모드·속도 선택"], ["+0x04", "TAR", "상대 장치 7비트 주소"], ["+0x10", "DATA_CMD", "쓰면 바이트 송신, bit8=1이면 읽기 명령"]] },
+      { a: 0x10020000, e: 0x1002FFFF, n: "SPI0", t: "io", h: 1, d: "디스플레이 설정·플래시용 SPI.", regs: [["+0x00", "CR0", "프레임 형식, 클럭 극성·위상"], ["+0x08", "DR", "송수신 데이터"]] },
+      { a: 0x10030000, e: 0x1003FFFF, n: "GPIO", t: "io", h: 1, d: "범용 입출력 핀. 아래 LED 줄을 눌러 DATA 레지스터를 써 보자.", regs: [["+0x00", "DATA", "핀 출력값 (bit n = 핀 n)"], ["+0x04", "DIR", "1이면 출력, 0이면 입력"], ["+0x10", "IE", "핀 인터럽트 허용"]] },
+      { a: 0x10040000, e: 0x1004FFFF, n: "타이머", t: "pmu", h: 1, d: "주기 인터럽트를 만드는 하드웨어 타이머. 운영체제의 '틱'과 sleep의 기반.", regs: [["+0x00", "LOAD", "카운트 시작값"], ["+0x08", "CTRL", "켜기·주기 모드·인터럽트 허용"]] },
+      { a: 0x10800000, e: 0x108FFFFF, n: "DMA 엔진", t: "noc", h: 1, d: "채널별 디스크립터 주소를 쓰고 시작 비트를 켜면 메모리 복사를 대신 한다.", regs: [["+0x00", "CH0_DESC", "첫 디스크립터의 물리 주소"], ["+0x08", "CH0_CTRL", "bit0=시작, bit1=완료 인터럽트"], ["+0x0C", "CH0_STAT", "진행·완료·오류"]] },
+      { a: 0x12000000, e: 0x120FFFFF, n: "UFS 호스트", t: "io", h: 1, d: "저장장치 컨트롤러. 명령 큐는 DRAM에 두고, 여기에는 '새 명령 있음' 초인종(doorbell) 레지스터가 있다.", regs: [["+0x58", "UTRLDBR", "초인종: 비트를 켜면 그 슬롯의 명령 실행"]] },
+      { a: 0x1F000000, e: 0x1F0FFFFF, n: "GIC", t: "pmu", h: 1, d: "인터럽트 컨트롤러. 인터럽트마다 우선순위·목적지 코어·켜기를 설정한다.", regs: [["+0x0100", "ISENABLER", "인터럽트 켜기 (비트마다 하나)"], ["+0x0400", "IPRIORITYR", "우선순위 (바이트마다 하나, 작을수록 높음)"], ["+0x0800", "ITARGETSR", "목적지 코어"]] },
+      { a: 0x40000000, e: 0x7FFFFFFF, n: "PCIe 창", t: "io", h: 2, d: "1 GB 주소 창. 여기에 접근하면 PCIe 링크 너머 장치(예: Wi-Fi 칩)의 레지스터·메모리에 닿는다.", regs: [] },
+      { a: 0x80000000, e: 0x37FFFFFFF, n: "DRAM (12 GB)", t: "mem", h: 5, d: "LPDDR5X 메인 메모리. 주소의 대부분을 차지한다. 운영체제·앱·GPU 버퍼가 모두 여기 산다(<a href=\"dram.html\">7장</a>).", regs: [] },
+    ];
+    var sel = 5, gpio = 0x2D, geo = null;
+    var info = document.getElementById("mm-info");
+    function showInfo() {
+      var r = REG[sel];
+      var html = "<b>" + r.n + "</b> <span class=\"pill io-mono\">" + hex(r.a, 9).replace(/^0x0/, "0x") + " – " + hex(r.e, 9).replace(/^0x0/, "0x") + "</span><br>" + r.d;
+      if (r.regs.length) html += "<table class=\"io-reg\">" + r.regs.map(function (g) { return "<tr><td>" + hex(r.a + parseInt(g[0].slice(3), 16)) + "</td><td>" + g[1] + "</td><td>" + g[2] + "</td></tr>"; }).join("") + "</table>";
+      info.innerHTML = html;
+    }
+    var cv = SB.canvas("#cv-mmap", function (ctx, w, h) {
+      var narrow = w < 560;
+      var mw = narrow ? w - 20 : Math.min(360, w * 0.48), mx = 10, my = 8, mh = narrow ? h - 98 : h - 16;
+      var tot = REG.reduce(function (s, r) { return s + r.h; }, 0) + 2; // +gaps
+      var unit = mh / tot, y = my;
+      var rects = [];
+      ctx.font = SB.font(narrow ? 11 : 12, false, 700); ctx.textBaseline = "middle";
+      REG.forEach(function (r, i) {
+        var hh = r.h * unit - 2;
+        if (i === 2 || i === 10) { ctx.fillStyle = P.faint; ctx.font = SB.font(10, true); ctx.textAlign = "left"; ctx.fillText("⋯", mx + 4, y + unit * 0.5); y += unit; ctx.font = SB.font(narrow ? 11 : 12, false, 700); }
+        var on = i === sel;
+        SOC.box(ctx, mx + 84, y, mw - 84, hh, SOC.color(r.t), null, { r: 4, stroke: on ? P.text : null, lw: 2.2 });
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "#fff"; ctx.textAlign = "left"; ctx.font = SB.font(Math.min(12, Math.max(9, hh * 0.55)), false, 700);
+        ctx.fillText(r.n, mx + 92, y + hh / 2);
+        ctx.fillStyle = P.dim; ctx.font = SB.font(9.5, true); ctx.textAlign = "right";
+        ctx.fillText(hex(r.a, 9).replace(/^0x0/, "0x"), mx + 80, y + 6);
+        rects.push([mx + 84, y, mw - 84, hh, i]);
+        y += r.h * unit;
+      });
+      // GPIO LEDs
+      var lx = narrow ? 14 : mx + mw + 30, ly = narrow ? my + mh + 14 : h * 0.3, lw = narrow ? w - 28 : w - lx - 14;
+      ctx.fillStyle = P.text; ctx.font = SB.font(12, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("GPIO DATA @ 0x1003_0000", lx, ly);
+      var bw = Math.min(40, (lw - 7 * 6) / 8), bits = [];
+      for (var b = 7; b >= 0; b--) {
+        var k = 7 - b, bx = lx + k * (bw + 6), by = ly + 22;
+        var on = (gpio >> b) & 1;
+        SOC.box(ctx, bx, by, bw, 26, on ? P.accent2 : P.surface, String(on), { r: 5, stroke: P.border, color: on ? "#fff" : P.dim, mono: true, size: 13 });
+        ctx.fillStyle = P.faint; ctx.font = SB.font(9.5, true); ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText("b" + b, bx + bw / 2, by + 28);
+        // LED
+        var cx = bx + bw / 2, cy = by + 54;
+        ctx.beginPath(); ctx.arc(cx, cy, Math.min(10, bw * 0.3), 0, 7);
+        ctx.fillStyle = on ? SB.color("warn") : SOC.alpha(P.dim, 0.25); ctx.fill();
+        if (on) { ctx.strokeStyle = SOC.alpha(SB.color("warn"), 0.4); ctx.lineWidth = 4; ctx.stroke(); }
+        bits.push([bx, by, bw, 26, b]);
+      }
+      if (!narrow) {
+        ctx.fillStyle = P.dim; ctx.font = SB.font(11.5, true); ctx.textAlign = "left"; ctx.textBaseline = "top";
+        ctx.fillText("str w1, [x0]   // x0 = 0x1003_0000", lx, ly + 84);
+        ctx.fillText("                // w1 = 0x" + gpio.toString(16).toUpperCase().padStart(2, "0"), lx, ly + 102);
+      } else { ctx.fillStyle = P.dim; ctx.font = SB.font(11, true); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("*(u32*)0x10030000 = 0x" + gpio.toString(16).toUpperCase().padStart(2, "0") + ";", lx, ly + 72); }
+      geo = { rects: rects, bits: bits };
+    }, { aspect: 0.58, minHeight: 440, maxHeight: 460 });
+    var el = document.getElementById("cv-mmap");
+    SOC.pointer(el, {
+      down: function (x, y) {
+        if (!geo) return;
+        for (var i = 0; i < geo.bits.length; i++) { var b = geo.bits[i]; if (x >= b[0] && x <= b[0] + b[2] && y >= b[1] && y <= b[1] + b[3] + 40) { gpio ^= 1 << b[4]; sel = 5; showInfo(); cv.redraw(); return; } }
+        for (var j = 0; j < geo.rects.length; j++) { var r = geo.rects[j]; if (x >= r[0] - 84 && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3] + 2) { sel = r[4]; showInfo(); cv.redraw(); return; } }
+      },
+      move: function (x, y) { if (!geo) return; var hit = geo.rects.some(function (r) { return x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]; }) || geo.bits.some(function (b) { return x >= b[0] && x <= b[0] + b[2] && y >= b[1] && y <= b[1] + b[3] + 40; }); el.style.cursor = hit ? "pointer" : "default"; },
+    });
+    showInfo();
+  })();
+
+  /* ---------------------------------------------------------------- 15-2 polling vs interrupt */
+  (function () {
+    var lr = 3, li = 2;
+    var POLL = 0.3, HAND = 2, IRQ = 3; // µs
+    var cv = SB.canvas("#cv-poll", function (ctx, w, h) {
+      var rate = Math.pow(10, lr), intv = Math.pow(10, li); // events/s, µs
+      var Wus = SB.clamp(6e6 / rate, 50, 50000); // display window
+      var rng = SB.rng(3), ev = [], t = 0;
+      while (true) { t += -Math.log(1 - rng()) * 1e6 / rate; if (t > Wus) break; ev.push(t); }
+      var nameW = w < 480 ? 56 : 76, x0 = 8 + nameW, X = function (u) { return x0 + u / Wus * (w - x0 - 10); };
+      var rowH = (h - 40) / 2;
+      var rows = [["폴링", 10], ["인터럽트", 10 + rowH + 10]];
+      ctx.font = SB.font(12, false, 700); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      rows.forEach(function (r) { ctx.fillStyle = P.text; ctx.fillText(r[0], 8, r[1] + rowH / 2); ctx.fillStyle = P.surface; ctx.fillRect(x0, r[1], w - x0 - 10, rowH); });
+      var y1 = rows[0][1], y2 = rows[1][1];
+      // polling: polls every intv; event handled at next poll
+      var npoll = Wus / intv;
+      if (npoll * 1.5 > w) { ctx.fillStyle = SOC.alpha(P.warn, Math.min(0.9, POLL / intv * 4 + 0.15)); ctx.fillRect(x0, y1 + rowH * 0.55, w - x0 - 10, rowH * 0.35); }
+      else { ctx.fillStyle = P.warn; for (var p = 0; p < Wus; p += intv) ctx.fillRect(X(p), y1 + rowH * 0.55, Math.max(1, X(p + POLL) - X(p)), rowH * 0.35); }
+      ctx.fillStyle = P.accent2;
+      ev.forEach(function (e) { var tp = Math.ceil(e / intv) * intv; ctx.fillRect(X(tp), y1 + 4, Math.max(1.5, X(tp + HAND) - X(tp)), rowH - 8); });
+      ctx.fillStyle = P.accent;
+      ev.forEach(function (e) { ctx.fillRect(X(e), y2 + 4, Math.max(1.5, X(e + IRQ + HAND) - X(e)), rowH - 8); });
+      ctx.strokeStyle = P.bad; ctx.lineWidth = 1.5;
+      ev.forEach(function (e) { [y1, y2].forEach(function (y) { ctx.beginPath(); ctx.moveTo(X(e), y - 3); ctx.lineTo(X(e), y + 5); ctx.stroke(); }); });
+      ctx.fillStyle = P.faint; ctx.font = SB.font(10.5, true); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("0", x0, h - 16); ctx.textAlign = "right"; ctx.fillText(Wus >= 1000 ? (Wus / 1000).toPrecision(3) + " ms" : Math.round(Wus) + " µs", w - 10, h - 16);
+      ctx.textAlign = "center"; ctx.fillStyle = P.dim; ctx.fillText(w < 480 ? "주황 폴링 · 파랑 처리 · 분홍 IRQ" : "주황 = 상태 읽기 · 파랑 = 처리 · 분홍 = 인터럽트 진입+처리", (x0 + w) / 2, h - 16);
+      var pc = POLL / intv + rate * HAND * 1e-6, ic = rate * (IRQ + HAND) * 1e-6;
+      var f = function (x) { return x >= 1 ? '<span class="io-warn">100%+</span>' : (x * 100 < 0.1 ? (x * 100).toFixed(3) : (x * 100).toPrecision(3)) + "<small>%</small>"; };
+      SB.stat("pl-pc", f(pc)); SB.stat("pl-ic", f(ic));
+      SB.stat("pl-pl", SB.si((intv / 2 + HAND) * 1e-6, "s", 3));
+      SB.stat("pl-il", SB.si((IRQ + HAND) * 1e-6, "s", 3));
+    }, { aspect: 0.26, minHeight: 170, maxHeight: 220 });
+    SB.range("pl-r", function (v) { var r = Math.pow(10, v); return (r >= 1000 ? SB.fmt(r / 1000, 3) + "천" : SB.fmt(r, 3)) + " 회/s"; }, function (v) { lr = v; cv.redraw(); });
+    SB.range("pl-i", function (v) { return SB.si(Math.pow(10, v) * 1e-6, "s", 3); }, function (v) { li = v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 15-3 GIC */
+  (function () {
+    var SRC = [
+      { n: "모뎀", p: 1, d: 18, t: "modem" },
+      { n: "타이머", p: 2, d: 10, t: "pmu" },
+      { n: "UART", p: 3, d: 14, t: "io" },
+      { n: "터치", p: 4, d: 35, t: "dsp" },
+      { n: "저장장치", p: 5, d: 70, t: "mem" },
+    ];
+    var ENTRY = 2, WIN = 600;
+    var nest = true, auto = true, rateK = 1, rng = SB.rng(8);
+    var t = 0, stack = [], pend = SRC.map(function () { return null; }), hist = [], arrivals = [], spans = [], lost = 0, busyT = 0, worst = SRC.map(function () { return 0; });
+    var btns = document.getElementById("gic-btns");
+    btns.innerHTML = SRC.map(function (s, i) { return '<button data-i="' + i + '"><i style="background:' + SOC.color(s.t) + '"></i>' + s.n + " <small style=\"color:var(--text-faint)\">P" + s.p + "</small></button>"; }).join("");
+    function fire(i) { arrivals.push([t, i]); if (pend[i] != null) { lost++; return; } if (stack.some(function (x) { return x.i === i; }) && pend[i] == null) { pend[i] = t; return; } pend[i] = t; }
+    btns.addEventListener("click", function (e) { var b = e.target.closest("button"); if (b) fire(+b.dataset.i); });
+    function step(dt) {
+      // random arrivals (per µs probability)
+      if (auto) SRC.forEach(function (s, i) { var lam = [1 / 160, 1 / 100, 1 / 140, 1 / 220, 1 / 300][i] * rateK; if (rng() < lam * dt) fire(i); });
+      // choose
+      var best = -1;
+      pend.forEach(function (v, i) { if (v != null && (best < 0 || SRC[i].p < SRC[best].p)) best = i; });
+      var top = stack.length ? stack[stack.length - 1] : null;
+      if (best >= 0 && (!top || (nest && SRC[best].p < SRC[top.i].p))) {
+        var lat = t - pend[best];
+        if (lat > worst[best]) worst[best] = lat;
+        stack.push({ i: best, rem: SRC[best].d + ENTRY, t0: t });
+        spans.push({ i: best, a: pend[best], s: t });
+        pend[best] = null;
+        top = stack[stack.length - 1];
+      }
+      if (top) { top.rem -= dt; busyT += dt; if (top.rem <= 0) stack.pop(); }
+      hist.push([t, top ? top.i : -1, stack.length]);
+      t += dt;
+      var cut = t - WIN;
+      while (hist.length && hist[0][0] < cut) hist.shift();
+      while (arrivals.length && arrivals[0][0] < cut) arrivals.shift();
+      while (spans.length && spans[0].s < cut - 200) spans.shift();
+    }
+    var cv = SB.canvas("#cv-gic", function (ctx, w, h) {
+      var nameW = w < 480 ? 58 : 76, x0 = 8 + nameW, X = function (u) { return x0 + (u - (t - WIN)) / WIN * (w - x0 - 10); };
+      var cpuH = 34, rowH = (h - cpuH - 30) / SRC.length;
+      ctx.font = SB.font(12, false, 700); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      ctx.fillStyle = P.text; ctx.fillText("CPU", 8, 6 + cpuH / 2);
+      ctx.fillStyle = P.surface; ctx.fillRect(x0, 6, w - x0 - 10, cpuH);
+      var dx = (w - x0 - 10) / WIN * 0.5 + 0.6;
+      hist.forEach(function (e) { if (e[1] < 0) return; ctx.fillStyle = SOC.color(SRC[e[1]].t); var hh = Math.min(1, e[2] / 3) * cpuH; ctx.fillRect(X(e[0]), 6 + cpuH - hh, dx, hh); });
+      SRC.forEach(function (s, i) {
+        var y = 6 + cpuH + 8 + i * rowH;
+        ctx.fillStyle = SOC.color(s.t); ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "left"; ctx.fillText(s.n, 8, y + rowH / 2);
+        ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(x0, y + rowH - 0.5); ctx.lineTo(w - 10, y + rowH - 0.5); ctx.stroke();
+      });
+      // pending (thin) and service spans (thick) from history
+      spans.forEach(function (sp) {
+        var y = 6 + cpuH + 8 + sp.i * rowH;
+        ctx.fillStyle = SOC.alpha(SOC.color(SRC[sp.i].t), 0.5);
+        var a = Math.max(sp.a, t - WIN), b = sp.s;
+        if (b > a) ctx.fillRect(X(a), y + rowH * 0.45, X(b) - X(a), rowH * 0.12);
+      });
+      pend.forEach(function (v, i) { if (v == null) return; var y = 6 + cpuH + 8 + i * rowH; ctx.fillStyle = SOC.alpha(SOC.color(SRC[i].t), 0.5); var a = Math.max(v, t - WIN); ctx.fillRect(X(a), y + rowH * 0.45, X(t) - X(a), rowH * 0.12); });
+      hist.forEach(function (e) { if (e[1] < 0) return; var y = 6 + cpuH + 8 + e[1] * rowH; ctx.fillStyle = SOC.color(SRC[e[1]].t); ctx.fillRect(X(e[0]), y + rowH * 0.25, dx, rowH * 0.5); });
+      arrivals.forEach(function (a) { var y = 6 + cpuH + 8 + a[1] * rowH, x = X(a[0]); ctx.fillStyle = P.text; ctx.beginPath(); ctx.moveTo(x - 4, y + 2); ctx.lineTo(x + 4, y + 2); ctx.lineTo(x, y + 8); ctx.closePath(); ctx.fill(); });
+      ctx.fillStyle = P.faint; ctx.font = SB.font(10.5, true); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      ctx.fillText("−600 µs", x0, h - 4); ctx.textAlign = "right"; ctx.fillText("지금", w - 10, h - 4);
+      var f = function (v) { return Math.round(v) + "<small>µs</small>"; };
+      SB.stat("gic-wm", f(worst[0])); SB.stat("gic-ws", f(worst[4]));
+      SB.stat("gic-lost", lost ? '<span class="io-warn">' + lost + "개</span>" : "0개");
+      SB.stat("gic-busy", t > 0 ? Math.round(busyT / t * 100) + "<small>%</small>" : "—");
+    }, { aspect: 0.4, minHeight: 260, maxHeight: 330 });
+    SB.loop(document.getElementById("cv-gic"), function (dt) { var sim = dt * 200; var n = Math.ceil(sim / 0.5); for (var k = 0; k < n; k++) step(sim / n); cv.redraw(); });
+    SB.seg("gic-nest", function (v) { nest = v === "1"; worst = SRC.map(function () { return 0; }); lost = 0; busyT = 0; t = t; });
+    document.getElementById("gic-auto").addEventListener("change", function (e) { auto = e.target.checked; });
+    SB.range("gic-rate", function (v) { return v.toFixed(1) + "×"; }, function (v) { rateK = v; worst = SRC.map(function () { return 0; }); lost = 0; });
+  })();
+
+  /* ---------------------------------------------------------------- 15-4 DMA */
+  (function () {
+    var si = 6;
+    var cv = SB.canvas("#cv-dma", function (ctx, w, h) {
+      var bytes = 1024 * Math.pow(2, si); // 1 KB .. 4 MB
+      var pio = bytes / 200e6 * 1e6, setup = 3, irq = 3, xfer = bytes / 2e9 * 1e6; // µs
+      var dmaT = setup + xfer + irq, T = Math.max(pio, dmaT) * 1.05;
+      var nameW = w < 480 ? 60 : 90, x0 = 8 + nameW, X = function (u) { return x0 + u / T * (w - x0 - 12); };
+      var rows = [["CPU (PIO)", 12], ["CPU (DMA)", 12 + 34], ["DMA 엔진", 12 + 68]];
+      ctx.font = SB.font(11.5, false, 700); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      rows.forEach(function (r) { ctx.fillStyle = P.text; ctx.fillText(r[0], 8, r[1] + 12); ctx.fillStyle = P.surface; ctx.fillRect(x0, r[1], w - x0 - 12, 24); });
+      ctx.fillStyle = P.bad; ctx.fillRect(x0, rows[0][1], X(pio) - x0, 24);
+      ctx.fillStyle = P.accent; ctx.fillRect(x0, rows[1][1], Math.max(2, X(setup) - x0), 24); ctx.fillRect(X(setup + xfer), rows[1][1], Math.max(2, X(dmaT) - X(setup + xfer)), 24);
+      ctx.fillStyle = SOC.alpha(P.ok, 0.25); ctx.fillRect(X(setup), rows[1][1], X(setup + xfer) - X(setup), 24);
+      ctx.fillStyle = SOC.color("noc"); ctx.fillRect(X(setup), rows[2][1], Math.max(2, X(setup + xfer) - X(setup)), 24);
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textAlign = "center";
+      if (X(setup + xfer) - X(setup) > 120) { ctx.fillStyle = P.ok; ctx.fillText("CPU는 다른 일", (X(setup) + X(setup + xfer)) / 2, rows[1][1] + 12); ctx.fillStyle = "#fff"; ctx.fillText("DMA가 복사", (X(setup) + X(setup + xfer)) / 2, rows[2][1] + 12); }
+      if (X(pio) - x0 > 120) { ctx.fillStyle = "#fff"; ctx.fillText("CPU가 4바이트씩 복사", (x0 + X(pio)) / 2, rows[0][1] + 12); }
+      ctx.fillStyle = P.faint; ctx.font = SB.font(10.5, true); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("0", x0, h - 18); ctx.textAlign = "right"; ctx.fillText(SB.si(T * 1e-6, "s", 3), w - 12, h - 18);
+      SB.stat("dm-pt", SB.si(pio * 1e-6, "s", 3)); SB.stat("dm-dt", SB.si(dmaT * 1e-6, "s", 3)); SB.stat("dm-dc", SB.si((setup + irq) * 1e-6, "s", 3));
+      var save = pio - setup - irq;
+      SB.stat("dm-save", save > 0 ? SB.si(save * 1e-6, "s", 3) : '<span class="io-warn">' + SB.si(save * 1e-6, "s", 2) + "</span>");
+    }, { aspect: 0.2, minHeight: 130, maxHeight: 150 });
+    SB.range("dm-s", function (v) { return SB.bytes(1024 * Math.pow(2, v)); }, function (v) { si = v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 15-4b scatter-gather */
+  (function () {
+    var NP = 24, buf = [], rng = SB.rng(12), anim = -1, prog = 0, descs = [], geo = null;
+    function alloc() { var all = []; for (var i = 0; i < NP; i++) all.push(i); var pick = []; var n = 7; while (pick.length < n) { var k = Math.floor(rng() * NP); if (pick.indexOf(k) < 0) { pick.push(k); if (rng() < 0.45 && k + 1 < NP && pick.indexOf(k + 1) < 0 && pick.length < n) pick.push(k + 1); } } buf = pick; anim = -1; build(); }
+    function build() {
+      descs = [];
+      buf.forEach(function (p, i) { var last = descs[descs.length - 1]; if (last && last.p + last.n === p) last.n++; else descs.push({ p: p, n: 1, from: i }); });
+      SB.stat("sg-sz", buf.length * 4 + "<small>KB</small>");
+      SB.stat("sg-nd", descs.length + "<small>개</small>");
+      SB.stat("sg-ns", buf.length + "<small>번 (페이지마다)</small>");
+    }
+    var cv = SB.canvas("#cv-sg", function (ctx, w, h) {
+      var cols = w < 480 ? 8 : 12, rowsN = Math.ceil(NP / cols);
+      var cw = Math.min(54, (w - 20) / cols), ch = 30, gx = (w - cw * cols) / 2, gy = 22;
+      ctx.fillStyle = P.faint; ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("물리 메모리 (4 KB 페이지)", gx, 4);
+      var cells = [];
+      var cur = anim >= 0 ? Math.floor(prog) : -1; // page index in buf being transferred
+      for (var p = 0; p < NP; p++) {
+        var x = gx + (p % cols) * cw, y = gy + Math.floor(p / cols) * (ch + 6), bi = buf.indexOf(p);
+        var done = anim >= 0 && bi >= 0 && bi < cur, now = anim >= 0 && bi === cur;
+        SOC.box(ctx, x + 2, y, cw - 4, ch, bi >= 0 ? (now ? P.accent : done ? SOC.alpha(SOC.color("mem"), 0.45) : SOC.color("mem")) : P.surface, bi >= 0 ? String(bi) : "", { r: 4, stroke: P.border, color: "#fff", size: 12, mono: true });
+        ctx.fillStyle = P.faint; ctx.font = SB.font(9, true); ctx.textAlign = "right"; ctx.textBaseline = "top"; ctx.fillText(p, x + cw - 5, y + 2);
+        cells.push([x + 2, y, cw - 4, ch, p]);
+      }
+      geo = cells;
+      // descriptor chain
+      var dy = gy + rowsN * (ch + 6) + 14;
+      ctx.fillStyle = P.faint; ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.fillText("디스크립터 사슬 (DMA 엔진이 차례로 읽는다)", gx, dy - 12 + 2);
+      var dw = Math.min(150, (w - 20 - (descs.length - 1) * 14) / Math.max(1, descs.length)), dh = 44;
+      var curD = -1; if (anim >= 0) descs.forEach(function (d, k) { if (cur >= d.from && cur < d.from + d.n) curD = k; });
+      descs.forEach(function (d, k) {
+        var x = gx + k * (dw + 14), y = dy + 6;
+        SOC.box(ctx, x, y, dw, dh, k === curD ? P.accent2 : P.surface, null, { r: 6, stroke: P.border });
+        ctx.fillStyle = k === curD ? "#fff" : P.text; ctx.font = SB.font(dw < 70 ? 9 : 10.5, true, 600); ctx.textAlign = "left"; ctx.textBaseline = "top";
+        ctx.fillText(dw < 70 ? "p" + d.p : "addr " + hex(0x80000000 + d.p * 4096).slice(0, 11), x + 5, y + 6);
+        ctx.fillText((d.n * 4) + " KB", x + 5, y + 24);
+        if (k < descs.length - 1) SOC.arrow(ctx, x + dw + 1, y + dh / 2, x + dw + 13, y + dh / 2, P.dim, 1.4, 6);
+      });
+      if (anim >= 0 && cur >= buf.length) { ctx.fillStyle = P.ok; ctx.font = SB.font(12, false, 700); ctx.textAlign = "right"; ctx.textBaseline = "top"; ctx.fillText("완료 → 인터럽트 1번", w - 10, 4); }
+    }, { aspect: 0.3, minHeight: 210, maxHeight: 260 });
+    var el = document.getElementById("cv-sg");
+    el.style.cursor = "pointer";
+    SOC.pointer(el, { down: function (x, y) { if (!geo) return; geo.forEach(function (c) { if (x >= c[0] && x <= c[0] + c[2] && y >= c[1] && y <= c[1] + c[3]) { var i = buf.indexOf(c[4]); if (i >= 0) buf.splice(i, 1); else buf.push(c[4]); anim = -1; build(); cv.redraw(); } }); } });
+    document.getElementById("sg-go").onclick = function () { if (!buf.length) return; anim = 0; prog = 0; };
+    document.getElementById("sg-rnd").onclick = function () { alloc(); cv.redraw(); };
+    SB.loop(el, function (dt) { if (anim < 0) return; if (prog < buf.length) { prog += dt * 2.2; cv.redraw(); } else if (anim === 0) { anim = 1; cv.redraw(); } });
+    alloc();
+  })();
+
+  /* ---------------------------------------------------------------- 15-4c IOMMU */
+  (function () {
+    var on = true, last = null, flash = 0;
+    var MAP = { 0: 3, 1: 7, 2: 8 }; // iova page -> phys frame
+    var KERNEL = [0, 1], BUF = [3, 7, 8];
+    var cv = SB.canvas("#cv-iommu", function (ctx, w, h) {
+      var narrow = w < 520;
+      var colW = narrow ? (w - 40) / 3 : Math.min(170, (w - 80) / 3), gap = (w - 3 * colW) / 4;
+      var xA = gap, xB = xA + colW + gap, xC = xB + colW + gap;
+      var rows = 10, rh = Math.min(22, (h - 40) / rows), y0 = 28;
+      ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = P.text;
+      ctx.fillText("장치 주소 (IOVA)", xA + colW / 2, 6); ctx.fillText(on ? "IOMMU 변환표" : "IOMMU 꺼짐", xB + colW / 2, 6); ctx.fillText("물리 메모리", xC + colW / 2, 6);
+      // iova pages 0..3
+      for (var i = 0; i < 4; i++) SOC.box(ctx, xA, y0 + i * rh * 1.6, colW, rh * 1.3, i < 3 ? SOC.color("io") : P.surface, "IOVA " + i + (i < 3 ? "" : " (없음)"), { r: 4, size: 11, color: i < 3 ? "#fff" : P.dim, stroke: P.border });
+      // phys frames 0..9
+      for (var f = 0; f < rows; f++) {
+        var isK = KERNEL.indexOf(f) >= 0, isB = BUF.indexOf(f) >= 0;
+        var hit = last && last.f === f;
+        var col = isK ? SOC.color("sec") : isB ? SOC.color("mem") : P.surface;
+        SOC.box(ctx, xC, y0 + f * rh, colW, rh - 2, col, (isK ? "커널 " : isB ? "버퍼 " : "") + "프레임 " + f, { r: 3, size: 10.5, color: isK || isB ? "#fff" : P.dim, stroke: hit ? (last.bad ? P.bad : P.ok) : P.border, lw: hit ? 3 : 1 });
+      }
+      // table
+      if (on) {
+        Object.keys(MAP).forEach(function (k, j) {
+          var y = y0 + j * rh * 1.6;
+          SOC.box(ctx, xB, y, colW, rh * 1.3, P.surface, k + " → 프레임 " + MAP[k], { r: 4, size: 11, color: P.text, stroke: P.border });
+          ctx.strokeStyle = SOC.alpha(P.dim, 0.6); ctx.lineWidth = 1.2;
+          ctx.beginPath(); ctx.moveTo(xA + colW, y + rh * 0.65); ctx.lineTo(xB, y + rh * 0.65); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(xB + colW, y + rh * 0.65); ctx.lineTo(xC, y0 + MAP[k] * rh + rh / 2 - 1); ctx.stroke();
+        });
+      } else {
+        ctx.fillStyle = P.faint; ctx.font = SB.font(11); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("주소를 그대로 통과", xB + colW / 2, y0 + rh * 2);
+      }
+      if (last && flash > 0) {
+        ctx.globalAlpha = Math.min(1, flash);
+        var c = last.bad ? P.bad : P.ok;
+        var ty = last.f != null ? y0 + last.f * rh + rh / 2 : y0 + rh * 5;
+        SOC.arrow(ctx, xA + colW / 2, y0 + (last.src || 0) * rh * 1.6 + rh * 1.3, last.f != null ? xC : xB + colW / 2, last.f != null ? ty : y0 + rh * 5.5, c, 2.6, 10);
+        if (last.f == null) { ctx.fillStyle = P.bad; ctx.font = SB.font(14, false, 800); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("✕ 차단", xB + colW / 2, y0 + rh * 6.3); }
+        ctx.globalAlpha = 1;
+      }
+    }, { aspect: 0.36, minHeight: 260, maxHeight: 290 });
+    var info = document.getElementById("iom-info");
+    function say() {
+      if (!last) { info.innerHTML = "버튼을 눌러 장치가 DMA 쓰기를 해 보게 하자."; return; }
+      if (last.kind === "ok") info.innerHTML = on ? "<b class='io-good'>정상:</b> 장치는 IOVA 1에 썼고, IOMMU가 이를 버퍼 프레임 7로 번역했다. 장치는 실제 물리 주소를 몰라도 된다." : "<b class='io-good'>정상:</b> IOMMU가 없으니 운영체제가 장치에 물리 주소(프레임 7)를 직접 알려 주었고, 장치가 그곳에 썼다.";
+      else info.innerHTML = on ? "<b class='io-good'>차단:</b> 장치가 커널 영역 주소를 노렸지만 그 IOVA는 변환표에 없다. IOMMU가 접근을 막고 운영체제에 오류(fault)를 알린다." : "<b class='io-warn'>커널 메모리 오염!</b> IOMMU가 없으니 장치가 고른 주소가 곧 물리 주소다. 악성 장치가 커널 프레임 0을 덮어써 버렸다. 이런 공격을 DMA 공격이라 한다.";
+    }
+    document.getElementById("iom-ok").onclick = function () { last = { kind: "ok", f: 7, src: 1, bad: false }; flash = 2; say(); cv.redraw(); };
+    document.getElementById("iom-bad").onclick = function () { last = on ? { kind: "bad", f: null, src: 3, bad: true } : { kind: "bad", f: 0, src: 3, bad: true }; flash = 2; say(); cv.redraw(); };
+    document.getElementById("iom-on").addEventListener("change", function (e) { on = e.target.checked; last = null; say(); cv.redraw(); });
+    SB.loop(document.getElementById("cv-iommu"), function (dt) { if (flash > 0) { flash -= dt * 0.6; if (flash < 0.35) flash = 0.35; cv.redraw(); } });
+    say();
+  })();
+
+  /* ---------------------------------------------------------------- 15-5 I2C */
+  (function () {
+    var addr = 0x48, data = 0xA5, rw = "w", nack = false, prog = 1, playing = false;
+    function seq() {
+      // returns list of slots: {t:'S'|'P'|'b', v, who:'m'|'s', lab}
+      var s = [{ t: "S" }];
+      for (var i = 6; i >= 0; i--) s.push({ t: "b", v: (addr >> i) & 1, who: "m", lab: "A" + i });
+      s.push({ t: "b", v: rw === "r" ? 1 : 0, who: "m", lab: rw === "r" ? "R" : "W̄" });
+      s.push({ t: "b", v: nack ? 1 : 0, who: nack ? "z" : "s", lab: nack ? "NACK" : "ACK" });
+      if (!nack) {
+        for (var j = 7; j >= 0; j--) s.push({ t: "b", v: (data >> j) & 1, who: rw === "r" ? "s" : "m", lab: "D" + j });
+        if (rw === "r") s.push({ t: "b", v: 1, who: "m", lab: "NACK" });
+        else s.push({ t: "b", v: 0, who: "s", lab: "ACK" });
+      }
+      s.push({ t: "P" });
+      return s;
+    }
+    var cv = SB.canvas("#cv-i2c", function (ctx, w, h) {
+      var S = seq(), n = S.length;
+      var nameW = w < 480 ? 36 : 50, x0 = 8 + nameW, sw = (w - x0 - 10) / n;
+      var yS = 34, yD = h * 0.62, amp = Math.min(34, h * 0.16);
+      var upto = prog * n;
+      ctx.font = SB.font(12, true, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillStyle = P.dim; ctx.fillText("SCL", 8, yS + amp / 2); ctx.fillText("SDA", 8, yD + amp / 2);
+      // segment labels (fields)
+      var fields = [[1, 8, "주소 0x" + addr.toString(16).toUpperCase()], [8, 9, rw === "r" ? "R" : "W"], [9, 10, ""]];
+      if (!nack) fields.push([10, 18, "데이터 0x" + data.toString(16).toUpperCase().padStart(2, "0")]);
+      ctx.font = SB.font(11, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "top";
+      fields.forEach(function (f) { if (!f[2]) return; ctx.fillStyle = P.accent2; ctx.fillText(f[2], x0 + (f[0] + f[1]) / 2 * sw, 4); ctx.strokeStyle = SOC.alpha(P.accent2, 0.4); ctx.beginPath(); ctx.moveTo(x0 + f[0] * sw + 2, 20); ctx.lineTo(x0 + f[1] * sw - 2, 20); ctx.stroke(); });
+      // draw SCL & SDA as polylines up to 'upto'
+      function level(y, v) { return v ? y : y + amp; }
+      ctx.lineWidth = 2;
+      // SCL: idle high; for bit slots: low first quarter, high middle half, low last quarter
+      var sclPts = [], sdaSegs = [];
+      var sda = 1;
+      for (var k = 0; k < n; k++) {
+        var s = S[k], xa = x0 + k * sw, xb = xa + sw;
+        if (k + 0.001 > upto) break;
+        if (s.t === "S") { sclPts.push([xa, 1], [xb - sw * 0.25, 1], [xb - sw * 0.2, 0], [xb, 0]); sdaSegs.push([xa, xa + sw * 0.4, 1, "m"], [xa + sw * 0.45, xb, 0, "m"]); sda = 0; }
+        else if (s.t === "P") { sclPts.push([xa, 0], [xa + sw * 0.3, 0], [xa + sw * 0.35, 1], [xb, 1]); sdaSegs.push([xa, xa + sw * 0.55, 0, "m"], [xa + sw * 0.6, xb, 1, "m"]); sda = 1; }
+        else {
+          sclPts.push([xa, 0], [xa + sw * 0.25, 0], [xa + sw * 0.3, 1], [xa + sw * 0.72, 1], [xa + sw * 0.77, 0], [xb, 0]);
+          sdaSegs.push([xa + sw * 0.05, xb, s.v, s.who, s.lab, sda !== s.v]);
+          sda = s.v;
+        }
+      }
+      ctx.strokeStyle = P.dim; ctx.beginPath();
+      sclPts.forEach(function (p, i) { var y = level(yS, p[1]); if (!i) ctx.moveTo(p[0], y); else { ctx.lineTo(p[0], ctx._ly != null ? ctx._ly : y); ctx.lineTo(p[0], y); } ctx._ly = y; });
+      ctx.stroke(); ctx._ly = null;
+      var prevY = level(yD, 1), prevX = x0;
+      sdaSegs.forEach(function (sg) {
+        var col = sg[3] === "s" ? P.ok : sg[3] === "z" ? P.bad : P.accent2;
+        var y = level(yD, sg[2]);
+        ctx.strokeStyle = col; ctx.beginPath(); ctx.moveTo(prevX, prevY); ctx.lineTo(sg[0], prevY); ctx.lineTo(sg[0] + 2, y); ctx.lineTo(sg[1], y); ctx.stroke();
+        if (sg[4] && sw > 14) { ctx.fillStyle = col; ctx.font = SB.font(sw > 26 ? 10.5 : 9, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText(sg[2], (sg[0] + sg[1]) / 2, yD + amp + 6); if (sw > 30 || /ACK/.test(sg[4])) { ctx.fillStyle = P.faint; ctx.font = SB.font(9, true); ctx.fillText(sw > 30 ? sg[4] : sg[4][0], (sg[0] + sg[1]) / 2, yD + amp + 20); } }
+        prevX = sg[1]; prevY = y;
+      });
+      // S/P marks
+      ctx.font = SB.font(11, false, 800); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      S.forEach(function (s, k) { if ((s.t === "S" || s.t === "P") && k < upto) { ctx.fillStyle = P.accent; ctx.fillText(s.t === "S" ? "시작" : "정지", x0 + (k + 0.5) * sw, yS - 2); } });
+      var clocks = n - 2;
+      SB.stat("i2-n", clocks + "<small>개</small>");
+      var tt = (clocks + 1) / 400e3;
+      SB.stat("i2-t", SB.si(tt, "s", 3));
+      SB.stat("i2-e", nack ? '<span class="io-warn">장치 없음</span>' : SB.fmt(1 / tt / 1000, 3) + "<small>kB/s</small>");
+    }, { aspect: 0.3, minHeight: 200, maxHeight: 250 });
+    SB.loop(document.getElementById("cv-i2c"), function (dt) { if (!playing) return; prog = Math.min(1, prog + dt / 3); if (prog >= 1) playing = false; cv.redraw(); });
+    function restart() { prog = 0.02; playing = true; }
+    SB.range("i2-a", function (v) { return "0x" + v.toString(16).toUpperCase().padStart(2, "0"); }, function (v) { addr = v; prog = 1; cv.redraw(); });
+    SB.range("i2-d", function (v) { return "0x" + v.toString(16).toUpperCase().padStart(2, "0") + " (" + SB.bin(v, 8) + ")"; }, function (v) { data = v; prog = 1; cv.redraw(); });
+    SB.seg("i2-rw", function (v) { rw = v; prog = 1; cv.redraw(); });
+    document.getElementById("i2-nack").addEventListener("change", function (e) { nack = e.target.checked; prog = 1; cv.redraw(); });
+    document.getElementById("i2-go").onclick = restart;
+  })();
+
+  /* ---------------------------------------------------------------- 15-6 parallel skew */
+  (function () {
+    var rate = 2, spread = 80, cdr = false, J = 10;
+    var rng = SB.rng(31), sk = []; for (var i = 0; i < 8; i++) sk.push(rng());
+    var m = Math.min.apply(null, sk), M = Math.max.apply(null, sk); sk = sk.map(function (v) { return (v - m) / (M - m); });
+    var cv = SB.canvas("#cv-par", function (ctx, w, h) {
+      var UI = 1000 / rate; // ps
+      var nameW = w < 480 ? 30 : 44, x0 = 8 + nameW, span = 3 * UI;
+      var X = function (t) { return x0 + (t + UI * 0.5) / span * (w - x0 - 10); };
+      var rowH = (h - 26) / 8;
+      var offs = sk.map(function (v) { return v * spread - spread / 2; });
+      var lo = Math.max.apply(null, offs) + J, hi = Math.min.apply(null, offs) + UI - J; // common window for bit 0 (from 0..UI)
+      var win = hi - lo;
+      ctx.font = SB.font(10.5, true); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      // common window band
+      if (!cdr) {
+        for (var b = 0; b < 3; b++) {
+          if (win > 0) { ctx.fillStyle = SOC.alpha(P.ok, 0.18); ctx.fillRect(X(lo + (b - 0.5) * UI), 4, X(hi) - X(lo), h - 26); }
+        }
+      }
+      for (var i = 0; i < 8; i++) {
+        var y = 4 + i * rowH, top = y + rowH * 0.2, bot = y + rowH * 0.8, mid = (top + bot) / 2;
+        ctx.fillStyle = P.dim; ctx.fillText("D" + i, 8, mid);
+        ctx.strokeStyle = P.accent2; ctx.lineWidth = 1.5;
+        for (var k = -1; k < 4; k++) {
+          var tc = (k - 0.5) * UI + offs[i]; // transition center
+          var xa = X(tc - J), xb = X(tc + J), xn = X(tc + UI - J);
+          // X shape
+          ctx.beginPath(); ctx.moveTo(xa, top); ctx.lineTo(xb, bot); ctx.moveTo(xa, bot); ctx.lineTo(xb, top); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(xb, top); ctx.lineTo(xn, top); ctx.moveTo(xb, bot); ctx.lineTo(xn, bot); ctx.stroke();
+        }
+        if (cdr) { ctx.strokeStyle = P.ok; ctx.lineWidth = 2; for (var b2 = 0; b2 < 3; b2++) { var xs = X((b2 - 0.5) * UI + offs[i] + UI / 2); ctx.beginPath(); ctx.moveTo(xs, top - 2); ctx.lineTo(xs, bot + 2); ctx.stroke(); } }
+      }
+      if (!cdr) { ctx.strokeStyle = win > 0 ? P.ok : P.bad; ctx.lineWidth = 2; for (var b3 = 0; b3 < 3; b3++) { var xc = X((lo + hi) / 2 + (b3 - 0.5) * UI); ctx.setLineDash([5, 3]); ctx.beginPath(); ctx.moveTo(xc, 2); ctx.lineTo(xc, h - 22); ctx.stroke(); ctx.setLineDash([]); } }
+      ctx.save(); ctx.beginPath(); ctx.rect(0, 0, x0 - 2, h); ctx.restore();
+      ctx.fillStyle = P.faint; ctx.font = SB.font(10.5); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      ctx.fillText(cdr ? "초록 실선 = 레인마다 복원한 표본 시점" : (win > 0 ? "점선 = 공통 클럭 표본 시점, 초록 띠 = 모든 선이 유효한 구간" : "모든 선이 동시에 유효한 구간이 없다 → 오류"), (x0 + w) / 2, h - 3);
+      SB.stat("pr-ui", Math.round(UI) + "<small>ps</small>");
+      var ww = cdr ? UI - 2 * J : win;
+      SB.stat("pr-w", ww > 0 ? Math.round(ww) + "<small>ps</small>" : '<span class="io-warn">없음</span>');
+      SB.stat("pr-max", SB.fmt(1000 / (spread + 2 * J + 30), 3) + "<small>Gb/s/핀</small>");
+    }, { aspect: 0.34, minHeight: 230, maxHeight: 300 });
+    SB.range("pr-r", function (v) { return v.toFixed(1) + " Gb/s"; }, function (v) { rate = v; cv.redraw(); });
+    SB.range("pr-s", function (v) { return v + " ps"; }, function (v) { spread = v; cv.redraw(); });
+    document.getElementById("pr-cdr").addEventListener("change", function (e) { cdr = e.target.checked; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 15-6b line coding */
+  (function () {
+    var EFF = { "8b10b": 0.8, "128b130b": 128 / 130, "128b132b": 128 / 132, flit: 236 / 256 };
+    var kind = "128b130b", rate = 16, lanes = 4, pat = "zero";
+    function bitsRaw() { var rng = SB.rng(99), b = []; for (var i = 0; i < 64; i++) b.push(pat === "zero" ? 0 : rng() < 0.5 ? 1 : 0); return b; }
+    function scramble(b) { var lfsr = 0xFFFF, out = []; b.forEach(function (x) { var fb = ((lfsr >> 15) ^ (lfsr >> 4) ^ (lfsr >> 3) ^ (lfsr >> 2)) & 1; out.push(x ^ ((lfsr >> 15) & 1)); lfsr = ((lfsr << 1) | fb) & 0xFFFF; }); return out; }
+    function run(b) { var m = 1, c = 1; for (var i = 1; i < b.length; i++) { if (b[i] === b[i - 1]) { c++; if (c > m) m = c; } else c = 1; } return m; }
+    var cv = SB.canvas("#cv-enc", function (ctx, w, h) {
+      var raw = bitsRaw(), sc = scramble(raw);
+      var nameW = w < 480 ? 54 : 88, x0 = 8 + nameW, bw = (w - x0 - 10) / 64;
+      function wave(b, y, col, lab) {
+        var top = y, bot = y + 26;
+        ctx.fillStyle = P.dim; ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(lab, 8, y + 13);
+        ctx.strokeStyle = col; ctx.lineWidth = 1.8; ctx.beginPath();
+        b.forEach(function (v, i) { var yy = v ? top : bot; if (!i) ctx.moveTo(x0, yy); else ctx.lineTo(x0 + i * bw, yy); ctx.lineTo(x0 + (i + 1) * bw, yy); });
+        ctx.stroke();
+        // highlight longest run
+        var m = 1, c = 1, end = 0; for (var i = 1; i < b.length; i++) { if (b[i] === b[i - 1]) { c++; if (c > m) { m = c; end = i; } } else c = 1; }
+        if (m > 6) { ctx.fillStyle = SOC.alpha(P.bad, 0.12); ctx.fillRect(x0 + (end - m + 1) * bw, top - 3, m * bw, 32); }
+      }
+      wave(raw, 14, P.accent2, w < 480 ? "원래" : "원래 데이터");
+      wave(sc, 62, P.ok, w < 480 ? "스크램블" : "스크램블 후");
+      ctx.fillStyle = P.faint; ctx.font = SB.font(10.5); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("64비트 (빨간 띠 = 같은 비트가 길게 이어진 구간)", x0, 98);
+      var eff = EFF[kind], bwGB = rate * lanes * eff / 8;
+      SB.stat("en-eff", (eff * 100).toFixed(1) + "<small>%</small>");
+      SB.stat("en-bw", SB.fmt(bwGB, 3) + "<small>GB/s</small>");
+      SB.stat("en-run0", run(raw) + "<small>비트</small>");
+      SB.stat("en-run1", run(sc) + "<small>비트</small>");
+    }, { aspect: 0.15, minHeight: 120, maxHeight: 124 });
+    SB.seg("en-k", function (v) { kind = v; cv.redraw(); });
+    SB.seg("en-l", function (v) { lanes = +v; cv.redraw(); });
+    SB.seg("en-p", function (v) { pat = v; cv.redraw(); });
+    SB.range("en-r", function (v) { return v + " GT/s"; }, function (v) { rate = v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 15-7 eye diagram */
+  (function () {
+    var st = { m: "nrz", r: 16, L: 10, n: 8, j: 1, c1: 0, c0: 0 };
+    var OS = 32, NS = 1500, A = 0.4, res = null;
+    function simulate() {
+      var pam = st.m === "pam4", baud = st.r * 1e9 / (pam ? 2 : 1), UI = 1 / baud, fN = baud / 2;
+      var loss = st.L * Math.pow(fN / 8e9, 0.85); // dB at Nyquist
+      var mag = Math.pow(10, -loss / 20), fc = mag >= 0.999 ? fN * 40 : fN / Math.sqrt(1 / mag - 1);
+      var Ts = UI / OS, a = Math.exp(-2 * Math.PI * fc * Ts);
+      var rng = SB.rng(2024), randn = function () { var u = rng() || 1e-9, v = rng(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+      var lev = pam ? [-1, -1 / 3, 1 / 3, 1] : [-1, 1];
+      var sym = []; for (var k = 0; k < NS; k++) sym.push(Math.floor(rng() * lev.length));
+      var pre = st.c0, post = st.c1, main = 1 - Math.abs(pre) - Math.abs(post);
+      var tx = function (k) { var s = function (i) { return i >= 0 && i < NS ? lev[sym[i]] : 0; }; return pre * s(k + 1) + main * s(k) + post * s(k - 1); };
+      // waveform through 2-pole channel
+      var y1 = 0, y2 = 0, wv = new Float32Array(NS * OS);
+      for (var k2 = 0; k2 < NS; k2++) { var x = tx(k2) * A; for (var s2 = 0; s2 < OS; s2++) { y1 = a * y1 + (1 - a) * x; y2 = a * y2 + (1 - a) * y1; wv[k2 * OS + s2] = y2; } }
+      // pulse response
+      var pr = [], q1 = 0, q2 = 0, L = OS * 12;
+      for (var n = 0; n < L; n++) { var xi = n < OS ? A : 0; q1 = a * q1 + (1 - a) * xi; q2 = a * q2 + (1 - a) * q1; pr.push(q2); }
+      // apply FFE to the pulse: pre at -OS, main at 0, post at +OS
+      var prf = []; for (var n2 = 0; n2 < L; n2++) { var v = main * pr[n2]; if (n2 + OS < L) v += pre * pr[n2 + OS]; if (n2 - OS >= 0) v += post * pr[n2 - OS]; prf.push(v); }
+      var pk = 0; for (var n3 = 0; n3 < L; n3++) if (prf[n3] > prf[pk]) pk = n3;
+      var curs = []; for (var m = -2; m <= 5; m++) { var idx = pk + m * OS; curs.push([m, idx >= 0 && idx < L ? prf[idx] : 0]); }
+      // fold into eye: window [pk - OS, pk + OS) relative to symbol start
+      var COLS = 2 * OS, ROWS = 96, VM = A * 1.35;
+      var H = new Uint16Array(COLS * ROWS), vals = [];
+      for (var c = 0; c < COLS; c++) vals.push(lev.map(function () { return { s: 0, ss: 0, n: 0 }; }));
+      var nsg = st.n * 1e-3, jsig = st.j * 1e-12 / Ts;
+      for (var k3 = 4; k3 < NS - 4; k3++) {
+        var d = Math.round(randn() * jsig);
+        var base = k3 * OS + pk - OS + d;
+        for (var c2 = 0; c2 < COLS; c2++) {
+          var ix = base + c2; if (ix < 0 || ix >= wv.length) continue;
+          var vv = wv[ix] + randn() * nsg;
+          var row = Math.floor((VM - vv) / (2 * VM) * ROWS); if (row >= 0 && row < ROWS) H[row * COLS + c2]++;
+          var acc = vals[c2][sym[k3]]; acc.s += vv; acc.ss += vv * vv; acc.n++;
+        }
+      }
+      // metrics per column
+      var bestQ = -1, bestC = OS, bestH = 0, qcol = [];
+      for (var c3 = 0; c3 < COLS; c3++) {
+        var st2 = vals[c3].map(function (o) { var mu = o.s / o.n, sd = Math.sqrt(Math.max(1e-12, o.ss / o.n - mu * mu)); return [mu, sd]; });
+        var qmin = 1e9, hmin = 1e9;
+        for (var e = 0; e < st2.length - 1; e++) { var lo = st2[e], hi = st2[e + 1]; var q = (hi[0] - lo[0]) / (hi[1] + lo[1]); if (q < qmin) qmin = q; var hh = (hi[0] - 3 * hi[1]) - (lo[0] + 3 * lo[1]); if (hh < hmin) hmin = hh; }
+        qcol.push(qmin);
+        if (qmin > bestQ) { bestQ = qmin; bestC = c3; bestH = hmin; }
+      }
+      var wcnt = qcol.filter(function (q) { return q >= 3; }).length;
+      var ber = 0.5 * SB.erfc(Math.max(0, bestQ) / Math.SQRT2) * (pam ? 0.75 : 1);
+      if (bestQ > 9) ber = 0.5 * Math.exp(-bestQ * bestQ / 2) / (bestQ * Math.sqrt(2 * Math.PI)) * (pam ? 0.75 : 1);
+      return { H: H, COLS: COLS, ROWS: ROWS, VM: VM, curs: curs, bestC: bestC, bestQ: bestQ, eyeH: bestH, eyeW: wcnt / OS, ber: ber, fN: fN, loss: loss, lev: lev, pam: pam };
+    }
+    var cv = SB.canvas("#cv-eye", function (ctx, w, h) {
+      if (!res) return;
+      var box = { x: 46, y: 10, w: w - 46 - 10, h: h - 10 - 26 };
+      var cw = box.w / res.COLS, rh = box.h / res.ROWS, mx = 0;
+      for (var i = 0; i < res.H.length; i++) if (res.H[i] > mx) mx = res.H[i];
+      var col = SOC.rgb(P.accent2), lm = Math.log(1 + mx);
+      ctx.fillStyle = SB.isDark() ? "#0a0e16" : "#0f1420"; ctx.fillRect(box.x, box.y, box.w, box.h);
+      for (var r = 0; r < res.ROWS; r++) for (var c = 0; c < res.COLS; c++) {
+        var v = res.H[r * res.COLS + c]; if (!v) continue;
+        var t = Math.log(1 + v) / lm;
+        var rr = Math.round(SB.lerp(col[0] * 0.5, 255, t * t)), gg = Math.round(SB.lerp(col[1] * 0.5, 240, t * t)), bb = Math.round(SB.lerp(col[2] * 0.6, 160, t * t));
+        ctx.fillStyle = "rgba(" + rr + "," + gg + "," + bb + "," + Math.min(1, 0.25 + t) + ")";
+        ctx.fillRect(box.x + c * cw, box.y + r * rh, cw + 0.6, rh + 0.6);
+      }
+      // grid/labels
+      ctx.strokeStyle = "rgba(255,255,255,.12)"; ctx.lineWidth = 1;
+      [0.25, 0.5, 0.75].forEach(function (f) { ctx.beginPath(); ctx.moveTo(box.x + box.w * f, box.y); ctx.lineTo(box.x + box.w * f, box.y + box.h); ctx.stroke(); });
+      ctx.beginPath(); ctx.moveTo(box.x, box.y + box.h / 2); ctx.lineTo(box.x + box.w, box.y + box.h / 2); ctx.stroke();
+      // best sampling point
+      var xs = box.x + (res.bestC + 0.5) * cw;
+      ctx.strokeStyle = SOC.alpha(P.warn, 0.9); ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(xs, box.y); ctx.lineTo(xs, box.y + box.h); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, true); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      [-400, 0, 400].forEach(function (mv) { ctx.fillText(mv, box.x - 5, box.y + box.h * (0.5 - mv / 1000 / (2 * res.VM))); });
+      ctx.textAlign = "center"; ctx.textBaseline = "top";
+      ctx.fillText("0", box.x, box.y + box.h + 6); ctx.fillText("1 UI", box.x + box.w / 2, box.y + box.h + 6); ctx.fillText("2 UI", box.x + box.w - 10, box.y + box.h + 6);
+      ctx.save(); ctx.translate(12, box.y + box.h / 2); ctx.rotate(-Math.PI / 2); ctx.fillText("mV", 0, -4); ctx.restore();
+    }, { aspect: 0.62, minHeight: 260, maxHeight: 420 });
+    var pc = SB.canvas("#cv-pulse", function (ctx, w, h) {
+      if (!res) return;
+      var box = { x: 46, y: 22, w: w - 46 - 14, h: h - 22 - 24 };
+      var cs = res.curs, n = cs.length, bw = box.w / n;
+      var mxv = Math.max.apply(null, cs.map(function (c) { return Math.abs(c[1]); })) || 1;
+      var Y = function (v) { return box.y + box.h * 0.75 - v / mxv * box.h * 0.7; };
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(box.x, Y(0)); ctx.lineTo(box.x + box.w, Y(0)); ctx.stroke();
+      ctx.fillStyle = P.faint; ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("펄스 응답 커서 (UI 간격)", box.x, 4);
+      cs.forEach(function (c, i) {
+        var x = box.x + i * bw + bw * 0.2, ww = bw * 0.6, y0 = Y(0), y1 = Y(c[1]);
+        ctx.fillStyle = c[0] === 0 ? P.accent2 : Math.abs(c[1]) / mxv > 0.1 ? P.bad : P.dim;
+        ctx.fillRect(x, Math.min(y0, y1), ww, Math.max(1, Math.abs(y1 - y0)));
+        ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, true); ctx.textAlign = "center"; ctx.textBaseline = "top";
+        ctx.fillText("h" + (c[0] < 0 ? "₋" + (-c[0]) : c[0]), x + ww / 2, box.y + box.h + 4);
+        if (bw > 40) { ctx.textBaseline = "bottom"; ctx.fillStyle = P.text; ctx.fillText(Math.round(c[1] * 1000), x + ww / 2, Math.min(y0, y1) - 2); }
+      });
+    }, { aspect: 0.2, minHeight: 130, maxHeight: 160 });
+    function run() {
+      res = simulate(); cv.redraw(); pc.redraw();
+      SB.stat("ey-nq", (res.fN / 1e9).toFixed(1) + " GHz · −" + res.loss.toFixed(1) + " dB");
+      var eh = res.eyeH * 1000;
+      SB.stat("ey-h", eh > 0 ? Math.round(eh) + "<small>mV</small>" : '<span class="io-warn">닫힘</span>');
+      SB.stat("ey-w", res.eyeW > 0 ? (res.eyeW * 100).toFixed(0) + "<small>% UI</small>" : '<span class="io-warn">0</span>');
+      var b = res.ber;
+      SB.stat("ey-ber", b < 1e-30 ? "&lt; 10<sup>−30</sup>" : b < 1e-12 ? '<span class="io-good">' + b.toExponential(0).replace("e", "×10<sup>") + "</sup></span>" : b > 1e-3 ? '<span class="io-warn">' + b.toExponential(1).replace("e", "×10<sup>") + "</sup></span>" : b.toExponential(1).replace("e", "×10<sup>") + "</sup>");
+    }
+    var rerun = SB.debounce(run, 50);
+    SB.seg("ey-m", function (v) { st.m = v; run(); });
+    SB.range("ey-r", function (v) { return v + " Gb/s"; }, function (v) { st.r = v; rerun(); });
+    SB.range("ey-l", function (v) { return v + " dB"; }, function (v) { st.L = v; rerun(); });
+    SB.range("ey-n", function (v) { return v + " mV"; }, function (v) { st.n = v; rerun(); });
+    SB.range("ey-j", function (v) { return v.toFixed(1) + " ps"; }, function (v) { st.j = v; rerun(); });
+    SB.range("ey-c1", function (v) { return v.toFixed(2); }, function (v) { st.c1 = v; rerun(); });
+    SB.range("ey-c0", function (v) { return v.toFixed(2); }, function (v) { st.c0 = v; rerun(); });
+    run();
+  })();
+})();
+</script>
+</body>
+</html>

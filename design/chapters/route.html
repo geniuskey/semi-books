@@ -1,0 +1,525 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and DesignBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "배치된 셀 사이를 금속으로 잇는 배선. 금속 스택과 선호 방향, 전역·상세 배선, Lee 미로 탐색과 A*, 여러 넷의 순서 문제와 협상 기반 립업·리라우트, 혼잡도와 배선 규칙을 시뮬레이터로 익힌다."}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>배선 · DesignBook</title>
+<meta name="description" content="배치된 셀 사이를 금속으로 잇는 배선. 금속 스택과 선호 방향, 전역·상세 배선, Lee 미로 탐색과 A*, 여러 넷의 순서 문제와 협상 기반 립업·리라우트, 혼잡도와 배선 규칙을 시뮬레이터로 익힌다.">
+<link rel="canonical" href="https://semi.euiyun.com/design/chapters/route.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#6d3fd1">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="DesignBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="배선 · DesignBook">
+<meta property="og:description" content="배치된 셀 사이를 금속으로 잇는 배선. 금속 스택과 선호 방향, 전역·상세 배선, Lee 미로 탐색과 A*, 여러 넷의 순서 문제와 협상 기반 립업·리라우트, 혼잡도와 배선 규칙을 시뮬레이터로 익힌다.">
+<meta property="og:url" content="https://semi.euiyun.com/design/chapters/route.html">
+<meta property="og:image" content="https://semi.euiyun.com/design/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/design/chapters/route.html#chapter","name":"배선","headline":"배선 · DesignBook","description":"배치된 셀 사이를 금속으로 잇는 배선. 금속 스택과 선호 방향, 전역·상세 배선, Lee 미로 탐색과 A*, 여러 넷의 순서 문제와 협상 기반 립업·리라우트, 혼잡도와 배선 규칙을 시뮬레이터로 익힌다.","url":"https://semi.euiyun.com/design/chapters/route.html","position":7,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/design/og.png","dateModified":"2026-10-02","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/design/#book","name":"DesignBook · 반도체 설계 교과서","url":"https://semi.euiyun.com/design/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"DesignBook","item":"https://semi.euiyun.com/design/"},{"@type":"ListItem","position":2,"name":"7. 배선","item":"https://semi.euiyun.com/design/chapters/route.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<!--head:end-->
+<style>
+  .grid-cv { touch-action: none; cursor: crosshair; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="design"></script>
+</head>
+<body data-chapter="route">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 07</div>
+    <h1>배선</h1>
+    <p class="lead">배치가 끝나면 셀 핀 수천만 개 사이를 실제 금속선으로 이어야 한다. 배선기<span class="en">(Router)</span>는 10~15층의 금속 위에서, 각 층에 정해진 방향과 피치를 지키며, 서로 단락되지 않게, 그리고 타이밍과 혼잡을 생각하며 길을 찾는다. 칩 면적을 결정하는 것은 트랜지스터가 아니라 배선 자원인 경우가 많다. 이 장에서는 배선기가 길을 찾는 알고리즘을 직접 돌려 본다.</p>
+    <ul class="objectives">
+      <li>금속 스택의 구성(로컬·중간·전역 층)과 층마다 선호 방향·피치가 다른 이유를 설명한다.</li>
+      <li>전역 배선(GCell, 용량·수요)과 상세 배선(트랙, 설계 규칙)의 역할을 구분한다.</li>
+      <li>Lee 미로 탐색으로 최단 경로를 찾고, 비아 비용과 A* 휴리스틱의 효과를 확인한다.</li>
+      <li>넷 순서 문제와 협상 기반 립업·리라우트(PathFinder)가 혼잡을 푸는 원리를 이해한다.</li>
+      <li>배선 규칙(간격, 비아, 멀티 패터닝 색, 안테나)과 기생 추출로 이어지는 흐름을 안다.</li>
+    </ul>
+  </header>
+
+  <section id="stack">
+    <h2>금속 스택: 층마다 다른 역할</h2>
+    <p>트랜지스터 위에는 텅스텐 콘택, 그 위로 구리(최하층은 코발트·루테늄도 쓴다) 배선층이 쌓인다. 아래층은 가늘고 촘촘해 셀 안·셀 사이 짧은 연결에, 위층은 두껍고 성겨 긴 신호·클럭·전원에 쓴다. 층마다 <strong>선호 방향</strong>이 수평·수직으로 번갈아 정해져 있어, 한 층 안에서는 같은 방향의 선만 촘촘히 깔고 방향을 바꿀 때는 비아로 위아래 층을 오간다. 단면 공정은 <a href="/process/chapters/metal.html">ProcessBook 11장(듀얼 다마신)</a>에서 다룬다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 300" role="img" aria-label="금속 스택 단면">
+        <rect x="40" y="250" width="700" height="30" class="m-si"/>
+        <g class="m-cu">
+          <rect x="70" y="230" width="14" height="10"/><rect x="100" y="230" width="14" height="10"/><rect x="130" y="230" width="14" height="10"/><rect x="160" y="230" width="14" height="10"/><rect x="190" y="230" width="14" height="10"/><rect x="220" y="230" width="14" height="10"/><rect x="250" y="230" width="14" height="10"/><rect x="280" y="230" width="14" height="10"/>
+          <rect x="70" y="206" width="250" height="10"/>
+          <rect x="70" y="182" width="14" height="10"/><rect x="100" y="182" width="14" height="10"/><rect x="130" y="182" width="14" height="10"/><rect x="160" y="182" width="14" height="10"/><rect x="190" y="182" width="14" height="10"/><rect x="220" y="182" width="14" height="10"/>
+          <rect x="70" y="140" width="28" height="22"/><rect x="130" y="140" width="28" height="22"/><rect x="190" y="140" width="28" height="22"/><rect x="250" y="140" width="28" height="22"/>
+          <rect x="70" y="100" width="260" height="22"/>
+          <rect x="70" y="30" width="80" height="45"/><rect x="200" y="30" width="80" height="45"/>
+        </g>
+        <g class="m-w"><rect x="74" y="240" width="6" height="10"/><rect x="134" y="240" width="6" height="10"/></g>
+        <g class="lbl-dim">
+          <text x="360" y="240">M1 · M3 (수평, 피치 ~140 nm in EDU45)</text>
+          <text x="360" y="215">M2 (수직) — 로컬: 셀 안 · 이웃 셀</text>
+          <text x="360" y="190">M3~M5 중간층: 블록 안 신호</text>
+          <text x="360" y="155">M6~M9 (2× 두께·피치): 블록 사이 신호, 클럭</text>
+          <text x="360" y="115">M10~M11 (4×): 긴 전역 신호, 클럭 스파인</text>
+          <text x="360" y="58">최상층 (10×, 두께 수 µm): 전원망, 범프 재배선</text>
+        </g>
+        <path d="M340 245 V20" stroke="var(--border)"/>
+        <text x="44" y="296" class="lbl-dim">실리콘 · 트랜지스터 (FEOL)</text>
+      </svg>
+      <figcaption><b>그림 07-1.</b> 금속 스택(개념도, 축척 아님). 위로 갈수록 두께와 피치가 커져 단위 길이 저항이 작아진다. 전원망은 가장 두꺼운 위층에서 내려와 표준 셀 행의 M1 레일까지 비아 기둥으로 이어진다(9장). 후면 전력 공급(BSPDN)에서는 전원망이 웨이퍼 뒤쪽으로 옮겨 간다(<a href="/process/chapters/advanced.html">ProcessBook 13장</a>).</figcaption>
+    </figure>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>층 묶음</th><th>피치 (대략)</th><th>단위 저항</th><th>단위 커패시턴스</th><th>쓰임</th></tr></thead>
+        <tbody>
+          <tr><td>로컬 (M1~M2, 첨단 공정)</td><td class="num">~20~40 nm</td><td class="num">수십~수백 Ω/µm</td><td class="num">~0.2 fF/µm</td><td>셀 안, 핀 접근</td></tr>
+          <tr><td>로컬 (EDU45 M1~M2)</td><td class="num">140 nm</td><td class="num">~1.2 Ω/µm</td><td class="num">~0.2 fF/µm</td><td>셀 안, 이웃 셀</td></tr>
+          <tr><td>중간 (2×)</td><td class="num">~2× 기준</td><td class="num">~0.25 Ω/µm</td><td class="num">~0.2 fF/µm</td><td>블록 안 수백 µm</td></tr>
+          <tr><td>전역 (4~10×)</td><td class="num">~0.5~수 µm</td><td class="num">~0.02 Ω/µm</td><td class="num">~0.25 fF/µm</td><td>mm급 신호, 클럭, 전원</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>커패시턴스가 층에 거의 무관한 것이 흥미롭다. 선이 넓어지면 아래층과의 면적 커패시턴스는 늘지만 간격도 넓어져 옆 선과의 결합이 줄기 때문이다. 그래서 긴 배선의 RC 지연을 줄이는 열쇠는 저항, 즉 <strong>층 선택</strong>이다(8장 리피터 시뮬레이터에서 확인).</p>
+  </section>
+
+  <section id="global">
+    <h2>전역 배선과 상세 배선</h2>
+    <p>수천만 넷을 한 번에 트랙 단위로 풀 수는 없다. 배선은 두 단계로 나뉜다.</p>
+    <ul>
+      <li><strong>전역 배선</strong><span class="en">(Global routing)</span>: 칩을 수 µm 크기의 <span class="term">GCell</span> 격자로 나누고, 각 넷이 어느 GCell들을 지날지만 정한다. GCell 경계마다 지날 수 있는 트랙 수(용량)가 있고, 지나는 넷 수(수요)가 용량을 넘으면 <strong>오버플로</strong>다.</li>
+      <li><strong>상세 배선</strong><span class="en">(Detailed routing)</span>: 전역 경로가 지정한 GCell 안에서 실제 트랙·비아 위치를 정하고, 폭·간격·비아 둘러싸기·멀티 패터닝 색 등 모든 설계 규칙을 지킨다. 끝에 남은 규칙 위반을 고치는 수리(search-and-repair) 단계가 길다.</li>
+    </ul>
+    <p>두 단계 모두 핵심은 “장애물을 피해 두 점을 잇는 최소 비용 경로”라는 그래프 탐색이다. 가장 오래되고 확실한 방법부터 보자.</p>
+  </section>
+
+  <section id="lee">
+    <h2>Lee 알고리즘: 물결처럼 퍼지는 탐색</h2>
+    <p>1961년 C. Y. Lee가 제안한 <span class="term">미로 배선</span><span class="en">(Maze routing)</span>은 격자 위 너비 우선 탐색이다. 출발 칸에 0을 쓰고, 이웃한 빈 칸에 1, 그 이웃에 2… 하고 물결이 퍼지듯 번호를 매기다가 도착 칸에 닿으면, 번호가 1씩 작아지는 방향으로 거꾸로 따라가며 경로를 그린다(역추적). 길이 있으면 반드시 최단 경로를 찾는다는 것이 장점이고, 탐색 칸이 많아 느리다는 것이 단점이다. 비용을 칸마다 다르게 주면(층 바꿈·혼잡) 다익스트라가 되고, 목표까지의 맨해튼 거리를 더해 탐색 순서를 정하면 <strong>A*</strong>가 된다.</p>
+    <div class="sim" id="sim-lee">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>미로 배선기: 파면 확장과 역추적</h3>
+        <div class="seg" id="lee-alg"><button data-value="bfs" class="on">Lee (BFS)</button><button data-value="astar">A*</button></div>
+      </div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="lee-cv" class="grid-cv"></canvas><span class="hint">끌어서 장애물 그리기 · S/T 끌어 옮기기</span></div>
+        <div class="sim-controls">
+          <label class="check"><input type="checkbox" id="lee-2l"> 2층 모드 (M2 수직 · M3 수평, 층 바꿈 = 비아)</label>
+          <label class="ctrl"><span>비아 비용 <output id="lee-v-out"></output></span><input type="range" id="lee-v" min="1" max="20" step="1" value="4"></label>
+          <label class="ctrl"><span>애니메이션 속도 <output id="lee-sp-out"></output></span><input type="range" id="lee-sp" min="1" max="60" step="1" value="12"></label>
+          <div class="ctrl-row"><button class="btn primary sm" id="lee-go">배선 시작</button><button class="btn sm" id="lee-clr">장애물 지우기</button><button class="btn sm" id="lee-maze">무작위 장애물</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">탐색한 칸</span><span class="v" id="lee-o-e">—</span></div>
+        <div class="stat"><span class="k">경로 길이</span><span class="v" id="lee-o-l">—</span></div>
+        <div class="stat"><span class="k">비아 수</span><span class="v" id="lee-o-v">—</span></div>
+        <div class="stat"><span class="k">경로 비용</span><span class="v" id="lee-o-c">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① Lee로 한 번, A*로 한 번 돌려 <b>탐색한 칸</b> 수를 비교하자. 경로 길이는 같지만 A*는 목표 쪽으로만 파면을 뻗는다. ② 장애물로 ㄷ자 함정을 만들면 A*도 함정 안을 다 훑은 뒤에야 빠져나온다. 휴리스틱은 보장이 아니라 힌트다. ③ <b>2층 모드</b>에서 한 층은 수직, 다른 층은 수평으로만 움직일 수 있다. 방향을 바꿀 때마다 비아가 생기므로 비아 비용을 높이면 꺾임이 적은 경로를 고른다. 비아는 저항이 크고 불량 확률이 있어 실제 배선기도 비용을 준다(중요 넷에는 비아를 두 개씩 박는 더블 비아). (셀 = 트랙 하나)</div>
+    </div>
+  </section>
+
+  <section id="multi">
+    <h2>여러 넷: 순서의 문제와 협상</h2>
+    <p>넷 하나는 미로 탐색으로 최적으로 풀린다. 문제는 넷이 여럿일 때다. 먼저 배선한 넷이 가장 짧은 길을 차지하면 나중 넷은 막혀 돌아가거나 아예 실패한다. 어떤 순서가 좋은지 미리 알 수 없고, 넷 수가 많으면 순서를 모두 시도할 수도 없다.</p>
+    <p>현대 배선기의 해법은 <strong>겹침을 일단 허용하고 값을 올리는 것</strong>이다. FPGA 배선을 위해 1995년 McMurchie·Ebeling이 제안한 <span class="term">PathFinder</span>(협상 기반 혼잡 제거)는 모든 넷을 겹쳐도 되도록 배선한 뒤, 여러 넷이 함께 쓰는 칸의 비용을 올리고, 모든 넷을 뜯어(립업) 다시 배선한다. 이를 반복하면 꼭 그 칸이 필요한 넷만 남고 나머지는 스스로 비켜 간다.</p>
+    <div class="formula">$$\text{cost}(n) = \big(b_n + h_n\big)\cdot p_n,\qquad p_n = 1 + p_{\text{fac}}\cdot \max(0,\ \text{occ}_n + 1 - \text{cap}_n),\qquad h_n \mathrel{+}= h_{\text{fac}}\cdot \text{overuse}_n$$
+      <div class="where">\(b_n\) 기본 비용, \(p_n\) 현재 혼잡 벌점(이번 반복), \(h_n\) 혼잡 이력(반복마다 누적). 이력이 쌓인 칸은 “늘 붐비는 곳”으로 기억되어 점점 피하게 된다.</div>
+    </div>
+    <div class="sim" id="sim-pf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>순차 배선 vs 협상 기반 립업·리라우트</h3>
+        <div class="seg" id="pf-mode"><button data-value="seq" class="on">순차 (겹침 금지)</button><button data-value="pf">PathFinder</button></div>
+      </div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pf-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>넷 수 <output id="pf-n-out"></output></span><input type="range" id="pf-n" min="3" max="14" step="1" value="8"></label>
+          <div class="ctrl"><span>순차 배선 순서</span><div class="seg" id="pf-ord"><button data-value="id" class="on">번호순</button><button data-value="short">짧은 넷 먼저</button><button data-value="long">긴 넷 먼저</button><button data-value="rand">무작위</button></div></div>
+          <div class="ctrl-row"><button class="btn primary sm" id="pf-go">배선</button><button class="btn sm" id="pf-step">PathFinder 한 번 반복</button><button class="btn sm" id="pf-new">새 문제</button></div>
+          <div class="info-box" id="pf-info" style="min-height:4.5em"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">완료한 넷</span><span class="v" id="pf-o-d">—</span></div>
+        <div class="stat"><span class="k">겹친 칸 (오버플로)</span><span class="v" id="pf-o-o">—</span></div>
+        <div class="stat"><span class="k">총 배선 길이</span><span class="v" id="pf-o-l">—</span></div>
+        <div class="stat"><span class="k">반복</span><span class="v" id="pf-o-i">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 순차 모드에서 순서를 바꿔 가며 배선해 보자. 같은 문제가 순서에 따라 풀리기도 하고 실패하기도 한다(빨간 점선 = 실패한 넷의 핀). ② PathFinder로 바꾸고 <b>배선</b>을 누르면 처음엔 많은 칸이 겹친다(빨강). <b>한 번 반복</b>을 누를 때마다 겹친 칸의 값이 올라 넷들이 흩어지고, 몇 번 만에 겹침이 0이 된다. ③ 대가는 약간 늘어난 총 길이다. 혼잡 해소는 길이를 조금 내주고 실패를 없애는 거래다. (격자 22 × 16, 칸마다 용량 1, 2핀 넷)</div>
+    </div>
+  </section>
+
+  <section id="congest">
+    <h2>혼잡도 지도</h2>
+    <p>전역 배선이 끝나면 GCell마다 수요/용량 비를 칠한 <strong>혼잡도 지도</strong>를 본다. 붉은 곳이 넓게 퍼져 있으면 상세 배선에서 규칙 위반과 우회가 폭발하고, 타이밍도 무너진다. 원인은 대개 배치에 있다. 셀이 너무 빽빽하거나(이용률), 핀이 많은 셀(MUX, 플립플롭, 큰 AOI)이 모여 있거나, 매크로 사이 좁은 통로로 많은 넷이 지나가는 경우다. 그래서 배치기는 혼잡을 예측해 셀을 흩고(혼잡 인지 배치, 5장), 설계자는 매크로 배치와 이용률을 조정한다.</p>
+    <div class="sim" id="sim-cg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>배치 밀도 → 전역 배선 혼잡도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cg-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>평균 이용률 <output id="cg-u-out"></output></span><input type="range" id="cg-u" min="0.4" max="0.95" step="0.01" value="0.7"></label>
+          <label class="ctrl"><span>핫스팟 세기 (핀 밀집) <output id="cg-h-out"></output></span><input type="range" id="cg-h" min="0" max="1" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span>배선층 수 (용량) <output id="cg-l-out"></output></span><input type="range" id="cg-l" min="4" max="12" step="1" value="6"></label>
+          <label class="check"><input type="checkbox" id="cg-mac" checked> 가운데 매크로 두 개 (좁은 통로)</label>
+          <button class="btn sm" id="cg-new">새 배치</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최대 수요/용량</span><span class="v" id="cg-o-m">—</span></div>
+        <div class="stat"><span class="k">오버플로 GCell</span><span class="v" id="cg-o-o">—</span></div>
+        <div class="stat"><span class="k">총 오버플로</span><span class="v" id="cg-o-t">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 이용률을 0.85 이상으로 올리면 오버플로가 급증한다. 셀 면적은 몇 %만 늘었는데 배선은 실패한다. ② 매크로 사이 통로에 수요가 몰리는 것을 확인하자. 매크로 주위에 배치 금지 띠(halo)를 두는 이유다. ③ 층을 늘리면 용량이 늘어 혼잡이 풀리지만 금속층 하나는 마스크 2~3장과 공정 수십 단계다(12장). 배선층 수는 칩 원가와 바로 연결된다. (32 × 32 GCell. 넷 수요는 셀 밀도·핀 밀도에서, 각 넷을 L자 두 경로로 반씩 나눠 확률적으로 배분한 교육용 모델)</div>
+    </div>
+  </section>
+
+  <section id="rules">
+    <h2>배선 규칙과 그다음</h2>
+    <p>상세 배선기가 지켜야 하는 규칙은 공정 세대마다 늘어났다. 대표적인 것들과 그 공정적 이유는 다음과 같다(자세한 검사는 10장).</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>규칙</th><th>내용</th><th>공정 쪽 이유</th></tr></thead>
+        <tbody>
+          <tr><td>최소 폭·간격</td><td>트랙 피치 = 폭 + 간격</td><td>노광 해상도, 구리 CMP 잔류물에 의한 단락 (<a href="/process/chapters/cmp.html">PB 10장</a>)</td></tr>
+          <tr><td>넓은 선 간격</td><td>폭이 넓은 선 옆은 간격을 더 넓게</td><td>CMP 디싱, 패턴 밀도</td></tr>
+          <tr><td>선 끝 간격 (EOL)</td><td>선 끝과 옆 선 사이 간격 강화</td><td>선 끝 후퇴·둥글림 (11장 OPC)</td></tr>
+          <tr><td>비아 둘러싸기·더블 비아</td><td>비아 주위 금속 여유, 중요 넷은 비아 2개</td><td>오버레이 오차, 비아 불량 확률</td></tr>
+          <tr><td>멀티 패터닝 색</td><td>같은 마스크(색) 선끼리 더 넓은 간격</td><td>LELE·SADP로 한 층을 2~4장 마스크로 (<a href="/process/chapters/resist.html">PB 5장</a>)</td></tr>
+          <tr><td>안테나 비율</td><td>게이트에 연결된 금속 면적/게이트 면적 제한</td><td>플라즈마 식각 중 전하가 쌓여 게이트 절연막 손상 (<a href="/process/chapters/etch.html">PB 6장</a>)</td></tr>
+          <tr><td>최소 면적·밀도</td><td>작은 금속 조각 금지, 창마다 밀도 범위</td><td>CMP 균일도, 더미 필 (<a href="/process/chapters/cmp.html">PB 10장</a>)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>배선이 끝나면 실제 금속 모양에서 저항·커패시턴스를 계산하는 <strong>기생 추출</strong>(SPEF 파일)을 하고, 그 값으로 타이밍을 다시 계산한다(<a href="timing.html">8장</a>). 결합 커패시턴스가 큰 민감한 넷(클럭, 비동기 리셋)은 양옆에 접지선을 깔아 차폐하거나 간격을 두 배로 넓히는 비기본 규칙(NDR)으로 배선한다.</p>
+  </section>
+
+  <section id="go-arcade" data-nonum><h2>직접 배선해 보기</h2>
+    <div class="callout tip"><strong>도전 과제</strong><p>한 층에서 교차 없이 모든 넷을 잇는 <a href="arcade.html#g-route">15장 배선 퍼즐</a>을 풀어 보자. 순서 문제를 손으로 겪을 수 있다.</p></div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>금속층은 위로 갈수록 두껍고 성글며, 층마다 선호 방향이 번갈아 있고 방향을 바꿀 때 비아를 쓴다.</li>
+      <li>전역 배선은 GCell 단위로 경로와 혼잡을 정하고, 상세 배선은 트랙 위에서 모든 규칙을 지킨다.</li>
+      <li>Lee 알고리즘은 너비 우선 파면 확장으로 최단 경로를 보장한다. 비용을 주면 다익스트라, 거리 휴리스틱을 더하면 A*.</li>
+      <li>여러 넷은 순서에 따라 결과가 달라진다. PathFinder는 겹침을 허용하고 혼잡 비용을 올려 반복하며 푼다.</li>
+      <li>혼잡의 원인은 대개 배치(이용률, 핀 밀집, 매크로 통로)에 있다. 층을 늘리는 해법은 마스크 비용으로 돌아온다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Lee 알고리즘의 가장 큰 장점은?</p><div class="opts">
+        <button class="opt">탐색하는 칸이 가장 적다</button><button class="opt" data-correct>경로가 존재하면 반드시 최단 경로를 찾는다</button><button class="opt">여러 넷을 동시에 최적으로 배선한다</button><button class="opt">비아를 쓰지 않는다</button>
+      </div><div class="quiz-exp">너비 우선 탐색이므로 처음 도착한 순간의 거리가 최단 거리다. 대신 탐색 칸이 많아 느리다.</div></div>
+      <div class="quiz-q"><p>PathFinder 방식에서 반복마다 누적되는 '이력 비용'의 역할은?</p><div class="opts">
+        <button class="opt">경로 길이를 줄인다</button><button class="opt" data-correct>늘 붐비던 칸을 기억해 점점 그 칸을 피하게 만든다</button><button class="opt">비아 수를 0으로 만든다</button><button class="opt">넷 순서를 정한다</button>
+      </div><div class="quiz-exp">현재 혼잡 벌점만 쓰면 넷들이 같은 칸을 번갈아 차지하며 진동할 수 있다. 이력이 쌓이면 그 칸을 꼭 필요로 하는 넷만 남는다.</div></div>
+      <div class="quiz-q"><p>긴 전역 신호를 위층 두꺼운 금속으로 보내는 주된 이유는?</p><div class="opts">
+        <button class="opt">커패시턴스가 훨씬 작아서</button><button class="opt" data-correct>단위 길이 저항이 훨씬 작아 RC 지연이 줄어서</button><button class="opt">비아가 필요 없어서</button><button class="opt">노광이 쉬워서</button>
+      </div><div class="quiz-exp">층별 커패시턴스는 비슷하다. 단면적이 큰 위층은 저항이 수십 배 작다.</div></div>
+      <div class="quiz-q"><p>안테나 규칙이 막으려는 공정 문제는?</p><div class="opts">
+        <button class="opt">구리 CMP 디싱</button><button class="opt">노광 초점 이탈</button><button class="opt" data-correct>플라즈마 식각 중 긴 금속에 모인 전하가 게이트 절연막을 손상시키는 것</button><button class="opt">전자 이동</button>
+      </div><div class="quiz-exp">게이트에만 연결된 금속은 아직 확산(방전 경로)과 이어지지 않아, 금속이 넓을수록 모은 전하가 얇은 게이트 절연막으로 흐른다. 다이오드를 달거나 위층으로 점프해 해결한다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  function small(v, u) { return v + "<small>" + u + "</small>"; }
+
+  /* ---------------- 1. Lee / A* */
+  (function () {
+    var GW = 30, GH = 20, blk = new Uint8Array(GW * GH), S = [3, 10], T = [26, 9], cv, alg = "bfs";
+    var st = null, tr = null, two = document.getElementById("lee-2l");
+    var gV = PB.range("lee-v", function (v) { return v; }, function () { });
+    var gSp = PB.range("lee-sp", function (v) { return v + " 칸/프레임"; });
+    PB.seg("lee-alg", function (v) { alg = v; st = null; cv.redraw(); });
+    two.addEventListener("change", function () { st = null; cv.redraw(); });
+    function wall() { for (var y = 3; y < 17; y++) blk[y * GW + 14] = 1; for (var x = 8; x < 14; x++) blk[16 * GW + x] = 1; for (var x2 = 18; x2 < 24; x2++) blk[4 * GW + x2] = 1; }
+    wall();
+    document.getElementById("lee-clr").addEventListener("click", function () { blk.fill(0); st = null; cv.redraw(); });
+    document.getElementById("lee-maze").addEventListener("click", function () { blk.fill(0); for (var i = 0; i < GW * GH * 0.28; i++) blk[Math.floor(Math.random() * GW * GH)] = 1; blk[S[1] * GW + S[0]] = 0; blk[T[1] * GW + T[0]] = 0; st = null; cv.redraw(); });
+    document.getElementById("lee-go").addEventListener("click", start);
+    // 상태: 노드 = (층, x, y). 1층 모드는 층 0만.
+    function start() {
+      var L = two.checked ? 2 : 1, N = GW * GH * L, dist = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), done = new Uint8Array(N);
+      var open = [];
+      for (var l = 0; l < L; l++) { var s = l * GW * GH + S[1] * GW + S[0]; dist[s] = 0; open.push(s); }
+      st = { L: L, dist: dist, prev: prev, done: done, open: open, path: null, exp: 0, vc: gV(), fin: false };
+    }
+    function h(k) { var c = k % (GW * GH), x = c % GW, y = (c / GW) | 0; return Math.abs(x - T[0]) + Math.abs(y - T[1]); }
+    function step(n) {
+      if (!st || st.fin) return;
+      for (var it = 0; it < n; it++) {
+        if (!st.open.length) { st.fin = true; return; }
+        // 최소 우선순위 (작은 격자라 선형 탐색)
+        var bi = 0, bv = Infinity;
+        for (var i = 0; i < st.open.length; i++) { var k0 = st.open[i], v = st.dist[k0] + (alg === "astar" ? h(k0) * 1.0001 : 0); if (v < bv) { bv = v; bi = i; } }
+        var k = st.open[bi]; st.open[bi] = st.open[st.open.length - 1]; st.open.pop();
+        if (st.done[k]) continue;
+        st.done[k] = 1; st.exp++;
+        var c = k % (GW * GH), l = (k / (GW * GH)) | 0, x = c % GW, y = (c / GW) | 0;
+        if (x === T[0] && y === T[1]) { var p = [], q = k; while (q >= 0) { p.push(q); q = st.prev[q]; } st.path = p.reverse(); st.fin = true; return; }
+        var nb = [];
+        var horiz = st.L === 1 || l === 1, vert = st.L === 1 || l === 0;
+        if (horiz) { nb.push([x - 1, y, l, 1]); nb.push([x + 1, y, l, 1]); }
+        if (vert) { nb.push([x, y - 1, l, 1]); nb.push([x, y + 1, l, 1]); }
+        if (st.L === 2) nb.push([x, y, 1 - l, st.vc]);
+        nb.forEach(function (t) {
+          if (t[0] < 0 || t[1] < 0 || t[0] >= GW || t[1] >= GH || blk[t[1] * GW + t[0]]) return;
+          var kk = t[2] * GW * GH + t[1] * GW + t[0]; if (st.done[kk]) return;
+          var nd = st.dist[k] + t[3];
+          if (nd < st.dist[kk]) { st.dist[kk] = nd; st.prev[kk] = k; st.open.push(kk); }
+        });
+      }
+    }
+    cv = PB.canvas("#lee-cv", function (ctx, w, h) {
+      var P = PB.palette(), cs = Math.min((w - 10) / GW, (h - 10) / GH), ox = (w - cs * GW) / 2, oy = (h - cs * GH) / 2;
+      tr = { cs: cs, ox: ox, oy: oy };
+      ctx.fillStyle = P.surface; ctx.fillRect(ox, oy, cs * GW, cs * GH);
+      var maxd = 1;
+      if (st) for (var i = 0; i < st.done.length; i++) if (st.done[i] && isFinite(st.dist[i])) maxd = Math.max(maxd, st.dist[i]);
+      for (var y = 0; y < GH; y++) for (var x = 0; x < GW; x++) {
+        var c = y * GW + x, X = ox + x * cs, Y = oy + y * cs;
+        if (blk[c]) { ctx.fillStyle = P.dim; ctx.fillRect(X + 0.5, Y + 0.5, cs - 1, cs - 1); continue; }
+        if (st) {
+          var d = Infinity, any = false;
+          for (var l = 0; l < st.L; l++) { var k = l * GW * GH + c; if (st.done[k]) { any = true; d = Math.min(d, st.dist[k]); } }
+          if (any) { ctx.fillStyle = "rgba(11,143,134," + (0.12 + 0.4 * (1 - d / maxd)) + ")"; ctx.fillRect(X + 0.5, Y + 0.5, cs - 1, cs - 1);
+            if (cs > 17 && d < 100) { ctx.fillStyle = P.dim; ctx.font = PB.font(Math.min(10, cs * 0.45), true); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(Math.round(d), X + cs / 2, Y + cs / 2); } }
+        }
+      }
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1; ctx.beginPath();
+      for (var gx = 0; gx <= GW; gx++) { ctx.moveTo(ox + gx * cs, oy); ctx.lineTo(ox + gx * cs, oy + GH * cs); }
+      for (var gy = 0; gy <= GH; gy++) { ctx.moveTo(ox, oy + gy * cs); ctx.lineTo(ox + GW * cs, oy + gy * cs); }
+      ctx.stroke();
+      var vias = 0, len = 0;
+      if (st && st.path) {
+        var p = st.path;
+        for (var j = 1; j < p.length; j++) {
+          var a = p[j - 1], b = p[j], la = (a / (GW * GH)) | 0, lb = (b / (GW * GH)) | 0, ca = a % (GW * GH), cb = b % (GW * GH);
+          if (la !== lb) { vias++; ctx.fillStyle = P.text; ctx.fillRect(ox + (ca % GW) * cs + cs * 0.28, oy + ((ca / GW) | 0) * cs + cs * 0.28, cs * 0.44, cs * 0.44); continue; }
+          len++;
+          ctx.strokeStyle = st.L === 1 ? P.accent : la === 0 ? "#d6336c" : "#4263eb"; ctx.lineWidth = Math.max(3, cs * 0.34); ctx.lineCap = "round";
+          ctx.beginPath(); ctx.moveTo(ox + (ca % GW + 0.5) * cs, oy + (((ca / GW) | 0) + 0.5) * cs); ctx.lineTo(ox + (cb % GW + 0.5) * cs, oy + (((cb / GW) | 0) + 0.5) * cs); ctx.stroke();
+        }
+      }
+      [[S, "S"], [T, "T"]].forEach(function (q) { ctx.fillStyle = P.accent; ctx.fillRect(ox + q[0][0] * cs + 1, oy + q[0][1] * cs + 1, cs - 2, cs - 2); ctx.fillStyle = "#fff"; ctx.font = PB.font(Math.min(13, cs * 0.6), true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(q[1], ox + (q[0][0] + 0.5) * cs, oy + (q[0][1] + 0.5) * cs); });
+      if (st && st.L === 2) { ctx.font = PB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillStyle = "#d6336c"; ctx.fillText("■ M2 수직", ox + 4, oy + 4); ctx.fillStyle = "#4263eb"; ctx.fillText("■ M3 수평", ox + 80, oy + 4); }
+      PB.stat("lee-o-e", st ? small(st.exp, "칸") : "—");
+      PB.stat("lee-o-l", st && st.path ? small(len, "트랙") : st && st.fin ? '<span class="bad-t">경로 없음</span>' : "—");
+      PB.stat("lee-o-v", st && st.path ? small(vias, "개") : "—");
+      PB.stat("lee-o-c", st && st.path ? small(Math.round(st.dist[st.path[st.path.length - 1]]), "") : "—");
+    }, { aspect: 0.68, minHeight: 260, maxHeight: 460 });
+    PB.loop(document.getElementById("lee-cv"), function () { if (st && !st.fin) { step(gSp()); cv.redraw(); } });
+    // 그리기 · 끌기
+    var el = document.getElementById("lee-cv"), drag = null;
+    function cell(e) { var b = el.getBoundingClientRect(), x = Math.floor((e.clientX - b.left - tr.ox) / tr.cs), y = Math.floor((e.clientY - b.top - tr.oy) / tr.cs); return x >= 0 && y >= 0 && x < GW && y < GH ? [x, y] : null; }
+    el.addEventListener("pointerdown", function (e) {
+      var c = cell(e); if (!c) return; el.setPointerCapture(e.pointerId);
+      if (c[0] === S[0] && c[1] === S[1]) drag = "S"; else if (c[0] === T[0] && c[1] === T[1]) drag = "T"; else { drag = blk[c[1] * GW + c[0]] ? "erase" : "draw"; blk[c[1] * GW + c[0]] = drag === "draw" ? 1 : 0; }
+      st = null; cv.redraw();
+    });
+    el.addEventListener("pointermove", function (e) {
+      if (!drag) return; var c = cell(e); if (!c) return;
+      if (drag === "S" || drag === "T") { if (!blk[c[1] * GW + c[0]]) { if (drag === "S") S = c; else T = c; } }
+      else if (!(c[0] === S[0] && c[1] === S[1]) && !(c[0] === T[0] && c[1] === T[1])) blk[c[1] * GW + c[0]] = drag === "draw" ? 1 : 0;
+      cv.redraw();
+    });
+    el.addEventListener("pointerup", function () { drag = null; });
+  })();
+
+  /* ---------------- 2. 순차 vs PathFinder */
+  (function () {
+    var GW = 22, GH = 16, nets = [], seed = 7, mode = "seq", ord = "id", res = null, hist = null, iter = 0, cv;
+    var gN = PB.range("pf-n", function (v) { return v + "개"; }, function () { gen(); });
+    PB.seg("pf-mode", function (v) { mode = v; res = null; hist = null; iter = 0; cv.redraw(); });
+    PB.seg("pf-ord", function (v) { ord = v; if (mode === "seq") { route(); } });
+    document.getElementById("pf-go").addEventListener("click", function () { hist = null; iter = 0; route(); });
+    document.getElementById("pf-step").addEventListener("click", function () { if (mode !== "pf") return; if (!res) route(); else { iter++; route(true); } });
+    document.getElementById("pf-new").addEventListener("click", function () { seed++; gen(); });
+    var BLK = new Uint8Array(GW * GH);
+    function gen() {
+      var rnd = PB.rng(seed * 31 + gN()), used = {};
+      BLK.fill(0);
+      for (var b = 0; b < 3; b++) { var bx = 4 + Math.floor(rnd() * (GW - 10)), by = 3 + Math.floor(rnd() * (GH - 8)), bw = 2 + Math.floor(rnd() * 3), bh = 2 + Math.floor(rnd() * 3); for (var y = by; y < by + bh; y++) for (var x = bx; x < bx + bw; x++) BLK[y * GW + x] = 1; }
+      nets = [];
+      function pin() { for (;;) { var x = Math.floor(rnd() * GW), y = Math.floor(rnd() * GH), k = y * GW + x; if (!used[k] && !BLK[k]) { used[k] = 1; return [x, y]; } } }
+      for (var i = 0; i < gN(); i++) {
+        var a = pin(), c;
+        // 긴 넷과 짧은 넷이 섞이도록, 일부는 가운데를 가로지르게
+        if (i % 2 === 0) { c = pin(); } else { c = pin(); }
+        nets.push({ id: i, a: a, b: c, len: Math.abs(a[0] - c[0]) + Math.abs(a[1] - c[1]) });
+      }
+      // PathFinder로 풀리는 문제만 쓴다 (핀이 막힌 문제 제외)
+      if (!solvable() && (gen.tries = (gen.tries || 0) + 1) < 12) { seed += 101; return gen(); }
+      gen.tries = 0;
+      res = null; hist = null; iter = 0; cv && cv.redraw();
+    }
+    function dijkstra(net, costFn, forbid) {
+      var N = GW * GH, d = new Float64Array(N).fill(Infinity), pv = new Int32Array(N).fill(-1), done = new Uint8Array(N), s = net.a[1] * GW + net.a[0], t = net.b[1] * GW + net.b[0];
+      d[s] = 0; var open = [s];
+      while (open.length) {
+        var bi = 0; for (var i = 1; i < open.length; i++) if (d[open[i]] < d[open[bi]]) bi = i;
+        var k = open[bi]; open[bi] = open[open.length - 1]; open.pop();
+        if (done[k]) continue; done[k] = 1; if (k === t) break;
+        var x = k % GW, y = (k / GW) | 0;
+        [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]].forEach(function (q) {
+          if (q[0] < 0 || q[1] < 0 || q[0] >= GW || q[1] >= GH) return;
+          var kk = q[1] * GW + q[0];
+          if (BLK[kk] || done[kk] || (forbid && forbid(kk, t))) return;
+          var nd = d[k] + costFn(kk);
+          if (nd < d[kk]) { d[kk] = nd; pv[kk] = k; open.push(kk); }
+        });
+      }
+      if (!isFinite(d[t])) return null;
+      var p = [], q2 = t; while (q2 >= 0) { p.push(q2); q2 = pv[q2]; } return p.reverse();
+    }
+    function solvable() {
+      var m0 = mode; mode = "pf"; hist = null; iter = 0; res = null; route(false, true);
+      for (var i = 0; i < 25; i++) { var o = 0; for (var c = 0; c < GW * GH; c++) if (res.over[c] > 1) o++; var ok = o === 0 && nets.every(function (n) { return res.paths[n.id]; }); if (ok) break; iter++; route(true, true); }
+      mode = m0; return ok;
+    }
+    var pins = function () { var m = {}; nets.forEach(function (n) { m[n.a[1] * GW + n.a[0]] = n.id; m[n.b[1] * GW + n.b[0]] = n.id; }); return m; };
+    function route(again, quiet) {
+      var N = GW * GH, P = pins();
+      if (mode === "seq") {
+        var occ = new Int32Array(N).fill(-1), list = nets.slice();
+        if (ord === "short") list.sort(function (a, b) { return a.len - b.len; });
+        if (ord === "long") list.sort(function (a, b) { return b.len - a.len; });
+        if (ord === "rand") { var r = PB.rng(Date.now() & 0xffff); list.sort(function () { return r() - 0.5; }); }
+        var paths = {};
+        list.forEach(function (n) {
+          var p = dijkstra(n, function () { return 1; }, function (k, t) { return (occ[k] >= 0) || (P[k] != null && P[k] !== n.id); });
+          paths[n.id] = p; if (p) p.forEach(function (k) { occ[k] = n.id; });
+        });
+        res = { paths: paths, over: new Int32Array(N) };
+      } else {
+        if (!hist || !again) { hist = new Float64Array(N); iter = 1; }
+        var use = new Int32Array(N), paths2 = {};
+        if (again && res) { for (var k in res.paths) if (res.paths[k]) res.paths[k].forEach(function (c) { use[c]++; }); for (var c = 0; c < N; c++) if (use[c] > 1) hist[c] += 1.2 * (use[c] - 1); }
+        var pfac = 0.5 * Math.pow(1.6, iter - 1), occ2 = again ? use : new Int32Array(N);
+        nets.forEach(function (n) {
+          var old = again && res ? res.paths[n.id] : null;
+          if (old) old.forEach(function (c2) { occ2[c2]--; });
+          var p = dijkstra(n, function (k) { return (1 + hist[k]) * (1 + pfac * occ2[k]); }, function (k, t) { return P[k] != null && P[k] !== n.id; });
+          paths2[n.id] = p; if (p) p.forEach(function (c2) { occ2[c2]++; });
+        });
+        res = { paths: paths2, over: occ2 };
+      }
+      if (!quiet) cv.redraw();
+    }
+    var COLS = ["#4263eb", "#e8590c", "#2f9e44", "#ae3ec9", "#1098ad", "#e03131", "#f08c00", "#5c7cfa", "#c2255c", "#37b24d", "#7048e8", "#0ca678", "#d9480f", "#1c7ed6"];
+    cv = PB.canvas("#pf-cv", function (ctx, w, h) {
+      var Pp = PB.palette(), cs = Math.min((w - 10) / GW, (h - 10) / GH), ox = (w - cs * GW) / 2, oy = (h - cs * GH) / 2;
+      ctx.fillStyle = Pp.surface; ctx.fillRect(ox, oy, cs * GW, cs * GH);
+      for (var k = 0; k < GW * GH; k++) {
+        var x = k % GW, y = (k / GW) | 0;
+        if (BLK[k]) { ctx.fillStyle = Pp.dim; ctx.fillRect(ox + x * cs + 0.5, oy + y * cs + 0.5, cs - 1, cs - 1); }
+        else if (res && res.over[k] > 1) { ctx.fillStyle = Pp.bad; ctx.globalAlpha = 0.35; ctx.fillRect(ox + x * cs, oy + y * cs, cs, cs); ctx.globalAlpha = 1; }
+        else if (hist && hist[k] > 0) { ctx.fillStyle = Pp.warn; ctx.globalAlpha = Math.min(0.3, hist[k] * 0.08); ctx.fillRect(ox + x * cs, oy + y * cs, cs, cs); ctx.globalAlpha = 1; }
+      }
+      ctx.strokeStyle = Pp.grid; ctx.beginPath();
+      for (var gx = 0; gx <= GW; gx++) { ctx.moveTo(ox + gx * cs, oy); ctx.lineTo(ox + gx * cs, oy + GH * cs); }
+      for (var gy = 0; gy <= GH; gy++) { ctx.moveTo(ox, oy + gy * cs); ctx.lineTo(ox + GW * cs, oy + gy * cs); }
+      ctx.stroke();
+      var done = 0, len = 0, ovf = 0;
+      if (res) for (var c = 0; c < GW * GH; c++) if (res.over[c] > 1) ovf += res.over[c] - 1;
+      nets.forEach(function (n, i) {
+        var col = COLS[i % COLS.length], p = res && res.paths[n.id];
+        if (p) {
+          done++; len += p.length - 1;
+          ctx.strokeStyle = col; ctx.lineWidth = Math.max(2.5, cs * 0.3); ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.globalAlpha = 0.85;
+          ctx.beginPath(); p.forEach(function (k, j) { var X = ox + (k % GW + 0.5) * cs, Y = oy + (((k / GW) | 0) + 0.5) * cs; j ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); ctx.stroke(); ctx.globalAlpha = 1;
+        } else if (res) {
+          ctx.strokeStyle = Pp.bad; ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(ox + (n.a[0] + 0.5) * cs, oy + (n.a[1] + 0.5) * cs); ctx.lineTo(ox + (n.b[0] + 0.5) * cs, oy + (n.b[1] + 0.5) * cs); ctx.stroke(); ctx.setLineDash([]);
+        }
+        [n.a, n.b].forEach(function (q) { ctx.fillStyle = col; ctx.fillRect(ox + q[0] * cs + 2, oy + q[1] * cs + 2, cs - 4, cs - 4); ctx.fillStyle = "#fff"; ctx.font = PB.font(Math.min(11, cs * 0.55), true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(i + 1, ox + (q[0] + 0.5) * cs, oy + (q[1] + 0.5) * cs); });
+      });
+      PB.stat("pf-o-d", res ? small(done + " / " + nets.length, "") : "—");
+      PB.stat("pf-o-o", res ? (ovf ? '<span class="bad-t">' + ovf + "</span>" : '<span class="ok-t">0</span>') : "—");
+      PB.stat("pf-o-l", res ? small(len, "트랙") : "—");
+      PB.stat("pf-o-i", mode === "pf" && res ? small(iter, "회") : "—");
+      document.getElementById("pf-info").innerHTML = mode === "seq" ? "겹침을 허용하지 않고 한 넷씩 최단 경로로 배선한다. 먼저 간 넷이 길을 막으면 뒤의 넷은 우회하거나 실패한다." :
+        "모든 넷을 겹침 허용으로 배선하고, 겹친 칸의 현재 벌점(×" + (0.5 * Math.pow(1.8, Math.max(0, iter - 1))).toFixed(2) + ")과 이력 비용(주황 음영)을 올려 다시 배선한다.";
+    }, { aspect: 0.72, minHeight: 260, maxHeight: 460 });
+    gen();
+  })();
+
+  /* ---------------- 3. 혼잡도 */
+  (function () {
+    var G = 32, seed = 2, cv, rr = function () { cv && cv.redraw(); };
+    var gU = PB.range("cg-u", function (v) { return Math.round(v * 100) + "%"; }, rr);
+    var gH = PB.range("cg-h", function (v) { return v.toFixed(2); }, rr);
+    var gL = PB.range("cg-l", function (v) { return v + "층"; }, rr);
+    var mac = document.getElementById("cg-mac"); mac.addEventListener("change", rr);
+    document.getElementById("cg-new").addEventListener("click", function () { seed++; rr(); });
+    function macro(x, y) { return mac.checked && ((x >= 6 && x < 14 && y >= 8 && y < 24) || (x >= 17 && x < 26 && y >= 8 && y < 24)); }
+    function build() {
+      var rnd = PB.rng(seed * 97), u = gU(), hs = gH();
+      var dens = new Float64Array(G * G), hx = 4 + rnd() * 24, hy = 4 + rnd() * 24, hx2 = 4 + rnd() * 24, hy2 = 4 + rnd() * 24;
+      for (var y = 0; y < G; y++) for (var x = 0; x < G; x++) {
+        if (macro(x, y)) continue;
+        var d = u * (0.85 + 0.3 * rnd());
+        d *= 1 + hs * 1.4 * (Math.exp(-((x - hx) * (x - hx) + (y - hy) * (y - hy)) / 18) + 0.8 * Math.exp(-((x - hx2) * (x - hx2) + (y - hy2) * (y - hy2)) / 12));
+        dens[y * G + x] = Math.min(1.2, d);
+      }
+      // 넷: 각 셀 밀도에 비례한 수의 핀 → 짧은 넷(평균 길이 3~6 GCell) + 일부 긴 넷
+      var dem = new Float64Array(G * G);
+      for (var k = 0; k < G * G; k++) {
+        var n = dens[k] * 6; var x0 = k % G, y0 = (k / G) | 0;
+        for (var j = 0; j < n; j++) {
+          var L = rnd() < 0.12 ? 8 + rnd() * 14 : 1 + rnd() * 5, ang = rnd() * Math.PI * 2;
+          var x1 = Math.round(x0 + Math.cos(ang) * L), y1 = Math.round(y0 + Math.sin(ang) * L);
+          if (x1 < 0 || y1 < 0 || x1 >= G || y1 >= G || macro(x1, y1)) continue;
+          // L자 두 가지 경로에 반씩
+          [[x0, y0, x1, y0, x1, y1], [x0, y0, x0, y1, x1, y1]].forEach(function (p) {
+            var cx = p[0], cy = p[1];
+            while (cx !== p[2]) { dem[cy * G + cx] += 0.5; cx += cx < p[2] ? 1 : -1; }
+            while (cy !== p[5]) { dem[cy * G + cx] += 0.5; cy += cy < p[5] ? 1 : -1; }
+            dem[cy * G + cx] += 0.5;
+          });
+        }
+      }
+      return { dens: dens, dem: dem };
+    }
+    cv = PB.canvas("#cg-cv", function (ctx, w, h) {
+      var P = PB.palette(), b = build(), cap = gL() * 4.2, narrow = w < 520;
+      var size = narrow ? Math.min(w - 30, (h - 60) / 2) : Math.min((w - 50) / 2, h - 50);
+      var x1 = narrow ? (w - size) / 2 : 16, y1 = 24, x2 = narrow ? x1 : x1 + size + 18, y2 = narrow ? y1 + size + 30 : y1, cs = size / G;
+      var mx = 0, ovn = 0, ovt = 0;
+      for (var y = 0; y < G; y++) for (var x = 0; x < G; x++) {
+        var k = y * G + x, m = macro(x, y);
+        ctx.fillStyle = m ? P.dim : "rgba(109,63,209," + (0.08 + 0.7 * Math.min(1, b.dens[k])) + ")";
+        ctx.fillRect(x1 + x * cs, y1 + y * cs, cs + 0.5, cs + 0.5);
+        var r = m ? 0 : b.dem[k] / cap; mx = Math.max(mx, r); if (r > 1) { ovn++; ovt += b.dem[k] - cap; }
+        var t = PB.clamp(r / 1.3, 0, 1);
+        ctx.fillStyle = m ? P.dim : r > 1 ? "rgb(214," + Math.round(120 - 80 * Math.min(1, r - 1)) + ",60)" : "rgb(" + Math.round(40 + 200 * t) + "," + Math.round(160 + 60 * t) + "," + Math.round(120 - 60 * t) + ")";
+        ctx.fillRect(x2 + x * cs, y2 + y * cs, cs + 0.5, cs + 0.5);
+      }
+      ctx.fillStyle = P.dim; ctx.font = PB.font(12); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      ctx.fillText("배치 밀도 (회색 = 매크로)", x1, y1 - 6); ctx.fillText("수요/용량 (초록 → 노랑 → 빨강 > 1)", x2, y2 - 6);
+      PB.stat("cg-o-m", small(mx.toFixed(2), ""));
+      PB.stat("cg-o-o", ovn ? '<span class="bad-t">' + ovn + "</span><small>/" + G * G + "</small>" : '<span class="ok-t">0</span>');
+      PB.stat("cg-o-t", small(Math.round(ovt), "트랙"));
+    }, { aspect: 0.55, minHeight: 300, maxHeight: 440 });
+  })();
+})();
+</script>
+</body>
+</html>

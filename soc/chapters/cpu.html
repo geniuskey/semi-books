@@ -1,0 +1,989 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and SoCBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "명령어 하나가 인출·해독·실행·메모리·기록을 지나는 길. RISC-V 명령어 비트를 직접 뒤집어 해독하고, 5단 파이프라인 시뮬레이터로 데이터 해저드와 포워딩, 분기 예측과 플러시, CPI를 한 사이클씩 따라간다.", "libs": []}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CPU 코어: 파이프라인 · SoCBook</title>
+<meta name="description" content="명령어 하나가 인출·해독·실행·메모리·기록을 지나는 길. RISC-V 명령어 비트를 직접 뒤집어 해독하고, 5단 파이프라인 시뮬레이터로 데이터 해저드와 포워딩, 분기 예측과 플러시, CPI를 한 사이클씩 따라간다.">
+<link rel="canonical" href="https://semi.euiyun.com/soc/chapters/cpu.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#c8285f">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="SoCBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="CPU 코어: 파이프라인 · SoCBook">
+<meta property="og:description" content="명령어 하나가 인출·해독·실행·메모리·기록을 지나는 길. RISC-V 명령어 비트를 직접 뒤집어 해독하고, 5단 파이프라인 시뮬레이터로 데이터 해저드와 포워딩, 분기 예측과 플러시, CPI를 한 사이클씩 따라간다.">
+<meta property="og:url" content="https://semi.euiyun.com/soc/chapters/cpu.html">
+<meta property="og:image" content="https://semi.euiyun.com/soc/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/soc/chapters/cpu.html#chapter","name":"CPU 코어: 파이프라인","headline":"CPU 코어: 파이프라인 · SoCBook","description":"명령어 하나가 인출·해독·실행·메모리·기록을 지나는 길. RISC-V 명령어 비트를 직접 뒤집어 해독하고, 5단 파이프라인 시뮬레이터로 데이터 해저드와 포워딩, 분기 예측과 플러시, CPI를 한 사이클씩 따라간다.","url":"https://semi.euiyun.com/soc/chapters/cpu.html","position":3,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/soc/og.png","dateModified":"2026-10-03","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/soc/#book","name":"SoCBook · 시스템 온 칩 교과서","url":"https://semi.euiyun.com/soc/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"SoCBook","item":"https://semi.euiyun.com/soc/"},{"@type":"ListItem","position":2,"name":"3. CPU 코어: 파이프라인","item":"https://semi.euiyun.com/soc/chapters/cpu.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/soc.js"></script>
+<!--head:end-->
+<style>
+  .cp-prog { width: 100%; min-height: 168px; font-family: var(--mono); font-size: 13px; line-height: 1.5; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); resize: vertical; }
+  .cp-err { color: var(--bad); font-size: 13px; min-height: 1.2em; }
+  .cp-regs { font-family: var(--mono); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; }
+  .cp-regs span { padding: 1px 6px; border-radius: 5px; background: var(--bg-elev); border: 1px solid var(--border); }
+  .cp-regs span.new { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .cp-asm { font-family: var(--mono); font-size: 18px; font-weight: 700; color: var(--text); }
+  .cp-flds { font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); margin-top: 4px; }
+  .cp-flds i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 4px 0 8px; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="soc"></script>
+</head>
+<body data-chapter="cpu">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 03</div>
+    <h1>CPU 코어: 파이프라인</h1>
+    <p class="lead">앱 아이콘을 누르면 CPU는 메모리에서 32비트짜리 숫자를 하나 가져온다. 그 숫자는 "레지스터 6번과 7번을 더해 5번에 넣어라" 같은 아주 작은 지시다. 이런 지시를 1초에 수십억 개 처리하는 비결은 한 명령을 빨리 끝내는 것이 아니라, 여러 명령을 <b>겹쳐서</b> 처리하는 데 있다. 빨래방에서 첫 빨래가 건조기에 들어가면 바로 다음 빨래를 세탁기에 넣는 것처럼. 하지만 겹치는 순간 문제가 생긴다. 앞 명령의 결과가 아직 안 나왔는데 뒷 명령이 그 값을 써야 한다면? 다음에 실행할 명령이 무엇인지 분기를 계산해 봐야 안다면? 이 장에서는 명령어의 비트를 직접 뒤집어 보고, 5단 파이프라인을 한 사이클씩 돌리며 이 문제들과 그 해법을 만난다.</p>
+    <ul class="objectives">
+      <li>RISC-V 명령어가 opcode·레지스터·즉치값 필드로 이루어진 비트열임을 해독하며 확인한다.</li>
+      <li>단일 사이클 데이터패스의 한계와, 5단 파이프라인이 처리량을 높이는 원리를 설명한다.</li>
+      <li>데이터 해저드·제어 해저드가 만드는 거품과 플러시를 시뮬레이터로 관찰하고, 포워딩의 효과를 잰다.</li>
+      <li>2비트 포화 카운터 분기 예측기가 패턴마다 얼마나 맞히는지 직접 돌려 본다.</li>
+      <li>실행 시간 = 명령어 수 × CPI × 클럭 주기(철의 법칙)로 성능을 계산하고, 파이프라인 깊이의 최적점을 찾는다.</li>
+    </ul>
+    <div class="soc-locator" data-blocks="little big" data-caption="이 장은 CPU 코어 하나의 안쪽을 연다. 작은 효율 코어는 이 장에서 다루는 순차 파이프라인 그대로이고, 큰 코어는 그 위에 다음 장의 비순차 실행을 얹었다."></div>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="isa">
+    <h2>명령어는 비트다</h2>
+    <p>CPU가 알아듣는 말의 목록을 <span class="term">명령어 집합 구조</span><span class="en">(ISA, Instruction Set Architecture)</span>라 한다. 스마트폰 CPU는 대부분 Arm의 AArch64를 쓰고, 최근에는 누구나 쓸 수 있는 공개 ISA인 <span class="term">RISC-V</span>가 마이크로컨트롤러에서 시작해 점점 큰 코어로 퍼지고 있다. 이 장에서는 구조가 깔끔한 RISC-V로 이야기한다.</p>
+    <p>RISC-V의 기본 명령어는 모두 32비트다. 맨 아래 7비트 <b>opcode</b>가 명령의 종류(산술, 적재, 저장, 분기…)를 정하고, 나머지 비트는 종류에 따라 정해진 자리에 레지스터 번호와 상수(<span class="term">즉치값</span><span class="en">(Immediate)</span>)를 담는다. 레지스터 번호 자리가 형식과 상관없이 늘 같은 비트에 있다는 점이 중요하다. 해독기가 명령의 종류를 알아내기 전에 미리 레지스터 파일을 읽기 시작할 수 있기 때문이다. 아래에서 명령을 고르거나, 비트를 직접 눌러 뒤집어 보자.</p>
+    <figure class="play" id="fig-isa">
+      <div class="play-ctrl" style="border-top:0;border-bottom:1px solid var(--border)">
+        <div class="seg" id="isa-pick"><button data-value="add" class="on">add</button><button data-value="sub">sub</button><button data-value="addi">addi</button><button data-value="lw">lw</button><button data-value="sw">sw</button><button data-value="beq">beq</button></div>
+      </div>
+      <div class="play-view"><canvas id="cv-isa"></canvas></div>
+      <div class="info-panel" id="isa-info"></div>
+      <figcaption><b>그림 3-1.</b> <span class="try">눌러 보기</span>칸 하나가 비트 하나다. 칸을 누르면 0과 1이 바뀌고, 해독 결과가 바로 바뀐다. 예를 들어 <code>add</code>의 30번 비트(funct7의 둘째 비트)를 누르면 <code>sub</code>이 된다. rd 칸을 바꾸면 결과를 쓸 레지스터가, opcode 칸을 바꾸면 명령의 종류 자체가 바뀐다. 분기(<code>beq</code>)의 즉치값은 비트가 여기저기 흩어져 있는데, 이것도 하드웨어를 단순하게 하려는 배치다(부호 비트가 늘 31번에 있다).</figcaption>
+    </figure>
+    <p>명령어가 하는 일은 크게 네 가지다. 레지스터끼리 계산하기(<code>add</code>, <code>sub</code>, <code>and</code>…), 메모리에서 레지스터로 가져오기(<code>lw</code>, load), 레지스터에서 메모리로 내보내기(<code>sw</code>, store), 다음에 실행할 명령의 주소를 바꾸기(<code>beq</code>, branch). 계산은 오직 레지스터에서만 하고 메모리와는 적재·저장으로만 주고받는 이 방식을 <span class="term">적재-저장 구조</span><span class="en">(Load-store architecture)</span>라 한다. RISC 계열 ISA의 공통점이며, 파이프라인을 깔끔하게 만드는 바탕이다.</p>
+    <div class="callout deep"><strong>해독기의 무게: Arm·RISC-V와 x86</strong><p>AArch64와 이 장의 C 확장을 제외한 기본 RV32I 명령은 길이가 4바이트로 고정이라, 해독기가 다음 명령이 어디서 시작하는지 고민할 필요가 없다. 실제 RISC-V의 C 확장은 16비트와 32비트 명령을 섞으므로 명령 경계 처리가 필요하다. 한 사이클에 8개, 10개 명령을 동시에 해독하는 넓은 코어를 만들기 쉽다. 반면 x86은 명령어 길이가 1~15바이트로 들쭉날쭉해서 먼저 길이부터 알아내야 하고, 복잡한 명령은 내부에서 RISC 비슷한 <b>마이크로옵</b><span class="en">(µop)</span> 여러 개로 쪼갠다. 그래서 x86 코어는 한 번 해독한 마이크로옵을 저장해 두는 캐시를 크게 두어 해독 비용을 피한다. 겉모습(ISA)과 속 구조(마이크로아키텍처)는 별개라는 점이 핵심이다.</p></div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="datapath">
+    <h2>명령어가 지나가는 길: 데이터패스</h2>
+    <p>명령어 하나를 처리하는 과정은 다섯 단계로 나눌 수 있다. ① <b>IF</b>(인출, Instruction Fetch): 프로그램 카운터(PC)가 가리키는 주소에서 명령어를 읽는다. ② <b>ID</b>(해독, Instruction Decode): 필드를 나누고 레지스터 파일에서 피연산자를 읽는다. ③ <b>EX</b>(실행, Execute): ALU가 계산하거나 메모리 주소를 만든다. ④ <b>MEM</b>(메모리): 적재·저장이면 데이터 메모리에 접근한다. ⑤ <b>WB</b>(기록, Write Back): 결과를 레지스터 파일에 쓴다. 이 회로 덩어리 전체를 <span class="term">데이터패스</span><span class="en">(Datapath)</span>라 한다.</p>
+    <figure class="play" id="fig-dp">
+      <div class="play-view"><canvas id="cv-dp"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="dp-ins"><button data-value="add" class="on">add</button><button data-value="lw">lw</button><button data-value="sw">sw</button><button data-value="beq">beq</button></div>
+        <div class="seg" id="dp-mode"><button data-value="single" class="on">단일 사이클</button><button data-value="pipe">5단 파이프라인</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">이 명령에 필요한 시간</span><span class="v" id="dp-need">—</span></div>
+        <div class="stat"><span class="k">클럭 주기</span><span class="v" id="dp-clk">—</span></div>
+        <div class="stat"><span class="k">명령 하나의 지연 시간</span><span class="v" id="dp-lat">—</span></div>
+        <div class="stat"><span class="k">처리량</span><span class="v" id="dp-thr">—</span></div>
+      </div>
+      <figcaption><b>그림 3-2.</b> <span class="try">만져 보기</span>명령을 고르면 그 명령이 실제로 쓰는 블록과 길이 밝아지고, 아래 막대가 단계별 시간(인출 200, 레지스터 읽기 100, ALU 200, 데이터 메모리 200, 레지스터 쓰기 100 ps; Hennessy·Patterson 교과서의 예)을 보여 준다. 단일 사이클 설계는 가장 느린 <code>lw</code>(800 ps)에 클럭을 맞춰야 하므로 다른 명령은 시간을 버린다. 파이프라인으로 바꾸면 단계 사이에 레지스터(세로 막대)가 들어가고 클럭은 가장 느린 단계(200 ps + 레지스터 오버헤드 20 ps)로 짧아진다.</figcaption>
+    </figure>
+    <p>단일 사이클 설계는 이해하기 쉽지만 낭비가 크다. 한 명령이 인출 회로를 쓰는 동안 ALU와 데이터 메모리는 놀고 있고, 클럭은 가장 느린 명령에 맞춰야 한다. <a href="logic.html">2장</a>에서 본 파이프라이닝을 여기에 적용하면 어떨까? 다섯 단계 사이에 플립플롭을 끼워 넣으면 각 단계가 서로 다른 명령을 동시에 처리할 수 있다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="pipeline">
+    <h2>파이프라인: 빨래방의 지혜</h2>
+    <p>빨래 네 바구니를 생각하자. 세탁, 건조, 개기, 정리에 각각 30분이 걸린다. 한 바구니를 끝까지 마친 뒤 다음 바구니를 시작하면 네 바구니에 8시간이 걸린다. 하지만 첫 바구니가 건조기에 들어가자마자 둘째 바구니를 세탁기에 넣으면 3시간 30분이면 끝난다. 바구니 하나가 끝나는 데 걸리는 시간(지연 시간)은 그대로 2시간인데, 일정 시간에 끝나는 바구니 수(<span class="term">처리량</span><span class="en">(Throughput)</span>)가 늘었다.</p>
+    <figure class="play" id="fig-laundry">
+      <div class="play-view"><canvas id="cv-laundry"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>빨래 바구니 수 <output id="ld-n-out"></output></span><input type="range" id="ld-n" min="1" max="8" step="1" value="4"></label>
+        <div class="seg" id="ld-mode"><button data-value="eq" class="on">모두 30분</button><button data-value="slow">건조기만 60분</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">하나씩 차례로</span><span class="v" id="ld-seq">—</span></div>
+        <div class="stat"><span class="k">파이프라인</span><span class="v" id="ld-pipe">—</span></div>
+        <div class="stat"><span class="k">속도 향상</span><span class="v" id="ld-sp">—</span></div>
+      </div>
+      <figcaption><b>그림 3-3.</b> <span class="try">만져 보기</span>바구니 수를 늘리면 속도 향상이 단계 수(4)에 가까워진다. 처음 채우고 마지막에 비우는 시간이 상대적으로 작아지기 때문이다. 건조기만 60분으로 바꾸면 모든 바구니가 건조기 앞에서 줄을 서고, 파이프라인 전체가 가장 느린 단계의 박자로 움직인다. CPU 파이프라인의 단계를 고르게 나누려 애쓰는 이유다.</figcaption>
+    </figure>
+    <div class="formula">$$\text{속도 향상} = \frac{n \cdot k \cdot t}{(k + n - 1)\, t} \;\xrightarrow{n\to\infty}\; k$$
+      <div class="where">\(n\): 일의 개수, \(k\): 단계 수, \(t\): 단계 하나의 시간(모두 같다고 가정). 명령어는 수십억 개이므로 사실상 \(k\)배다. 단, 이것은 일들이 서로 방해하지 않을 때의 이야기다.</div></div>
+    <p>CPU에서 "바구니"는 명령어, "세탁기·건조기"는 IF·ID·EX·MEM·WB 다섯 단계다. 이상적이라면 매 사이클 명령어 하나가 끝나므로 명령어당 사이클 수, 즉 <span class="term">CPI</span><span class="en">(Cycles Per Instruction)</span>가 1이 된다. 그런데 빨래와 달리 명령어는 서로 얽혀 있다. 뒷 명령이 앞 명령의 결과를 필요로 하기도 하고, 앞 명령(분기)이 끝나 봐야 뒷 명령이 무엇인지 알 수 있기도 하다. 이렇게 파이프라인이 매 사이클 다음 명령을 진행하지 못하게 막는 상황을 <span class="term">해저드</span><span class="en">(Hazard)</span>라 한다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="hazard">
+    <h2>데이터 해저드와 포워딩</h2>
+    <p>해저드는 세 종류다. 같은 자원을 두 명령이 동시에 쓰려는 <b>구조적 해저드</b>(예: 메모리 포트가 하나뿐인데 인출과 적재가 겹칠 때), 앞 명령의 결과를 뒷 명령이 기다리는 <b>데이터 해저드</b>, 분기의 결과를 몰라 다음 명령을 정하지 못하는 <b>제어 해저드</b>. 5단 파이프라인은 명령어 메모리와 데이터 메모리를 나누어(실제로는 L1 명령 캐시와 L1 데이터 캐시) 구조적 해저드를 피한다. 남은 둘을 차례로 보자.</p>
+    <p><code>add x1, x2, x3</code> 바로 뒤에 <code>sub x4, x1, x5</code>가 온다고 하자. <code>sub</code>는 ID 단계에서 x1을 읽어야 하는데, <code>add</code>는 그때 막 EX 단계에서 x1을 계산하는 중이고 레지스터 파일에 쓰는 것은 두 사이클 뒤 WB 단계다. 이것이 <span class="term">데이터 해저드</span><span class="en">(Data hazard)</span>다. 가장 단순한 해결은 <code>sub</code>를 ID에서 기다리게 하는 것이다. 그 사이 EX 이후 단계에는 아무 일도 하지 않는 빈칸, 즉 <span class="term">거품</span><span class="en">(Bubble, Stall)</span>이 흘러간다.</p>
+    <p>더 똑똑한 방법이 있다. x1의 값은 <code>add</code>의 EX 단계가 끝나는 순간 이미 ALU 출력에 나와 있다. 레지스터 파일까지 돌아갈 필요 없이 그 값을 바로 다음 명령의 ALU 입력으로 옆길로 보내 주면 된다. 이것이 <span class="term">포워딩</span><span class="en">(Forwarding, Bypassing)</span>이다. 아래에서 앞 명령의 종류와 두 명령 사이 거리, 포워딩 여부를 바꿔 거품이 몇 개 생기는지 보자.</p>
+    <figure class="play" id="fig-hz">
+      <div class="play-view"><canvas id="cv-hz"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="hz-p"><button data-value="alu" class="on">앞: add (ALU)</button><button data-value="load">앞: lw (적재)</button></div>
+        <div class="seg" id="hz-d"><button data-value="1" class="on">바로 다음</button><button data-value="2">1개 건너</button><button data-value="3">2개 건너</button></div>
+        <div class="seg" id="hz-f"><button data-value="0" class="on">포워딩 없음</button><button data-value="1">포워딩</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">거품 (지연 사이클)</span><span class="v" id="hz-b">—</span></div>
+        <div class="stat"><span class="k">전체 사이클</span><span class="v" id="hz-c">—</span></div>
+      </div>
+      <figcaption><b>그림 3-4.</b> <span class="try">만져 보기</span>가로가 사이클, 세로가 명령이다. 회색 빗금 칸은 ID에서 기다리는 거품, 화살표는 포워딩 경로다. 포워딩이 있으면 ALU 결과는 거품 없이 다음 명령에 전달된다. 그러나 <code>lw</code>는 값이 MEM 단계가 끝나야 나오므로, 바로 다음 명령이 그 값을 쓰면 포워딩이 있어도 거품 하나를 피할 수 없다. 이것이 유명한 <b>적재-사용 해저드</b><span class="en">(Load-use hazard)</span>다.</figcaption>
+    </figure>
+    <div class="predict"><strong>적재-사용 거품을 없애려면 하드웨어를 바꿔야 할까?</strong>
+      <p><code>lw x4, 0(x1)</code> 바로 뒤에 <code>add x3, x3, x4</code>가 있는 반복문이 있다. 회로는 그대로 두고 거품을 없앨 방법이 있을까?</p>
+      <details><summary>답 보기</summary><p>있다. x4와 상관없는 다른 명령(예를 들어 다음 주소를 계산하는 <code>addi x1, x1, 4</code>)을 <code>lw</code>와 <code>add</code> 사이로 옮기면 된다. 이처럼 컴파일러가 명령 순서를 바꿔 해저드를 피하는 것을 <b>명령어 스케줄링</b>이라 한다. 다음 절 시뮬레이터의 "배열 합" 과 "배열 합 (순서 바꿈)" 프로그램을 비교해 보자. 다음 장의 비순차 실행 코어는 이 일을 하드웨어가 실행 중에 스스로 한다(<a href="ooo.html">4장</a>).</p></details>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="sim">
+    <h2>5단 파이프라인 시뮬레이터</h2>
+    <p>이제 모든 조각을 한 기계에 모으자. 아래 시뮬레이터는 RISC-V의 일부 명령(<code>add sub and or xor slt addi andi ori lw sw beq bne blt bge nop</code>)을 실제로 실행하면서, 매 사이클 어느 명령이 어느 단계에 있는지 그린다. 분기는 EX 단계에서 결정되고, 예측이 틀리면 그 사이에 잘못 가져온 두 명령을 버린다(<span class="term">플러시</span><span class="en">(Flush)</span>). 프로그램을 골라 한 사이클씩 넘겨 보고, 포워딩과 분기 예측을 바꿔 가며 CPI가 어떻게 변하는지 확인하자. 프로그램은 직접 고칠 수도 있다.</p>
+    <div class="sim" id="sim-pipe">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>RISC-V 5단 파이프라인</h3></div>
+      <div class="sim-view"><canvas id="cv-pipe"></canvas></div>
+      <div class="sim-controls" style="grid-template-columns:1fr">
+        <div class="ctrl-row">
+          <button class="btn sm" id="ps-reset">⏮ 처음</button>
+          <button class="btn sm" id="ps-back">← 한 사이클</button>
+          <button class="btn sm primary" id="ps-step">한 사이클 →</button>
+          <button class="btn sm" id="ps-play">▶ 자동</button>
+          <button class="btn sm" id="ps-end">끝까지 ⏭</button>
+        </div>
+        <div class="ctrl-row">
+          <div class="seg" id="ps-fwd"><button data-value="1" class="on">포워딩 켬</button><button data-value="0">포워딩 끔</button></div>
+          <div class="seg" id="ps-bp"><button data-value="nt" class="on">예측: 항상 안 감</button><button data-value="t">항상 감</button><button data-value="2b">2비트 카운터</button></div>
+        </div>
+      </div>
+      <div class="info-panel" id="ps-info"></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">사이클</span><span class="v" id="ps-cyc">—</span></div>
+        <div class="stat"><span class="k">완료한 명령</span><span class="v" id="ps-ret">—</span></div>
+        <div class="stat"><span class="k">데이터 거품</span><span class="v" id="ps-stl">—</span></div>
+        <div class="stat"><span class="k">플러시된 명령</span><span class="v" id="ps-fl">—</span></div>
+        <div class="stat"><span class="k">CPI (전체 실행)</span><span class="v" id="ps-cpi">—</span></div>
+      </div>
+      <div class="sim-controls" style="grid-template-columns:1fr">
+        <label class="ctrl"><span>프로그램</span>
+          <select id="ps-prog"><option value="sum">배열 합 (반복문)</option><option value="sched">배열 합 (순서 바꿈)</option><option value="chain">의존 사슬</option><option value="alt">홀짝 분기</option></select></label>
+        <textarea class="cp-prog" id="ps-src" spellcheck="false" aria-label="프로그램 코드"></textarea>
+        <div class="ctrl-row"><button class="btn sm" id="ps-load">이 코드로 다시 실행</button><span class="cp-err" id="ps-err"></span></div>
+      </div>
+      <div class="sim-note">레지스터는 x0~x31(x0은 늘 0), 데이터 메모리는 64워드이며 처음에 mem[k] = k+1(주소 4k)로 채워 두었다. 분기 대상은 레이블로 쓴다. 분기는 EX에서 결정되므로 예측이 틀리면 2사이클을 잃는다. "항상 감"과 "2비트"는 분기 대상 주소를 바로 알려 주는 BTB가 있다고 가정했다. 안전을 위해 최대 400개 명령까지만 실행한다.</div>
+    </div>
+    <p>"배열 합"을 포워딩 켜고 끝까지 돌리면 CPI가 1을 꽤 넘는다. 원인은 두 가지다. 반복마다 <code>lw</code> 직후 <code>add</code>가 그 값을 쓰는 적재-사용 거품 1개, 그리고 반복문 끝의 <code>bne</code>가 "안 감"으로 예측되었다가 실제로는 매번 뒤로 가서 생기는 플러시 2개다. 예측기를 2비트로 바꾸면 두 번째 반복부터 분기를 맞히기 시작하고, "순서 바꿈" 프로그램은 거품도 없앤다. 두 가지를 모두 하면 CPI가 1에 가까워진다.</p>
+    <p>이 시뮬레이터가 바로 스마트폰 <b>효율 코어</b>의 뼈대다. Arm의 Cortex-A55·A520 같은 작은 코어는 명령을 프로그램 순서대로 처리하는 <span class="term">순차 실행</span><span class="en">(In-order)</span> 파이프라인에 한 사이클 두 개씩 발행하는 정도를 더한 구조다. 순서를 바꾸는 복잡한 회로가 없어 면적이 큰 코어의 1/4~1/5에 불과하고, 같은 일을 훨씬 적은 에너지로 한다. 대신 적재-사용 거품이나 캐시 미스를 만나면 꼼짝없이 기다린다. 그 기다림을 줄이는 것이 다음 장 큰 코어의 일이다.</p>
+    <div class="callout tip"><strong>시뮬레이터 읽는 법</strong><p>위쪽 다섯 칸은 지금 사이클에 각 단계에 들어 있는 명령이다. 빈칸이면 거품이다. 아래 표는 시간에 따른 파이프라인 도표로, 같은 열(사이클)을 세로로 읽으면 그 순간 기계의 단면이 된다. 흐린 줄에 ✕가 있는 명령은 분기 예측이 틀려 버려진 명령이다. 화살표는 포워딩이 실제로 쓰인 곳이다.</p></div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="branch">
+    <h2>분기 예측: 아직 모르는 미래에 걸기</h2>
+    <p>프로그램에는 평균 5~7개 명령에 하나꼴로 분기가 있다. 분기의 결과는 EX 단계에 가서야 알 수 있으므로, 그때까지 파이프라인 앞쪽은 무엇을 가져와야 할지 모른다. 기다리면 분기마다 사이클을 잃는다. 그래서 CPU는 <b>추측</b>한다. 일단 한쪽 길을 골라 계속 가져오고 실행하다가, 틀렸으면 그 일을 모두 버리고 올바른 길로 돌아간다. 맞히는 비율이 높을수록 손해가 적다.</p>
+    <p>가장 유명한 예측기는 분기마다 2비트짜리 카운터를 하나 두는 <span class="term">2비트 포화 카운터</span><span class="en">(2-bit saturating counter)</span>다. 분기가 가면 카운터를 하나 올리고, 안 가면 하나 내린다(0과 3에서 멈춘다). 카운터가 2 이상이면 "감"으로 예측한다. 한 번 어긋났다고 바로 생각을 바꾸지 않으므로, 반복문 끝에서 한 번 빠져나오는 정도로는 흔들리지 않는다.</p>
+    <figure class="play" id="fig-bp">
+      <div class="play-view"><canvas id="cv-bp"></canvas></div>
+      <div class="play-ctrl">
+        <div class="ctrl-row"><button class="btn sm" id="bp-t">분기 감 (T)</button><button class="btn sm" id="bp-n">안 감 (N)</button></div>
+        <div class="seg" id="bp-pat"><button data-value="loop" class="on">반복문 (9번 감, 1번 안 감)</button><button data-value="alt">번갈아 T N</button><button data-value="tnn">T N N 반복</button><button data-value="rand">무작위 (70% 감)</button></div>
+        <button class="btn sm primary" id="bp-run">패턴 20개 넣기</button>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">항상 안 감</span><span class="v" id="bp-a0">—</span></div>
+        <div class="stat"><span class="k">1비트 (지난번 그대로)</span><span class="v" id="bp-a1">—</span></div>
+        <div class="stat"><span class="k">2비트 카운터</span><span class="v" id="bp-a2">—</span></div>
+        <div class="stat"><span class="k">전역 기록 2비트 + 2비트 카운터</span><span class="v" id="bp-a3">—</span></div>
+      </div>
+      <figcaption><b>그림 3-5.</b> <span class="try">눌러 보기</span>T·N 버튼으로 분기 결과를 하나씩 넣으면 카운터 상태가 화살표를 따라 움직인다. 원을 눌러 상태를 직접 정할 수도 있다. 아래 줄은 최근 결과(채운 칸 = 감)와 2비트 예측의 성패(초록 ✓ / 빨강 ✕)다. 위 정확도 숫자는 고른 패턴 2,000개에 네 가지 예측기를 돌린 결과다. 번갈아 오는 패턴은 2비트 카운터를 무력하게 만들지만, 최근 결과 몇 개를 기억해 카운터를 골라 쓰는 예측기(맨 오른쪽)는 거의 다 맞힌다.</figcaption>
+    </figure>
+    <div class="predict"><strong>반복 10회짜리 반복문에서 2비트 카운터의 정확도는?</strong>
+      <p>반복문 끝 분기는 9번 "감", 1번 "안 감"을 되풀이한다. 1비트 예측기와 2비트 예측기는 각각 몇 %를 맞힐까?</p>
+      <details><summary>답 보기</summary><p>1비트는 마지막 "안 감"에서 한 번 틀리고, 다음 반복문 첫 "감"에서 또 틀린다(지난번이 "안 감"이었으므로). 10번 중 8번, 80%. 2비트는 "안 감" 한 번에 강한 감(3)→약한 감(2)으로만 내려가서 다음 "감"을 여전히 맞힌다. 10번 중 9번, 90%. 위 그림에서 반복문 패턴의 정확도를 확인해 보자.</p></details>
+    </div>
+    <p>방향(감/안 감)만 맞혀서는 부족하다. "감"이라고 예측했다면 <b>어디로</b> 가는지도 인출 단계에서 바로 알아야 한다. 그래서 분기 명령의 주소와 그 목적지를 기억하는 작은 캐시, <span class="term">BTB</span><span class="en">(Branch Target Buffer)</span>를 둔다. 함수에서 돌아가는 <code>ret</code>처럼 목적지가 매번 바뀌는 분기는 호출할 때마다 돌아올 주소를 쌓아 두는 <b>반환 주소 스택</b><span class="en">(Return address stack)</span>으로 맞힌다. 위 시뮬레이터의 "항상 감"과 "2비트"는 BTB가 늘 맞는다고 가정한 것이다.</p>
+    <p>현대 고성능 코어의 예측기는 이보다 훨씬 정교하다. 최근 수십~수천 개 분기의 결과(전역 기록)와 주소를 섞어 여러 표를 동시에 찾고, 가장 믿을 만한 표의 답을 고르는 <b>TAGE</b> 계열이나 신경망을 흉내 낸 <b>퍼셉트론</b> 예측기를 쓴다. 덕분에 보통 프로그램에서 정확도가 95~99%에 이른다. 그래도 남은 1~5%가 중요하다. 깊은 파이프라인에서 예측 실패 한 번은 10~20사이클을 버리는 일이기 때문이다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="perf">
+    <h2>성능 방정식과 파이프라인의 깊이</h2>
+    <p>CPU 성능을 하나의 식으로 묶어 보자. 프로그램 하나를 실행하는 시간은 명령어 수, 명령어당 사이클, 사이클 하나의 길이를 곱한 것이다. 이 식을 흔히 <span class="term">철의 법칙</span><span class="en">(Iron law of performance)</span>이라 부른다. 세 항은 서로 다른 사람이 책임진다. 명령어 수는 ISA와 컴파일러, CPI는 마이크로아키텍처, 클럭은 회로와 공정(<a href="logic.html">2장</a>)이다.</p>
+    <div class="formula">$$\text{실행 시간} = \underbrace{\text{명령어 수}}_{\text{ISA·컴파일러}} \times \underbrace{\text{CPI}}_{\text{마이크로아키텍처}} \times \underbrace{\frac{1}{f_{clk}}}_{\text{회로·공정}}$$
+      $$\text{CPI} = 1 + \underbrace{\frac{\text{적재-사용 거품}}{\text{명령}}}_{\text{데이터}} + \underbrace{f_{br}\,(1-a)\,P_{br}}_{\text{분기}} + \underbrace{\frac{\text{MPKI}}{1000}\,P_{mem}}_{\text{캐시 미스}}$$
+      <div class="where">\(f_{br}\): 분기 비율, \(a\): 예측 정확도, \(P_{br}\): 예측 실패 벌점(사이클), MPKI: 명령 1,000개당 캐시 미스 수, \(P_{mem}\): 미스 한 번의 벌점(사이클). IPC(Instructions Per Cycle)는 CPI의 역수다.</div></div>
+    <figure class="play" id="fig-iron">
+      <div class="play-view"><canvas id="cv-iron"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>클럭 <output id="ir-f-out"></output></span><input type="range" id="ir-f" min="1" max="4.5" step="0.1" value="3"></label>
+        <label class="ctrl"><span>분기 예측 정확도 <output id="ir-a-out"></output></span><input type="range" id="ir-a" min="80" max="99.9" step="0.1" value="95"></label>
+        <label class="ctrl"><span>예측 실패 벌점 <output id="ir-p-out"></output></span><input type="range" id="ir-p" min="2" max="25" step="1" value="12"></label>
+        <label class="ctrl"><span>캐시 미스 (MPKI, 벌점 150사이클) <output id="ir-m-out"></output></span><input type="range" id="ir-m" min="0" max="20" step="0.5" value="2"></label>
+        <label class="ctrl"><span>적재-사용 거품 (명령당) <output id="ir-h-out"></output></span><input type="range" id="ir-h" min="0" max="0.3" step="0.01" value="0.08"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">CPI</span><span class="v" id="ir-cpi">—</span></div>
+        <div class="stat"><span class="k">IPC</span><span class="v" id="ir-ipc">—</span></div>
+        <div class="stat"><span class="k">명령 10억 개 실행 시간</span><span class="v" id="ir-t">—</span></div>
+      </div>
+      <figcaption><b>그림 3-6.</b> <span class="try">만져 보기</span>막대는 CPI를 이루는 항목의 몫이다(분기 비율 20% 가정). 클럭을 올려도 캐시 미스 벌점은 "나노초" 단위로 고정이라 사이클로 세면 오히려 커지는데, 여기서는 단순하게 사이클 수를 고정했다. 캐시 미스 MPKI를 5만 넘겨도 나머지가 모두 하찮아지는 것을 보자. 메모리 계층은 <a href="cache.html">5장</a>의 주제다.</figcaption>
+    </figure>
+    <p>2장에서 본 대로 파이프라인을 깊게 하면 클럭은 오르지만, 단마다 레지스터 오버헤드를 내야 하고, 분기 예측이 틀렸을 때 버리는 단의 수도 늘어난다. 깊이에 따라 클럭은 오르고 CPI는 나빠진다. 그 곱이 최소가 되는 지점, 즉 최적 깊이가 있다. 2000년대 초 연구들(Hartstein·Puzak, Sprangle·Carmean 등)은 성능만 보면 최적 깊이가 FO4 6~8개 남짓의 단 지연, 대략 20~30단이라는 결과를 냈지만, 전력까지 고려하면 훨씬 얕아진다. 펜티엄 4가 31단까지 갔다가 다음 세대(Core)에서 14단 안팎으로 돌아온 것이 그 증거다.</p>
+    <div class="sim" id="sim-depth">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>파이프라인 깊이의 최적점</h3></div>
+      <div class="sim-view"><canvas id="cv-depth"></canvas></div>
+      <div class="sim-controls">
+        <label class="ctrl"><span>단마다 레지스터 오버헤드 <output id="dp2-o-out"></output></span><input type="range" id="dp2-o" min="5" max="60" step="1" value="30"></label>
+        <label class="ctrl"><span>분기 예측 실패 (명령 1,000개당) <output id="dp2-m-out"></output></span><input type="range" id="dp2-m" min="0" max="20" step="0.5" value="6"></label>
+        <label class="ctrl"><span>5단 기준 데이터 거품 (명령당) <output id="dp2-h-out"></output></span><input type="range" id="dp2-h" min="0" max="0.4" step="0.01" value="0.1"></label>
+        <label class="ctrl"><span>발행 폭 (한 사이클에 들여보내는 명령 수) <output id="dp2-w-out"></output></span><input type="range" id="dp2-w" min="1" max="8" step="1" value="4"></label>
+        <div class="ctrl"><span>평가 기준</span><div class="seg" id="dp2-goal"><button data-value="perf" class="on">성능</button><button data-value="eff">성능³/전력 (에너지 효율 반영)</button></div></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최적 깊이</span><span class="v" id="dp2-n">—</span></div>
+        <div class="stat"><span class="k">그때 클럭</span><span class="v" id="dp2-f">—</span></div>
+        <div class="stat"><span class="k">그때 CPI</span><span class="v" id="dp2-cpi">—</span></div>
+        <div class="stat"><span class="k">5단 대비 성능</span><span class="v" id="dp2-sp">—</span></div>
+      </div>
+      <div class="sim-note">교육용 모델: 전체 로직 지연 3,000 ps를 N단으로 나눈다. 이상적인 CPI는 1/발행 폭이고(다음 장의 슈퍼스칼라), 분기는 파이프라인의 약 70% 지점에서 결정되어 벌점 ≈ 0.7N 사이클, 데이터 거품은 단 수에 비례해 는다고 가정했다(Hartstein·Puzak 2002 모델의 단순화). 발행 폭이 넓을수록 거품 한 사이클에 잃는 명령이 많아 최적 깊이가 얕아진다. 전력은 클럭 × (1 + 플립플롭 비중 N/15)에 비례한다고 보고, 성능³/전력(같은 전력에서 전압 조절로 얻을 수 있는 성능을 반영한 지표)을 쓰면 최적 깊이가 얕아진다.</div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>코어</th><th>연도</th><th>구조</th><th class="num">파이프라인 단 수</th><th class="num">분기 예측 실패 벌점</th></tr></thead>
+        <tbody>
+          <tr><td>MIPS R2000</td><td>1985</td><td>순차, 단일 발행</td><td class="num">5</td><td class="num">~1 (지연 슬롯)</td></tr>
+          <tr><td>Intel Pentium 4 (Prescott)</td><td>2004</td><td>비순차</td><td class="num">31</td><td class="num">약 30 이상</td></tr>
+          <tr><td>Intel Core 2</td><td>2006</td><td>비순차, 4폭</td><td class="num">약 14</td><td class="num">약 15</td></tr>
+          <tr><td>Arm Cortex-A53 / A55</td><td>2012 / 2017</td><td>순차, 2폭 (효율 코어)</td><td class="num">8</td><td class="num">약 7~8</td></tr>
+          <tr><td>Arm Cortex-A76</td><td>2018</td><td>비순차, 4폭</td><td class="num">약 13</td><td class="num">약 11</td></tr>
+          <tr><td>Apple Firestorm (M1/A14)</td><td>2020</td><td>비순차, 8폭</td><td class="num">비공개</td><td class="num">약 13~14 (측정 추정)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:14px;color:var(--text-dim)">단 수와 벌점은 공식 발표와 공개 측정(마이크로벤치마크) 자료의 대략값이며, 같은 코어도 측정 방법(어느 단계에서 예측 실패가 드러나는가, 마이크로옵 캐시 적중 여부)에 따라 몇 사이클씩 다르다.</p>
+    <div class="callout deep"><strong>CPI 1의 벽 너머</strong><p>지금까지 이상적인 파이프라인의 CPI는 1이었다. 매 사이클 명령 하나만 들여보내기 때문이다. 이 벽을 넘으려면 한 사이클에 명령을 여러 개 들여보내야 하고(슈퍼스칼라), 그러면 해저드가 훨씬 많아져서 명령 순서를 하드웨어가 바꿔야 한다(비순차 실행). 스마트폰의 큰 코어가 작은 코어보다 3~4배 큰 이유가 거기에 있다. <a href="ooo.html">4장</a>에서 이어 간다.</p></div>
+  </section>
+
+  <section class="keypoints">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>명령어는 opcode·레지스터 번호·즉치값 필드로 나뉜 32비트 비트열이다. RISC-V는 레지스터 필드 위치를 고정해 해독을 빠르게 한다.</li>
+      <li>파이프라인은 명령 하나의 지연 시간을 줄이지 않고, 여러 명령을 겹쳐 처리량을 단계 수만큼 높인다. 가장 느린 단계가 박자를 정한다.</li>
+      <li>데이터 해저드는 포워딩으로 대부분 없애지만 적재-사용은 거품 하나가 남는다. 컴파일러 스케줄링이나 비순차 실행으로 숨긴다.</li>
+      <li>제어 해저드는 분기 예측으로 숨긴다. 2비트 카운터는 반복문에 강하고, 전역 기록을 쓰면 규칙적인 패턴도 맞힌다. 틀리면 플러시 벌점을 낸다.</li>
+      <li>실행 시간 = 명령어 수 × CPI × 클럭 주기. 파이프라인을 깊게 하면 클럭과 CPI가 맞바뀌어, 성능과 전력을 함께 보면 최적 깊이는 10~20단 남짓이다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. RISC-V에서 opcode가 명령어의 몇 번 비트에 있는가?</p>
+        <div class="opts">
+          <button class="opt">31~25번</button><button class="opt">19~15번</button><button class="opt" data-correct>6~0번</button><button class="opt">형식마다 다르다</button>
+        </div>
+        <div class="quiz-exp">모든 기본 형식에서 맨 아래 7비트(6~0)가 opcode다. 레지스터 rs1(19~15), rs2(24~20), rd(11~7)도 위치가 고정되어 있다.</div></div>
+      <div class="quiz-q"><p>Q2. 단계 지연이 각각 200·100·200·200·100 ps인 5단 파이프라인(레지스터 오버헤드 무시)의 클럭 주기는?</p>
+        <div class="opts">
+          <button class="opt" data-correct>200 ps</button><button class="opt">160 ps</button><button class="opt">800 ps</button><button class="opt">100 ps</button>
+        </div>
+        <div class="quiz-exp">파이프라인의 클럭은 가장 느린 단계에 맞춰야 하므로 200 ps다. 단계 지연 합(800 ps)은 단일 사이클 설계의 주기다.</div></div>
+      <div class="quiz-q"><p>Q3. 포워딩이 있는 5단 파이프라인에서도 거품이 생기는 경우는?</p>
+        <div class="opts">
+          <button class="opt">add 바로 뒤에 그 결과를 쓰는 sub</button>
+          <button class="opt">서로 관계없는 add 두 개</button>
+          <button class="opt" data-correct>lw 바로 뒤에 그 결과를 쓰는 add</button>
+          <button class="opt">sw 뒤의 add</button>
+        </div>
+        <div class="quiz-exp">적재 값은 MEM 단계 끝에야 나오고 다음 명령은 그때 이미 EX에 들어가야 하므로 한 사이클을 기다려야 한다(적재-사용 해저드).</div></div>
+      <div class="quiz-q"><p>Q4. 분기 비율 20%, 예측 정확도 95%, 예측 실패 벌점 15사이클, 다른 해저드가 없다면 CPI는?</p>
+        <div class="opts">
+          <button class="opt">1.03</button><button class="opt" data-correct>1.15</button><button class="opt">1.30</button><button class="opt">1.75</button>
+        </div>
+        <div class="quiz-exp">\(1 + 0.2 \times 0.05 \times 15 = 1.15\). 정확도 95%도 깊은 파이프라인에서는 15%의 손해다.</div></div>
+      <div class="quiz-q"><p>Q5. 패턴 T, N, T, N, …을 되풀이하는 분기에 대해 2비트 포화 카운터(약한 안 감 상태에서 시작)의 장기 정확도는?</p>
+        <div class="opts">
+          <button class="opt">100%</button><button class="opt">약 75%</button><button class="opt">50%</button><button class="opt" data-correct>0~50% (시작 상태에 따라 0%까지)</button>
+        </div>
+        <div class="quiz-exp">카운터가 1과 2 사이를 오가며 늘 직전과 반대 결과에 당한다. 약한 안 감(1)에서 시작하면 T에 틀려 2로, N에 틀려 1로… 계속 틀린다. 전역 기록을 쓰는 예측기가 필요한 이유다.</div></div>
+      <div class="quiz-q"><p>Q6. 펜티엄 4 이후 고성능 CPU의 파이프라인이 다시 얕아진 가장 큰 이유는?</p>
+        <div class="opts">
+          <button class="opt">분기가 없어져서</button>
+          <button class="opt" data-correct>깊은 파이프라인의 높은 클럭이 전력을 너무 많이 쓰고, 예측 실패 벌점이 커져서</button>
+          <button class="opt">레지스터 오버헤드가 0이 되어서</button>
+          <button class="opt">컴파일러가 명령을 더 많이 만들어서</button>
+        </div>
+        <div class="quiz-exp">클럭을 올리면 전력이 급격히 늘고(전압도 올려야 한다), 단이 깊을수록 예측 실패·해저드의 사이클 벌점이 커져 CPI가 나빠진다. 그래서 넓게(슈퍼스칼라) 가는 쪽으로 방향을 틀었다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var P = SB.palette();
+  SB.onTheme(function () { P = SB.palette(); });
+  function aopt(sel, wide, narrow, bp, extra) {
+    var el = document.querySelector(sel), o = Object.assign({}, extra || {});
+    Object.defineProperty(o, "aspect", { get: function () { return (el.parentElement.clientWidth || 600) < (bp || 560) ? narrow : wide; } });
+    return o;
+  }
+  function T(ctx, s, x, y, o) {
+    o = o || {};
+    ctx.font = SB.font(o.size || 12, o.mono, o.weight);
+    ctx.fillStyle = o.color || P.text; ctx.textAlign = o.align || "left"; ctx.textBaseline = o.base || "middle";
+    ctx.fillText(s, x, y);
+  }
+  function inside(r, x, y) { return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
+
+  /* ================================================================ 1. 명령어 해독기 */
+  (function () {
+    function bits(v, hi, lo) { return Math.floor(v / Math.pow(2, lo)) % Math.pow(2, hi - lo + 1); }
+    function sext(v, n) { return v >= Math.pow(2, n - 1) ? v - Math.pow(2, n) : v; }
+    function encR(f7, rs2, rs1, f3, rd, op) { return ((f7 << 25) | (rs2 << 20) | (rs1 << 15) | (f3 << 12) | (rd << 7) | op) >>> 0; }
+    function encI(imm, rs1, f3, rd, op) { return (((imm & 0xfff) << 20) | (rs1 << 15) | (f3 << 12) | (rd << 7) | op) >>> 0; }
+    function encS(imm, rs2, rs1, f3, op) { return ((((imm >> 5) & 0x7f) << 25) | (rs2 << 20) | (rs1 << 15) | (f3 << 12) | ((imm & 0x1f) << 7) | op) >>> 0; }
+    function encB(imm, rs2, rs1, f3, op) { return ((((imm >> 12) & 1) << 31) | (((imm >> 5) & 0x3f) << 25) | (rs2 << 20) | (rs1 << 15) | (f3 << 12) | (((imm >> 1) & 0xf) << 8) | (((imm >> 11) & 1) << 7) | op) >>> 0; }
+    var PRE = { add: encR(0, 7, 6, 0, 5, 0x33), sub: encR(0x20, 7, 6, 0, 5, 0x33), addi: encI(-12, 6, 0, 5, 0x13), lw: encI(16, 2, 2, 8, 0x03), sw: encS(20, 8, 2, 2, 0x23), beq: encB(-8, 6, 5, 0, 0x63) };
+    var word = PRE.add, cells = [];
+    var FCOL = { opcode: "accent", rd: "ok", rs1: "accent2", rs2: "warn", funct3: "dim", funct7: "dim", imm: "npu" };
+    function colOf(k) { return k === "imm" ? SOC.color("npu") : P[FCOL[k]]; }
+    function decode(w) {
+      var op = bits(w, 6, 0), rd = bits(w, 11, 7), f3 = bits(w, 14, 12), rs1 = bits(w, 19, 15), rs2 = bits(w, 24, 20), f7 = bits(w, 31, 25);
+      var r = function (i) { return "x" + i; }, d = { fmt: "?", name: null, asm: "알 수 없는 명령", desc: "이 opcode는 여기서 다루는 RV32I 부분 집합(R·I·S·B형)에 없다.", fields: [[6, 0, "opcode", "opcode"], [31, 7, "?", "funct7"]] };
+      if (op === 0x33) {
+        var m = { 0: f7 === 0 ? "add" : f7 === 0x20 ? "sub" : null, 1: f7 === 0 ? "sll" : null, 2: f7 === 0 ? "slt" : null, 4: f7 === 0 ? "xor" : null, 5: f7 === 0 ? "srl" : f7 === 0x20 ? "sra" : null, 6: f7 === 0 ? "or" : null, 7: f7 === 0 ? "and" : null };
+        var DS = { add: "+", sub: "−", sll: "<<", slt: "< ? 1 : 0 (부호 있는 비교)", xor: "XOR", srl: ">> (논리)", sra: ">> (산술)", or: "OR", and: "AND" };
+        d = { fmt: "R", name: m[f3], fields: [[31, 25, "funct7", "funct7"], [24, 20, "rs2", "rs2"], [19, 15, "rs1", "rs1"], [14, 12, "funct3", "funct3"], [11, 7, "rd", "rd"], [6, 0, "opcode", "opcode"]] };
+        d.asm = d.name ? d.name + " " + r(rd) + ", " + r(rs1) + ", " + r(rs2) : "(funct7·funct3 조합이 정의되지 않음)";
+        d.desc = d.name ? "레지스터 " + r(rs1) + " " + DS[d.name] + " " + r(rs2) + "을(를) 계산해 " + r(rd) + "에 쓴다." + (rd === 0 ? " (x0에 쓰면 버려진다)" : "") : "R형(레지스터-레지스터 연산)이지만 이 조합은 없는 명령이다.";
+      } else if (op === 0x13 || op === 0x03) {
+        var imm = sext(bits(w, 31, 20), 12);
+        d = { fmt: "I", fields: [[31, 20, "imm[11:0]", "imm"], [19, 15, "rs1", "rs1"], [14, 12, "funct3", "funct3"], [11, 7, "rd", "rd"], [6, 0, "opcode", "opcode"]] };
+        if (op === 0x13) {
+          d.name = { 0: "addi", 2: "slti", 4: "xori", 6: "ori", 7: "andi" }[f3] || null;
+          d.asm = d.name ? d.name + " " + r(rd) + ", " + r(rs1) + ", " + imm : "(정의되지 않은 funct3)";
+          d.desc = d.name ? "레지스터 " + r(rs1) + "와(과) 상수 " + imm + "로 연산해 " + r(rd) + "에 쓴다. 상수는 12비트 부호 있는 수(−2048~2047)다." : "";
+        } else {
+          d.name = { 0: "lb", 1: "lh", 2: "lw", 4: "lbu", 5: "lhu" }[f3] || null;
+          d.asm = d.name ? d.name + " " + r(rd) + ", " + imm + "(" + r(rs1) + ")" : "(정의되지 않은 funct3)";
+          d.desc = d.name ? "메모리 주소 " + r(rs1) + " + " + imm + "에서 " + ({ lb: "1바이트", lh: "2바이트", lw: "4바이트", lbu: "1바이트(부호 없음)", lhu: "2바이트(부호 없음)" })[d.name] + "를 읽어 " + r(rd) + "에 넣는다(적재)." : "";
+        }
+      } else if (op === 0x23) {
+        var si = sext(f7 * 32 + rd, 12);
+        d = { fmt: "S", name: { 0: "sb", 1: "sh", 2: "sw" }[f3] || null, fields: [[31, 25, "imm[11:5]", "imm"], [24, 20, "rs2", "rs2"], [19, 15, "rs1", "rs1"], [14, 12, "funct3", "funct3"], [11, 7, "imm[4:0]", "imm"], [6, 0, "opcode", "opcode"]] };
+        d.asm = d.name ? d.name + " " + r(rs2) + ", " + si + "(" + r(rs1) + ")" : "(정의되지 않은 funct3)";
+        d.desc = d.name ? "레지스터 " + r(rs2) + "의 값을 메모리 주소 " + r(rs1) + " + " + si + "에 쓴다(저장). rd 자리가 없으므로 즉치값을 둘로 쪼개 그 자리에 넣었다." : "";
+      } else if (op === 0x63) {
+        var bi = sext(bits(w, 31, 31) * 4096 + bits(w, 7, 7) * 2048 + bits(w, 30, 25) * 32 + bits(w, 11, 8) * 2, 13);
+        d = { fmt: "B", name: { 0: "beq", 1: "bne", 4: "blt", 5: "bge", 6: "bltu", 7: "bgeu" }[f3] || null, fields: [[31, 31, "i12", "imm"], [30, 25, "imm[10:5]", "imm"], [24, 20, "rs2", "rs2"], [19, 15, "rs1", "rs1"], [14, 12, "funct3", "funct3"], [11, 8, "imm[4:1]", "imm"], [7, 7, "i11", "imm"], [6, 0, "opcode", "opcode"]] };
+        var cmp = { beq: "==", bne: "≠", blt: "<", bge: "≥", bltu: "< (부호 없음)", bgeu: "≥ (부호 없음)" };
+        d.asm = d.name ? d.name + " " + r(rs1) + ", " + r(rs2) + ", " + bi : "(정의되지 않은 funct3)";
+        d.desc = d.name ? "만약 " + r(rs1) + " " + cmp[d.name] + " " + r(rs2) + "이면 PC를 " + bi + "바이트(" + (bi / 4) + "개 명령) 옮긴다. 아니면 다음 명령으로 간다. 즉치값의 0번 비트는 늘 0이라 저장하지 않는다." : "";
+      }
+      return d;
+    }
+    var cv = SB.canvas("#cv-isa", function (ctx, w, h) {
+      var d = decode(word), narrow = w < 640, perRow = narrow ? 16 : 32, rows = 32 / perRow;
+      var cw = (w - 20) / perRow, ch = Math.min(34, cw * 1.2), rowH = ch + 58;
+      cells = [];
+      var fieldOf = function (b) { for (var i = 0; i < d.fields.length; i++) if (b <= d.fields[i][0] && b >= d.fields[i][1]) return d.fields[i]; return null; };
+      for (var rr = 0; rr < rows; rr++) {
+        var hiB = 31 - rr * perRow, loB = hiB - perRow + 1, y0 = 14 + rr * rowH;
+        for (var b = hiB; b >= loB; b--) {
+          var x = 10 + (hiB - b) * cw, v = bits(word, b, b), f = fieldOf(b), col = f ? colOf(f[3]) : P.faint;
+          ctx.fillStyle = SOC.alpha(col, v ? 0.85 : 0.14);
+          SOC.roundRect(ctx, x + 1, y0, cw - 2, ch, 4); ctx.fill();
+          ctx.strokeStyle = SOC.alpha(col, 0.9); ctx.lineWidth = 1; ctx.stroke();
+          T(ctx, String(v), x + cw / 2, y0 + ch / 2 + 1, { size: Math.min(15, cw * 0.6), mono: true, weight: 700, align: "center", color: v ? "#fff" : P.text });
+          if (b % 4 === 0 || b === 31) T(ctx, String(b), x + cw / 2, y0 - 6, { size: 9, mono: true, color: P.faint, align: "center" });
+          cells.push({ x: x, y: y0, w: cw, h: ch, b: b });
+        }
+        // 필드 괄호
+        d.fields.forEach(function (fd) {
+          var hi = Math.min(fd[0], hiB), lo = Math.max(fd[1], loB);
+          if (hi < lo) return;
+          var xa = 10 + (hiB - hi) * cw + 2, xb = 10 + (hiB - lo + 1) * cw - 2, yb = y0 + ch + 6, col = colOf(fd[3]);
+          ctx.strokeStyle = col; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.moveTo(xa, yb); ctx.lineTo(xa, yb + 5); ctx.lineTo(xb, yb + 5); ctx.lineTo(xb, yb); ctx.stroke();
+          var lab = fd[2], val = bits(word, fd[0], fd[1]);
+          ctx.font = SB.font(11, true, 700);
+          if (ctx.measureText(lab).width > xb - xa + 4) lab = fd[3] === "imm" ? "imm" : fd[3] === "funct3" ? "f3" : fd[3] === "funct7" ? "f7" : lab;
+          if (ctx.measureText(lab).width <= xb - xa + 6) T(ctx, lab, (xa + xb) / 2, yb + 15, { size: 11, mono: true, weight: 700, align: "center", color: col });
+          var vs = fd[3] === "rd" || fd[3] === "rs1" || fd[3] === "rs2" ? "x" + val : fd[3] === "opcode" ? "0x" + val.toString(16) : String(val);
+          if (hi === fd[0] && ctx.measureText(vs).width <= xb - xa + 6 && fd[3] !== "imm") T(ctx, vs, (xa + xb) / 2, yb + 29, { size: 10.5, mono: true, align: "center", color: P.dim });
+        });
+      }
+    }, (function () { var o = {}; Object.defineProperty(o, "height", { get: function () { return Math.round(fitH()); } }); return o; })());
+    function fitH() { var w = document.getElementById("cv-isa").parentElement.clientWidth || 600, narrow = w < 640, perRow = narrow ? 16 : 32, cw = (w - 20) / perRow, ch = Math.min(34, cw * 1.2); return 14 + (32 / perRow) * (ch + 58) - 10; }
+    var info = document.getElementById("isa-info");
+    function upd() {
+      var d = decode(word);
+      info.innerHTML = '<div class="cp-asm">' + d.asm + '</div><div class="cp-flds">' + d.fmt + "형 · 16진수 0x" + word.toString(16).padStart(8, "0") + "</div><div>" + d.desc + "</div>";
+      cv.redraw();
+    }
+    SB.seg("isa-pick", function (v) { word = PRE[v]; upd(); });
+    SOC.pointer(cv.canvas, {
+      down: function (x, y) { cells.forEach(function (c) { if (inside(c, x, y)) { word = (word ^ (1 << c.b)) >>> 0; upd(); } }); },
+      move: function (x, y) { cv.canvas.style.cursor = cells.some(function (c) { return inside(c, x, y); }) ? "pointer" : "default"; },
+    });
+    upd();
+  })();
+
+  /* ================================================================ 2. 데이터패스 */
+  (function () {
+    var ins = "add", mode = "single", tk = 0;
+    var DLY = { IF: 200, ID: 100, EX: 200, MEM: 200, WB: 100 };
+    var USE = { add: ["IF", "ID", "EX", "WB"], lw: ["IF", "ID", "EX", "MEM", "WB"], sw: ["IF", "ID", "EX", "MEM"], beq: ["IF", "ID", "EX"] };
+    var STG = ["IF", "ID", "EX", "MEM", "WB"];
+    var BL = [{ k: "IF", n: "PC + 명령\n메모리", s: "명령\n메모리" }, { k: "ID", n: "해독 +\n레지스터", s: "레지\n스터" }, { k: "EX", n: "ALU", s: "ALU" }, { k: "MEM", n: "데이터\n메모리", s: "데이터\n메모리" }, { k: "WB", n: "레지스터\n쓰기", s: "쓰기" }];
+    function need(i) { return USE[i].reduce(function (a, s) { return a + DLY[s]; }, 0); }
+    var cv = SB.canvas("#cv-dp", function (ctx, w, h) {
+      var used = USE[ins], narrow = w < 560;
+      var top = 16, bh = narrow ? 52 : 62, gap = narrow ? 10 : 24, bw = (w - 24 - gap * 4) / 5;
+      var bx = function (i) { return 12 + i * (bw + gap); };
+      // 연결선
+      for (var i = 0; i < 5; i++) {
+        var on = used.indexOf(BL[i].k) >= 0;
+        if (i < 4) { var on2 = used.indexOf(BL[i + 1].k) >= 0; ctx.strokeStyle = on && on2 ? P.accent : P.border; ctx.lineWidth = on && on2 ? 3 : 1.5; ctx.beginPath(); ctx.moveTo(bx(i) + bw, top + bh / 2); ctx.lineTo(bx(i + 1), top + bh / 2); ctx.stroke(); }
+      }
+      // 되돌아가는 쓰기 길
+      if (used.indexOf("WB") >= 0) { ctx.strokeStyle = SOC.alpha(P.accent, 0.8); ctx.lineWidth = 2; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(bx(4) + bw / 2, top + bh); ctx.lineTo(bx(4) + bw / 2, top + bh + 12); ctx.lineTo(bx(1) + bw / 2, top + bh + 12); ctx.lineTo(bx(1) + bw / 2, top + bh); ctx.stroke(); ctx.setLineDash([]); }
+      if (ins === "beq") { ctx.strokeStyle = SOC.alpha(P.accent2, 0.9); ctx.lineWidth = 2; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(bx(2) + bw / 2, top); ctx.lineTo(bx(2) + bw / 2, top - 8); ctx.lineTo(bx(0) + bw / 2, top - 8); ctx.lineTo(bx(0) + bw / 2, top); ctx.stroke(); ctx.setLineDash([]); }
+      for (var j = 0; j < 5; j++) {
+        var b = BL[j], on3 = used.indexOf(b.k) >= 0;
+        ctx.fillStyle = on3 ? SOC.alpha(SOC.color("little"), 0.85) : P.surface; ctx.strokeStyle = on3 ? SOC.color("little") : P.border; ctx.lineWidth = 1.5;
+        SOC.roundRect(ctx, bx(j), top, bw, bh, 8); ctx.fill(); ctx.stroke();
+        var lines = (narrow ? b.s : b.n).split("\n");
+        lines.forEach(function (ln, k) { T(ctx, ln, bx(j) + bw / 2, top + bh / 2 + (k - (lines.length - 1) / 2) * 14, { size: narrow ? 10 : 12, weight: 700, align: "center", color: on3 ? "#fff" : P.dim }); });
+        T(ctx, b.k, bx(j) + bw / 2, top + bh + 24, { size: 11, mono: true, align: "center", color: on3 ? P.text : P.faint, weight: 700 });
+        if (mode === "pipe" && j < 4) { ctx.fillStyle = SOC.color("big"); ctx.fillRect(bx(j) + bw + gap / 2 - 3, top - 4, 6, bh + 8); }
+      }
+      if (used.indexOf("EX") >= 0 && used.indexOf("WB") >= 0 && used.indexOf("MEM") < 0) { ctx.strokeStyle = P.accent; ctx.lineWidth = 2.5; ctx.setLineDash([6, 4]); ctx.beginPath(); ctx.moveTo(bx(2) + bw, top + bh / 2); ctx.lineTo(bx(4), top + bh / 2); ctx.stroke(); ctx.setLineDash([]); if (!narrow) T(ctx, "ALU 결과가 메모리를 건너뜀", bx(3) + bw / 2, top + bh + 8, { size: 9.5, align: "center", color: P.accent }); }
+      // 이동하는 토큰
+      var tot = need(ins), per = mode === "pipe" ? 220 : 800, tt = (tk * 400) % (mode === "pipe" ? per * 5 : per + 200);
+      var acc = 0, px = null;
+      for (var s = 0; s < 5; s++) {
+        var st = STG[s], d = mode === "pipe" ? per : (used.indexOf(st) >= 0 ? DLY[st] : 0);
+        if (mode === "single" && used.indexOf(st) < 0) continue;
+        if (tt >= acc && tt < acc + d) { px = bx(s) + bw * ((tt - acc) / d); break; }
+        acc += d;
+      }
+      if (px != null) { ctx.fillStyle = P.accent; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(px, top + bh / 2, 7, 0, 7); ctx.fill(); ctx.stroke(); }
+      // 시간 막대
+      var ty = top + bh + 44, tw = w - 24 - (narrow ? 44 : 60), sc = tw / (mode === "pipe" ? 1100 : 900), lab = narrow ? 44 : 60;
+      var rowsI = ["add", "lw", "sw", "beq"], rh = Math.min(34, (h - ty - 26) / 4);
+      rowsI.forEach(function (ri, k) {
+        var y = ty + k * rh, x = 12 + lab, sel = ri === ins;
+        T(ctx, ri, 12, y + rh / 2, { size: 12, mono: true, weight: sel ? 700 : 400, color: sel ? P.accent : P.dim });
+        if (mode === "single") {
+          USE[ri].forEach(function (st) { var ww = DLY[st] * sc; ctx.fillStyle = SOC.alpha(SOC.color("little"), sel ? 0.9 : 0.4); ctx.fillRect(x, y + 3, ww - 1.5, rh - 6); if (ww > 26) T(ctx, st, x + ww / 2, y + rh / 2, { size: 9.5, mono: true, align: "center", color: "#fff", weight: 700 }); x += ww; });
+          var wasted = 800 - need(ri);
+          if (wasted > 0) { ctx.fillStyle = SOC.alpha(P.bad, sel ? 0.25 : 0.1); ctx.fillRect(x, y + 3, wasted * sc, rh - 6); if (sel && wasted * sc > 50) T(ctx, "낭비 " + wasted, x + wasted * sc / 2, y + rh / 2, { size: 10, mono: true, align: "center", color: P.bad }); }
+        } else {
+          STG.forEach(function (st) { var ww = 220 * sc, u = USE[ri].indexOf(st) >= 0; ctx.fillStyle = u ? SOC.alpha(SOC.color("little"), sel ? 0.9 : 0.4) : SOC.alpha(P.faint, 0.18); ctx.fillRect(x, y + 3, ww - 1.5, rh - 6); if (ww > 26) T(ctx, st, x + ww / 2, y + rh / 2, { size: 9.5, mono: true, align: "center", color: u ? "#fff" : P.faint, weight: 700 }); x += ww; });
+        }
+      });
+      var clkX = 12 + lab + (mode === "pipe" ? 220 : 800) * sc;
+      ctx.strokeStyle = P.accent; ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(clkX, ty - 4); ctx.lineTo(clkX, ty + rh * 4 + 2); ctx.stroke(); ctx.setLineDash([]);
+      T(ctx, "클럭 " + (mode === "pipe" ? 220 : 800) + " ps", Math.min(clkX + 4, w - 70), ty + rh * 4 + 12, { size: 10.5, color: P.accent, weight: 700 });
+    }, aopt("#cv-dp", 0.36, 0.95, 560, { minHeight: 280, maxHeight: 400 }));
+    function upd() {
+      var n = need(ins);
+      SB.stat("dp-need", n + "<small>ps</small>");
+      if (mode === "single") { SB.stat("dp-clk", "800<small>ps</small>"); SB.stat("dp-lat", "800<small>ps</small>"); SB.stat("dp-thr", "1.25<small>명령/ns</small>"); }
+      else { SB.stat("dp-clk", "220<small>ps</small>"); SB.stat("dp-lat", "1,100<small>ps</small>"); SB.stat("dp-thr", "4.55<small>명령/ns</small>"); }
+      cv.redraw();
+    }
+    SB.seg("dp-ins", function (v) { ins = v; upd(); });
+    SB.seg("dp-mode", function (v) { mode = v; upd(); });
+    SB.loop(cv.canvas, function (dt) { tk += dt; cv.redraw(); });
+    upd();
+  })();
+
+  /* ================================================================ 3. 빨래방 */
+  (function () {
+    var n = 4, mode = "eq", tt = 0;
+    var NAMES = ["세탁", "건조", "개기", "정리"];
+    function durs() { return mode === "eq" ? [30, 30, 30, 30] : [30, 60, 30, 30]; }
+    function sched(pipe) {
+      var d = durs(), out = [], endPrev = [0, 0, 0, 0], t = 0;
+      for (var i = 0; i < n; i++) {
+        var row = [];
+        if (!pipe) { for (var s = 0; s < 4; s++) { row.push([t, t + d[s]]); t += d[s]; } }
+        else { var tEnd = 0; for (var s2 = 0; s2 < 4; s2++) { var st = Math.max(tEnd, endPrev[s2]); row.push([st, st + d[s2]]); tEnd = st + d[s2]; endPrev[s2] = tEnd; } }
+        out.push(row);
+      }
+      return out;
+    }
+    var cv = SB.canvas("#cv-laundry", function (ctx, w, h) {
+      var A = sched(false), B = sched(true), tmax = A[n - 1][3][1];
+      var left = 40, right = 12, X = function (t) { return left + t / tmax * (w - left - right); };
+      var half = (h - 40) / 2, rh = Math.min(26, (half - 22) / n);
+      var tc = (tt * 40) % (tmax + 60);
+      function gantt(S, y0, title) {
+        T(ctx, title, left, y0 + 6, { size: 12, weight: 700 });
+        var end = S[n - 1][3][1];
+        S.forEach(function (row, i) {
+          var y = y0 + 18 + i * rh;
+          T(ctx, "#" + (i + 1), 8, y + rh / 2, { size: 10.5, mono: true, color: P.dim });
+          row.forEach(function (seg, s) {
+            var x0 = X(seg[0]), x1 = X(seg[1]), act = tc >= seg[0] && tc < seg[1];
+            ctx.fillStyle = SOC.alpha(P.series[s], act ? 1 : 0.55); ctx.fillRect(x0, y + 1, Math.max(1, x1 - x0 - 1), rh - 3);
+            if (x1 - x0 > 30 && rh > 13) T(ctx, NAMES[s], (x0 + x1) / 2, y + rh / 2, { size: 10, align: "center", color: "#fff", weight: 700 });
+          });
+        });
+        T(ctx, (end / 60).toFixed(1) + "시간", Math.min(X(end) + 4, w - 46), y0 + 6, { size: 11, mono: true, color: P.accent, weight: 700 });
+      }
+      gantt(A, 6, "하나씩 차례로");
+      gantt(B, 6 + half + 8, "파이프라인");
+      ctx.strokeStyle = P.accent; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(X(Math.min(tc, tmax)), 18); ctx.lineTo(X(Math.min(tc, tmax)), h - 22); ctx.stroke(); ctx.setLineDash([]);
+      for (var t = 0; t <= tmax; t += 60) T(ctx, t / 60 + "h", X(t), h - 10, { size: 10, mono: true, color: P.dim, align: "center" });
+    }, { aspect: 0.55, minHeight: 300, maxHeight: 440 });
+    function upd() {
+      var a = sched(false)[n - 1][3][1], b = sched(true)[n - 1][3][1];
+      SB.stat("ld-seq", (a / 60).toFixed(1) + "<small>시간</small>");
+      SB.stat("ld-pipe", (b / 60).toFixed(1) + "<small>시간</small>");
+      SB.stat("ld-sp", (a / b).toFixed(2) + "<small>×</small>");
+      cv.redraw();
+    }
+    SB.range("ld-n", function (v) { return v + "개"; }, function (v) { n = v; upd(); });
+    SB.seg("ld-mode", function (v) { mode = v; upd(); });
+    SB.loop(cv.canvas, function (dt) { tt += dt; cv.redraw(); });
+    upd();
+  })();
+
+  /* ================================================================ 파이프라인 엔진 (해저드 그림과 시뮬레이터 공용) */
+  var KIND = { add: "alu", sub: "alu", and: "alu", or: "alu", xor: "alu", slt: "alu", addi: "alui", andi: "alui", ori: "alui", lw: "load", sw: "store", beq: "br", bne: "br", blt: "br", bge: "br", nop: "nop" };
+  function parse(src) {
+    var raw = [], labels = {}, errs = [];
+    src.split("\n").forEach(function (L, ln) {
+      var s = L.replace(/#.*/, "").trim(), m;
+      while ((m = s.match(/^([A-Za-z_]\w*):\s*(.*)$/))) { labels[m[1]] = raw.length; s = m[2].trim(); }
+      if (s) raw.push({ s: s, ln: ln + 1 });
+    });
+    function reg(t, ln) { var m = /^x(\d{1,2})$/.exec(t || ""); if (!m || +m[1] > 31) { if (t === "zero") return 0; errs.push(ln + "행: 레지스터 '" + t + "'"); return 0; } return +m[1]; }
+    function num(t, ln) { if (!/^-?\d+$/.test(t || "")) { errs.push(ln + "행: 숫자 '" + t + "'"); return 0; } return +t; }
+    var prog = raw.map(function (r) {
+      var m = r.s.match(/^(\w+)\s*(.*)$/), op = m[1].toLowerCase(), a = m[2].split(",").map(function (x) { return x.trim(); }).filter(Boolean), k = KIND[op];
+      var I = { op: op, kind: k, rd: 0, rs1: 0, rs2: 0, imm: 0, txt: r.s.replace(/\s+/g, " "), ln: r.ln };
+      if (!k) { errs.push(r.ln + "행: 모르는 명령 '" + op + "'"); I.kind = "nop"; return I; }
+      if (k === "alu") { I.rd = reg(a[0], r.ln); I.rs1 = reg(a[1], r.ln); I.rs2 = reg(a[2], r.ln); }
+      else if (k === "alui") { I.rd = reg(a[0], r.ln); I.rs1 = reg(a[1], r.ln); I.imm = num(a[2], r.ln); }
+      else if (k === "load" || k === "store") {
+        var mm = /^(-?\d+)\((\w+)\)$/.exec(a[1] || "");
+        if (!mm) errs.push(r.ln + "행: 주소 형식은 imm(xN)");
+        if (k === "load") I.rd = reg(a[0], r.ln); else I.rs2 = reg(a[0], r.ln);
+        I.imm = mm ? +mm[1] : 0; I.rs1 = mm ? reg(mm[2], r.ln) : 0;
+      } else if (k === "br") {
+        I.rs1 = reg(a[0], r.ln); I.rs2 = reg(a[1], r.ln);
+        if (!(a[2] in labels)) errs.push(r.ln + "행: 레이블 '" + a[2] + "' 없음"); I.target = labels[a[2]] != null ? labels[a[2]] : 0;
+      }
+      return I;
+    });
+    return { prog: prog, errs: errs };
+  }
+  function srcs(I) {
+    if (I.kind === "alu" || I.kind === "br") return [I.rs1, I.rs2];
+    if (I.kind === "alui" || I.kind === "load") return [I.rs1];
+    if (I.kind === "store") return [I.rs1, I.rs2];
+    return [];
+  }
+  function run(prog, fwd, pred, maxN) {
+    var R = []; for (var i = 0; i < 32; i++) R.push(0);
+    var M = []; for (var k = 0; k < 64; k++) M.push(k + 1);
+    var rows = [], dyn = [], prod = {}, last = { f: -1, d: -1, x: -1 }, nextF = 0, pc = 0, bp = {}, nBr = 0, nMis = 0;
+    maxN = maxN || 400;
+    while (pc >= 0 && pc < prog.length && dyn.length < maxN) {
+      var I = prog[pc], e = { I: I, txt: I.txt, pc: pc, fw: [] };
+      e.f = Math.max(nextF, last.d);
+      e.d = Math.max(e.f + 1, last.x);
+      var ready = e.d + 1;
+      srcs(I).forEach(function (r, si) {
+        if (!r || !prod[r]) return;
+        var p = prod[r], need;
+        var isStoreData = I.kind === "store" && si === 1;
+        if (fwd) {
+          need = p.I.kind === "load" ? p.x + 2 : p.x + 1;
+          if (isStoreData) need -= 1;
+        } else need = p.w + 1;
+        if (need > ready) ready = need;
+        e.fw.push({ p: p, r: r, store: isStoreData });
+      });
+      e.x = Math.max(ready, last.x + 1);
+      e.m = e.x + 1; e.w = e.m + 1;
+      e.stall = e.x - (e.d + 1);
+      // 포워딩이 실제로 쓰였는지: 생산자가 소비자의 ID 이후에도 아직 레지스터에 쓰지 않았으면
+      e.fw = fwd ? e.fw.filter(function (q) { return q.p.w > e.x - 1; }) : [];
+      // 기능 실행
+      var a = R[I.rs1], b = R[I.rs2], res = null, npc = pc + 1, taken = false;
+      switch (I.op) {
+        case "add": res = (a + b) | 0; break; case "sub": res = (a - b) | 0; break;
+        case "and": res = a & b; break; case "or": res = a | b; break; case "xor": res = a ^ b; break;
+        case "slt": res = a < b ? 1 : 0; break;
+        case "addi": res = (a + I.imm) | 0; break; case "andi": res = a & I.imm; break; case "ori": res = a | I.imm; break;
+        case "lw": var ad = ((a + I.imm) >> 2) & 63; res = M[ad]; e.addr = ad; break;
+        case "sw": var ad2 = ((a + I.imm) >> 2) & 63; M[ad2] = b; e.addr = ad2; break;
+        case "beq": taken = a === b; break; case "bne": taken = a !== b; break;
+        case "blt": taken = a < b; break; case "bge": taken = a >= b; break;
+      }
+      if (res != null && I.rd) { R[I.rd] = res; e.wr = [I.rd, res]; prod[I.rd] = e; }
+      rows.push(e); dyn.push(e);
+      if (I.kind === "br") {
+        nBr++;
+        var cnt = bp[pc] == null ? 1 : bp[pc];
+        var p = pred === "nt" ? false : pred === "t" ? true : cnt >= 2;
+        if (pred === "2b") bp[pc] = taken ? Math.min(3, cnt + 1) : Math.max(0, cnt - 1);
+        e.pred = p; e.taken = taken; e.mis = p !== taken;
+        if (taken) npc = I.target;
+        if (e.mis) {
+          nMis++;
+          var wp = p ? I.target : pc + 1;
+          var w1 = { txt: wp < prog.length ? prog[wp].txt : "(끝)", flushed: true, f: e.f + 1, d: e.x, x: null };
+          var w2 = { txt: wp + 1 < prog.length ? prog[wp + 1].txt : "(끝)", flushed: true, f: e.x, d: null, x: null };
+          rows.push(w1, w2);
+          nextF = e.x + 1;
+        } else nextF = e.f + 1;
+      } else nextF = e.f + 1;
+      last = e; pc = npc;
+    }
+    var endC = last.w != null ? last.w : 0;
+    return { rows: rows, dyn: dyn, cycles: endC + 1, regs: R, nBr: nBr, nMis: nMis, cut: dyn.length >= maxN && pc < prog.length };
+  }
+  function stageAt(r, c) {
+    if (c < r.f) return null;
+    if (r.flushed) { if (r.d != null && c >= r.d) return c === r.d ? "ID" : c === r.d + 1 ? "X" : null; if (c < (r.d != null ? r.d : r.f + 1)) return "IF"; return c === (r.d != null ? r.d : r.f + 1) ? "X" : null; }
+    if (c < r.d) return c > r.f ? "IF*" : "IF";
+    if (c < r.x) return c > r.d ? "ID*" : "ID";
+    if (c === r.x) return "EX"; if (c === r.m) return "MEM"; if (c === r.w) return "WB";
+    return null;
+  }
+  var SCOL = { IF: 0, ID: 1, EX: 2, MEM: 3, WB: 4 };
+  function stageColor(s) { var k = s.replace("*", ""); return [P.accent2, P.ok, P.accent, P.warn, SOC.color("npu")][SCOL[k]]; }
+  /** 파이프라인 도표. C: 현재 사이클(Infinity면 전부), win: {r0, c0}. 반환: 실제 사용한 창 */
+  function drawDiagram(ctx, box, rows, C, opt) {
+    opt = opt || {};
+    var labW = opt.labW || Math.min(140, Math.max(84, box.w * 0.3)), cw = opt.cw || 28;
+    var nCols = Math.max(4, Math.floor((box.w - labW) / cw)); cw = (box.w - labW) / nCols;
+    var rh = opt.rh || 22, nRows = Math.max(1, Math.floor((box.h - 18) / rh));
+    var vis = rows.filter(function (r) { return r.f <= C; });
+    var c0 = isFinite(C) ? Math.max(0, C - nCols + 2) : 0;
+    if (opt.c0 != null) c0 = opt.c0;
+    var rEnd = function (r) { return r.flushed ? (r.d != null ? r.d + 1 : r.f + 1) : r.w; };
+    var firstAct = 0; while (firstAct < vis.length && rEnd(vis[firstAct]) < c0) firstAct++;
+    var r0 = Math.max(0, Math.min(firstAct, vis.length - nRows));
+    if (opt.r0 != null) r0 = opt.r0;
+    // 헤더
+    for (var j = 0; j < nCols; j++) {
+      var c = c0 + j, x = box.x + labW + j * cw;
+      if (c === C) { ctx.fillStyle = SB.color("accent-soft"); ctx.fillRect(x, box.y, cw, box.h); }
+      T(ctx, String(c + 1), x + cw / 2, box.y + 8, { size: 10, mono: true, color: c === C ? P.accent : P.faint, align: "center", weight: c === C ? 700 : 400 });
+    }
+    var pos = {};
+    for (var i = 0; i < nRows && r0 + i < vis.length; i++) {
+      var r = vis[r0 + i], y = box.y + 18 + i * rh;
+      ctx.globalAlpha = r.flushed ? 0.45 : 1;
+      var lfs = labW < 110 ? 9.5 : 11;
+      ctx.font = SB.font(lfs, true); var tx = r.txt;
+      while (ctx.measureText(tx).width > labW - 6 && tx.length > 4) tx = tx.slice(0, -2) + "…";
+      T(ctx, tx, box.x + 2, y + rh / 2, { size: lfs, mono: true, color: r.flushed ? P.faint : P.text });
+      if (r.flushed) { ctx.strokeStyle = P.bad; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(box.x + 2, y + rh / 2); ctx.lineTo(box.x + 2 + Math.min(labW - 8, ctx.measureText(tx).width), y + rh / 2); ctx.stroke(); }
+      for (var j2 = 0; j2 < nCols; j2++) {
+        var cc = c0 + j2; if (cc > C) break;
+        var s = stageAt(r, cc); if (!s) continue;
+        var x2 = box.x + labW + j2 * cw;
+        if (s === "X") { T(ctx, "✕", x2 + cw / 2, y + rh / 2, { size: 13, align: "center", color: P.bad, weight: 700 }); continue; }
+        var stall = s.indexOf("*") >= 0, col = stageColor(s);
+        ctx.fillStyle = SOC.alpha(col, stall ? 0.15 : 0.85);
+        SOC.roundRect(ctx, x2 + 1.5, y + 2, cw - 3, rh - 4, 4); ctx.fill();
+        if (stall) { SOC.hatch(ctx, x2 + 1.5, y + 2, cw - 3, rh - 4, P.dim); }
+        if (cw > 19) T(ctx, s.replace("*", ""), x2 + cw / 2, y + rh / 2 + 0.5, { size: cw > 32 ? 10 : cw > 24 ? 9 : 8, mono: true, weight: 700, align: "center", color: stall ? P.dim : "#fff" });
+        pos[rows.indexOf(r) + ":" + cc] = [x2 + cw / 2, y + rh / 2];
+      }
+      ctx.globalAlpha = 1;
+    }
+    // 포워딩 화살표
+    vis.forEach(function (r) {
+      (r.fw || []).forEach(function (q) {
+        if (r.x > C) return;
+        var pc2 = q.p.I.kind === "load" ? q.p.m : q.p.x, tc = q.store ? r.m : r.x;
+        if (tc > C) return;
+        var a = pos[rows.indexOf(q.p) + ":" + pc2], b = pos[rows.indexOf(r) + ":" + tc];
+        if (a && b) SOC.arrow(ctx, a[0] + cw * 0.3, a[1] + rh * 0.3, b[0] - cw * 0.25, b[1] - rh * 0.25, P.text, 1.6, 6);
+      });
+    });
+    return { nCols: nCols, nRows: nRows };
+  }
+
+  /* ================================================================ 4. 해저드 그림 */
+  (function () {
+    var pk = "alu", dist = 1, fwd = 0;
+    var cv = SB.canvas("#cv-hz", function (ctx, w, h) {
+      var src = (pk === "alu" ? "add x1, x2, x3" : "lw x1, 0(x2)") + "\n";
+      for (var i = 1; i < dist; i++) src += "addi x" + (5 + i) + ", x0, " + i + "\n";
+      src += "sub x4, x1, x5\n";
+      var R = run(parse(src).prog, !!fwd, "nt");
+      var lw = w < 500 ? 100 : 140; drawDiagram(ctx, { x: 10, y: 6, w: w - 20, h: h - 12 }, R.rows, Infinity, { c0: 0, r0: 0, cw: Math.min(40, (w - 20 - lw) / Math.max(9, R.cycles)), rh: 30, labW: lw });
+    }, { aspect: 0.22, minHeight: 150, maxHeight: 200 });
+    function upd() {
+      var src = (pk === "alu" ? "add x1, x2, x3" : "lw x1, 0(x2)") + "\n"; for (var i = 1; i < dist; i++) src += "addi x" + (5 + i) + ", x0, " + i + "\n"; src += "sub x4, x1, x5\n";
+      var R = run(parse(src).prog, !!fwd, "nt"), st = R.dyn.reduce(function (a, e) { return a + e.stall; }, 0);
+      SB.stat("hz-b", st + "<small>사이클</small>");
+      SB.stat("hz-c", R.cycles + "<small>사이클</small>");
+      cv.redraw();
+    }
+    SB.seg("hz-p", function (v) { pk = v; upd(); });
+    SB.seg("hz-d", function (v) { dist = +v; upd(); });
+    SB.seg("hz-f", function (v) { fwd = +v; upd(); });
+    upd();
+  })();
+
+  /* ================================================================ 5. 파이프라인 시뮬레이터 */
+  (function () {
+    var PROGS = {
+      sum: "# 배열 mem[0..9]의 합을 x3에\n  addi x1, x0, 0     # 주소\n  addi x2, x0, 40    # 끝 주소 (10개)\n  addi x3, x0, 0     # 합\nloop:\n  lw   x4, 0(x1)\n  add  x3, x3, x4    # 적재-사용!\n  addi x1, x1, 4\n  bne  x1, x2, loop\n  sw   x3, 200(x0)",
+      sched: "# 같은 일, 명령 순서만 바꿈\n  addi x1, x0, 0\n  addi x2, x0, 40\n  addi x3, x0, 0\nloop:\n  lw   x4, 0(x1)\n  addi x1, x1, 4     # lw와 add 사이로 옮김\n  add  x3, x3, x4\n  bne  x1, x2, loop\n  sw   x3, 200(x0)",
+      chain: "# 앞 결과를 바로 쓰는 명령들\n  addi x1, x0, 5\n  add  x2, x1, x1\n  sub  x3, x2, x1\n  and  x4, x3, x2\n  or   x5, x4, x1\n  lw   x6, 8(x0)\n  add  x7, x6, x5\n  sw   x7, 12(x0)\n  lw   x8, 12(x0)\n  xor  x9, x8, x7",
+      alt: "# i가 짝수면 건너뛰기: 분기가 번갈아 간다\n  addi x1, x0, 0     # i\n  addi x2, x0, 12\n  addi x5, x0, 0     # 홀수 개수\nloop:\n  andi x3, x1, 1\n  beq  x3, x0, even\n  addi x5, x5, 1\neven:\n  addi x1, x1, 1\n  blt  x1, x2, loop",
+    };
+    var srcEl = document.getElementById("ps-src"), errEl = document.getElementById("ps-err"), info = document.getElementById("ps-info");
+    var fwd = true, pred = "nt", prog = [], R = null, C = -1, playing = false, acc = 0;
+    function rerun(keepC) {
+      var p = parse(srcEl.value);
+      errEl.textContent = p.errs.slice(0, 2).join(" · ");
+      prog = p.prog;
+      R = run(prog, fwd, pred, 400);
+      if (!keepC) C = -1;
+      C = Math.min(C, R.cycles);
+      upd();
+    }
+    var cv = SB.canvas("#cv-pipe", function (ctx, w, h) {
+      if (!R) return;
+      // 위: 단계 상자
+      var stg = ["IF", "ID", "EX", "MEM", "WB"], g = 6, bw = (w - 20 - g * 4) / 5, bh = 46;
+      stg.forEach(function (s, i) {
+        var x = 10 + i * (bw + g), occ = null;
+        R.rows.forEach(function (r) { var a = stageAt(r, C); if (a && a.replace("*", "") === s) occ = { r: r, a: a }; });
+        var col = stageColor(s);
+        ctx.fillStyle = occ ? SOC.alpha(col, occ.r.flushed ? 0.25 : occ.a.indexOf("*") >= 0 ? 0.35 : 0.9) : P.surface;
+        ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+        SOC.roundRect(ctx, x, 8, bw, bh, 8); ctx.fill(); ctx.stroke();
+        T(ctx, s, x + 6, 18, { size: 10.5, mono: true, weight: 700, color: occ && !occ.r.flushed ? "#fff" : col });
+        var t = occ ? occ.r.txt : "(거품)";
+        ctx.font = SB.font(w < 560 ? 9.5 : 11.5, true, 600);
+        while (ctx.measureText(t).width > bw - 8 && t.length > 3) t = t.slice(0, -2) + "…";
+        T(ctx, t, x + bw / 2, 38, { size: w < 560 ? 9.5 : 11.5, mono: true, weight: 600, align: "center", color: occ && !occ.r.flushed && occ.a.indexOf("*") < 0 ? "#fff" : P.dim });
+        if (occ && occ.a.indexOf("*") >= 0) T(ctx, "대기", x + bw - 6, 18, { size: 10, align: "right", color: P.bad, weight: 700 });
+        if (occ && occ.r.flushed) T(ctx, "버림", x + bw - 6, 18, { size: 10, align: "right", color: P.bad, weight: 700 });
+      });
+      drawDiagram(ctx, { x: 10, y: 66, w: w - 20, h: h - 72 }, R.rows, C < 0 ? -1 : C, { cw: w < 560 ? 26 : 34, rh: 21, labW: w < 560 ? 96 : 150 });
+      if (C < 0) T(ctx, "‘한 사이클 →’을 눌러 시작", w / 2, h / 2 + 30, { size: 13, align: "center", color: P.faint });
+    }, aopt("#cv-pipe", 0.5, 1.2, 560, { minHeight: 340, maxHeight: 520 }));
+    function upd() {
+      var done = R.dyn.filter(function (e) { return e.w <= C; }), stl = 0, fl = 0;
+      R.dyn.forEach(function (e) { if (e.x <= C) stl += e.stall; else if (e.d < C) stl += Math.max(0, C - e.d - 0); if (e.mis && e.x <= C) fl += 2; });
+      stl = R.dyn.reduce(function (a, e) { return a + (e.x <= C ? e.stall : (e.d <= C ? Math.max(0, Math.min(e.stall, C - e.d)) : 0)); }, 0);
+      SB.stat("ps-cyc", Math.max(0, C + 1) + "<small>/ " + R.cycles + "</small>");
+      SB.stat("ps-ret", done.length + "<small>/ " + R.dyn.length + "</small>");
+      SB.stat("ps-stl", stl + "");
+      SB.stat("ps-fl", fl + "");
+      var cpi = (R.cycles - 4) / Math.max(1, R.dyn.length);
+      SB.stat("ps-cpi", cpi.toFixed(2) + (R.nBr ? "<small>분기 적중 " + Math.round((1 - R.nMis / R.nBr) * 100) + "%</small>" : ""));
+      // 이번 사이클의 사건
+      var ev = [];
+      R.rows.forEach(function (r) {
+        var s = stageAt(r, C); if (!s) return;
+        if (s === "ID*") ev.push("<b>" + r.txt + "</b>: 피연산자를 기다리며 ID에 멈춤 → EX에 거품");
+        if (!r.flushed && r.I && r.I.kind === "br" && r.x === C) ev.push("<b>" + r.txt + "</b>: EX에서 분기 결정 — 실제 " + (r.taken ? "감" : "안 감") + ", 예측 " + (r.pred ? "감" : "안 감") + (r.mis ? ' → <span class="bad-t">예측 실패, 뒤따르던 2개 명령을 버림</span>' : ' → <span class="ok-t">적중</span>'));
+        if (!r.flushed && r.fw && r.fw.length && (r.x === C)) r.fw.forEach(function (q) { if (!q.store) ev.push("<b>" + r.txt + "</b>: x" + q.r + " 값을 " + (q.p.I.kind === "load" ? "MEM/WB" : "EX/MEM") + " 레지스터에서 포워딩"); });
+        if (!r.flushed && r.w === C && r.wr) ev.push("<b>" + r.txt + "</b>: x" + r.wr[0] + " ← " + r.wr[1] + " 기록");
+      });
+      var regs = {}, newest = null;
+      R.dyn.forEach(function (e) { if (e.wr && e.w <= C) { regs[e.wr[0]] = e.wr[1]; if (e.w === C) newest = e.wr[0]; } });
+      var rk = Object.keys(regs).map(Number).sort(function (a, b) { return a - b; });
+      info.innerHTML = (C < 0 ? "<b>준비.</b> 프로그램 " + R.dyn.length + "개 명령(실행 순서 기준)을 " + R.cycles + "사이클에 마친다." + (R.cut ? " (400개에서 멈춤)" : "") : "<b>사이클 " + (C + 1) + "</b> · " + (ev.length ? ev.join("<br>") : "모든 단계가 막힘 없이 진행")) +
+        '<div class="cp-regs">' + (rk.length ? rk.map(function (k) { return '<span class="' + (k === newest ? "new" : "") + '">x' + k + "=" + regs[k] + "</span>"; }).join("") : '<span>레지스터: 아직 기록 없음</span>') + "</div>";
+      cv.redraw();
+    }
+    document.getElementById("ps-step").onclick = function () { C = Math.min(R.cycles - 1, C + 1); upd(); };
+    document.getElementById("ps-back").onclick = function () { C = Math.max(-1, C - 1); upd(); };
+    document.getElementById("ps-reset").onclick = function () { C = -1; upd(); };
+    document.getElementById("ps-end").onclick = function () { C = R.cycles - 1; upd(); };
+    var pb = document.getElementById("ps-play");
+    pb.onclick = function () { playing = !playing; pb.textContent = playing ? "❚❚ 멈춤" : "▶ 자동"; if (playing && C >= R.cycles - 1) C = -1; };
+    SB.loop(cv.canvas, function (dt) { if (!playing) return; acc += dt; if (acc > 0.45) { acc = 0; if (C < R.cycles - 1) { C++; upd(); } else { playing = false; pb.textContent = "▶ 자동"; } } });
+    SB.seg("ps-fwd", function (v) { fwd = v === "1"; rerun(true); });
+    SB.seg("ps-bp", function (v) { pred = v; rerun(true); });
+    var sel = document.getElementById("ps-prog");
+    sel.addEventListener("change", function () { srcEl.value = PROGS[sel.value]; rerun(false); });
+    document.getElementById("ps-load").onclick = function () { rerun(false); };
+    srcEl.value = PROGS.sum;
+    rerun(false);
+  })();
+
+  /* ================================================================ 6. 2비트 분기 예측기 */
+  (function () {
+    var s = 1, hist = [], pat = "loop", pidx = 0, rnd = SB.rng(7), circles = [];
+    var NAMES = ["강한\n안 감", "약한\n안 감", "약한\n감", "강한\n감"];
+    function gen(p, i, r) {
+      if (p === "loop") return i % 10 !== 9;
+      if (p === "alt") return i % 2 === 0;
+      if (p === "tnn") return i % 3 === 0;
+      return r() < 0.7;
+    }
+    function feed(o) { var pr = s >= 2; hist.push({ o: o, ok: pr === o }); if (hist.length > 60) hist.shift(); s = o ? Math.min(3, s + 1) : Math.max(0, s - 1); }
+    function accuracy(p) {
+      var r = SB.rng(11), n = 2000, a0 = 0, a1 = 0, a2 = 0, a3 = 0, last = false, c = 1, gh = 0, tab = [1, 1, 1, 1];
+      for (var i = 0; i < n; i++) {
+        var o = gen(p, i, r);
+        if (!o) a0++;
+        if (last === o) a1++; last = o;
+        if ((c >= 2) === o) a2++; c = o ? Math.min(3, c + 1) : Math.max(0, c - 1);
+        if ((tab[gh] >= 2) === o) a3++; tab[gh] = o ? Math.min(3, tab[gh] + 1) : Math.max(0, tab[gh] - 1); gh = ((gh << 1) | (o ? 1 : 0)) & 3;
+      }
+      return [a0 / n, a1 / n, a2 / n, a3 / n];
+    }
+    var cv = SB.canvas("#cv-bp", function (ctx, w, h) {
+      var narrow = w < 560, r = Math.min(34, (w - 40) / 11), cy = 26 + r + 18, gap = (w - 20 - 8 * r) / 3;
+      circles = [];
+      for (var i = 0; i < 4; i++) {
+        var cx = 10 + r + i * (2 * r + gap), on = i === s, col = i >= 2 ? P.accent : P.accent2;
+        circles.push({ x: cx - r, y: cy - r, w: 2 * r, h: 2 * r, i: i });
+        // 화살표 (T: 위쪽 오른쪽, N: 아래쪽 왼쪽)
+        if (i < 3) {
+          var nx = 10 + r + (i + 1) * (2 * r + gap);
+          ctx.strokeStyle = SOC.alpha(P.accent, 0.8); ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(cx + r * 0.6, cy - r * 0.8); ctx.quadraticCurveTo((cx + nx) / 2, cy - r * 1.7, nx - r * 0.6, cy - r * 0.8); ctx.stroke();
+          SOC.arrow(ctx, nx - r * 0.9, cy - r * 1.05, nx - r * 0.6, cy - r * 0.8, SOC.alpha(P.accent, 0.8), 1.5, 7);
+          T(ctx, "T", (cx + nx) / 2, cy - r * 1.45 - 8, { size: 11, mono: true, weight: 700, color: P.accent, align: "center" });
+          ctx.strokeStyle = SOC.alpha(P.accent2, 0.8);
+          ctx.beginPath(); ctx.moveTo(nx - r * 0.6, cy + r * 0.8); ctx.quadraticCurveTo((cx + nx) / 2, cy + r * 1.7, cx + r * 0.6, cy + r * 0.8); ctx.stroke();
+          SOC.arrow(ctx, cx + r * 0.9, cy + r * 1.05, cx + r * 0.6, cy + r * 0.8, SOC.alpha(P.accent2, 0.8), 1.5, 7);
+          T(ctx, "N", (cx + nx) / 2, cy + r * 1.45 + 8, { size: 11, mono: true, weight: 700, color: P.accent2, align: "center" });
+        }
+        ctx.fillStyle = on ? col : SOC.alpha(col, 0.12); ctx.strokeStyle = col; ctx.lineWidth = on ? 3 : 1.5;
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fill(); ctx.stroke();
+        var L = NAMES[i].split("\n");
+        T(ctx, String(i), cx, cy - r * 0.45, { size: 11, mono: true, align: "center", color: on ? "#fff" : P.dim, weight: 700 });
+        L.forEach(function (ln, k) { T(ctx, ln, cx, cy + (k + 0.1) * Math.min(13, r * 0.42), { size: Math.min(11.5, r * 0.36), align: "center", color: on ? "#fff" : P.text, weight: 700 }); });
+      }
+      T(ctx, "다음 예측: " + (s >= 2 ? "감 (T)" : "안 감 (N)"), w - 10, 12, { size: 12, weight: 700, align: "right", color: s >= 2 ? P.accent : P.accent2 });
+      // 기록 줄
+      var hy = cy + r * 2 + 22, cs = Math.min(16, (w - 20) / 40), nShow = Math.floor((w - 20) / cs);
+      T(ctx, "최근 결과 (채운 칸 = 감) · 아래 = 2비트 예측 성패", 10, hy - 8, { size: 10.5, color: P.dim });
+      var hs = hist.slice(-nShow);
+      hs.forEach(function (q, k) {
+        var x = 10 + k * cs;
+        ctx.strokeStyle = P.dim; ctx.lineWidth = 1; ctx.fillStyle = q.o ? P.text : "transparent";
+        ctx.fillRect(x + 1, hy, cs - 2, cs - 2); ctx.strokeRect(x + 1, hy, cs - 2, cs - 2);
+        T(ctx, q.ok ? "✓" : "✕", x + cs / 2, hy + cs + 6, { size: Math.min(11, cs * 0.8), align: "center", color: q.ok ? P.ok : P.bad, weight: 700 });
+      });
+      if (!hs.length) T(ctx, "T·N 버튼이나 ‘패턴 20개 넣기’를 눌러 보자", 10, hy + 8, { size: 12, color: P.faint });
+      var ok = hist.filter(function (q) { return q.ok; }).length;
+      if (hist.length) T(ctx, "최근 " + hist.length + "개 정확도 " + Math.round(ok / hist.length * 100) + "%", w - 10, hy - 8, { size: 11, mono: true, align: "right", color: P.text, weight: 700 });
+    }, { aspect: 0.36, minHeight: 210, maxHeight: 260 });
+    function stats() {
+      var a = accuracy(pat);
+      ["bp-a0", "bp-a1", "bp-a2", "bp-a3"].forEach(function (id, i) { SB.stat(id, (a[i] * 100).toFixed(1) + "<small>%</small>"); });
+    }
+    document.getElementById("bp-t").onclick = function () { feed(true); cv.redraw(); };
+    document.getElementById("bp-n").onclick = function () { feed(false); cv.redraw(); };
+    document.getElementById("bp-run").onclick = function () { for (var i = 0; i < 20; i++) { feed(gen(pat, pidx, rnd)); pidx++; } cv.redraw(); };
+    SB.seg("bp-pat", function (v) { pat = v; pidx = 0; hist = []; stats(); cv.redraw(); });
+    SOC.pointer(cv.canvas, {
+      down: function (x, y) { circles.forEach(function (c) { if (inside(c, x, y)) { s = c.i; cv.redraw(); } }); },
+      move: function (x, y) { cv.canvas.style.cursor = circles.some(function (c) { return inside(c, x, y); }) ? "pointer" : "default"; },
+    });
+    stats();
+  })();
+
+  /* ================================================================ 7. 철의 법칙 */
+  (function () {
+    var f = 3, a = 95, pen = 12, mpki = 2, hz = 0.08;
+    function parts() { return [["기본", 1, P.ok], ["데이터 거품", hz, P.warn], ["분기 예측 실패", 0.2 * (1 - a / 100) * pen, P.accent], ["캐시 미스", mpki / 1000 * 150, P.accent2]]; }
+    var cv = SB.canvas("#cv-iron", function (ctx, w, h) {
+      var ps = parts(), cpi = ps.reduce(function (s, p) { return s + p[1]; }, 0), mx = Math.max(2, Math.ceil(cpi));
+      var x0 = 12, bw = w - 24, y = 34, bh = 40, X = function (v) { return x0 + v / mx * bw; };
+      T(ctx, "CPI = " + cpi.toFixed(2) + " 의 구성", x0, 14, { size: 12.5, weight: 700 });
+      var acc = 0;
+      ps.forEach(function (p) {
+        var x = X(acc), ww = X(acc + p[1]) - x;
+        ctx.fillStyle = SOC.alpha(p[2], 0.85); ctx.fillRect(x, y, Math.max(0, ww - 1), bh);
+        if (ww > 54) T(ctx, p[1].toFixed(2), x + ww / 2, y + bh / 2, { size: 11.5, mono: true, align: "center", color: "#fff", weight: 700 });
+        acc += p[1];
+      });
+      for (var t = 0; t <= mx; t += mx > 6 ? 2 : 1) { T(ctx, String(t), X(t), y + bh + 10, { size: 10, mono: true, color: P.dim, align: "center" }); }
+      // 범례
+      var lx = x0, ly = y + bh + 30;
+      ps.forEach(function (p) { ctx.font = SB.font(11.5); var tw = ctx.measureText(p[0] + " " + (p[1] / cpi * 100).toFixed(0) + "%").width + 26; if (lx + tw > w - 10) { lx = x0; ly += 18; } ctx.fillStyle = p[2]; ctx.fillRect(lx, ly - 5, 10, 10); T(ctx, p[0] + " " + (p[1] / cpi * 100).toFixed(0) + "%", lx + 14, ly, { size: 11.5, color: P.text }); lx += tw; });
+      // 실행 시간 막대 (기준: CPI 1, 3 GHz)
+      var tm = 1e9 * cpi / (f * 1e9), tref = 1e9 / 3e9, yy = ly + 26;
+      T(ctx, "실행 시간 (명령 10억 개)", x0, yy, { size: 12, weight: 700 });
+      var sc = bw / Math.max(tm, tref * 4);
+      ctx.fillStyle = SOC.alpha(SOC.color("little"), 0.85); ctx.fillRect(x0, yy + 12, tm * sc, 20);
+      T(ctx, (tm * 1000).toFixed(0) + " ms", x0 + tm * sc + 6, yy + 22, { size: 11.5, mono: true, weight: 700 });
+      ctx.strokeStyle = P.faint; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(x0 + tref * sc, yy + 8); ctx.lineTo(x0 + tref * sc, yy + 36); ctx.stroke(); ctx.setLineDash([]);
+      T(ctx, "이상(CPI 1, 3 GHz)", x0 + tref * sc + 4, yy + 44, { size: 10, color: P.dim });
+    }, { aspect: 0.25, minHeight: 210, maxHeight: 240 });
+    function upd() {
+      var cpi = parts().reduce(function (s, p) { return s + p[1]; }, 0);
+      SB.stat("ir-cpi", cpi.toFixed(2)); SB.stat("ir-ipc", (1 / cpi).toFixed(2));
+      SB.stat("ir-t", (cpi / f * 1000).toFixed(0) + "<small>ms</small>");
+      cv.redraw();
+    }
+    SB.range("ir-f", function (v) { return v.toFixed(1) + " GHz"; }, function (v) { f = v; upd(); });
+    SB.range("ir-a", function (v) { return v.toFixed(1) + "%"; }, function (v) { a = v; upd(); });
+    SB.range("ir-p", function (v) { return v + "사이클"; }, function (v) { pen = v; upd(); });
+    SB.range("ir-m", function (v) { return v.toFixed(1); }, function (v) { mpki = v; upd(); });
+    SB.range("ir-h", function (v) { return v.toFixed(2); }, function (v) { hz = v; upd(); });
+    upd();
+  })();
+
+  /* ================================================================ 8. 깊이 최적점 */
+  (function () {
+    var to = 30, mp = 6, hz = 0.1, W = 4, goal = "perf", LOG = 3000;
+    function m(N) { var Tc = LOG / N + to, cpi = 1 / W + mp / 1000 * 0.7 * N + hz * N / 5, perf = 1 / (cpi * Tc), pw = (1 / Tc) * (1 + N / 15); return { Tc: Tc, cpi: cpi, perf: perf, eff: perf * perf * perf / pw }; }
+    function best() { var b = 1, bv = -1; for (var N = 1; N <= 50; N++) { var v = m(N)[goal]; if (v > bv) { bv = v; b = N; } } return b; }
+    var cv = SB.canvas("#cv-depth", function (ctx, w, h) {
+      var ref = m(5), data = [], fq = [], bN = best(), mx = 0;
+      for (var N = 1; N <= 50; N++) { var r = m(N), v = goal === "perf" ? r.perf / ref.perf : Math.cbrt(r.eff / ref.eff); data.push([N, v]); mx = Math.max(mx, v); fq.push([N, 1000 / r.Tc]); }
+      var fmax = Math.max.apply(null, fq.map(function (p) { return p[1]; }));
+      var ymax = Math.max(2, Math.ceil(mx * 1.15 * 2) / 2);
+      var ch = SB.chart(ctx, null, {
+        x: [1, 50], y: [0, ymax], xLabel: "파이프라인 단 수 N", xTicks: [1, 10, 20, 30, 40, 50],
+        series: [{ data: fq.map(function (p) { return [p[0], p[1] / fmax * ymax * 0.95]; }), color: P.faint, width: 1.5, dash: [5, 4] }, { data: data, color: P.accent, width: 2.6 }],
+        vlines: [{ x: bN, color: P.accent, label: "최적 " + bN + "단" }, { x: 5, color: P.faint, label: "5단" }],
+        points: [{ x: bN, y: data[bN - 1][1], color: P.accent, r: 5.5 }],
+      });
+      T(ctx, goal === "perf" ? "성능 (5단 = 1)" : "효율 반영 성능 (5단 = 1)", ch.box.x + 8, ch.box.y + 10, { size: 11, color: P.accent, weight: 700 });
+      T(ctx, "점선: 클럭 (최대 " + fmax.toFixed(1) + " GHz)", ch.box.x + ch.box.w - 6, ch.box.y + ch.box.h - 12, { size: 11, color: P.dim, align: "right" });
+    }, { aspect: 0.45, minHeight: 260, maxHeight: 380 });
+    function upd() {
+      var b = best(), r = m(b), ref = m(5);
+      SB.stat("dp2-n", b + "<small>단</small>");
+      SB.stat("dp2-f", (1000 / r.Tc).toFixed(2) + "<small>GHz</small>");
+      SB.stat("dp2-cpi", r.cpi.toFixed(2));
+      SB.stat("dp2-sp", (r.perf / ref.perf).toFixed(2) + "<small>×</small>");
+      cv.redraw();
+    }
+    SB.range("dp2-o", function (v) { return v + " ps"; }, function (v) { to = v; upd(); });
+    SB.range("dp2-m", function (v) { return v.toFixed(1); }, function (v) { mp = v; upd(); });
+    SB.range("dp2-h", function (v) { return v.toFixed(2); }, function (v) { hz = v; upd(); });
+    SB.range("dp2-w", function (v) { return v + "개"; }, function (v) { W = v; upd(); });
+    SB.seg("dp2-goal", function (v) { goal = v; upd(); });
+    upd();
+  })();
+})();
+</script>
+</body>
+</html>

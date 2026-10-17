@@ -1,0 +1,1026 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and SoCBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "코어마다 캐시를 가지면 생기는 낡은 값 문제에서 출발해, MESI 상태 기계와 스누핑·디렉터리, 거짓 공유, 메모리 순서 모델(SC·TSO·Arm)의 리트머스 테스트, 락 경합까지 직접 시뮬레이션한다.", "libs": []}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>멀티코어와 캐시 일관성 · SoCBook</title>
+<meta name="description" content="코어마다 캐시를 가지면 생기는 낡은 값 문제에서 출발해, MESI 상태 기계와 스누핑·디렉터리, 거짓 공유, 메모리 순서 모델(SC·TSO·Arm)의 리트머스 테스트, 락 경합까지 직접 시뮬레이션한다.">
+<link rel="canonical" href="https://semi.euiyun.com/soc/chapters/coherence.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#c8285f">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="SoCBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="멀티코어와 캐시 일관성 · SoCBook">
+<meta property="og:description" content="코어마다 캐시를 가지면 생기는 낡은 값 문제에서 출발해, MESI 상태 기계와 스누핑·디렉터리, 거짓 공유, 메모리 순서 모델(SC·TSO·Arm)의 리트머스 테스트, 락 경합까지 직접 시뮬레이션한다.">
+<meta property="og:url" content="https://semi.euiyun.com/soc/chapters/coherence.html">
+<meta property="og:image" content="https://semi.euiyun.com/soc/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/soc/chapters/coherence.html#chapter","name":"멀티코어와 캐시 일관성","headline":"멀티코어와 캐시 일관성 · SoCBook","description":"코어마다 캐시를 가지면 생기는 낡은 값 문제에서 출발해, MESI 상태 기계와 스누핑·디렉터리, 거짓 공유, 메모리 순서 모델(SC·TSO·Arm)의 리트머스 테스트, 락 경합까지 직접 시뮬레이션한다.","url":"https://semi.euiyun.com/soc/chapters/coherence.html","position":6,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/soc/og.png","dateModified":"2026-10-03","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/soc/#book","name":"SoCBook · 시스템 온 칩 교과서","url":"https://semi.euiyun.com/soc/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"SoCBook","item":"https://semi.euiyun.com/soc/"},{"@type":"ListItem","position":2,"name":"6. 멀티코어와 캐시 일관성","item":"https://semi.euiyun.com/soc/chapters/coherence.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/soc.js"></script>
+<!--head:end-->
+<style>
+  .co-sub { font-size: 12px; color: var(--text-faint); font-weight: 700; letter-spacing: .06em; margin-bottom: 4px; }
+  .co-log { font-size: 13.5px; color: var(--text-dim); padding: 8px 18px; border-top: 1px solid var(--border); background: var(--surface); min-height: 2.6em; line-height: 1.6; }
+  .co-log b { color: var(--text); }
+  .co-log .w { color: var(--bad); font-weight: 700; }
+  .co-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .co-tab { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .co-tab th, .co-tab td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: center; }
+  .co-tab th { background: var(--surface); font-size: 12.5px; }
+  .co-tab td:first-child, .co-tab th:first-child { text-align: left; font-family: var(--mono); }
+  .co-tab tr.cur td { background: var(--accent-soft); font-weight: 700; }
+  .co-tab td.y { color: var(--ok); font-weight: 700; } .co-tab td.n { color: var(--text-faint); }
+  .co-tab td.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .sim-controls select { width: 100%; min-width: 0; }
+  .co-tw { padding: 10px 18px; border-top: 1px solid var(--border); overflow-x: auto; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="soc"></script>
+</head>
+<body data-chapter="coherence">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 06</div>
+    <h1>멀티코어와 캐시 일관성</h1>
+    <p class="lead">두 사람이 같은 공책을 각자 복사해 들고 다닌다고 하자. 한 사람이 자기 사본에 "회의는 3시"를 "4시"로 고쳤는데, 다른 사람은 여전히 자기 사본을 보고 3시에 회의실에 간다. 스마트폰 SoC의 CPU 코어 여덟 개도 같은 처지다. <a href="cache.html">5장</a>에서 본 대로 코어마다 L1·L2 캐시라는 사본을 들고 있기 때문이다. 이 장에서는 사본들이 서로 어긋나지 않게 하는 약속인 <strong>캐시 일관성</strong><span class="en">(Cache coherence)</span> 프로토콜을 직접 돌려 보고, 그것만으로는 해결되지 않는 더 미묘한 문제, 즉 <strong>메모리 순서</strong>까지 따라가 본다.</p>
+    <ul class="objectives">
+      <li>개인 캐시가 여럿일 때 낡은 값과 잃어버린 갱신이 생기는 과정을 직접 재현한다.</li>
+      <li>MESI 상태 기계의 전이와 버스 메시지를 설명하고, MSI·MESI·MOESI의 트래픽 차이를 시뮬레이터로 비교한다.</li>
+      <li>스누핑과 디렉터리 방식이 코어 수에 따라 어떻게 확장되는지, SoC의 I/O 일관성이 왜 필요한지 이해한다.</li>
+      <li>거짓 공유로 프로그램이 느려지는 이유와 해결법을 안다.</li>
+      <li>SC·TSO·Arm 메모리 모델에서 허용되는 실행 결과를 리트머스 테스트로 판별하고, 펜스와 락의 비용을 이해한다.</li>
+    </ul>
+    <div class="soc-locator" data-blocks="big little cache noc" data-caption="큰 코어·작은 코어(빨강 계열)는 각자 L1·L2를 갖고, 공유 L3(노랑)와 NoC(회색)를 통해 서로의 캐시를 엿보며 일관성을 맞춘다."></div>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="problem">
+    <h2>캐시가 둘이면 생기는 문제</h2>
+    <p>코어 0과 코어 1이 공유 변수 X를 함께 쓴다. 각 코어의 캐시는 <a href="cache.html">5장</a>에서 본 나중 쓰기(write-back) 캐시다. 쓰기는 일단 자기 캐시에만 반영되고, 줄이 쫓겨날 때에야 메모리에 내려간다. 아래에서 버튼을 눌러 두 코어가 X를 읽고 1씩 올리게 해 보자. 먼저 "일관성 없음"으로 놓고 <b>코어 0 쓰기 → 코어 1 읽기</b>를 해 보자.</p>
+    <figure class="play" id="fig-stale">
+      <div class="play-view"><canvas id="cv-stale"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="st-mode"><button data-value="none" class="on">일관성 없음</button><button data-value="inv">쓰기 무효화 프로토콜</button></div>
+        <div class="co-btns"><button class="btn sm" id="st-r0">코어 0 읽기</button><button class="btn sm" id="st-w0">코어 0: X+1</button><button class="btn sm" id="st-e0">코어 0 내보내기</button></div>
+        <div class="co-btns"><button class="btn sm" id="st-r1">코어 1 읽기</button><button class="btn sm" id="st-w1">코어 1: X+1</button><button class="btn sm" id="st-e1">코어 1 내보내기</button><button class="btn sm" id="st-reset">초기화</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">마지막으로 쓴 X (진짜 값)</span><span class="v" id="st-true">0</span></div>
+        <div class="stat"><span class="k">낡은 값을 읽은 횟수</span><span class="v" id="st-stale">0</span></div>
+        <div class="stat"><span class="k">잃어버린 갱신</span><span class="v" id="st-lost">0</span></div>
+      </div>
+      <div class="co-log" id="st-log">버튼을 눌러 보자.</div>
+      <figcaption><b>그림 6-1.</b> <span class="try">만져 보기</span>"X+1"은 자기 캐시의 X를 읽어 1을 더해 쓰는 연산이다. 일관성이 없으면 코어 1은 메모리의 낡은 X를 읽고, 거기에 1을 더해 쓰면 코어 0이 올린 값이 사라진다(잃어버린 갱신). 프로토콜을 켜면 한 코어가 쓸 때 다른 캐시의 사본을 <b>무효화</b>하고, 읽기 미스 때 최신 값을 가진 캐시가 직접 데이터를 건넨다.</figcaption>
+    </figure>
+    <p>문제를 정확히 말하면 이렇다. 여러 사본이 있을 때 <strong>어떤 주소 하나에 대해</strong> 모든 코어가 같은 쓰기 순서를 보고, 읽기는 그 순서에서 가장 최근에 쓴 값을 돌려받아야 한다. 이 성질이 <span class="term">캐시 일관성</span>이다. 흔히 두 가지 불변식으로 정리한다.</p>
+    <ul>
+      <li><strong>단일 쓰기자, 다중 읽기자</strong><span class="en">(SWMR)</span>: 어느 순간이든 한 줄에 대해 <em>쓸 수 있는 사본 하나</em>만 있거나, <em>읽기만 하는 사본 여러 개</em>만 있다.</li>
+      <li><strong>데이터 값 불변식</strong>: 한 시기가 시작될 때 줄의 값은 직전 시기에 마지막으로 쓴 값과 같다.</li>
+    </ul>
+    <p>쓰기 전에 다른 사본을 모두 없애는 방식을 <span class="term">쓰기 무효화</span><span class="en">(Write-invalidate)</span>, 쓸 때마다 새 값을 다른 사본에 뿌리는 방식을 <span class="term">쓰기 갱신</span><span class="en">(Write-update)</span>이라 한다. 같은 줄에 연달아 쓰는 일이 많아서 거의 모든 현대 CPU는 무효화 방식을 쓴다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="mesi">
+    <h2>줄마다 붙는 상태표: MESI</h2>
+    <p>무효화 프로토콜을 구현하려면 캐시의 줄마다 몇 비트짜리 <strong>상태</strong>를 붙인다. 가장 널리 알려진 것이 네 상태의 <span class="term">MESI</span>다.</p>
+    <ul>
+      <li><b>M</b> (Modified): 이 캐시만 가졌고, 메모리보다 새 값이다(더티). 마음대로 읽고 쓸 수 있다.</li>
+      <li><b>E</b> (Exclusive): 이 캐시만 가졌고, 메모리와 같은 값이다. 쓰려면 아무에게도 묻지 않고 조용히 M이 된다.</li>
+      <li><b>S</b> (Shared): 다른 캐시에도 사본이 있을 수 있다. 읽기만 가능. 쓰려면 다른 사본을 무효화해야 한다.</li>
+      <li><b>I</b> (Invalid): 사본이 없다(혹은 쓸모없다).</li>
+    </ul>
+    <p>각 캐시 제어기는 자기 코어의 요청(<code>PrRd</code>, <code>PrWr</code>)과, 공유 버스에서 엿들은 다른 캐시의 요청(<code>BusRd</code>: 읽으려 함, <code>BusRdX</code>: 쓰려고 독점 사본을 원함)에 반응해 상태를 바꾼다. 이렇게 버스를 엿듣는 것을 <span class="term">스누핑</span><span class="en">(Snooping)</span>이라 한다. 아래 상태 기계에 사건을 하나씩 넣어 보자.</p>
+    <figure class="play" id="fig-mesi">
+      <div class="play-view"><canvas id="cv-mesi"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="me-proto"><button data-value="MSI">MSI</button><button data-value="MESI" class="on">MESI</button></div>
+        <div class="seg" id="me-oth"><button data-value="0" class="on">다른 캐시에 사본 없음</button><button data-value="1">사본 있음</button></div>
+      </div>
+      <div class="play-ctrl">
+        <div class="co-btns" id="me-ev">
+          <button class="btn sm" data-ev="PrRd">내가 읽기 PrRd</button><button class="btn sm" data-ev="PrWr">내가 쓰기 PrWr</button>
+          <button class="btn sm" data-ev="BusRd">남이 읽기 BusRd</button><button class="btn sm" data-ev="BusRdX">남이 쓰기 BusRdX</button><button class="btn sm" data-ev="Evict">내보내기</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">이 줄의 상태</span><span class="v" id="me-st">I</span></div>
+        <div class="stat"><span class="k">내가 버스에 낸 요청</span><span class="v" id="me-bus">0</span></div>
+        <div class="stat"><span class="k">메모리로 되쓴 횟수</span><span class="v" id="me-wb">0</span></div>
+      </div>
+      <div class="co-log" id="me-log">한 캐시의 한 줄을 지켜본다. 처음엔 I(사본 없음)다.</div>
+      <figcaption><b>그림 6-2.</b> <span class="try">만져 보기</span>원은 상태, 화살표는 가능한 전이다. 방금 일어난 전이가 진하게 표시되고 "사건 / 버스 동작"이 붙는다. "내가 읽기 → 내가 쓰기"를 MSI와 MESI에서 각각 해 보고 버스 요청 수를 비교하자. E 상태가 있으면 혼자 쓰는 데이터를 고칠 때 버스를 한 번 덜 쓴다.</figcaption>
+    </figure>
+    <div class="predict"><strong>M 상태인 줄에 대해 다른 코어가 읽기(BusRd)를 보냈다. 이 캐시는 무엇을 해야 할까?</strong>
+      <p>메모리의 값은 낡았다는 점을 떠올리자.</p>
+      <details><summary>답 보기</summary><p>메모리 대신 자기가 최신 데이터를 내보내야 한다(<code>Flush</code>). 동시에 그 값을 메모리에도 써서 깨끗하게 만들고 S로 내려간다. 요청한 코어도 S로 받는다. 다른 캐시가 데이터를 직접 건네는 것을 <span class="term">캐시 간 전송</span><span class="en">(Cache-to-cache transfer)</span>이라 한다. MOESI 프로토콜은 여기서 메모리 쓰기를 생략하고 <b>O</b>(Owned) 상태로 남아 "더티지만 공유 중인 사본의 주인" 역할을 맡는다. 다음 절의 시뮬레이터에서 확인해 보자.</p></details>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="sim">
+    <h2>멀티코어 일관성 시뮬레이터</h2>
+    <p>이제 코어를 2~4개로 늘리고 줄도 A~D 네 개로 늘려 보자. 각 캐시 상자 안의 줄을 누르면 그 코어가 그 줄을 읽거나 쓴다. 아래 시나리오를 고르면 정해진 순서로 접근을 재생하고, 같은 시나리오를 세 프로토콜로 돌렸을 때의 트래픽을 표로 비교한다.</p>
+    <div class="sim" id="sim-coh">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>스누핑 버스 일관성 시뮬레이터</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-coh"></canvas></div>
+        <div class="sim-controls">
+          <div><div class="co-sub">프로토콜</div><div class="seg" id="ch-proto"><button data-value="MSI">MSI</button><button data-value="MESI" class="on">MESI</button><button data-value="MOESI">MOESI</button></div></div>
+          <div><div class="co-sub">코어 수</div><div class="seg" id="ch-n"><button data-value="2">2</button><button data-value="3">3</button><button data-value="4" class="on">4</button></div></div>
+          <div><div class="co-sub">줄을 누르면</div><div class="seg" id="ch-op"><button data-value="r" class="on">읽기</button><button data-value="w">쓰기</button></div></div>
+          <label class="ctrl"><span>시나리오</span><select id="ch-scn">
+            <option value="private">각자 자기 데이터 읽고 고치기</option>
+            <option value="prodcons">생산자 하나, 소비자 여럿</option>
+            <option value="migratory">이동하는 데이터 (락으로 보호된 변수)</option>
+            <option value="pingpong">두 코어가 번갈아 쓰기</option>
+            <option value="readall">모두 읽기만</option>
+          </select></label>
+          <div class="btn-row"><button class="btn sm" id="ch-step">다음 접근</button><button class="btn sm primary" id="ch-play">▶ 자동</button><button class="btn sm" id="ch-reset">초기화</button></div>
+          <div class="step-desc" id="ch-scn-desc"></div>
+        </div>
+      </div>
+      <div class="co-log" id="ch-log">캐시 상자 안의 줄(A~D)을 눌러 보자.</div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">버스 트랜잭션</span><span class="v" id="ch-bus">0</span></div>
+        <div class="stat"><span class="k">무효화한 사본</span><span class="v" id="ch-inv">0</span></div>
+        <div class="stat"><span class="k">캐시 → 캐시 전송</span><span class="v" id="ch-c2c">0</span></div>
+        <div class="stat"><span class="k">메모리 읽기 / 쓰기</span><span class="v" id="ch-mem">0 / 0</span></div>
+      </div>
+      <div class="co-tw"><div class="co-sub">이 시나리오 전체를 세 프로토콜로 돌리면</div><table class="co-tab" id="ch-cmp"></table></div>
+      <div class="sim-note">버스 트랜잭션은 BusRd·BusRdX·BusUpgr(이미 S인 줄을 M으로 올리며 다른 사본만 무효화, 데이터 없음)를 센다. M·O 상태 캐시는 읽기 요청에 데이터를 직접 건네고, 그 밖에는 메모리가 응답한다. 실제 칩에서는 버스 대신 L3·NoC가 이 방송을 중계하며, 줄이 용량 때문에 쫓겨날 때의 되쓰기는 여기서는 생략했다.</div>
+    </div>
+    <p>표를 보면 프로토콜마다 잘하는 일이 다르다. <b>각자 자기 데이터</b>를 고치는 경우 MESI는 MSI보다 버스 트랜잭션이 절반이다. 읽은 직후 쓰는 일이 프로그램에 아주 흔하기 때문에 E 상태는 거의 모든 프로세서가 채택했다. <b>이동하는 데이터</b>처럼 더티 줄이 코어 사이를 옮겨 다니면 MOESI가 메모리 쓰기를 아낀다. Arm의 AMBA ACE·CHI 버스가 정의한 다섯 상태(UniqueDirty, SharedDirty, UniqueClean, SharedClean, Invalid)는 사실상 MOESI다. 반면 <b>두 코어가 번갈아 쓰기</b>는 어떤 프로토콜로도 줄이지 못한다. 쓰기 하나마다 줄이 통째로 건너가야 한다. 이것이 뒤에서 볼 거짓 공유와 락 경합의 뿌리다.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>프로토콜</th><th>상태</th><th>특징</th><th>대표 사용처 (대략)</th></tr></thead>
+        <tbody>
+          <tr><td>MSI</td><td>M, S, I</td><td>가장 단순. 읽고 바로 쓰면 요청이 두 번</td><td>교과서, 일부 단순한 설계</td></tr>
+          <tr><td>MESI</td><td>+ E</td><td>혼자 가진 깨끗한 줄은 조용히 M으로</td><td>대부분의 CPU (일리노이 프로토콜)</td></tr>
+          <tr><td>MOESI</td><td>+ O</td><td>더티 줄을 메모리에 쓰지 않고 공유</td><td>AMD x86, Arm ACE/CHI (UD·SD·UC·SC·I)</td></tr>
+          <tr><td>MESIF</td><td>+ F</td><td>공유 사본 중 응답할 하나(Forward)를 지정</td><td>Intel x86 (2008년 이후)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="scale">
+    <h2>스누핑은 얼마나 커질 수 있나: 디렉터리와 SoC의 일관성</h2>
+    <p>스누핑은 모든 미스를 모든 캐시에 방송한다. 코어가 4개일 때는 문제가 없지만, 64개가 되면 미스 하나마다 63개 캐시가 태그를 뒤져야 하고 버스의 대역폭도 금세 바닥난다. 대안은 줄마다 "지금 누가 사본을 가졌는지"를 기록하는 <span class="term">디렉터리</span><span class="en">(Directory)</span>다. 미스는 그 줄의 담당(홈) 노드로 가고, 디렉터리를 보고 사본을 가진 캐시에만 메시지를 보낸다. 메시지 수는 코어 수가 아니라 공유자 수에 비례한다.</p>
+    <figure class="play" id="fig-scale">
+      <div class="play-view"><canvas id="cv-scale"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>코어 수 <output id="sc-n-out"></output></span><input type="range" id="sc-n" min="1" max="6" step="1" value="3"></label>
+        <label class="ctrl"><span>미스 하나당 평균 공유자 수 <output id="sc-k-out"></output></span><input type="range" id="sc-k" min="0" max="6" step="0.5" value="1"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">스누핑: 미스당 메시지</span><span class="v" id="sc-snoop">—</span></div>
+        <div class="stat"><span class="k">디렉터리: 미스당 메시지</span><span class="v" id="sc-dir">—</span></div>
+        <div class="stat"><span class="k">완전 비트 벡터 디렉터리 저장 부담</span><span class="v" id="sc-store">—</span></div>
+      </div>
+      <figcaption><b>그림 6-3.</b> <span class="try">만져 보기</span>스누핑은 요청 1 + 다른 캐시 N−1곳의 태그 조회 + 데이터 1, 디렉터리는 요청 1 + 공유자 k곳에 무효화·응답 2k + 데이터 1(+ 홈을 거치는 전달 1)로 셌다. 공유자는 보통 적어서(실측 평균 1~2개) 디렉터리가 코어 수와 무관하게 거의 평평하다. 대신 줄마다 코어 수만큼의 비트(64 B 줄 = 512비트 대비)를 저장해야 한다.</figcaption>
+    </figure>
+    <p>스마트폰 SoC는 두 방식을 섞는다. 한 CPU 클러스터 안(예: Arm DynamIQ의 DSU)에서는 공유 L3 옆에 <span class="term">스누프 필터</span><span class="en">(Snoop filter)</span>를 두어, 각 코어의 L1·L2에 어떤 줄이 있는지 추적한다. 필터에 없는 코어에는 스누프를 보내지 않으니 사실상 작은 디렉터리다. 클러스터 바깥, 즉 GPU·NPU·DMA까지 아우르는 일관성은 NoC(<a href="noc.html">8장</a>)의 일관성 노드가 맡는다.</p>
+    <h3>CPU 밖의 블록들: I/O 일관성</h3>
+    <p>GPU나 카메라 ISP, DMA 엔진은 CPU가 준비한 버퍼를 읽고 결과를 써서 돌려준다. 그런데 CPU가 막 쓴 데이터는 CPU 캐시에 더티로 남아 있을 수 있다. 이들이 메모리를 직접 읽으면 낡은 데이터를 본다. 해결법은 두 가지다. 소프트웨어가 넘기기 전에 캐시를 <b>청소</b>(clean, 더티 줄을 메모리로 내림)하고 받기 전에 <b>무효화</b>(invalidate)하거나, 하드웨어가 그 블록의 메모리 접근을 CPU 캐시에 스누프해 주는 <span class="term">I/O 일관성</span><span class="en">(I/O coherency)</span>을 쓰는 것이다. Arm은 이런 블록용으로 스누프는 받지 않고 보내기만 하는 ACE-Lite 인터페이스를 정의했다.</p>
+    <figure class="play" id="fig-io">
+      <div class="play-view"><canvas id="cv-io"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="io-mode"><button data-value="sw" class="on">비일관 (소프트웨어 관리)</button><button data-value="hw">I/O 일관 (하드웨어 스누프)</button></div>
+      </div>
+      <div class="play-ctrl">
+        <div class="co-btns"><button class="btn sm" id="io-cw">① CPU가 버퍼에 쓰기</button><button class="btn sm" id="io-clean">② 캐시 청소</button><button class="btn sm" id="io-gr">③ GPU가 읽기</button></div>
+        <div class="co-btns"><button class="btn sm" id="io-gw">④ GPU가 결과 쓰기</button><button class="btn sm" id="io-inv">⑤ 캐시 무효화</button><button class="btn sm" id="io-cr">⑥ CPU가 결과 읽기</button><button class="btn sm" id="io-reset">초기화</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">낡은 값을 읽은 줄</span><span class="v" id="io-stale">0</span></div>
+        <div class="stat"><span class="k">캐시 유지 연산 (청소·무효화)</span><span class="v" id="io-cmo">0</span></div>
+        <div class="stat"><span class="k">하드웨어 스누프</span><span class="v" id="io-snoop">0</span></div>
+      </div>
+      <div class="co-log" id="io-log">①부터 차례로 눌러 보자. 비일관 모드에서 ②나 ⑤를 건너뛰면 어떻게 될까?</div>
+      <figcaption><b>그림 6-4.</b> <span class="try">만져 보기</span>버퍼는 캐시 줄 8개다. 칸의 숫자는 그 줄에 담긴 "프레임 번호"이고, 빨간 칸은 진짜 최신 값과 다른 낡은 값이다. 비일관 모드에서는 드라이버가 청소·무효화를 빠뜨리는 순간 GPU나 CPU가 낡은 프레임을 본다. I/O 일관 모드에서는 GPU의 읽기가 CPU 캐시를 스누프해 최신 값을 가져오고, GPU의 쓰기가 CPU 사본을 무효화한다.</figcaption>
+    </figure>
+    <div class="callout warn"><strong>"가끔 화면이 깨진다"의 단골 원인</strong><p>캐시 청소·무효화를 빠뜨린 드라이버 버그는 타이밍에 따라 가끔만 드러나서 찾기 어렵다. 반대로 매번 버퍼 전체를 청소하면 큰 버퍼(예: 4K 프레임 수십 MB)에서는 그 자체가 수 ms를 잡아먹는다. 그래서 최근 SoC는 GPU·NPU·DMA 대부분을 I/O 일관으로 연결하고, 디스플레이처럼 대역폭이 크고 CPU가 거의 건드리지 않는 데이터만 비일관 경로로 보낸다.</p></div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="false">
+    <h2>같은 줄에 사는 남남: 거짓 공유</h2>
+    <p>일관성은 <strong>캐시 줄 단위</strong>로 관리된다. 두 스레드가 서로 다른 변수를 쓰더라도 그 변수들이 같은 64 B 줄에 들어 있으면, 하드웨어 눈에는 같은 줄을 번갈아 쓰는 것과 똑같다. 쓸 때마다 줄을 상대에게서 빼앗아 와야 한다. 이것이 <span class="term">거짓 공유</span><span class="en">(False sharing)</span>다. 아래에서 코어 0은 <code>a++</code>, 코어 1은 <code>b++</code>만 계속한다. 둘은 아무것도 공유하지 않는다.</p>
+    <figure class="play" id="fig-fs">
+      <div class="play-view"><canvas id="cv-fs"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="fs-lay"><button data-value="same" class="on">a, b가 같은 줄</button><button data-value="pad">패딩으로 줄 분리</button></div>
+        <label class="ctrl"><span>증가 사이의 다른 일 <output id="fs-w-out"></output></span><input type="range" id="fs-w" min="0" max="200" step="5" value="20"></label>
+        <button class="btn sm" id="fs-reset">초기화</button>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">코어 0의 a++</span><span class="v" id="fs-a">0</span></div>
+        <div class="stat"><span class="k">코어 1의 b++</span><span class="v" id="fs-b">0</span></div>
+        <div class="stat"><span class="k">줄이 오간 횟수</span><span class="v" id="fs-x">0</span></div>
+        <div class="stat"><span class="k">패딩했을 때 대비 속도</span><span class="v" id="fs-r">—</span></div>
+      </div>
+      <figcaption><b>그림 6-5.</b> <span class="try">만져 보기</span>줄 하나가 코어 사이를 건너가는 데 60클럭이 걸린다고 가정했다(클러스터 안 캐시 간 전송의 대략값). 같은 줄이면 줄이 두 코어 사이를 쉴 새 없이 오가며(핑퐁), 증가 사이의 일이 적을수록 패딩한 경우보다 몇 배나 느려진다. 패딩하면 각 줄이 자기 코어에 M 상태로 머물러 증가가 1클럭에 끝난다.</figcaption>
+    </figure>
+    <p>해결법은 간단하다. 스레드마다 자주 쓰는 변수를 다른 캐시 줄에 두면 된다. C/C++에서는 <code>alignas(64)</code>나 <code>std::hardware_destructive_interference_size</code>로, 자바에서는 <code>@Contended</code>로 패딩을 넣는다. 스레드별 카운터를 따로 모았다가 마지막에 합치는 것도 같은 생각이다. 거짓 공유는 정답은 맞게 나오고 속도만 느려서, 프로파일러로 캐시 간 전송(HITM) 이벤트를 세어 보기 전에는 알아채기 어렵다.</p>
+    <div class="predict"><strong>a와 b가 같은 줄에 있을 때, 코어 1이 b를 쓰지 않고 읽기만 한다면 핑퐁은 사라질까?</strong>
+      <p>코어 0은 계속 a를 쓴다.</p>
+      <details><summary>답 보기</summary><p>사라지지 않는다. 코어 0이 쓸 때마다 코어 1의 S 사본이 무효화되고, 코어 1이 다시 읽으면 BusRd로 줄을 가져오며 코어 0의 M 줄을 S로 끌어내린다. 그러면 코어 0의 다음 쓰기가 또 BusUpgr를 내야 한다. 한쪽만 써도 다른 쪽이 같은 줄을 자주 읽으면 트래픽이 생긴다. 줄을 나누는 것이 근본 해결이다.</p></details>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="mcm">
+    <h2>일관성만으로는 부족하다: 메모리 순서 모델</h2>
+    <p>일관성은 <strong>주소 하나</strong>에 대한 약속이다. 그런데 프로그램은 여러 주소를 함께 쓴다. 코어 0이 <code>data = 1</code>을 쓰고 이어서 <code>flag = 1</code>을 썼을 때, 코어 1이 <code>flag == 1</code>을 봤다면 <code>data</code>도 반드시 1로 보일까? 이것은 일관성이 아니라 <span class="term">메모리 일관성 모델</span><span class="en">(Memory consistency model)</span>, 줄여서 메모리 모델이 정한다.</p>
+    <p>가장 직관적인 모델은 <span class="term">순차 일관성</span><span class="en">(SC, Sequential consistency)</span>이다. 모든 코어의 명령을 하나의 순서로 섞되 각 코어의 프로그램 순서는 지키는 실행만 허용한다. 하지만 SC는 비싸다. <a href="cache.html">5장</a>에서 본 쓰기 버퍼에 쓰기를 넣어 두고 다음 읽기를 먼저 하는 것조차 금지하기 때문이다. 그래서 x86은 <b>쓰기 → 읽기</b> 순서 바꾸기만 허용하는 <span class="term">TSO</span><span class="en">(Total store order)</span>를, Arm은 서로 다른 주소라면 거의 모든 순서 바꾸기를 허용하는 <b>약한 모델</b>을 택했다. 순서가 중요한 곳에서는 프로그래머가 <span class="term">펜스</span><span class="en">(Fence, Arm의 DMB)</span>나 acquire·release 명령으로 순서를 강제한다.</p>
+    <p>모델의 차이는 짧은 <span class="term">리트머스 테스트</span><span class="en">(Litmus test)</span>로 드러난다. 아래에서 테스트와 모델을 고르고, 실행할 명령을 직접 눌러 실행 순서를 만들어 보자. 밝은 테두리가 그 모델에서 지금 실행할 수 있는 명령이다. 처음에 모든 메모리 값은 0이다.</p>
+    <div class="sim" id="sim-mcm">
+      <div class="sim-head"><span class="sim-tag">EXPLORER</span><h3>리트머스 테스트 실행 탐색기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-mcm"></canvas></div>
+        <div class="sim-controls">
+          <div><div class="co-sub">테스트</div><div class="seg" id="mc-test"><button data-value="sb" class="on">SB</button><button data-value="mp">MP</button><button data-value="lb">LB</button></div></div>
+          <div><div class="co-sub">메모리 모델</div><div class="seg" id="mc-model"><button data-value="SC">SC</button><button data-value="TSO" class="on">TSO (x86)</button><button data-value="ARM">Arm (약함)</button></div></div>
+          <div><div class="co-sub">각 스레드 두 명령 사이에</div><div class="seg" id="mc-fence"><button data-value="0" class="on">펜스 없음</button><button data-value="1">펜스 (DMB)</button></div></div>
+          <div class="btn-row"><button class="btn sm" id="mc-reset">다시</button><button class="btn sm" id="mc-rand1">무작위 실행</button><button class="btn sm primary" id="mc-rand">무작위 1,000번</button></div>
+          <div class="step-desc" id="mc-desc"></div>
+        </div>
+      </div>
+      <div class="co-tw"><div class="co-sub">가능한 결과 (모든 실행 순서를 끝까지 탐색한 결과)</div><table class="co-tab" id="mc-tab"></table></div>
+      <div class="co-log" id="mc-log">명령을 눌러 실행해 보자.</div>
+      <div class="sim-note">이 탐색기는 "앞선 명령이 아직 실행되지 않았어도 모델이 허용하면 뒤 명령을 먼저 실행할 수 있다"는 순서 바꾸기 모델이다. SC는 순서 바꾸기 없음, TSO는 앞선 쓰기를 뒤의 다른 주소 읽기가 앞지르는 것만(쓰기 버퍼), Arm은 다른 주소끼리 모든 순서 바꾸기를 허용한다. 펜스는 어떤 메모리 명령과도 순서를 바꾸지 않는다. 같은 주소끼리는 늘 순서를 지킨다. 실제 Arm 모델에는 의존성 순서 등 더 세밀한 규칙이 있다.</div>
+    </div>
+    <ul>
+      <li><b>SB</b>(Store buffering): 두 스레드가 각자 자기 변수에 쓰고 상대 변수를 읽는다. 둘 다 0을 읽는 결과는 SC에서 불가능하지만, 쓰기가 아직 쓰기 버퍼에 있으면 TSO에서도 가능하다. 피터슨 알고리즘 같은 상호 배제가 x86에서 펜스 없이는 깨지는 이유다.</li>
+      <li><b>MP</b>(Message passing): 데이터를 쓰고 깃발을 세운다. 깃발은 보였는데 데이터가 0인 결과는 TSO에서는 불가능하지만 Arm에서는 가능하다. Arm에서는 쓰는 쪽에 <code>STLR</code>(release), 읽는 쪽에 <code>LDAR</code>(acquire)를 쓰거나 양쪽에 DMB를 넣어야 한다.</li>
+      <li><b>LB</b>(Load buffering): 각자 상대 변수를 먼저 읽고 자기 변수에 쓴다. 둘 다 1을 읽는 결과는 미래의 쓰기를 읽은 것처럼 보이지만 Arm 모델은 이를 허용한다.</li>
+    </ul>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>허용되는 순서 바꾸기 (다른 주소)</th><th>SC</th><th>TSO (x86)</th><th>Arm v8 / RISC-V (RVWMO)</th></tr></thead>
+        <tbody>
+          <tr><td>쓰기 → 읽기</td><td>✗</td><td>✓ (쓰기 버퍼)</td><td>✓</td></tr>
+          <tr><td>쓰기 → 쓰기</td><td>✗</td><td>✗</td><td>✓</td></tr>
+          <tr><td>읽기 → 읽기, 읽기 → 쓰기</td><td>✗</td><td>✗</td><td>✓ (의존성이 있으면 ✗)</td></tr>
+          <tr><td>순서를 강제하는 법</td><td>—</td><td>MFENCE, LOCK 접두 명령</td><td>DMB/DSB, LDAR·STLR (RISC-V: FENCE, .aq/.rl)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout deep"><strong>왜 약한 모델을 택하나</strong><p>약한 모델은 하드웨어에 자유를 준다. 캐시 미스가 난 쓰기를 기다리지 않고 뒤의 쓰기를 먼저 내보내고, 비순차 코어(<a href="ooo.html">4장</a>)가 읽기를 마음껏 앞당길 수 있다. 대가는 프로그래밍의 어려움이다. C/C++의 <code>std::atomic</code>은 원자 접근을 제공하지만 순서는 <code>memory_order</code>에 따라 다르고, 항상 별도 펜스가 필요한 것도 아니다. SC-for-DRF는 적절한 mutex·seq_cst 접근으로 동기화한 데이터 경쟁 없는 프로그램 등의 조건에서 읽어야 한다. relaxed 또는 acquire/release 원자는 데이터 경쟁이 없어도 SC에 없는 결과를 허용할 수 있다. 예를 들어 두 스레드가 각자 release store 뒤 상대 변수의 acquire load를 하면 둘 다 초기 0을 읽을 수 있다.</p></div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="lock">
+    <h2>원자 연산과 락: 일관성 위에 지은 집</h2>
+    <p>여러 코어가 공유 자료를 고치려면 한 번에 한 코어만 들어가게 하는 <span class="term">락</span><span class="en">(Lock)</span>이 필요하다. 락은 읽고-고치고-쓰기를 쪼갤 수 없게 하는 <span class="term">원자 연산</span><span class="en">(Atomic operation)</span> 위에 만든다. Arm v8.1부터는 <code>SWP</code>, <code>LDADD</code>, <code>CAS</code> 같은 원자 명령(LSE)이 있고, 그 전에는 <code>LDXR</code>/<code>STXR</code>(배타적 읽기·쓰기) 쌍으로 같은 일을 했다. 원자 연산은 그 줄을 M 상태로 독점해야 실행할 수 있다. 그래서 락을 기다리는 코어가 많으면 락이 든 줄이 코어 사이를 미친 듯이 오간다.</p>
+    <ul>
+      <li><b>TAS 스핀락</b>: 될 때까지 <code>swap(lock, 1)</code>을 반복한다. 기다리는 동안에도 매번 줄을 독점하려 해서 버스가 포화되고, 락을 풀려는 주인조차 줄을 받으려고 줄을 서야 한다.</li>
+      <li><b>TTAS</b>(test-and-test-and-set): 먼저 평범한 읽기로 락이 풀릴 때까지 자기 캐시의 S 사본을 보며 기다리다가, 풀린 것을 보면 그때 swap한다. 기다리는 동안 버스가 조용하다. 하지만 풀리는 순간 모든 대기자가 한꺼번에 몰려든다.</li>
+      <li><b>티켓 락</b>: 은행 번호표처럼 <code>my = fetch_add(next, 1)</code>로 번호를 받고 <code>serving == my</code>가 될 때까지 읽기로 기다린다. 도착 순서대로 공정하게 들어가고, 풀 때 원자 연산 경쟁이 없다.</li>
+    </ul>
+    <div class="sim" id="sim-lock">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>락 경합 시뮬레이터</h3></div>
+      <div class="sim-view"><canvas id="cv-lock"></canvas></div>
+      <div class="sim-controls">
+        <div><div class="co-sub">락 종류</div><div class="seg" id="lk-kind"><button data-value="tas" class="on">TAS 스핀락</button><button data-value="ttas">TTAS</button><button data-value="ticket">티켓 락</button></div></div>
+        <div><div class="co-sub">코어 수</div><div class="seg" id="lk-n"><button data-value="2">2</button><button data-value="4">4</button><button data-value="8" class="on">8</button><button data-value="16">16</button></div></div>
+        <label class="ctrl"><span>임계 구역 길이 <output id="lk-cs-out"></output></span><input type="range" id="lk-cs" min="20" max="400" step="20" value="100"></label>
+        <div class="btn-row"><button class="btn sm primary" id="lk-play">▶ 자동</button><button class="btn sm" id="lk-reset">초기화</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">1만 클럭당 락 획득</span><span class="v" id="lk-thr">—</span></div>
+        <div class="stat"><span class="k">획득 한 번당 버스 트랜잭션</span><span class="v" id="lk-tx">—</span></div>
+        <div class="stat"><span class="k">평균 대기 시간</span><span class="v" id="lk-wait">—</span></div>
+        <div class="stat"><span class="k">버스 점유율</span><span class="v" id="lk-util">—</span></div>
+        <div class="stat"><span class="k">공정성 (최소/최대 획득)</span><span class="v" id="lk-fair">—</span></div>
+      </div>
+      <div class="sim-note">코어마다 "락 획득 → 임계 구역 → 해제 → 임계 구역 길이 정도의 다른 일"을 반복한다. 버스 트랜잭션 하나는 20클럭이 걸리고 한 번에 하나씩 처리된다(MSI 무효화). 위쪽은 실시간 애니메이션(코어 색: 회색 다른 일, 주황 대기, 초록 임계 구역, 파랑 해제 중, 글자는 락 줄의 상태), 아래 막대는 코어 수 2~16에서 각 락을 6만 클럭씩 돌려 얻은 획득당 버스 트랜잭션이다. 오른쪽 숫자는 고른 설정의 6만 클럭 결과다.</div>
+    </div>
+    <p>결과는 생각보다 단순하지 않다. 임계 구역 길이를 400클럭, 코어를 4개로 놓아 보자. TAS는 기다리는 코어들이 서로 줄을 빼앗느라 버스를 90% 가까이 점유하지만, TTAS와 티켓 락은 기다리는 동안 조용해서 점유율이 그 1/3 수준이다. 버스가 비어 있으면 락과 무관한 다른 코어의 메모리 접근도 빨라진다. 그런데 코어를 16개로 늘리고 경합을 심하게 하면 TTAS는 오히려 TAS보다 트래픽이 많아진다. 락이 풀리는 순간 모든 대기자의 사본이 한꺼번에 무효화되고, 15개의 다시 읽기와 여러 swap 시도가 버스로 몰리기 때문이다. 1990년 T. Anderson이 버스 기반 멀티프로세서에서 측정해 보인 바로 그 현상이다. 티켓 락도 해제 때마다 대기자 전원이 다시 읽으므로 트래픽은 코어 수에 비례하지만, <b>공정성</b>(최소/최대 획득)이 거의 완벽하다. TAS·TTAS에서는 운 나쁜 코어가 거의 굶는다.</p>
+    <p>근본 해법은 대기자들이 서로 다른 줄을 보며 기다리게 하는 것이다. 리눅스 커널의 qspinlock이 쓰는 MCS 큐 락은 대기자마다 자기 줄을 따로 두고 그 줄만 보며 기다리게 해서, 해제가 다음 대기자 한 명의 줄만 건드린다. 획득당 트래픽이 코어 수와 무관해진다. 실패할 때마다 기다리는 시간을 늘리는 지수 백오프도 TAS·TTAS의 폭주를 크게 줄인다.</p>
+    <div class="callout tip"><strong>가장 좋은 락은 쓰지 않는 락</strong><p>코어 간 줄 전송은 수십~100 ns다. 락 경합이 심한 코드는 코어를 늘려도 빨라지지 않는다. 데이터를 코어별로 나누고(샤딩), 읽기가 대부분이면 RCU처럼 읽는 쪽이 아무것도 쓰지 않는 기법을 쓰고, 꼭 필요한 공유만 원자 연산으로 처리하는 것이 멀티코어 SoC에서 성능을 끌어내는 길이다.</p></div>
+  </section>
+
+  <section class="keypoints">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>코어마다 나중 쓰기 캐시를 가지면 낡은 값과 잃어버린 갱신이 생긴다. 일관성은 "주소 하나에 대해 쓰기는 한 명, 읽기는 여럿"과 "최신 값 읽기"를 보장한다.</li>
+      <li>MESI는 줄마다 M·E·S·I 상태를 두고 자기 요청과 엿들은 버스 요청에 따라 전이한다. E는 혼자 쓰는 데이터의 버스 요청을 줄이고, O(MOESI)는 더티 공유 줄의 메모리 쓰기를 줄인다.</li>
+      <li>스누핑은 방송이라 코어 수가 늘면 확장이 어렵고, 디렉터리·스누프 필터는 공유자에게만 메시지를 보낸다. GPU·DMA를 위한 I/O 일관성이 없으면 소프트웨어가 캐시를 청소·무효화해야 한다.</li>
+      <li>일관성은 줄 단위다. 서로 다른 변수라도 같은 줄에 있으면 거짓 공유로 줄이 핑퐁한다. 패딩으로 줄을 나눈다.</li>
+      <li>메모리 모델은 여러 주소 사이의 순서를 정한다. SC ⊂ TSO ⊂ Arm 순으로 허용 결과가 늘고, 펜스·acquire·release로 순서를 강제한다. 락은 원자 연산과 일관성 트래픽의 비용을 그대로 물려받는다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. MESI에서 E 상태인 줄에 자기 코어가 쓰기를 하면?</p>
+        <div class="opts">
+          <button class="opt">BusUpgr를 보내고 M이 된다</button>
+          <button class="opt" data-correct>버스에 아무것도 보내지 않고 M이 된다</button>
+          <button class="opt">BusRdX를 보내고 M이 된다</button>
+          <button class="opt">S로 바뀐 뒤 무효화를 기다린다</button>
+        </div>
+        <div class="quiz-exp">E는 "나만 가진 깨끗한 사본"이므로 무효화할 다른 사본이 없다. 그래서 조용히 M으로 올라간다. MSI라면 같은 상황(S)에서 BusUpgr가 필요하다.</div></div>
+      <div class="quiz-q"><p>Q2. 다른 캐시가 M 상태로 가진 줄을 이 코어가 읽으려 할 때 데이터는 누가 주는가?</p>
+        <div class="opts">
+          <button class="opt">메모리 (항상)</button><button class="opt">L1 명령 캐시</button><button class="opt">아무도 주지 않고 재시도한다</button><button class="opt" data-correct>M 상태 줄을 가진 캐시가 직접 (캐시 간 전송)</button>
+        </div>
+        <div class="quiz-exp">M 줄의 값이 유일한 최신 값이다. 그 캐시가 스누프에 응답해 데이터를 내보내고 S(MESI)나 O(MOESI)로 내려간다.</div></div>
+      <div class="quiz-q"><p>Q3. 64코어 시스템에서 디렉터리 방식이 스누핑보다 유리한 가장 큰 이유는?</p>
+        <div class="opts">
+          <button class="opt" data-correct>미스마다 모든 캐시에 방송하지 않고 사본을 가진 캐시에만 메시지를 보내서</button>
+          <button class="opt">디렉터리는 저장 공간이 전혀 필요 없어서</button>
+          <button class="opt">디렉터리는 캐시 미스를 없애서</button>
+          <button class="opt">디렉터리는 메모리 순서 모델을 SC로 만들어서</button>
+        </div>
+        <div class="quiz-exp">공유자 수는 보통 1~2개라 메시지 수가 코어 수와 거의 무관하다. 대신 줄마다 공유자 정보를 저장하는 비용과 홈 노드를 거치는 지연이 생긴다.</div></div>
+      <div class="quiz-q"><p>Q4. 두 스레드의 카운터 a, b가 같은 64 B 줄에 있어 느려지는 현상과 해결책은?</p>
+        <div class="opts">
+          <button class="opt">진짜 공유, 락을 건다</button><button class="opt">용량 미스, 캐시를 키운다</button><button class="opt" data-correct>거짓 공유, 패딩으로 다른 줄에 둔다</button><button class="opt">충돌 미스, 연관도를 올린다</button>
+        </div>
+        <div class="quiz-exp">일관성은 줄 단위로 관리되어 서로 다른 변수라도 같은 줄이면 핑퐁이 생긴다. 변수를 다른 줄에 정렬하면 각자 M 상태로 머문다.</div></div>
+      <div class="quiz-q"><p>Q5. SB 리트머스 테스트(T0: x=1; r0=y / T1: y=1; r1=x)에서 r0=0, r1=0이 나올 수 있는 모델은?</p>
+        <div class="opts">
+          <button class="opt">SC만</button><button class="opt" data-correct>TSO와 Arm</button><button class="opt">Arm만</button><button class="opt">어떤 모델에서도 불가능</button>
+        </div>
+        <div class="quiz-exp">쓰기가 쓰기 버퍼에 머무는 동안 뒤의 읽기가 먼저 실행되면 둘 다 0을 읽는다. TSO가 허용하는 유일한 순서 바꾸기가 바로 이 쓰기 → 읽기다. 두 명령 사이에 펜스를 넣으면 막힌다.</div></div>
+      <div class="quiz-q"><p>Q6. TAS 스핀락에서 기다리는 코어가 많을수록 락을 쥔 코어의 해제까지 늦어지는 이유는?</p>
+        <div class="opts">
+          <button class="opt">임계 구역 코드가 길어져서</button>
+          <button class="opt">해제는 원자 연산이 아니어서</button>
+          <button class="opt">메모리 순서 모델이 해제를 막아서</button>
+          <button class="opt" data-correct>대기자들이 swap을 반복하며 줄을 독점하려 해 버스가 포화되고, 해제 쓰기도 그 뒤에 줄을 서야 해서</button>
+        </div>
+        <div class="quiz-exp">해제(lock = 0)도 줄을 M으로 가져와야 하는 쓰기다. 대기자의 BusRdX가 버스를 가득 채우면 해제 요청이 밀린다. TTAS나 큐 락이 이를 줄인다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var P = SB.palette();
+  SB.onTheme(function () { P = SB.palette(); });
+  function u(v, unit) { return v + "<small>" + unit + "</small>"; }
+  function stCol(s) { return s === "M" ? P.bad : s === "O" ? P.warn : s === "E" ? P.ok : s === "S" ? P.accent2 : P.faint; }
+
+  /* ---------------------------------------------------------------- 1. 낡은 값 */
+  (function () {
+    var mode = "none", S, fx = [], log = document.getElementById("st-log");
+    function reset() { S = { c: [{ ok: false, v: 0, d: false, flag: "" }, { ok: false, v: 0, d: false, flag: "" }], mem: 0, latest: 0, stale: 0, lost: 0 }; fx = []; log.innerHTML = "버튼을 눌러 보자."; upd(); }
+    function arrow(from, to, label, col) { fx.push({ from: from, to: to, label: label, col: col, t: 0 }); }
+    function fetch(i) {
+      var me = S.c[i], o = S.c[1 - i];
+      if (mode === "inv" && o.ok && o.d) { me.v = o.v; o.d = false; S.mem = o.v; arrow("c" + (1 - i), "c" + i, "최신 값 전달", P.ok); return "코어 " + (1 - i) + "가 최신 값을 직접 건넸다(메모리도 갱신)"; }
+      me.v = S.mem; arrow("mem", "c" + i, "읽기", P.accent2); return "메모리에서 X를 가져왔다";
+    }
+    function rd(i) {
+      var me = S.c[i], m;
+      if (me.ok) m = "캐시 적중"; else { m = fetch(i); me.ok = true; me.d = false; }
+      me.flag = "";
+      if (me.v !== S.latest) { S.stale++; me.flag = "낡은 값!"; log.innerHTML = "<b>코어 " + i + " 읽기</b>: " + m + ". X = " + me.v + " <span class=\"w\">— 진짜 값은 " + S.latest + "인데 낡은 값을 읽었다!</span>"; }
+      else log.innerHTML = "<b>코어 " + i + " 읽기</b>: " + m + ". X = " + me.v + " (최신)";
+      upd();
+    }
+    function wr(i) {
+      var me = S.c[i], o = S.c[1 - i], m = "";
+      if (!me.ok) { m = fetch(i) + ", "; me.ok = true; }
+      if (mode === "inv" && o.ok) { o.ok = false; o.flag = ""; arrow("c" + i, "c" + (1 - i), "무효화", P.bad); m += "코어 " + (1 - i) + "의 사본을 무효화, "; }
+      var lostNow = me.v !== S.latest;
+      me.v = me.v + 1; me.d = true; me.flag = "";
+      if (lostNow) S.lost++;
+      S.latest = me.v;
+      log.innerHTML = "<b>코어 " + i + ": X+1</b>: " + m + "자기 캐시에 X = " + me.v + "을 썼다(더티)." + (lostNow ? " <span class=\"w\">낡은 값에 1을 더했으므로 다른 코어의 갱신이 사라졌다!</span>" : "");
+      upd();
+    }
+    function ev(i) {
+      var me = S.c[i];
+      if (!me.ok) { log.innerHTML = "코어 " + i + "의 캐시에는 X가 없다."; return; }
+      if (me.d) { S.mem = me.v; arrow("c" + i, "mem", "되쓰기", P.warn); }
+      log.innerHTML = "<b>코어 " + i + " 내보내기</b>: " + (me.d ? "더티 줄이라 메모리에 X = " + me.v + "을 썼다." : "깨끗한 줄이라 그냥 버렸다.");
+      me.ok = false; me.d = false; me.flag = ""; upd();
+    }
+    function upd() { SB.stat("st-true", String(S.latest)); SB.stat("st-stale", String(S.stale)); SB.stat("st-lost", String(S.lost)); }
+    var pos = {};
+    var cv = SB.canvas("#cv-stale", function (ctx, w, h) {
+      if (!S) return;
+      var cw = Math.min(200, w * 0.38), gap = w - 2 * cw, x0 = gap / 3, x1 = w - x0 - cw;
+      var memY = h - 54, busY = h - 92;
+      [x0, x1].forEach(function (x, i) {
+        var c = S.c[i];
+        SOC.box(ctx, x, 12, cw, 34, SOC.color(i ? "little" : "big"), "코어 " + i, { size: 13 });
+        ctx.fillStyle = P.surface; ctx.strokeStyle = P.border; SOC.roundRect(ctx, x, 56, cw, 64, 8); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("L1 캐시", x + 8, 61);
+        ctx.font = SB.font(16, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        if (c.ok) { ctx.fillStyle = c.flag ? P.bad : P.text; ctx.fillText("X = " + c.v, x + cw / 2, 90); if (c.d) { ctx.fillStyle = P.warn; ctx.font = SB.font(11, true, 700); ctx.fillText("더티", x + cw - 22, 66); } }
+        else { ctx.fillStyle = P.faint; ctx.font = SB.font(13, false); ctx.fillText(mode === "inv" && i >= 0 ? "(없음 · I)" : "(없음)", x + cw / 2, 90); }
+        if (c.flag) { ctx.fillStyle = P.bad; ctx.font = SB.font(12, false, 700); ctx.fillText(c.flag, x + cw / 2, 110); }
+        ctx.strokeStyle = P.dim; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x + cw / 2, 120); ctx.lineTo(x + cw / 2, busY); ctx.stroke();
+        pos["c" + i] = [x + cw / 2, 128];
+      });
+      ctx.strokeStyle = SOC.color("noc"); ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(x0 - 10, busY); ctx.lineTo(x1 + cw + 10, busY); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText("공유 버스", x0 - 10, busY - 5);
+      var mw = Math.min(220, w * 0.5), mx = w / 2 - mw / 2;
+      ctx.strokeStyle = P.dim; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(w / 2, busY); ctx.lineTo(w / 2, memY); ctx.stroke();
+      SOC.box(ctx, mx, memY, mw, 40, SOC.color("mem"), "메모리  X = " + S.mem, { size: 14, mono: true });
+      pos.mem = [w / 2, memY + 20];
+      fx.forEach(function (f) {
+        var a = pos[f.from], b = pos[f.to], k = Math.min(1, f.t / 0.6);
+        ctx.globalAlpha = Math.max(0, 1 - Math.max(0, f.t - 1.2) / 0.6);
+        var px = SB.lerp(a[0], b[0], k), py = SB.lerp(a[1], b[1], k) + Math.sin(k * Math.PI) * 26;
+        ctx.fillStyle = f.col; ctx.beginPath(); ctx.arc(px, py, 7, 0, Math.PI * 2); ctx.fill();
+        ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillText(f.label, px, py - 10);
+        ctx.globalAlpha = 1;
+      });
+    }, { aspect: 0.4, minHeight: 270, maxHeight: 300 });
+    SB.loop(cv.canvas, function (dt) { fx.forEach(function (f) { f.t += dt; }); fx = fx.filter(function (f) { return f.t < 1.8; }); cv.redraw(); });
+    SB.seg("st-mode", function (v) { mode = v; reset(); log.innerHTML = v === "inv" ? "프로토콜을 켰다. 같은 순서로 다시 해 보자: <b>코어 0 읽기 → 코어 1 읽기 → 코어 0: X+1 → 코어 1 읽기</b>." : "일관성 없음. <b>코어 0: X+1 → 코어 1 읽기 → 코어 1: X+1</b>을 해 보자."; });
+    ["0", "1"].forEach(function (i) {
+      document.getElementById("st-r" + i).onclick = function () { rd(+i); };
+      document.getElementById("st-w" + i).onclick = function () { wr(+i); };
+      document.getElementById("st-e" + i).onclick = function () { ev(+i); };
+    });
+    document.getElementById("st-reset").onclick = reset;
+    reset();
+  })();
+
+  /* ---------------------------------------------------------------- 2. MESI 상태 기계 */
+  (function () {
+    var proto = "MESI", others = false, st = "I", last = null, bus = 0, wb = 0, logEl = document.getElementById("me-log");
+    var POS = { M: [0.25, 0.25], E: [0.75, 0.25], S: [0.75, 0.75], I: [0.25, 0.75] };
+    var EDGES = [["I", "E"], ["I", "S"], ["I", "M"], ["E", "M"], ["E", "S"], ["E", "I"], ["S", "M"], ["S", "I"], ["M", "S"], ["M", "I"]];
+    function next(s, ev) {
+      var r = { to: s, bus: "—", note: "" };
+      if (ev === "PrRd") {
+        if (s === "I") { r.to = proto === "MESI" && !others ? "E" : "S"; r.bus = "BusRd"; r.note = r.to === "E" ? "다른 캐시에 사본이 없어 E(독점·깨끗)로 받았다." : (proto === "MSI" ? "MSI에는 E가 없어 늘 S로 받는다." : "다른 캐시에도 사본이 있어 S로 받았다."); }
+        else r.note = "적중. 버스를 쓰지 않는다.";
+      } else if (ev === "PrWr") {
+        if (s === "I") { r.to = "M"; r.bus = "BusRdX"; r.note = "독점 사본을 요청(BusRdX)해 데이터를 받고 다른 사본을 모두 무효화했다."; }
+        else if (s === "S") { r.to = "M"; r.bus = "BusUpgr"; r.note = "데이터는 이미 있으니 다른 사본만 무효화(BusUpgr)하고 M으로 올렸다."; }
+        else if (s === "E") { r.to = "M"; r.note = "<b>버스 요청 없이</b> 조용히 M이 되었다. 이것이 E 상태의 존재 이유다."; }
+        else r.note = "이미 M. 그냥 쓴다.";
+      } else if (ev === "BusRd") {
+        others = true;
+        if (s === "M") { r.to = "S"; r.bus = "Flush"; r.note = "최신 데이터를 요청자에게 건네고 메모리에도 써서(되쓰기) S로 내려갔다."; }
+        else if (s === "E") { r.to = "S"; r.note = "다른 캐시가 읽었으니 더는 독점이 아니다. S로 내려갔다."; }
+        else r.note = s === "S" ? "여전히 S. 할 일 없음." : "사본이 없으니 무시한다.";
+      } else if (ev === "BusRdX") {
+        others = true;
+        if (s === "M") { r.to = "I"; r.bus = "Flush"; r.note = "최신 데이터를 요청자에게 건네고 무효화되었다."; }
+        else if (s !== "I") { r.to = "I"; r.note = "다른 코어가 쓰려 하므로 내 사본을 무효화했다."; }
+        else r.note = "사본이 없으니 무시한다.";
+      } else if (ev === "Evict") {
+        if (s === "M") { r.to = "I"; r.bus = "Writeback"; r.note = "더티 줄이라 메모리에 되쓰고 비웠다."; }
+        else if (s !== "I") { r.to = "I"; r.note = "깨끗한 줄이라 조용히 버렸다."; }
+        else r.note = "이미 비어 있다.";
+      }
+      return r;
+    }
+    var anim = 0;
+    var cv = SB.canvas("#cv-mesi", function (ctx, w, h) {
+      var R = Math.min(34, w * 0.07, h * 0.12), sx = w < 500 ? 0.12 : 0.22;
+      var X = function (s) { return w * (sx + (1 - 2 * sx) * (POS[s][0] - 0.25) * 2); }, Y = function (s) { return R + 34 + (h - 2 * R - 70) * (POS[s][1] - 0.25) * 2; };
+      var states = proto === "MESI" ? ["M", "E", "S", "I"] : ["M", "S", "I"];
+      function edge(a, b, hot, label) {
+        if (states.indexOf(a) < 0 || states.indexOf(b) < 0) return;
+        var x0 = X(a), y0 = Y(a), x1 = X(b), y1 = Y(b), dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy), nx = -dy / L, ny = dx / L;
+        var cx = (x0 + x1) / 2 + nx * 22, cy = (y0 + y1) / 2 + ny * 22;
+        var sx0 = x0 + (cx - x0) / Math.hypot(cx - x0, cy - y0) * R, sy0 = y0 + (cy - y0) / Math.hypot(cx - x0, cy - y0) * R;
+        var ex = x1 + (cx - x1) / Math.hypot(cx - x1, cy - y1) * (R + 3), ey = y1 + (cy - y1) / Math.hypot(cx - x1, cy - y1) * (R + 3);
+        ctx.strokeStyle = hot ? P.accent : P.border; ctx.lineWidth = hot ? 3 : 1.4;
+        ctx.beginPath(); ctx.moveTo(sx0, sy0); ctx.quadraticCurveTo(cx, cy, ex, ey); ctx.stroke();
+        var ang = Math.atan2(ey - cy, ex - cx);
+        SOC.arrow(ctx, ex - Math.cos(ang) * 2, ey - Math.sin(ang) * 2, ex, ey, hot ? P.accent : P.border, hot ? 3 : 1.4, hot ? 11 : 8);
+        if (hot && label) {
+          ctx.font = SB.font(12, false, 700); var tw = ctx.measureText(label).width + 12;
+          var lx = SB.clamp(cx + nx * 6, tw / 2 + 4, w - tw / 2 - 4), ly = cy + ny * 6;
+          ctx.fillStyle = P.bg; ctx.strokeStyle = P.accent; ctx.lineWidth = 1.2; SOC.roundRect(ctx, lx - tw / 2, ly - 11, tw, 22, 6); ctx.fill(); ctx.stroke();
+          ctx.fillStyle = P.accent; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(label, lx, ly + 0.5);
+        }
+      }
+      EDGES.forEach(function (e) { if (!last || !(last.from === e[0] && last.to === e[1])) edge(e[0], e[1], false); });
+      if (last && last.from !== last.to) edge(last.from, last.to, true, last.ev + " / " + last.bus);
+      var NM = { M: "Modified", E: "Exclusive", S: "Shared", I: "Invalid" };
+      states.forEach(function (s) {
+        var x = X(s), y = Y(s), on = s === st;
+        if (on) { ctx.fillStyle = SOC.alpha(stCol(s), 0.18 + 0.1 * Math.sin(anim * 4)); ctx.beginPath(); ctx.arc(x, y, R + 9, 0, Math.PI * 2); ctx.fill(); }
+        ctx.fillStyle = on ? stCol(s) : P.surface; ctx.strokeStyle = stCol(s); ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = on ? "#fff" : P.text; ctx.font = SB.font(R * 0.75, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(s, x, y + 1);
+        ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textBaseline = "top"; ctx.fillText(NM[s], x, y + R + 4);
+      });
+      if (last && last.from === last.to) {
+        var x = X(st), y = Y(st);
+        ctx.strokeStyle = P.accent; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(x, y - R - 10, 10, 0.2 * Math.PI, 2.8 * Math.PI); ctx.stroke();
+        ctx.fillStyle = P.accent; ctx.font = SB.font(12, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillText(last.ev + " / " + last.bus, x, y - R - 22);
+      }
+    }, { aspect: 0.5, minHeight: 300, maxHeight: 380 });
+    function fire(ev) {
+      if (proto === "MSI" && st === "E") st = "S";
+      var r = next(st, ev);
+      last = { from: st, to: r.to, ev: ev, bus: r.bus };
+      if (/^Bus/.test(r.bus)) bus++;
+      if (r.bus === "Flush" || r.bus === "Writeback") wb++;
+      logEl.innerHTML = "<b>" + ev + "</b>: " + st + " → <b style=\"color:" + stCol(r.to) + "\">" + r.to + "</b> · 버스: " + r.bus + " · " + r.note;
+      st = r.to;
+      SB.stat("me-st", "<span style=\"color:" + stCol(st) + "\">" + st + "</span>"); SB.stat("me-bus", String(bus)); SB.stat("me-wb", String(wb));
+      othSeg.set(others ? "1" : "0", false);
+      cv.redraw();
+    }
+    document.getElementById("me-ev").addEventListener("click", function (e) { var b = e.target.closest("button"); if (b) fire(b.dataset.ev); });
+    SB.seg("me-proto", function (v) { proto = v; st = "I"; last = null; bus = 0; wb = 0; SB.stat("me-st", "I"); SB.stat("me-bus", "0"); SB.stat("me-wb", "0"); logEl.innerHTML = v + " 프로토콜. 상태를 I로 되돌렸다."; cv.redraw(); });
+    var othSeg = SB.seg("me-oth", function (v) { others = v === "1"; });
+    SB.loop(cv.canvas, function (dt) { anim += dt; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 3. 일관성 시뮬레이터 */
+  var COH = (function () {
+    var LN = ["A", "B", "C", "D"];
+    function make(proto, n) {
+      var S = { proto: proto, n: n, st: [], val: [], mem: [0, 0, 0, 0], latest: [0, 0, 0, 0], bus: 0, inv: 0, c2c: 0, memR: 0, memW: 0, last: null };
+      for (var c = 0; c < n; c++) { S.st.push(["I", "I", "I", "I"]); S.val.push([0, 0, 0, 0]); }
+      return S;
+    }
+    function op(S, c, l, isW) {
+      var st = S.st[c][l], others = [], msg = "", kind = "hit", resp = null, invd = [];
+      for (var o = 0; o < S.n; o++) if (o !== c) others.push(o);
+      var owner = others.filter(function (o) { return S.st[o][l] === "M" || S.st[o][l] === "O"; })[0];
+      if (!isW) {
+        if (st !== "I") { msg = "적중 (" + st + ")"; }
+        else {
+          S.bus++; kind = "BusRd";
+          if (owner != null) {
+            S.c2c++; resp = owner; S.val[c][l] = S.val[owner][l];
+            if (S.proto === "MOESI") { S.st[owner][l] = "O"; msg = "코어 " + owner + "가 데이터를 건네고 O(주인)로"; }
+            else { S.st[owner][l] = "S"; S.mem[l] = S.val[owner][l]; S.memW++; msg = "코어 " + owner + "가 데이터를 건네고 메모리에 되쓴 뒤 S로"; }
+          } else { S.memR++; resp = "mem"; S.val[c][l] = S.mem[l]; msg = "메모리가 응답"; }
+          others.forEach(function (o) { if (S.st[o][l] === "E") S.st[o][l] = "S"; });
+          var shared = others.some(function (o) { return S.st[o][l] !== "I"; });
+          S.st[c][l] = (S.proto === "MSI" || shared) ? "S" : "E";
+          msg += " → 코어 " + c + "는 " + S.st[c][l];
+        }
+      } else {
+        if (st === "M") msg = "적중 (M)";
+        else if (st === "E") { S.st[c][l] = "M"; msg = "E → M, 버스 요청 없음"; }
+        else {
+          S.bus++;
+          if (st === "S" || st === "O") { kind = "BusUpgr"; msg = st + " → M, 다른 사본 무효화(BusUpgr)"; }
+          else {
+            kind = "BusRdX";
+            if (owner != null) { S.c2c++; resp = owner; S.val[c][l] = S.val[owner][l]; msg = "코어 " + owner + "가 데이터를 건넴, "; }
+            else { S.memR++; resp = "mem"; S.val[c][l] = S.mem[l]; msg = "메모리가 응답, "; }
+            msg += "다른 사본 무효화 → M";
+          }
+          others.forEach(function (o) { if (S.st[o][l] !== "I") { S.st[o][l] = "I"; S.inv++; invd.push(o); } });
+          S.st[c][l] = "M";
+        }
+        S.val[c][l]++; S.latest[l] = S.val[c][l];
+      }
+      S.last = { c: c, l: l, isW: isW, kind: kind, resp: resp, invd: invd, t: 0 };
+      return msg;
+    }
+    var SCN = {
+      private: { d: "각 코어가 자기 줄(코어 0은 A, 1은 B…)을 읽고 곧바로 고친다. 스레드 지역 데이터·스택에 흔한 패턴.", f: function (n) { var s = []; for (var r = 0; r < 2; r++) for (var c = 0; c < n; c++) { s.push([c, c, 0]); s.push([c, c, 1]); } return s; } },
+      prodcons: { d: "코어 0이 A를 쓰면 나머지가 모두 읽는다. 세 번 반복.", f: function (n) { var s = []; for (var r = 0; r < 3; r++) { s.push([0, 0, 1]); for (var c = 1; c < n; c++) s.push([c, 0, 0]); } return s; } },
+      migratory: { d: "코어들이 차례로 A를 읽고 고친다. 락으로 보호된 공유 변수가 코어 사이를 옮겨 다니는 패턴.", f: function (n) { var s = []; for (var r = 0; r < 2; r++) for (var c = 0; c < n; c++) { s.push([c, 0, 0]); s.push([c, 0, 1]); } return s; } },
+      pingpong: { d: "코어 0과 1이 A에 번갈아 쓴다. 공유 카운터나 거짓 공유에서 생긴다.", f: function () { var s = []; for (var r = 0; r < 6; r++) { s.push([0, 0, 1]); s.push([1, 0, 1]); } return s; } },
+      readall: { d: "모두가 A와 B를 읽기만 한다. 읽기 전용 데이터는 S로 퍼져 나간 뒤 트래픽이 없다.", f: function (n) { var s = []; for (var r = 0; r < 2; r++) for (var c = 0; c < n; c++) { s.push([c, 0, 0]); s.push([c, 1, 0]); } return s; } },
+    };
+    return { make: make, op: op, SCN: SCN, LN: LN };
+  })();
+  (function () {
+    var proto = "MESI", n = 4, clickOp = "r", scn = "private", script = [], pc = 0, playing = false, acc = 0, S, hits = [];
+    var logEl = document.getElementById("ch-log"), descEl = document.getElementById("ch-scn-desc");
+    function reset() {
+      S = COH.make(proto, n); script = COH.SCN[scn].f(n); pc = 0;
+      descEl.innerHTML = "<b>시나리오</b>: " + COH.SCN[scn].d + " (총 " + script.length + "번 접근, 진행 0)";
+      logEl.innerHTML = "캐시 상자 안의 줄(A~D)을 누르거나 <b>다음 접근</b>으로 시나리오를 재생하자.";
+      compare(); stats(); cv.redraw();
+    }
+    function compare() {
+      var rows = ["MSI", "MESI", "MOESI"].map(function (p) {
+        var T = COH.make(p, n); COH.SCN[scn].f(n).forEach(function (a) { COH.op(T, a[0], a[1], !!a[2]); });
+        return "<tr class=\"" + (p === proto ? "cur" : "") + "\"><td>" + p + "</td><td>" + T.bus + "</td><td>" + T.inv + "</td><td>" + T.c2c + "</td><td>" + T.memR + " / " + T.memW + "</td></tr>";
+      });
+      document.getElementById("ch-cmp").innerHTML = "<tr><th>프로토콜</th><th>버스</th><th>무효화</th><th>캐시→캐시</th><th>메모리 읽기/쓰기</th></tr>" + rows.join("");
+    }
+    function stats() { SB.stat("ch-bus", String(S.bus)); SB.stat("ch-inv", String(S.inv)); SB.stat("ch-c2c", String(S.c2c)); SB.stat("ch-mem", S.memR + " / " + S.memW); }
+    function doOp(c, l, w) {
+      var m = COH.op(S, c, l, w);
+      var ok = !w ? (S.val[c][l] === S.latest[l]) : true;
+      logEl.innerHTML = "<b>코어 " + c + " " + (w ? "쓰기 " : "읽기 ") + COH.LN[l] + "</b>: " + (S.last.kind !== "hit" ? "[" + S.last.kind + "] " : "") + m + (w ? " · 새 값 " + S.val[c][l] : " · 읽은 값 " + S.val[c][l] + (ok ? " ✓ 최신" : " ✗"));
+      stats(); cv.redraw();
+    }
+    function step() {
+      if (pc >= script.length) { playing = false; pbtn.textContent = "▶ 자동"; logEl.innerHTML += " · <b>시나리오 끝</b>"; return; }
+      var a = script[pc++]; doOp(a[0], a[1], !!a[2]);
+      descEl.innerHTML = "<b>시나리오</b>: " + COH.SCN[scn].d + " (총 " + script.length + "번 접근, 진행 " + pc + ")";
+    }
+    var boxes = [];
+    var cv = SB.canvas("#cv-coh", function (ctx, w, h) {
+      if (!S) return;
+      var narrow = w < 520, cols = narrow ? Math.min(2, n) : n, rows = Math.ceil(n / cols);
+      var gap = 10, bw = (w - gap * (cols + 1)) / cols, memH = 54, bh = Math.min(230, (h - 8 - memH - 64 - gap * (rows - 1)) / rows), busY = 8 + rows * bh + (rows - 1) * gap + 28;
+      boxes = [];
+      for (var c = 0; c < n; c++) {
+        var x = gap + (c % cols) * (bw + gap), y = 8 + Math.floor(c / cols) * (bh + gap);
+        ctx.fillStyle = P.surface; ctx.strokeStyle = S.last && S.last.c === c ? P.accent : P.border; ctx.lineWidth = S.last && S.last.c === c ? 2 : 1;
+        SOC.roundRect(ctx, x, y, bw, bh, 8); ctx.fill(); ctx.stroke();
+        SOC.box(ctx, x + 6, y + 6, bw - 12, 22, SOC.color(c < 2 ? "big" : "little"), "코어 " + c + (c < 2 ? " (큰)" : " (작은)"), { size: 12 });
+        var rh = (bh - 38) / 4;
+        for (var l = 0; l < 4; l++) {
+          var ry = y + 34 + l * rh, s = S.st[c][l], inv = S.last && S.last.invd.indexOf(c) >= 0 && S.last.l === l;
+          ctx.fillStyle = S.last && S.last.c === c && S.last.l === l ? SOC.alpha(P.accent, 0.15) : P.bg;
+          ctx.fillRect(x + 6, ry + 1, bw - 12, rh - 2);
+          ctx.fillStyle = P.text; ctx.font = SB.font(Math.min(13, rh * 0.6), true, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+          ctx.fillText(COH.LN[l], x + 12, ry + rh / 2);
+          var bx = x + 30, bwd = Math.min(28, bw * 0.22);
+          ctx.fillStyle = s === "I" ? P.surface : stCol(s); ctx.fillRect(bx, ry + 3, bwd, rh - 6);
+          ctx.fillStyle = s === "I" ? P.faint : "#fff"; ctx.textAlign = "center"; ctx.fillText(s, bx + bwd / 2, ry + rh / 2 + 0.5);
+          if (s !== "I") { ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.font = SB.font(Math.min(12, rh * 0.55), true); ctx.fillText("값 " + S.val[c][l], bx + bwd + 8, ry + rh / 2); }
+          if (inv) { ctx.fillStyle = P.bad; ctx.font = SB.font(11, false, 700); ctx.textAlign = "right"; ctx.fillText("무효화됨", x + bw - 10, ry + rh / 2); }
+          boxes.push({ x: x + 6, y: ry, w: bw - 12, h: rh, c: c, l: l });
+        }
+        if (Math.floor(c / cols) === rows - 1) { ctx.strokeStyle = P.dim; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x + bw / 2, y + bh); ctx.lineTo(x + bw / 2, busY); ctx.stroke(); }
+      }
+      ctx.strokeStyle = SOC.color("noc"); ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(gap, busY); ctx.lineTo(w - gap, busY); ctx.stroke();
+      if (S.last && S.last.kind !== "hit" && S.last.t < 1.5) {
+        ctx.globalAlpha = Math.max(0, 1 - S.last.t / 1.5); ctx.fillStyle = P.accent; ctx.font = SB.font(12, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+        ctx.fillText("◆ " + S.last.kind + " (코어 " + S.last.c + ")", w / 2, busY - 5); ctx.globalAlpha = 1;
+      }
+      var mx = w / 2 - Math.min(160, w * 0.4), mw = Math.min(320, w * 0.8), my = busY + 24;
+      ctx.strokeStyle = P.dim; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(w / 2, busY); ctx.lineTo(w / 2, my); ctx.stroke();
+      ctx.fillStyle = SOC.alpha(SOC.color("mem"), 0.2); ctx.strokeStyle = SOC.color("mem"); SOC.roundRect(ctx, mx, my, mw, memH, 8); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("메모리", mx + 8, my + 5);
+      for (l = 0; l < 4; l++) {
+        var cx = mx + 8 + (mw - 16) * (l + 0.5) / 4, stale = S.mem[l] !== S.latest[l];
+        ctx.fillStyle = stale ? P.warn : P.text; ctx.font = SB.font(13, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(COH.LN[l] + "=" + S.mem[l], cx, my + 30);
+        if (stale) { ctx.font = SB.font(10, false, 700); ctx.fillText("낡음", cx, my + 45); }
+      }
+    }, { aspect: 0.72, minHeight: 380, maxHeight: 520 });
+    SOC.pointer(cv.canvas, { down: function (x, y) { var b = boxes.filter(function (q) { return x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.h; })[0]; if (b) doOp(b.c, b.l, clickOp === "w"); } });
+    cv.canvas.style.cursor = "pointer";
+    SB.seg("ch-proto", function (v) { proto = v; reset(); });
+    SB.seg("ch-n", function (v) { n = +v; reset(); });
+    SB.seg("ch-op", function (v) { clickOp = v; });
+    document.getElementById("ch-scn").addEventListener("change", function (e) { scn = e.target.value; reset(); });
+    document.getElementById("ch-step").onclick = step;
+    var pbtn = document.getElementById("ch-play");
+    pbtn.onclick = function () { if (pc >= script.length) reset(); playing = !playing; pbtn.textContent = playing ? "❚❚ 멈춤" : "▶ 자동"; acc = 0.6; };
+    document.getElementById("ch-reset").onclick = reset;
+    SB.loop(cv.canvas, function (dt) { if (S && S.last) S.last.t += dt; if (playing) { acc += dt; if (acc > 0.75) { acc = 0; step(); } } cv.redraw(); });
+    reset();
+  })();
+
+  /* ---------------------------------------------------------------- 4. 스누핑 vs 디렉터리 */
+  (function () {
+    var NS = [2, 4, 8, 16, 32, 64], ni = 3, k = 1;
+    function snoop(N) { return 1 + (N - 1) + 1; }
+    function dir(N) { var kk = Math.min(k, N - 1); return 1 + 2 * kk + 1 + (kk > 0 ? 1 : 0); }
+    var cv = SB.canvas("#cv-scale", function (ctx, w, h) {
+      var a = [], b = [];
+      for (var N = 2; N <= 64; N *= 1.1) { a.push([N, snoop(N)]); b.push([N, dir(N)]); }
+      a.push([64, snoop(64)]); b.push([64, dir(64)]);
+      var N0 = NS[ni];
+      SB.chart(ctx, null, {
+        x: [2, 64], y: [1, 100], logX: true, logY: true, xTicks: NS, yTicks: [1, 10, 100], xLabel: "코어 수", yLabel: "미스 하나당 메시지",
+        series: [{ data: a, color: P.bad, width: 2.5 }, { data: b, color: P.ok, width: 2.5 }],
+        vlines: [{ x: N0, color: P.faint }],
+        points: [{ x: N0, y: snoop(N0), color: P.bad, r: 5, label: "스누핑 " + snoop(N0) }, { x: N0, y: dir(N0), color: P.ok, r: 5, label: "디렉터리 " + dir(N0) }],
+      });
+    }, { aspect: 0.45, minHeight: 250, maxHeight: 340 });
+    function upd() {
+      var N = NS[ni];
+      SB.stat("sc-snoop", u(snoop(N), "개"));
+      SB.stat("sc-dir", u(dir(N), "개"));
+      SB.stat("sc-store", u((N / 512 * 100).toFixed(1), "%") + " <small>(" + N + "비트/줄)</small>");
+      cv.redraw();
+    }
+    SB.range("sc-n", function (v) { return NS[v - 1] + "개"; }, function (v) { ni = v - 1; upd(); });
+    SB.range("sc-k", function (v) { return v + "개"; }, function (v) { k = v; upd(); });
+    ni = 2; upd();
+  })();
+
+  /* ---------------------------------------------------------------- 4b. I/O 일관성 */
+  (function () {
+    var mode = "sw", S, logEl = document.getElementById("io-log");
+    function reset() { S = { cpu: [], mem: [], gpu: [], truth: [], frame: 0, stale: 0, cmo: 0, snoop: 0, hl: "" }; for (var i = 0; i < 8; i++) { S.cpu.push({ ok: false, v: 0, d: false }); S.mem.push(0); S.gpu.push(null); S.truth.push(0); } upd(); }
+    function upd() { SB.stat("io-stale", u(S.stale, "줄")); SB.stat("io-cmo", u(S.cmo, "회")); SB.stat("io-snoop", u(S.snoop, "줄")); cv && cv.redraw(); }
+    function act(k) {
+      var i, n = 0;
+      if (k === "cw") { S.frame++; for (i = 0; i < 8; i++) { S.cpu[i] = { ok: true, v: S.frame, d: true }; S.truth[i] = S.frame; } S.hl = "cpu"; logEl.innerHTML = "CPU가 프레임 " + S.frame + "을 버퍼에 썼다. 데이터는 아직 <b>CPU 캐시에 더티</b>로 있고 메모리는 옛 값이다."; }
+      if (k === "clean") { for (i = 0; i < 8; i++) if (S.cpu[i].d) { S.mem[i] = S.cpu[i].v; S.cpu[i].d = false; n++; } S.cmo++; S.hl = "mem"; logEl.innerHTML = "캐시 청소: 더티 줄 " + n + "개를 메모리로 내렸다(" + n * 64 + " B). 이제 메모리가 최신이다."; }
+      if (k === "gr") { var st = 0; for (i = 0; i < 8; i++) { var c = S.cpu[i], v; if (mode === "hw" && c.ok && c.d) { v = c.v; S.snoop++; } else v = S.mem[i]; S.gpu[i] = v; if (v !== S.truth[i]) st++; } S.stale += st; S.hl = "gpu"; logEl.innerHTML = "GPU가 버퍼를 읽었다. " + (st ? "<span class=\"w\">" + st + "줄이 낡은 값!</span> 청소를 빠뜨렸다." : "모두 최신 값이다.") + (mode === "hw" ? " (CPU 캐시를 스누프해 더티 줄을 가져옴)" : ""); }
+      if (k === "gw") { S.frame++; for (i = 0; i < 8; i++) { S.mem[i] = S.frame; S.truth[i] = S.frame; S.gpu[i] = S.frame; if (mode === "hw" && S.cpu[i].ok) { S.cpu[i].ok = false; S.snoop++; } } S.hl = "mem"; logEl.innerHTML = "GPU가 결과(프레임 " + S.frame + ")를 메모리에 썼다." + (mode === "hw" ? " 하드웨어가 CPU 캐시의 옛 사본을 무효화했다." : " CPU 캐시에는 <b>옛 사본</b>이 남아 있을 수 있다."); }
+      if (k === "inv") { for (i = 0; i < 8; i++) { if (S.cpu[i].ok) n++; S.cpu[i] = { ok: false, v: 0, d: false }; } S.cmo++; S.hl = "cpu"; logEl.innerHTML = "캐시 무효화: CPU 캐시에서 버퍼 줄 " + n + "개를 버렸다. 다음 읽기는 메모리에서 새로 가져온다."; }
+      if (k === "cr") { var st2 = 0; for (i = 0; i < 8; i++) { var c2 = S.cpu[i]; if (!c2.ok) { c2.ok = true; c2.v = S.mem[i]; c2.d = false; } if (c2.v !== S.truth[i]) st2++; } S.stale += st2; S.hl = "cpu"; logEl.innerHTML = "CPU가 결과를 읽었다. " + (st2 ? "<span class=\"w\">" + st2 + "줄이 낡은 값!</span> 무효화를 빠뜨려 캐시의 옛 사본을 읽었다." : "모두 최신 값이다."); }
+      upd();
+    }
+    var cv = SB.canvas("#cv-io", function (ctx, w, h) {
+      if (!S) return;
+      var lx = w < 480 ? 8 : 104, cw = (w - lx - 10) / 8, rows = [["CPU 캐시", "cpu", "big"], ["메모리 (DRAM)", "mem", "mem"], ["GPU가 본 값", "gpu", "gpu"]];
+      var rh = (h - 20) / 3;
+      rows.forEach(function (r, k) {
+        var y = 10 + k * rh;
+        ctx.fillStyle = S.hl === r[1] ? P.text : P.dim; ctx.font = SB.font(12, false, 700); ctx.textAlign = "left"; ctx.textBaseline = w < 480 ? "top" : "middle";
+        ctx.fillText(r[0], w < 480 ? lx : 8, w < 480 ? y : y + rh / 2);
+        var yy = w < 480 ? y + 18 : y + 8, hh = w < 480 ? rh - 24 : rh - 16;
+        for (var i = 0; i < 8; i++) {
+          var x = lx + i * cw, txt = "", stale = false, col = SOC.color(r[2]);
+          if (r[1] === "cpu") { var c = S.cpu[i]; if (c.ok) { txt = String(c.v); stale = c.v !== S.truth[i]; } }
+          else if (r[1] === "mem") { txt = String(S.mem[i]); stale = S.mem[i] !== S.truth[i]; }
+          else if (S.gpu[i] != null) { txt = String(S.gpu[i]); stale = S.gpu[i] !== S.truth[i]; }
+          ctx.fillStyle = txt === "" ? P.surface : stale ? SOC.alpha(P.bad, 0.25) : SOC.alpha(col, 0.28);
+          ctx.fillRect(x + 1.5, yy, cw - 3, hh);
+          if (stale) { ctx.strokeStyle = P.bad; ctx.lineWidth = 1.5; ctx.strokeRect(x + 2, yy + 0.5, cw - 4, hh - 1); }
+          ctx.fillStyle = stale ? P.bad : P.text; ctx.font = SB.font(13, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(txt === "" ? "–" : txt, x + cw / 2, yy + hh / 2);
+          if (r[1] === "cpu" && S.cpu[i].d) { ctx.fillStyle = P.warn; ctx.font = SB.font(9.5, false, 700); ctx.fillText("D", x + cw - 9, yy + 9); }
+        }
+      });
+    }, { aspect: 0.24, minHeight: 190, maxHeight: 210 });
+    SB.seg("io-mode", function (v) { mode = v; reset(); logEl.innerHTML = v === "hw" ? "I/O 일관 모드. 이번엔 ②·⑤를 건너뛰고 ① → ③ → ④ → ⑥을 해 보자." : "비일관 모드. ① → ③을 먼저 해 보자(청소를 빠뜨린 경우)."; });
+    ["cw", "clean", "gr", "gw", "inv", "cr"].forEach(function (k) { document.getElementById("io-" + k).onclick = function () { act(k); }; });
+    document.getElementById("io-reset").onclick = function () { reset(); logEl.innerHTML = "초기화했다."; };
+    reset();
+  })();
+
+  /* ---------------------------------------------------------------- 5. 거짓 공유 */
+  (function () {
+    var W = 20, lay = "same", XFER = 60;
+    function mk(same) { return { same: same, owner: [0, 1], pend: [null, null], cores: [{ st: "need", rem: 0, cnt: 0 }, { st: "need", rem: 0, cnt: 0 }], xfer: 0, t: 0 }; }
+    var A = mk(true), B = mk(false);
+    function stepSim(s) {
+      s.t++;
+      for (var l = 0; l < 2; l++) { var p = s.pend[l]; if (p) { p.rem--; if (p.rem <= 0) { s.owner[l] = p.to; s.pend[l] = null; s.xfer++; } } }
+      for (var c = 0; c < 2; c++) {
+        var C = s.cores[c], L = s.same ? 0 : c;
+        if (C.st === "work") { if (--C.rem <= 0) C.st = "need"; }
+        else if (s.owner[L] === c && !s.pend[L]) { C.cnt++; C.st = "work"; C.rem = W + 1; }
+        else if (!s.pend[L] && s.owner[L] !== c) s.pend[L] = { to: c, rem: XFER };
+      }
+    }
+    function reset() { A = mk(true); B = mk(false); }
+    var cv = SB.canvas("#cv-fs", function (ctx, w, h) {
+      var s = lay === "same" ? A : B, cw = Math.min(150, w * 0.26), x0 = 10, x1 = w - 10 - cw;
+      [x0, x1].forEach(function (x, c) {
+        SOC.box(ctx, x, 14, cw, 36, SOC.color(c ? "little" : "big"), "코어 " + c + (c ? " · b++" : " · a++"), { size: 12.5 });
+        var C = s.cores[c];
+        ctx.fillStyle = C.st === "work" ? P.ok : P.warn; ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "top";
+        ctx.fillText(C.st === "work" ? "다른 일 하는 중" : "줄 기다리는 중", x + cw / 2, 56);
+        ctx.fillStyle = P.text; ctx.font = SB.font(18, true, 700); ctx.fillText((c ? "b = " : "a = ") + C.cnt, x + cw / 2, 76);
+      });
+      // lines
+      var lw = Math.min(w - 2 * cw - 60, 300), slotW = lw / 16, ly0 = 40;
+      var lines = s.same ? [0] : [0, 1];
+      lines.forEach(function (l, li) {
+        var p = s.pend[l], own = s.owner[l], fx;
+        var leftX = x0 + cw + 14, rightX = x1 - 14 - lw;
+        var posOf = function (o) { return o === 0 ? leftX : rightX; };
+        if (p) { var k = 1 - p.rem / XFER; fx = SB.lerp(posOf(own), posOf(p.to), k * k * (3 - 2 * k)); } else fx = posOf(own);
+        if (rightX < leftX) fx = w / 2 - lw / 2;
+        var y = ly0 + li * 44 + (s.same ? 18 : 0);
+        for (var i = 0; i < 16; i++) {
+          var isA = i === 0 && l === 0, isB = s.same ? i === 1 : (l === 1 && i === 0);
+          ctx.fillStyle = isA ? SOC.color("big") : isB ? SOC.color("little") : P.surface;
+          ctx.fillRect(fx + i * slotW + 0.5, y, slotW - 1, 26);
+        }
+        ctx.strokeStyle = p ? P.accent : P.border; ctx.lineWidth = p ? 2 : 1; ctx.strokeRect(fx, y, lw, 26);
+        ctx.fillStyle = P.dim; ctx.font = SB.font(10.5); ctx.textAlign = "center"; ctx.textBaseline = "top";
+        ctx.fillText("64 B 줄 " + (s.same ? "" : "#" + l) + " · " + (p ? "이동 중 →코어 " + p.to : "코어 " + own + "에 M"), fx + lw / 2, y + 29);
+      });
+      // time chart: throughput bars
+      var by = h - 44, bw2 = w - 140;
+      [["같은 줄", A], ["패딩", B]].forEach(function (r, i) {
+        var tot = r[1].cores[0].cnt + r[1].cores[1].cnt, mx = Math.max(1, B.cores[0].cnt + B.cores[1].cnt);
+        ctx.fillStyle = P.dim; ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        ctx.fillText(r[0], 10, by + i * 20 + 7);
+        ctx.fillStyle = i ? P.ok : P.bad; ctx.fillRect(70, by + i * 20, Math.max(1, tot / mx * bw2), 14);
+        ctx.fillStyle = P.text; ctx.font = SB.font(11, true); ctx.fillText(tot.toLocaleString() + "회", 76 + tot / mx * bw2, by + i * 20 + 7);
+      });
+    }, { aspect: 0.22, minHeight: 200, maxHeight: 210 });
+    function upd() {
+      var s = lay === "same" ? A : B;
+      SB.stat("fs-a", s.cores[0].cnt.toLocaleString()); SB.stat("fs-b", s.cores[1].cnt.toLocaleString()); SB.stat("fs-x", s.xfer.toLocaleString());
+      var ta = A.cores[0].cnt + A.cores[1].cnt, tb = B.cores[0].cnt + B.cores[1].cnt;
+      SB.stat("fs-r", tb ? u((ta / tb * 100).toFixed(0), "%") + " <small>(같은 줄)</small>" : "—");
+    }
+    SB.seg("fs-lay", function (v) { lay = v; cv.redraw(); upd(); });
+    SB.range("fs-w", function (v) { return v + "클럭"; }, function (v) { W = v; reset(); });
+    document.getElementById("fs-reset").onclick = function () { reset(); upd(); cv.redraw(); };
+    SB.loop(cv.canvas, function (dt) { var n = Math.round(dt * 900); for (var i = 0; i < n; i++) { stepSim(A); stepSim(B); } upd(); cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 6. 메모리 순서 모델 */
+  (function () {
+    var TESTS = {
+      sb: { n: "SB", mem: ["x", "y"], th: [[{ op: "st", a: "x", v: 1 }, { op: "ld", a: "y", r: "r0" }], [{ op: "st", a: "y", v: 1 }, { op: "ld", a: "x", r: "r1" }]], hot: "0,0", d: "<b>SB</b>: 둘 다 0을 읽을 수 있을까? (r0=0, r1=0)" },
+      mp: { n: "MP", mem: ["data", "flag"], th: [[{ op: "st", a: "data", v: 1 }, { op: "st", a: "flag", v: 1 }], [{ op: "ld", a: "flag", r: "r0" }, { op: "ld", a: "data", r: "r1" }]], hot: "1,0", d: "<b>MP</b>: 깃발(flag)은 보였는데 데이터가 0일 수 있을까? (r0=1, r1=0)" },
+      lb: { n: "LB", mem: ["x", "y"], th: [[{ op: "ld", a: "x", r: "r0" }, { op: "st", a: "y", v: 1 }], [{ op: "ld", a: "y", r: "r1" }, { op: "st", a: "x", v: 1 }]], hot: "1,1", d: "<b>LB</b>: 서로가 나중에 쓸 값을 먼저 읽을 수 있을까? (r0=1, r1=1)" },
+    };
+    var test = "sb", model = "TSO", fence = false, S, hist = {}, geo = [];
+    function prog() { var t = TESTS[test]; return t.th.map(function (th) { return fence ? [th[0], { op: "f" }, th[1]] : th.slice(); }); }
+    function canRe(m, e, me) { if (e.op === "f" || me.op === "f") return false; if (e.a === me.a) return false; if (m === "SC") return false; if (m === "TSO") return e.op === "st" && me.op === "ld"; return true; }
+    function eligible(st, pr, t, i, m) { if (st.done[t][i]) return false; for (var j = 0; j < i; j++) if (!st.done[t][j] && !canRe(m, pr[t][j], pr[t][i])) return false; return true; }
+    function init(pr) { var mem = {}; TESTS[test].mem.forEach(function (a) { mem[a] = 0; }); return { mem: mem, reg: { r0: null, r1: null }, done: pr.map(function (th) { return th.map(function () { return false; }); }), order: [] }; }
+    function exec(st, pr, t, i) { var ins = pr[t][i]; if (ins.op === "st") st.mem[ins.a] = ins.v; else if (ins.op === "ld") st.reg[ins.r] = st.mem[ins.a]; st.done[t][i] = true; st.order.push([t, i]); }
+    function clone(st) { return { mem: Object.assign({}, st.mem), reg: Object.assign({}, st.reg), done: st.done.map(function (a) { return a.slice(); }), order: st.order.slice() }; }
+    function finished(st) { return st.done.every(function (a) { return a.every(Boolean); }); }
+    function key(st) { return st.reg.r0 + "," + st.reg.r1; }
+    function enumerate(m) {
+      var pr = prog(), out = {};
+      (function dfs(st) {
+        if (finished(st)) { out[key(st)] = 1; return; }
+        for (var t = 0; t < pr.length; t++) for (var i = 0; i < pr[t].length; i++) if (eligible(st, pr, t, i, m)) { var s2 = clone(st); exec(s2, pr, t, i); dfs(s2); }
+      })(init(pr));
+      return out;
+    }
+    var rr = SB.rng(17);
+    function randRun(m) { var pr = prog(), st = init(pr); while (!finished(st)) { var c = []; for (var t = 0; t < pr.length; t++) for (var i = 0; i < pr[t].length; i++) if (eligible(st, pr, t, i, m)) c.push([t, i]); var p = c[Math.floor(rr() * c.length)]; exec(st, pr, p[0], p[1]); } return st; }
+    function reset() { S = init(prog()); hist = {}; document.getElementById("mc-desc").innerHTML = TESTS[test].d; document.getElementById("mc-log").innerHTML = "밝은 테두리의 명령을 눌러 실행 순서를 만들자."; table(); cv.redraw(); }
+    function table() {
+      var al = { SC: enumerate("SC"), TSO: enumerate("TSO"), ARM: enumerate("ARM") }, tot = 0;
+      Object.keys(hist).forEach(function (k) { tot += hist[k]; });
+      var cur = finished(S) ? key(S) : null, hot = TESTS[test].hot;
+      var rows = ["0,0", "0,1", "1,0", "1,1"].map(function (k) {
+        var p = k.split(",");
+        var cells = ["SC", "TSO", "ARM"].map(function (m) { var y = !!al[m][k]; return "<td class=\"" + (y ? "y" : "n") + (m === model ? " sel" : "") + "\">" + (y ? "✓ 허용" : "✗") + "</td>"; }).join("");
+        return "<tr class=\"" + (k === cur ? "cur" : "") + "\"><td>r0=" + p[0] + ", r1=" + p[1] + (k === hot ? " ★" : "") + "</td>" + cells + "<td>" + (tot ? ((hist[k] || 0) / tot * 100).toFixed(1) + "%" : "—") + "</td></tr>";
+      });
+      document.getElementById("mc-tab").innerHTML = "<tr><th>결과 (★ 관심 결과)</th><th>SC</th><th>TSO</th><th>Arm</th><th>무작위 빈도 (" + (model === "ARM" ? "Arm" : model) + ")</th></tr>" + rows.join("");
+    }
+    function txt(ins) { return ins.op === "st" ? ins.a + " = " + ins.v : ins.op === "ld" ? ins.r + " = " + ins.a : "DMB (펜스)"; }
+    var cv = SB.canvas("#cv-mcm", function (ctx, w, h) {
+      if (!S) return;
+      var pr = prog(), colW = (w - 30) / 2, top = 34, bh = 38, gap = 10;
+      geo = [];
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      pr.forEach(function (th, t) {
+        var x = 10 + t * (colW + 10);
+        SOC.box(ctx, x, 6, colW, 22, SOC.color(t ? "little" : "big"), "스레드 " + t + " (코어 " + t + ")", { size: 12 });
+        th.forEach(function (ins, i) {
+          var y = top + i * (bh + gap), done = S.done[t][i], el = !done && eligible(S, pr, t, i, model);
+          var ord = S.order.findIndex(function (o) { return o[0] === t && o[1] === i; });
+          ctx.fillStyle = done ? SOC.alpha(P.accent2, 0.18) : ins.op === "f" ? SOC.alpha(P.warn, 0.12) : P.surface;
+          ctx.strokeStyle = el ? P.accent : P.border; ctx.lineWidth = el ? 2.5 : 1;
+          SOC.roundRect(ctx, x, y, colW, bh, 7); ctx.fill(); ctx.stroke();
+          ctx.fillStyle = done ? P.dim : P.text; ctx.font = SB.font(14, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(txt(ins), x + colW / 2, y + bh / 2);
+          if (done) { ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.arc(x + 16, y + bh / 2, 10, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "#fff"; ctx.font = SB.font(11, true, 700); ctx.fillText(ord + 1, x + 16, y + bh / 2 + 0.5); }
+          if (done && ins.op === "ld") { ctx.fillStyle = P.accent; ctx.font = SB.font(12, true, 700); ctx.textAlign = "right"; ctx.fillText("→" + S.reg[ins.r], x + colW - 8, y + bh / 2); }
+          geo.push({ x: x, y: y, w: colW, h: bh, t: t, i: i });
+        });
+      });
+      var my = top + 3 * (bh + gap) + 6;
+      ctx.fillStyle = SOC.alpha(SOC.color("mem"), 0.18); SOC.roundRect(ctx, 10, my, w - 20, h - my - 8, 8); ctx.fill();
+      ctx.fillStyle = P.text; ctx.font = SB.font(13, true, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      var mt = "메모리: " + TESTS[test].mem.map(function (a) { return a + "=" + S.mem[a]; }).join("  "), rt = "레지스터: r0=" + (S.reg.r0 == null ? "?" : S.reg.r0) + "  r1=" + (S.reg.r1 == null ? "?" : S.reg.r1);
+      if (w < 460) { ctx.fillText(mt, 20, my + (h - my - 8) * 0.32); ctx.fillText(rt, 20, my + (h - my - 8) * 0.7); }
+      else { ctx.fillText(mt, 20, my + (h - my - 8) / 2); ctx.textAlign = "right"; ctx.fillText(rt, w - 20, my + (h - my - 8) / 2); }
+    }, { aspect: 0.42, minHeight: 240, maxHeight: 250 });
+    SOC.pointer(cv.canvas, { down: function (x, y) {
+      var pr = prog(), g = geo.filter(function (q) { return x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.h; })[0];
+      if (!g) return;
+      if (!eligible(S, pr, g.t, g.i, model)) { document.getElementById("mc-log").innerHTML = S.done[g.t][g.i] ? "이미 실행한 명령이다." : "<b>" + (model === "ARM" ? "Arm" : model) + "</b> 모델에서는 이 명령이 앞선 명령을 앞지를 수 없다."; return; }
+      var jumped = false; for (var j = 0; j < g.i; j++) if (!S.done[g.t][j]) jumped = true;
+      exec(S, pr, g.t, g.i);
+      var msg = "스레드 " + g.t + ": <b>" + txt(pr[g.t][g.i]) + "</b> 실행" + (jumped ? " <span class=\"w\">(앞선 명령보다 먼저 — 순서 바꾸기!)</span>" : "");
+      if (finished(S)) { var k = key(S); msg += " · 결과 <b>r0=" + S.reg.r0 + ", r1=" + S.reg.r1 + "</b>" + (k === TESTS[test].hot ? " ★ 관심 결과가 나왔다!" : ""); }
+      document.getElementById("mc-log").innerHTML = msg; table(); cv.redraw();
+    } });
+    cv.canvas.style.cursor = "pointer";
+    SB.seg("mc-test", function (v) { test = v; reset(); });
+    SB.seg("mc-model", function (v) { model = v; reset(); });
+    SB.seg("mc-fence", function (v) { fence = v === "1"; reset(); });
+    document.getElementById("mc-reset").onclick = reset;
+    document.getElementById("mc-rand1").onclick = function () { S = randRun(model); var k = key(S); hist[k] = (hist[k] || 0) + 1; document.getElementById("mc-log").innerHTML = "무작위 순서 " + S.order.map(function (o) { return "T" + o[0] + "." + (o[1] + 1); }).join(" → ") + " · 결과 <b>r0=" + S.reg.r0 + ", r1=" + S.reg.r1 + "</b>"; table(); cv.redraw(); };
+    document.getElementById("mc-rand").onclick = function () { for (var i = 0; i < 1000; i++) { var s = randRun(model), k = key(s); hist[k] = (hist[k] || 0) + 1; S = s; } document.getElementById("mc-log").innerHTML = "무작위 실행 순서를 1,000번 더 뽑았다. 표 오른쪽 열이 각 결과의 빈도다. 실제 하드웨어에서는 ★ 결과가 훨씬 드물게(수백만 번에 몇 번) 나오기도 한다."; table(); cv.redraw(); };
+    reset();
+  })();
+
+  /* ---------------------------------------------------------------- 7. 락 경합 */
+  (function () {
+    var kind = "tas", N = 8, CS = 100, BUS = 20, H = 60000, playing = false, live = null, res = {};
+    function Sim(kind, N, CS, seed) {
+      var r = SB.rng(seed), s = { t: 0, ls: [], core: [], lockv: 0, next: 0, serving: 0, q: [], cur: null, tx: 0, acq: 0, wait: 0, cnt: [] };
+      for (var c = 0; c < N; c++) { s.ls.push("I"); s.core.push({ st: "nc", rem: Math.floor(r() * CS), pend: false, delay: 0, my: -1, sub: "", t0: 0 }); s.cnt.push(0); }
+      s.ls[0] = "M";
+      function req(c, type, cb) { s.core[c].pend = true; s.q.push({ c: c, type: type, cb: cb }); }
+      function grant(g) {
+        if (g.type === "rdx") { for (var o = 0; o < N; o++) s.ls[o] = "I"; s.ls[g.c] = "M"; }
+        else { for (o = 0; o < N; o++) if (s.ls[o] === "M") s.ls[o] = "S"; s.ls[g.c] = "S"; }
+        s.tx++; s.core[g.c].pend = false; g.cb && g.cb();
+      }
+      function enter(c) { var C = s.core[c]; C.st = "cs"; C.rem = CS; s.acq++; s.cnt[c]++; s.wait += s.t - C.t0; }
+      function swap(c) { if (s.lockv === 0) { s.lockv = 1; enter(c); } else s.core[c].delay = 2 + Math.floor(r() * 5); }
+      function release(c) { if (kind === "ticket") s.serving++; else s.lockv = 0; var C = s.core[c]; C.st = "nc"; C.rem = Math.floor(CS * (0.5 + r())); }
+      s.step = function () {
+        s.t++;
+        if (s.cur) { if (--s.cur.rem <= 0) { var g = s.cur; s.cur = null; grant(g); } }
+        if (!s.cur && s.q.length) { s.cur = s.q.shift(); s.cur.rem = BUS; }
+        for (var c = 0; c < N; c++) {
+          var C = s.core[c];
+          if (C.pend) continue;
+          if (C.delay > 0) { C.delay--; continue; }
+          if (C.st === "nc") { if (--C.rem <= 0) { C.st = "acq"; C.sub = "take"; C.t0 = s.t; } }
+          else if (C.st === "cs") { if (--C.rem <= 0) C.st = "rel"; }
+          else if (C.st === "rel") { if (s.ls[c] === "M") release(c); else req(c, "rdx", (function (cc) { return function () { release(cc); }; })(c)); }
+          else if (C.st === "acq") {
+            if (kind === "tas") { if (s.ls[c] === "M") swap(c); else req(c, "rdx", (function (cc) { return function () { swap(cc); }; })(c)); }
+            else if (kind === "ttas") {
+              if (s.ls[c] === "I") req(c, "rd", null);
+              else if (s.lockv === 1) C.delay = 2 + Math.floor(r() * 5);
+              else if (s.ls[c] === "M") swap(c);
+              else req(c, "rdx", (function (cc) { return function () { swap(cc); }; })(c));
+            } else {
+              if (C.sub === "take") { if (s.ls[c] === "M") { C.my = s.next++; C.sub = "wait"; } else req(c, "rdx", (function (cc) { return function () { s.core[cc].my = s.next++; s.core[cc].sub = "wait"; }; })(c)); }
+              else { if (s.ls[c] === "I") req(c, "rd", null); else if (s.serving === C.my) enter(c); else C.delay = 2 + Math.floor(r() * 5); }
+            }
+          }
+        }
+      };
+      return s;
+    }
+    function compute() {
+      res = {};
+      ["tas", "ttas", "ticket"].forEach(function (k) { [2, 4, 8, 16].forEach(function (n) { var s = Sim(k, n, CS, 5); for (var i = 0; i < H; i++) s.step(); res[k + n] = s; }); });
+      upd();
+    }
+    function upd() {
+      var s = res[kind + N];
+      if (!s) return;
+      SB.stat("lk-thr", u((s.acq / H * 1e4).toFixed(1), "회"));
+      SB.stat("lk-tx", u(s.acq ? (s.tx / s.acq).toFixed(1) : "—", "개"));
+      SB.stat("lk-wait", u(s.acq ? Math.round(s.wait / s.acq).toLocaleString() : "—", "클럭"));
+      SB.stat("lk-util", u(Math.min(100, s.tx * BUS / H * 100).toFixed(0), "%"));
+      SB.stat("lk-fair", Math.min.apply(null, s.cnt) + " / " + Math.max.apply(null, s.cnt));
+      cv.redraw();
+    }
+    function resetLive() { live = Sim(kind, N, CS, 9); }
+    var KC = { tas: "TAS", ttas: "TTAS", ticket: "티켓" };
+    var cv = SB.canvas("#cv-lock", function (ctx, w, h) {
+      if (!live) return;
+      var topH = Math.min(150, h * 0.46), cw = (w - 20) / N, cb = Math.min(cw - 4, 70);
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText(KC[kind] + " · 코어 " + N + "개 · " + live.t.toLocaleString() + "클럭 · 획득 " + live.acq + " · 버스 " + live.tx, 10, 6);
+      var colOf = { nc: P.faint, acq: P.warn, cs: P.ok, rel: P.accent2 };
+      for (var c = 0; c < N; c++) {
+        var x = 10 + c * cw + (cw - cb) / 2, C = live.core[c];
+        ctx.fillStyle = colOf[C.st]; SOC.roundRect(ctx, x, 26, cb, 40, 6); ctx.fill();
+        ctx.fillStyle = "#fff"; ctx.font = SB.font(Math.min(13, cb * 0.32), true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(live.ls[c], x + cb / 2, 46);
+        ctx.fillStyle = P.dim; ctx.font = SB.font(Math.min(11, cb * 0.3), true); ctx.textBaseline = "top"; ctx.fillText(live.cnt[c], x + cb / 2, 70);
+        ctx.strokeStyle = live.cur && live.cur.c === c ? P.accent : P.border; ctx.lineWidth = live.cur && live.cur.c === c ? 2.5 : 1;
+        ctx.beginPath(); ctx.moveTo(x + cb / 2, 86); ctx.lineTo(x + cb / 2, topH - 30); ctx.stroke();
+      }
+      ctx.fillStyle = live.cur ? SOC.alpha(P.accent, 0.25) : P.surface; ctx.fillRect(10, topH - 30, w - 20, 16);
+      ctx.fillStyle = P.text; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText("버스: " + (live.cur ? (live.cur.type === "rdx" ? "BusRdX" : "BusRd") + " ← 코어 " + live.cur.c : "쉬는 중") + " · 대기 줄 " + live.q.length, 16, topH - 22);
+      // chart
+      var cy = topH + 8, ch = h - cy - 26, groups = [2, 4, 8, 16], gw = (w - 70) / groups.length, kinds = ["tas", "ttas", "ticket"], kcol = [P.bad, P.warn, P.ok];
+      var mx = 1; groups.forEach(function (n) { kinds.forEach(function (k) { var s = res[k + n]; if (s && s.acq) mx = Math.max(mx, s.tx / s.acq); }); });
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("획득 한 번당 버스 트랜잭션", 10, cy);
+      groups.forEach(function (n, gi) {
+        var gx = 60 + gi * gw;
+        kinds.forEach(function (k, ki) {
+          var s = res[k + n]; if (!s) return; var v = s.acq ? s.tx / s.acq : 0, bh = v / mx * (ch - 30), bw = gw / 4, bx = gx + ki * bw;
+          ctx.fillStyle = kcol[ki]; ctx.globalAlpha = (k === kind && n === N) ? 1 : 0.55; ctx.fillRect(bx, cy + ch - bh, bw - 2, bh); ctx.globalAlpha = 1;
+          if (k === kind && n === N) { ctx.strokeStyle = P.text; ctx.lineWidth = 1.5; ctx.strokeRect(bx, cy + ch - bh, bw - 2, bh); }
+          if (bw > 18) { ctx.fillStyle = P.text; ctx.font = SB.font(9.5, true); ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillText(v.toFixed(v < 10 ? 1 : 0), bx + bw / 2 - 1, cy + ch - bh - 1); }
+        });
+        ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText(n + "코어", gx + gw * 0.37, cy + ch + 4);
+      });
+      ["TAS", "TTAS", "티켓"].forEach(function (nm, ki) { var nar = w < 420, lx = (nar ? 10 : w - 170) + ki * 56, ly0 = nar ? cy + 16 : cy; ctx.fillStyle = kcol[ki]; ctx.fillRect(lx, ly0 + 2, 10, 10); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.font = SB.font(11); ctx.fillText(nm, lx + 13, ly0); });
+    }, { aspect: 0.55, minHeight: 340, maxHeight: 420 });
+    SB.seg("lk-kind", function (v) { kind = v; resetLive(); upd(); });
+    SB.seg("lk-n", function (v) { N = +v; resetLive(); upd(); });
+    SB.range("lk-cs", function (v) { return v + "클럭"; }, SB.debounce(function (v) { CS = v; resetLive(); compute(); }, 150));
+    var pb = document.getElementById("lk-play");
+    pb.onclick = function () { playing = !playing; pb.textContent = playing ? "❚❚ 멈춤" : "▶ 자동"; };
+    document.getElementById("lk-reset").onclick = function () { resetLive(); cv.redraw(); };
+    SB.loop(cv.canvas, function () { if (playing && live) { for (var i = 0; i < 12; i++) live.step(); cv.redraw(); } });
+    resetLive(); compute();
+  })();
+})();
+</script>
+</body>
+</html>

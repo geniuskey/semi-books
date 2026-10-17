@@ -1,0 +1,921 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and SoCBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<!--head:start {"desc": "신경망은 곱셈-누산의 산이다. 시스톨릭 배열로 행렬 곱을 한 사이클씩 흘려 보내고, 루프라인으로 연산과 메모리의 한계를 가르고, 타일링·양자화·희소성으로 데이터 이동을 줄이며, 휴대폰에서 LLM이 초당 몇 토큰을 낼지 계산한다.", "libs": []}-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NPU와 AI 가속 · SoCBook</title>
+<meta name="description" content="신경망은 곱셈-누산의 산이다. 시스톨릭 배열로 행렬 곱을 한 사이클씩 흘려 보내고, 루프라인으로 연산과 메모리의 한계를 가르고, 타일링·양자화·희소성으로 데이터 이동을 줄이며, 휴대폰에서 LLM이 초당 몇 토큰을 낼지 계산한다.">
+<link rel="canonical" href="https://semi.euiyun.com/soc/chapters/npu.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#c8285f">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="SoCBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="NPU와 AI 가속 · SoCBook">
+<meta property="og:description" content="신경망은 곱셈-누산의 산이다. 시스톨릭 배열로 행렬 곱을 한 사이클씩 흘려 보내고, 루프라인으로 연산과 메모리의 한계를 가르고, 타일링·양자화·희소성으로 데이터 이동을 줄이며, 휴대폰에서 LLM이 초당 몇 토큰을 낼지 계산한다.">
+<meta property="og:url" content="https://semi.euiyun.com/soc/chapters/npu.html">
+<meta property="og:image" content="https://semi.euiyun.com/soc/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/soc/chapters/npu.html#chapter","name":"NPU와 AI 가속","headline":"NPU와 AI 가속 · SoCBook","description":"신경망은 곱셈-누산의 산이다. 시스톨릭 배열로 행렬 곱을 한 사이클씩 흘려 보내고, 루프라인으로 연산과 메모리의 한계를 가르고, 타일링·양자화·희소성으로 데이터 이동을 줄이며, 휴대폰에서 LLM이 초당 몇 토큰을 낼지 계산한다.","url":"https://semi.euiyun.com/soc/chapters/npu.html","position":10,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/soc/og.png","dateModified":"2026-10-03","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/soc/#book","name":"SoCBook · 시스템 온 칩 교과서","url":"https://semi.euiyun.com/soc/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"SoCBook","item":"https://semi.euiyun.com/soc/"},{"@type":"ListItem","position":2,"name":"10. NPU와 AI 가속","item":"https://semi.euiyun.com/soc/chapters/npu.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/soc.js"></script>
+<!--head:end-->
+<style>
+  .np-top { padding: 12px 18px 0; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+  .np-sub { font-size: 12px; color: var(--text-faint); font-weight: 700; letter-spacing: .08em; margin-bottom: 6px; }
+  .np-klist { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 18px 0; }
+  .np-klist button { font: inherit; font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text-dim); cursor: pointer; }
+  .np-klist button i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .np-klist button.on { border-color: var(--accent); color: var(--text); background: var(--bg-elev); font-weight: 700; }
+  .np-pre { display: flex; flex-wrap: wrap; gap: 6px; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="soc"></script>
+</head>
+<body data-chapter="npu">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 10</div>
+    <h1>NPU와 AI 가속</h1>
+    <p class="lead">사진을 찍으면 휴대폰은 셔터를 누른 순간 이미 하늘과 사람을 구분하고, 여러 장을 합쳐 노이즈를 지우고 있다. 통화 소리에서 잡음을 지우고, 말을 받아 적고, 이제는 휴대폰 안에서 대화형 AI가 문장을 지어낸다. 이 모든 신경망의 계산은 놀랍도록 단순하다. <strong>곱하고, 더하고, 또 곱하고, 더한다.</strong> 사진 한 장을 분석하는 데 이 곱셈-누산이 수십억 번 들어간다. CPU로 하면 배터리가 녹고, GPU로 해도 아깝다. 그래서 SoC에는 곱셈-누산기 수천 개를 바둑판처럼 엮은 전용 블록, <strong>NPU</strong><span class="en">(Neural Processing Unit)</span>가 있다. 그런데 NPU를 만들어 보면 곧 깨닫게 된다. 진짜 적은 곱셈이 아니라 <strong>데이터를 가져오는 일</strong>이라는 것을.</p>
+    <ul class="objectives">
+      <li>신경망 층의 곱셈-누산(MAC) 수, 매개변수 수, 산술 집약도를 계산할 수 있다.</li>
+      <li>시스톨릭 배열이 데이터를 엇갈려 흘려 보내 행렬 곱을 하는 과정과, 가중치 고정·출력 고정 데이터 흐름의 차이를 설명한다.</li>
+      <li>루프라인 모델로 커널이 연산 한계인지 메모리 한계인지 판정한다.</li>
+      <li>온칩 SRAM 타일링, 양자화(INT8·INT4), 희소성이 DRAM 트래픽과 에너지를 줄이는 원리를 수치로 비교한다.</li>
+      <li>휴대폰에서 LLM의 토큰 생성 속도가 메모리 대역폭으로 정해지는 이유를 계산한다.</li>
+    </ul>
+    <div class="soc-locator" data-blocks="npu slc" data-caption="NPU는 SB-1의 아랫부분에 있다(약 7 mm²). 큰 SRAM을 품고 있고, 시스템 캐시(SLC)와 메모리 컨트롤러를 거쳐 DRAM에서 가중치를 읽는다."></div>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="mac">
+    <h2>신경망은 곱셈-누산의 산</h2>
+    <p>인공 신경망의 기본 단위인 <span class="term">뉴런</span><span class="en">(Neuron)</span>은 입력 \(x_i\)에 가중치 \(w_i\)를 곱해 모두 더하고, 편향 \(b\)를 더한 뒤, 비선형 함수(대개 ReLU, 음수를 0으로)에 통과시킨다.</p>
+    <div class="formula">$$y = \mathrm{ReLU}\Big(b + \sum_{i} w_i\,x_i\Big)$$</div>
+    <p>곱하고 누적기에 더하는 이 한 걸음을 <span class="term">곱셈-누산</span><span class="en">(MAC, Multiply-Accumulate)</span>이라 한다. 하드웨어로는 곱셈기 하나, 덧셈기 하나, 누적 레지스터 하나다. 아래에서 막대를 위아래로 끌어 입력과 가중치를 바꾸고, MAC을 한 번씩 진행해 보자.</p>
+    <figure class="play" id="fig-neuron">
+      <div class="play-view"><canvas id="cv-neuron"></canvas></div>
+      <div class="play-ctrl">
+        <div class="btn-row"><button class="btn sm primary" id="ne-step">MAC 한 번</button><button class="btn sm" id="ne-all">끝까지</button><button class="btn sm" id="ne-reset">처음부터</button></div>
+        <label class="ctrl"><span>편향 b <output id="ne-b-out"></output></span><input type="range" id="ne-b" min="-1" max="1" step="0.05" value="-0.2"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">누적기</span><span class="v" id="ne-acc">—</span></div>
+        <div class="stat"><span class="k">출력 y (ReLU 후)</span><span class="v" id="ne-y">—</span></div>
+        <div class="stat"><span class="k">MAC 횟수</span><span class="v" id="ne-n">—</span></div>
+      </div>
+      <figcaption><b>그림 10-1.</b> <span class="try">만져 보기</span>위쪽 막대가 입력 \(x_i\), 아래쪽 막대가 가중치 \(w_i\)다. 막대를 끌어 값을 바꾸면 결과가 다시 계산된다. 누적기가 음수로 끝나면 ReLU가 0으로 잘라 이 뉴런은 "꺼진다". 활성값에 0이 많다는 사실은 뒤의 희소성 절에서 다시 쓰인다.</figcaption>
+    </figure>
+    <p>실제 신경망은 이런 뉴런 수백만 개를 층으로 쌓는다. 이미지에 쓰는 <span class="term">합성곱</span><span class="en">(Convolution)</span> 층은 \(K\times K\) 크기의 필터를 이미지 전체에 미끄러뜨리며 같은 가중치를 반복해서 쓴다. 출력 크기가 \(H_o\times W_o\times C_{out}\)이면 MAC 수는</p>
+    <div class="formula">$$\text{MAC} = H_o \, W_o \, C_{out} \times K^2 \, C_{in}$$</div>
+    <p>이다. 층의 종류와 크기를 바꿔 보며 MAC, 매개변수, 데이터 크기가 어떻게 변하는지 보자. 마지막 숫자 <span class="term">산술 집약도</span><span class="en">(Arithmetic intensity)</span>는 메모리에서 1바이트를 옮길 때마다 하는 연산 수다. 이 장 전체를 꿰뚫는 숫자다.</p>
+    <figure class="play" id="fig-layer">
+      <div class="play-view"><canvas id="cv-layer"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="ly-type"><button data-value="conv" class="on">일반 합성곱</button><button data-value="dw">깊이별 합성곱</button><button data-value="fc">완전 연결</button></div>
+        <div class="seg" id="ly-k"><button data-value="1">1×1</button><button data-value="3" class="on">3×3</button><button data-value="5">5×5</button><button data-value="7">7×7</button></div>
+        <label class="ctrl"><span>입력 크기 H=W <output id="ly-h-out"></output></span><input type="range" id="ly-h" min="7" max="224" step="7" value="56"></label>
+        <label class="ctrl"><span>입력 채널 수 <output id="ly-ci-out"></output></span><input type="range" id="ly-ci" min="0" max="9" step="1" value="5"></label>
+        <label class="ctrl"><span>출력 채널 수 <output id="ly-co-out"></output></span><input type="range" id="ly-co" min="0" max="9" step="1" value="5"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">MAC</span><span class="v" id="ly-mac">—</span></div>
+        <div class="stat"><span class="k">가중치 (INT8)</span><span class="v" id="ly-w">—</span></div>
+        <div class="stat"><span class="k">입력+출력 활성값</span><span class="v" id="ly-act">—</span></div>
+        <div class="stat"><span class="k">산술 집약도</span><span class="v" id="ly-ai">—</span></div>
+      </div>
+      <figcaption><b>그림 10-2.</b> <span class="try">만져 보기</span>입력 텐서(왼쪽), 필터 묶음(가운데), 출력 텐서(오른쪽)의 크기를 로그 비율로 그렸다. 일반 합성곱은 가중치 하나를 화소 수만큼 재사용해 집약도가 수백에 이른다. 깊이별 합성곱(MobileNet류)은 MAC이 수십 배 적지만 집약도도 낮다. 완전 연결 층은 가중치 하나를 딱 한 번만 쓴다(배치 1). 산술 집약도는 연산 수(MAC × 2)를 가중치·입력·출력을 한 번씩 옮기는 바이트로 나눈 값이다.</figcaption>
+    </figure>
+    <p>대표적인 이미지 분류망 ResNet-50은 사진 한 장(224×224)에 약 40억 MAC, 매개변수 약 2,500만 개다. 초당 30장을 처리하려면 초당 1,200억 MAC, 즉 0.24 TOPS<span class="en">(Tera Operations Per Second, MAC 하나 = 연산 2개)</span>가 필요하다. 사진 보정, 실시간 번역, 생성형 AI까지 동시에 돌리면 수십 TOPS가 금세 찬다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="why">
+    <h2>왜 CPU·GPU가 아니라 NPU인가</h2>
+    <p><a href="overview.html#energy">1장</a>에서 본 에너지 표를 다시 꺼내 보자. 8비트 정수 곱셈은 약 0.2 pJ, 덧셈은 0.03 pJ이다. 그런데 작은 SRAM에서 그 피연산자를 읽는 데 5 pJ, DRAM에서 읽으면 수백 pJ이 든다. CPU는 여기에 명령어 인출·해독·레지스터 파일 접근이 MAC마다 붙는다. 결국 <strong>MAC 자체에 쓰는 에너지는 전체의 몇 %</strong>에 불과하다.</p>
+    <p>NPU 설계의 핵심은 단 하나다. <strong>한 번 가져온 데이터를 최대한 많이 재사용한다.</strong> 신경망에는 재사용 기회가 넘친다. 합성곱의 가중치는 화소마다 다시 쓰이고, 입력 화소는 필터마다 다시 쓰이고, 부분합은 채널마다 누적된다. 이 재사용을 데이터가 레지스터와 이웃 PE 사이에서만 오가도록 짜 맞춘 구조가 다음 절의 시스톨릭 배열이다.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>MAC 하나의 비용 (45 nm, 대략)</th><th class="num">곱셈 + 덧셈 에너지</th><th class="num">면적 (INT8 = 1)</th></tr></thead>
+        <tbody>
+          <tr><td>FP32 곱셈 + FP32 덧셈</td><td class="num">약 4.6 pJ</td><td class="num">약 37</td></tr>
+          <tr><td>FP16 곱셈 + FP16 덧셈</td><td class="num">약 1.5 pJ</td><td class="num">약 9</td></tr>
+          <tr><td>INT8 곱셈 + 32비트 누적</td><td class="num">약 0.3 pJ</td><td class="num">1</td></tr>
+          <tr><td>INT4 곱셈 + 누적 (추정)</td><td class="num">약 0.1 pJ</td><td class="num">약 0.3</td></tr>
+          <tr><td>참고: 8 KB SRAM에서 32비트 읽기</td><td class="num">약 5 pJ</td><td class="num">—</td></tr>
+          <tr><td>참고: DRAM에서 32비트 읽기</td><td class="num">약 640 pJ</td><td class="num">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>표는 Horowitz(ISSCC 2014)의 45 nm 자료와 그로부터 어림한 값이다. 정수 MAC이 부동소수점보다 열 배 이상 싸고 작다는 것, 그리고 DRAM 접근 한 번이 MAC 수천 번이라는 것, 두 가지가 NPU의 모양을 결정한다. NPU가 정수 연산과 거대한 온칩 SRAM으로 이루어진 이유다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="systolic">
+    <h2>시스톨릭 배열: 심장이 뛰듯 데이터를 흘린다</h2>
+    <p>1978년 H. T. Kung과 Charles Leiserson이 제안한 <span class="term">시스톨릭 배열</span><span class="en">(Systolic array)</span>은 심장 박동(systole)처럼 데이터가 일정한 박자로 이웃 처리 소자<span class="en">(PE, Processing Element)</span>로 넘어가는 구조다. PE 하나는 MAC 하나와 레지스터 몇 개뿐이다. 각 PE는 왼쪽에서 받은 값을 오른쪽으로, 위에서 받은 값을 아래로 넘기며 그 사이에 곱셈-누산을 한 번 한다. 긴 배선도, 공유 버스도, 메모리 접근도 없다. 데이터 하나가 배열을 가로지르는 동안 PE 수만큼 재사용된다. 구글 TPU(2016)가 256×256 시스톨릭 배열로 이 구조를 부활시켰고, 지금의 NPU 대부분이 이 생각을 바탕으로 한다.</p>
+    <p>핵심 묘기는 <strong>엇갈림</strong><span class="en">(Skew)</span>이다. 행렬 곱 \(C = A\,W\)에서 \(A\)의 각 열을 한 사이클씩 늦게 들여보내야, 맞는 짝이 맞는 PE에서 정확히 같은 사이클에 만난다. 아래 시뮬레이터에서 한 사이클씩 진행하며 계단 모양으로 들어가는 데이터를 따라가 보자.</p>
+    <div class="sim" id="sim-sys">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>시스톨릭 배열 행렬 곱</h3></div>
+      <div class="np-top">
+        <div class="seg" id="sy-flow"><button data-value="ws" class="on">가중치 고정 (WS)</button><button data-value="os">출력 고정 (OS)</button></div>
+        <div class="btn-row"><button class="btn sm primary" id="sy-step">한 사이클 →</button><button class="btn sm" id="sy-play">▶ 재생</button><button class="btn sm" id="sy-reset">처음으로</button><button class="btn sm" id="sy-rand">새 행렬</button></div>
+      </div>
+      <div class="sim-view"><canvas id="cv-sys"></canvas></div>
+      <div class="sim-controls">
+        <label class="ctrl"><span>배열 크기 S×S <output id="sy-s-out"></output></span><input type="range" id="sy-s" min="2" max="8" step="1" value="4"></label>
+        <label class="ctrl"><span>흘려 보낼 길이 L <output id="sy-l-out"></output></span><input type="range" id="sy-l" min="1" max="16" step="1" value="6"></label>
+      </div>
+      <div class="info-panel" id="sy-info"></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">사이클</span><span class="v" id="sy-t">—</span></div>
+        <div class="stat"><span class="k">지금까지 MAC</span><span class="v" id="sy-mac">—</span></div>
+        <div class="stat"><span class="k">PE 사용률 (누적)</span><span class="v" id="sy-u">—</span></div>
+        <div class="stat"><span class="k">결과 검증</span><span class="v" id="sy-ok">—</span></div>
+      </div>
+      <div class="sim-note">WS: PE(k, n)에 가중치 \(W_{kn}\)이 미리 실려 있다. \(A\)의 행 \(m\)의 원소 \(A_{mk}\)는 왼쪽에서 \(k\) 사이클 늦게 들어와 오른쪽으로 흐르고, 부분합은 위에서 아래로 흘러 맨 아래에서 \(C_{mn}\)이 나온다(오른쪽 결과판). OS: PE(i, j)가 \(C_{ij}\)를 붙잡고 누적한다. \(A\)는 왼쪽에서, \(B\)는 위에서 엇갈려 들어온다. 초록 테두리 = 이번 사이클에 MAC을 한 PE. 결과는 실제로 계산해 정답과 비교한다.</div>
+    </div>
+    <p>배열이 다 차고 다 비는 데 걸리는 시간이 보이는가? 이 시뮬레이터의 첫 결과는 WS에서 S사이클, OS에서 L사이클 뒤에 나온다. 마지막 MAC과 모든 결과의 완료 시각은 두 흐름 모두 \(L + 2S - 2\)사이클이다. 가중치 적재와 별도 결과 배출 시간은 포함하지 않는다. 따라서 이 모델의 PE 사용률은</p>
+    <div class="formula">$$\text{사용률} = \frac{L}{L + 2S - 2}$$</div>
+    <p>이다. 흘려 보낼 길이 \(L\)(WS에서는 배치나 화소 수)이 배열 크기보다 훨씬 길어야 효율이 난다. 256×256 배열에 배치 1짜리 작은 행렬을 넣으면 PE 대부분이 논다.</p>
+    <div class="predict"><strong>S = 8 배열에 L = 4짜리 일을 넣으면 사용률은?</strong>
+      <p>식으로 계산하고, 시뮬레이터에서 끝까지 돌려 확인해 보자.</p>
+      <details><summary>답 보기</summary><p>\(4 / (4 + 14) \approx 22\%\)다. PE 슬롯의 약 78%가 채우고 비우는 데 낭비된다. 그래서 NPU 컴파일러는 작은 행렬 여러 개를 묶어 한꺼번에 흘리거나, 배열을 작은 조각으로 나눠 따로 쓰게 한다. 큰 배열이 늘 좋은 것은 아니다. 휴대폰 NPU가 거대한 배열 하나 대신 중간 크기 엔진 여러 개를 두는 이유다.</p></details>
+    </div>
+    <p>두 데이터 흐름의 차이는 <strong>무엇을 붙잡아 두느냐</strong>다. <span class="term">가중치 고정</span><span class="en">(Weight-stationary)</span>은 가중치를 PE에 한 번 싣고 수많은 입력에 재사용한다. 합성곱처럼 가중치가 여러 화소에 쓰일 때 좋다. <span class="term">출력 고정</span><span class="en">(Output-stationary)</span>은 부분합을 PE 안에 붙잡아 누적하므로 넓은(32비트) 부분합이 움직이지 않는다. 그 밖에 입력 고정, 행 고정(MIT Eyeriss) 같은 흐름도 있다. 어느 쪽이 나은지는 층의 모양에 따라 달라서, 요즘 NPU는 층마다 흐름을 바꿀 수 있게 만든다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="roofline">
+    <h2>루프라인: 연산의 지붕과 메모리의 경사</h2>
+    <p>NPU가 40 TOPS라고 해서 어떤 신경망이든 40 TOPS로 도는 것은 아니다. 계산할 데이터가 제때 도착하지 않으면 MAC은 논다. 커널이 낼 수 있는 성능의 상한을 한 장의 그림으로 보여 주는 것이 <span class="term">루프라인 모델</span><span class="en">(Roofline model)</span>(Williams, Waterman, Patterson 2009)이다.</p>
+    <div class="formula">$$\text{성능} = \min\big(\text{최대 연산 성능},\;\; \text{메모리 대역폭} \times \text{산술 집약도}\big)$$</div>
+    <p>가로축이 산술 집약도(연산/바이트), 세로축이 성능이다. 왼쪽은 대역폭이 정하는 경사, 오른쪽은 연산기가 정하는 평평한 지붕이다. 두 선이 만나는 <span class="term">능선점</span><span class="en">(Ridge point)</span>보다 왼쪽에 있는 커널은 <strong>메모리 한계</strong>, 오른쪽은 <strong>연산 한계</strong>다. 커널을 눌러 보고, 대역폭과 연산 성능을 바꿔 보고, "내 커널" 점을 좌우로 끌어 보자.</p>
+    <div class="sim" id="sim-roof">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>NPU 루프라인</h3></div>
+      <div class="np-klist" id="rf-list"></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-roof"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>최대 연산 성능 <output id="rf-p-out"></output></span><input type="range" id="rf-p" min="2" max="100" step="1" value="40"></label>
+          <label class="ctrl"><span>DRAM 대역폭 <output id="rf-bw-out"></output></span><input type="range" id="rf-bw" min="10" max="200" step="2" value="68"></label>
+          <label class="ctrl"><span>LLM 디코드 배치 <output id="rf-b-out"></output></span><input type="range" id="rf-b" min="0" max="7" step="1" value="0"></label>
+          <div><div class="np-sub">가중치 정밀도</div><div class="seg" id="rf-q"><button data-value="1" class="on">INT8</button><button data-value="0.5">INT4</button></div></div>
+        </div>
+      </div>
+      <div class="info-panel" id="rf-info"></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">능선점</span><span class="v" id="rf-ridge">—</span></div>
+        <div class="stat"><span class="k">선택한 커널 성능</span><span class="v" id="rf-att">—</span></div>
+        <div class="stat"><span class="k">최대 대비</span><span class="v" id="rf-pct">—</span></div>
+        <div class="stat"><span class="k">한계</span><span class="v" id="rf-bound">—</span></div>
+      </div>
+      <div class="sim-note">산술 집약도는 대략값이다. 원소별 연산(INT8 덧셈·ReLU): 1연산/3바이트. 깊이별 3×3: 출력 하나에 MAC 9개, 입출력 약 2바이트. 3×3 합성곱(64→64 채널): 출력 하나에 MAC 576개. 큰 행렬 곱 1024³: \(2N^3/3N^2\). LLM 디코드: 토큰 하나에 가중치 1바이트(INT8)당 2연산 × 배치. 프리필: 프롬프트 토큰 512개가 같은 가중치를 공유. 온칩 SRAM에 다 들어가는 작은 모델은 DRAM 루프라인보다 위로 갈 수 있다.</div>
+    </div>
+    <p>가장 중요한 관찰은 <strong>LLM 디코드</strong>다. 대화형 AI가 단어를 하나씩 만들 때(배치 1), 매 토큰마다 모델의 모든 가중치를 DRAM에서 한 번씩 읽어야 하고, 가중치 1바이트당 연산은 2번뿐이다. 산술 집약도 2는 능선점(40 TOPS ÷ 68 GB/s ≈ 590)보다 수백 배 왼쪽이다. NPU가 아무리 커도 0.5% 남짓밖에 쓰지 못한다. 배치를 키우면(여러 사용자의 요청을 묶으면) 점이 오른쪽으로 움직이지만, 휴대폰의 사용자는 한 명뿐이다.</p>
+    <div class="predict"><strong>LLM 디코드를 빠르게 하려면 NPU의 TOPS를 두 배로 늘려야 할까, 대역폭을 두 배로 늘려야 할까?</strong>
+      <p>시뮬레이터에서 두 슬라이더를 각각 움직여 보자.</p>
+      <details><summary>답 보기</summary><p>대역폭이다. 메모리 한계 영역에서는 성능이 \(\text{대역폭} \times \text{집약도}\)로 정해지므로 TOPS를 열 배 올려도 아무것도 바뀌지 않는다. 반대로 INT4로 가중치를 줄이면 같은 대역폭으로 두 배의 가중치를 읽으므로 집약도가 두 배가 되어 토큰 속도도 두 배가 된다. 휴대폰 LLM에서 양자화가 필수인 이유다.</p></details>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="tiling">
+    <h2>온칩 SRAM과 타일링: 재사용을 짜 맞추기</h2>
+    <p>루프라인에서 오른쪽으로 가려면 산술 집약도를 높여야 한다. 같은 계산을 하면서 DRAM 트래픽을 줄이는 방법은 데이터를 <strong>조각</strong><span class="en">(Tile)</span>으로 나눠 칩 안 SRAM에 올리고, 내려보내기 전에 최대한 많이 쓰는 것이다. \(n\times n\) 행렬 곱을 \(T\times T\) 타일로 하면, \(A\)와 \(B\)의 각 원소는 DRAM에서 \(n/T\)번만 읽힌다.</p>
+    <div class="formula">$$\text{DRAM 트래픽} \approx \underbrace{2\,\frac{n^3}{T}}_{A,\;B\ \text{읽기}} + \underbrace{n^2}_{C\ \text{쓰기}} \quad(\text{바이트, INT8}),\qquad \text{SRAM} \gtrsim 2T^2 + 4T^2$$</div>
+    <p>타일이 클수록 트래픽이 줄지만, 타일은 SRAM에 들어가야 한다(\(A\)·\(B\) 타일 각 \(T^2\) 바이트, 32비트 누적기 \(C\) 타일 \(4T^2\) 바이트). SRAM 크기와 타일 크기를 바꾸며 이 맞바꿈을 보자.</p>
+    <div class="sim" id="sim-tile">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>행렬 곱 타일링과 DRAM 트래픽</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-tile"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>행렬 크기 n <output id="tl-n-out"></output></span><input type="range" id="tl-n" min="256" max="4096" step="256" value="2048"></label>
+          <label class="ctrl"><span>타일 크기 T <output id="tl-t-out"></output></span><input type="range" id="tl-t" min="3" max="10" step="1" value="6"></label>
+          <label class="ctrl"><span>온칩 SRAM <output id="tl-m-out"></output></span><input type="range" id="tl-m" min="5" max="13" step="1" value="10"></label>
+          <button class="btn sm" id="tl-best">SRAM에 맞는 가장 큰 타일</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">DRAM 트래픽</span><span class="v" id="tl-tr">—</span></div>
+        <div class="stat"><span class="k">산술 집약도</span><span class="v" id="tl-ai">—</span></div>
+        <div class="stat"><span class="k">걸리는 시간 (40 TOPS, 68 GB/s)</span><span class="v" id="tl-time">—</span></div>
+        <div class="stat"><span class="k">필요 SRAM</span><span class="v" id="tl-need">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽은 \(C = A\,B\)의 타일 순회(바깥 i, j, 안쪽 k)를 애니메이션으로 보여 준다. 칸의 진하기는 그 타일이 지금까지 DRAM에서 몇 번 읽혔는지다. 행렬이 크면 8×8 타일로 줄여 그렸다. 시간은 연산 시간과 메모리 시간 중 긴 쪽(겹쳐 실행 가정)이다. 실제 NPU는 이중 버퍼링으로 다음 타일을 미리 읽으므로 SRAM이 두 배쯤 더 필요하다.</div>
+    </div>
+    <p>SRAM이 작으면 타일을 키울 수 없고, 트래픽이 수십 배로 불어난다. 그래서 휴대폰 NPU는 수 MB, 데이터센터 가속기는 수십~수백 MB의 SRAM을 품는다. SRAM은 다이에서 비싼 면적이지만, 그 면적이 DRAM 트래픽을 줄여 아끼는 에너지가 더 크다. 시스템 캐시(SLC, <a href="cache.html">5장</a>)도 NPU에게는 두 번째 타일 저장소 역할을 한다. 층과 층 사이의 중간 결과(활성값)를 DRAM에 내려보내지 않고 SRAM에서 다음 층으로 바로 넘기는 <span class="term">층 융합</span><span class="en">(Layer fusion)</span>도 같은 생각이다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="quant">
+    <h2>양자화: 32비트는 너무 많다</h2>
+    <p>신경망은 학습할 때 32비트나 16비트 부동소수점을 쓰지만, 추론할 때는 그렇게 정밀할 필요가 없다. 가중치를 8비트나 4비트 정수로 바꾸는 것을 <span class="term">양자화</span><span class="en">(Quantization)</span>라 한다. 가장 단순한 대칭 양자화는 값의 범위를 정하고(클리핑 값 \(\alpha\)), 그 범위를 \(2^{b-1}-1\)개의 등간격 칸으로 나눈다.</p>
+    <div class="formula">$$q = \mathrm{round}\!\left(\frac{x}{s}\right),\quad s = \frac{\alpha}{2^{b-1}-1},\qquad \hat x = s\,q$$</div>
+    <p>비트 수가 하나 줄 때마다 칸 수가 절반이 되고 오차가 두 배가 된다. 신호 대 양자화 잡음비<span class="en">(SQNR)</span>로는 비트당 약 6 dB이다. 그런데 가중치 분포에는 드물게 아주 큰 값(이상치)이 있다. 범위를 이상치에 맞추면 대부분의 작은 값이 칸 몇 개에 몰리고, 범위를 좁혀 이상치를 잘라 내면 작은 값은 정밀해지지만 이상치가 망가진다. 클리핑 값을 움직여 이 줄다리기를 직접 해 보자.</p>
+    <figure class="play" id="fig-quant">
+      <div class="play-view"><canvas id="cv-quant"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="qt-b"><button data-value="32">FP32</button><button data-value="16">FP16</button><button data-value="8">INT8</button><button data-value="4" class="on">INT4</button><button data-value="2">INT2</button></div>
+        <div class="seg" id="qt-d"><button data-value="w" class="on">가중치 (이상치 포함)</button><button data-value="a">활성값 (ReLU 후)</button></div>
+        <label class="ctrl"><span>클리핑 범위 α (최댓값 대비) <output id="qt-c-out"></output></span><input type="range" id="qt-c" min="0.1" max="1" step="0.01" value="1"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">SQNR</span><span class="v" id="qt-sq">—</span></div>
+        <div class="stat"><span class="k">30억 매개변수 모델 크기</span><span class="v" id="qt-sz">—</span></div>
+        <div class="stat"><span class="k">MAC 에너지 (대략)</span><span class="v" id="qt-e">—</span></div>
+        <div class="stat"><span class="k">MAC 면적 (INT8=1)</span><span class="v" id="qt-a">—</span></div>
+      </div>
+      <figcaption><b>그림 10-3.</b> <span class="try">만져 보기</span>위: 값 4,000개의 분포(막대)와 양자화 단계(세로선), 잘려 나가는 영역(빨강). 아래: 값 40개의 원래 값(테두리)과 양자화된 값(채움). INT4에서 클리핑을 최댓값의 30~50%로 줄이면 SQNR이 오히려 좋아지는 지점이 있다. 활성값은 ReLU 뒤라 음수가 없으므로 비대칭(0~α) 양자화로 칸을 두 배 쓴다. FP16은 사람 눈에 차이가 없을 만큼 정밀하다.</figcaption>
+    </figure>
+    <p>실전 양자화는 이보다 영리하다. 채널마다 따로 범위를 정하고(채널별 스케일), 작은 묶음(32~128개)마다 스케일을 두고(그룹 양자화), 이상치만 따로 높은 정밀도로 남기기도 한다. 그 덕에 이미지 신경망은 INT8에서 정확도 손실이 1% 안팎이고, LLM은 INT4 가중치(활성값은 8~16비트)로 쓸 만한 품질을 낸다. 하드웨어 이득은 앞의 표대로다. 비트 수를 절반으로 줄이면 MAC 면적은 대략 1/3~1/4, 메모리와 대역폭은 정확히 절반이 된다.</p>
+    <div class="callout tip"><strong>TOPS 숫자를 읽는 법</strong><p>NPU 광고의 "45 TOPS"는 대개 INT8 기준이고, 어떤 회사는 INT4나 희소성을 가정한 값을 쓴다. INT4 TOPS는 같은 칩의 INT8 TOPS의 두 배로 표시되는 경우가 많다. 비교할 때는 정밀도와 희소성 가정을 꼭 확인하자.</p></div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="sparse">
+    <h2>희소성: 0은 곱하지 않는다</h2>
+    <p>ReLU 뒤의 활성값은 절반 넘게 0이고, 학습이 끝난 가중치 중에도 아주 작은 값이 많다. 0을 곱하는 MAC은 결과에 아무 영향이 없으니 건너뛰면 된다. 이를 <span class="term">희소성</span><span class="en">(Sparsity)</span> 활용이라 한다. 문제는 0이 <strong>어디에</strong> 있느냐다. 0이 무작위로 흩어져 있으면 시스톨릭 배열처럼 규칙적으로 데이터를 흘리는 하드웨어는 건너뛸 방법이 없다. 0의 위치를 적어 둔 색인을 따라가며 데이터를 모아야 하는데, 그 비용이 아낀 MAC보다 크기 쉽다.</p>
+    <p>그래서 나온 타협이 <span class="term">2:4 구조적 희소성</span><span class="en">(2:4 structured sparsity)</span>이다(NVIDIA Ampere, 2020). 가중치 4개마다 정확히 2개만 남기도록 가지치기한다. 하드웨어는 남은 2개와 비영 원소당 2비트 위치 색인(한 그룹 총 4비트 메타데이터, 대표 FP16/BF16·INT8 형식)만 보고 곱셈기 절반으로 같은 일을 한다. 네 위치 중 두 개를 고르는 패턴은 여섯 가지여서 그룹 전체를 2비트로 나타낼 수 없다(정보량 최소 3비트, 이 구현은 4비트). 다른 정밀도 형식의 묶음 규칙은 별도로 확인해야 한다. 0의 비율은 50%로 정해져 있지만 그 50%를 확실히 속도로 바꿀 수 있다.</p>
+    <figure class="play" id="fig-sparse">
+      <div class="play-view"><canvas id="cv-sparse"></canvas></div>
+      <div class="play-ctrl">
+        <div class="seg" id="sp-m"><button data-value="none">가지치기 없음</button><button data-value="un" class="on">비구조적</button><button data-value="24">2:4 구조적</button></div>
+        <label class="ctrl"><span>비구조적 가지치기 비율 <output id="sp-r-out"></output></span><input type="range" id="sp-r" min="0" max="0.95" step="0.05" value="0.6"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">0인 가중치</span><span class="v" id="sp-z">—</span></div>
+        <div class="stat"><span class="k">남은 가중치 크기 (에너지)</span><span class="v" id="sp-keep">—</span></div>
+        <div class="stat"><span class="k">조밀 배열에서 속도</span><span class="v" id="sp-dense">—</span></div>
+        <div class="stat"><span class="k">희소 지원 하드웨어에서</span><span class="v" id="sp-hw">—</span></div>
+      </div>
+      <figcaption><b>그림 10-4.</b> <span class="try">만져 보기</span>8×32 가중치 행렬. 칸의 색은 값의 부호와 크기, 빈칸은 가지치기된 0이다. 2:4 모드에서는 가로로 4개씩 묶은 칸(가는 세로선) 안에서 큰 값 2개만 남는다. "남은 가중치 크기"는 원래 가중치 제곱합 중 남은 비율로, 정확도 손실의 거친 대리 지표다. 비구조적 희소성은 같은 비율이면 덜 손해 보지만, 전용 색인 하드웨어 없이는 빠르지 않다.</figcaption>
+    </figure>
+    <p>활성값의 0은 실행 중에야 알 수 있으므로 다르게 다룬다. 많은 NPU는 0인 활성값이 들어오면 그 PE의 곱셈기 클럭을 멈춰(클럭 게이팅, <a href="power.html">12장</a>) 에너지만 아끼고, 일부는 0을 압축해 SRAM·DRAM 트래픽을 줄인다. 속도보다 에너지와 대역폭을 얻는 쪽이다.</p>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="llm">
+    <h2>휴대폰에서 LLM 돌리기: 토큰 속도의 산수</h2>
+    <p>루프라인 절에서 본 대로 LLM 디코드는 철저히 메모리 한계다. 그렇다면 토큰 하나를 만드는 시간은 계산이 아니라 <strong>모든 가중치를 DRAM에서 한 번 읽는 시간</strong>이다. 여기에 지금까지 만든 토큰들의 키·값 기록(<span class="term">KV 캐시</span><span class="en">(KV cache)</span>)도 매번 읽어야 한다.</p>
+    <div class="formula">$$\text{토큰/초} \;\approx\; \frac{\text{대역폭} \times \eta}{\text{매개변수 수} \times \text{매개변수당 바이트} + \text{KV 캐시}}$$</div>
+    <p>\(\eta\)는 실제로 얻는 대역폭 비율(대개 60~80%, <a href="dram.html">7장</a>)이다. 모델 크기, 정밀도, 대역폭을 바꿔 휴대폰이 말을 얼마나 빨리 하는지 보자. 화면에 글자가 실제 계산된 속도로 찍힌다.</p>
+    <figure class="play" id="fig-llm">
+      <div class="play-view"><canvas id="cv-llm"></canvas></div>
+      <div class="play-ctrl">
+        <label class="ctrl"><span>매개변수 <output id="lm-p-out"></output></span><input type="range" id="lm-p" min="0" max="10" step="1" value="4"></label>
+        <div class="seg" id="lm-q"><button data-value="2">FP16</button><button data-value="1">INT8</button><button data-value="0.5" class="on">INT4</button></div>
+        <label class="ctrl"><span>메모리 대역폭 <output id="lm-bw-out"></output></span><input type="range" id="lm-bw" min="20" max="200" step="5" value="60"></label>
+        <label class="ctrl"><span>문맥 길이 <output id="lm-ctx-out"></output></span><input type="range" id="lm-ctx" min="0" max="32" step="1" value="4"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">가중치 크기</span><span class="v" id="lm-w">—</span></div>
+        <div class="stat"><span class="k">토큰당 읽는 데이터</span><span class="v" id="lm-rd">—</span></div>
+        <div class="stat"><span class="k">생성 속도</span><span class="v" id="lm-tps">—</span></div>
+        <div class="stat"><span class="k">40 TOPS NPU 사용률</span><span class="v" id="lm-u">—</span></div>
+      </div>
+      <figcaption><b>그림 10-5.</b> <span class="try">만져 보기</span>대역폭 효율 \(\eta = 0.7\). KV 캐시는 80억 매개변수급(32층, KV 차원 1,024, FP16) 모델의 토큰당 약 128 KB를 모델 크기에 비례해 어림했다. 막대는 휴대폰 RAM 12 GB 중 모델과 KV 캐시가 차지하는 양이다. 30억 매개변수 INT4(약 1.5 GB)를 60 GB/s로 돌리면 초당 약 25토큰, 사람이 읽는 속도(초당 5~10토큰)보다 빠르다. 70억 FP16은 메모리에 들어가기도 버겁다.</figcaption>
+    </figure>
+    <p>여기서 휴대폰 AI의 설계 방향이 모두 나온다. 대역폭을 늘리고(LPDDR5X → LPDDR6, 더 넓은 버스), 가중치를 줄이고(INT4, 작은 모델, 지식 증류), 한 번 읽은 가중치로 토큰을 여러 개 만든다(추측 디코딩, Speculative decoding: 작은 모델이 몇 토큰을 미리 짐작하면 큰 모델이 한 번에 검증해 배치 효과를 얻는다). 처음 프롬프트를 읽는 <strong>프리필</strong> 단계는 토큰 수백 개가 같은 가중치를 공유하므로 연산 한계에 가깝고, 여기서 NPU의 TOPS가 빛난다.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>NPU (연도)</th><th class="num">공개 성능</th><th>비고</th></tr></thead>
+        <tbody>
+          <tr><td>Google TPU v1 (2016, 데이터센터)</td><td class="num">92 TOPS (INT8)</td><td>256×256 시스톨릭 배열, 온칩 28 MB, 약 40 W</td></tr>
+          <tr><td>Apple A17 Pro Neural Engine (2023)</td><td class="num">약 35 TOPS</td><td>16코어, 스마트폰</td></tr>
+          <tr><td>Apple M4 Neural Engine (2024)</td><td class="num">약 38 TOPS</td><td>태블릿·노트북</td></tr>
+          <tr><td>Qualcomm Snapdragon X Elite Hexagon (2024)</td><td class="num">약 45 TOPS (INT8)</td><td>노트북용, 스마트폰 Hexagon도 비슷한 세대</td></tr>
+          <tr><td>Intel Core Ultra 200V NPU (2024)</td><td class="num">약 48 TOPS</td><td>노트북용</td></tr>
+          <tr><td>AMD Ryzen AI 300 XDNA 2 (2024)</td><td class="num">약 50 TOPS</td><td>노트북용, 공간형 데이터 흐름 배열</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>2024년에 PC 업계가 "AI PC" 기준으로 NPU 40 TOPS 이상을 내걸면서, 휴대폰과 노트북 NPU는 모두 수십 TOPS대에 모였다. 그런데 앞에서 계산했듯 LLM 디코드에서 이 TOPS의 1%도 쓰기 어렵다. 다음 세대 NPU 경쟁이 TOPS보다 대역폭, SRAM, 저정밀도 지원으로 옮겨 가는 이유다. NPU 옆에서 사진을 처리하는 ISP와 영상 코덱 같은 고정 기능 블록은 <a href="media.html">11장</a>에서 다룬다.</p>
+  </section>
+
+  <section class="keypoints">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>신경망 계산의 대부분은 곱셈-누산(MAC)이다. 합성곱 층의 MAC = 출력 크기 × K² × C<sub>in</sub>.</li>
+      <li>MAC 자체보다 데이터 이동이 훨씬 비싸다. NPU는 정수 MAC 배열과 큰 SRAM으로 재사용을 극대화한다.</li>
+      <li>시스톨릭 배열은 데이터를 엇갈려 흘려 이웃 PE끼리만 주고받는다. 이 모델의 사용률 = L/(L+2S−2)이라 흘릴 데이터가 충분히 길어야 한다.</li>
+      <li>루프라인: 성능 = min(최대 연산, 대역폭 × 산술 집약도). LLM 디코드(배치 1)는 극단적인 메모리 한계다.</li>
+      <li>타일링은 트래픽을 1/T로, 양자화는 바이트를 절반씩, 2:4 희소성은 MAC을 절반으로 줄인다. 휴대폰 LLM 속도 ≈ 대역폭 ÷ 모델 바이트.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. 출력 28×28×128, 입력 채널 128, 3×3 합성곱 층의 MAC 수에 가장 가까운 것은?</p>
+        <div class="opts">
+          <button class="opt">약 1,450만</button><button class="opt">약 2,900만</button><button class="opt" data-correct>약 1억 1,600만</button><button class="opt">약 11억 6,000만</button>
+        </div>
+        <div class="quiz-exp">28 × 28 × 128 = 100,352개 출력 각각에 3 × 3 × 128 = 1,152번의 MAC. 곱하면 115,605,504 ≈ 1억 1,600만이다. 가중치는 3×3×128×128 ≈ 14.7만 개뿐이니 가중치 하나가 약 784번 재사용된다.</div></div>
+      <div class="quiz-q"><p>Q2. 시스톨릭 배열에서 입력 데이터를 행마다 한 사이클씩 늦게(엇갈려) 넣는 이유는?</p>
+        <div class="opts">
+          <button class="opt">클럭 스큐를 보정하려고</button>
+          <button class="opt" data-correct>위에서 내려오는 부분합과 왼쪽에서 오는 입력이 맞는 PE에서 같은 사이클에 만나도록</button>
+          <button class="opt">전력 소모를 고르게 퍼뜨리려고</button>
+          <button class="opt">DRAM 행 버퍼 적중률을 높이려고</button>
+        </div>
+        <div class="quiz-exp">부분합이 한 행 내려가는 데 한 사이클이 걸리므로, 다음 행의 입력도 한 사이클 늦게 도착해야 같은 출력 원소의 다음 항을 정확히 누적할 수 있다.</div></div>
+      <div class="quiz-q"><p>Q3. 최대 40 TOPS, 대역폭 80 GB/s인 NPU에서 산술 집약도 100 연산/바이트인 커널이 낼 수 있는 최대 성능은?</p>
+        <div class="opts">
+          <button class="opt" data-correct>8 TOPS (메모리 한계)</button><button class="opt">40 TOPS (연산 한계)</button><button class="opt">0.8 TOPS</button><button class="opt">20 TOPS</button>
+        </div>
+        <div class="quiz-exp">80 GB/s × 100 = 8 TOPS < 40 TOPS. 능선점은 40T/80G = 500 연산/바이트이므로 100은 그 왼쪽, 메모리 한계 영역이다.</div></div>
+      <div class="quiz-q"><p>Q4. n×n 행렬 곱의 타일 크기를 32에서 128로 키우면 A·B를 읽는 DRAM 트래픽은 대략 어떻게 되는가?</p>
+        <div class="opts">
+          <button class="opt">변화 없다</button><button class="opt">1/2</button><button class="opt" data-correct>1/4</button><button class="opt">1/16</button>
+        </div>
+        <div class="quiz-exp">A·B 트래픽 ≈ 2n³/T이므로 T가 4배면 1/4이다. 대신 필요한 SRAM은 T²에 비례해 16배가 된다.</div></div>
+      <div class="quiz-q"><p>Q5. 70억 매개변수 모델을 INT4로 양자화해 대역폭 70 GB/s(효율 70%)에서 돌리면 토큰 생성 속도는 대략?</p>
+        <div class="opts">
+          <button class="opt">약 1.4토큰/초</button><button class="opt" data-correct>약 14토큰/초</button><button class="opt">약 7토큰/초</button><button class="opt">약 140토큰/초</button>
+        </div>
+        <div class="quiz-exp">가중치 7 × 10⁹ × 0.5 B = 3.5 GB. 49 GB/s ÷ 3.5 GB ≈ 14토큰/초(KV 캐시 제외). 계산 능력은 거의 상관없다.</div></div>
+      <div class="quiz-q"><p>Q6. 2:4 구조적 희소성이 비구조적 희소성보다 하드웨어에서 유리한 점은?</p>
+        <div class="opts">
+          <button class="opt">0의 비율을 90%까지 높일 수 있다</button>
+          <button class="opt">정확도 손실이 항상 더 작다</button>
+          <button class="opt">색인 정보가 필요 없다</button>
+          <button class="opt" data-correct>네 개마다 정확히 두 개가 남아 규칙적이므로, 한 그룹 4비트 위치 색인과 절반의 곱셈기로 지원 엔진의 이론 MAC 처리량을 최대 2배로 높인다</button>
+        </div>
+        <div class="quiz-exp">규칙적인 패턴 덕분에 데이터 흐름을 바꾸지 않고 곱셈기 절반을 건너뛸 수 있다. 비율은 50%로 고정되고, 같은 비율이면 비구조적보다 정확도 손실이 약간 클 수 있다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var P = SB.palette();
+  SB.onTheme(function () { P = SB.palette(); });
+  var NPU = function () { return SOC.color("npu"); };
+  var fmtN = function (x) { return x >= 1e9 ? (x / 1e9).toFixed(x >= 1e10 ? 1 : 2) + "<small>G</small>" : x >= 1e6 ? (x / 1e6).toFixed(x >= 1e7 ? 1 : 2) + "<small>M</small>" : x >= 1e3 ? (x / 1e3).toFixed(1) + "<small>K</small>" : String(Math.round(x)); };
+
+  /* ---------------------------------------------------------------- 1. 뉴런 */
+  (function () {
+    var x = [0.8, -0.4, 0.6, 0.3, -0.7], w = [0.5, 0.9, -0.6, 0.8, -0.3], b = -0.2, step = 0, drag = null, geo = null;
+    var cv = SB.canvas("#cv-neuron", function (ctx, W, H) {
+      var n = x.length, lx = 44, rx = W < 520 ? W - 10 : W * 0.62, bw = (rx - lx) / n;
+      var mid = H * 0.5, half = H * 0.2;
+      geo = { lx: lx, bw: bw, n: n, top: H * 0.06, xMid: H * 0.28, wMid: H * 0.72, half: half * 0.95 };
+      ctx.font = SB.font(11.5, false, 700); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText("입력 x", 4, geo.xMid); ctx.fillText("가중치 w", 4, geo.wMid);
+      for (var i = 0; i < n; i++) {
+        var cx = lx + i * bw + bw / 2, done = i < step, curr = i === step - 1;
+        [[x[i], geo.xMid, P.accent2], [w[i], geo.wMid, NPU()]].forEach(function (r) {
+          ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(cx - bw * 0.35, r[1]); ctx.lineTo(cx + bw * 0.35, r[1]); ctx.stroke();
+          var hh = r[0] * geo.half; ctx.fillStyle = r[2]; ctx.globalAlpha = done || step === 0 ? 1 : 0.45;
+          ctx.fillRect(cx - bw * 0.22, Math.min(r[1], r[1] - hh), bw * 0.44, Math.abs(hh)); ctx.globalAlpha = 1;
+          ctx.fillStyle = P.text; ctx.font = SB.font(10.5, true); ctx.textAlign = "center";
+          ctx.fillText(r[0].toFixed(2), cx, r[1] + (r[0] >= 0 ? 10 : -10) * 1);
+        });
+        if (curr) { ctx.strokeStyle = P.accent; ctx.lineWidth = 2; ctx.strokeRect(cx - bw * 0.42, geo.xMid - geo.half - 6, bw * 0.84, geo.wMid - geo.xMid + 2 * geo.half + 12); ctx.lineWidth = 1; }
+        ctx.fillStyle = done ? P.text : P.faint; ctx.font = SB.font(10.5, true); ctx.textAlign = "center";
+        ctx.fillText("x·w=" + (x[i] * w[i]).toFixed(2), cx, mid);
+      }
+      // accumulator & output (right side or below)
+      var acc = b; for (var k = 0; k < step; k++) acc += x[k] * w[k];
+      var y = Math.max(0, acc);
+      if (W >= 520) {
+        var ax = rx + 30, aw = W - ax - 14;
+        ctx.fillStyle = P.dim; ctx.font = SB.font(11.5, false, 700); ctx.textAlign = "left"; ctx.fillText("누적기 (b에서 시작)", ax, H * 0.14);
+        var zx = ax + aw / 2, sc = aw / 2 / 2.2;
+        ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(zx, H * 0.22); ctx.lineTo(zx, H * 0.46); ctx.stroke();
+        ctx.fillStyle = acc >= 0 ? P.ok : P.bad; ctx.fillRect(Math.min(zx, zx + acc * sc), H * 0.27, Math.abs(acc * sc), H * 0.14);
+        ctx.fillStyle = P.text; ctx.font = SB.font(13, true, 700); ctx.textAlign = "center"; ctx.fillText(acc.toFixed(2), zx, H * 0.52);
+        SOC.arrow(ctx, zx, H * 0.58, zx, H * 0.68, P.faint, 1.6, 7);
+        SOC.box(ctx, zx - 40, H * 0.70, 80, 24, SOC.alpha(NPU(), 0.85), "ReLU", { size: 12 });
+        ctx.fillStyle = y > 0 ? P.ok : P.faint; ctx.font = SB.font(15, true, 700); ctx.fillText("y = " + y.toFixed(2), zx, H * 0.88);
+      }
+      SB.stat("ne-acc", acc.toFixed(3)); SB.stat("ne-y", y.toFixed(3) + (y === 0 ? "<small>꺼짐</small>" : "")); SB.stat("ne-n", step + "<small>/ " + n + "</small>");
+    }, { aspect: 0.42, minHeight: 240, maxHeight: 320 });
+    var el = document.getElementById("cv-neuron");
+    function hit(px, py) {
+      if (!geo) return null; var i = Math.floor((px - geo.lx) / geo.bw); if (i < 0 || i >= geo.n) return null;
+      var row = Math.abs(py - geo.xMid) < Math.abs(py - geo.wMid) ? "x" : "w"; return { i: i, row: row };
+    }
+    function setVal(d, py) { var mid = d.row === "x" ? geo.xMid : geo.wMid, v = SB.clamp((mid - py) / geo.half, -1, 1); (d.row === "x" ? x : w)[d.i] = Math.round(v * 20) / 20; cv.redraw(); }
+    SOC.pointer(el, {
+      down: function (px, py) { drag = hit(px, py); if (drag) setVal(drag, py); },
+      move: function (px, py, down) { if (down && drag) setVal(drag, py); else el.style.cursor = hit(px, py) ? "ns-resize" : "default"; },
+      up: function () { drag = null; },
+    }, { drag: true });
+    document.getElementById("ne-step").onclick = function () { step = Math.min(x.length, step + 1); cv.redraw(); };
+    document.getElementById("ne-all").onclick = function () { step = x.length; cv.redraw(); };
+    document.getElementById("ne-reset").onclick = function () { step = 0; cv.redraw(); };
+    SB.range("ne-b", function (v) { return v.toFixed(2); }, function (v) { b = v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 2. 층 계산기 */
+  (function () {
+    var S = { type: "conv", k: 3, h: 56, ci: 64, co: 64 };
+    var CH = [3, 8, 16, 24, 32, 64, 128, 256, 512, 1024];
+    function calc() {
+      var ho = S.type === "fc" ? 1 : S.h, k = S.type === "fc" ? 1 : S.k, ci = S.type === "fc" ? S.ci * (S.h >= 7 ? 1 : 1) : S.ci, co = S.type === "dw" ? S.ci : S.co;
+      var mac, wts, ain, aout;
+      if (S.type === "conv") { mac = ho * ho * co * k * k * ci; wts = k * k * ci * co; ain = S.h * S.h * ci; aout = ho * ho * co; }
+      else if (S.type === "dw") { mac = ho * ho * ci * k * k; wts = k * k * ci; ain = S.h * S.h * ci; aout = ho * ho * ci; }
+      else { mac = ci * co; wts = ci * co; ain = ci; aout = co; }
+      return { mac: mac, wts: wts, ain: ain, aout: aout, ho: ho, k: k, co: co, ai: 2 * mac / (wts + ain + aout) };
+    }
+    var cv = SB.canvas("#cv-layer", function (ctx, w, h) {
+      var c = calc();
+      var sz = function (v, mx) { return 8 + Math.log2(1 + v) / Math.log2(1 + mx) * 1; };
+      var boxes = [
+        { n: "입력", d: [S.type === "fc" ? 1 : S.h, S.type === "fc" ? 1 : S.h, S.ci], col: P.accent2, sub: S.type === "fc" ? S.ci + "" : S.h + "×" + S.h + "×" + S.ci },
+        { n: S.type === "dw" ? "필터 (채널마다 1개)" : "필터 ×" + c.co, d: [c.k, c.k, S.type === "dw" ? 1 : S.ci], col: NPU(), sub: c.k + "×" + c.k + "×" + (S.type === "dw" ? 1 : S.ci) + (S.type === "dw" ? " ×" + S.ci : " ×" + c.co) },
+        { n: "출력", d: [c.ho, c.ho, c.co], col: P.ok, sub: S.type === "fc" ? c.co + "" : c.ho + "×" + c.ho + "×" + c.co },
+      ];
+      var colW = w / 3, maxPix = Math.min(colW * 0.55, h * 0.5);
+      var L = function (v) { return Math.log2(1 + v) / Math.log2(1 + 1024); };
+      boxes.forEach(function (bx, i) {
+        var cx = colW * i + colW / 2, cy = h * 0.48;
+        var fw = Math.max(6, L(bx.d[0]) * maxPix * 1.6), fh = Math.max(6, L(bx.d[1]) * maxPix * 1.6), dep = Math.max(3, L(bx.d[2]) * maxPix * 0.9);
+        fw = Math.min(fw, colW * 0.62); fh = Math.min(fh, h * 0.5);
+        var x0 = cx - fw / 2 - dep * 0.35, y0 = cy - fh / 2 + dep * 0.35, ox = dep * 0.7, oy = -dep * 0.7;
+        ctx.fillStyle = SOC.alpha(bx.col, 0.35);
+        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 + ox, y0 + oy); ctx.lineTo(x0 + ox + fw, y0 + oy); ctx.lineTo(x0 + fw, y0); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = SOC.alpha(bx.col, 0.55);
+        ctx.beginPath(); ctx.moveTo(x0 + fw, y0); ctx.lineTo(x0 + fw + ox, y0 + oy); ctx.lineTo(x0 + fw + ox, y0 + oy + fh); ctx.lineTo(x0 + fw, y0 + fh); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = bx.col; ctx.fillRect(x0, y0, fw, fh);
+        ctx.fillStyle = P.text; ctx.font = SB.font(12, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+        ctx.fillText(bx.n, cx, h - 30);
+        ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, true); ctx.fillText(bx.sub, cx, h - 14);
+        if (i < 2) { ctx.fillStyle = P.faint; ctx.font = SB.font(24, false, 700); ctx.fillText(i === 0 ? "⊛" : "=", colW * (i + 1), cy + 6); }
+      });
+      SB.stat("ly-mac", fmtN(c.mac));
+      SB.stat("ly-w", SB.bytes(c.wts, 3, false));
+      SB.stat("ly-act", SB.bytes(c.ain + c.aout, 3, false));
+      SB.stat("ly-ai", (c.ai >= 10 ? Math.round(c.ai) : c.ai.toFixed(1)) + "<small>연산/B</small>");
+    }, { aspect: 0.36, minHeight: 200, maxHeight: 280 });
+    SB.seg("ly-type", function (v) { S.type = v; cv.redraw(); });
+    SB.seg("ly-k", function (v) { S.k = +v; cv.redraw(); });
+    SB.range("ly-h", function (v) { return v; }, function (v) { S.h = v; cv.redraw(); });
+    SB.range("ly-ci", function (v) { return CH[v]; }, function (v) { S.ci = CH[v]; cv.redraw(); });
+    SB.range("ly-co", function (v) { return CH[v]; }, function (v) { S.co = CH[v]; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 3. 시스톨릭 배열 */
+  (function () {
+    var S = 4, L = 6, flow = "ws", t = 0, playing = false, acc = 0, seed = 3;
+    var A, W, C, rowsA, colsA;
+    var info = document.getElementById("sy-info");
+    function gen() {
+      var r = SB.rng(seed);
+      // WS: A is L×S, W is S×S, C = L×S.  OS: A is S×L, B(=W) is L×S, C = S×S
+      if (flow === "ws") { rowsA = L; colsA = S; } else { rowsA = S; colsA = L; }
+      A = []; for (var i = 0; i < rowsA; i++) { A.push([]); for (var j = 0; j < colsA; j++) A[i].push(Math.floor(r() * 4)); }
+      W = []; var wr = flow === "ws" ? S : L; for (var k = 0; k < wr; k++) { W.push([]); for (var n = 0; n < S; n++) W[k].push(Math.floor(r() * 5) - 2); }
+      t = 0;
+    }
+    function total() { return L + 2 * S - 2; }
+    function exact(m, n) { var s = 0; var K = flow === "ws" ? S : L; for (var k = 0; k < K; k++) s += A[m][k] * W[k][n]; return s; }
+    // state at cycle t (after t cycles have executed: cycles 0..t-1)
+    function stateAt(tt) {
+      var pe = [], macs = 0, outs = {};
+      for (var r = 0; r < S; r++) { pe.push([]); for (var c = 0; c < S; c++) pe[r].push({ a: null, b: null, ps: null, act: false, acc: 0 }); }
+      if (flow === "ws") {
+        // cycle cyc: PE(k,n) processes m = cyc - k - n
+        for (var cyc = 0; cyc < tt; cyc++) for (var k = 0; k < S; k++) for (var n = 0; n < S; n++) { var m = cyc - k - n; if (m >= 0 && m < L) macs++; }
+        var cyc2 = tt - 1;
+        for (var k2 = 0; k2 < S; k2++) for (var n2 = 0; n2 < S; n2++) {
+          var m2 = cyc2 - k2 - n2, p = pe[k2][n2];
+          if (cyc2 >= 0 && m2 >= 0 && m2 < L) { p.act = true; p.a = A[m2][k2]; var s = 0; for (var q = 0; q <= k2; q++) s += A[m2][q] * W[q][n2]; p.ps = s; p.m = m2; }
+        }
+        for (var mm = 0; mm < L; mm++) for (var nn = 0; nn < S; nn++) if (mm + (S - 1) + nn < tt) outs[mm + "," + nn] = exact(mm, nn);
+      } else {
+        for (var cyc3 = 0; cyc3 < tt; cyc3++) for (var i = 0; i < S; i++) for (var j = 0; j < S; j++) { var kk = cyc3 - i - j; if (kk >= 0 && kk < L) macs++; }
+        for (var i2 = 0; i2 < S; i2++) for (var j2 = 0; j2 < S; j2++) {
+          var p2 = pe[i2][j2], s2 = 0, last = tt - 1 - i2 - j2;
+          for (var k3 = 0; k3 < L && k3 <= last; k3++) s2 += A[i2][k3] * W[k3][j2];
+          p2.acc = s2;
+          if (last >= 0 && last < L) { p2.act = true; p2.a = A[i2][last]; p2.b = W[last][j2]; }
+          if (last >= L - 1) outs[i2 + "," + j2] = s2;
+        }
+      }
+      return { pe: pe, macs: macs, outs: outs };
+    }
+    gen();
+    var cv = SB.canvas("#cv-sys", function (ctx, w, h) {
+      var st = stateAt(t), ws = flow === "ws";
+      var qc = Math.min(L + S - 1, w < 520 ? 4 : 10) * 0.62 + 0.4, resCols = ws ? S * 0.62 + 1.2 : 0, topQ = ws ? 0 : (w < 520 ? 2.5 : 3.2);
+      var cs = Math.min((w - 24) / (qc + S + resCols + 0.4), (h - 30) / (S + topQ + (ws ? 0.9 : 0.4)), 64);
+      var gx = 12 + qc * cs, gy = 18 + topQ * cs;
+      var fs = Math.max(8.5, cs * 0.24);
+      // PE grid
+      for (var r = 0; r < S; r++) for (var c = 0; c < S; c++) {
+        var p = st.pe[r][c], x = gx + c * cs, y = gy + r * cs;
+        ctx.fillStyle = p.act ? SOC.alpha(NPU(), 0.32) : SOC.alpha(NPU(), 0.1); ctx.fillRect(x + 2, y + 2, cs - 4, cs - 4);
+        ctx.strokeStyle = p.act ? P.ok : SOC.alpha(NPU(), 0.6); ctx.lineWidth = p.act ? 2.5 : 1; ctx.strokeRect(x + 2, y + 2, cs - 4, cs - 4);
+        ctx.textBaseline = "middle"; ctx.textAlign = "left";
+        if (ws) {
+          ctx.fillStyle = NPU(); ctx.font = SB.font(fs, true, 700); ctx.fillText("w" + W[r][c], x + 5, y + fs * 0.8 + 3);
+          if (p.act) {
+            ctx.fillStyle = P.accent2; ctx.font = SB.font(fs, true, 700); ctx.textAlign = "right"; ctx.fillText(String(p.a), x + cs - 5, y + fs * 0.8 + 3);
+            ctx.fillStyle = P.text; ctx.textAlign = "center"; ctx.font = SB.font(fs * 1.05, true, 700); ctx.fillText("Σ" + p.ps, x + cs / 2, y + cs * 0.68);
+          }
+        } else {
+          ctx.fillStyle = P.text; ctx.textAlign = "center"; ctx.font = SB.font(fs * 1.15, true, 700); ctx.fillText(String(p.acc), x + cs / 2, y + cs * 0.62);
+          if (p.act) { ctx.font = SB.font(fs * 0.9, true, 700); ctx.textAlign = "left"; ctx.fillStyle = P.accent2; ctx.fillText(String(p.a), x + 5, y + fs * 0.7 + 3); ctx.textAlign = "right"; ctx.fillStyle = P.warn; ctx.fillText(String(p.b), x + cs - 5, y + fs * 0.7 + 3); }
+        }
+      }
+      // left queue: values not yet entered
+      ctx.save(); ctx.beginPath(); ctx.rect(4, gy - 2, gx - 6, S * cs + 4); ctx.clip();
+      for (var rr = 0; rr < S; rr++) {
+        var cnt = ws ? L : L;
+        for (var m = 0; m < cnt; m++) {
+          var enter = ws ? m + rr : m + rr, off = enter - t + 1; // off>=1 means still waiting (t cycles done)
+          if (off < 1) continue;
+          var v = ws ? A[m][rr] : A[rr][m], qx = gx - off * cs * 0.62;
+          if (qx < 0) continue;
+          ctx.fillStyle = SOC.alpha(P.accent2, off === 1 ? 0.9 : 0.55); SOC.roundRect(ctx, qx + 2, gy + rr * cs + cs * 0.28, cs * 0.56, cs * 0.44, 4); ctx.fill();
+          ctx.fillStyle = "#fff"; ctx.font = SB.font(fs, true, 700); ctx.textAlign = "center"; ctx.fillText(String(v), qx + 2 + cs * 0.28, gy + rr * cs + cs * 0.5);
+        }
+      }
+      ctx.restore();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillText(ws ? "A 입력 →" : "A →", 8, gy - 6);
+      // top queue (OS)
+      if (!ws) {
+        ctx.save(); ctx.beginPath(); ctx.rect(gx - 2, 14, S * cs + 4, gy - 14); ctx.clip();
+        for (var cc = 0; cc < S; cc++) for (var k = 0; k < L; k++) {
+          var off2 = k + cc - t + 1; if (off2 < 1) continue;
+          var qy = gy - off2 * cs * 0.62; if (qy < 14) continue;
+          ctx.fillStyle = SOC.alpha(P.warn, off2 === 1 ? 0.95 : 0.6); SOC.roundRect(ctx, gx + cc * cs + cs * 0.22, qy + 2, cs * 0.56, cs * 0.5, 4); ctx.fill();
+          ctx.fillStyle = "#fff"; ctx.font = SB.font(fs, true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(W[k][cc]), gx + cc * cs + cs / 2, qy + 2 + cs * 0.25);
+        }
+        ctx.restore();
+        ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillText("B ↓", gx, 12);
+      } else {
+        ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "top";
+        ctx.fillText("부분합 ↓ · 결과는 아래로 나온다", gx + S * cs / 2, gy + S * cs + 4);
+        // result matrix L×S at right
+        var rx = gx + S * cs + cs * 0.8, rcs = Math.min(cs * 0.62, (h - 40) / L), ry = 18;
+        ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillText("C = A·W", rx, ry - 4);
+        for (var mm = 0; mm < L; mm++) for (var nn = 0; nn < S; nn++) {
+          var key = mm + "," + nn, have = key in st.outs, x2 = rx + nn * rcs, y2 = ry + mm * rcs;
+          ctx.fillStyle = have ? SOC.alpha(P.ok, 0.3) : P.grid; ctx.fillRect(x2 + 1, y2 + 1, rcs - 2, rcs - 2);
+          if (have) { ctx.fillStyle = P.text; ctx.font = SB.font(Math.max(8, rcs * 0.38), true, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(st.outs[key]), x2 + rcs / 2, y2 + rcs / 2); }
+        }
+      }
+      // readouts
+      var T = total(), nOut = Object.keys(st.outs).length, need = ws ? L * S : S * S;
+      var okAll = true; Object.keys(st.outs).forEach(function (kq) { var a = kq.split(","); if (st.outs[kq] !== exact(+a[0], +a[1])) okAll = false; });
+      SB.stat("sy-t", t + "<small>/ " + T + "</small>");
+      SB.stat("sy-mac", st.macs + "<small>/ " + (L * S * S) + "</small>");
+      SB.stat("sy-u", t ? Math.round(st.macs / (t * S * S) * 100) + "<small>%</small>" : "—");
+      SB.stat("sy-ok", nOut === need ? (okAll ? '<span style="color:var(--ok)">✓ 정답</span>' : "✗") : nOut + "<small>/ " + need + " 완료</small>");
+    }, { aspect: 0.42, minHeight: 210, maxHeight: 440 });
+    function setInfo() {
+      var T = total();
+      info.innerHTML = (flow === "ws" ? "<b>가중치 고정.</b> 파란 칩 = 들어오는 A 원소, 각 PE 왼쪽 위 = 붙박이 가중치, Σ = 내려가는 부분합." : "<b>출력 고정.</b> 파란 칩 = A(왼쪽에서), 주황 칩 = B(위에서). PE 가운데 숫자가 그 자리에 쌓이는 C 원소다.") +
+        " 이 크기에서 전체 " + T + "사이클, 이론 사용률 L/(L+2S−2) = " + Math.round(L / T * 100) + "%." + (flow === "ws" ? " (가중치를 미리 싣는 " + S + "사이클은 따로)" : " (결과를 빼내는 " + S + "사이클은 따로)");
+    }
+    function reset() { gen(); setInfo(); cv.redraw(); }
+    SB.range("sy-s", function (v) { return v + "×" + v; }, function (v) { S = v; reset(); });
+    SB.range("sy-l", function (v) { return v; }, function (v) { L = v; reset(); });
+    SB.seg("sy-flow", function (v) { flow = v; reset(); });
+    document.getElementById("sy-step").onclick = function () { if (t < total()) t++; cv.redraw(); };
+    document.getElementById("sy-reset").onclick = function () { t = 0; cv.redraw(); };
+    document.getElementById("sy-rand").onclick = function () { seed++; reset(); };
+    var pb = document.getElementById("sy-play");
+    pb.onclick = function () { playing = !playing; if (playing && t >= total()) t = 0; pb.textContent = playing ? "❚❚ 멈춤" : "▶ 재생"; };
+    SB.loop(document.getElementById("cv-sys"), function (dt) {
+      if (!playing) return; acc += dt; if (acc < 0.55) return; acc = 0;
+      if (t < total()) { t++; cv.redraw(); } else { playing = false; pb.textContent = "▶ 재생"; }
+    });
+    reset();
+  })();
+
+  /* ---------------------------------------------------------------- 4. 루프라인 */
+  (function () {
+    var peak = 40, bw = 68, batch = 1, q = 1, sel = "llm", custom = 30, drag = false, geo = null;
+    var K = [
+      { k: "elt", n: "원소별 연산", ai: function () { return 0.33; }, c: "text-dim" },
+      { k: "llm", n: "LLM 디코드", ai: function () { return 2 * batch / q; }, c: "bad" },
+      { k: "dw", n: "깊이별 3×3", ai: function () { return 9; }, c: "warn" },
+      { k: "conv", n: "3×3 합성곱", ai: function () { return 380; }, c: "ok" },
+      { k: "gemm", n: "큰 행렬 곱", ai: function () { return 680; }, c: "accent-2" },
+      { k: "pre", n: "LLM 프리필", ai: function () { return 1024 / q * 0.9; }, c: "accent" },
+      { k: "me", n: "내 커널 (끌기)", ai: function () { return custom; }, c: "text" },
+    ];
+    var listEl = document.getElementById("rf-list"), info = document.getElementById("rf-info");
+    function att(ai) { return Math.min(peak, bw * ai / 1000); }
+    var X0 = 0.1, X1 = 3000, Y0 = 0.01, Y1 = 200;
+    var cv = SB.canvas("#cv-roof", function (ctx, w, h) {
+      var ridge = peak * 1000 / bw;
+      var line = []; for (var e = Math.log10(X0); e <= Math.log10(X1) + 1e-9; e += 0.02) { var a = Math.pow(10, e); line.push([a, att(a)]); }
+      var pts = K.map(function (k) { var a = k.ai(); return { x: a, y: att(a), color: SB.color(k.c), r: k.k === sel ? 7 : 4.5 }; });
+      var g = SB.chart(ctx, null, {
+        x: [X0, X1], y: [Y0, Y1], logX: true, logY: true, xLabel: "산술 집약도 (연산/바이트)", yLabel: "성능 (TOPS)",
+        yFmt: function (v) { return v >= 1 ? String(v) : String(v); },
+        bands: [{ x0: X0, x1: ridge, color: SOC.alpha(P.bad, 0.06) }],
+        series: [{ data: line, color: P.text, width: 2.5 }],
+        vlines: [{ x: ridge, color: P.faint, label: "능선점 " + Math.round(ridge) }],
+        points: pts,
+      });
+      geo = g;
+      // labels
+      ctx.font = SB.font(11, false, 600); ctx.textBaseline = "bottom";
+      K.forEach(function (k, i) {
+        var a = k.ai(), px = g.X(a), py = g.Y(att(a));
+        if (k.k !== sel && (w < 520 || a > ridge * 0.35)) return;
+        ctx.fillStyle = k.k === sel ? P.text : P.dim; ctx.textAlign = px > g.box.x + g.box.w - 90 ? "right" : "left";
+        ctx.fillText(k.n, px + (ctx.textAlign === "right" ? -8 : 8), py - 6 - (i % 2) * 12);
+      });
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("메모리 한계", g.box.x + 6, g.box.y + 4);
+      ctx.textAlign = "right"; ctx.textBaseline = "bottom"; ctx.fillText("연산 한계 (지붕 " + peak + " TOPS)", g.box.x + g.box.w - 4, g.Y(peak) - 16);
+    }, { aspect: 0.66, minHeight: 300, maxHeight: 460 });
+    function list() {
+      listEl.innerHTML = K.map(function (k) { return '<button data-k="' + k.k + '" class="' + (k.k === sel ? "on" : "") + '"><i style="background:' + SB.color(k.c) + '"></i>' + k.n + "</button>"; }).join("");
+    }
+    listEl.addEventListener("click", function (e) { var b = e.target.closest("button"); if (b) { sel = b.dataset.k; upd(); } });
+    function upd() {
+      list();
+      var k = K.find(function (z) { return z.k === sel; }), a = k.ai(), v = att(a), ridge = peak * 1000 / bw;
+      SB.stat("rf-ridge", Math.round(ridge) + "<small>연산/B</small>");
+      SB.stat("rf-att", (v >= 1 ? v.toFixed(1) : v.toFixed(3)) + "<small>TOPS</small>");
+      SB.stat("rf-pct", (v / peak * 100 >= 1 ? Math.round(v / peak * 100) : (v / peak * 100).toFixed(2)) + "<small>%</small>");
+      SB.stat("rf-bound", a < ridge ? '<span style="color:var(--bad)">메모리</span>' : '<span style="color:var(--ok)">연산</span>');
+      var DESC = {
+        elt: "더하기·ReLU 같은 원소별 연산은 값 하나를 읽고 한 번 계산하고 쓴다. 이런 연산은 앞뒤 층에 붙여(융합) DRAM에 따로 오가지 않게 해야 한다.",
+        llm: "배치 " + batch + ", 가중치 " + (q === 1 ? "INT8" : "INT4") + ". 토큰 하나를 만들 때 모든 가중치를 한 번씩 읽고 가중치당 MAC 하나(연산 2개)×배치만 한다.",
+        dw: "깊이별 합성곱은 채널마다 3×3 필터 하나뿐이라 MAC이 적고 재사용도 적다. MobileNet류가 NPU에서 기대만큼 빠르지 않은 이유.",
+        conv: "일반 3×3 합성곱(64→64 채널)은 가중치를 화소마다, 입력을 필터마다 재사용해 집약도가 높다. 지붕 바로 아래에 있어 대역폭이 조금만 늘거나 층 융합으로 활성값을 칩 안에 두면 연산 한계가 된다.",
+        gemm: "큰 행렬 곱은 원소마다 n번 재사용된다(타일이 충분히 크면). 연산 한계에 놓인다.",
+        pre: "프롬프트 토큰 512개를 한꺼번에 처리하는 프리필 단계는 같은 가중치를 512번 쓴다. 디코드와 같은 모델인데 루프라인 반대편에 있다.",
+        me: "점을 좌우로 끌어 보자. 능선점 왼쪽에서는 성능이 집약도에 비례하고, 오른쪽에서는 지붕에 막힌다.",
+      };
+      info.innerHTML = "<b>" + k.n + "</b> · 산술 집약도 ≈ " + (a >= 10 ? Math.round(a) : a.toFixed(2)) + " 연산/바이트. " + DESC[sel];
+      cv.redraw();
+    }
+    SB.range("rf-p", function (v) { return v + " TOPS"; }, function (v) { peak = v; upd(); });
+    SB.range("rf-bw", function (v) { return v + " GB/s"; }, function (v) { bw = v; upd(); });
+    SB.range("rf-b", function (v) { return Math.pow(2, v); }, function (v) { batch = Math.pow(2, v); upd(); });
+    SB.seg("rf-q", function (v) { q = +v; upd(); });
+    var el = document.getElementById("cv-roof");
+    SOC.pointer(el, {
+      down: function (x, y) { if (!geo) return; var px = geo.X(custom), py = geo.Y(att(custom)); if (Math.hypot(x - px, y - py) < 22) { drag = true; sel = "me"; upd(); } },
+      move: function (x, y, down) {
+        if (!geo) return;
+        if (down && drag) { var lx = Math.log10(X0) + (x - geo.box.x) / geo.box.w * (Math.log10(X1) - Math.log10(X0)); custom = SB.clamp(Math.pow(10, lx), X0, X1); upd(); return; }
+        el.style.cursor = Math.hypot(x - geo.X(custom), y - geo.Y(att(custom))) < 22 ? "ew-resize" : "default";
+      },
+      up: function () { drag = false; },
+    }, { drag: true });
+    upd();
+  })();
+
+  /* ---------------------------------------------------------------- 5. 타일링 */
+  (function () {
+    var n = 2048, T = 64, M = 1024 * 1024, anim = 0;
+    var PEAK = 40e12, BW = 68e9;
+    function need(T) { return 6 * T * T; }
+    function model() {
+      var tr = 2 * Math.pow(n, 3) / T + n * n, ops = 2 * Math.pow(n, 3);
+      return { tr: tr, ai: ops / tr, tc: ops / PEAK, tm: tr / BW, need: need(T), fit: need(T) <= M, min: 3 * n * n };
+    }
+    var cv = SB.canvas("#cv-tile", function (ctx, w, h) {
+      var md = model(), g = Math.min(8, Math.max(1, n / T)), real = n / T;
+      var narrow = w < 460;
+      var mw = Math.min((w - 30) / (narrow ? 2.15 : 2.2), (h - 90) / 2.15);
+      var ox = 10 + mw * 1.08, oy = 22 + mw * 1.08, cs = mw / g;
+      // loop position
+      var total = g * g * g, step = Math.floor(anim) % total, i = Math.floor(step / (g * g)), j = Math.floor(step / g) % g, k = step % g;
+      // load counts so far for display: A(i,k) loaded once per (i,j,k) visited
+      var cntA = [], cntB = [];
+      for (var a = 0; a < g; a++) { cntA.push([]); cntB.push([]); for (var b = 0; b < g; b++) { cntA[a].push(0); cntB[a].push(0); } }
+      for (var s = 0; s <= step; s++) { var si = Math.floor(s / (g * g)), sj = Math.floor(s / g) % g, sk = s % g; cntA[si][sk]++; cntB[sk][sj]++; }
+      var mx = g;
+      function drawM(x0, y0, cnt, hl, col, label) {
+        for (var r = 0; r < g; r++) for (var c = 0; c < g; c++) {
+          var v = cnt ? cnt[r][c] / mx : 0;
+          ctx.fillStyle = cnt ? SOC.alpha(col, 0.08 + 0.75 * v) : P.grid; ctx.fillRect(x0 + c * cs + 0.5, y0 + r * cs + 0.5, cs - 1, cs - 1);
+        }
+        if (hl) { ctx.strokeStyle = P.accent; ctx.lineWidth = 2.5; ctx.strokeRect(x0 + hl[1] * cs, y0 + hl[0] * cs, cs, cs); }
+        ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(x0, y0, g * cs, g * cs);
+        ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(label, x0 + g * cs / 2, y0 + g * cs / 2);
+      }
+      drawM(10, oy, cntA, [i, k], P.accent2, "");
+      drawM(ox, 22, cntB, [k, j], P.warn, "");
+      // C: done tiles
+      var cdone = []; for (var r = 0; r < g; r++) { cdone.push([]); for (var c = 0; c < g; c++) cdone[r].push(r * g + c < i * g + j ? 1 : 0); }
+      for (var r2 = 0; r2 < g; r2++) for (var c2 = 0; c2 < g; c2++) { ctx.fillStyle = cdone[r2][c2] ? SOC.alpha(NPU(), 0.55) : (r2 === i && c2 === j ? SOC.alpha(NPU(), 0.25 + 0.3 * (k + 1) / g) : P.grid); ctx.fillRect(ox + c2 * cs + 0.5, oy + r2 * cs + 0.5, cs - 1, cs - 1); }
+      ctx.strokeStyle = P.accent; ctx.lineWidth = 2.5; ctx.strokeRect(ox + j * cs, oy + i * cs, cs, cs);
+      ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(ox, oy, g * cs, g * cs);
+      ctx.fillStyle = P.text; ctx.font = SB.font(12, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+      ctx.fillText("A", 10 + mw / 2, oy - 6); ctx.fillText("B", ox + mw / 2, 16); ctx.fillText("C", ox + mw / 2, oy - 6);
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, true); ctx.textAlign = "left";
+      ctx.fillText("T=" + T + " → 타일 " + real + "×" + real + "개" + (real > 8 ? " (8×8로 축약)" : ""), 10, 14);
+      if (!narrow) ctx.fillText("루프 i=" + i + " j=" + j + " k=" + k, 10, 30);
+      // bars: traffic vs min
+      var by = oy + mw + 18, bw = w - 20;
+      if (by + 50 < h) {
+        var lg = function (v) { return Math.log10(v); }, lo = lg(md.min) - 0.3, hi = lg(2 * Math.pow(n, 3) / 8 + n * n) + 0.2;
+        var X = function (v) { return 10 + (lg(v) - lo) / (hi - lo) * (bw - 100); };
+        ctx.fillStyle = P.grid; ctx.fillRect(10, by, bw - 100, 14);
+        ctx.fillStyle = md.fit ? NPU() : P.bad; ctx.fillRect(10, by, X(md.tr) - 10, 14);
+        ctx.strokeStyle = P.ok; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(md.min), by - 4); ctx.lineTo(X(md.min), by + 18); ctx.stroke();
+        ctx.fillStyle = P.text; ctx.font = SB.font(11, true, 600); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(SB.bytes(md.tr, 3, false), X(md.tr) + 6, by + 7);
+        ctx.fillStyle = P.dim; ctx.font = SB.font(10.5); ctx.textBaseline = "top";
+        ctx.fillText(narrow ? "DRAM 트래픽 (로그). 초록 선 = 최소 " + SB.bytes(md.min, 2, false) : "DRAM 트래픽 (로그). 초록 선 = 각 원소를 한 번씩만 옮기는 최소 " + SB.bytes(md.min, 2, false), 10, by + 22);
+        if (!md.fit) { ctx.fillStyle = P.bad; ctx.font = SB.font(11.5, false, 700); ctx.fillText((narrow ? "SRAM 초과! 필요 " : "타일이 SRAM에 들어가지 않는다! 필요 ") + SB.bytes(md.need, 3), 10, by + 40); }
+      }
+    }, { aspect: 0.8, minHeight: 340, maxHeight: 520 });
+    function upd() {
+      var md = model();
+      SB.stat("tl-tr", SB.bytes(md.tr, 3, false));
+      SB.stat("tl-ai", Math.round(md.ai) + "<small>연산/B</small>");
+      var tt = Math.max(md.tc, md.tm);
+      SB.stat("tl-time", (tt >= 1 ? tt.toFixed(2) + "<small>s</small>" : (tt * 1000).toFixed(tt < 0.01 ? 2 : 1) + "<small>ms</small>") + "<small>" + (md.tm > md.tc ? " 메모리 한계" : " 연산 한계") + "</small>");
+      SB.stat("tl-need", '<span style="color:' + (md.fit ? "var(--ok)" : "var(--bad)") + '">' + SB.bytes(md.need, 3) + "</span>");
+      cv.redraw();
+    }
+    var tGet = SB.range("tl-t", function (v) { return Math.pow(2, v); }, function (v) { T = Math.pow(2, v); if (T > n) T = n; anim = 0; upd(); });
+    SB.range("tl-n", function (v) { return v; }, function (v) { n = v; if (T > n) T = n; anim = 0; upd(); });
+    SB.range("tl-m", function (v) { return SB.bytes(Math.pow(2, v) * 1024, 3); }, function (v) { M = Math.pow(2, v) * 1024; upd(); });
+    document.getElementById("tl-best").onclick = function () { var b = 3; for (var e = 3; e <= 10; e++) if (need(Math.pow(2, e)) <= M && Math.pow(2, e) <= n) b = e; tGet.set(b); };
+    upd();
+    SB.loop(document.getElementById("cv-tile"), function (dt) { anim += dt * 6; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 6. 양자화 */
+  (function () {
+    var bits = 4, data = "w", clip = 1;
+    var r = SB.rng(21), W = [], Aact = [];
+    var gauss = function () { return Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r()); };
+    for (var i = 0; i < 4000; i++) { var v = gauss() * 0.25; if (r() < 0.006) v *= 5 + r() * 3; W.push(v); }
+    for (var j = 0; j < 4000; j++) { var u = Math.max(0, (r() + r() + r() - 1.5) * 0.9 + 0.05); if (r() < 0.004) u *= 6; Aact.push(u); }
+    var EN = { 32: 4.6, 16: 1.5, 8: 0.3, 4: 0.1, 2: 0.04 }, AR = { 32: 37, 16: 9, 8: 1, 4: 0.3, 2: 0.12 };
+    function quant(arr) {
+      var mx = 0; arr.forEach(function (v) { mx = Math.max(mx, Math.abs(v)); });
+      var alpha = mx * clip, sym = data === "w";
+      if (bits >= 16) return { q: arr.map(function (v) { return bits === 32 ? v : roundHalf(v); }), alpha: mx, levels: null, mx: mx };
+      var nl = sym ? Math.pow(2, bits - 1) - 1 : Math.pow(2, bits) - 1, s = alpha / nl;
+      var q = arr.map(function (v) { var k = Math.round(v / s); k = sym ? SB.clamp(k, -nl, nl) : SB.clamp(k, 0, nl); return k * s; });
+      var lv = []; for (var k = sym ? -nl : 0; k <= nl; k++) lv.push(k * s);
+      return { q: q, alpha: alpha, levels: lv, mx: mx };
+    }
+    function roundHalf(v) { // FP16 rounding (10-bit mantissa)
+      if (v === 0) return 0; var e = Math.floor(Math.log2(Math.abs(v))), m = Math.pow(2, e - 10); return Math.round(v / m) * m;
+    }
+    var cv = SB.canvas("#cv-quant", function (ctx, w, h) {
+      var arr = data === "w" ? W : Aact, Q = quant(arr), mx = Q.mx;
+      var lo = data === "w" ? -mx : 0, hi = mx;
+      var hx = 12, hw = w - 24, hy = 12, hh = h * 0.52;
+      var NB = 120, hist = new Array(NB).fill(0);
+      arr.forEach(function (v) { var b = Math.floor((v - lo) / (hi - lo) * NB); hist[SB.clamp(b, 0, NB - 1)]++; });
+      var hm = Math.max.apply(null, hist);
+      var X = function (v) { return hx + (v - lo) / (hi - lo) * hw; };
+      // clipped regions
+      if (Q.levels) {
+        ctx.fillStyle = SOC.alpha(P.bad, 0.12);
+        if (data === "w") ctx.fillRect(hx, hy, X(-Q.alpha) - hx, hh);
+        ctx.fillRect(X(Q.alpha), hy, hx + hw - X(Q.alpha), hh);
+      }
+      for (var b = 0; b < NB; b++) { var bh = Math.sqrt(hist[b] / hm) * (hh - 4); ctx.fillStyle = SOC.alpha(NPU(), 0.8); ctx.fillRect(hx + b * hw / NB + 0.5, hy + hh - bh, hw / NB - 1, bh); }
+      if (Q.levels) {
+        ctx.strokeStyle = SOC.alpha(P.text, Q.levels.length > 60 ? 0.18 : 0.6); ctx.lineWidth = 1;
+        ctx.beginPath(); Q.levels.forEach(function (lv) { var x = X(lv); ctx.moveTo(x, hy); ctx.lineTo(x, hy + hh); }); ctx.stroke();
+      }
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(hx, hy + hh); ctx.lineTo(hx + hw, hy + hh); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5, true); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText(lo.toFixed(2), hx, hy + hh + 3); ctx.textAlign = "right"; ctx.fillText(hi.toFixed(2), hx + hw, hy + hh + 3);
+      ctx.textAlign = "center"; ctx.fillText(Q.levels ? "양자화 단계 " + Q.levels.length + "개" : bits === 16 ? "FP16: 유효 숫자 약 3자리" : "FP32: 원본", hx + hw / 2, hy + hh + 3);
+      ctx.textAlign = "left"; ctx.fillText("막대 높이: √개수", hx + 2, hy + 2);
+      // bottom: 40 values
+      var by = hy + hh + 26, bh2 = h - by - 8, mid = data === "w" ? by + bh2 / 2 : by + bh2 - 2, sc = (data === "w" ? bh2 / 2 : bh2 - 4) / (mx * 0.75);
+      var nV = 40, cw = hw / nV;
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(hx, mid); ctx.lineTo(hx + hw, mid); ctx.stroke();
+      for (var i = 0; i < nV; i++) {
+        var idx = (i * 97) % arr.length, v = arr[idx], qv = Q.q[idx], x = hx + i * cw + cw * 0.15, ww = cw * 0.7;
+        var yv = SB.clamp(v * sc, -bh2, bh2), yq = SB.clamp(qv * sc, -bh2, bh2);
+        ctx.fillStyle = SOC.alpha(P.accent, 0.75); ctx.fillRect(x, Math.min(mid, mid - yq), ww, Math.abs(yq));
+        ctx.strokeStyle = P.text; ctx.lineWidth = 1; ctx.strokeRect(x, Math.min(mid, mid - yv), ww, Math.abs(yv));
+      }
+      // stats
+      var se = 0, sp = 0; arr.forEach(function (v, i) { var e = v - Q.q[i]; se += e * e; sp += v * v; });
+      var sq = se > 0 ? 10 * Math.log10(sp / se) : Infinity;
+      SB.stat("qt-sq", (isFinite(sq) ? sq.toFixed(1) : "∞") + "<small>dB</small>");
+      SB.stat("qt-sz", SB.bytes(3e9 * bits / 8, 3, false));
+      SB.stat("qt-e", EN[bits] + "<small>pJ</small>");
+      SB.stat("qt-a", AR[bits] + "<small>×</small>");
+    }, { aspect: 0.5, minHeight: 280, maxHeight: 380 });
+    SB.seg("qt-b", function (v) { bits = +v; cv.redraw(); });
+    SB.seg("qt-d", function (v) { data = v; cv.redraw(); });
+    SB.range("qt-c", function (v) { return Math.round(v * 100) + "%"; }, function (v) { clip = v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 7. 희소성 */
+  (function () {
+    var mode = "un", ratio = 0.6, R = 8, Cn = 32, Wt = [];
+    var r = SB.rng(33); for (var i = 0; i < R * Cn; i++) { var u = r() + r() + r() + r() - 2; Wt.push(u * 0.6); }
+    function mask() {
+      var m = Wt.map(function () { return 1; });
+      if (mode === "un") {
+        var s = Wt.map(function (v, i) { return [Math.abs(v), i]; }).sort(function (a, b) { return a[0] - b[0]; });
+        for (var k = 0; k < Math.round(ratio * Wt.length); k++) m[s[k][1]] = 0;
+      } else if (mode === "24") {
+        for (var g = 0; g < Wt.length; g += 4) {
+          var grp = [0, 1, 2, 3].map(function (o) { return [Math.abs(Wt[g + o]), g + o]; }).sort(function (a, b) { return a[0] - b[0]; });
+          m[grp[0][1]] = 0; m[grp[1][1]] = 0;
+        }
+      }
+      return m;
+    }
+    var cv = SB.canvas("#cv-sparse", function (ctx, w, h) {
+      var m = mask(), cs = Math.min((w - 20) / Cn, (h - 30) / R), ox = (w - cs * Cn) / 2, oy = 8;
+      var mx = 0; Wt.forEach(function (v) { mx = Math.max(mx, Math.abs(v)); });
+      for (var i = 0; i < R; i++) for (var j = 0; j < Cn; j++) {
+        var k = i * Cn + j, v = Wt[k], x = ox + j * cs, y = oy + i * cs;
+        if (m[k]) { ctx.fillStyle = SOC.alpha(v >= 0 ? NPU() : P.warn, 0.25 + 0.75 * Math.abs(v) / mx); ctx.fillRect(x + 1, y + 1, cs - 2, cs - 2); }
+        else { ctx.strokeStyle = P.grid; ctx.lineWidth = 1; ctx.strokeRect(x + 1.5, y + 1.5, cs - 3, cs - 3); }
+      }
+      if (mode === "24") { ctx.strokeStyle = SOC.alpha(P.text, 0.35); ctx.lineWidth = 1; ctx.beginPath(); for (var g = 0; g <= Cn; g += 4) { ctx.moveTo(ox + g * cs, oy); ctx.lineTo(ox + g * cs, oy + R * cs); } ctx.stroke(); }
+      var z = m.filter(function (x) { return !x; }).length / m.length;
+      var e0 = 0, e1 = 0; Wt.forEach(function (v, i) { e0 += v * v; if (m[i]) e1 += v * v; });
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText(mode === "24" ? "4개 묶음: 값 2개 + 위치 4비트" : mode === "un" ? "작은 값부터 " + Math.round(ratio * 100) + "% 제거, 위치는 제각각" : "조밀 행렬", ox, oy + R * cs + 8);
+      SB.stat("sp-z", Math.round(z * 100) + "<small>%</small>");
+      SB.stat("sp-keep", (e1 / e0 * 100).toFixed(1) + "<small>%</small>");
+      SB.stat("sp-dense", "1.0<small>× (0도 곱함)</small>");
+      var hw = mode === "24" ? "2.0<small>×</small>" : mode === "un" ? Math.max(1, 0.5 / (1 - z)).toFixed(1) + "<small>× (대략)</small>" : "1.0<small>×</small>";
+      SB.stat("sp-hw", hw);
+    }, { aspect: 0.3, minHeight: 130, maxHeight: 240 });
+    SB.seg("sp-m", function (v) { mode = v; cv.redraw(); });
+    SB.range("sp-r", function (v) { return Math.round(v * 100) + "%"; }, function (v) { ratio = v; cv.redraw(); });
+  })();
+
+  /* ---------------------------------------------------------------- 8. LLM 토큰 속도 */
+  (function () {
+    var PS = [0.5, 1, 1.5, 2, 3, 4, 7, 8, 13, 34, 70], p = 3, q = 0.5, bw = 60, ctxK = 4, shown = 0, acc = 0;
+    var TEXT = "시스톨릭 배열은 데이터를 엇갈려 흘려 보내 곱셈과 덧셈을 이웃끼리만 주고받는다. 그래서 같은 데이터를 여러 번 재사용하고 DRAM 접근을 줄인다. 휴대폰에서 언어 모델이 말하는 속도는 연산기가 아니라 메모리 대역폭이 정한다. ";
+    var TOK = TEXT.split(/(?<=\s)/);
+    function model() {
+      var wB = p * 1e9 * q, kv = ctxK * 1024 * 131072 * (p / 8), rd = wB + kv, tps = bw * 1e9 * 0.7 / rd;
+      return { wB: wB, kv: kv, rd: rd, tps: tps, util: 2 * p * 1e9 * tps / 40e12 };
+    }
+    var cv = SB.canvas("#cv-llm", function (ctx, w, h) {
+      var md = model();
+      // text area
+      var tx = 14, ty = 14, tw = w - 28, th = h - 78;
+      ctx.fillStyle = SB.isDark() ? "#0b111c" : "#f4f6fb"; SOC.roundRect(ctx, tx - 6, ty - 6, tw + 12, th + 12, 8); ctx.fill();
+      ctx.font = SB.font(w < 480 ? 13 : 14.5); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillStyle = P.text;
+      var n = Math.floor(shown), lh = w < 480 ? 19 : 21, lines = [], cur = "";
+      for (var i = 0; i < n; i++) { var tk = TOK[i % TOK.length]; if (cur && ctx.measureText(cur + tk).width > tw) { lines.push(cur); cur = tk; } else cur += tk; }
+      lines.push(cur);
+      var maxL = Math.floor(th / lh); if (lines.length > maxL) lines = lines.slice(lines.length - maxL);
+      lines.forEach(function (l, k) { ctx.fillText(l, tx, ty + k * lh); });
+      var last = lines[lines.length - 1] || ""; var cx = tx + ctx.measureText(last).width + 2;
+      if (Math.floor(Date.now() / 400) % 2) { ctx.fillStyle = P.accent; ctx.fillRect(cx, ty + (lines.length - 1) * lh + 2, 2, lh - 4); }
+      // memory bar
+      var by = h - 50, bw2 = w - 28, ram = 12e9;
+      ctx.fillStyle = P.dim; ctx.font = SB.font(11, false, 700); ctx.textBaseline = "alphabetic"; ctx.fillText("휴대폰 RAM 12 GB 중", tx, by - 6);
+      ctx.fillStyle = P.grid; ctx.fillRect(tx, by, bw2, 14);
+      var fw = Math.min(1, md.wB / ram) * bw2, fk = Math.min(1 - Math.min(1, md.wB / ram), md.kv / ram) * bw2;
+      ctx.fillStyle = md.wB + md.kv > ram * 0.6 ? P.bad : NPU(); ctx.fillRect(tx, by, fw, 14);
+      ctx.fillStyle = P.warn; ctx.fillRect(tx + fw, by, fk, 14);
+      ctx.fillStyle = P.dim; ctx.font = SB.font(10.5); ctx.textBaseline = "top";
+      var msg = "가중치 " + SB.bytes(md.wB, 2, false) + " + KV 캐시 " + SB.bytes(md.kv, 2, false) + (md.wB + md.kv > ram * 0.6 ? " · 앱이 쓰기엔 너무 크다" : "");
+      ctx.fillText(msg, tx, by + 19);
+    }, { aspect: 0.3, minHeight: 210, maxHeight: 260 });
+    function upd() {
+      var md = model();
+      SB.stat("lm-w", SB.bytes(md.wB, 3, false));
+      SB.stat("lm-rd", SB.bytes(md.rd, 3, false));
+      SB.stat("lm-tps", (md.tps >= 10 ? Math.round(md.tps) : md.tps.toFixed(1)) + "<small>토큰/s</small>");
+      SB.stat("lm-u", (md.util * 100 < 1 ? (md.util * 100).toFixed(2) : (md.util * 100).toFixed(1)) + "<small>%</small>");
+      cv.redraw();
+    }
+    SB.range("lm-p", function (v) { return PS[v] + "B (" + (PS[v] >= 1 ? PS[v] * 10 + "억" : PS[v] * 10 + "억") + ")"; }, function (v) { p = PS[v]; shown = 0; upd(); });
+    SB.seg("lm-q", function (v) { q = +v; shown = 0; upd(); });
+    SB.range("lm-bw", function (v) { return v + " GB/s"; }, function (v) { bw = v; upd(); });
+    SB.range("lm-ctx", function (v) { return v * 1024 + " 토큰"; }, function (v) { ctxK = v; upd(); });
+    upd();
+    SB.loop(document.getElementById("cv-llm"), function (dt) {
+      var md = model(); shown += dt * md.tps; if (shown > TOK.length * 3) shown = 0;
+      acc += dt; if (acc > 0.05) { acc = 0; cv.redraw(); }
+    });
+  })();
+})();
+</script>
+</body>
+</html>

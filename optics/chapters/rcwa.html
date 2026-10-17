@@ -1,0 +1,1495 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<title>전자기 시뮬레이션: RCWA·FDTD · OpticsBook</title>
+<meta name="description" content="서브마이크로미터 픽셀에서 광선 추적과 TMM이 무너지는 이유, 플로케 고조파와 S 행렬로 푼 RCWA, 깁스 현상과 Li의 역규칙, 이 장에서 직접 구현한 1D 격자 RCWA, 이 장에서 직접 돌리는 FDTD의 Yee 격자·CFL·PML, 마이크로렌즈·DTI 픽셀의 2D FDTD, 픽셀 시뮬레이션 실무와 도구를 시뮬레이터로 배운다.">
+<link rel="canonical" href="https://semi.euiyun.com/optics/chapters/rcwa.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="OpticsBook">
+<meta property="og:title" content="전자기 시뮬레이션: RCWA·FDTD · OpticsBook">
+<meta property="og:description" content="서브마이크로미터 픽셀에서 광선 추적과 TMM이 무너지는 이유, 플로케 고조파와 S 행렬로 푼 RCWA, 깁스 현상과 Li의 역규칙, 이 장에서 직접 구현한 1D 격자 RCWA, 이 장에서 직접 돌리는 FDTD의 Yee 격자·CFL·PML, 마이크로렌즈·DTI 픽셀의 2D FDTD, 픽셀 시뮬레이션 실무와 도구를 시뮬레이터로 배운다.">
+<meta property="og:url" content="https://semi.euiyun.com/optics/chapters/rcwa.html">
+<meta property="og:image" content="https://semi.euiyun.com/optics/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:locale" content="ko_KR">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","headline":"전자기 시뮬레이션: RCWA·FDTD","name":"전자기 시뮬레이션: RCWA·FDTD · OpticsBook","url":"https://semi.euiyun.com/optics/chapters/rcwa.html","mainEntityOfPage":"https://semi.euiyun.com/optics/chapters/rcwa.html","inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"interactive textbook chapter","position":15,"image":"https://semi.euiyun.com/optics/og.png","dateModified":"2026-10-04","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/optics/#book","name":"OpticsBook — 이미지 센서를 위한 인터랙티브 광학 교과서","url":"https://semi.euiyun.com/optics/"},"publisher":{"@type":"Organization","name":"OpticsBook","url":"https://semi.euiyun.com/optics/"},"description":"서브마이크로미터 픽셀에서 광선 추적과 TMM이 무너지는 이유, 플로케 고조파와 S 행렬로 푼 RCWA, 깁스 현상과 Li의 역규칙, 이 장에서 직접 구현한 1D 격자 RCWA, 이 장에서 직접 돌리는 FDTD의 Yee 격자·CFL·PML, 마이크로렌즈·DTI 픽셀의 2D FDTD, 픽셀 시뮬레이션 실무와 도구를 시뮬레이터로 배운다."},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"OpticsBook","item":"https://semi.euiyun.com/optics/"},{"@type":"ListItem","position":2,"name":"15 전자기 시뮬레이션: RCWA·FDTD","item":"https://semi.euiyun.com/optics/chapters/rcwa.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/optics.js"></script>
+<style>
+  .fig-lg svg .t, .fig-lg svg .t-acc { font-size: 16px; }
+  .fig-lg svg .t-dim { font-size: 14px; }
+  .fig-lg svg .t-mono { font-size: 13px; }
+  .legend-row { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--text-dim); margin: 6px 2px 0; }
+  .legend-row i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="optics"></script>
+</head>
+<body data-chapter="rcwa">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 15</div>
+    <h1>전자기 시뮬레이션: RCWA·FDTD</h1>
+    <p class="lead">픽셀 피치가 0.6 µm까지 줄어든 오늘날, 마이크로렌즈 하나의 크기는 빛의 파장과 거의 같다. 이 크기에서는 광선이 직진한다는 가정도, 층이 무한히 넓다는 <a href="thinfilm.html">TMM</a>의 가정도 맞지 않는다. 남는 방법은 맥스웰 방정식을 그대로 푸는 것뿐이다. 이 장에서는 주기 구조를 푸리에 급수로 다루는 <b>RCWA</b>와 시간 영역에서 전자기장을 한 칸씩 전진시키는 <b>FDTD</b>의 원리를 공부한다. 두 방법을 페이지 안에서 실제로 구현해 돌려 보고, 픽셀 시뮬레이션 실무에서 결과를 믿을 수 있게 만드는 수렴 점검 방법도 익힌다.</p>
+    <ul class="objectives">
+      <li>픽셀 피치·스택 두께가 파장과 비슷해질 때 광선 추적과 TMM이 어떤 가정에서 무너지는지 설명한다.</li>
+      <li>TMM·RCWA·FDTD·FEM의 이산화 방식, 장단점, 계산량 스케일링을 비교해 문제에 맞는 해석법을 고른다.</li>
+      <li>RCWA의 핵심인 유전율 푸리에 전개, 플로케 고조파 \(k_{x,m}=k_{x0}-2\pi m/\Lambda\), 층별 고윳값 문제, S 행렬 결합, 회절 효율을 유도한다.</li>
+      <li>깁스 현상과 Li의 역규칙(Inverse Rule)이 TM 편광 수렴을 어떻게 바꾸는지 직접 계산해 확인한다.</li>
+      <li>FDTD의 Yee 격자, 립프로그 시간 전진, 쿠랑(CFL) 조건, 수치 분산, PML 흡수 경계와 광원 설정을 이해한다.</li>
+      <li>주기 경계, 사입사(블로흐 위상), 메시 λ/(20n), 수렴 점검, 계산 시간 추정을 포함한 픽셀 시뮬레이션 작업 흐름을 세운다.</li>
+    </ul>
+  </header>
+
+  <!-- =============================================================== 1 -->
+  <section id="why">
+    <h2>왜 전파(Full-wave) 해석이 필요한가</h2>
+    <p>앞 장들에서 쓴 도구는 모두 근사다. <a href="geometric.html">광선 광학</a>은 구조가 파장보다 충분히 클 때(\(D\gg\lambda\)) 맞는다. <a href="thinfilm.html">TMM</a>은 층이 옆으로 무한히 넓고 균일해서 경계면에서 반사·투과만 일어난다고 가정한다. <a href="diffraction.html">스칼라 회절 이론</a>은 편광과 경계면의 벡터 성질을 무시한다. 그런데 현재 모바일 센서의 픽셀은 이 세 가정을 모두 벗어난다.</p>
+    <ul>
+      <li><b>피치 ≈ 파장</b>: 0.7 µm 피치는 녹색광의 진공 파장(0.53 µm)과 비슷하다. 산화막(n≈1.46) 안에서 파장은 0.36 µm, 실리콘(n≈4.1) 안에서는 0.13 µm다. 마이크로렌즈는 몇 개의 회절 차수만 다루는 "격자"처럼 동작한다.</li>
+      <li><b>옆 방향이 균일하지 않다</b>: 마이크로렌즈 곡면, 컬러 필터 사이의 그리드, DTI 벽이 수평 방향으로 굴절률을 바꾼다. TMM은 각 층을 평균 굴절률로 대체하는 수밖에 없다.</li>
+      <li><b>도파와 근접장</b>: DTI 사이 실리콘 기둥(폭 0.6 µm, n≈4)은 몇 개의 모드만 지지하는 도파로다. 얕은 각도의 광은 전반사와 소멸파로 이웃 픽셀에 새어 들어간다. 광선 추적으로는 이 현상을 계산할 수 없다.</li>
+    </ul>
+    <p>주기 \(\Lambda\)인 구조에 빛이 들어오면 출사광은 아무 방향으로나 나가지 못하고, <span class="term">격자 방정식</span><span class="en">(Grating Equation)</span>이 허락한 이산적인 방향(회절 차수)으로만 나간다. 이미지 센서는 마이크로렌즈·컬러 필터 배열 자체가 주기 \(\Lambda\)(베이어면 \(2p\))의 2차원 격자다.</p>
+    <div class="formula">$$n_{\text{out}}\sin\theta_m = n_{\text{in}}\sin\theta_{\text{in}} - m\,\frac{\lambda}{\Lambda},\qquad m=0,\pm1,\pm2,\dots$$
+      <div class="where">\(\lambda\): 진공 파장, \(\Lambda\): 주기. \(|n_{\text{out}}\sin\theta_m|>n_{\text{out}}\)이면 그 차수는 진행하지 못하는 <b>소멸 차수</b>(Evanescent Order)다. \(\Lambda&lt;\lambda/(n_{\text{in}}+n_{\text{out}})\) 정도로 작으면 0차만 남는 <b>서브파장 영역</b>이 되고, 이때 구조는 등가 박막(유효 매질)처럼 행동한다.</div>
+    </div>
+    <p>예를 들어 \(\Lambda=1.0\) µm, \(\lambda=0.55\) µm로 수직 입사하면 공기 쪽 반사에는 \(m=\pm1\)(\(\sin\theta=0.55\), 33°)이 있다. 산화막 안에서는 \(\pm1\)(22°)에 더해 이론상 \(\pm2\)(\(\sin\theta=1.10/1.46\), 49°)까지 진행한다. 실리콘 안에서는 \(\pm7\)차까지 열린다. 굴절률이 높은 매질일수록 진행 차수가 많아지므로, 실리콘 안의 장은 공기 쪽보다 훨씬 더 "파동답게" 복잡하다.</p>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 760 300" role="img" aria-label="구조 크기와 해석법의 적용 범위">
+        <line x1="40" y1="200" x2="730" y2="200" class="s-axis"/>
+        <g class="t-mono" text-anchor="middle">
+          <line x1="80" y1="196" x2="80" y2="204" class="s-axis"/><text x="80" y="222">0.1 µm</text>
+          <line x1="250" y1="196" x2="250" y2="204" class="s-axis"/><text x="250" y="222">0.5</text>
+          <line x1="330" y1="196" x2="330" y2="204" class="s-axis"/><text x="330" y="222">1</text>
+          <line x1="500" y1="196" x2="500" y2="204" class="s-axis"/><text x="500" y="222">5</text>
+          <line x1="580" y1="196" x2="580" y2="204" class="s-axis"/><text x="580" y="222">10</text>
+          <line x1="700" y1="196" x2="700" y2="204" class="s-axis"/><text x="700" y="222">50 µm</text>
+        </g>
+        <text x="385" y="250" class="t-dim" text-anchor="middle">구조의 옆 방향 크기 D (로그 축) — 가시광 λ ≈ 0.4~0.7 µm</text>
+        <rect x="220" y="40" width="98" height="150" class="f-acc-soft" rx="6"/>
+        <text x="269" y="60" class="t-acc" text-anchor="middle">λ 영역</text>
+        <rect x="40" y="150" width="190" height="34" class="f-acc2-soft" rx="6"/>
+        <text x="135" y="172" class="t" text-anchor="middle">서브파장: 유효 매질·TMM</text>
+        <rect x="180" y="100" width="380" height="34" class="f-elev" stroke="var(--accent)" rx="6"/>
+        <text x="370" y="122" class="t" text-anchor="middle">전파 해석 필수: RCWA · FDTD · FEM</text>
+        <rect x="470" y="150" width="260" height="34" class="f-surface" stroke="var(--border)" rx="6"/>
+        <text x="600" y="172" class="t" text-anchor="middle">광선 추적(+회절 보정)</text>
+        <g>
+          <circle cx="285" cy="76" r="5" fill="var(--warn)"/><text x="295" y="81" class="t-dim">0.6~0.8 µm 모바일 픽셀</text>
+          <circle cx="400" cy="56" r="5" fill="var(--warn)"/><text x="410" y="61" class="t-dim">2~3 µm 차량·DSLR 픽셀</text>
+          <circle cx="160" cy="76" r="5" fill="var(--accent-2)"/><text x="60" y="64" class="t-dim">DTI 폭 0.1 µm</text>
+        </g>
+        <text x="385" y="285" class="t-dim" text-anchor="middle">모바일 픽셀은 "λ 영역" 한가운데에 있다 → 근사가 아닌 맥스웰 방정식 직접 해석</text>
+      </svg>
+      <figcaption><b>그림 15-1.</b> 구조 크기에 따른 해석법의 적용 범위. 파장보다 훨씬 작으면 유효 매질(평균 굴절률)과 TMM이, 훨씬 크면 광선 추적이 맞는다. 현재 모바일 픽셀(0.6~1.0 µm)과 그 안의 DTI·그리드(0.05~0.15 µm)는 그 사이 공백에 있다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-orders">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>격자 방정식: 픽셀 주기가 허락하는 회절 차수</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-orders"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>주기 Λ <output id="or-p-out"></output></span><input type="range" id="or-p" min="0.2" max="3" step="0.02" value="1.0"></label>
+          <label class="ctrl"><span>파장 λ <output id="or-l-out"></output></span><input type="range" id="or-l" min="400" max="1000" step="5" value="550"></label>
+          <label class="ctrl"><span>입사각 θ <output id="or-t-out"></output></span><input type="range" id="or-t" min="0" max="40" step="1" value="0"></label>
+          <div class="ctrl"><span>아래 매질</span><div class="seg" id="or-sub"><button data-value="1.46" class="on">SiO₂</button><button data-value="1.6">CF/수지</button><button data-value="4.1">Si</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">반사 진행 차수</span><span class="v" id="o-or-r">—</span></div>
+        <div class="stat"><span class="k">투과 진행 차수</span><span class="v" id="o-or-t">—</span></div>
+        <div class="stat"><span class="k">+1차 투과각</span><span class="v" id="o-or-a">—</span></div>
+        <div class="stat"><span class="k">서브파장 한계 Λ</span><span class="v" id="o-or-s">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 아래 매질을 Si로 바꾸면 Λ = 0.8 µm에서도 진행 차수가 십여 개다. ② Λ를 0.25 µm 아래로 줄이면 공기·SiO₂ 모두 0차만 남는다. 이것이 서브파장 반사 방지 구조(모스아이)가 "보이지 않는" 이유다. ③ 입사각을 키우면 차수 배치가 비대칭이 되고, 한쪽 차수가 먼저 열리거나 닫힌다. 차수가 막 사라지는 파장(레일리 이상)에서 효율이 급변한다.</div>
+    </div>
+
+    <div class="callout tip">
+      <strong>근사가 깨지는 신호 세 가지</strong>
+      <p>① 광선 추적으로 구한 마이크로렌즈 초점이 실리콘 표면 아래 몇 µm에 찍히는데, 실제 측정한 각도 응답은 훨씬 넓다. 이것은 회절에 의한 초점 확산이다(<a href="microlens.html">13장</a>). ② TMM QE와 측정 QE가 단파장에서는 맞지만 장파장으로 갈수록 크로스토크 때문에 어긋난다. ③ 같은 스택에서 피치만 줄였는데 QE 피크 파장과 리플이 바뀐다. 셋 중 하나라도 보이면 전파 해석이 필요하다.</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== 2 -->
+  <section id="methods">
+    <h2>해석법 지도: TMM · RCWA · FDTD · FEM</h2>
+    <p>전자기 수치 해석법은 맥스웰 방정식을 <b>어떤 영역에서</b>(주파수 또는 시간), <b>어떤 기저로</b>(평면파, 격자점, 유한 요소) 이산화하느냐에 따라 나뉜다. 단일 주파수 \(\omega\)에서 시간 의존성 \(e^{-i\omega t}\)를 가정하면 맥스웰 방정식은 다음 헬름홀츠형 방정식이 된다.</p>
+    <div class="formula">$$\nabla\times\nabla\times\mathbf E - k_0^2\,\varepsilon_r(\mathbf r)\,\mathbf E = 0,\qquad k_0=\frac{2\pi}{\lambda}=\frac{\omega}{c}$$
+      <div class="where">\(\varepsilon_r=(n+i\kappa)^2\): 위치에 따라 변하는 복소 비유전율, 투자율은 1로 둔다. TMM·RCWA·FEM은 이 <b>주파수 영역</b> 방정식을 풀고, FDTD는 시간 영역의 맥스웰 회전 방정식 \(\partial_t\mathbf D=\nabla\times\mathbf H\), \(\partial_t\mathbf B=-\nabla\times\mathbf E\)를 직접 적분한다.</div>
+    </div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 800 290" role="img" aria-label="네 가지 해석법의 이산화 방식">
+        <defs>
+          <pattern id="g15grid" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M10 0 L0 0 0 10" fill="none" stroke="var(--grid)" stroke-width="1"/></pattern>
+        </defs>
+        <!-- TMM -->
+        <g transform="translate(20,30)">
+          <text x="80" y="0" class="t-acc" text-anchor="middle">TMM</text>
+          <rect x="10" y="20" width="140" height="40" class="f-surface" stroke="var(--border)"/>
+          <rect x="10" y="60" width="140" height="30" class="f-acc-soft" stroke="var(--border)"/>
+          <rect x="10" y="90" width="140" height="50" class="f-acc2-soft" stroke="var(--border)"/>
+          <rect x="10" y="140" width="140" height="60" class="f-elev" stroke="var(--border)"/>
+          <text x="80" y="225" class="t-dim" text-anchor="middle">옆으로 균일한 층</text>
+          <text x="80" y="245" class="t-dim" text-anchor="middle">층마다 2×2 행렬</text>
+        </g>
+        <!-- RCWA -->
+        <g transform="translate(215,30)">
+          <text x="80" y="0" class="t-acc" text-anchor="middle">RCWA</text>
+          <rect x="10" y="20" width="140" height="180" class="f-surface" stroke="var(--border)"/>
+          <rect x="60" y="22" width="40" height="12" class="f-acc-soft"/>
+          <rect x="45" y="34" width="70" height="12" class="f-acc-soft"/>
+          <rect x="33" y="46" width="94" height="12" class="f-acc-soft"/>
+          <rect x="22" y="58" width="116" height="12" class="f-acc-soft"/>
+          <rect x="10" y="70" width="140" height="40" class="f-acc2-soft"/>
+          <rect x="10" y="110" width="140" height="90" class="f-elev"/>
+          <rect x="10" y="110" width="8" height="90" class="f-acc-soft"/><rect x="142" y="110" width="8" height="90" class="f-acc-soft"/>
+          <line x1="10" y1="20" x2="10" y2="200" stroke="var(--accent)" stroke-dasharray="4 3"/>
+          <line x1="150" y1="20" x2="150" y2="200" stroke="var(--accent)" stroke-dasharray="4 3"/>
+          <text x="80" y="225" class="t-dim" text-anchor="middle">계단 근사 슬랩 + 주기 셀</text>
+          <text x="80" y="245" class="t-dim" text-anchor="middle">x: 푸리에, z: 해석적</text>
+        </g>
+        <!-- FDTD -->
+        <g transform="translate(410,30)">
+          <text x="80" y="0" class="t-acc" text-anchor="middle">FDTD</text>
+          <rect x="10" y="20" width="140" height="180" fill="url(#g15grid)" stroke="var(--border)"/>
+          <path d="M20 70 Q80 10 140 70 Z" class="f-acc-soft" stroke="var(--accent)" stroke-width="1"/>
+          <rect x="10" y="110" width="140" height="90" class="f-acc2-soft" opacity="0.6"/>
+          <rect x="10" y="20" width="140" height="12" fill="var(--warn)" opacity="0.25"/>
+          <rect x="10" y="188" width="140" height="12" fill="var(--warn)" opacity="0.25"/>
+          <text x="80" y="225" class="t-dim" text-anchor="middle">균일 직교 격자 (Yee)</text>
+          <text x="80" y="245" class="t-dim" text-anchor="middle">시간 전진, 광대역 한 번에</text>
+        </g>
+        <!-- FEM -->
+        <g transform="translate(605,30)">
+          <text x="80" y="0" class="t-acc" text-anchor="middle">FEM</text>
+          <rect x="10" y="20" width="140" height="180" class="f-surface" stroke="var(--border)"/>
+          <g stroke="var(--text-faint)" fill="none" stroke-width="1">
+            <path d="M10 20 L60 60 L150 20 M60 60 L10 110 M60 60 L110 90 L150 20 M110 90 L150 110 M10 110 L80 130 L110 90 M80 130 L150 110 M10 110 L40 200 L80 130 L120 200 L150 110 M40 200 L120 200"/>
+            <path d="M60 60 L80 50 L110 90 M80 50 L150 20 M80 50 L60 60" stroke="var(--accent)"/>
+          </g>
+          <path d="M20 70 Q80 10 140 70" fill="none" stroke="var(--accent)" stroke-width="2"/>
+          <text x="80" y="225" class="t-dim" text-anchor="middle">곡면을 따르는 사면체 메시</text>
+          <text x="80" y="245" class="t-dim" text-anchor="middle">희소 행렬 연립방정식</text>
+        </g>
+        <text x="400" y="282" class="t-dim" text-anchor="middle">왼쪽에서 오른쪽으로 갈수록 기하 자유도↑, 계산량↑</text>
+      </svg>
+      <figcaption><b>그림 15-2.</b> 네 해석법의 이산화. TMM은 층 두께만, RCWA는 수평 방향을 푸리에 고조파로, FDTD는 공간 전체를 직교 격자로, FEM은 곡면에 맞춘 비정형 메시로 표현한다. RCWA는 곡면 마이크로렌즈를 얇은 슬랩의 계단으로 근사한다.</figcaption>
+    </figure>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>방법</th><th>영역·기저</th><th>잘 맞는 문제</th><th>약점</th><th>계산량 스케일 (대략)</th></tr></thead>
+      <tbody>
+        <tr><td><b>TMM</b></td><td>주파수, 층마다 평면파 2개</td><td>AR 코팅, IR 컷 필터, 평판 스택의 QE 리플</td><td>옆 방향 구조를 표현하지 못함</td><td>\(O(L)\), µs 단위</td></tr>
+        <tr><td><b>RCWA</b> (FMM)</td><td>주파수, 푸리에 고조파 \(N\)개 × 층</td><td>주기 격자, 컬러 라우터, 서브파장 AR, 층상 픽셀 스택</td><td>곡면은 계단 근사, 금속·고대비에서 수렴 느림</td><td>\(O(L\,N^3)\), 2D 주기면 \(N=(2M+1)^2\)</td></tr>
+        <tr><td><b>FDTD</b></td><td>시간, 직교 격자 \(\Delta x\)</td><td>임의 3D 형상, 광대역 한 번에, 비주기·단일 픽셀 조명</td><td>계단 경계 오차, 분산 재료 피팅, 사입사 광대역 처리</td><td>\(O(N_{\text{cell}}\,N_t)\sim (L/\Delta x)^4\)</td></tr>
+        <tr><td><b>FEM</b></td><td>주파수, 유한 요소</td><td>곡면·얇은 금속막의 정밀 해석, 공진기</td><td>메시 생성, 큰 3D에서 메모리 많이 필요</td><td>희소 해법 \(\sim O(N^{1.5\text{–}2})\)</td></tr>
+      </tbody>
+    </table></div>
+    <p>FEM(유한 요소법)은 곡면 마이크로렌즈나 얇은 텅스텐 그리드처럼 경계가 복잡한 구조를 메시가 그대로 따라가므로 정확도가 높다. 다만 3D 픽셀 배열 전체를 주파수마다 다시 풀어야 하고 메모리 요구량이 크다. 그래서 이미지 센서 업계의 일상 업무는 <b>FDTD</b>(형상 자유, 광대역)와 <b>RCWA</b>(주기 구조, 빠른 파장·각도 스윕)가 양분한다. FEM은 특정 구조를 정밀 검증할 때 주로 쓴다. 이 장의 나머지는 이 두 방법에 집중한다.</p>
+  </section>
+
+  <!-- =============================================================== 3 -->
+  <section id="rcwa-principle">
+    <h2>RCWA 원리: 푸리에 전개와 플로케 고조파</h2>
+    <p><span class="term">엄밀 결합파 해석</span><span class="en">(Rigorous Coupled-Wave Analysis, RCWA)</span>은 푸리에 모드법(Fourier Modal Method, FMM)이라고도 부르며, Moharam과 Gaylord가 1981년에 정식화했다. 아이디어는 세 단계다.</p>
+    <ol>
+      <li><b>층 나누기</b>: 구조를 \(z\) 방향으로 잘라, 각 슬랩 안에서는 굴절률이 \(x\)(와 \(y\))에만 의존하게 만든다. 곡면 마이크로렌즈는 10~30장의 계단 슬랩으로 근사한다.</li>
+      <li><b>푸리에 전개</b>: 각 슬랩의 유전율과 장을 수평 방향 푸리에 급수로 쓴다. 주기 구조이므로 이 표현은 정확하다(단, 차수를 잘라내면 근사가 된다).</li>
+      <li><b>고윳값 문제와 경계 정합</b>: 슬랩 안에서는 \(z\) 방향 해가 지수 함수의 조합이므로 고유 모드를 해석적으로 구한다. 슬랩 사이 경계에서 접선 성분을 맞춰 전체 반사·투과를 얻는다.</li>
+    </ol>
+    <p>주기 \(\Lambda\)인 슬랩의 비유전율은 다음처럼 쓴다.</p>
+    <div class="formula">$$\varepsilon_r(x)=\sum_{p}\varepsilon_p\,e^{i2\pi p x/\Lambda},\qquad \varepsilon_p=\frac1\Lambda\int_0^\Lambda \varepsilon_r(x)\,e^{-i2\pi px/\Lambda}\,dx$$
+      <div class="where">폭 \(f\Lambda\)인 리지(\(\varepsilon_{\text{r}}\))가 \(x=0\)을 중심으로 홈(\(\varepsilon_{\text{g}}\)) 안에 있는 이진 격자라면 \(\varepsilon_0=\varepsilon_{\text{g}}+f(\varepsilon_{\text{r}}-\varepsilon_{\text{g}})\), \(\varepsilon_{p\neq0}=(\varepsilon_{\text{r}}-\varepsilon_{\text{g}})\,\dfrac{\sin(\pi p f)}{\pi p}\)이다. \(f\): 채움률(Fill Factor).</div>
+    </div>
+    <p>블로흐–플로케 정리<span class="en">(Bloch–Floquet Theorem)</span>에 따르면 주기 구조 안의 장은 입사파의 위상 기울기 \(e^{ik_{x0}x}\)에 주기 함수를 곱한 꼴이다. 따라서 장 역시 이산적인 수평 파수의 합으로 쓸 수 있다.</p>
+    <div class="formula">$$E_y(x,z)=\sum_{m=-M}^{M} S_m(z)\,e^{i k_{x,m}x},\qquad k_{x,m}=k_{x0}-\frac{2\pi m}{\Lambda},\quad k_{x0}=k_0 n_{\text{in}}\sin\theta$$
+      <div class="where">\(m\): 플로케 고조파(회절 차수) 번호, \(M\): 잘라낸 최대 차수. 고조파 수 \(N=2M+1\)(2D 주기 구조는 \(N=(2M_x+1)(2M_y+1)\)). 입력 매질에서 \(k_{z,m}=\sqrt{k_0^2n^2-k_{x,m}^2}\)가 실수인 차수만 멀리 진행하며, 이것이 앞 절 격자 방정식의 정체다.</div>
+    </div>
+    <p>TE 편광(\(E_y\)만 존재, 홈이 \(y\) 방향)이면 각 슬랩에서 맥스웰 방정식은 \(\partial_z^2E_y=-\partial_x^2E_y-k_0^2\varepsilon(x)E_y\)가 된다. 이를 푸리에 공간에서 쓰고, 정규화 좌표 \(z'=k_0z\)와 \(K_x=\mathrm{diag}(k_{x,m}/k_0)\)를 도입하면 행렬 2계 미분방정식이 된다.</p>
+    <div class="formula">$$\frac{d^2\mathbf S}{dz'^2}=\Omega^2\,\mathbf S,\qquad \Omega^2_{\text{TE}}=K_x^2-\llbracket\varepsilon\rrbracket$$
+      <div class="where">\(\mathbf S\): 고조파 진폭 벡터(\(N\times1\)). \(\llbracket\varepsilon\rrbracket\): 원소가 \(\varepsilon_{m-n}\)인 \(N\times N\) <b>토플리츠 행렬</b>(Toeplitz Matrix, 합성곱 행렬). 실공간의 곱 \(\varepsilon(x)E(x)\)가 푸리에 공간에서는 합성곱이 되기 때문이다. 대칭 리지와 실수 \(\varepsilon\)이면 \(\Omega^2\)은 실대칭 행렬이다.</div>
+    </div>
+    <p>\(\Omega^2=W\Lambda^2W^{-1}\)로 대각화하면 슬랩 안의 일반해가 나온다.</p>
+    <div class="formula">$$\mathbf S(z')=W\left(e^{-\lambda z'}\mathbf c^{+}+e^{\lambda (z'-k_0d)}\mathbf c^{-}\right),\qquad \mathbf U(z')=V\left(e^{-\lambda z'}\mathbf c^{+}-e^{\lambda (z'-k_0d)}\mathbf c^{-}\right),\quad V=W\lambda$$
+      <div class="where">\(W\): 고유벡터 행렬(각 열 = 슬랩의 고유 모드, "격자 도파 모드"), \(\lambda\): 고윳값의 제곱근(대각). 실수 \(\lambda\)는 감쇠하는 모드, 순허수 \(\lambda=-ik_z/k_0\)는 진행 모드다. \(\mathbf U\): 정규화 자기장 \(H_x\)의 고조파. \(\mathbf c^\pm\): 아래·위로 가는 모드 진폭.</div>
+    </div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 780 330" role="img" aria-label="RCWA의 주기 셀, 계단 근사, 회절 차수">
+        <defs>
+          <marker id="ar15a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker>
+          <marker id="ar15b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--warn)"/></marker>
+        </defs>
+        <!-- unit cells -->
+        <g transform="translate(40,70)">
+          <rect x="0" y="0" width="360" height="200" class="f-surface" stroke="var(--border)"/>
+          <g class="f-acc-soft">
+            <rect x="80" y="10" width="40" height="14"/><rect x="62" y="24" width="76" height="14"/><rect x="50" y="38" width="100" height="14"/><rect x="40" y="52" width="120" height="14"/><rect x="0" y="66" width="180" height="10"/>
+            <rect x="260" y="10" width="40" height="14"/><rect x="242" y="24" width="76" height="14"/><rect x="230" y="38" width="100" height="14"/><rect x="220" y="52" width="120" height="14"/><rect x="180" y="66" width="180" height="10"/>
+          </g>
+          <path d="M0 76 Q90 -2 180 76 Q270 -2 360 76" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="5 3"/>
+          <rect x="0" y="76" width="360" height="44" class="f-acc2-soft"/>
+          <rect x="0" y="120" width="360" height="80" class="f-elev"/>
+          <rect x="174" y="120" width="12" height="80" class="f-acc-soft" stroke="var(--accent)"/>
+          <rect x="0" y="120" width="6" height="80" class="f-acc-soft"/><rect x="354" y="120" width="6" height="80" class="f-acc-soft"/>
+          <line x1="180" y1="-8" x2="180" y2="210" stroke="var(--text-faint)" stroke-dasharray="3 4"/>
+          <text x="90" y="100" class="t-dim" text-anchor="middle">CF</text><text x="270" y="100" class="t-dim" text-anchor="middle">CF</text>
+          <text x="90" y="165" class="t-dim" text-anchor="middle">Si</text><text x="270" y="165" class="t-dim" text-anchor="middle">Si</text>
+          <text x="196" y="160" class="t-dim">DTI</text>
+          <path d="M0 220 L180 220" stroke="var(--text-dim)" marker-start="url(#ar15a)" marker-end="url(#ar15a)"/>
+          <text x="90" y="240" class="t" text-anchor="middle">주기 Λ (=피치)</text>
+          <text x="-6" y="45" class="t-mono" text-anchor="end">슬랩 1…</text>
+        </g>
+        <!-- incidence and orders -->
+        <g transform="translate(560,40)">
+          <line x1="-60" y1="0" x2="0" y2="80" stroke="var(--warn)" stroke-width="2.5" marker-end="url(#ar15b)"/>
+          <text x="-70" y="-6" class="t">입사 (θ, k<tspan baseline-shift="sub" font-size="10">x0</tspan>)</text>
+          <line x1="0" y1="80" x2="0" y2="20" stroke="var(--accent)" stroke-width="2" marker-end="url(#ar15a)"/>
+          <line x1="0" y1="80" x2="60" y2="30" stroke="var(--accent)" stroke-width="2" marker-end="url(#ar15a)"/>
+          <line x1="0" y1="80" x2="-80" y2="40" stroke="var(--accent)" stroke-width="2" marker-end="url(#ar15a)"/>
+          <text x="66" y="30" class="t-mono">R₋₁</text><text x="6" y="16" class="t-mono">R₀</text><text x="-110" y="42" class="t-mono">R₊₁</text>
+          <rect x="-110" y="80" width="220" height="40" class="f-acc-soft" stroke="var(--border)"/>
+          <text x="0" y="105" class="t" text-anchor="middle">격자 층들 (S 행렬)</text>
+          <line x1="0" y1="120" x2="40" y2="200" stroke="var(--accent)" stroke-width="2" marker-end="url(#ar15a)"/>
+          <line x1="0" y1="120" x2="-12" y2="205" stroke="var(--accent)" stroke-width="2" marker-end="url(#ar15a)"/>
+          <line x1="0" y1="120" x2="-80" y2="190" stroke="var(--accent)" stroke-width="2" marker-end="url(#ar15a)"/>
+          <line x1="0" y1="120" x2="110" y2="150" stroke="var(--text-faint)" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <text x="46" y="214" class="t-mono">T₋₁</text><text x="-24" y="226" class="t-mono">T₀</text><text x="-114" y="200" class="t-mono">T₊₁</text>
+          <text x="112" y="146" class="t-dim">소멸 차수</text>
+          <text x="0" y="262" class="t-dim" text-anchor="middle">k<tspan baseline-shift="sub" font-size="10">x,m</tspan> = k<tspan baseline-shift="sub" font-size="10">x0</tspan> − 2πm/Λ</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 15-3.</b> 왼쪽: RCWA가 보는 픽셀. 한 주기(점선 사이)만 계산하고, 곡면 마이크로렌즈(점선)는 계단 슬랩으로 근사한다. 컬러 필터·실리콘·DTI 층은 \(z\)로 균일하므로 슬랩 하나면 충분하다. 오른쪽: 결과는 반사·투과 회절 차수별 효율 \(R_m, T_m\)이다. 이 장의 부호 규약 \(k_{x,m}=k_{x0}-2\pi m/\Lambda\)에서 \(+1\)차는 입사파의 반대쪽으로 꺾인다.</figcaption>
+    </figure>
+
+    <div class="callout deep">
+      <strong>심화: 2D 주기 픽셀에서는 행렬이 얼마나 커지나</strong>
+      <p>실제 픽셀은 \(x\), \(y\) 모두 주기적이다. 차수를 \(\pm M_x\), \(\pm M_y\)로 자르면 고조파 수는 \(N=(2M_x+1)(2M_y+1)\)이다. 두 편광 성분이 결합하므로 고윳값 문제의 크기는 \(2N\times2N\)이 된다. \(M=10\)이면 \(N=441\), 행렬은 882×882이고 고윳값 분해 비용은 \(\sim(2N)^3\approx7\times10^8\)회의 복소 연산이다. 계단 슬랩이 20장이면 파장 하나에 수 초가 걸린다. 차수를 두 배로 늘리면 \(N\)은 네 배, 시간은 64배가 된다. RCWA에서 수렴 점검이 곧 계산 예산 관리인 이유다.</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== 4 -->
+  <section id="smatrix">
+    <h2>S 행렬로 층 쌓기와 회절 효율</h2>
+    <p>각 슬랩의 모드를 구했으면 슬랩 경계에서 \(E_y\)와 \(H_x\)(접선 성분)의 고조파가 연속이라는 조건으로 모드 진폭을 잇는다. 가장 직관적인 방법은 TMM처럼 전달 행렬 \(T\)를 곱해 나가는 것이다. 하지만 RCWA에서는 이 방법이 <b>수치적으로 터진다</b>. 두꺼운 슬랩의 감쇠 모드는 \(e^{-\lambda k_0 d}\)로 작아지지만, 전달 행렬에는 그 역수 \(e^{+\lambda k_0 d}\)도 함께 들어간다. 예를 들어 Si 층(\(d=3\) µm)에서 \(M=10\)이면 \(\lambda k_0d\)가 수백에 이르러 배정밀도(\(10^{308}\))를 넘는다.</p>
+    <p>해결책은 들어오는 파동을 나가는 파동으로 보내는 <span class="term">산란 행렬</span><span class="en">(Scattering Matrix)</span>을 쓰는 것이다. S 행렬에는 감쇠하는 지수 \(X=e^{-\lambda k_0 d}\)만 등장하므로 아무리 두꺼워도 안정적이다.</p>
+    <div class="formula">$$\begin{pmatrix}\mathbf c_1^-\\ \mathbf c_2^+\end{pmatrix}=\begin{pmatrix}S_{11}&S_{12}\\ S_{21}&S_{22}\end{pmatrix}\begin{pmatrix}\mathbf c_1^+\\ \mathbf c_2^-\end{pmatrix}$$
+      <div class="where">\(S_{11}\): 위에서 들어와 위로 나가는 반사, \(S_{21}\): 위→아래 투과, \(S_{12}, S_{22}\): 아래쪽 입사에 대한 투과·반사. 각 블록은 \(N\times N\) 행렬이다.</div>
+    </div>
+    <p>두 S 행렬을 합치는 연산은 레드헤퍼 별곱<span class="en">(Redheffer Star Product)</span>이다. 두 층 사이를 무한히 왕복하는 다중 반사를 기하급수 합 \((I-S^B_{11}S^A_{22})^{-1}\)으로 한 번에 더하는 셈이다.</p>
+    <div class="formula">$$S^{AB}_{11}=S^A_{11}+S^A_{12}\,(I-S^B_{11}S^A_{22})^{-1}S^B_{11}S^A_{21},\qquad S^{AB}_{21}=S^B_{21}\,(I-S^A_{22}S^B_{11})^{-1}S^A_{21}$$
+      <div class="where">\(S_{12}^{AB}\), \(S_{22}^{AB}\)도 같은 꼴이다. 전체 장치는 \(S=S_{\text{ref}}\star S_1\star S_2\star\cdots\star S_{\text{trn}}\). 반복되는 층 묶음(예: 브래그 반사경 10주기)은 별곱의 거듭제곱으로 \(\log_2\) 횟수만에 쌓을 수 있다.</div>
+    </div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 780 230" role="img" aria-label="S 행렬과 레드헤퍼 별곱">
+        <defs>
+          <marker id="ar15c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker>
+          <marker id="ar15d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent-2)"/></marker>
+        </defs>
+        <g transform="translate(30,20)">
+          <rect x="0" y="60" width="110" height="80" class="f-surface" stroke="var(--border)" rx="6"/><text x="55" y="105" class="t" text-anchor="middle">S_ref</text>
+          <text x="125" y="105" class="t-acc" text-anchor="middle">★</text>
+          <rect x="140" y="60" width="110" height="80" class="f-acc-soft" stroke="var(--border)" rx="6"/><text x="195" y="96" class="t" text-anchor="middle">S₁</text><text x="195" y="118" class="t-dim" text-anchor="middle">ML 슬랩들</text>
+          <text x="265" y="105" class="t-acc" text-anchor="middle">★</text>
+          <rect x="280" y="60" width="110" height="80" class="f-acc2-soft" stroke="var(--border)" rx="6"/><text x="335" y="96" class="t" text-anchor="middle">S₂</text><text x="335" y="118" class="t-dim" text-anchor="middle">CF + 그리드</text>
+          <text x="405" y="105" class="t-acc" text-anchor="middle">★</text>
+          <rect x="420" y="60" width="110" height="80" class="f-elev" stroke="var(--border)" rx="6"/><text x="475" y="96" class="t" text-anchor="middle">S₃</text><text x="475" y="118" class="t-dim" text-anchor="middle">Si + DTI</text>
+          <text x="545" y="105" class="t-acc" text-anchor="middle">★</text>
+          <rect x="560" y="60" width="110" height="80" class="f-surface" stroke="var(--border)" rx="6"/><text x="615" y="105" class="t" text-anchor="middle">S_trn</text>
+          <!-- multiple reflection inset -->
+          <text x="20" y="180" class="t-dim">층 사이 무한 왕복:  (I − S₁₁ᴮ S₂₂ᴬ)⁻¹ = I + S₁₁ᴮS₂₂ᴬ + (S₁₁ᴮS₂₂ᴬ)² + …</text>
+          <text x="20" y="204" class="t-dim">T 행렬은 e^{+λk₀d}가 넘쳐 발산하지만 S 행렬은 e^{−λk₀d}만 써서 안정적이다.</text>
+          <path d="M150 50 C170 10 230 10 250 50" fill="none" stroke="var(--accent-2)" stroke-width="1.6" marker-end="url(#ar15d)"/>
+          <path d="M290 50 C310 10 370 10 390 50" fill="none" stroke="var(--accent-2)" stroke-width="1.6" marker-end="url(#ar15d)"/>
+          <text x="200" y="20" class="t-mono" text-anchor="middle">c⁺ ↓ c⁻ ↑</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 15-4.</b> S 행렬 결합. 입사·반사 영역, 각 슬랩 묶음, 기판 영역의 S 행렬을 레드헤퍼 별곱(★)으로 차례로 합친다. 별곱의 역행렬 항이 층 사이 다중 반사의 무한 급수를 한 번에 더한다. 여기서 쓴 구현은 Rumpf의 "간격(gap) 매질" 정규화를 따른다.</figcaption>
+    </figure>
+
+    <p>입사 차수 \(m=0\)에 단위 진폭을 넣으면 반사·투과 고조파 진폭 \(r_m=\left(S_{11}\right)_{m0}\), \(t_m=\left(S_{21}\right)_{m0}\)이 나온다. 각 차수가 운반하는 파워는 포인팅 벡터의 \(z\) 성분으로 정규화한다.</p>
+    <div class="formula">$$R_m=|r_m|^2\,\frac{\mathrm{Re}\,k_{z,m}^{\text{ref}}}{k_{z,0}^{\text{inc}}},\qquad T_m=|t_m|^2\,\frac{\mathrm{Re}\,k_{z,m}^{\text{trn}}}{k_{z,0}^{\text{inc}}}\quad(\text{TE}),\qquad \text{TM: } k_z\to k_z/\varepsilon$$
+      <div class="where">소멸 차수는 \(k_z\)가 순허수이므로 파워가 0이다. 손실 없는 구조라면 \(\sum_m R_m+\sum_m T_m=1\)이어야 하며, 이것이 구현을 검증하는 첫 번째 기준이다. 두 번째 기준은 채움률을 0 또는 1로 했을 때(균일 층) TMM 결과와 일치하는지다.</div>
+    </div>
+
+    <div class="sim" id="sim-rcwa">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>1D 격자 RCWA: 회절 효율 스펙트럼 (페이지 안에서 실제 계산)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-rcwa"></canvas>
+          <div class="legend-row"><span><i style="background:var(--accent)"></i>T₀</span><span><i style="background:var(--accent-2)"></i>T 회절(|m|≥1)</span><span><i style="background:var(--warn)"></i>R₀</span><span><i style="background:var(--bad)"></i>R 회절</span><span><i style="background:var(--text-dim)"></i>유효 매질 TMM T</span></div>
+        </div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>편광</span><div class="seg" id="rc-pol"><button data-value="TE" class="on">TE</button><button data-value="TM">TM</button></div></div>
+          <div class="ctrl"><span>리지 재료</span><div class="seg" id="rc-mat"><button data-value="2.0">Si₃N₄</button><button data-value="2.4" class="on">TiO₂</button><button data-value="3.6">Si(NIR)</button></div></div>
+          <label class="ctrl"><span>주기 Λ <output id="rc-p-out"></output></span><input type="range" id="rc-p" min="200" max="1200" step="10" value="500"></label>
+          <label class="ctrl"><span>격자 깊이 d <output id="rc-d-out"></output></span><input type="range" id="rc-d" min="20" max="800" step="10" value="250"></label>
+          <label class="ctrl"><span>채움률 f <output id="rc-f-out"></output></span><input type="range" id="rc-f" min="0" max="1" step="0.02" value="0.5"></label>
+          <label class="ctrl"><span>입사각 θ <output id="rc-t-out"></output></span><input type="range" id="rc-t" min="0" max="40" step="1" value="0"></label>
+          <label class="ctrl"><span>고조파 ±M <output id="rc-m-out"></output></span><input type="range" id="rc-m" min="1" max="15" step="1" value="7"></label>
+          <label class="ctrl"><span>표시 파장 <output id="rc-l-out"></output></span><input type="range" id="rc-l" min="400" max="1000" step="5" value="550"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">R₀ / T₀</span><span class="v" id="o-rc-0">—</span></div>
+        <div class="stat"><span class="k">회절 ΣR / ΣT (|m|≥1)</span><span class="v" id="o-rc-d">—</span></div>
+        <div class="stat"><span class="k">에너지 합 R+T</span><span class="v" id="o-rc-e">—</span></div>
+        <div class="stat"><span class="k">TMM 대조 (f=0·1)</span><span class="v" id="o-rc-v">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 채움률을 0이나 1로 놓으면 격자가 균일 박막이 되고, 오른쪽 아래 값이 <code>OPT.tmm</code>과의 차이를 보여 준다(10⁻¹⁰ 이하). ② Λ = 300 nm처럼 작은 주기에서는 회절 곡선이 0이고 T₀가 회색 점선(유효 매질 TMM)과 거의 겹친다. 이것이 서브파장 구조의 등가 박막 근사다. ③ Λ를 600~900 nm로 키우면 λ = Λ·n<sub>sub</sub> 근처(세로 점선, 레일리 이상)에서 1차 투과가 열리고 0차가 급변한다. ④ 에너지 합은 어떤 설정에서도 1.000000이어야 한다. 구조: 공기 / 격자(리지 + 공기 홈) / SiO₂ 기판.</div>
+    </div>
+
+    <div class="callout warn">
+      <strong>RCWA 구현 검증 체크리스트</strong>
+      <p>① 손실 없는 구조에서 \(\sum R+\sum T=1\)(10⁻⁸ 이내). ② 균일 층에서 TMM과 일치. ③ 출판된 벤치마크(Moharam 1995의 이진 격자 표, 또는 S4 결과)와 비교. ④ 차수를 늘릴 때 결과가 단조롭게 수렴. ⑤ 반대 입사각(\(\pm\theta\))에서 0차 효율의 상반성(Reciprocity). 이 페이지의 구현은 ①②를 실시간으로 표시한다. 상용 도구를 쓰더라도 새 구조를 시작할 때는 ①과 ④를 직접 확인하는 습관을 들이자.</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== 5 -->
+  <section id="convergence">
+    <h2>수렴: 깁스 현상과 Li의 역규칙</h2>
+    <p>RCWA의 유일한 근사는 푸리에 급수를 \(\pm M\)에서 자른다는 것이다. 이진 격자처럼 굴절률이 불연속이면 잘린 급수는 계단 모서리에서 약 9% 넘치고 출렁이는 <span class="term">깁스 현상</span><span class="en">(Gibbs Phenomenon)</span>을 보인다. 차수를 늘려도 출렁임의 <b>폭</b>은 줄지만 <b>높이</b>는 줄지 않는다. 그래서 고대비 격자(Si/공기, 금속)에서는 수렴이 느리다.</p>
+
+    <div class="sim" id="sim-gibbs">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>잘린 푸리에 급수: ε 재구성과 깁스 오버슈트</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-gibbs"></canvas>
+          <div class="legend-row"><span><i style="background:var(--text-dim)"></i>실제 ε(x)</span><span><i style="background:var(--accent)"></i>⟦ε⟧ 부분합</span><span><i style="background:var(--warn)"></i>1/⟦1/ε⟧ 부분합</span></div>
+        </div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>차수 ±M <output id="gb-m-out"></output></span><input type="range" id="gb-m" min="1" max="40" step="1" value="6"></label>
+          <label class="ctrl"><span>채움률 f <output id="gb-f-out"></output></span><input type="range" id="gb-f" min="0.1" max="0.9" step="0.01" value="0.5"></label>
+          <div class="ctrl"><span>대비</span><div class="seg" id="gb-c"><button data-value="2.13">SiO₂/공기</button><button data-value="5.76" class="on">TiO₂/공기</button><button data-value="12.96">Si/공기</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">⟦ε⟧ 최대 오버슈트</span><span class="v" id="o-gb-o">—</span></div>
+        <div class="stat"><span class="k">⟦ε⟧ 최솟값 (홈 ε=1)</span><span class="v" id="o-gb-min">—</span></div>
+        <div class="stat"><span class="k">L2 오차 (⟦ε⟧)</span><span class="v" id="o-gb-l2">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① M을 키워도 모서리 오버슈트 비율은 약 9%(점프 대비)에서 멈춘다. 출렁임이 모서리 쪽으로 좁아질 뿐이다. ② Si/공기 대비에서 M이 작으면 ⟦ε⟧가 1보다 작은 "가짜 저굴절" 영역을 만든다. ③ 주황 곡선(역수의 급수를 다시 뒤집은 것)은 낮은 쪽은 정확하지만 높은 쪽 모서리를 둥글게 깎는다. 두 표현은 서로 다른 물리량(연속인 D<sub>x</sub> 대 연속인 E<sub>z</sub>)에 맞는다.</div>
+    </div>
+
+    <p>더 근본적인 문제는 <b>곱의 푸리에 계수</b>를 어떻게 계산하느냐다. TM 편광(\(H_y\), 장 성분 \(E_x, E_z\))에서는 수직 경계(리지 옆면)에 수직인 \(E_x\)가 불연속이고, \(D_x=\varepsilon E_x\)는 연속이다. 불연속 함수 둘을 곱해 연속 함수가 되는 경우에 단순한 합성곱(로랑 규칙, Laurent's Rule)을 쓰면 잘린 급수가 매우 느리게 수렴한다. Lifeng Li(1996)는 이런 경우에 역수의 토플리츠 행렬을 뒤집어 쓰는 <span class="term">역규칙</span><span class="en">(Inverse Rule)</span>이 옳은 인수분해임을 보였다. 같은 해 Lalanne·Morris, Granet·Guizal도 같은 처방을 경험적으로 발견했다.</p>
+    <div class="formula">$$\llbracket \varepsilon E_x\rrbracket \approx \underbrace{\llbracket \varepsilon\rrbracket\,\llbracket E_x\rrbracket}_{\text{로랑 (느림)}}\quad\longrightarrow\quad \llbracket D_x\rrbracket = \underbrace{\llbracket 1/\varepsilon\rrbracket^{-1}\,\llbracket E_x\rrbracket}_{\text{역규칙 (빠름)}}$$
+      <div class="where">\(\llbracket f\rrbracket\): \(f\)의 푸리에 계수로 만든 \(N\times N\) 토플리츠 행렬. 경계에 평행한 \(E_z\)는 연속이고 \(\varepsilon\)만 불연속이므로 로랑 규칙 \(\llbracket\varepsilon E_z\rrbracket=\llbracket\varepsilon\rrbracket\llbracket E_z\rrbracket\)이 맞다. 따라서 TM 고윳값 행렬은 \(\Omega^2_{\text{TM}}=\llbracket1/\varepsilon\rrbracket^{-1}\left(K_x\llbracket\varepsilon\rrbracket^{-1}K_x-I\right)\)이 된다. TE(\(E_y\)만, 경계에 평행)는 처음부터 로랑 규칙으로 충분하다.</div>
+    </div>
+    <p>2D 주기 픽셀에서는 경계 법선 방향이 위치마다 달라지므로, 장을 법선·접선 성분으로 나누는 <b>법선 벡터장 방법</b>(Normal Vector Method, Schuster·Götz 등)이 쓰인다. 원형 마이크로렌즈 단면, 원기둥 메타표면처럼 곡선 경계가 있는 구조에서 수렴 속도를 크게 개선한다. S4, Lumerical RCWA 같은 도구에는 이 옵션이 있고, 기본값이 아닌 경우도 있으니 확인해야 한다.</p>
+
+    <div class="sim" id="sim-conv">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>RCWA 수렴 시험: TE vs TM(로랑) vs TM(Li 역규칙)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-conv"></canvas>
+          <div class="legend-row"><span><i style="background:var(--accent)"></i>TE</span><span><i style="background:var(--warn)"></i>TM 로랑</span><span><i style="background:var(--accent-2)"></i>TM Li 역규칙</span></div>
+        </div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>리지 재료 (공기 홈)</span><div class="seg" id="cg-mat"><button data-value="1.46">SiO₂</button><button data-value="2.4">TiO₂</button><button data-value="3.6" class="on">Si(NIR)</button></div></div>
+          <div class="ctrl"><span>관찰량</span><div class="seg" id="cg-q"><button data-value="T" class="on">T₀</button><button data-value="R">R₀</button></div></div>
+          <label class="ctrl"><span>채움률 f <output id="cg-f-out"></output></span><input type="range" id="cg-f" min="0.1" max="0.9" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span>λ / Λ <output id="cg-r-out"></output></span><input type="range" id="cg-r" min="0.6" max="2" step="0.05" value="1.25"></label>
+          <button class="btn primary" id="cg-run">다시 계산</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">TE 오차 @M=8</span><span class="v" id="o-cg-te">—</span></div>
+        <div class="stat"><span class="k">TM 로랑 오차 @M=8</span><span class="v" id="o-cg-la">—</span></div>
+        <div class="stat"><span class="k">TM Li 오차 @M=8</span><span class="v" id="o-cg-li">—</span></div>
+        <div class="stat"><span class="k">진행</span><span class="v" id="o-cg-p">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: 구조는 공기 / 깊이 0.625Λ 격자 / SiO₂, 수직 입사다. 위 그래프는 M에 따른 효율, 아래 그래프는 M = 30(Li) 기준값과의 차이를 로그로 보여 준다. ① Si/공기에서 TM 로랑 곡선은 M = 30에서도 수×10⁻³ 오차가 남아 아주 천천히 줄지만, Li 역규칙은 M ≈ 8에서 이미 10⁻³ 아래로 내려가고 TE와 비슷한 속도로 계속 줄어든다(기준값이 Li 자신이라 끝부분은 약간 낙관적이다). ② SiO₂처럼 대비가 낮으면 세 곡선 모두 빨리 수렴한다. ③ 같은 정확도에 필요한 M이 절반이면 2D RCWA 계산 시간은 약 64분의 1이다. 계산은 프레임마다 나눠 진행된다.</div>
+    </div>
+
+    <div class="callout deep">
+      <strong>심화: 왜 "곱의 계수 ≠ 계수의 합성곱"인가</strong>
+      <p>무한 급수에서는 \(\llbracket fg\rrbracket=\llbracket f\rrbracket\llbracket g\rrbracket\)가 정확하다. 문제는 잘라낸 유한 행렬에서 생긴다. \(f\)와 \(g\)가 같은 위치에서 불연속이고 곱이 연속이면, 잘린 합성곱은 그 점에서 \(f\)의 깁스 출렁임과 \(g\)의 깁스 출렁임을 곱하게 된다. 그 결과 곱의 연속성이 깨지고 수렴 차수가 떨어진다. \(fg=h\)가 연속일 때는 \(g=h/f\)로 보고 \(\llbracket 1/f\rrbracket^{-1}\llbracket g\rrbracket\)를 쓰면 \(h\)의 매끈함을 보존한다(Li, JOSA A 13, 1870, 1996). FDTD에서도 같은 문제가 이방성 서브픽셀 평균(\(\varepsilon_\parallel\)는 산술 평균, \(\varepsilon_\perp\)는 조화 평균)으로 다시 나타난다.</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== 6 -->
+  <section id="fdtd">
+    <h2>FDTD: Yee 격자와 립프로그</h2>
+    <p><span class="term">시간 영역 유한 차분법</span><span class="en">(Finite-Difference Time-Domain, FDTD)</span>은 Kane Yee(1966)가 제안한 엇갈린 격자 위에서 맥스웰의 두 회전 방정식을 시간에 따라 번갈아 전진시킨다. 행렬을 풀 필요가 없다. 매 스텝은 이웃 격자점 몇 개의 차분만 계산하므로 GPU 병렬화가 쉽고, 메모리는 격자점 수에 비례한다.</p>
+    <p>2D TM<sub>z</sub> 모드(\(E_z, H_x, H_y\))로 쓰면 다음과 같다. 픽셀 단면에서 \(E_z\)는 단면에 수직인 성분이므로 RCWA의 TE(\(E_y\))와 같은 물리다.</p>
+    <div class="formula">$$\varepsilon\frac{\partial E_z}{\partial t}+\sigma E_z=\frac{\partial H_y}{\partial x}-\frac{\partial H_x}{\partial y},\qquad \mu_0\frac{\partial H_x}{\partial t}=-\frac{\partial E_z}{\partial y},\qquad \mu_0\frac{\partial H_y}{\partial t}=\frac{\partial E_z}{\partial x}$$
+      <div class="where">\(\sigma\): 전도도. 흡수 매질은 단일 파장에서 \(\sigma=\omega\varepsilon_0\varepsilon''=\omega\varepsilon_0\,2n\kappa\)로 넣을 수 있다. 실리콘처럼 넓은 대역에서 분산이 크면 Drude·Lorentz·임계점(Critical-point) 모델을 피팅해 보조 미분방정식(ADE)으로 넣는다.</div>
+    </div>
+    <p>Yee 격자에서는 \(E_z\)를 정수 격자점 \((i,j)\)에, \(H_y\)를 \((i+\tfrac12,j)\), \(H_x\)를 \((i,j+\tfrac12)\)에 둔다. 시간도 \(E\)는 정수 스텝 \(n\), \(H\)는 반 스텝 \(n+\tfrac12\)에 둔다. 그러면 모든 미분이 2차 정확도의 <b>중심 차분</b>이 된다.</p>
+    <div class="formula">$$H_y\big|^{n+\frac12}_{i+\frac12,j}=H_y\big|^{n-\frac12}_{i+\frac12,j}+\frac{\Delta t}{\mu_0\Delta x}\left(E_z\big|^n_{i+1,j}-E_z\big|^n_{i,j}\right)$$
+      $$E_z\big|^{n+1}_{i,j}=C_a\,E_z\big|^{n}_{i,j}+C_b\left[\frac{H_y|_{i+\frac12,j}-H_y|_{i-\frac12,j}}{\Delta x}-\frac{H_x|_{i,j+\frac12}-H_x|_{i,j-\frac12}}{\Delta y}\right]^{n+\frac12}$$
+      <div class="where">\(C_a=\dfrac{1-\sigma\Delta t/2\varepsilon}{1+\sigma\Delta t/2\varepsilon}\), \(C_b=\dfrac{\Delta t/\varepsilon}{1+\sigma\Delta t/2\varepsilon}\). E와 H가 반 스텝씩 엇갈려 서로를 밀고 나가므로 <b>립프로그</b>(Leapfrog, 개구리 뜀) 방식이라 부른다.</div>
+    </div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 780 300" role="img" aria-label="2D Yee 격자와 립프로그 시간 전진">
+        <defs>
+          <marker id="ar15e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent-2)"/></marker>
+          <marker id="ar15f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--text-dim)"/></marker>
+        </defs>
+        <g transform="translate(40,30)">
+          <g stroke="var(--grid)" stroke-width="1.2">
+            <line x1="0" y1="0" x2="300" y2="0"/><line x1="0" y1="100" x2="300" y2="100"/><line x1="0" y1="200" x2="300" y2="200"/>
+            <line x1="0" y1="0" x2="0" y2="200"/><line x1="100" y1="0" x2="100" y2="200"/><line x1="200" y1="0" x2="200" y2="200"/><line x1="300" y1="0" x2="300" y2="200"/>
+          </g>
+          <g fill="var(--accent)">
+            <circle cx="0" cy="0" r="6"/><circle cx="100" cy="0" r="6"/><circle cx="200" cy="0" r="6"/><circle cx="300" cy="0" r="6"/>
+            <circle cx="0" cy="100" r="6"/><circle cx="100" cy="100" r="6"/><circle cx="200" cy="100" r="6"/><circle cx="300" cy="100" r="6"/>
+            <circle cx="0" cy="200" r="6"/><circle cx="100" cy="200" r="6"/><circle cx="200" cy="200" r="6"/><circle cx="300" cy="200" r="6"/>
+          </g>
+          <g stroke="var(--accent-2)" stroke-width="2.4">
+            <line x1="38" y1="100" x2="62" y2="100" marker-end="url(#ar15e)"/><line x1="138" y1="100" x2="162" y2="100" marker-end="url(#ar15e)"/><line x1="238" y1="100" x2="262" y2="100" marker-end="url(#ar15e)"/>
+            <line x1="38" y1="0" x2="62" y2="0" marker-end="url(#ar15e)"/><line x1="138" y1="0" x2="162" y2="0" marker-end="url(#ar15e)"/><line x1="238" y1="0" x2="262" y2="0" marker-end="url(#ar15e)"/>
+            <line x1="38" y1="200" x2="62" y2="200" marker-end="url(#ar15e)"/><line x1="138" y1="200" x2="162" y2="200" marker-end="url(#ar15e)"/><line x1="238" y1="200" x2="262" y2="200" marker-end="url(#ar15e)"/>
+          </g>
+          <g stroke="var(--warn)" stroke-width="2.4">
+            <line x1="0" y1="62" x2="0" y2="38"/><line x1="100" y1="62" x2="100" y2="38"/><line x1="200" y1="62" x2="200" y2="38"/><line x1="300" y1="62" x2="300" y2="38"/>
+            <line x1="0" y1="162" x2="0" y2="138"/><line x1="100" y1="162" x2="100" y2="138"/><line x1="200" y1="162" x2="200" y2="138"/><line x1="300" y1="162" x2="300" y2="138"/>
+          </g>
+          <text x="108" y="94" class="t-mono">E<tspan baseline-shift="sub" font-size="10">z</tspan>(i,j)</text>
+          <text x="140" y="124" class="t-mono">H<tspan baseline-shift="sub" font-size="10">y</tspan>(i+½,j)</text>
+          <text x="106" y="56" class="t-mono">H<tspan baseline-shift="sub" font-size="10">x</tspan>(i,j+½)</text>
+          <path d="M200 215 L300 215" stroke="var(--text-dim)" marker-start="url(#ar15f)" marker-end="url(#ar15f)"/>
+          <text x="250" y="236" class="t-mono" text-anchor="middle">Δx</text>
+          <text x="150" y="262" class="t-dim" text-anchor="middle">E는 격자점, H는 변의 중점 (반 칸 엇갈림)</text>
+        </g>
+        <!-- leapfrog timeline -->
+        <g transform="translate(420,60)">
+          <line x1="0" y1="80" x2="320" y2="80" class="s-axis" marker-end="url(#ar15f)"/>
+          <text x="326" y="84" class="t-mono">t</text>
+          <g class="t-mono" text-anchor="middle">
+            <circle cx="30" cy="80" r="7" fill="var(--accent)"/><text x="30" y="110">E<tspan baseline-shift="super" font-size="10">n</tspan></text>
+            <rect x="93" y="73" width="14" height="14" fill="var(--accent-2)"/><text x="100" y="110">H<tspan baseline-shift="super" font-size="10">n+½</tspan></text>
+            <circle cx="170" cy="80" r="7" fill="var(--accent)"/><text x="170" y="110">E<tspan baseline-shift="super" font-size="10">n+1</tspan></text>
+            <rect x="233" y="73" width="14" height="14" fill="var(--accent-2)"/><text x="240" y="110">H<tspan baseline-shift="super" font-size="10">n+3/2</tspan></text>
+            <circle cx="310" cy="80" r="7" fill="var(--accent)"/>
+          </g>
+          <path d="M30 70 C50 30 80 30 100 70" fill="none" stroke="var(--text-dim)" marker-end="url(#ar15f)"/>
+          <path d="M100 70 C120 30 150 30 170 70" fill="none" stroke="var(--text-dim)" marker-end="url(#ar15f)"/>
+          <path d="M170 70 C190 30 220 30 240 70" fill="none" stroke="var(--text-dim)" marker-end="url(#ar15f)"/>
+          <text x="160" y="20" class="t-dim" text-anchor="middle">립프로그: E → H → E → …</text>
+          <text x="160" y="150" class="t-dim" text-anchor="middle">쿠랑 조건 (2D, Δx = Δy)</text>
+          <text x="160" y="176" class="t-acc" text-anchor="middle">S = cΔt/Δx ≤ 1/√2 ≈ 0.707</text>
+          <text x="160" y="200" class="t-dim" text-anchor="middle">3D: S ≤ 1/√3 ≈ 0.577</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 15-5.</b> 2D TM<sub>z</sub> Yee 격자(왼쪽)와 립프로그 시간 전진(오른쪽). \(E_z\)(청록 점)를 둘러싼 네 변 위의 \(H_x\)(주황), \(H_y\)(보라)가 회전(curl)을 이룬다. E와 H를 반 칸·반 스텝씩 엇갈리게 두면 모든 미분이 중심 차분이 되고, 발산 없는 장(\(\nabla\cdot\mathbf B=0\))이 자동으로 보존된다.</figcaption>
+    </figure>
+
+    <p><b>쿠랑–프리드리히스–레비(CFL) 조건.</b> 명시적 시간 전진은 한 스텝 동안 정보가 한 칸보다 멀리 가면 불안정해진다. 균일 격자의 안정 조건은 다음과 같다.</p>
+    <div class="formula">$$c\,\Delta t\le\frac{1}{\sqrt{\dfrac1{\Delta x^2}+\dfrac1{\Delta y^2}+\dfrac1{\Delta z^2}}}\qquad\Rightarrow\qquad S\equiv\frac{c\Delta t}{\Delta x}\le\frac1{\sqrt D}$$
+      <div class="where">\(D\): 차원 수(1, 2, 3). 3D에서 \(\Delta x=10\) nm이면 \(\Delta t\le 19\) as(아토초)이다. 수백 fs를 시뮬레이션하려면 수만 스텝이 필요하다. 한 군데라도 메시를 1 nm로 세분하면 전체 \(\Delta t\)가 10배 작아진다. 얇은 막 하나 때문에 전체 계산이 느려지는 이유다.</div>
+    </div>
+    <p><b>수치 분산.</b> 차분 근사 때문에 격자 위의 파동은 실제보다 약간 느리게, 방향과 파장에 따라 다르게 진행한다. 1D에서 분산 관계는 \(\sin(\omega\Delta t/2)/(c\Delta t)=\sin(k\Delta x/2)/\Delta x\)다. 파장당 격자점 수 \(N_\lambda=\lambda/(n\Delta x)\)가 클수록 정확하다. 위상 속도 오차는 대략 \((\pi/N_\lambda)^2(1-S^2)/6\)이다. \(N_\lambda=10\)이면 \(S\)가 작을 때 약 1.6%다. 이 오차는 수 µm를 지나며 위상으로 쌓인다. 실리콘 안 파장이 짧기 때문에(450 nm에서 \(\lambda/n\approx96\) nm) 픽셀 시뮬레이션의 메시는 실리콘에 맞춰 정한다.</p>
+
+    <div class="sim" id="sim-fdtd1d">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>1D FDTD: 쿠랑 수, 메시 밀도와 수치 분산</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-f1"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>쿠랑 수 S = cΔt/Δx <output id="f1-s-out"></output></span><input type="range" id="f1-s" min="0.2" max="1.04" step="0.01" value="0.5"></label>
+          <label class="ctrl"><span>파장당 격자점 N<sub>λ</sub> <output id="f1-n-out"></output></span><input type="range" id="f1-n" min="3" max="40" step="1" value="8"></label>
+          <label class="ctrl"><span>속도 (스텝/프레임) <output id="f1-v-out"></output></span><input type="range" id="f1-v" min="1" max="20" step="1" value="6"></label>
+          <button class="btn primary" id="f1-reset">다시 시작</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">수치 위상 속도 v<sub>p</sub>/c</span><span class="v" id="o-f1-vp">—</span></div>
+        <div class="stat"><span class="k">스텝 / 경과 시간</span><span class="v" id="o-f1-t">—</span></div>
+        <div class="stat"><span class="k">상태</span><span class="v" id="o-f1-st">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: 가운데에서 시작한 변조 가우시안 펄스가 좌우로 갈라진다. 회색 점선은 정확한 해의 포락선이다. ① N<sub>λ</sub> = 4~6이면 펄스가 뒤처지고 꼬리에 잔물결이 생긴다(수치 분산). ② S = 1.00은 1D의 "마법의 시간 간격"으로, 분산이 정확히 0이 된다. ③ S를 1.01 이상으로 올리면 몇 백 스텝 안에 해가 발산한다. 이것이 CFL 조건이다. 3D에서는 한계가 0.577이고 마법의 간격이 없다. 양 끝은 1차 Mur 흡수 경계다.</div>
+    </div>
+  </section>
+
+  <!-- =============================================================== 7 -->
+  <section id="boundary">
+    <h2>경계 조건과 광원: PML, 주기, 블로흐, TF/SF</h2>
+    <p>FDTD의 계산 영역은 유한하다. 영역 끝에서 무엇이 일어나는지를 정하는 경계 조건이 결과의 신뢰성을 좌우한다.</p>
+    <ul>
+      <li><b>PML</b>(Perfectly Matched Layer): Berenger(1994)가 제안했다. 경계에 인공 흡수층을 두되, 임피던스를 진공과 맞춰(\(\sigma^*/\mu_0=\sigma/\varepsilon_0\)) 모든 입사각·주파수에서 이론상 반사 없이 빨아들인다. 이산화 오차를 줄이려고 전도도를 \(\sigma(d)=\sigma_{\max}(d/L)^m\)(보통 \(m=3\))로 서서히 키운다. 두께 8~16셀, 반사 \(10^{-4}\sim10^{-6}\)이 표준이다. 소멸파나 매우 비스듬한 파동에는 약하므로 구조에서 반 파장 이상 떨어뜨려 둔다.</li>
+      <li><b>주기 경계</b>(Periodic): 픽셀 배열을 무한 반복으로 보고 한 단위 셀(베이어 2×2, 또는 쿼드 베이어 4×4)만 계산한다. 왼쪽 끝 값을 오른쪽 끝에 그대로 복사한다.</li>
+      <li><b>블로흐 경계</b>(Bloch): 사입사 평면파는 한 주기마다 위상이 \(k_x\Lambda\)만큼 돈다. \(\mathbf E(x+\Lambda)=\mathbf E(x)e^{ik_x\Lambda}\)를 쓰려면 장을 복소수로 다뤄야 하므로 메모리가 두 배가 된다. 더 중요한 점은 <b>\(k_x\)가 고정</b>된다는 것이다. 광대역 펄스에서는 \(\sin\theta=k_x\lambda/(2\pi)\)이므로 파장마다 입사각이 달라진다. 그래서 CRA 30°의 QE 스펙트럼을 얻으려면 파장마다 따로 돌리거나, Lumerical의 BFAST 같은 광대역 고정각 기법을 써야 한다. RCWA는 파장마다 독립적으로 풀기 때문에 각도가 자연스럽게 고정된다.</li>
+      <li><b>대칭·반대칭 경계</b>: 수직 입사이고 구조가 거울 대칭이면 영역을 1/2이나 1/4로 줄인다. 편광 방향에 따라 PEC/PMC 거울을 고른다.</li>
+    </ul>
+    <p>광원도 고르는 방법이 여러 가지다. <b>평면파 광원</b>은 주기·블로흐 경계와 함께 쓰는 기본 광원이다. <b>TF/SF</b>(Total-Field/Scattered-Field)는 직사각형 안에만 입사파를 넣어 산란장을 따로 볼 수 있게 한다. <b>가우시안 빔</b>은 단일 픽셀 조명이나 PDAF 각도 응답을 볼 때 쓴다. <b>쌍극자 여러 개를 결맞지 않게 합치는 방법</b>은 렌즈 동공 전체에서 들어오는 빛(부분 결맞음)을 흉내 낸다. 시간 파형은 보통 짧은 가우시안 펄스로 넣는다. 그다음 모니터에서 장을 푸리에 변환하면 한 번의 실행으로 수백 개 파장의 응답을 얻는다. 이것이 FDTD의 가장 큰 장점이다.</p>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 780 340" role="img" aria-label="픽셀 FDTD 시뮬레이션 영역">
+        <defs>
+          <marker id="ar15g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--warn)"/></marker>
+        </defs>
+        <g transform="translate(60,20)">
+          <rect x="0" y="0" width="360" height="300" class="f-surface" stroke="var(--border)"/>
+          <rect x="0" y="0" width="360" height="26" fill="var(--warn)" opacity="0.22"/>
+          <rect x="0" y="274" width="360" height="26" fill="var(--warn)" opacity="0.22"/>
+          <text x="180" y="18" class="t-mono" text-anchor="middle">PML (위)</text>
+          <text x="180" y="292" class="t-mono" text-anchor="middle">PML (아래, 실리콘 속)</text>
+          <line x1="0" y1="50" x2="360" y2="50" stroke="var(--warn)" stroke-width="2.5"/>
+          <text x="352" y="44" class="t-mono" text-anchor="end">평면파 광원 (펄스)</text>
+          <line x1="40" y1="56" x2="40" y2="80" stroke="var(--warn)" stroke-width="1.6" marker-end="url(#ar15g)"/><line x1="120" y1="56" x2="120" y2="80" stroke="var(--warn)" stroke-width="1.6" marker-end="url(#ar15g)"/><line x1="240" y1="56" x2="240" y2="80" stroke="var(--warn)" stroke-width="1.6" marker-end="url(#ar15g)"/><line x1="320" y1="56" x2="320" y2="80" stroke="var(--warn)" stroke-width="1.6" marker-end="url(#ar15g)"/>
+          <line x1="0" y1="38" x2="360" y2="38" stroke="var(--accent-2)" stroke-dasharray="5 3" stroke-width="1.6"/>
+          <text x="8" y="34" class="t-mono">반사 모니터</text>
+          <path d="M0 140 Q90 70 180 140 Q270 70 360 140 Z" class="f-acc-soft" stroke="var(--accent)"/>
+          <rect x="0" y="140" width="360" height="40" class="f-acc2-soft"/>
+          <rect x="176" y="140" width="8" height="40" fill="var(--text-faint)" opacity="0.7"/>
+          <text x="90" y="166" class="t-dim" text-anchor="middle">CF (G)</text><text x="270" y="166" class="t-dim" text-anchor="middle">CF (R)</text>
+          <rect x="0" y="180" width="360" height="94" class="f-elev"/>
+          <rect x="174" y="180" width="12" height="94" class="f-acc-soft" stroke="var(--accent)"/>
+          <rect x="0" y="180" width="6" height="94" class="f-acc-soft"/><rect x="354" y="180" width="6" height="94" class="f-acc-soft"/>
+          <text x="90" y="232" class="t-dim" text-anchor="middle">Si (흡수 모니터)</text><text x="270" y="232" class="t-dim" text-anchor="middle">Si</text>
+          <rect x="10" y="190" width="160" height="78" fill="none" stroke="var(--accent-2)" stroke-dasharray="5 3" stroke-width="1.4"/>
+          <line x1="-14" y1="0" x2="-14" y2="300" stroke="var(--accent)" stroke-width="3" stroke-dasharray="2 4"/>
+          <line x1="374" y1="0" x2="374" y2="300" stroke="var(--accent)" stroke-width="3" stroke-dasharray="2 4"/>
+        </g>
+        <g transform="translate(470,40)">
+          <text x="0" y="0" class="t">설정 요약</text>
+          <text x="0" y="30" class="t-dim">• 좌우: 주기 또는 블로흐 경계(점선)</text>
+          <text x="0" y="56" class="t-dim">• 위·아래: PML (구조에서 ≥ λ/2 이격)</text>
+          <text x="0" y="82" class="t-dim">• 광원: 마이크로렌즈 위 평면파 펄스</text>
+          <text x="0" y="108" class="t-dim">• 반사 모니터: 광원 위 (R 스펙트럼)</text>
+          <text x="0" y="134" class="t-dim">• 흡수 모니터: 픽셀별 PD 체적 ∫σ|E|²dV</text>
+          <text x="0" y="160" class="t-dim">• 메시: Si 안에서 λ/(20n) 이하</text>
+          <text x="0" y="186" class="t-dim">• 정규화: 광원 파워 스펙트럼으로 나눔</text>
+          <text x="0" y="230" class="t-acc">QE<tspan baseline-shift="sub" font-size="10">opt</tspan>(λ) = P<tspan baseline-shift="sub" font-size="10">abs, PD</tspan>(λ) / P<tspan baseline-shift="sub" font-size="10">in</tspan>(λ)</text>
+          <text x="0" y="256" class="t-dim">크로스토크 = 이웃 PD 흡수 / 전체 흡수</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 15-6.</b> 2×1 베이어 단면의 전형적인 픽셀 FDTD 설정. 위·아래 PML, 좌우 주기(사입사면 블로흐) 경계, 마이크로렌즈 위 평면파 광원, 반사 모니터와 픽셀별 포토다이오드 흡수 모니터. 실제로는 3D에서 2×2 베이어 단위 셀을 쓴다.</figcaption>
+    </figure>
+
+    <div class="callout warn">
+      <strong>흔한 함정: 실리콘을 PML로 그냥 자르기</strong>
+      <p>장파장(850~940 nm)에서 실리콘의 흡수 깊이는 수십 µm다. 3~6 µm 두께의 실리콘을 아래 PML로 자르면, 실제 소자에서는 배선층(BSI의 앞면) 금속에 반사되어 돌아올 빛이 사라진다. 그러면 NIR QE를 과소평가하고 크로스토크를 과대평가한다. 반대로 실리콘 끝을 금속 거울로 막으면 비현실적인 공진이 생긴다. 실제 BEOL 반사(배선 밀도로 가중한 유효 반사율)를 모델링하거나, 적어도 두 극단을 모두 계산해 범위를 보고해야 한다.</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== 8 -->
+  <section id="fdtd-pixel">
+    <h2>2D FDTD로 보는 픽셀: 마이크로렌즈, 컬러 필터, DTI</h2>
+    <p>이제 지금까지의 요소를 모두 모아 실제 픽셀 단면을 FDTD로 돌려 보자. 아래 시뮬레이터는 피치 0.8 µm 픽셀 세 개(R–G–R 행)의 단면을 16 nm 격자(약 170×250셀)로 계산한다. 구성은 위에서부터 공기, 마이크로렌즈(n≈1.6, 높이 0.5 µm), 평탄화층, 컬러 필터 0.5 µm와 저굴절 그리드, 산화막, 실리콘 2 µm와 산화막 DTI다. 가운데 G 픽셀의 마이크로렌즈만 비추는 기울어진 빔을 넣고, 각 픽셀 실리콘 영역의 흡수 \(\int\sigma|E|^2\,dA\)를 시간 평균해 크로스토크를 잰다. 네 변은 Berenger 분할장 PML이고, 재료는 선택한 파장의 \(n+i\kappa\)(<code>OPT.n</code>)를 전도도로 바꿔 넣었다.</p>
+
+    <div class="sim" id="sim-fdtd2d">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2D FDTD (TM<sub>z</sub>): 마이크로렌즈 + 컬러 필터 + DTI 픽셀</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-f2"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>파장</span><div class="seg" id="f2-l"><button data-value="450">450</button><button data-value="530" class="on">530</button><button data-value="620">620</button><button data-value="850">850</button></div></div>
+          <label class="ctrl"><span>입사각 (CRA) <output id="f2-a-out"></output></span><input type="range" id="f2-a" min="0" max="35" step="1" value="15"></label>
+          <div class="ctrl"><span>표시</span><div class="seg" id="f2-v"><button data-value="E" class="on">E<sub>z</sub> 순간값</button><button data-value="I">|E|² 평균</button></div></div>
+          <div class="ctrl"><span>광원</span><div class="seg" id="f2-src"><button data-value="cw" class="on">연속파</button><button data-value="pulse">펄스</button></div></div>
+          <label class="check"><input type="checkbox" id="f2-ml" checked> 마이크로렌즈</label>
+          <label class="check"><input type="checkbox" id="f2-dti" checked> DTI + 저굴절 그리드</label>
+          <label class="check"><input type="checkbox" id="f2-cf" checked> 컬러 필터 (R·G·R)</label>
+          <button class="btn primary" id="f2-run">일시정지</button>
+          <button class="btn" id="f2-reset">초기화</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">시간 (스텝)</span><span class="v" id="o-f2-t">—</span></div>
+        <div class="stat"><span class="k">흡수 분포 좌 / 중앙 / 우</span><span class="v" id="o-f2-a">—</span></div>
+        <div class="stat"><span class="k">광학 크로스토크</span><span class="v" id="o-f2-x">—</span></div>
+        <div class="stat"><span class="k">Si 안 N<sub>λ</sub> · 쿠랑 S</span><span class="v" id="o-f2-n">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 530 nm, 15°에서 DTI를 끄고 켜며 크로스토크를 비교해 보자. DTI는 기울어져 들어온 빛을 전반사로 가두어 이웃 픽셀로의 누설을 크게 줄인다. ② 마이크로렌즈를 켜고 끄며 "|E|² 평균" 보기를 비교하면, 렌즈가 빛을 픽셀 중앙으로 모아 DTI 벽에서 떼어 놓는 것이 보인다. 이 시뮬레이터처럼 빔 폭이 픽셀 하나로 제한되어 있으면 크로스토크 숫자 차이는 작다(약 1%p). 렌즈의 효과는 실제로는 그리드에 가려지는 빛, 즉 감도 쪽에서 더 크게 나타난다. ③ 850 nm에서는 실리콘 흡수가 약해 빛이 깊이 들어가고, DTI가 없으면 이웃으로 많이 샌다. ④ 펄스 모드에서는 반사파가 위로 돌아가 PML에 흡수되는 것을 볼 수 있다. 흡수 비율은 연속파 정상 상태(약 1500스텝 이후)에서 읽자. 2D 계산이므로 3D 원형 렌즈보다 집광이 약하다.</div>
+    </div>
+
+    <p>이 작은 시뮬레이터에도 실무 판단 몇 가지가 들어 있다. 첫째, 16 nm 메시는 450 nm에서 실리콘 안 \(N_\lambda\)가 약 6에 불과하다. 위상 오차가 상당하지만 청색광은 실리콘 0.4 µm 안에서 대부분 흡수되므로 <b>흡수 분포</b>라는 관찰량에는 영향이 작다. 반대로 850 nm에서 실리콘 내부의 공진·간섭 무늬를 정량적으로 보려면 메시가 더 촘촘해야 한다. 둘째, 기울어진 빔을 쓰려고 좌우를 PML로 막았기 때문에 이웃의 이웃에서 되돌아오는 빛은 빠져 있다. 주기 경계 + 블로흐 위상을 쓰는 실제 설정과는 크로스토크의 정의가 조금 다르다. 셋째, 2D는 \(y\) 방향으로 무한히 긴 원통 렌즈와 벽을 가정한다. 집광과 크로스토크의 경향은 맞지만 절대값은 3D와 다르다.</p>
+
+    <div class="callout tip">
+      <strong>시뮬레이션에서 크로스토크를 정의하는 두 가지 방법</strong>
+      <p>(a) <b>단일 픽셀 조명</b>: 한 픽셀의 마이크로렌즈에만 빛을 넣고(가우시안 빔 또는 개구), 이웃 PD 흡수를 잰다. 위 시뮬레이터가 이 방식이며, 원인 분석에 직관적이다. (b) <b>균일 조명 + 색 분리</b>: 주기 경계로 전체를 비추고, 예를 들어 650 nm에서 G 픽셀 PD가 흡수한 양을 R 픽셀 흡수와 비교한다. 측정(단색광 QE 스펙트럼)과 바로 대조할 수 있다. 업계 보고서에서 "크로스토크 x%"라는 숫자를 볼 때는 어느 정의인지 먼저 확인하자.</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== 9 -->
+  <section id="practice">
+    <h2>픽셀 시뮬레이션 실무: 설정, 수렴 점검, 계산 시간</h2>
+    <p>픽셀 광학 시뮬레이션의 결과는 QE 스펙트럼, 각도 응답(CRA 의존성), 크로스토크, 반사율이다. 이 숫자들이 공정 엔지니어와 설계자 사이의 공용어가 된다. 숫자를 믿으려면 다음 작업 흐름을 지키는 것이 좋다.</p>
+    <ol>
+      <li><b>구조 정의</b>: 단위 셀(베이어 2×2, 쿼드 4×4), 레이아웃 기반 마이크로렌즈 형상(측정 AFM 프로파일이 가장 좋다), 층 두께, DTI 깊이·폭·테이퍼, 그리드 재료. 공정 변동 범위(±10% 두께 등)도 함께 정한다.</li>
+      <li><b>재료 모델</b>: 실리콘, 텅스텐, 알루미늄, 컬러 필터 레지스트의 \(n,\kappa(\lambda)\). 엘립소미터 측정 데이터를 FDTD용 분산 모델로 피팅하고 피팅 오차를 확인한다(특히 Si의 400~450 nm, 금속).</li>
+      <li><b>경계·광원</b>: 수직 입사는 주기 경계 + 대칭으로 영역을 줄인다. 사입사는 RCWA, 또는 FDTD 블로흐 경계로 파장마다 계산한다. 두 편광(TE/TM)을 평균해 비편광을 만든다.</li>
+      <li><b>메시</b>: 가장 굴절률이 높은 재료(Si) 안에서 정밀 계산은 \(\Delta x\le\lambda_{\min}/(20n)\)을 기준으로 한다(450 nm, \(n=4.7\)이면 약 5 nm). 컨포멀 메시를 쓰는 광대역 스크리닝은 \(\lambda/(10\sim12\,n)\)(약 8~10 nm)로 시작하고, 수렴 점검으로 정당화한다. 얇은 층(HfO₂ 반사 방지막 50 nm)은 최소 3~5셀이 들어가도록 국부 메시를 쓰고, 경계는 서브픽셀 평균(Conformal Mesh)으로 다룬다.</li>
+      <li><b>수렴 점검</b>: 메시를 \(\Delta x\to\Delta x/1.5\)로 줄여 QE가 1%p 이내로 바뀌는지, 시뮬레이션 시간을 늘려 장이 충분히 감쇠했는지(auto-shutoff 10⁻⁵), PML 두께를 늘려도 R이 그대로인지 확인한다. RCWA는 M을 늘려 0.5%p 이내인지, 계단 슬랩 수를 늘려 마이크로렌즈 계단 근사가 수렴했는지 확인한다.</li>
+      <li><b>교차 검증</b>: 평판 구조(ML·DTI 없음)는 TMM과, 대표 구조는 FDTD와 RCWA끼리 비교한다. 마지막으로 측정 QE와 비교해 재료·형상 불확도를 보정한다.</li>
+    </ol>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>시나리오 (2×2 베이어 단위 셀)</th><th>방법</th><th>격자·차수</th><th>메모리</th><th>계산 시간 (대략)</th></tr></thead>
+      <tbody>
+        <tr><td>1.0 µm 피치, 스택 5 µm, 400~700 nm 광대역, 수직</td><td>FDTD (CPU 32코어)</td><td>Δx = 8 nm, 250×250×650 ≈ 4×10⁷셀</td><td>~2~4 GB</td><td>30분~1시간</td></tr>
+        <tr><td>같은 구조</td><td>FDTD (GPU 1장)</td><td>같음</td><td>~3 GB</td><td>2~5분</td></tr>
+        <tr><td>같은 구조, CRA 0~35° 8각도 × 31파장</td><td>FDTD 블로흐 (파장별)</td><td>같음</td><td>×2 (복소장)</td><td>CPU 수일 / GPU 수 시간</td></tr>
+        <tr><td>같은 구조, 같은 스윕</td><td>RCWA (S4 류)</td><td>M = 10~15, ML 20슬랩</td><td>~1 GB</td><td>CPU 수 시간 (각도 추가 비용 작음)</td></tr>
+        <tr><td>0.6 µm 피치 쿼드 베이어 4×4 단위 셀</td><td>FDTD (GPU)</td><td>2.4×2.4×5 µm, Δx = 6 nm ≈ 8×10⁷셀</td><td>~6~10 GB</td><td>10~20분 / 각도</td></tr>
+        <tr><td>3 µm 차량용 픽셀 + 수 µm 렌즈 결합</td><td>FDTD + 광선 추적 연계</td><td>렌즈는 광선, 픽셀만 FDTD</td><td>~20 GB</td><td>수 시간</td></tr>
+      </tbody>
+    </table></div>
+    <p>표의 숫자는 하드웨어와 도구에 따라 몇 배씩 달라질 수 있는 대략값이다. 하지만 스케일링은 확실하다. FDTD의 비용은 \((\text{크기}/\Delta x)^3\times N_t\)이고, \(N_t\propto(\text{크기}/\Delta x)\)이므로 메시를 절반으로 줄이면 비용은 약 16배가 된다. RCWA의 비용은 \(L\times(2N)^3\)이므로 차수 \(M\)을 두 배로 늘리면 2D 주기 구조에서 약 64배다. 아래 계산기로 직접 감을 잡아 보자.</p>
+
+    <div class="sim" id="sim-cost">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>계산 예산 추정기: FDTD 셀 수 vs RCWA 차수</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-cost"></canvas>
+          <div class="legend-row"><span><i style="background:var(--accent)"></i>FDTD (GPU)</span><span><i style="background:var(--warn)"></i>FDTD (CPU)</span><span><i style="background:var(--accent-2)"></i>RCWA (CPU)</span></div>
+        </div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>픽셀 피치 <output id="co-p-out"></output></span><input type="range" id="co-p" min="0.5" max="3" step="0.05" value="1.0"></label>
+          <div class="ctrl"><span>단위 셀</span><div class="seg" id="co-u"><button data-value="1">1×1</button><button data-value="2" class="on">2×2</button><button data-value="4">4×4</button></div></div>
+          <label class="ctrl"><span>스택 높이 (Si 포함) <output id="co-h-out"></output></span><input type="range" id="co-h" min="2" max="10" step="0.5" value="5"></label>
+          <label class="ctrl"><span>최단 파장 <output id="co-l-out"></output></span><input type="range" id="co-l" min="400" max="900" step="10" value="450"></label>
+          <label class="ctrl"><span>메시 λ/(k·n), k = <output id="co-k-out"></output></span><input type="range" id="co-k" min="6" max="30" step="1" value="12"></label>
+          <label class="ctrl"><span>각도·편광 조합 수 <output id="co-a-out"></output></span><input type="range" id="co-a" min="1" max="32" step="1" value="1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">FDTD 격자 (Δx)</span><span class="v" id="o-co-c">—</span></div>
+        <div class="stat"><span class="k">메모리 · 스텝 수</span><span class="v" id="o-co-m">—</span></div>
+        <div class="stat"><span class="k">FDTD 시간 GPU / CPU</span><span class="v" id="o-co-t">—</span></div>
+        <div class="stat"><span class="k">RCWA 차수 M · 시간</span><span class="v" id="o-co-r">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(450 nm, k = 12)은 Δx ≈ 8 nm로 위 표의 첫 행과 같다. 메시 k를 10에서 20으로 올리면 FDTD 시간은 약 16배가 된다. ② 400 nm에서 Si의 굴절률 5.6을 쓰면 Δx가 매우 작아진다. 실무에서는 청색 QE를 따로 촘촘한 메시로 돌리기도 한다. ③ 각도 조합을 늘리면 FDTD(블로흐, 파장별)는 선형으로 늘지만 RCWA는 각도·파장마다 독립이라 비용 구조가 같다. 4×4 단위 셀에서는 RCWA 차수가 커져 FDTD가 유리해진다. 처리량 가정: GPU 3×10⁹, CPU 2.5×10⁸ 셀·스텝/s, 300 fs 시뮬레이션, 메모리 60 B/셀. RCWA는 31파장·20슬랩, CPU 5×10¹⁰ flop/s, 차수 M ≈ 2.5×(셀 폭/λ<sub>min</sub>)+3, 고윳값 비용 ≈ 10·(2N)³.</div>
+    </div>
+
+    <div class="callout">
+      <strong>실무 노트: 시뮬레이션과 측정 QE가 안 맞을 때 확인할 순서</strong>
+      <p>① <b>정규화</b>: 측정 QE는 패키지 커버 글라스·IR 필터를 포함하는지, 시뮬레이션은 입사 매질이 공기인지 확인한다. ② <b>조명 조건</b>: 측정은 F/2.8 정도의 원뿔 광(각도 평균)인데 시뮬레이션은 수직 평면파일 수 있다. 각도 응답을 동공에 대해 적분하면 피크가 낮아지고 리플이 줄어든다(<a href="interference.html">5장</a>의 결맞음 이야기). ③ <b>형상</b>: 마이크로렌즈 실측 높이와 갭, CF 두께의 웨이퍼 내 변동. ④ <b>재료</b>: CF 레지스트의 κ(λ), 실리콘 표면 패시베이션층. ⑤ <b>전기적 수집 효율</b>: 광학 시뮬레이션은 "흡수"까지만 계산한다. 표면 재결합과 깊은 곳의 수집 손실은 TCAD(<a href="/sensor/chapters/pixel.html">SensorBook 3장</a>)와 결합해야 QE가 된다. 광학 흡수 QE가 측정보다 10~20%p 높게 나오는 것은 흔하며, 대부분 ⑤ 때문이다.</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== 10 -->
+  <section id="tools">
+    <h2>도구 생태계와 선택 기준</h2>
+    <p>직접 구현은 원리를 이해하는 데 좋지만, 실무에서는 검증된 도구를 쓴다. 상용 도구는 재료 데이터베이스, 컨포멀 메시, GPU 가속, 파라미터 스윕과 최적화 기능을 제공한다. 오픈소스는 투명성과 스크립팅 자유도가 장점이다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>도구</th><th>방법</th><th>형태</th><th>특징·이미지 센서 관련 용도</th></tr></thead>
+      <tbody>
+        <tr><td><b>Ansys Lumerical FDTD</b></td><td>FDTD (+RCWA 솔버)</td><td>상용, GUI + Lumerical 스크립트·Python API</td><td>CMOS 이미지 센서 예제가 풍부하다. BFAST 광대역 사입사, 컨포멀 메시, GPU 가속을 지원한다. CHARGE(전하 수송)와 연계해 QE를 계산할 수 있다.</td></tr>
+        <tr><td><b>Ansys HFSS · COMSOL Wave Optics</b></td><td>FEM</td><td>상용</td><td>곡면·얇은 금속의 정밀 해석, 공진 구조, 다물리(열·응력) 결합</td></tr>
+        <tr><td><b>Synopsys RSoft</b> (FullWAVE / DiffractMOD)</td><td>FDTD / RCWA</td><td>상용</td><td>격자·메타표면·회절 광학 설계 툴체인, 광학 설계 도구 CODE V와 연계</td></tr>
+        <tr><td><b>Synopsys Sentaurus EMW</b></td><td>FDTD</td><td>상용 (TCAD 내장)</td><td>공정·소자 TCAD와 같은 구조를 공유해 광학 흡수 → 전하 수집 QE를 한 흐름으로 계산</td></tr>
+        <tr><td><b>S4</b> (Stanford)</td><td>RCWA (FMM)</td><td>오픈소스, Lua/Python</td><td>2D 주기 다층 구조, Li 인수분해·법선 벡터장 옵션, 학술 벤치마크의 기준</td></tr>
+        <tr><td><b>MEEP</b> (MIT)</td><td>FDTD</td><td>오픈소스, Python/Scheme</td><td>서브픽셀 평활화로 정확도가 높다. 블로흐 경계와 adjoint 역설계(메타표면 컬러 라우터)를 지원한다.</td></tr>
+        <tr><td><b>Tidy3D</b> (Flexcompute)</td><td>FDTD</td><td>클라우드 GPU, Python</td><td>대규모 3D를 분 단위로 계산하고, 미분 가능 역설계를 지원한다. 사용량 과금이다.</td></tr>
+        <tr><td><b>torcwa · grcwa · Inkstone</b></td><td>RCWA</td><td>오픈소스, Python (자동미분)</td><td>미분 가능 RCWA로 나노구조 컬러 라우터·AR 구조 최적화</td></tr>
+      </tbody>
+    </table></div>
+    <p>도구를 고르는 간단한 기준은 다음과 같다. <b>주기적이고 층 구조가 뚜렷하며 각도·파장 스윕이 많으면 RCWA</b>를 쓴다(컬러 라우터 최적화, 서브파장 AR, IR 필터 위 격자). <b>임의 형상, 단일 픽셀 조명, 과도 응답, 광대역 한 번에가 필요하면 FDTD</b>를 쓴다(마이크로렌즈 + DTI 픽셀의 QE·크로스토크). <b>정밀 검증과 복잡한 곡면에는 FEM</b>을 쓴다. 이 장의 시뮬레이터들은 원리를 보여 주는 장난감 크기지만, 상용 도구도 같은 방정식과 같은 함정(차수, 메시, 경계, 정규화)을 공유한다.</p>
+
+    <div class="callout tip">
+      <strong>다음 장으로</strong>
+      <p>픽셀 내부의 회절은 센서 <b>표면</b>에서도 일어난다. 마이크로렌즈 배열은 반사 격자로 작용해 렌즈 쪽으로 회절 차수를 돌려보내고, 그 빛이 IR 필터·렌즈에서 다시 반사되어 꽃잎 모양의 플레어를 만든다. <a href="stray.html">16장 미광과 플레어</a>에서는 이 장의 격자 방정식과 반사 회절 효율로 그 패턴을 예측한다.</p>
+    </div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>피치가 파장과 비슷한 픽셀(0.6~1 µm)에서는 광선 추적(\(D\gg\lambda\))과 TMM(옆 방향 균일)의 가정이 깨진다. 주기 \(\Lambda\)는 격자 방정식으로 허용 회절 차수를 정하고, 실리콘 안에서는 진행 차수가 특히 많다.</li>
+      <li>TMM은 층, RCWA는 수평 푸리에 + 수직 해석해, FDTD는 시공간 직교 격자, FEM은 비정형 메시로 이산화한다. 일상 업무는 RCWA(주기·스윕)와 FDTD(형상·광대역)가 나눠 맡는다.</li>
+      <li>RCWA는 \(\varepsilon(x)\)의 토플리츠 행렬 \(\llbracket\varepsilon\rrbracket\)과 플로케 파수 \(k_{x,m}=k_{x0}-2\pi m/\Lambda\)로 층별 고윳값 문제 \(\Omega^2=K_x^2-\llbracket\varepsilon\rrbracket\)(TE)를 풀고, S 행렬 별곱으로 층을 쌓는다. T 행렬은 감쇠 모드 때문에 발산한다.</li>
+      <li>회절 효율은 \(R_m=|r_m|^2\mathrm{Re}(k_{z,m})/k_{z,0}\)이며, 손실 없는 구조에서 합이 1이고 균일 층에서 TMM과 일치해야 한다(구현 검증).</li>
+      <li>불연속 \(\varepsilon\)의 잘린 급수는 깁스 현상을 보인다. TM 편광에서는 Li의 역규칙 \(\llbracket1/\varepsilon\rrbracket^{-1}\)을 써야 빨리 수렴하며, 같은 정확도에 필요한 차수가 크게 줄어든다.</li>
+      <li>FDTD는 Yee 엇갈린 격자와 립프로그로 E, H를 번갈아 전진시킨다. 안정 조건은 \(S=c\Delta t/\Delta x\le1/\sqrt D\)이고, 정확도는 파장당 격자점 \(N_\lambda=\lambda/(n\Delta x)\)이 좌우한다(Si 기준 \(\lambda/(20n)\)).</li>
+      <li>PML은 임피던스 정합 흡수층으로 반사 없이 영역을 자른다. 주기 경계는 배열을, 블로흐 경계는 사입사를 표현하지만 \(k_x\)가 고정되어 광대역 펄스에서는 파장마다 각도가 달라진다. RCWA는 각도가 자연스럽게 고정된다.</li>
+      <li>결과를 믿으려면 메시·시간·PML·차수 수렴 점검, TMM·교차 도구 검증, 측정 QE와의 정규화·조명 조건 대조가 필요하다. 광학 흡수는 QE의 상한일 뿐이다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. 주기 \(\Lambda=0.8\) µm 픽셀 배열에 \(\lambda=0.6\) µm 빛이 수직 입사한다. 공기 쪽으로 반사되는 진행 회절 차수는?</p><div class="opts">
+        <button class="opt">0차만</button><button class="opt" data-correct>0, ±1차</button><button class="opt">0, ±1, ±2차</button><button class="opt">무수히 많다</button>
+      </div><div class="quiz-exp">\(\sin\theta_m=m\lambda/\Lambda=0.75m\)이다. \(|m|=1\)은 0.75(약 49°)로 진행하고, \(|m|=2\)는 1.5 &gt; 1이므로 소멸한다. 센서 표면의 이 반사 1차가 렌즈·IR 필터에서 되돌아와 플레어를 만든다(16장).</div></div>
+
+      <div class="quiz-q"><p>Q2. RCWA에서 층을 잇는 데 전달 행렬(T 행렬) 대신 S 행렬을 쓰는 주된 이유는?</p><div class="opts">
+        <button class="opt">S 행렬이 더 적은 메모리를 쓴다</button><button class="opt" data-correct>두꺼운 층의 감쇠 모드에서 \(e^{+\lambda k_0 d}\)가 넘쳐 T 행렬이 수치적으로 불안정하기 때문</button><button class="opt">S 행렬은 고윳값 분해가 필요 없다</button><button class="opt">T 행렬은 손실 재료를 다룰 수 없다</button>
+      </div><div class="quiz-exp">고차 소멸 모드는 층 안에서 지수적으로 감쇠한다. 그런데 T 행렬에는 그 역수인 지수 증가 항도 함께 들어가 배정밀도 범위를 넘는다. S 행렬은 감쇠 지수 \(X=e^{-\lambda k_0 d}\)만 쓰므로 무조건 안정하다.</div></div>
+
+      <div class="quiz-q"><p>Q3. 이진 격자의 유전율 푸리에 급수를 ±M에서 자를 때, M을 계속 늘리면 계단 모서리의 오버슈트는?</p><div class="opts">
+        <button class="opt">0으로 줄어든다</button><button class="opt">M에 비례해 커진다</button><button class="opt" data-correct>점프의 약 9%로 남고, 출렁임의 폭만 좁아진다</button><button class="opt">M이 짝수일 때만 생긴다</button>
+      </div><div class="quiz-exp">깁스 현상이다. 부분합은 L2 의미에서는 수렴하지만, 불연속점 근처의 최대 오버슈트는 약 8.95%로 남는다. 고대비 격자에서 RCWA 수렴이 느린 근본 원인이다.</div></div>
+
+      <div class="quiz-q"><p>Q4. 1D 이진 격자(홈이 y 방향)의 TM 편광 RCWA에서 Li의 역규칙을 적용해야 하는 성분은?</p><div class="opts">
+        <button class="opt">경계에 평행한 \(E_z\)와 \(\varepsilon\)의 곱</button><button class="opt" data-correct>경계에 수직한 \(E_x\)와 \(\varepsilon\)의 곱 (\(D_x\) 연속)</button><button class="opt">\(H_y\)와 \(\mu\)의 곱</button><button class="opt">TE의 \(E_y\)와 \(\varepsilon\)의 곱</button>
+      </div><div class="quiz-exp">리지 옆면의 법선은 \(x\) 방향이다. \(E_x\)는 불연속이고 \(D_x=\varepsilon E_x\)는 연속이므로, 불연속 함수 둘의 곱이 연속인 경우에 해당해 \(\llbracket1/\varepsilon\rrbracket^{-1}\)을 써야 한다. \(E_z, E_y\)는 경계 접선 성분이라 연속이므로 로랑 규칙이 맞다.</div></div>
+
+      <div class="quiz-q"><p>Q5. 3D FDTD에서 \(\Delta x=\Delta y=\Delta z=5\) nm일 때 허용되는 최대 시간 간격은 대략?</p><div class="opts">
+        <button class="opt">약 0.17 fs</button><button class="opt">약 17 fs</button><button class="opt" data-correct>약 9.6 as</button><button class="opt">제한 없음 (암시적 방법)</button>
+      </div><div class="quiz-exp">\(\Delta t\le\Delta x/(c\sqrt3)=5\times10^{-9}/(3\times10^8\times1.732)\approx9.6\times10^{-18}\) s다. 300 fs를 계산하려면 약 3만 스텝이 필요하다.</div></div>
+
+      <div class="quiz-q"><p>Q6. 450 nm 빛에서 실리콘(n ≈ 4.7) 안을 \(\lambda/(20n)\) 규칙으로 메시하려면 Δx는?</p><div class="opts">
+        <button class="opt">약 22 nm</button><button class="opt" data-correct>약 4.8 nm</button><button class="opt">약 1 nm</button><button class="opt">약 45 nm</button>
+      </div><div class="quiz-exp">\(450/(20\times4.7)\approx4.8\) nm. 공기 기준 \(\lambda/20=22\) nm로 잡으면 실리콘 안에서는 파장당 약 4셀밖에 안 되어 수치 분산이 커진다. 메시 기준은 항상 가장 굴절률이 높은 재료다.</div></div>
+
+      <div class="quiz-q"><p>Q7. FDTD에서 블로흐 경계와 광대역 펄스로 CRA 30° 응답을 한 번에 계산했다. 무엇이 잘못될 수 있나?</p><div class="opts">
+        <button class="opt">PML이 동작하지 않는다</button><button class="opt" data-correct>\(k_x\)가 고정되어 파장마다 실제 입사각이 \(\sin\theta=k_x\lambda/2\pi\)로 달라진다</button><button class="opt">쿠랑 조건이 두 배로 엄격해진다</button><button class="opt">TE와 TM이 섞인다</button>
+      </div><div class="quiz-exp">블로흐 위상은 \(k_x\)(공간 주파수)로 주어진다. 중심 파장에서 30°로 맞췄다면, 짧은 파장은 30°보다 작은 각, 긴 파장은 더 큰 각으로 입사한 셈이다. 파장별로 따로 돌리거나 BFAST 같은 기법을 쓴다. RCWA는 파장마다 독립이라 이 문제가 없다.</div></div>
+
+      <div class="quiz-q"><p>Q8. 손실 없는 격자에 대해 직접 짠 RCWA 결과가 \(\sum R+\sum T=1.04\)로 나왔다. 가장 먼저 의심할 것은?</p><div class="opts">
+        <button class="opt">고조파 수가 부족하다</button><button class="opt" data-correct>회절 효율 정규화(\(\mathrm{Re}\,k_z\) 인자, TM의 \(1/\varepsilon\)) 또는 소멸 차수 가지 선택 같은 구현 오류</button><button class="opt">깁스 현상</button><button class="opt">격자가 서브파장이다</button>
+      </div><div class="quiz-exp">차수를 잘라도 RCWA는 잘린 문제 안에서 에너지를 정확히 보존한다. 따라서 합이 1이 아니면 수렴 문제가 아니라 버그다. 흔한 원인은 효율 공식의 \(k_z\) 정규화, TM의 \(\varepsilon\) 인자, \(\sqrt{\cdot}\)의 가지 선택(감쇠해야 할 모드가 증가하는 경우)이다.</div></div>
+
+      <div class="quiz-q"><p>Q9. 0.7 µm 피치 2×2 베이어 셀을 FDTD로 돌리고 있다. 메시를 10 nm에서 5 nm로 줄이면 계산 시간은 대략 몇 배가 되나?</p><div class="opts">
+        <button class="opt">2배</button><button class="opt">4배</button><button class="opt">8배</button><button class="opt" data-correct>16배</button>
+      </div><div class="quiz-exp">셀 수가 \(2^3=8\)배, CFL 조건 때문에 Δt가 절반이 되어 스텝 수가 2배이므로 총 16배다. 메모리는 8배다. 국부 메시와 서브픽셀 평균이 중요한 이유다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const cssv = (n) => getComputedStyle(document.body).getPropertyValue(n);
+  const font = (sz, mono, w) => (w ? w + " " : "") + sz + "px " + (mono ? cssv("--mono") : cssv("--font"));
+  const D2R = Math.PI / 180, PI = Math.PI, TAU = 2 * Math.PI;
+  function scheduler(fn) { let pend = false; return () => { if (pend) return; pend = true; requestAnimationFrame(() => { pend = false; fn(); }); }; }
+  const sup = (x) => { // 지수 표기 HTML
+    if (!isFinite(x) || x <= 0) return "0";
+    const e = Math.floor(Math.log10(x)), m = x / Math.pow(10, e);
+    return m.toFixed(1) + "×10<sup>" + e + "</sup>";
+  };
+  const fmtTime = (s) => (s < 1 ? (s * 1000).toFixed(0) + " ms" : s < 120 ? s.toFixed(s < 10 ? 1 : 0) + " s" : s < 7200 ? (s / 60).toFixed(0) + " 분" : s < 172800 ? (s / 3600).toFixed(1) + " 시간" : (s / 86400).toFixed(1) + " 일");
+
+  /* ---------- 작은 복소 행렬 라이브러리 (N×N, re/im Float64Array 행 우선) ---------- */
+  const CM = {
+    zeros(n) { return { n, re: new Float64Array(n * n), im: new Float64Array(n * n) }; },
+    eye(n) { const A = CM.zeros(n); for (let i = 0; i < n; i++) A.re[i * n + i] = 1; return A; },
+    diag(re, im) { const n = re.length, A = CM.zeros(n); for (let i = 0; i < n; i++) { A.re[i * n + i] = re[i]; A.im[i * n + i] = im ? im[i] : 0; } return A; },
+    real(M, n) { const A = CM.zeros(n); A.re.set(M); return A; },
+    add(A, B, s) { s = s === undefined ? 1 : s; const C = CM.zeros(A.n); for (let i = 0; i < A.re.length; i++) { C.re[i] = A.re[i] + s * B.re[i]; C.im[i] = A.im[i] + s * B.im[i]; } return C; },
+    sub(A, B) { return CM.add(A, B, -1); },
+    scale(A, s) { const C = CM.zeros(A.n); for (let i = 0; i < A.re.length; i++) { C.re[i] = A.re[i] * s; C.im[i] = A.im[i] * s; } return C; },
+    mul(A, B) {
+      const n = A.n, C = CM.zeros(n), ar = A.re, ai = A.im, br = B.re, bi = B.im, cr = C.re, ci = C.im;
+      for (let i = 0; i < n; i++) for (let k = 0; k < n; k++) {
+        const xr = ar[i * n + k], xi = ai[i * n + k];
+        if (xr === 0 && xi === 0) continue;
+        const o = k * n, p = i * n;
+        for (let j = 0; j < n; j++) { const yr = br[o + j], yi = bi[o + j]; cr[p + j] += xr * yr - xi * yi; ci[p + j] += xr * yi + xi * yr; }
+      }
+      return C;
+    },
+    // 오른쪽에 대각 행렬 곱 (열 스케일)
+    mulDiag(A, dr, di) { const n = A.n, C = CM.zeros(n); for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const a = A.re[i * n + j], b = A.im[i * n + j]; C.re[i * n + j] = a * dr[j] - b * di[j]; C.im[i * n + j] = a * di[j] + b * dr[j]; } return C; },
+    // 왼쪽 대각 곱 (행 스케일)
+    diagMul(dr, di, A) { const n = A.n, C = CM.zeros(n); for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const a = A.re[i * n + j], b = A.im[i * n + j]; C.re[i * n + j] = a * dr[i] - b * di[i]; C.im[i * n + j] = a * di[i] + b * dr[i]; } return C; },
+    inv(A) {
+      const n = A.n, m = 2 * n;
+      const R = new Float64Array(n * m), I = new Float64Array(n * m);
+      for (let i = 0; i < n; i++) { for (let j = 0; j < n; j++) { R[i * m + j] = A.re[i * n + j]; I[i * m + j] = A.im[i * n + j]; } R[i * m + n + i] = 1; }
+      for (let c = 0; c < n; c++) {
+        let p = c, best = -1;
+        for (let r = c; r < n; r++) { const v = R[r * m + c] ** 2 + I[r * m + c] ** 2; if (v > best) { best = v; p = r; } }
+        if (p !== c) for (let j = 0; j < m; j++) { let t = R[c * m + j]; R[c * m + j] = R[p * m + j]; R[p * m + j] = t; t = I[c * m + j]; I[c * m + j] = I[p * m + j]; I[p * m + j] = t; }
+        const pr = R[c * m + c], pi = I[c * m + c], d = pr * pr + pi * pi || 1e-300;
+        const qr = pr / d, qi = -pi / d;
+        for (let j = 0; j < m; j++) { const a = R[c * m + j], b = I[c * m + j]; R[c * m + j] = a * qr - b * qi; I[c * m + j] = a * qi + b * qr; }
+        for (let r = 0; r < n; r++) {
+          if (r === c) continue;
+          const fr = R[r * m + c], fi = I[r * m + c];
+          if (fr === 0 && fi === 0) continue;
+          for (let j = 0; j < m; j++) { const a = R[c * m + j], b = I[c * m + j]; R[r * m + j] -= fr * a - fi * b; I[r * m + j] -= fr * b + fi * a; }
+        }
+      }
+      const B = CM.zeros(n);
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { B.re[i * n + j] = R[i * m + n + j]; B.im[i * n + j] = I[i * m + n + j]; }
+      return B;
+    },
+  };
+  /* 실대칭 행렬 고윳값 분해 (순환 야코비). A: Float64Array n×n → {val, vec(열=고유벡터)} */
+  function jacobiEig(Ain, n) {
+    const A = Float64Array.from(Ain), V = new Float64Array(n * n);
+    for (let i = 0; i < n; i++) V[i * n + i] = 1;
+    for (let sweep = 0; sweep < 60; sweep++) {
+      let off = 0, tot = 0;
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const a = A[i * n + j] * A[i * n + j]; if (i !== j) off += a; tot += a; }
+      if (off <= 1e-26 * tot) break;
+      for (let p = 0; p < n - 1; p++) for (let q = p + 1; q < n; q++) {
+        const apq = A[p * n + q];
+        if (Math.abs(apq) < 1e-300) continue;
+        const app = A[p * n + p], aqq = A[q * n + q];
+        const th = (aqq - app) / (2 * apq);
+        const t = Math.sign(th || 1) / (Math.abs(th) + Math.sqrt(th * th + 1));
+        const c = 1 / Math.sqrt(t * t + 1), s = t * c;
+        for (let k = 0; k < n; k++) { // 열 회전
+          const akp = A[k * n + p], akq = A[k * n + q];
+          A[k * n + p] = c * akp - s * akq; A[k * n + q] = s * akp + c * akq;
+        }
+        for (let k = 0; k < n; k++) { // 행 회전
+          const apk = A[p * n + k], aqk = A[q * n + k];
+          A[p * n + k] = c * apk - s * aqk; A[q * n + k] = s * apk + c * aqk;
+        }
+        for (let k = 0; k < n; k++) { const vkp = V[k * n + p], vkq = V[k * n + q]; V[k * n + p] = c * vkp - s * vkq; V[k * n + q] = s * vkp + c * vkq; }
+      }
+    }
+    const val = new Float64Array(n);
+    for (let i = 0; i < n; i++) val[i] = A[i * n + i];
+    return { val, vec: V };
+  }
+  /* 촐레스키 A = L Lᵀ (A 대칭 양정치) */
+  function cholesky(A, n) {
+    const L = new Float64Array(n * n);
+    for (let i = 0; i < n; i++) for (let j = 0; j <= i; j++) {
+      let s = A[i * n + j];
+      for (let k = 0; k < j; k++) s -= L[i * n + k] * L[j * n + k];
+      L[i * n + j] = i === j ? Math.sqrt(Math.max(s, 1e-300)) : s / L[j * n + j];
+    }
+    return L;
+  }
+  function invLower(L, n) { // 하삼각 역행렬
+    const X = new Float64Array(n * n);
+    for (let j = 0; j < n; j++) {
+      X[j * n + j] = 1 / L[j * n + j];
+      for (let i = j + 1; i < n; i++) { let s = 0; for (let k = j; k < i; k++) s -= L[i * n + k] * X[k * n + j]; X[i * n + j] = s / L[i * n + i]; }
+    }
+    return X;
+  }
+  const rmul = (A, B, n) => { const C = new Float64Array(n * n); for (let i = 0; i < n; i++) for (let k = 0; k < n; k++) { const a = A[i * n + k]; if (!a) continue; for (let j = 0; j < n; j++) C[i * n + j] += a * B[k * n + j]; } return C; };
+  const rT = (A, n) => { const B = new Float64Array(n * n); for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) B[j * n + i] = A[i * n + j]; return B; };
+  function rinv(A, n) { const C = CM.inv(CM.real(A, n)); return C.re; }
+  /* 고윳값 μ → 전파 상수 λ = sqrt(μ), 순방향 가지 (μ<0: −i√(−μ)) */
+  const lamOf = (mu) => (mu >= 0 ? [Math.sqrt(mu), 0] : [0, -Math.sqrt(-mu)]);
+
+  /* 격자 한 층의 유전율 푸리에 계수: 폭 f·Λ의 리지(ε_r)가 x=0 중심, 나머지 ε_g. 대칭이라 실수 계수 */
+  function epsCoeffs(epsR, epsG, f, P) { // p = −P..P
+    const c = new Float64Array(2 * P + 1);
+    for (let p = -P; p <= P; p++) c[p + P] = p === 0 ? epsG + (epsR - epsG) * f : (epsR - epsG) * Math.sin(Math.PI * p * f) / (Math.PI * p);
+    return c;
+  }
+  function toeplitz(c, N) { const P = (c.length - 1) / 2, T = new Float64Array(N * N); for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) T[i * N + j] = c[i - j + P]; return T; }
+
+  /**
+   * 1D 이진 격자 RCWA (S 행렬, Rumpf 방식).
+   * cfg: {lam(nm), period(nm), theta(rad), pol:'TE'|'TM', M(차수 ±M), rule:'li'|'laurent',
+   *       nInc, nSub, layers:[{d(nm), nRidge, nGroove, fill}] (위→아래)}
+   * 반환: {R[], T[], orders[], Rtot, Ttot, kx[] ...}
+   */
+  function rcwa(cfg) {
+    const M = cfg.M, N = 2 * M + 1, k0 = (2 * Math.PI) / cfg.lam, TM = cfg.pol === "TM";
+    const e1 = cfg.nInc * cfg.nInc, e3 = cfg.nSub * cfg.nSub;
+    const kx0 = cfg.nInc * Math.sin(cfg.theta || 0);
+    const Kx = new Float64Array(N);
+    for (let i = 0; i < N; i++) { const m = i - M; Kx[i] = kx0 - (m * cfg.lam) / cfg.period; }
+    // 균질 영역: W = I, λ_m = sqrt(Kx² − ε), V = λ (TE) 또는 λ/ε (TM)
+    const homo = (eps) => {
+      const lr = new Float64Array(N), li = new Float64Array(N), vr = new Float64Array(N), vi = new Float64Array(N);
+      for (let i = 0; i < N; i++) { const [a, b] = lamOf(Kx[i] * Kx[i] - eps); lr[i] = a; li[i] = b; vr[i] = TM ? a / eps : a; vi[i] = TM ? b / eps : b; }
+      return { W: CM.eye(N), V: CM.diag(vr, vi), lr, li };
+    };
+    const eg = 1 + kx0 * kx0 + 0.2371; // 간격(gap) 매질: 특이점 회피용 임의 값
+    const G = homo(eg);
+    const Vg = G.V, Vgi = CM.inv(Vg);
+    // 층 모드
+    function layerModes(L) {
+      const nr = L.nRidge, ng = L.nGroove;
+      if (L.fill <= 0 || L.fill >= 1 || Math.abs(nr - ng) < 1e-12) { const n = L.fill >= 1 ? nr : ng; return homo(n * n); }
+      const P = 2 * M;
+      const E = toeplitz(epsCoeffs(nr * nr, ng * ng, L.fill, P), N);
+      let W, lr = new Float64Array(N), li = new Float64Array(N), V;
+      if (!TM) {
+        const A = new Float64Array(N * N);
+        for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) A[i * N + j] = (i === j ? Kx[i] * Kx[i] : 0) - E[i * N + j];
+        const ev = jacobiEig(A, N);
+        W = CM.real(ev.vec, N);
+        for (let i = 0; i < N; i++) { const [a, b] = lamOf(ev.val[i]); lr[i] = a; li[i] = b; }
+        V = CM.mulDiag(W, lr, li);
+      } else {
+        // Ω² = Ainv·B, B = Kx E⁻¹ Kx − I. Li: Ainv = ⟦1/ε⟧⁻¹, Laurent: Ainv = E. → B h = μ A h (A = ⟦1/ε⟧ 또는 E⁻¹, 대칭 양정치)
+        const Ei = rinv(E, N);
+        const B = new Float64Array(N * N);
+        for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) B[i * N + j] = Kx[i] * Ei[i * N + j] * Kx[j] - (i === j ? 1 : 0);
+        const A = cfg.rule === "laurent" ? Ei : toeplitz(epsCoeffs(1 / (nr * nr), 1 / (ng * ng), L.fill, P), N);
+        const Lc = cholesky(A, N), Li = invLower(Lc, N);
+        const S = rmul(rmul(Li, B, N), rT(Li, N), N);
+        for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) { const m = 0.5 * (S[i * N + j] + S[j * N + i]); S[i * N + j] = S[j * N + i] = m; }
+        const ev = jacobiEig(S, N);
+        const Wr = rmul(rT(Li, N), ev.vec, N); // h = L⁻ᵀ y
+        W = CM.real(Wr, N);
+        for (let i = 0; i < N; i++) { const [a, b] = lamOf(ev.val[i]); lr[i] = a; li[i] = b; }
+        V = CM.mulDiag(CM.real(rmul(A, Wr, N), N), lr, li); // Ex = A W λ
+      }
+      return { W, V, lr, li };
+    }
+    // 반사 영역 S (간격 매질 기준)
+    const I = CM.eye(N);
+    function regionS(R, isRef) {
+      const A = CM.add(R.W, CM.mul(Vgi, R.V)), B = CM.sub(R.W, CM.mul(Vgi, R.V)); // Wg = I
+      const Ai = CM.inv(A), BAi = CM.mul(B, Ai);
+      const half = CM.scale(CM.sub(A, CM.mul(BAi, B)), 0.5);
+      if (isRef) return { S11: CM.scale(CM.mul(Ai, B), -1), S12: CM.scale(Ai, 2), S21: half, S22: BAi };
+      return { S11: BAi, S12: half, S21: CM.scale(Ai, 2), S22: CM.scale(CM.mul(Ai, B), -1) };
+    }
+    function layerS(md, d) {
+      const Wi = CM.inv(md.W), Vi = CM.inv(md.V);
+      const A = CM.add(Wi, CM.mul(Vi, Vg)), B = CM.sub(Wi, CM.mul(Vi, Vg));
+      const xr = new Float64Array(N), xi = new Float64Array(N), kd = k0 * d;
+      for (let i = 0; i < N; i++) { const a = Math.exp(-md.lr[i] * kd); xr[i] = a * Math.cos(-md.li[i] * kd); xi[i] = a * Math.sin(-md.li[i] * kd); }
+      const Ai = CM.inv(A);
+      const XB = CM.diagMul(xr, xi, B), XA = CM.diagMul(xr, xi, A);
+      const XBAi = CM.mul(XB, Ai);
+      const D = CM.inv(CM.sub(A, CM.mul(XBAi, XB)));
+      const S11 = CM.mul(D, CM.sub(CM.mul(XBAi, XA), B));
+      const S12 = CM.mul(D, CM.diagMul(xr, xi, CM.sub(A, CM.mul(CM.mul(B, Ai), B))));
+      return { S11, S12, S21: S12, S22: S11 };
+    }
+    function star(SA, SB) {
+      const D = CM.mul(SA.S12, CM.inv(CM.sub(I, CM.mul(SB.S11, SA.S22))));
+      const F = CM.mul(SB.S21, CM.inv(CM.sub(I, CM.mul(SA.S22, SB.S11))));
+      return {
+        S11: CM.add(SA.S11, CM.mul(CM.mul(D, SB.S11), SA.S21)),
+        S12: CM.mul(D, SB.S12),
+        S21: CM.mul(F, SA.S21),
+        S22: CM.add(SB.S22, CM.mul(CM.mul(F, SA.S22), SB.S12)),
+      };
+    }
+    const Rg = homo(e1), Tg = homo(e3);
+    let S = regionS(Rg, true);
+    for (const L of cfg.layers) if (L.d > 0) S = star(S, layerS(layerModes(L), L.d));
+    S = star(S, regionS(Tg, false));
+    // 입사: 0차 단위 진폭 (TE: Ey, TM: Hy)
+    const R = [], T = [], orders = [];
+    const kzInc = TM ? -Rg.li[M] / e1 : -Rg.li[M];
+    let Rtot = 0, Ttot = 0;
+    for (let i = 0; i < N; i++) {
+      const r2 = S.S11.re[i * N + M] ** 2 + S.S11.im[i * N + M] ** 2;
+      const t2 = S.S21.re[i * N + M] ** 2 + S.S21.im[i * N + M] ** 2;
+      const kr = TM ? -Rg.li[i] / e1 : -Rg.li[i], kt = TM ? -Tg.li[i] / e3 : -Tg.li[i];
+      R.push((r2 * kr) / kzInc); T.push((t2 * kt) / kzInc); orders.push(i - M);
+      Rtot += R[i]; Ttot += T[i];
+    }
+    return { R, T, orders, Rtot, Ttot, Kx, M };
+  }
+
+  /* =================================================== Sim 1: grating orders */
+  (function () {
+    let cv;
+    const gP = SB.range("or-p", (v) => v.toFixed(2) + " µm", () => cv && cv.redraw());
+    const gL = SB.range("or-l", (v) => v + " nm", () => cv && cv.redraw());
+    const gT = SB.range("or-t", (v) => v + "°", () => cv && cv.redraw());
+    const gS = SB.seg("or-sub", () => cv && cv.redraw());
+    const orders = (nOut, s0, lamUm, P) => { const out = []; for (let m = -40; m <= 40; m++) { const s = (s0 - (m * lamUm) / P) / nOut; if (Math.abs(s) < 1) out.push({ m, s }); } return out; };
+    function draw(ctx, w, h) {
+      const P = SB.palette();
+      const Pm = gP(), lam = gL() / 1000, th = gT() * D2R, nS = Number(gS());
+      const s0 = Math.sin(th);
+      const refl = orders(1, s0, lam, Pm), tran = orders(nS, s0, lam, Pm);
+      const wide = w >= 560;
+      const top = { x: 8, y: 8, w: wide ? w * 0.56 : w - 16, h: wide ? h - 16 : h * 0.58 };
+      const cx = top.x + top.w / 2, cy = top.y + top.h / 2, Lr = Math.min(top.w / 2, top.h / 2) - 14;
+      ctx.fillStyle = P.surface; ctx.globalAlpha = 0.5; ctx.fillRect(top.x, cy, top.w, top.h / 2); ctx.globalAlpha = 1;
+      ctx.strokeStyle = P.border; ctx.strokeRect(top.x, top.y, top.w, top.h);
+      // grating teeth at interface
+      ctx.fillStyle = P.faint;
+      const tooth = Math.max(4, Math.min(30, (Pm / 3) * 40));
+      for (let x = cx - Math.floor(top.w / 2 / tooth) * tooth; x < top.x + top.w; x += tooth) if (x > top.x) ctx.fillRect(x, cy - 3, tooth / 2, 6);
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(top.x, cy); ctx.lineTo(top.x + top.w, cy); ctx.stroke();
+      ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(cx, top.y); ctx.lineTo(cx, top.y + top.h); ctx.stroke(); ctx.setLineDash([]);
+      const arrow = (x0, y0, x1, y1, col, wd) => {
+        ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = wd; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+        const a = Math.atan2(y1 - y0, x1 - x0); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - 9 * Math.cos(a - 0.4), y1 - 9 * Math.sin(a - 0.4)); ctx.lineTo(x1 - 9 * Math.cos(a + 0.4), y1 - 9 * Math.sin(a + 0.4)); ctx.fill();
+      };
+      arrow(cx - Lr * Math.sin(th), cy - Lr * Math.cos(th), cx - 3 * Math.sin(th), cy - 3 * Math.cos(th), P.warn, 3);
+      ctx.font = font(11, true); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      refl.forEach((o) => { const c = Math.sqrt(1 - o.s * o.s); const L = o.m === 0 ? Lr : Lr * 0.86; arrow(cx, cy, cx + L * o.s, cy - L * c, o.m === 0 ? P.accent : P.accent2, o.m === 0 ? 2.6 : 1.8); if (Math.abs(o.m) <= 6) { ctx.fillStyle = P.text; ctx.fillText(String(o.m), cx + (L + 10) * o.s, cy - (L + 10) * c); } });
+      tran.forEach((o) => { const c = Math.sqrt(1 - o.s * o.s); const L = o.m === 0 ? Lr : Lr * 0.86; arrow(cx, cy, cx + L * o.s, cy + L * c, o.m === 0 ? P.accent : P.accent2, o.m === 0 ? 2.6 : 1.6); if (tran.length <= 13) { ctx.fillStyle = P.text; ctx.fillText(String(o.m), cx + (L + 10) * o.s, cy + (L + 10) * c); } });
+      ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.font = font(11.5);
+      ctx.fillText("공기 n = 1 (반사)", top.x + 6, top.y + 6);
+      ctx.textBaseline = "bottom"; ctx.fillText("아래 매질 n = " + nS + " (투과)", top.x + 6, top.y + top.h - 6);
+      // chart: number of transmitted propagating orders vs pitch
+      const cb = wide ? { x: top.x + top.w + 48, y: 20, w: w - (top.x + top.w + 48) - 12, h: h - 72 } : { x: 48, y: top.y + top.h + 14, w: w - 62, h: h - top.h - 62 };
+      const dR = [], dT = [];
+      let maxN = 1;
+      for (let i = 0; i <= 280; i++) { const p = 0.2 + (2.8 * i) / 280; const nr = orders(1, s0, lam, p).length, nt = orders(nS, s0, lam, p).length; dR.push([p, nr]); dT.push([p, nt]); maxN = Math.max(maxN, nt); }
+      SB.chart(ctx, cb, { x: [0.2, 3], y: [0, Math.ceil(maxN / 5) * 5 + 1], xLabel: "주기 Λ (µm) · 세로: 진행 차수 수", series: [{ data: dT, color: P.accent2, width: 2 }, { data: dR, color: P.accent, width: 2 }], vlines: [{ x: Pm, color: P.warn }] });
+      ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillStyle = P.accent2; ctx.fillText("투과", cb.x + 6, cb.y + 2); ctx.fillStyle = P.accent; ctx.fillText("반사", cb.x + 44, cb.y + 2);
+      SB.stat("o-or-r", refl.length + "<small> 개</small>");
+      SB.stat("o-or-t", tran.length + "<small> 개</small>");
+      const p1 = tran.find((o) => o.m === 1) || tran.find((o) => o.m === -1);
+      SB.stat("o-or-a", p1 ? (Math.asin(p1.s) / D2R).toFixed(1) + "°<small> (m=" + p1.m + ")</small>" : "소멸");
+      SB.stat("o-or-s", ((lam / (nS + s0)) * 1000).toFixed(0) + "<small> nm (투과)</small>");
+    }
+    cv = SB.canvas($("cv-orders"), draw, { aspect: 0.52, minHeight: 440, maxHeight: 440 });
+  })();
+
+  /* =================================================== Sim 3: RCWA spectrum */
+  (function () {
+    let cv;
+    const gPol = SB.seg("rc-pol", () => start());
+    const gMat = SB.seg("rc-mat", () => start());
+    const gP = SB.range("rc-p", (v) => v + " nm", () => start());
+    const gD = SB.range("rc-d", (v) => v + " nm", () => start());
+    const gF = SB.range("rc-f", (v) => v.toFixed(2), () => start());
+    const gT = SB.range("rc-t", (v) => v + "°", () => start());
+    const gM = SB.range("rc-m", (v) => "±" + v + " (N=" + (2 * v + 1) + ")", () => start());
+    const gL = SB.range("rc-l", (v) => v + " nm", () => { readout(); cv && cv.redraw(); });
+    const LAMS = []; for (let l = 400; l <= 1000; l += 5) LAMS.push(l);
+    let res = [], emt = [], job = 0, cfgKey = "";
+    const cfgAt = (lam) => {
+      const nR = Number(gMat());
+      return { lam, period: gP(), theta: gT() * D2R, pol: gPol(), M: gM(), rule: "li", nInc: 1, nSub: OPT.n("SiO2", lam).re, layers: [{ d: gD(), nRidge: nR, nGroove: 1, fill: gF() }] };
+    };
+    function start() {
+      const my = ++job;
+      res = new Array(LAMS.length).fill(null); emt = [];
+      const f = gF(), nR = Number(gMat()), eR = nR * nR, TM = gPol() === "TM";
+      const eEff = TM ? 1 / (f / eR + (1 - f) / 1) : f * eR + (1 - f);
+      LAMS.forEach((l) => { const t = OPT.tmm([{ m: 1 }, { m: Math.sqrt(eEff), d: gD() }, { m: "SiO2" }], l, { theta: gT() * D2R, pol: TM ? "p" : "s" }); emt.push([l, t.T]); });
+      let i = 0;
+      const step = () => {
+        if (my !== job) return;
+        const t0 = performance.now();
+        while (i < LAMS.length && performance.now() - t0 < 14) { res[i] = rcwa(cfgAt(LAMS[i])); i++; }
+        cv && cv.redraw();
+        if (i < LAMS.length) requestAnimationFrame(step); else readout();
+      };
+      requestAnimationFrame(step);
+      readout();
+    }
+    function readout() {
+      const l = gL(), r = rcwa(cfgAt(l)), M = r.M;
+      const Rd = r.Rtot - r.R[M], Td = r.Ttot - r.T[M];
+      SB.stat("o-rc-0", r.R[M].toFixed(3) + " / " + r.T[M].toFixed(3));
+      SB.stat("o-rc-d", Rd.toFixed(3) + " / " + Td.toFixed(3));
+      SB.stat("o-rc-e", (r.Rtot + r.Ttot).toFixed(6));
+      const f = gF();
+      if (f <= 0 || f >= 1) {
+        const n = f >= 1 ? Number(gMat()) : 1;
+        const t = OPT.tmm([{ m: 1 }, { m: n, d: gD() }, { m: "SiO2" }], l, { theta: gT() * D2R, pol: gPol() === "TM" ? "p" : "s" });
+        SB.stat("o-rc-v", "|ΔR| = " + sup(Math.abs(t.R - r.Rtot) + 1e-17));
+      } else SB.stat("o-rc-v", "<small>f = 0 또는 1에서 표시</small>");
+    }
+    function draw(ctx, w, h) {
+      const P = SB.palette();
+      const s0 = Math.sin(gT() * D2R), Pn = gP(), nSub = OPT.n("SiO2", 600).re;
+      const vl = [];
+      [Pn * (nSub + s0), Pn * (nSub - s0), Pn * (1 + s0), Pn * (1 - s0)].forEach((x, k) => { if (x > 400 && x < 1000 && (k % 2 === 0 || s0 > 0.005)) vl.push({ x, color: k < 2 ? P.accent2 : P.bad, dash: [3, 4], label: k === 0 ? "기판 1차 차단" : k === 2 ? "공기 1차" : "" }); });
+      vl.push({ x: gL(), color: P.faint, dash: [] });
+      const T0 = [], Td = [], R0 = [], Rd = [];
+      res.forEach((r, i) => { if (!r) return; const M = r.M; T0.push([LAMS[i], r.T[M]]); R0.push([LAMS[i], r.R[M]]); Td.push([LAMS[i], r.Ttot - r.T[M]]); Rd.push([LAMS[i], r.Rtot - r.R[M]]); });
+      SB.chart(ctx, null, {
+        x: [400, 1000], y: [0, 1], xLabel: "파장 λ (nm)", yLabel: "효율",
+        series: [{ data: emt, color: P.dim, width: 1.4, dash: [5, 4] }, { data: T0, color: P.accent, width: 2.2 }, { data: Td, color: P.accent2, width: 2 }, { data: R0, color: P.warn, width: 2 }, { data: Rd, color: P.bad, width: 1.6 }],
+        vlines: vl,
+      });
+    }
+    cv = SB.canvas($("cv-rcwa"), draw, { aspect: 0.6, minHeight: 300, maxHeight: 420 });
+    start();
+  })();
+
+  /* =================================================== Sim 2: Gibbs */
+  (function () {
+    let cv;
+    const gM = SB.range("gb-m", (v) => "±" + v, () => cv && cv.redraw());
+    const gF = SB.range("gb-f", (v) => v.toFixed(2), () => cv && cv.redraw());
+    const gC = SB.seg("gb-c", () => cv && cv.redraw());
+    function draw(ctx, w, h) {
+      const P = SB.palette();
+      const M = gM(), f = gF(), eR = Number(gC()), eG = 1;
+      const NX = 700, x0 = -0.75, x1 = 0.75;
+      const exact = [], ser = [], inv = [];
+      const c1 = epsCoeffs(eR, eG, f, M), c2 = epsCoeffs(1 / eR, 1 / eG, f, M);
+      let mx = -1e9, mn = 1e9, l2 = 0, l2n = 0;
+      for (let k = 0; k <= NX; k++) {
+        const x = x0 + ((x1 - x0) * k) / NX;
+        let s1 = c1[M], s2 = c2[M];
+        for (let p = 1; p <= M; p++) { const c = Math.cos(TAU * p * x); s1 += 2 * c1[M + p] * c; s2 += 2 * c2[M + p] * c; }
+        const xm = ((x % 1) + 1.5) % 1 - 0.5;
+        const e = Math.abs(xm) < f / 2 ? eR : eG;
+        exact.push([x, e]); ser.push([x, s1]); inv.push([x, s2 > 0.02 ? 1 / s2 : 50]);
+        mx = Math.max(mx, s1); mn = Math.min(mn, s1); l2 += (s1 - e) ** 2; l2n += e * e;
+      }
+      SB.chart(ctx, null, {
+        x: [x0, x1], y: [Math.min(0, Math.floor(mn)), eR * 1.2 + 0.2], xLabel: "x / Λ", yLabel: "ε(x)",
+        series: [{ data: exact, color: P.dim, width: 1.6 }, { data: inv, color: P.warn, width: 1.8 }, { data: ser, color: P.accent, width: 2 }],
+        hlines: [{ y: eR, color: P.faint }, { y: 1, color: P.faint }],
+      });
+      SB.stat("o-gb-o", (((mx - eR) / (eR - eG)) * 100).toFixed(1) + "<small> % (점프 대비)</small>");
+      SB.stat("o-gb-min", mn.toFixed(2));
+      SB.stat("o-gb-l2", (Math.sqrt(l2 / l2n) * 100).toFixed(1) + "<small> %</small>");
+    }
+    cv = SB.canvas($("cv-gibbs"), draw, { aspect: 0.5, minHeight: 280, maxHeight: 360 });
+  })();
+
+  /* =================================================== Sim 4: convergence */
+  (function () {
+    let cv;
+    const gMat = SB.seg("cg-mat", () => start());
+    const gQ = SB.seg("cg-q", () => cv && cv.redraw());
+    const gF = SB.range("cg-f", (v) => v.toFixed(2), () => start());
+    const gR = SB.range("cg-r", (v) => v.toFixed(2), () => start());
+    $("cg-run").addEventListener("click", () => start());
+    const MMAX = 30;
+    let data = null, job = 0;
+    function start() {
+      const my = ++job;
+      data = { te: [], la: [], li: [] };
+      const tasks = [];
+      for (let M = 1; M <= MMAX; M++) tasks.push(["te", M], ["la", M], ["li", M]);
+      const base = { lam: 1000 * gR(), period: 1000, theta: 0, nInc: 1, nSub: 1.46, layers: [{ d: 625, nRidge: Number(gMat()), nGroove: 1, fill: gF() }] };
+      let i = 0;
+      const step = () => {
+        if (my !== job) return;
+        const t0 = performance.now();
+        while (i < tasks.length && performance.now() - t0 < 14) {
+          const [k, M] = tasks[i];
+          const r = rcwa(Object.assign({}, base, { M, pol: k === "te" ? "TE" : "TM", rule: k === "la" ? "laurent" : "li" }));
+          data[k][M] = { T: r.T[M], R: r.R[M] };
+          i++;
+        }
+        SB.stat("o-cg-p", Math.round((100 * i) / tasks.length) + "<small> %</small>");
+        cv && cv.redraw();
+        if (i < tasks.length) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
+    function draw(ctx, w, h) {
+      const P = SB.palette();
+      if (!data) return;
+      const q = gQ();
+      const ser = (k) => { const out = []; for (let M = 1; M <= MMAX; M++) if (data[k][M]) out.push([M, data[k][M][q]]); return out; };
+      const te = ser("te"), la = ser("la"), li = ser("li");
+      const all = te.concat(la, li).map((d) => d[1]);
+      let lo = Math.min(...all, 1), hi = Math.max(...all, 0);
+      if (!isFinite(lo)) { lo = 0; hi = 1; }
+      const pad = Math.max(0.02, (hi - lo) * 0.1);
+      const top = { x: 58, y: 12, w: w - 76, h: h * 0.5 - 40 };
+      const bot = { x: 58, y: h * 0.5 + 6, w: w - 76, h: h * 0.5 - 52 };
+      SB.chart(ctx, top, { x: [1, MMAX], y: [Math.max(0, lo - pad), Math.min(1, hi + pad)], xLabel: "", yLabel: q === "T" ? "T₀" : "R₀", series: [{ data: te, color: P.accent, width: 2 }, { data: la, color: P.warn, width: 2 }, { data: li, color: P.accent2, width: 2 }] });
+      const refTE = data.te[MMAX], refTM = data.li[MMAX];
+      const err = (s, ref) => (ref ? s.filter((d) => d[0] < MMAX).map((d) => [d[0], Math.max(1e-7, Math.abs(d[1] - ref[q]))]) : []);
+      SB.chart(ctx, bot, { x: [1, MMAX], y: [1e-7, 1], logY: true, xLabel: "고조파 차수 ±M", yLabel: "|오차|", series: [{ data: err(te, refTE), color: P.accent, width: 2 }, { data: err(la, refTM), color: P.warn, width: 2 }, { data: err(li, refTM), color: P.accent2, width: 2 }] });
+      const e8 = (k, ref) => (data[k][8] && ref ? sup(Math.max(1e-9, Math.abs(data[k][8][q] - ref[q]))) : "…");
+      SB.stat("o-cg-te", e8("te", refTE)); SB.stat("o-cg-la", e8("la", refTM)); SB.stat("o-cg-li", e8("li", refTM));
+    }
+    cv = SB.canvas($("cv-conv"), draw, { aspect: 0.75, minHeight: 420, maxHeight: 520 });
+    start();
+  })();
+
+  /* =================================================== Sim 5: 1D FDTD */
+  (function () {
+    let cv;
+    const NC = 800;
+    let E, H, n = 0, blown = false;
+    const gS = SB.range("f1-s", (v) => v.toFixed(2), () => reset());
+    const gN = SB.range("f1-n", (v) => v + "", () => reset());
+    const gV = SB.range("f1-v", (v) => v + "", null);
+    $("f1-reset").addEventListener("click", () => reset());
+    const sig = () => 1.6 * gN() + 6;
+    const x0 = NC / 2;
+    const pulse = (x) => { const s = sig(); return Math.exp(-((x - x0) ** 2) / (2 * s * s)) * Math.cos((TAU * (x - x0)) / gN()); };
+    function reset() {
+      E = new Float64Array(NC); H = new Float64Array(NC); n = 0; blown = false;
+      for (let i = 0; i < NC; i++) E[i] = pulse(i);
+      cv && cv.redraw();
+    }
+    let e0o = 0, e1o = 0, eNo = 0, eN1o = 0;
+    function stepOnce() {
+      const S = gS();
+      for (let i = 0; i < NC - 1; i++) H[i] += S * (E[i + 1] - E[i]);
+      e0o = E[0]; e1o = E[1]; eNo = E[NC - 1]; eN1o = E[NC - 2];
+      for (let i = 1; i < NC - 1; i++) E[i] += S * (H[i] - H[i - 1]);
+      const k = (S - 1) / (S + 1);
+      E[0] = e1o + k * (E[1] - e0o);
+      E[NC - 1] = eN1o + k * (E[NC - 2] - eNo);
+      n++;
+    }
+    reset();
+    function draw(ctx, w, h) {
+      const P = SB.palette();
+      const S = gS(), N = gN(), ct = S * n, s = sig();
+      const ex = [], num = [], env = [], envN = [];
+      const stride = Math.max(1, Math.floor(NC / Math.max(200, w)));
+      for (let i = 0; i < NC; i += stride) {
+        const a = Math.exp(-((i - x0 - ct) ** 2) / (2 * s * s)), b = Math.exp(-((i - x0 + ct) ** 2) / (2 * s * s));
+        ex.push([i, 0.5 * (a * Math.cos((TAU * (i - x0 - ct)) / N) + b * Math.cos((TAU * (i - x0 + ct)) / N))]);
+        env.push([i, 0.5 * Math.max(a, b)]); envN.push([i, -0.5 * Math.max(a, b)]);
+      }
+      for (let i = 0; i < NC; i++) num.push([i, Math.max(-2, Math.min(2, E[i]))]);
+      SB.chart(ctx, null, {
+        x: [0, NC], y: [-1.05, 1.05], xLabel: "격자점 i  (Δx = λ/" + N + ")", yLabel: "E",
+        series: [{ data: env, color: P.faint, width: 1.2, dash: [4, 4] }, { data: envN, color: P.faint, width: 1.2, dash: [4, 4] }, { data: ex, color: P.dim, width: 1, dash: [2, 3] }, { data: num, color: blown ? P.bad : P.accent, width: 1.6 }],
+      });
+      const arg = Math.sin((PI * S) / N) / S;
+      const vp = arg <= 1 ? (TAU / N) / (2 * Math.asin(arg)) : NaN;
+      SB.stat("o-f1-vp", isFinite(vp) ? vp.toFixed(4) : "<small>감쇠(격자 차단)</small>");
+      SB.stat("o-f1-t", n + "<small> 스텝 · ct = " + ct.toFixed(0) + " Δx</small>");
+      SB.stat("o-f1-st", blown ? '<span style="color:var(--bad)">발산 (CFL 위반)</span>' : S > 1 ? '<span style="color:var(--warn)">불안정 (S &gt; 1)</span>' : Math.abs(S - 1) < 0.005 ? "마법의 시간 간격" : "안정");
+    }
+    cv = SB.canvas($("cv-f1"), draw, { aspect: 0.45, minHeight: 260, maxHeight: 340 });
+    SB.loop($("cv-f1"), () => {
+      if (!blown) {
+        const k = gV();
+        for (let j = 0; j < k; j++) stepOnce();
+        let mx = 0; for (let i = 0; i < NC; i += 3) mx = Math.max(mx, Math.abs(E[i]));
+        if (!(mx < 5)) blown = true;
+        if (gS() * n > NC / 2 + 4 * sig()) reset();
+      }
+      cv.redraw();
+    });
+  })();
+
+  /* =================================================== Sim 6: 2D FDTD pixel */
+  (function () {
+    let cv;
+    const DX = 16;                // nm
+    const PML = 12, PITCH = 50;   // 셀 (0.8 µm)
+    const NIX = 3 * PITCH, NX = NIX + 2 * PML;
+    const L_AIR = 24, L_ML = 31, L_PL = 6, L_CF = 31, L_OX = 6, L_SI = 125;
+    const J_ML0 = PML + L_AIR, J_PL = J_ML0 + L_ML, J_CF = J_PL + L_PL, J_OX = J_CF + L_CF, J_SI = J_OX + L_OX, J_END = J_SI + L_SI;
+    const NY = J_END + PML, NIY = NY - 2 * PML;
+    const JS = PML + 6;           // 광원 행
+    const S = 0.5;                // 쿠랑 수
+    const NN = NX * NY;
+    const Ezx = new Float32Array(NN), Ezy = new Float32Array(NN), Hx = new Float32Array(NN), Hy = new Float32Array(NN);
+    const caX = new Float32Array(NN), cbX = new Float32Array(NN), caY = new Float32Array(NN), cbY = new Float32Array(NN);
+    const daX = new Float32Array(NX), dbX = new Float32Array(NX), daY = new Float32Array(NY), dbY = new Float32Array(NY);
+    const sMat = new Float32Array(NN), mat = new Uint8Array(NN), Iavg = new Float32Array(NN);
+    const pixA = new Float64Array(3);
+    let step = 0, running = true, scale = 0.05, omega = 0, lamCells = 0, nSi = 4, srcA = null, kxS = 0, emaA = 0;
+    const gL = SB.seg("f2-l", () => build());
+    const gA = SB.range("f2-a", (v) => v + "°", () => build());
+    const gV = SB.seg("f2-v", () => cv && cv.redraw());
+    const gSrc = SB.seg("f2-src", () => build());
+    ["f2-ml", "f2-dti", "f2-cf"].forEach((id) => $(id).addEventListener("change", () => build()));
+    $("f2-run").addEventListener("click", () => { running = !running; $("f2-run").textContent = running ? "일시정지" : "실행"; });
+    $("f2-reset").addEventListener("click", () => build());
+    const pmlS = (d) => 2.0 * Math.pow(Math.max(0, d) / PML, 3);
+    // 재료 번호: 0 공기, 1 ML 수지, 2 CF_G, 3 CF_R, 4 저굴절 그리드, 5 SiO2, 6 Si
+    const MATS = ["air", "polymer", "CF_G", "CF_R", "lowN", "SiO2", "Si"];
+    function build() {
+      const lam = Number(gL()), th = gA() * D2R;
+      const useML = $("f2-ml").checked, useDTI = $("f2-dti").checked, useCF = $("f2-cf").checked;
+      lamCells = lam / DX; omega = TAU / lamCells; kxS = omega * Math.sin(th);
+      const props = MATS.map((m) => {
+        let nk = OPT.n(m, lam);
+        if (!useCF && (m === "CF_G" || m === "CF_R")) nk = { re: nk.re, im: 0 };
+        return { eps: nk.re * nk.re - nk.im * nk.im, s: omega * 2 * nk.re * nk.im };
+      });
+      nSi = OPT.n("Si", lam).re;
+      const R = (31 * 31 + 25 * 25) / (2 * 31);
+      for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+        const xi = i - PML; // 내부 x (셀)
+        const px = Math.floor(xi / PITCH), xl = xi - px * PITCH + 0.5; // 픽셀 내부 좌표
+        const dB = Math.min(xl, PITCH - xl); // 픽셀 경계까지 거리
+        let m = 0;
+        if (j >= J_ML0 && j < J_PL) {
+          const dc = xl - PITCH / 2, hgt = Math.abs(dc) <= 25 ? Math.sqrt(Math.max(0, R * R - dc * dc)) - (R - 31) : 0;
+          m = useML && J_PL - j <= hgt ? 1 : 0;
+        } else if (j >= J_PL && j < J_CF) m = 1;
+        else if (j >= J_CF && j < J_OX) m = useDTI && dB < 2.5 ? 4 : (px === 1 ? 2 : 3);
+        else if (j >= J_OX && j < J_SI) m = 5;
+        else if (j >= J_SI) m = useDTI && dB < 3 && j < J_END - 10 ? 5 : 6;
+        const k = j * NX + i;
+        mat[k] = m;
+        const pr = props[m];
+        sMat[k] = m === 6 && i >= PML && i < NX - PML && j < J_END ? pr.s : 0;
+        const sx = i < PML ? pmlS(PML - i) : i >= NX - PML ? pmlS(i - (NX - PML - 1)) : 0;
+        const sy = j < PML ? pmlS(PML - j) : j >= NY - PML ? pmlS(j - (NY - PML - 1)) : 0;
+        const ex = pr.s + pr.eps * sx, ey = pr.s + pr.eps * sy;
+        const ax = (ex * S) / (2 * pr.eps), ay = (ey * S) / (2 * pr.eps);
+        caX[k] = (1 - ax) / (1 + ax); cbX[k] = S / pr.eps / (1 + ax);
+        caY[k] = (1 - ay) / (1 + ay); cbY[k] = S / pr.eps / (1 + ay);
+      }
+      for (let i = 0; i < NX; i++) { const s = i < PML ? pmlS(PML - i - 0.5) : i >= NX - PML - 1 ? pmlS(i + 0.5 - (NX - PML - 1)) : 0; const a = (s * S) / 2; daX[i] = (1 - a) / (1 + a); dbX[i] = S / (1 + a); }
+      for (let j = 0; j < NY; j++) { const s = j < PML ? pmlS(PML - j - 0.5) : j >= NY - PML - 1 ? pmlS(j + 0.5 - (NY - PML - 1)) : 0; const a = (s * S) / 2; daY[j] = (1 - a) / (1 + a); dbY[j] = S / (1 + a); }
+      // 광원: 가운데 픽셀의 렌즈를 비추는 기울어진 평탄 빔
+      const shift = (J_PL - 15 - JS) * Math.tan(th);
+      const xc = PML + 1.5 * PITCH - shift;
+      srcA = new Float32Array(NX);
+      for (let i = PML; i < NX - PML; i++) srcA[i] = Math.exp(-Math.pow((i - xc) / (0.55 * PITCH), 6));
+      Ezx.fill(0); Ezy.fill(0); Hx.fill(0); Hy.fill(0); Iavg.fill(0); pixA.fill(0);
+      step = 0; scale = 0.05; emaA = 0;
+      buildEdges();
+      cv && cv.redraw();
+    }
+    let edge = null;
+    function buildEdges() {
+      edge = new Uint8Array(NIX * NIY);
+      for (let j = 0; j < NIY; j++) for (let i = 0; i < NIX; i++) {
+        const k = (j + PML) * NX + i + PML, m = mat[k];
+        if ((i + 1 < NIX && mat[k + 1] !== m) || (j + 1 < NIY && mat[k + NX] !== m)) edge[j * NIX + i] = 1;
+      }
+    }
+    function advance() {
+      // H 갱신
+      for (let j = 0; j < NY - 1; j++) {
+        const da = daY[j], db = dbY[j], o = j * NX;
+        for (let i = 0; i < NX; i++) { const k = o + i; Hx[k] = da * Hx[k] - db * (Ezx[k + NX] + Ezy[k + NX] - Ezx[k] - Ezy[k]); }
+      }
+      for (let j = 0; j < NY; j++) {
+        const o = j * NX;
+        for (let i = 0; i < NX - 1; i++) { const k = o + i; Hy[k] = daX[i] * Hy[k] + dbX[i] * (Ezx[k + 1] + Ezy[k + 1] - Ezx[k] - Ezy[k]); }
+      }
+      // E 갱신
+      for (let j = 1; j < NY - 1; j++) {
+        const o = j * NX;
+        for (let i = 1; i < NX - 1; i++) {
+          const k = o + i;
+          Ezx[k] = caX[k] * Ezx[k] + cbX[k] * (Hy[k] - Hy[k - 1]);
+          Ezy[k] = caY[k] * Ezy[k] - cbY[k] * (Hx[k] - Hx[k - NX]);
+        }
+      }
+      // 소프트 광원
+      const t = step * S;
+      const T = lamCells; // 주기 (시간 단위 = Δx/c)
+      let env;
+      if (gSrc() === "pulse") { const tau = 1.6 * T, t0 = 3 * tau; env = Math.exp(-(((t - t0) / tau) ** 2)); }
+      else env = 1 - Math.exp(-((t / (2.5 * T)) ** 2));
+      if (env > 1e-6) {
+        const o = JS * NX;
+        for (let i = PML; i < NX - PML; i++) { const a = srcA[i]; if (a < 1e-4) continue; const v = 0.5 * S * a * env * Math.sin(omega * t - kxS * (i - PML)); Ezx[o + i] += v; Ezy[o + i] += v; }
+      }
+      step++;
+    }
+    function measure() {
+      const per = Math.max(20, lamCells / S);
+      const a = 1 / (1.5 * per);
+      let mx = 0;
+      for (let j = PML; j < NY - PML; j++) {
+        const o = j * NX;
+        const below = j >= J_ML0;
+        for (let i = PML; i < NX - PML; i++) { const k = o + i, e = Ezx[k] + Ezy[k], e2 = e * e; Iavg[k] += a * (e2 - Iavg[k]); if (below && e2 > mx) mx = e2; }
+      }
+      scale += 0.08 * (Math.sqrt(mx) - scale);
+      if (scale < 1e-4) scale = 1e-4;
+      // 픽셀별 흡수 (시간 평균)
+      const b = gSrc() === "pulse" ? 0 : 1 / (4 * per);
+      const acc = [0, 0, 0];
+      for (let j = J_SI; j < J_END; j++) {
+        const o = j * NX;
+        for (let i = PML; i < NX - PML; i++) { const s = sMat[o + i]; if (!s) continue; const e = Ezx[o + i] + Ezy[o + i]; acc[Math.min(2, Math.floor((i - PML) / PITCH))] += s * e * e; }
+      }
+      for (let p = 0; p < 3; p++) pixA[p] = b ? pixA[p] + b * (acc[p] - pixA[p]) : pixA[p] + acc[p];
+    }
+    // 색 LUT
+    const LUT_E = [], LUT_I = [];
+    for (let i = 0; i < 256; i++) { LUT_E.push(OPT.cmap("rdbu", i / 255)); LUT_I.push(OPT.cmap("inferno", i / 255)); }
+    const off = document.createElement("canvas"); off.width = NIX; off.height = NIY;
+    const octx = off.getContext("2d"), img = octx.createImageData(NIX, NIY);
+    function draw(ctx, w, h) {
+      const P = SB.palette();
+      const mode = gV();
+      let imax = 1e-12;
+      if (mode === "I") for (let j = J_ML0; j < NY - PML; j++) for (let i = PML; i < NX - PML; i++) { const v = Iavg[j * NX + i]; if (v > imax) imax = v; }
+      for (let j = 0; j < NIY; j++) for (let i = 0; i < NIX; i++) {
+        const k = (j + PML) * NX + i + PML, q = j * NIX + i;
+        let c;
+        if (mode === "E") { const v = (Ezx[k] + Ezy[k]) / (scale * 1.1); c = LUT_E[Math.max(0, Math.min(255, Math.round(127.5 - 127.5 * v)))]; }
+        else { const v = Math.sqrt(Iavg[k] / imax); c = LUT_I[Math.max(0, Math.min(255, Math.round(255 * v)))]; }
+        let r = c[0], g = c[1], bl = c[2];
+        if (edge[q]) { if (mode === "E") { r *= 0.35; g *= 0.35; bl *= 0.35; } else { r = 0.5 * r + 110; g = 0.5 * g + 110; bl = 0.5 * bl + 110; } }
+        img.data[4 * q] = r; img.data[4 * q + 1] = g; img.data[4 * q + 2] = bl; img.data[4 * q + 3] = 255;
+      }
+      octx.putImageData(img, 0, 0);
+      const fh = h - 12, fw = Math.min(w * 0.62, (fh * NIX) / NIY);
+      const fx = 6, fy = 6;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(off, fx, fy, fw, fh);
+      ctx.strokeStyle = P.border; ctx.strokeRect(fx, fy, fw, fh);
+      // 광원 선
+      const sy = fy + ((JS - PML) / NIY) * fh;
+      ctx.strokeStyle = P.warn; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(fx, sy); ctx.lineTo(fx + fw, sy); ctx.stroke(); ctx.setLineDash([]);
+      ctx.font = font(10.5, true); ctx.fillStyle = "#fff"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      const lab = (txt, jRow) => { const y = fy + ((jRow - PML) / NIY) * fh + 2; ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(fx + 2, y, ctx.measureText(txt).width + 6, 14); ctx.fillStyle = "#fff"; ctx.fillText(txt, fx + 5, y + 1); };
+      lab("ML", J_ML0 + 8); lab("CF", J_CF + 2); lab("Si", J_SI + 4);
+      // 오른쪽: 흡수 막대
+      const bx = fx + fw + 14, bw = w - bx - 8;
+      const tot = pixA[0] + pixA[1] + pixA[2];
+      ctx.fillStyle = P.dim; ctx.font = font(11.5); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("Si 흡수 분포", bx, fy + 2);
+      const names = ["좌 R", "중앙 G", "우 R"], cols = [P.red, P.green, P.red];
+      const bh = Math.min(40, (fh * 0.45) / 3 - 8);
+      for (let p = 0; p < 3; p++) {
+        const y = fy + 26 + p * (bh + 22), fr = tot > 0 ? pixA[p] / tot : 0;
+        ctx.fillStyle = P.dim; ctx.fillText(names[p] + "  " + (fr * 100).toFixed(1) + "%", bx, y);
+        ctx.fillStyle = P.grid; ctx.fillRect(bx, y + 15, bw, bh * 0.5);
+        ctx.fillStyle = cols[p]; ctx.fillRect(bx, y + 15, bw * fr, bh * 0.5);
+      }
+      // 시간 스텝 정보
+      const yb = fy + 26 + 3 * (bh + 22) + 8;
+      ctx.fillStyle = P.dim; ctx.font = font(11, true);
+      ctx.fillText("t = " + (step * S * DX / 299.792458).toFixed(1) + " fs", bx, yb);
+      ctx.fillText("격자 " + NX + "×" + NY, bx, yb + 16);
+      ctx.fillText("Δx = " + DX + " nm", bx, yb + 32);
+      ctx.fillText(mode === "E" ? "색: E_z (rdbu)" : "색: √⟨|E|²⟩", bx, yb + 48);
+      const xt = tot > 0 ? (pixA[0] + pixA[2]) / tot : 0;
+      SB.stat("o-f2-t", (step * S * DX / 299.792458).toFixed(1) + "<small> fs (" + step + ")</small>");
+      SB.stat("o-f2-a", tot > 0 ? [0, 1, 2].map((p) => ((100 * pixA[p]) / tot).toFixed(0)).join(" / ") + "<small> %</small>" : "—");
+      SB.stat("o-f2-x", tot > 0 ? (100 * xt).toFixed(1) + "<small> %</small>" : "—");
+      SB.stat("o-f2-n", (Number(gL()) / (nSi * DX)).toFixed(1) + " · " + S.toFixed(2));
+    }
+    build();
+    cv = SB.canvas($("cv-f2"), draw, { aspect: 0.8, minHeight: 360, maxHeight: 560 });
+    SB.loop($("cv-f2"), () => {
+      if (running && step < 60000) {
+        for (let k = 0; k < 24; k++) { advance(); if (k % 2) measure(); }
+      }
+      cv.redraw();
+    });
+  })();
+
+  /* =================================================== Sim 7: cost estimator */
+  (function () {
+    let cv;
+    const re = () => cv && cv.redraw();
+    const gP = SB.range("co-p", (v) => v.toFixed(2) + " µm", re);
+    const gU = SB.seg("co-u", re);
+    const gH = SB.range("co-h", (v) => v.toFixed(1) + " µm", re);
+    const gL = SB.range("co-l", (v) => v + " nm", re);
+    const gK = SB.range("co-k", (v) => v + "", re);
+    const gA = SB.range("co-a", (v) => v + "", re);
+    function est(pitch) {
+      const u = Number(gU()), H = gH(), lam = gL(), k = gK(), nA = gA();
+      const n = OPT.n("Si", lam).re;
+      const dx = lam / (k * n); // nm
+      const W = u * pitch * 1000;
+      const cells = Math.pow(W / dx, 2) * ((H * 1000) / dx + 2 * 12);
+      const dt = (0.99 * dx * 1e-9) / (2.998e8 * Math.sqrt(3));
+      const steps = 300e-15 / dt;
+      const work = cells * steps * nA;
+      const M = Math.round(2.5 * (u * pitch * 1000) / lam + 3);
+      const N = (2 * M + 1) ** 2;
+      const rcwaT = (10 * Math.pow(2 * N, 3) * 20 * 31 * nA) / 5e10;
+      return { dx, cells, steps, mem: cells * 60, gpu: work / 3e9, cpu: work / 2.5e8, M, N, rcwaT };
+    }
+    function draw(ctx, w, h) {
+      const P = SB.palette();
+      const g = [], c = [], r = [];
+      for (let p = 0.5; p <= 3.0001; p += 0.05) { const e = est(p); g.push([p, e.gpu]); c.push([p, e.cpu]); r.push([p, e.rcwaT]); }
+      const all = g.concat(c, r).map((d) => d[1]);
+      const lo = Math.pow(10, Math.floor(Math.log10(Math.min(...all)))), hi = Math.pow(10, Math.ceil(Math.log10(Math.max(...all))));
+      SB.chart(ctx, null, {
+        x: [0.5, 3], y: [lo, hi], logY: true, xLabel: "픽셀 피치 (µm)", yLabel: "계산 시간 (s, 로그)",
+        series: [{ data: g, color: P.accent, width: 2.2 }, { data: c, color: P.warn, width: 2 }, { data: r, color: P.accent2, width: 2 }],
+        vlines: [{ x: gP(), color: P.faint, dash: [] }],
+        hlines: [{ y: 60, color: P.faint, label: "1분" }, { y: 3600, color: P.faint, label: "1시간" }, { y: 86400, color: P.faint, label: "1일" }].filter((l) => l.y > lo && l.y < hi),
+      });
+      const e = est(gP());
+      SB.stat("o-co-c", sup(e.cells) + "<small> 셀 (" + e.dx.toFixed(1) + " nm)</small>");
+      SB.stat("o-co-m", (e.mem / 1e9).toFixed(e.mem < 1e10 ? 1 : 0) + "<small> GB · " + sup(e.steps) + "</small>");
+      SB.stat("o-co-t", fmtTime(e.gpu) + "<small> / " + fmtTime(e.cpu) + "</small>");
+      SB.stat("o-co-r", "±" + e.M + "<small> (N=" + e.N + ") · </small>" + fmtTime(e.rcwaT));
+    }
+    cv = SB.canvas($("cv-cost"), draw, { aspect: 0.6, minHeight: 280, maxHeight: 400 });
+  })();
+})();
+</script>
+</body>
+</html>

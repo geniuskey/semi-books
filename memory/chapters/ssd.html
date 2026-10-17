@@ -1,0 +1,1585 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and MemoryBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSD와 플래시 컨트롤러 · MemoryBook</title>
+<meta name="description" content="SSD 내부 구조, 채널·웨이·플레인 병렬성, FTL 주소 매핑, 가비지 컬렉션과 쓰기 증폭, 웨어 레벨링과 TBW, SLC 캐시, NVMe·PCIe, ZNS·FDP까지 — NAND 칩을 '디스크'로 만드는 컨트롤러의 모든 것.">
+<link rel="canonical" href="https://semi.euiyun.com/memory/chapters/ssd.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#0e9384">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="MemoryBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="SSD와 플래시 컨트롤러 · MemoryBook">
+<meta property="og:description" content="SSD 내부 구조, 채널·웨이·플레인 병렬성, FTL 주소 매핑, 가비지 컬렉션과 쓰기 증폭, 웨어 레벨링과 TBW, SLC 캐시, NVMe·PCIe, ZNS·FDP까지 — NAND 칩을 '디스크'로 만드는 컨트롤러의 모든 것.">
+<meta property="og:url" content="https://semi.euiyun.com/memory/chapters/ssd.html">
+<meta property="og:image" content="https://semi.euiyun.com/memory/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/memory/chapters/ssd.html#chapter","name":"SSD와 플래시 컨트롤러","headline":"SSD와 플래시 컨트롤러 · MemoryBook","description":"SSD 내부 구조, 채널·웨이·플레인 병렬성, FTL 주소 매핑, 가비지 컬렉션과 쓰기 증폭, 웨어 레벨링과 TBW, SLC 캐시, NVMe·PCIe, ZNS·FDP까지 — NAND 칩을 '디스크'로 만드는 컨트롤러의 모든 것.","url":"https://semi.euiyun.com/memory/chapters/ssd.html","position":10,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","image":"https://semi.euiyun.com/memory/og.png","dateModified":"2026-10-01","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/memory/#book","name":"MemoryBook · 메모리 반도체 교과서","url":"https://semi.euiyun.com/memory/"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"MemoryBook","item":"https://semi.euiyun.com/memory/"},{"@type":"ListItem","position":2,"name":"10. SSD와 플래시 컨트롤러","item":"https://semi.euiyun.com/memory/chapters/ssd.html"}]}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  .ssd-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ssd-btns .btn { padding: 7px 11px; }
+  .sim-view .ssd-cap { position: absolute; left: 10px; top: 6px; font-size: 12px; color: var(--text-faint); pointer-events: none; }
+  .ssd-sub { border-top: 1px solid var(--border); position: relative; }
+  .ssd-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--text-dim); padding: 10px 18px; border-top: 1px solid var(--border); background: var(--bg-elev); }
+  .ssd-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 6px; border: 1px solid var(--border); }
+  figure.diagram svg.ssd-narrow { max-width: 640px; margin: 0 auto; }
+  .ssd-warn { color: var(--bad) !important; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="memory"></script>
+</head>
+<body data-chapter="ssd">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 10</div>
+    <h1>SSD와 플래시 컨트롤러</h1>
+    <p class="lead">8장과 9장에서 본 NAND 플래시는 덮어쓸 수 없고, 쓰는 단위와 지우는 단위가 다르며, 몇천 번 지우면 닳는 까다로운 소자다. 그런데 운영체제는 SSD를 "아무 주소에나 몇 번이고 덮어쓸 수 있는 디스크"로 쓴다. 이 간극을 메우는 것이 SSD 컨트롤러와 그 안의 펌웨어 — <strong>플래시 변환 계층(FTL)</strong>이다. 이 장에서는 주소 매핑, 가비지 컬렉션, 쓰기 증폭, 웨어 레벨링, SLC 캐시, 그리고 NVMe 인터페이스까지 SSD가 '빠르고 오래가는 디스크'인 척하는 기술을 하나씩 해부한다.</p>
+    <ul class="objectives">
+      <li>SSD의 구성 요소(컨트롤러, NAND, DRAM/HMB)와 채널·웨이·다이·플레인 병렬성으로 처리량을 계산할 수 있다.</li>
+      <li>NAND의 세 가지 제약(덮어쓰기 불가, 페이지/블록 단위 불일치, 제한된 P/E)이 FTL을 필요로 하는 이유를 설명할 수 있다.</li>
+      <li>페이지 매핑 FTL의 out-of-place 업데이트와 매핑 테이블 DRAM 요구량(1 TB당 약 1 GB)을 계산할 수 있다.</li>
+      <li>가비지 컬렉션의 동작, victim 선택 정책, 쓰기 증폭 계수 \(\mathrm{WAF} = 1/(1-u)\)와 오버 프로비저닝의 관계를 이해한다.</li>
+      <li>TBW·DWPD를 계산하고, SLC 캐시의 쓰기 속도 절벽과 TRIM의 효과를 설명할 수 있다.</li>
+      <li>NVMe 큐 구조와 리틀의 법칙으로 큐 깊이–IOPS–지연의 관계를 설명하고, PCIe 세대별 대역폭과 ZNS·FDP의 의미를 안다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="anatomy">
+    <h2>SSD 해부: 컨트롤러 · NAND · DRAM</h2>
+    <p>M.2 2280 SSD 기판을 뒤집어 보면 부품은 의외로 단출하다. 가운데에 <span class="term">컨트롤러</span><span class="en">(Controller SoC)</span> 하나, 그 옆에 <span class="term">DRAM</span> 칩 하나(없는 제품도 있다), 그리고 나머지 면적을 차지하는 <span class="term">NAND 패키지</span> 2~4개. 여기에 전원 관리 IC(PMIC)와, 기업용 제품이라면 정전 시 버퍼를 NAND에 쏟아낼 시간을 벌어 주는 커패시터 뱅크(<span class="term">PLP</span>, Power Loss Protection)가 더해진다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 390" role="img" aria-label="SSD 내부 블록도">
+        <defs>
+          <marker id="ssd-a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+          <marker id="ssd-a1b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <!-- host -->
+        <rect x="8" y="140" width="96" height="92" rx="10" class="f-surface"/>
+        <text x="56" y="178" text-anchor="middle" class="t">호스트</text>
+        <text x="56" y="198" text-anchor="middle" class="t-dim">CPU · 메모리</text>
+        <path d="M106 186 H146" class="s-acc" marker-start="url(#ssd-a1)" marker-end="url(#ssd-a1)"/>
+        <text x="126" y="174" text-anchor="middle" class="t-mono">PCIe</text>
+        <text x="126" y="208" text-anchor="middle" class="t-mono">×4</text>
+        <!-- controller -->
+        <rect x="150" y="28" width="332" height="276" rx="14" class="f-acc-soft"/>
+        <text x="316" y="52" text-anchor="middle" class="t-acc">SSD 컨트롤러 (SoC)</text>
+        <g>
+          <rect x="164" y="66" width="148" height="46" rx="8" class="f-elev"/>
+          <text x="238" y="85" text-anchor="middle" class="t">호스트 인터페이스</text>
+          <text x="238" y="102" text-anchor="middle" class="t-mono">PCIe PHY · NVMe</text>
+          <rect x="322" y="66" width="148" height="46" rx="8" class="f-elev"/>
+          <text x="396" y="85" text-anchor="middle" class="t">CPU 코어</text>
+          <text x="396" y="102" text-anchor="middle" class="t-mono">Arm Cortex-R ×3~5</text>
+          <rect x="164" y="120" width="148" height="46" rx="8" class="f-acc2-soft"/>
+          <text x="238" y="139" text-anchor="middle" class="t">FTL 펌웨어</text>
+          <text x="238" y="156" text-anchor="middle" class="t-mono">매핑 · GC · WL</text>
+          <rect x="322" y="120" width="148" height="46" rx="8" class="f-elev"/>
+          <text x="396" y="139" text-anchor="middle" class="t">ECC 엔진</text>
+          <text x="396" y="156" text-anchor="middle" class="t-mono">LDPC (11장)</text>
+          <rect x="164" y="174" width="148" height="46" rx="8" class="f-elev"/>
+          <text x="238" y="193" text-anchor="middle" class="t">SRAM 버퍼 · 암호화</text>
+          <text x="238" y="210" text-anchor="middle" class="t-mono">AES-256 암호화</text>
+          <rect x="322" y="174" width="148" height="46" rx="8" class="f-elev"/>
+          <text x="396" y="193" text-anchor="middle" class="t">플래시 인터페이스</text>
+          <text x="396" y="210" text-anchor="middle" class="t-mono">채널 0 ~ 7 (ONFI/Toggle)</text>
+          <rect x="164" y="228" width="148" height="46" rx="8" class="f-elev"/>
+          <text x="238" y="247" text-anchor="middle" class="t">DRAM 컨트롤러</text>
+          <text x="238" y="264" text-anchor="middle" class="t-mono">LPDDR4X / DDR4</text>
+          <rect x="322" y="228" width="148" height="46" rx="8" class="f-elev"/>
+          <text x="396" y="247" text-anchor="middle" class="t">전력 · 온도 관리</text>
+          <text x="396" y="264" text-anchor="middle" class="t-mono">스로틀링 · PS 상태</text>
+        </g>
+        <!-- DRAM -->
+        <path d="M238 274 V326" class="s-line" marker-end="url(#ssd-a1b)" marker-start="url(#ssd-a1b)"/>
+        <rect x="150" y="328" width="176" height="52" rx="8" class="f-acc2-soft"/>
+        <text x="238" y="350" text-anchor="middle" class="t">DRAM 캐시</text>
+        <text x="238" y="368" text-anchor="middle" class="t-mono">매핑 테이블 ≈ 1 GB / 1 TB</text>
+        <rect x="340" y="328" width="142" height="52" rx="8" class="f-surface" style="stroke-dasharray:4 3"/>
+        <text x="411" y="350" text-anchor="middle" class="t-dim">PMIC · PLP 커패시터</text>
+        <text x="411" y="368" text-anchor="middle" class="t-mono">(기업용)</text>
+        <!-- channels -->
+        <g class="s-line">
+          <path d="M482 72 H560 M482 92 H560"/>
+          <path d="M482 152 H560 M482 172 H560"/>
+          <path d="M482 232 H560 M482 252 H560"/>
+          <path d="M482 312 H560 M482 332 H560"/>
+        </g>
+        <text x="520" y="66" text-anchor="middle" class="t-mono">CH0</text>
+        <text x="520" y="106" text-anchor="middle" class="t-mono">CH1</text>
+        <text x="520" y="146" text-anchor="middle" class="t-mono">CH2·3</text>
+        <text x="520" y="226" text-anchor="middle" class="t-mono">CH4·5</text>
+        <text x="520" y="306" text-anchor="middle" class="t-mono">CH6·7</text>
+        <!-- NAND packages -->
+        <g>
+          <rect x="562" y="50" width="190" height="64" rx="8" class="f-surface"/>
+          <rect x="572" y="62" width="70" height="6" rx="2" class="f-acc-soft"/><rect x="572" y="72" width="70" height="6" rx="2" class="f-acc-soft"/><rect x="572" y="82" width="70" height="6" rx="2" class="f-acc-soft"/><rect x="572" y="92" width="70" height="6" rx="2" class="f-acc-soft"/>
+          <text x="700" y="80" text-anchor="middle" class="t">NAND 0</text>
+          <text x="700" y="98" text-anchor="middle" class="t-mono">다이 4~16 적층</text>
+          <rect x="562" y="130" width="190" height="64" rx="8" class="f-surface"/>
+          <rect x="572" y="142" width="70" height="6" rx="2" class="f-acc-soft"/><rect x="572" y="152" width="70" height="6" rx="2" class="f-acc-soft"/><rect x="572" y="162" width="70" height="6" rx="2" class="f-acc-soft"/><rect x="572" y="172" width="70" height="6" rx="2" class="f-acc-soft"/>
+          <text x="700" y="160" text-anchor="middle" class="t">NAND 1</text>
+          <text x="700" y="178" text-anchor="middle" class="t-mono">1 Tb/다이 (TLC)</text>
+          <rect x="562" y="210" width="190" height="64" rx="8" class="f-surface"/>
+          <rect x="572" y="222" width="70" height="6" rx="2" class="f-acc-soft"/><rect x="572" y="232" width="70" height="6" rx="2" class="f-acc-soft"/><rect x="572" y="242" width="70" height="6" rx="2" class="f-acc-soft"/><rect x="572" y="252" width="70" height="6" rx="2" class="f-acc-soft"/>
+          <text x="700" y="240" text-anchor="middle" class="t">NAND 2</text>
+          <text x="700" y="258" text-anchor="middle" class="t-mono">200~300단 (9장)</text>
+          <rect x="562" y="290" width="190" height="64" rx="8" class="f-surface"/>
+          <rect x="572" y="302" width="70" height="6" rx="2" class="f-acc-soft"/><rect x="572" y="312" width="70" height="6" rx="2" class="f-acc-soft"/><rect x="572" y="322" width="70" height="6" rx="2" class="f-acc-soft"/><rect x="572" y="332" width="70" height="6" rx="2" class="f-acc-soft"/>
+          <text x="700" y="320" text-anchor="middle" class="t">NAND 3</text>
+          <text x="700" y="338" text-anchor="middle" class="t-mono">채널당 8비트 버스</text>
+        </g>
+        <text x="656" y="378" text-anchor="middle" class="t-dim">NAND 패키지 (BGA)</text>
+      </svg>
+      <figcaption><b>그림 10-1.</b> 전형적인 PCIe 4.0 ×4 NVMe SSD의 블록도. 컨트롤러는 여러 개의 실시간용 Arm 코어와 LDPC ECC 엔진, 8개 안팎의 NAND 채널을 가진 SoC다. DRAM은 주로 사용자 데이터가 아니라 <em>주소 매핑 테이블</em>을 담는다. 각 NAND 패키지에는 다이가 여러 장 적층되어 있다.</figcaption>
+    </figure>
+    <p>컨트롤러가 하는 일은 크게 네 갈래다. ① <strong>호스트 인터페이스</strong>: PCIe 링크를 통해 NVMe 명령을 받고 데이터를 DMA로 주고받는다. ② <strong>FTL</strong>: 호스트가 주는 논리 주소(LBA)를 NAND의 물리 위치로 번역하고, 가비지 컬렉션과 웨어 레벨링을 돌린다. ③ <strong>데이터 무결성</strong>: 11장에서 다룰 LDPC 부호로 비트 오류를 정정하고, 읽기 재시도(read retry)와 리프레시로 데이터 보존을 관리한다. ④ <strong>NAND 구동</strong>: 여러 채널로 수십 개의 다이에 명령을 뿌리고 그 타이밍을 스케줄링한다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>구성 요소</th><th>역할</th><th>대표 수치 (2024~2026 소비자·데이터센터 제품)</th></tr></thead>
+      <tbody>
+        <tr><td>컨트롤러</td><td>FTL, ECC, 호스트/NAND 인터페이스</td><td>Arm Cortex-R 계열 3~8코어, 8~16채널, 5~12 nm 공정</td></tr>
+        <tr><td>NAND 다이</td><td>데이터 저장</td><td>TLC 1 Tb(128 GB)/다이, 16 KB 페이지, 4~6 플레인, I/O 2.4~3.6 GT/s</td></tr>
+        <tr><td>DRAM</td><td>매핑 테이블 캐시</td><td>용량의 약 1/1000 (1 TB → 1 GB), LPDDR4X/DDR4</td></tr>
+        <tr><td>HMB</td><td>DRAM-less 제품의 대안</td><td>호스트 DRAM 수십 MB 차용 (NVMe 1.2 기능)</td></tr>
+        <tr><td>호스트 링크</td><td>PCIe + NVMe</td><td>Gen4 ×4 ≈ 7 GB/s, Gen5 ×4 ≈ 14 GB/s</td></tr>
+        <tr><td>PLP</td><td>정전 시 휘발 버퍼 보호</td><td>탄탈/폴리머 커패시터 수십 ms 유지 (주로 기업용)</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout tip"><strong>DRAM-less SSD와 HMB</strong>
+      <p>저가형 SSD는 원가와 전력을 줄이려 DRAM을 뺀다. 대신 NVMe의 <span class="term">HMB</span><span class="en">(Host Memory Buffer)</span> 기능으로 호스트 PC의 메인 메모리 일부(보통 수십 MB)를 PCIe 너머로 빌려 매핑 테이블의 '자주 쓰는 부분'만 캐싱한다. 1 TB 전체 테이블(~1 GB)은 못 담지만, 실제 워크로드는 지역성(1장)이 있어 좁은 LBA 범위에 몰리므로 일상 사용에서는 차이가 작다. 넓은 범위에 랜덤 접근이 퍼지면 매핑 미스가 나서 NAND에서 매핑 정보를 먼저 읽어야 하므로 지연이 늘어난다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="parallel">
+    <h2>병렬성: 채널 · 웨이 · 다이 · 플레인</h2>
+    <p>NAND 다이 하나는 결코 빠르지 않다. TLC 다이가 한 번 프로그램하는 데 수백 µs가 걸리고, 읽기(\(t_R\))도 수십 µs다. 다이 하나의 순차 쓰기 속도는 기껏해야 수백 MB/s. 7 GB/s짜리 SSD는 이런 느린 다이 수십 개를 <em>동시에</em> 돌려서 만든다. 병렬성은 계층적으로 조직된다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 320" role="img" aria-label="채널, 웨이, 다이, 플레인, 블록, 페이지 계층">
+        <defs>
+          <marker id="ssd-a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent-2)"/></marker>
+        </defs>
+        <rect x="8" y="118" width="64" height="84" rx="8" class="f-acc-soft"/>
+        <text x="40" y="156" text-anchor="middle" class="t">컨트롤러</text>
+        <text x="40" y="176" text-anchor="middle" class="t-mono">CH0</text>
+        <path d="M72 160 H92 M92 48 V274" class="s-acc"/>
+        <text x="96" y="302" class="t-mono">채널 버스 (8비트, 공유)</text>
+        <!-- dies -->
+        <g>
+          <path d="M92 48 H110 M92 118 H110 M92 188 H110 M92 258 H110" class="s-acc"/>
+          <rect x="110" y="20" width="210" height="56" rx="8" class="f-surface"/>
+          <text x="118" y="38" class="t-dim">다이 0 (Way 0, CE0)</text>
+          <rect x="118" y="44" width="44" height="24" rx="3" class="f-acc2-soft"/><rect x="168" y="44" width="44" height="24" rx="3" class="f-acc2-soft"/><rect x="218" y="44" width="44" height="24" rx="3" class="f-acc2-soft"/><rect x="268" y="44" width="44" height="24" rx="3" class="f-acc2-soft"/>
+          <text x="140" y="61" text-anchor="middle" class="t-mono">P0</text><text x="190" y="61" text-anchor="middle" class="t-mono">P1</text><text x="240" y="61" text-anchor="middle" class="t-mono">P2</text><text x="290" y="61" text-anchor="middle" class="t-mono">P3</text>
+          <rect x="110" y="90" width="210" height="56" rx="8" class="f-surface"/>
+          <text x="118" y="108" class="t-dim">다이 1 (Way 1, CE1)</text>
+          <rect x="118" y="114" width="44" height="24" rx="3" class="f-acc2-soft"/><rect x="168" y="114" width="44" height="24" rx="3" class="f-acc2-soft"/><rect x="218" y="114" width="44" height="24" rx="3" class="f-acc2-soft"/><rect x="268" y="114" width="44" height="24" rx="3" class="f-acc2-soft"/>
+          <rect x="110" y="160" width="210" height="56" rx="8" class="f-surface"/>
+          <text x="118" y="178" class="t-dim">다이 2 (Way 2, CE2)</text>
+          <rect x="118" y="184" width="44" height="24" rx="3" class="f-acc2-soft"/><rect x="168" y="184" width="44" height="24" rx="3" class="f-acc2-soft"/><rect x="218" y="184" width="44" height="24" rx="3" class="f-acc2-soft"/><rect x="268" y="184" width="44" height="24" rx="3" class="f-acc2-soft"/>
+          <rect x="110" y="230" width="210" height="56" rx="8" class="f-surface"/>
+          <text x="118" y="248" class="t-dim">다이 3 (Way 3, CE3)</text>
+          <rect x="118" y="254" width="44" height="24" rx="3" class="f-acc2-soft"/><rect x="168" y="254" width="44" height="24" rx="3" class="f-acc2-soft"/><rect x="218" y="254" width="44" height="24" rx="3" class="f-acc2-soft"/><rect x="268" y="254" width="44" height="24" rx="3" class="f-acc2-soft"/>
+        </g>
+        <!-- zoom plane -->
+        <path d="M162 44 L372 30 M162 68 L372 290" style="stroke:var(--accent-2);stroke-width:1;stroke-dasharray:3 3;fill:none"/>
+        <rect x="372" y="30" width="160" height="260" rx="8" class="f-acc2-soft"/>
+        <text x="452" y="50" text-anchor="middle" class="t">플레인 0</text>
+        <rect x="386" y="62" width="132" height="22" rx="3" class="f-elev"/><text x="452" y="78" text-anchor="middle" class="t-mono">블록 0</text>
+        <rect x="386" y="90" width="132" height="22" rx="3" class="f-acc-soft"/><text x="452" y="106" text-anchor="middle" class="t-mono">블록 1</text>
+        <rect x="386" y="118" width="132" height="22" rx="3" class="f-elev"/><text x="452" y="134" text-anchor="middle" class="t-mono">블록 2</text>
+        <text x="452" y="162" text-anchor="middle" class="t-dim">⋮</text>
+        <rect x="386" y="176" width="132" height="22" rx="3" class="f-elev"/><text x="452" y="192" text-anchor="middle" class="t-mono">블록 N−1</text>
+        <text x="452" y="226" text-anchor="middle" class="t-dim">블록 수백~수천 개</text>
+        <text x="452" y="246" text-anchor="middle" class="t-dim">+ 페이지 버퍼</text>
+        <text x="452" y="268" text-anchor="middle" class="t-mono">(플레인마다 독립)</text>
+        <!-- zoom block -->
+        <path d="M518 90 L580 30 M518 112 L580 290" style="stroke:var(--accent);stroke-width:1;stroke-dasharray:3 3;fill:none"/>
+        <rect x="580" y="30" width="172" height="260" rx="8" class="f-acc-soft"/>
+        <text x="666" y="50" text-anchor="middle" class="t">블록 = 소거 단위</text>
+        <rect x="594" y="62" width="144" height="18" rx="2" class="f-elev"/><text x="666" y="76" text-anchor="middle" class="t-mono">페이지 0 · 16 KB</text>
+        <rect x="594" y="84" width="144" height="18" rx="2" class="f-elev"/><text x="666" y="98" text-anchor="middle" class="t-mono">페이지 1</text>
+        <rect x="594" y="106" width="144" height="18" rx="2" class="f-elev"/><text x="666" y="120" text-anchor="middle" class="t-mono">페이지 2</text>
+        <text x="666" y="146" text-anchor="middle" class="t-dim">⋮</text>
+        <rect x="594" y="158" width="144" height="18" rx="2" class="f-elev"/><text x="666" y="172" text-anchor="middle" class="t-mono">페이지 M−1</text>
+        <text x="666" y="204" text-anchor="middle" class="t-dim">페이지 = 읽기·쓰기 단위</text>
+        <text x="666" y="226" text-anchor="middle" class="t-dim">M ≈ 수백~2천+ 페이지</text>
+        <text x="666" y="248" text-anchor="middle" class="t-dim">블록 ≈ 수 MB~수십 MB</text>
+        <text x="666" y="270" text-anchor="middle" class="t-mono">+ 스페어 영역 (ECC 패리티)</text>
+      </svg>
+      <figcaption><b>그림 10-2.</b> 병렬성의 계층. 한 <b>채널</b>의 버스에 여러 <b>다이</b>(웨이, 칩 선택 신호 CE#로 구분)가 매달려 버스를 시분할한다. 다이 안의 <b>플레인</b>은 각자 페이지 버퍼를 가져 동시에 읽고 쓸 수 있다(multi-plane 동작). 플레인은 블록으로, 블록은 페이지로 나뉜다.</figcaption>
+    </figure>
+    <p>핵심은 <strong>느린 셀 동작(\(t_{PROG}, t_R\))과 빠른 데이터 전송을 겹치는 것</strong>이다. 다이 0이 데이터를 받아 수백 µs 동안 프로그램하는 동안, 채널 버스는 비어 있으니 다이 1, 2, 3에 데이터를 차례로 보낸다. 이것이 <span class="term">웨이 인터리빙</span><span class="en">(way interleaving)</span>이다. 여러 채널은 서로 완전히 독립이므로 채널 수만큼 곱절로 늘어난다. 다이 하나의 쓰기 처리량과 채널 하나의 처리량은 다음과 같다.</p>
+    <div class="formula">
+      $$ BW_{die} = \frac{N_{plane}\, S_{prog}}{t_{xfer} + t_{PROG}}, \qquad BW_{ch} = \min\!\left( N_{way}\, BW_{die},\ \ BW_{bus} \right), \qquad BW_{SSD} = \min\!\left(N_{ch} BW_{ch},\ BW_{host}\right) $$
+      <div class="where">여기서 \(S_{prog}\)는 플레인당 한 번에 프로그램하는 데이터(TLC one-shot 프로그램이면 16 KB × 3 = 48 KB), \(t_{xfer} = N_{plane} S_{prog}/BW_{bus}\)는 그 데이터를 채널로 보내는 시간, \(BW_{bus}\)는 채널 버스 속도(8비트 × 2.4 GT/s = 2.4 GB/s)다.</div>
+    </div>
+    <p>예를 들어 4플레인 TLC 다이(\(t_{PROG}\) = 500 µs)는 한 사이클에 192 KB를 쓰고 전송에 80 µs가 걸리므로 다이당 약 330 MB/s다. 1 Tb 다이 8개로 만든 1 TB SSD는 SLC 캐시(7절)를 쓰지 않으면 약 2.6 GB/s가 한계다. 같은 컨트롤러라도 4 TB 제품(다이 32개)이 더 빠른 이유가 여기 있다. 읽기는 \(t_R\)이 짧아 오히려 채널 버스가 병목이 되기 쉽다.</p>
+
+    <div class="sim" id="sim-par">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>채널 × 웨이 × 플레인 병렬성과 타임라인</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="par-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>동작</span><div class="seg" id="par-mode"><button data-value="w" class="on">순차 쓰기</button><button data-value="r">순차 읽기</button></div></div>
+          <div class="ctrl"><span>셀 방식</span><div class="seg" id="par-cell"><button data-value="1">SLC</button><button data-value="3" class="on">TLC</button><button data-value="4">QLC</button></div></div>
+          <label class="ctrl"><span>채널 수 <output id="par-ch-out"></output></span><input type="range" id="par-ch" min="1" max="16" value="8"></label>
+          <label class="ctrl"><span>채널당 웨이(다이) <output id="par-way-out"></output></span><input type="range" id="par-way" min="1" max="8" value="1"></label>
+          <div class="ctrl"><span>다이당 플레인</span><div class="seg" id="par-plane"><button data-value="1">1</button><button data-value="2">2</button><button data-value="4" class="on">4</button><button data-value="6">6</button></div></div>
+          <label class="ctrl"><span>t<sub>PROG</sub> <output id="par-tp-out"></output></span><input type="range" id="par-tp" min="100" max="3000" step="50" value="500"></label>
+          <label class="ctrl"><span>t<sub>R</sub> <output id="par-tr-out"></output></span><input type="range" id="par-tr" min="20" max="150" step="5" value="50"></label>
+          <div class="ctrl"><span>채널 I/O 속도</span><div class="seg" id="par-io"><button data-value="1600">1.6 GT/s</button><button data-value="2400" class="on">2.4</button><button data-value="3600">3.6</button></div></div>
+          <div class="ctrl"><span>호스트 링크 (×4)</span><div class="seg" id="par-host"><button data-value="3.5">Gen3</button><button data-value="7" class="on">Gen4</button><button data-value="14">Gen5</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">총 다이 수 (용량 @1 Tb)</span><span class="v" id="par-dies">—</span></div>
+        <div class="stat"><span class="k">다이당 처리량</span><span class="v" id="par-bwdie">—</span></div>
+        <div class="stat"><span class="k">채널 버스 점유율</span><span class="v" id="par-util">—</span></div>
+        <div class="stat"><span class="k">NAND 합계</span><span class="v" id="par-bwnand">—</span></div>
+        <div class="stat"><span class="k">최종 처리량 / 병목</span><span class="v" id="par-bw">—</span></div>
+      </div>
+      <div class="sim-note">간트 차트는 채널 0 하나를 보여 준다. 보라 = 채널 버스로 데이터 전송, 청록 = 다이 내부 동작(t<sub>PROG</sub> 또는 t<sub>R</sub>). 해볼 것: ① 웨이 1에서 쓰기 — 버스가 대부분 놀고 있다. 웨이를 2, 4로 올리며 처리량이 비례해 느는 것을 보자. ② 읽기로 바꾸면 웨이 2만 되어도 버스가 포화된다(병목 = 채널). ③ QLC로 바꾸면 t<sub>PROG</sub>가 길어져 같은 다이 수로 쓰기가 크게 느려진다. ④ 채널 16 × 웨이 4에서 Gen4 링크가 병목이 되는지 확인하자.</div>
+    </div>
+    <div class="callout deep"><strong>슈퍼블록과 스트라이핑</strong>
+      <p>컨트롤러는 병렬성을 쉽게 쓰려고 모든 다이·플레인에서 같은 번호의 블록을 하나씩 묶어 <span class="term">슈퍼블록</span><span class="en">(superblock)</span>이라는 논리 단위로 관리한다. 호스트 데이터는 슈퍼블록 안의 페이지들에 라운드로빈으로 흩뿌려져(striping) 모든 다이가 동시에 일한다. 대신 GC와 소거도 슈퍼블록 단위로 일어나므로, FTL이 보는 '블록'은 수백 MB~GB에 이를 수 있다. 슈퍼블록 안에 RAID-5 같은 다이 간 패리티(흔히 RAIN, XOR 패리티라 부른다)를 두어 다이 하나가 통째로 고장 나도 데이터를 복구한다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="constraints">
+    <h2>플래시의 세 가지 제약</h2>
+    <p>8장에서 NAND 셀은 플로팅 게이트(또는 차지 트랩)에 전자를 넣어 문턱 전압 \(V_t\)를 올리는 방식으로 프로그램한다고 했다. 이 물리가 SSD 설계의 모든 제약을 만든다.</p>
+    <ol>
+      <li><strong>덮어쓰기 불가</strong><span class="en">(erase-before-write)</span>: 프로그램은 전자를 <em>넣는</em> 방향(\(V_t\) 상승, 비트 1→0)으로만 할 수 있다. 전자를 빼려면 기판 쪽에 고전압(~20 V)을 걸어 FN 터널링으로 한꺼번에 빼내는 소거가 필요하다. 이미 쓴 페이지는 소거 전까지 다시 쓸 수 없다.</li>
+      <li><strong>단위 불일치</strong>: 쓰기·읽기 단위는 <span class="term">페이지</span>(16 KB)인데 소거 단위는 수백~수천 페이지를 묶은 <span class="term">블록</span>(수 MB~수십 MB)이다. 소거용 고전압이 웰(well) 전체에 걸리기 때문이다. 게다가 블록 안의 페이지는 워드라인 순서대로만 써야 한다(셀 간 간섭 보상 때문).</li>
+      <li><strong>제한된 수명</strong>: 프로그램·소거(P/E) 사이클마다 터널 산화막에 결함이 쌓여 전자를 잃기 쉬워지고 \(V_t\) 분포가 넓어진다. TLC는 대략 1,000~3,000회, QLC는 수백~1,500회 정도에서 오류율이 ECC 한계에 다가간다(11장).</li>
+    </ol>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 300" role="img" aria-label="페이지 쓰기와 블록 소거, 동작 시간 비교">
+        <!-- block illustration -->
+        <text x="130" y="24" text-anchor="middle" class="t-acc">블록 (예: 8페이지로 단순화)</text>
+        <g>
+          <rect x="40" y="36" width="180" height="26" rx="3" class="f-acc-soft"/><text x="130" y="54" text-anchor="middle" class="t-mono">P0  데이터 A</text>
+          <rect x="40" y="66" width="180" height="26" rx="3" class="f-acc-soft"/><text x="130" y="84" text-anchor="middle" class="t-mono">P1  데이터 B</text>
+          <rect x="40" y="96" width="180" height="26" rx="3" class="f-acc-soft"/><text x="130" y="114" text-anchor="middle" class="t-mono">P2  데이터 C</text>
+          <rect x="40" y="126" width="180" height="26" rx="3" class="f-elev"/><text x="130" y="144" text-anchor="middle" class="t-mono">P3  (빈 페이지)</text>
+          <rect x="40" y="156" width="180" height="26" rx="3" class="f-elev"/><text x="130" y="174" text-anchor="middle" class="t-mono">P4  (빈 페이지)</text>
+          <rect x="40" y="186" width="180" height="26" rx="3" class="f-elev"/><text x="130" y="204" text-anchor="middle" class="t-mono">P5</text>
+          <rect x="40" y="216" width="180" height="26" rx="3" class="f-elev"/><text x="130" y="234" text-anchor="middle" class="t-mono">P6</text>
+          <rect x="40" y="246" width="180" height="26" rx="3" class="f-elev"/><text x="130" y="264" text-anchor="middle" class="t-mono">P7</text>
+        </g>
+        <path d="M232 139 H268" class="s-acc"/><text x="276" y="136" class="t">P3에 쓰기 ✓</text><text x="276" y="154" class="t-dim">빈 페이지 → 가능 (순서대로)</text>
+        <path d="M232 79 H268" style="stroke:var(--bad);stroke-width:2;fill:none"/><text x="276" y="76" class="t" style="fill:var(--bad)">P1 덮어쓰기 ✗</text><text x="276" y="94" class="t-dim">소거 전에는 불가</text>
+        <path d="M24 36 V272" class="s-acc2"/><path d="M18 36 H30 M18 272 H30" class="s-acc2"/>
+        <text x="14" y="160" text-anchor="middle" class="t-mono" transform="rotate(-90 14 160)" style="fill:var(--accent-2)">소거 = 블록 통째로</text>
+        <!-- timing bars (log scale) -->
+        <text x="580" y="186" text-anchor="middle" class="t-acc">동작 시간 (TLC, 로그 눈금)</text>
+        <g>
+          <path d="M470 270 H740" class="s-axis"/>
+          <path d="M470 266 V274 M560 266 V274 M650 266 V274 M740 266 V274" class="s-axis"/>
+          <text x="470" y="290" text-anchor="middle" class="t-mono">10 µs</text><text x="560" y="290" text-anchor="middle" class="t-mono">100 µs</text><text x="650" y="290" text-anchor="middle" class="t-mono">1 ms</text><text x="740" y="290" text-anchor="middle" class="t-mono">10 ms</text>
+          <rect x="470" y="198" width="63" height="16" rx="3" class="f-acc2-soft"/><text x="464" y="211" text-anchor="end" class="t-dim">읽기 t_R</text><text x="539" y="211" class="t-mono">~50 µs</text>
+          <rect x="470" y="222" width="153" height="16" rx="3" class="f-acc-soft"/><text x="464" y="235" text-anchor="end" class="t-dim">쓰기 t_PROG</text><text x="629" y="235" class="t-mono">~500 µs</text>
+          <rect x="470" y="246" width="225" height="16" rx="3" class="f-warn-soft"/><text x="464" y="259" text-anchor="end" class="t-dim">소거 t_BERS</text><text x="700" y="259" class="t-mono">~3–5 ms</text>
+        </g>
+        <!-- P/E -->
+        <rect x="470" y="30" width="270" height="130" rx="10" class="f-surface"/>
+        <text x="605" y="52" text-anchor="middle" class="t">P/E 수명 (대략, 2024~)</text>
+        <text x="490" y="78" class="t-mono">SLC     ~ 50k – 100k</text>
+        <text x="490" y="98" class="t-mono">MLC     ~ 3k – 10k</text>
+        <text x="490" y="118" class="t-mono">TLC     ~ 1k – 3k</text>
+        <text x="490" y="138" class="t-mono">QLC     ~ 0.5k – 1.5k</text>
+      </svg>
+      <figcaption><b>그림 10-3.</b> NAND의 제약. 빈 페이지에는 순서대로 쓸 수 있지만 이미 쓴 페이지는 덮어쓸 수 없고, 지우려면 블록 전체를 소거해야 한다. 소거는 읽기보다 약 100배 느리다. 수명 수치는 제조사·세대·ECC 강도에 따라 크게 다르다.</figcaption>
+    </figure>
+    <p>만약 FTL 없이 LBA를 물리 위치에 고정한다면(블록 매핑의 극단), 4 KB 하나를 고칠 때마다 그 블록 전체(예: 24 MB)를 읽어 DRAM에 담고, 블록을 지우고, 수정된 전체를 다시 써야 한다. 4 KB 쓰기에 24 MB를 쓰는 셈이니 쓰기 증폭이 6,000배, 속도는 소거 시간 수 ms에 묶이고 자주 쓰는 블록은 금세 닳는다. FTL은 이 세 문제를 한꺼번에 푸는 소프트웨어 층이다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="ftl">
+    <h2>FTL: 논리 주소를 물리 위치로</h2>
+    <p><span class="term">FTL</span><span class="en">(Flash Translation Layer)</span>의 기본 아이디어는 간단하다. <strong>"고칠 데이터는 제자리에 쓰지 말고 빈 페이지에 새로 쓴 뒤, 주소록만 고친다."</strong> 이를 <span class="term">out-of-place 업데이트</span>라 한다. 호스트가 보는 논리 블록 주소(LBA, 또는 FTL 단위로 묶은 LPN)마다 현재 데이터가 있는 물리 페이지 번호(PPN)를 적어 둔 표가 <span class="term">L2P 매핑 테이블</span>이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 300" role="img" aria-label="out-of-place 업데이트와 L2P 매핑 테이블">
+        <defs>
+          <marker id="ssd-a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+          <marker id="ssd-a3b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-faint)"/></marker>
+        </defs>
+        <text x="110" y="22" text-anchor="middle" class="t-acc">L2P 매핑 테이블 (DRAM)</text>
+        <g>
+          <rect x="40" y="34" width="70" height="28" class="f-surface"/><rect x="110" y="34" width="90" height="28" class="f-surface"/>
+          <text x="75" y="53" text-anchor="middle" class="t">LPN</text><text x="155" y="53" text-anchor="middle" class="t">PPN</text>
+          <rect x="40" y="62" width="70" height="28" class="f-elev"/><rect x="110" y="62" width="90" height="28" class="f-elev"/>
+          <text x="75" y="81" text-anchor="middle" class="t-mono">0</text><text x="155" y="81" text-anchor="middle" class="t-mono">B0 · P0</text>
+          <rect x="40" y="90" width="70" height="28" class="f-elev"/><rect x="110" y="90" width="90" height="28" class="f-elev"/>
+          <text x="75" y="109" text-anchor="middle" class="t-mono">1</text><text x="155" y="109" text-anchor="middle" class="t-mono">B0 · P1</text>
+          <rect x="40" y="118" width="70" height="28" class="f-acc-soft"/><rect x="110" y="118" width="90" height="28" class="f-acc-soft"/>
+          <text x="75" y="137" text-anchor="middle" class="t-mono">2</text>
+          <text x="140" y="137" text-anchor="middle" class="t-mono" style="text-decoration:line-through;fill:var(--text-faint)">B0·P2</text>
+          <text x="184" y="137" text-anchor="middle" class="t-mono" style="fill:var(--accent);font-weight:600">B1·P1</text>
+          <rect x="40" y="146" width="70" height="28" class="f-elev"/><rect x="110" y="146" width="90" height="28" class="f-elev"/>
+          <text x="75" y="165" text-anchor="middle" class="t-mono">3</text><text x="155" y="165" text-anchor="middle" class="t-mono">B0 · P3</text>
+          <rect x="40" y="174" width="70" height="28" class="f-elev"/><rect x="110" y="174" width="90" height="28" class="f-elev"/>
+          <text x="75" y="193" text-anchor="middle" class="t-mono">4</text><text x="155" y="193" text-anchor="middle" class="t-mono">B1 · P0</text>
+          <text x="120" y="226" text-anchor="middle" class="t-dim">항목 1개 ≈ 4 B</text>
+          <text x="120" y="246" text-anchor="middle" class="t-dim">4 KB마다 1개</text>
+        </g>
+        <!-- host write -->
+        <rect x="250" y="236" width="170" height="44" rx="8" class="f-acc-soft"/>
+        <text x="335" y="256" text-anchor="middle" class="t">호스트: LPN 2 쓰기</text>
+        <text x="335" y="272" text-anchor="middle" class="t-mono">(새 데이터 C′)</text>
+        <!-- blocks -->
+        <text x="520" y="22" text-anchor="middle" class="t">블록 B0</text>
+        <text x="680" y="22" text-anchor="middle" class="t">블록 B1 (쓰기 중)</text>
+        <g>
+          <rect x="450" y="34" width="140" height="30" rx="3" class="f-ok-soft"/><text x="520" y="54" text-anchor="middle" class="t-mono">P0 · LPN0 (A)</text>
+          <rect x="450" y="68" width="140" height="30" rx="3" class="f-ok-soft"/><text x="520" y="88" text-anchor="middle" class="t-mono">P1 · LPN1 (B)</text>
+          <rect x="450" y="102" width="140" height="30" rx="3" class="f-bad-soft"/><text x="520" y="122" text-anchor="middle" class="t-mono">P2 · LPN2 (C) 무효</text>
+          <rect x="450" y="136" width="140" height="30" rx="3" class="f-ok-soft"/><text x="520" y="156" text-anchor="middle" class="t-mono">P3 · LPN3 (D)</text>
+          <rect x="610" y="34" width="140" height="30" rx="3" class="f-ok-soft"/><text x="680" y="54" text-anchor="middle" class="t-mono">P0 · LPN4 (E)</text>
+          <rect x="610" y="68" width="140" height="30" rx="3" class="f-acc-soft" style="stroke-width:2"/><text x="680" y="88" text-anchor="middle" class="t-mono">P1 · LPN2 (C′)</text>
+          <rect x="610" y="102" width="140" height="30" rx="3" class="f-elev"/><text x="680" y="122" text-anchor="middle" class="t-mono">P2 · 빈</text>
+          <rect x="610" y="136" width="140" height="30" rx="3" class="f-elev"/><text x="680" y="156" text-anchor="middle" class="t-mono">P3 · 빈</text>
+        </g>
+        <path d="M420 258 C560 258 640 200 670 102" class="s-acc" marker-end="url(#ssd-a3)"/>
+        <text x="600" y="220" class="t-dim">① 빈 페이지에 새로 씀</text>
+        <path d="M200 132 C300 132 380 118 446 118" style="stroke:var(--text-faint);stroke-width:1.5;fill:none;stroke-dasharray:4 3" marker-end="url(#ssd-a3b)"/>
+        <text x="250" y="110" class="t-dim">② 옛 페이지는 '무효' 표시</text>
+        <text x="228" y="160" class="t-dim">③ 테이블 항목 갱신</text>
+      </svg>
+      <figcaption><b>그림 10-4.</b> Out-of-place 업데이트. LPN 2를 고쳐 쓰면 새 데이터 C′는 현재 쓰는 중인 블록 B1의 다음 빈 페이지로 가고, 매핑 테이블이 B1·P1을 가리키도록 바뀐다. B0·P2의 옛 데이터 C는 지울 수 없으니 <b>무효 페이지</b>(stale)로 남는다. 초록 = 유효, 빨강 = 무효.</figcaption>
+    </figure>
+    <p>이 방식 덕분에 모든 쓰기는 "빈 페이지에 순서대로 쓰기"가 되어 빠르고, 소거는 쓰기 경로에서 빠진다. 대가는 두 가지다. 첫째, 무효 페이지가 계속 쌓여 언젠가 치워야 한다(다음 절의 가비지 컬렉션). 둘째, 모든 LPN의 위치를 담은 큰 테이블을 빠른 메모리에 둬야 한다.</p>
+    <div class="formula">
+      $$ M_{L2P} = \frac{C}{S_{map}} \times E \;\;\approx\;\; \frac{1\ \text{TB}}{4\ \text{KB}} \times 4\ \text{B} = 2.4\times 10^{8} \times 4\ \text{B} \approx 1\ \text{GB} $$
+      <div class="where">여기서 \(C\)는 용량, \(S_{map}\)은 매핑 단위(보통 4 KB, 파일 시스템 블록 크기와 일치), \(E\)는 항목 크기. 32비트 항목은 \(2^{32}\)개 × 4 KB = 16 TB까지 가리킬 수 있어 그 이상은 항목이 더 커진다. 매핑 단위가 4 KB면 DRAM은 용량의 약 1/1000.</div>
+    </div>
+    <p>그래서 30 TB급 데이터센터 SSD는 DRAM이 30 GB 이상 필요해진다. 2023~2026년 QLC 기반 60~245 TB급 제품이 나오면서 매핑 단위를 16 KB 이상으로 키워 DRAM을 1/4 이하로 줄이는 설계(Indirection Unit, IU 확대)가 널리 쓰이기 시작했다. 대신 4 KB 랜덤 쓰기가 들어오면 16 KB 단위를 읽고-고치고-다시 써야(read-modify-write) 하므로 쓰기 증폭이 커진다.</p>
+
+    <div class="sim" id="sim-map">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>매핑 테이블 DRAM 요구량 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="map-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>SSD 용량 <output id="map-cap-out"></output></span><input type="range" id="map-cap" min="0" max="9" value="3"></label>
+          <div class="ctrl"><span>매핑 단위 (IU)</span><div class="seg" id="map-iu"><button data-value="4" class="on">4 KB</button><button data-value="16">16 KB</button><button data-value="32">32 KB</button><button data-value="64">64 KB</button></div></div>
+          <label class="ctrl"><span>HMB (호스트 메모리 차용) <output id="map-hmb-out"></output></span><input type="range" id="map-hmb" min="16" max="256" step="16" value="64"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">매핑 항목 수</span><span class="v" id="map-n">—</span></div>
+        <div class="stat"><span class="k">항목 크기 (물리 주소 비트)</span><span class="v" id="map-e">—</span></div>
+        <div class="stat"><span class="k">L2P 테이블 크기</span><span class="v" id="map-size">—</span></div>
+        <div class="stat"><span class="k">HMB가 덮는 LBA 범위</span><span class="v" id="map-cov">—</span></div>
+      </div>
+      <div class="sim-note">물리 주소 비트 = ⌈log₂(물리 페이지 수)⌉ (OP 10% 포함 가정), 항목 크기는 바이트 단위로 올림. 해볼 것: ① 16 TB를 넘기면 항목이 4 B → 5 B로 커지는 계단을 찾아보자. ② 64 TB에서 IU를 4 KB → 16 KB로 바꾸면 DRAM이 몇 GB 줄어드는가? ③ HMB 64 MB로 4 KB 매핑이면 LBA 몇 GB 범위를 캐싱할 수 있는가(= DRAM-less SSD의 '빠른 구간').</div>
+    </div>
+    <div class="callout deep"><strong>페이지 매핑 · 블록 매핑 · 하이브리드</strong>
+      <p>초기(2000년대) USB 메모리와 SD 카드는 DRAM이 없어 블록 단위로만 매핑했다(블록 매핑: 테이블이 수백 분의 1로 작아지지만 랜덤 쓰기가 끔찍하게 느리다). 그 사이에 로그 블록 몇 개만 페이지 매핑하는 하이브리드 FTL(BAST, FAST 등)이 연구되었다. 오늘날 SSD는 거의 모두 <strong>페이지 매핑</strong>이며, DRAM이 부족하면 테이블 전체를 NAND에 두고 일부만 캐싱하는 DFTL(Demand-based FTL) 방식을 쓴다. HMB SSD가 바로 이 구조다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="gc">
+    <h2>가비지 컬렉션과 쓰기 증폭</h2>
+    <p>Out-of-place 업데이트를 계속하면 빈 블록은 줄고 무효 페이지만 늘어난다. 빈 블록이 일정 수 아래로 떨어지면 FTL은 <span class="term">가비지 컬렉션</span><span class="en">(GC, Garbage Collection)</span>을 시작한다. ① 희생 블록(victim)을 고르고, ② 그 안의 <em>유효</em> 페이지를 다른 빈 페이지로 복사하고(매핑 테이블도 갱신), ③ 희생 블록을 소거해 빈 블록 목록에 되돌린다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="가비지 컬렉션 3단계">
+        <defs>
+          <marker id="ssd-a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+        <text x="100" y="22" text-anchor="middle" class="t-acc">① 희생 블록 선택</text>
+        <text x="380" y="22" text-anchor="middle" class="t-acc">② 유효 페이지 복사</text>
+        <text x="660" y="22" text-anchor="middle" class="t-acc">③ 소거</text>
+        <!-- stage 1 -->
+        <g>
+          <rect x="40" y="34" width="120" height="20" rx="2" class="f-ok-soft"/><rect x="40" y="56" width="120" height="20" rx="2" class="f-bad-soft"/>
+          <rect x="40" y="78" width="120" height="20" rx="2" class="f-bad-soft"/><rect x="40" y="100" width="120" height="20" rx="2" class="f-ok-soft"/>
+          <rect x="40" y="122" width="120" height="20" rx="2" class="f-bad-soft"/><rect x="40" y="144" width="120" height="20" rx="2" class="f-bad-soft"/>
+          <rect x="40" y="166" width="120" height="20" rx="2" class="f-ok-soft"/><rect x="40" y="188" width="120" height="20" rx="2" class="f-bad-soft"/>
+          <text x="100" y="48" text-anchor="middle" class="t-mono">V</text><text x="100" y="114" text-anchor="middle" class="t-mono">V</text><text x="100" y="180" text-anchor="middle" class="t-mono">V</text>
+          <text x="100" y="236" text-anchor="middle" class="t-dim">유효 3 / 8 → u = 0.375</text>
+        </g>
+        <path d="M172 120 H232" class="s-line" marker-end="url(#ssd-a4)"/>
+        <!-- stage 2 -->
+        <g>
+          <rect x="250" y="34" width="110" height="20" rx="2" class="f-ok-soft" style="opacity:.35"/><rect x="250" y="56" width="110" height="20" rx="2" class="f-bad-soft"/>
+          <rect x="250" y="78" width="110" height="20" rx="2" class="f-bad-soft"/><rect x="250" y="100" width="110" height="20" rx="2" class="f-ok-soft" style="opacity:.35"/>
+          <rect x="250" y="122" width="110" height="20" rx="2" class="f-bad-soft"/><rect x="250" y="144" width="110" height="20" rx="2" class="f-bad-soft"/>
+          <rect x="250" y="166" width="110" height="20" rx="2" class="f-ok-soft" style="opacity:.35"/><rect x="250" y="188" width="110" height="20" rx="2" class="f-bad-soft"/>
+          <rect x="400" y="34" width="110" height="20" rx="2" class="f-ok-soft"/><rect x="400" y="56" width="110" height="20" rx="2" class="f-ok-soft"/>
+          <rect x="400" y="78" width="110" height="20" rx="2" class="f-ok-soft"/><rect x="400" y="100" width="110" height="20" rx="2" class="f-elev"/>
+          <rect x="400" y="122" width="110" height="20" rx="2" class="f-elev"/><rect x="400" y="144" width="110" height="20" rx="2" class="f-elev"/>
+          <rect x="400" y="166" width="110" height="20" rx="2" class="f-elev"/><rect x="400" y="188" width="110" height="20" rx="2" class="f-elev"/>
+          <path d="M362 44 C380 44 382 44 398 44 M362 110 C382 110 380 66 398 66 M362 176 C386 176 380 88 398 88" class="s-acc" style="stroke-width:1.5"/>
+          <text x="455" y="236" text-anchor="middle" class="t-dim">빈 블록 (GC 대상 스트림)</text>
+          <text x="305" y="236" text-anchor="middle" class="t-dim">복사 3회 = 추가 쓰기</text>
+        </g>
+        <path d="M522 120 H582" class="s-line" marker-end="url(#ssd-a4)"/>
+        <!-- stage 3 -->
+        <g>
+          <rect x="600" y="34" width="120" height="174" rx="3" class="f-elev" style="stroke-dasharray:4 3"/>
+          <text x="660" y="112" text-anchor="middle" class="t">소거됨</text>
+          <text x="660" y="132" text-anchor="middle" class="t-mono">빈 페이지 8</text>
+          <text x="660" y="236" text-anchor="middle" class="t-dim">P/E 카운트 +1</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-5.</b> 가비지 컬렉션. 8페이지 중 3페이지가 유효한 블록을 치우면 3번의 복사(NAND 쓰기)를 치르고 5페이지 분량의 새 공간을 얻는다. 호스트는 이 5페이지를 쓸 수 있으므로, 호스트 5페이지 쓰기당 NAND에는 8페이지가 쓰인 셈이다.</figcaption>
+    </figure>
+    <p>GC가 하는 복사는 호스트가 요청하지 않은 추가 쓰기다. 그래서 SSD가 실제 NAND에 쓴 양은 호스트가 쓴 양보다 크다. 이 비율을 <span class="term">쓰기 증폭 계수</span><span class="en">(WAF, Write Amplification Factor)</span>라 한다. 정상 상태에서 희생 블록의 평균 유효 비율이 \(u\)라면, 블록 하나를 치울 때마다 \(uP\)번 복사하고 \((1-u)P\)만큼의 새 공간을 얻으므로</p>
+    <div class="formula">
+      $$ \mathrm{WAF} \;=\; \frac{\text{NAND 쓰기량}}{\text{호스트 쓰기량}} \;=\; \frac{(1-u)P + uP}{(1-u)P} \;=\; \frac{1}{1-u} $$
+      <div class="where">여기서 \(P\)는 블록당 페이지 수. 희생 블록이 비어 있을수록(\(u \to 0\)) WAF는 1에 가깝고, 꽉 찬 블록을 치우면(\(u \to 1\)) 폭발한다. 그림 10-5의 예는 \(u = 3/8\)이므로 WAF = 1.6.</div>
+    </div>
+    <p>그렇다면 희생 블록의 \(u\)를 낮추려면? 전체 물리 공간 중 호스트가 쓸 수 있는 부분을 줄여 여유 공간을 늘리면 된다. 이것이 <span class="term">오버 프로비저닝</span><span class="en">(OP, Over-Provisioning)</span>이다. 512 GB 제품에 512 GiB(≈550 GB)의 NAND를 넣으면 약 7%가 호스트에 보이지 않는 여유 공간이 된다. 데이터센터용 '혼합 사용' 제품은 3.84 TB 대신 3.2 TB로 팔아 OP를 28% 안팎으로 키운다.</p>
+    <div class="formula">
+      $$ \rho_{OP} = \frac{C_{phys} - C_{user}}{C_{user}}, \qquad \mathrm{WAF}_{greedy} \;\approx\; \frac{1 + \rho_{OP}}{2\rho_{OP}} \quad (\text{균일 랜덤 쓰기 근사}) $$
+      <div class="where">균일 랜덤 쓰기와 greedy 정책에 대한 널리 쓰이는 근사식. \(\rho\) = 7%면 약 7.6, 28%면 약 2.3이다. 실제 값은 블록 크기, 열린 블록 수, 워크로드의 핫/콜드 편중에 따라 달라지며 아래 시뮬레이터로 직접 확인할 수 있다.</div>
+    </div>
+    <p><strong>희생 블록 선택 정책</strong>도 WAF를 좌우한다. <span class="term">Greedy</span>는 유효 페이지가 가장 적은 블록을 고른다 — 당장 복사량이 최소다. <span class="term">Cost-Benefit</span>은 로그 구조 파일 시스템(LFS, Rosenblum &amp; Ousterhout 1992)에서 온 정책으로, 얻는 공간 \((1-u)\)과 데이터의 나이(age, 마지막으로 수정된 뒤 흐른 시간)를 함께 본다.</p>
+    <div class="formula">
+      $$ \text{score}_{CB} = \frac{(1-u)\cdot \text{age}}{2u} $$
+      <div class="where">분모의 \(2u\)는 유효 페이지를 읽고(\(u\)) 쓰는(\(u\)) 비용. 오래 안 바뀐 블록은 '콜드' 데이터라 한번 옮기면 한동안 다시 무효화되지 않으므로, 유효율이 조금 높더라도 치워 두는 편이 장기적으로 이득이다.</div>
+    </div>
+
+    <div class="sim" id="sim-gc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>FTL · 가비지 컬렉션 시뮬레이터</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gc-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ssd-btns">
+            <button class="btn primary" id="gc-run">▶ 실행</button>
+            <button class="btn" id="gc-fill">순차 채우기</button>
+            <button class="btn" id="gc-trim">TRIM 25%</button>
+            <button class="btn" id="gc-reset">리셋</button>
+          </div>
+          <div class="ctrl"><span>워크로드</span><div class="seg" id="gc-wl"><button data-value="rand" class="on">균일 랜덤</button><button data-value="hot">핫/콜드 80:20</button><button data-value="seq">순차</button></div></div>
+          <div class="ctrl"><span>희생 블록 정책</span><div class="seg" id="gc-pol"><button data-value="greedy" class="on">Greedy</button><button data-value="cb">Cost-Benefit</button><button data-value="rand">Random</button></div></div>
+          <label class="ctrl"><span>오버 프로비저닝 ρ <output id="gc-op-out"></output></span><input type="range" id="gc-op" min="7" max="50" value="12"></label>
+          <div class="ctrl"><span>웨어 레벨링</span><div class="seg" id="gc-wlv"><button data-value="none">없음</button><button data-value="dyn" class="on">동적</button><button data-value="stat">동적+정적</button></div></div>
+          <label class="check"><input type="checkbox" id="gc-sep" checked> GC 복사 스트림 분리 (호스트/GC 열린 블록 따로)</label>
+          <label class="ctrl"><span>속도 (프레임당 호스트 쓰기) <output id="gc-speed-out"></output></span><input type="range" id="gc-speed" min="1" max="400" value="60"></label>
+        </div>
+      </div>
+      <div class="ssd-legend">
+        <span><i style="background:var(--ok)"></i>유효</span>
+        <span><i style="background:var(--bad)"></i>무효</span>
+        <span><i style="background:var(--surface-2)"></i>빈 페이지</span>
+        <span><i style="background:transparent;border:2px solid var(--accent-2)"></i>열린 블록</span>
+        <span><i style="background:transparent;border:2px solid var(--warn)"></i>방금 GC한 블록</span>
+        <span>아래 띠 = 블록별 소거 횟수 (진할수록 많음)</span>
+      </div>
+      <div class="sim-view ssd-sub"><canvas id="gc-cv2"></canvas></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">호스트 쓰기 (드라이브 채움 횟수)</span><span class="v" id="gc-host">—</span></div>
+        <div class="stat"><span class="k">NAND 쓰기</span><span class="v" id="gc-nand">—</span></div>
+        <div class="stat"><span class="k">WAF 누적</span><span class="v" id="gc-waf">—</span></div>
+        <div class="stat"><span class="k">WAF 최근 (정상 상태)</span><span class="v" id="gc-wafr">—</span></div>
+        <div class="stat"><span class="k">근사식 (1+ρ)/2ρ</span><span class="v" id="gc-theory">—</span></div>
+        <div class="stat"><span class="k">소거 횟수 최소/평균/최대</span><span class="v" id="gc-erase">—</span></div>
+      </div>
+      <div class="sim-note">블록 64개 × 페이지 64개(총 4,096페이지)의 축소 모델. 한 열이 한 블록이다. 빈 블록이 2개 아래로 떨어지면 GC가 돈다. 블록이 작고 열린 블록·예비 블록이 여유 공간 일부를 차지하므로 정상 상태 WAF는 근사식보다 다소 높게 나온다. 해볼 것: ① 빈 드라이브에서 균일 랜덤 쓰기 — 처음 한 번 채울 때까지 WAF = 1, 그 뒤 GC가 시작되며 급상승한다. ② OP를 7% → 28%로 올리면 정상 상태 WAF가 얼마나 줄어드는가? 근사식과 비교하자. ③ 핫/콜드 워크로드에서 Greedy와 Cost-Benefit, 스트림 분리 on/off를 비교하자. ④ 웨어 레벨링 '없음'으로 핫/콜드를 오래 돌리면 소거 횟수가 블록마다 크게 벌어진다. '동적+정적'은 이를 평탄하게 만들지만 WAF가 약간 오른다. ⑤ 정상 상태에서 TRIM 25%를 누르면 유효 데이터가 줄어 실질 OP가 커지고 WAF가 떨어진다.</div>
+    </div>
+    <div class="callout warn"><strong>새 SSD의 벤치마크는 믿지 마라</strong>
+      <p>공장에서 갓 나온(FOB, Fresh-Out-of-Box) SSD는 모든 블록이 비어 있어 GC가 없다. 랜덤 쓰기를 계속 퍼부으면 몇 분~몇 시간 뒤 GC가 시작되며 성능이 1/3~1/10로 떨어지고 요동친 뒤 <span class="term">정상 상태</span><span class="en">(steady state)</span>에 안착한다. SNIA의 SSD 성능 시험 규격(PTS)이 드라이브를 두 번 가득 채우는 프리컨디셔닝을 요구하는 이유다. 데이터센터 SSD 스펙의 '4K 랜덤 쓰기 IOPS'는 정상 상태 값이다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="wear">
+    <h2>웨어 레벨링과 내구성: TBW · DWPD</h2>
+    <p>P/E 수명이 3,000회라도, 특정 블록만 계속 소거되면 그 블록이 먼저 죽는다. <span class="term">웨어 레벨링</span><span class="en">(Wear Leveling)</span>은 모든 블록이 비슷한 속도로 닳도록 하는 기법이다.</p>
+    <ul>
+      <li><strong>동적 웨어 레벨링</strong>: 새로 쓸 빈 블록을 고를 때 소거 횟수가 가장 적은 블록을 준다. 자주 바뀌는(핫) 데이터가 들어가는 블록들 사이에서는 고르게 닳는다. 하지만 한 번 쓰고 안 바뀌는 콜드 데이터(OS 파일, 사진 등)가 앉은 블록은 영영 소거되지 않아 '젊은' 채로 남는다.</li>
+      <li><strong>정적 웨어 레벨링</strong>: 소거 횟수 차이가 문턱을 넘으면, 콜드 데이터가 있는 젊은 블록을 강제로 비워(콜드 데이터를 많이 닳은 블록으로 옮김) 젊은 블록을 핫 데이터 풀에 투입한다. 추가 복사가 생기므로 WAF를 약간 희생한다.</li>
+    </ul>
+    <p>완벽한 웨어 레벨링을 가정하면, SSD 전체가 견딜 수 있는 호스트 쓰기 총량은 NAND 전체 용량 × P/E 수명을 WAF로 나눈 값이다. 제조사가 보증하는 <span class="term">TBW</span><span class="en">(Terabytes Written)</span>와, 보증 기간 동안 매일 용량의 몇 배를 쓸 수 있는지 나타내는 <span class="term">DWPD</span><span class="en">(Drive Writes Per Day)</span>는 다음과 같이 연결된다.</p>
+    <div class="formula">
+      $$ \mathrm{TBW} \approx \frac{C_{NAND} \times N_{PE}}{\mathrm{WAF}},\;\; C_{NAND} \approx C(1+\rho_{OP}), \qquad \mathrm{DWPD} = \frac{\mathrm{TBW}}{C \times 365 \times Y_{warranty}}, \qquad \text{수명(년)} = \frac{\mathrm{TBW}}{W_{day} \times 365} $$
+      <div class="where">\(C\)는 사용자 용량(\(C_{NAND}\)는 OP를 포함한 실제 NAND 용량), \(N_{PE}\)는 P/E 수명, \(Y\)는 보증 연수, \(W_{day}\)는 하루 호스트 쓰기량. 제조사 정격 TBW는 JEDEC JESD218/219의 워크로드·데이터 보존 조건(예: 소비자용은 수명 말기에도 전원 없이 30℃에서 1년 보존)을 만족하도록 여유를 두고 매긴다. 기업용은 보존 요구가 짧아(예: 40℃에서 3개월) 같은 NAND라도 더 많은 P/E까지 쓸 수 있다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>제품 등급 (예)</th><th class="num">용량</th><th class="num">정격</th><th class="num">DWPD (5년)</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>소비자 TLC (PCIe 4.0 플래그십)</td><td class="num">1 TB</td><td class="num">600 TBW</td><td class="num">≈ 0.33</td><td>일반 PC 사용(하루 20~50 GB)으로 수십 년</td></tr>
+        <tr><td>소비자 QLC</td><td class="num">2 TB</td><td class="num">~ 400–700 TBW</td><td class="num">≈ 0.1–0.2</td><td>읽기 위주 대용량</td></tr>
+        <tr><td>데이터센터 읽기 집중형 (TLC)</td><td class="num">3.84 TB</td><td class="num">1 DWPD</td><td class="num">1</td><td>≈ 7 PBW, OP ~7%</td></tr>
+        <tr><td>데이터센터 혼합 사용 (TLC)</td><td class="num">3.2 TB</td><td class="num">3 DWPD</td><td class="num">3</td><td>같은 NAND, OP ~28% → WAF↓</td></tr>
+        <tr><td>데이터센터 대용량 QLC (2024~)</td><td class="num">30~245 TB</td><td class="num">~0.3–0.6 DWPD</td><td class="num">0.3–0.6</td><td>순차 쓰기 위주, 16 KB+ IU</td></tr>
+      </tbody>
+    </table></div>
+    <div class="sim" id="sim-end">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>내구성 계산기: TBW · DWPD · 수명</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="end-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ssd-btns">
+            <button class="btn" id="end-p1">소비자 TLC</button>
+            <button class="btn" id="end-p2">소비자 QLC</button>
+            <button class="btn" id="end-p3">서버 혼합 사용</button>
+          </div>
+          <label class="ctrl"><span>용량 <output id="end-cap-out"></output></span><input type="range" id="end-cap" min="0" max="8" value="2"></label>
+          <label class="ctrl"><span>P/E 수명 <output id="end-pe-out"></output></span><input type="range" id="end-pe" min="300" max="10000" step="100" value="3000"></label>
+          <label class="ctrl"><span>WAF <output id="end-waf-out"></output></span><input type="range" id="end-waf" min="1" max="10" step="0.1" value="2.5"></label>
+          <label class="ctrl"><span>하루 호스트 쓰기 <output id="end-dw-out"></output></span><input type="range" id="end-dw" min="0" max="100" value="30"></label>
+          <div class="ctrl"><span>오버 프로비저닝</span><div class="seg" id="end-op"><button data-value="7" class="on">7%</button><button data-value="28">28%</button></div></div>
+          <div class="ctrl"><span>보증 기간</span><div class="seg" id="end-y"><button data-value="3">3년</button><button data-value="5" class="on">5년</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">TBW (이상적)</span><span class="v" id="end-tbw">—</span></div>
+        <div class="stat"><span class="k">DWPD (보증 기간)</span><span class="v" id="end-dwpd">—</span></div>
+        <div class="stat"><span class="k">NAND 실제 쓰기 / 일</span><span class="v" id="end-nand">—</span></div>
+        <div class="stat"><span class="k">예상 수명</span><span class="v" id="end-life">—</span></div>
+      </div>
+      <div class="sim-note">그래프: 누적 호스트 쓰기(청록 선)가 TBW(주황 수평선)에 닿는 시점이 이론 수명이다. 해볼 것: ① 소비자 TLC 1 TB · 하루 50 GB면 수명이 보증 기간의 몇 배인가? ② 서버 혼합 사용 프리셋에서 WAF를 1.5 → 5로 바꾸면 DWPD가 어떻게 되는가 — OP로 WAF를 낮추는 것이 내구성의 핵심 레버다. ③ QLC(P/E 1,000)에 하루 2 TB를 쓰는 로그 서버는 몇 년을 버티는가?</div>
+    </div>
+    <div class="callout"><strong>수명 끝에서는 무슨 일이?</strong>
+      <p>블록이 닳으면 프로그램/소거가 실패하거나 ECC로 못 고치는 오류가 나는데, 컨트롤러는 그 블록을 <span class="term">배드 블록</span>으로 표시하고 예비 블록으로 대체한다. 예비 블록(OP의 일부)이 바닥나면 SSD는 데이터 손실을 막기 위해 <em>읽기 전용</em> 모드로 들어간다. NVMe의 SMART 로그에 있는 'Percentage Used'와 'Available Spare' 항목으로 이 상태를 미리 볼 수 있다. 실제로는 정격 TBW를 몇 배 넘겨도 동작하는 경우가 많지만, 보존 기간(전원 없이 데이터를 유지하는 시간)이 짧아진다(11장).</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="slc">
+    <h2>SLC 캐시와 TRIM</h2>
+    <p>TLC 셀에 3비트를 쓰려면 8개 \(V_t\) 레벨을 정밀하게 맞추느라 여러 번의 프로그램-검증 펄스가 필요하다(8장의 ISPP). 반면 같은 셀을 1비트(SLC 모드)로 쓰면 두 레벨만 가르면 되므로 수 배 빠르다. 거의 모든 소비자용 SSD는 이 점을 이용해 빈 공간 일부를 <span class="term">SLC 캐시</span><span class="en">(SLC write buffer)</span>로 쓴다. 호스트 쓰기를 일단 SLC 모드로 빠르게 받고, 유휴 시간에 3개 SLC 블록의 데이터를 1개 TLC 블록으로 옮겨 담는다(<span class="term">폴딩</span>, folding).</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="SLC 캐시와 폴딩">
+        <defs>
+          <marker id="ssd-a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+          <marker id="ssd-a5b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent-2)"/></marker>
+        </defs>
+        <rect x="10" y="90" width="100" height="60" rx="10" class="f-surface"/>
+        <text x="60" y="116" text-anchor="middle" class="t">호스트</text>
+        <text x="60" y="134" text-anchor="middle" class="t-mono">쓰기</text>
+        <path d="M112 110 H176" class="s-acc" marker-end="url(#ssd-a5)"/>
+        <text x="144" y="100" text-anchor="middle" class="t-mono">빠름</text>
+        <!-- SLC region -->
+        <rect x="180" y="40" width="190" height="160" rx="10" class="f-acc-soft"/>
+        <text x="275" y="62" text-anchor="middle" class="t-acc">SLC 캐시 영역</text>
+        <text x="275" y="82" text-anchor="middle" class="t-mono">1 bit/셀 · t_PROG ~0.1–0.2 ms</text>
+        <rect x="196" y="96" width="50" height="40" rx="4" class="f-elev"/><rect x="252" y="96" width="50" height="40" rx="4" class="f-elev"/><rect x="308" y="96" width="50" height="40" rx="4" class="f-elev"/>
+        <text x="221" y="121" text-anchor="middle" class="t-mono">S1</text><text x="277" y="121" text-anchor="middle" class="t-mono">S2</text><text x="333" y="121" text-anchor="middle" class="t-mono">S3</text>
+        <text x="275" y="164" text-anchor="middle" class="t-dim">빈 공간의 일부를 빌림</text>
+        <text x="275" y="184" text-anchor="middle" class="t-dim">(동적: 드라이브가 찰수록 축소)</text>
+        <!-- folding -->
+        <path d="M372 120 H456" class="s-acc2" marker-end="url(#ssd-a5b)"/>
+        <text x="414" y="108" text-anchor="middle" class="t-mono" style="fill:var(--accent-2)">폴딩</text>
+        <text x="414" y="140" text-anchor="middle" class="t-mono">유휴 시</text>
+        <rect x="460" y="40" width="190" height="160" rx="10" class="f-acc2-soft"/>
+        <text x="555" y="62" text-anchor="middle" class="t" style="font-weight:700">TLC 영역</text>
+        <text x="555" y="82" text-anchor="middle" class="t-mono">3 bit/셀 · t_PROG ~0.5 ms</text>
+        <rect x="490" y="96" width="130" height="40" rx="4" class="f-elev"/>
+        <text x="555" y="121" text-anchor="middle" class="t-mono">T = S1 + S2 + S3</text>
+        <text x="555" y="164" text-anchor="middle" class="t-dim">캐시가 꽉 차면 호스트 쓰기가</text>
+        <text x="555" y="184" text-anchor="middle" class="t-dim">여기로 직접 (느림)</text>
+        <path d="M112 132 C150 230 480 240 540 202" style="stroke:var(--warn);stroke-width:1.6;stroke-dasharray:5 4;fill:none"/>
+        <text x="300" y="236" text-anchor="middle" class="t-dim" style="fill:var(--warn)">캐시 소진 후 경로 → 속도 절벽</text>
+        <rect x="668" y="60" width="84" height="120" rx="8" class="f-surface"/>
+        <text x="710" y="92" text-anchor="middle" class="t-mono">SLC 1개</text>
+        <text x="710" y="110" text-anchor="middle" class="t-mono">= TLC 1/3</text>
+        <text x="710" y="136" text-anchor="middle" class="t-mono">공간</text>
+        <text x="710" y="154" text-anchor="middle" class="t-mono">효율 ↓</text>
+      </svg>
+      <figcaption><b>그림 10-6.</b> SLC 캐시. SLC 모드는 같은 셀에 1비트만 저장하므로 3배의 공간을 쓰지만 쓰기가 빠르다. 캐시가 빈 동안은 PCIe 링크 속도에 가깝게 쓰다가, 캐시가 다 차면 느린 TLC(또는 QLC) 직접 쓰기로 떨어진다 — <b>쓰기 속도 절벽</b>(write cliff).</figcaption>
+    </figure>
+    <p>캐시 크기는 제품마다 다르다. 몇 GB 크기로 고정된 <strong>정적 SLC 캐시</strong>와, 빈 공간에 비례해 수십~수백 GB까지 늘어나는 <strong>동적 SLC 캐시</strong>를 섞어 쓰는 경우가 많다. 동적 캐시는 드라이브가 찰수록 작아지므로, 80~90% 찬 SSD에 큰 파일을 복사하면 절벽이 훨씬 일찍 온다. QLC SSD는 캐시 밖 쓰기 속도가 HDD 수준(수백 MB/s 이하)까지 떨어지기도 한다.</p>
+
+    <div class="sim" id="sim-slc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>SLC 캐시와 쓰기 속도 절벽</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="slc-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>용량</span><div class="seg" id="slc-cap"><button data-value="1">1 TB</button><button data-value="2" class="on">2 TB</button><button data-value="4">4 TB</button></div></div>
+          <div class="ctrl"><span>NAND</span><div class="seg" id="slc-nand"><button data-value="3" class="on">TLC</button><button data-value="4">QLC</button></div></div>
+          <div class="ctrl"><span>캐시 방식</span><div class="seg" id="slc-mode"><button data-value="dyn" class="on">동적 + 정적</button><button data-value="stat">정적만</button></div></div>
+          <label class="ctrl"><span>드라이브 사용률 <output id="slc-used-out"></output></span><input type="range" id="slc-used" min="0" max="95" value="20"></label>
+          <label class="ctrl"><span>연속 쓰기량 <output id="slc-amt-out"></output></span><input type="range" id="slc-amt" min="10" max="2000" step="10" value="800"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">현재 SLC 캐시 크기</span><span class="v" id="slc-size">—</span></div>
+        <div class="stat"><span class="k">캐시 안 / 밖 속도</span><span class="v" id="slc-v">—</span></div>
+        <div class="stat"><span class="k">절벽까지 시간</span><span class="v" id="slc-tc">—</span></div>
+        <div class="stat"><span class="k">총 소요 시간</span><span class="v" id="slc-t">—</span></div>
+        <div class="stat"><span class="k">평균 속도</span><span class="v" id="slc-avg">—</span></div>
+      </div>
+      <div class="sim-note">교육용 모델: '동적 + 정적' 캐시 ≈ 빈 공간 ÷ (셀당 비트 수) × 0.75 + 정적 캐시(용량 TB당 약 6 GB), '정적만'은 용량 TB당 약 24 GB, 캐시 안 속도 ≈ 6.5 GB/s(Gen4), 캐시 밖은 다이 수에 비례(실제 값은 제품마다 크게 다르다). 쓰기량은 빈 공간보다 클 수 없다. 해볼 것: ① 2 TB TLC에서 사용률 20% → 85%로 올리며 절벽 위치를 보자. ② QLC로 바꾸면 절벽 뒤 속도가 얼마나 떨어지는가? ③ 정적 캐시만 쓰는 설계는 어떤 사용자에게 유리할까(찬 드라이브에서도 일정한 성능).</div>
+    </div>
+
+    <h3>TRIM: 지운 파일을 SSD에 알려 주기</h3>
+    <p>파일 시스템이 파일을 지워도, 전통적으로는 메타데이터만 고치고 데이터 블록은 그대로 둔다. HDD는 상관없지만 SSD 입장에서는 그 LBA들이 여전히 <em>유효</em> 데이터로 보이므로, GC 때 쓸데없이 복사된다. <span class="term">TRIM</span>(ATA) 또는 NVMe의 <span class="term">Deallocate</span>(Dataset Management 명령)는 "이 LBA 범위는 더 이상 안 쓴다"고 SSD에 알려 주는 명령이다. FTL은 해당 매핑을 지우고 그 물리 페이지를 무효로 표시한다. 효과는 유효 데이터가 줄어드는 것 — 즉 <strong>실질 오버 프로비저닝이 늘어나 WAF가 낮아지는 것</strong>이다. 앞의 GC 시뮬레이터에서 TRIM 25% 버튼으로 확인할 수 있다. 리눅스의 <code>fstrim</code>, 윈도우의 '드라이브 최적화'가 주기적으로 TRIM을 보낸다.</p>
+    <div class="callout tip"><strong>실용 팁: SSD를 100% 채우지 말자</strong>
+      <p>파티션에 할당하지 않은 공간이나 TRIM된 빈 공간은 FTL 입장에서 추가 OP다. 소비자용 SSD라도 10~20%를 비워 두면 동적 SLC 캐시가 넉넉하게 유지되고 GC 효율이 좋아져 성능과 수명이 모두 개선된다. 데이터센터에서 3.84 TB 드라이브를 3.2 TB로 파티션해(또는 NVMe namespace를 작게 만들어) 혼합 사용 등급처럼 쓰는 것도 같은 원리다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="nvme">
+    <h2>NVMe와 PCIe: 병렬성을 위한 인터페이스</h2>
+    <p>SATA SSD는 HDD용으로 설계된 AHCI 프로토콜을 썼다. AHCI는 명령 큐가 <strong>1개, 깊이 32</strong>이고, 명령 하나를 내는 데 여러 번의 레지스터 접근(비캐시 MMIO 읽기)과 락이 필요했다. 회전 원판의 지연이 수 ms이던 시절엔 문제가 없었지만, 수십 µs에 응답하고 수십 개 다이가 동시에 일하는 SSD에는 병목이었다. <span class="term">NVMe</span><span class="en">(Non-Volatile Memory Express, 2011년 1.0)</span>는 처음부터 플래시와 멀티코어 CPU를 위해 설계되었다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 330" role="img" aria-label="NVMe 제출 큐와 완료 큐, 도어벨">
+        <defs>
+          <marker id="ssd-a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent)"/></marker>
+          <marker id="ssd-a6b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--accent-2)"/></marker>
+        </defs>
+        <rect x="10" y="10" width="420" height="310" rx="12" class="f-surface"/>
+        <text x="220" y="32" text-anchor="middle" class="t">호스트 (CPU 코어 + 메인 메모리)</text>
+        <!-- core 0 -->
+        <g>
+          <rect x="26" y="50" width="80" height="36" rx="6" class="f-elev"/><text x="66" y="73" text-anchor="middle" class="t">코어 0</text>
+          <rect x="130" y="46" width="200" height="20" rx="3" class="f-acc-soft"/>
+          <text x="340" y="61" class="t-mono">SQ0</text>
+          <rect x="130" y="70" width="200" height="20" rx="3" class="f-acc2-soft"/>
+          <text x="340" y="85" class="t-mono">CQ0</text>
+          <path d="M150 46 V66 M170 46 V66 M190 46 V66 M210 46 V66 M230 46 V66 M250 46 V66 M270 46 V66 M290 46 V66 M310 46 V66" class="s-line" style="stroke-width:.8"/>
+          <path d="M150 70 V90 M170 70 V90 M190 70 V90 M210 70 V90 M230 70 V90 M250 70 V90 M270 70 V90 M290 70 V90 M310 70 V90" class="s-line" style="stroke-width:.8"/>
+        </g>
+        <g>
+          <rect x="26" y="116" width="80" height="36" rx="6" class="f-elev"/><text x="66" y="139" text-anchor="middle" class="t">코어 1</text>
+          <rect x="130" y="112" width="200" height="20" rx="3" class="f-acc-soft"/><text x="340" y="127" class="t-mono">SQ1</text>
+          <rect x="130" y="136" width="200" height="20" rx="3" class="f-acc2-soft"/><text x="340" y="151" class="t-mono">CQ1</text>
+        </g>
+        <text x="66" y="186" text-anchor="middle" class="t-dim">⋮</text><text x="230" y="186" text-anchor="middle" class="t-dim">⋮  코어마다 큐 쌍 (락 불필요)</text>
+        <g>
+          <rect x="26" y="204" width="80" height="36" rx="6" class="f-elev"/><text x="66" y="227" text-anchor="middle" class="t">코어 N</text>
+          <rect x="130" y="200" width="200" height="20" rx="3" class="f-acc-soft"/><text x="340" y="215" class="t-mono">SQn</text>
+          <rect x="130" y="224" width="200" height="20" rx="3" class="f-acc2-soft"/><text x="340" y="239" class="t-mono">CQn</text>
+        </g>
+        <text x="220" y="272" text-anchor="middle" class="t-mono">SQ 항목 64 B · CQ 항목 16 B</text>
+        <text x="220" y="292" text-anchor="middle" class="t-mono">I/O 큐 최대 65,535개 × 깊이 최대 65,536</text>
+        <!-- controller -->
+        <rect x="520" y="10" width="230" height="310" rx="12" class="f-acc-soft"/>
+        <text x="635" y="32" text-anchor="middle" class="t-acc">NVMe 컨트롤러 (SSD)</text>
+        <rect x="540" y="50" width="190" height="60" rx="8" class="f-elev"/>
+        <text x="635" y="74" text-anchor="middle" class="t">도어벨 레지스터</text>
+        <text x="635" y="94" text-anchor="middle" class="t-mono">SQ tail · CQ head</text>
+        <rect x="540" y="130" width="190" height="60" rx="8" class="f-elev"/>
+        <text x="635" y="154" text-anchor="middle" class="t">명령 인출 · 실행</text>
+        <text x="635" y="174" text-anchor="middle" class="t-mono">FTL → NAND 다이들</text>
+        <rect x="540" y="210" width="190" height="50" rx="8" class="f-elev"/>
+        <text x="635" y="240" text-anchor="middle" class="t">MSI-X 인터럽트</text>
+        <!-- flow -->
+        <path d="M330 56 C420 56 460 80 538 80" class="s-acc" marker-end="url(#ssd-a6)"/>
+        <text x="440" y="54" text-anchor="middle" class="t-mono">② SQ 도어벨</text>
+        <path d="M540 150 C460 150 420 60 334 58" style="stroke:var(--accent);stroke-width:1.4;stroke-dasharray:4 3;fill:none" marker-end="url(#ssd-a6)"/>
+        <text x="455" y="128" text-anchor="middle" class="t-mono">③ 명령 인출 (DMA)</text>
+        <path d="M540 176 C460 176 420 82 334 82" class="s-acc2" marker-end="url(#ssd-a6b)"/>
+        <text x="455" y="194" text-anchor="middle" class="t-mono">⑤ 완료 기록</text>
+        <path d="M540 236 C300 300 150 290 90 244" class="s-acc2" style="stroke-dasharray:5 4" marker-end="url(#ssd-a6b)"/>
+        <text x="455" y="270" text-anchor="middle" class="t-mono">⑥ 인터럽트</text>
+        <text x="118" y="104" class="t-mono">① 명령 기록</text>
+      </svg>
+      <figcaption><b>그림 10-7.</b> NVMe 큐 구조. 코어마다 제출 큐(SQ)와 완료 큐(CQ)가 메인 메모리에 링 버퍼로 있다. ① 호스트가 SQ에 64바이트 명령을 쓰고 ② SSD의 도어벨 레지스터에 새 tail 위치를 한 번 기록하면, ③ 컨트롤러가 DMA로 명령을 가져가 ④ 실행하고 ⑤ CQ에 완료 항목을 쓴 뒤 ⑥ 인터럽트를 보낸다. 호스트는 완료를 처리하고 CQ head 도어벨을 갱신한다. 명령 하나에 MMIO 쓰기 두 번이면 충분하다.</figcaption>
+    </figure>
+    <p>코어마다 전용 큐 쌍이 있으니 코어끼리 락을 잡을 필요가 없고, 큐 깊이가 깊어 수십~수백 개의 명령을 동시에 SSD 안으로 밀어 넣을 수 있다. 이 동시 명령들이 2절의 다이 병렬성을 채운다. 큐 깊이(QD), IOPS, 지연 사이의 관계는 대기행렬 이론의 <span class="term">리틀의 법칙</span><span class="en">(Little's law)</span>이 정확히 말해 준다.</p>
+    <div class="formula">
+      $$ \text{QD} = \text{IOPS} \times \text{지연} \qquad\Longrightarrow\qquad \text{IOPS} = \frac{\text{QD}}{\text{지연}} $$
+      <div class="where">시스템 안에 머무는 평균 요청 수 = 도착률 × 평균 체류 시간. 4 KB 랜덤 읽기 지연이 80 µs인 SSD에 QD 1로 요청하면 12,500 IOPS(≈ 50 MB/s)에 불과하다. 수십만~백만 IOPS는 QD를 수십~수백으로 높여 다이들을 동시에 바쁘게 할 때만 나온다. 다이가 포화되면 QD를 더 올려도 IOPS는 늘지 않고 지연만 늘어난다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>PCIe 세대</th><th class="num">전송률/레인</th><th>인코딩</th><th class="num">×4 단방향 대역폭</th><th class="num">대표 SSD 순차 읽기</th><th>SSD 보급 시기</th></tr></thead>
+      <tbody>
+        <tr><td>Gen3</td><td class="num">8 GT/s</td><td>128b/130b NRZ</td><td class="num">≈ 3.9 GB/s</td><td class="num">~3.5 GB/s</td><td>2015~</td></tr>
+        <tr><td>Gen4</td><td class="num">16 GT/s</td><td>128b/130b NRZ</td><td class="num">≈ 7.9 GB/s</td><td class="num">~7.0–7.4 GB/s</td><td>2019~</td></tr>
+        <tr><td>Gen5</td><td class="num">32 GT/s</td><td>128b/130b NRZ</td><td class="num">≈ 15.8 GB/s</td><td class="num">~12–14.5 GB/s</td><td>2023~</td></tr>
+        <tr><td>Gen6</td><td class="num">64 GT/s</td><td>PAM4 + FLIT (FEC)</td><td class="num">≈ 30 GB/s</td><td class="num">~28 GB/s (데이터센터용)</td><td>2026~ (데이터센터용부터)</td></tr>
+      </tbody>
+    </table></div>
+    <p>PCIe 6.0은 6장에서 본 PAM4 신호를 도입해 레인당 64 GT/s를 얻고, 오류율 증가를 FEC와 고정 크기 FLIT 패킷으로 감당한다. 참고로 SATA 3의 한계는 600 MB/s(실효 ~550 MB/s)다.</p>
+
+    <div class="sim" id="sim-qd">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>큐 깊이 vs IOPS · 지연 (리틀의 법칙)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="qd-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>큐 깊이 QD <output id="qd-qd-out"></output></span><input type="range" id="qd-qd" min="0" max="10" value="5"></label>
+          <div class="ctrl"><span>병렬 다이 수</span><div class="seg" id="qd-die"><button data-value="8">8</button><button data-value="16">16</button><button data-value="32" class="on">32</button><button data-value="64">64</button><button data-value="128">128</button></div></div>
+          <label class="ctrl"><span>NAND 읽기 t<sub>R</sub> <output id="qd-tr-out"></output></span><input type="range" id="qd-tr" min="3" max="120" value="50"></label>
+          <label class="ctrl"><span>컨트롤러·소프트웨어 오버헤드 <output id="qd-ov-out"></output></span><input type="range" id="qd-ov" min="5" max="60" value="20"></label>
+          <div class="ctrl"><span>호스트 링크 (×4)</span><div class="seg" id="qd-link"><button data-value="3.5">Gen3</button><button data-value="7" class="on">Gen4</button><button data-value="14">Gen5</button></div></div>
+          <label class="check"><input type="checkbox" id="qd-sata" checked> SATA/AHCI 비교 (QD ≤ 32, 550 MB/s)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">4 KB 랜덤 읽기 IOPS</span><span class="v" id="qd-iops">—</span></div>
+        <div class="stat"><span class="k">대역폭</span><span class="v" id="qd-bw">—</span></div>
+        <div class="stat"><span class="k">평균 지연</span><span class="v" id="qd-lat">—</span></div>
+        <div class="stat"><span class="k">바쁜 다이 (평균)</span><span class="v" id="qd-busy">—</span></div>
+        <div class="stat"><span class="k">병목</span><span class="v" id="qd-bn">—</span></div>
+      </div>
+      <div class="sim-note">모델: QD개의 요청이 D개 다이에 무작위로 흩어지면 평균 D(1−(1−1/D)<sup>QD</sup>)개 다이가 바쁘다. IOPS = min(바쁜 다이/t<sub>R</sub>, QD/(t<sub>R</sub>+오버헤드), 컨트롤러 한계 ~2.5 M, 링크/4 KB), 지연 = QD/IOPS. 해볼 것: ① QD 1의 IOPS가 1/(t<sub>R</sub>+오버헤드)와 같은지 확인. ② 다이 32개에서 QD를 올리면 어디서 포화되는가? 그 뒤 지연은 QD에 비례해 늘어난다. ③ t<sub>R</sub>를 3~10 µs(저지연 SLC급 NAND)로 낮추면 병목이 컨트롤러/링크로 옮겨 간다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="zns">
+    <h2>ZNS와 FDP: 호스트와 FTL의 협업</h2>
+    <p>지금까지 본 FTL은 호스트에게 NAND의 모든 사정을 숨기는 '블랙박스'였다. 그 대가가 쓰기 증폭, OP로 버리는 용량, 큰 DRAM, 그리고 GC가 도는 순간 튀는 꼬리 지연(tail latency)이다. 문제의 뿌리는 FTL이 <em>데이터의 수명</em>을 모른다는 데 있다. 곧 지워질 임시 파일과 몇 년 갈 아카이브가 같은 블록에 섞이면, 그 블록은 GC 때 반드시 유효 데이터를 복사해야 한다. 데이터를 가장 잘 아는 호스트가 배치를 거들면 이 문제가 크게 줄어든다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 290" role="img" aria-label="기존 FTL, ZNS, FDP 비교">
+        <text x="125" y="24" text-anchor="middle" class="t-acc">기존 블록 인터페이스</text>
+        <text x="380" y="24" text-anchor="middle" class="t-acc">ZNS (Zoned Namespace)</text>
+        <text x="635" y="24" text-anchor="middle" class="t-acc">FDP (Flexible Data Placement)</text>
+        <!-- conventional -->
+        <g>
+          <rect x="20" y="40" width="210" height="36" rx="6" class="f-surface"/>
+          <text x="125" y="63" text-anchor="middle" class="t-dim">호스트: 아무 LBA나 쓰기</text>
+          <path d="M125 76 V92" class="s-line"/>
+          <rect x="20" y="92" width="210" height="36" rx="6" class="f-acc2-soft"/>
+          <text x="125" y="115" text-anchor="middle" class="t">FTL (페이지 매핑, GC)</text>
+          <path d="M125 128 V144" class="s-line"/>
+          <g>
+            <rect x="30" y="146" width="56" height="100" rx="4" class="f-elev"/><rect x="97" y="146" width="56" height="100" rx="4" class="f-elev"/><rect x="164" y="146" width="56" height="100" rx="4" class="f-elev"/>
+            <rect x="34" y="150" width="48" height="14" class="f-bad-soft"/><rect x="34" y="166" width="48" height="14" class="f-ok-soft"/><rect x="34" y="182" width="48" height="14" class="f-bad-soft"/><rect x="34" y="198" width="48" height="14" class="f-ok-soft"/><rect x="34" y="214" width="48" height="14" class="f-bad-soft"/>
+            <rect x="101" y="150" width="48" height="14" class="f-ok-soft"/><rect x="101" y="166" width="48" height="14" class="f-bad-soft"/><rect x="101" y="182" width="48" height="14" class="f-ok-soft"/><rect x="101" y="198" width="48" height="14" class="f-bad-soft"/><rect x="101" y="214" width="48" height="14" class="f-ok-soft"/>
+            <rect x="168" y="150" width="48" height="14" class="f-bad-soft"/><rect x="168" y="166" width="48" height="14" class="f-bad-soft"/><rect x="168" y="182" width="48" height="14" class="f-ok-soft"/><rect x="168" y="198" width="48" height="14" class="f-ok-soft"/>
+          </g>
+          <text x="125" y="266" text-anchor="middle" class="t-dim">수명이 다른 데이터가 섞임</text>
+          <text x="125" y="284" text-anchor="middle" class="t-mono">WAF 2~5, OP 7~28%</text>
+        </g>
+        <!-- ZNS -->
+        <g>
+          <rect x="275" y="40" width="210" height="36" rx="6" class="f-surface"/>
+          <text x="380" y="63" text-anchor="middle" class="t-dim">호스트: 존 단위 순차 쓰기</text>
+          <path d="M380 76 V92" class="s-line"/>
+          <rect x="275" y="92" width="210" height="36" rx="6" class="f-elev"/>
+          <text x="380" y="115" text-anchor="middle" class="t">얇은 매핑 (존 → 블록)</text>
+          <path d="M380 128 V144" class="s-line"/>
+          <rect x="285" y="146" width="56" height="100" rx="4" class="f-ok-soft"/><rect x="352" y="146" width="56" height="100" rx="4" class="f-acc-soft"/><rect x="419" y="146" width="56" height="100" rx="4" class="f-elev"/>
+          <rect x="352" y="146" width="56" height="60" rx="4" class="f-ok-soft"/>
+          <text x="313" y="200" text-anchor="middle" class="t-mono">존0</text><text x="380" y="232" text-anchor="middle" class="t-mono">존1</text><text x="447" y="200" text-anchor="middle" class="t-mono">존2</text>
+          <text x="380" y="266" text-anchor="middle" class="t-dim">호스트가 존을 통째로 리셋</text>
+          <text x="380" y="284" text-anchor="middle" class="t-mono">장치 WAF ≈ 1, OP·DRAM ↓</text>
+        </g>
+        <!-- FDP -->
+        <g>
+          <rect x="530" y="40" width="210" height="36" rx="6" class="f-surface"/>
+          <text x="635" y="63" text-anchor="middle" class="t-dim">호스트: 쓰기에 배치 힌트 태그</text>
+          <path d="M635 76 V92" class="s-line"/>
+          <rect x="530" y="92" width="210" height="36" rx="6" class="f-acc2-soft"/>
+          <text x="635" y="115" text-anchor="middle" class="t">FTL 유지 + 핸들별 분리</text>
+          <path d="M635 128 V144" class="s-line"/>
+          <rect x="540" y="146" width="56" height="100" rx="4" class="f-elev"/><rect x="607" y="146" width="56" height="100" rx="4" class="f-elev"/><rect x="674" y="146" width="56" height="100" rx="4" class="f-elev"/>
+          <rect x="544" y="150" width="48" height="76" class="f-bad-soft"/>
+          <rect x="611" y="150" width="48" height="76" class="f-ok-soft"/>
+          <rect x="678" y="150" width="48" height="40" class="f-acc-soft"/>
+          <text x="568" y="240" text-anchor="middle" class="t-mono">핸들A</text><text x="635" y="240" text-anchor="middle" class="t-mono">핸들B</text><text x="702" y="240" text-anchor="middle" class="t-mono">핸들C</text>
+          <text x="635" y="266" text-anchor="middle" class="t-dim">같은 수명끼리 같은 블록</text>
+          <text x="635" y="284" text-anchor="middle" class="t-mono">하위 호환, WAF → 1 근처</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-8.</b> 호스트–장치 협업 인터페이스. <b>ZNS</b>(NVMe 2.0, 2021)는 LBA 공간을 순차 쓰기만 허용하는 '존'으로 나누고, 존 리셋을 호스트가 책임진다. 존을 여러 물리 소거블록의 집합에 정렬해 존 전체를 회수할 수 있으며, 유효 데이터 복사와 빈 존 확보를 호스트가 맡아 장치의 일반적인 페이지 GC 부담을 줄인다. 논리 존과 단일 소거블록의 1:1 대응은 규격의 요구사항이 아니다. <b>FDP</b>(NVMe TP4146, 2022년 비준)는 기존 FTL을 그대로 두되, 쓰기 명령에 '배치 핸들'을 붙여 같은 핸들 데이터끼리 같은 블록(Reclaim Unit)에 모으게 한다.</figcaption>
+    </figure>
+    <p>ZNS는 이론상 가장 깔끔하지만 호스트 소프트웨어(파일 시스템, RocksDB 같은 KV 저장소)가 순차 쓰기 규칙을 지키도록 다시 짜야 한다. SMR 하드디스크를 위한 zoned 인터페이스와 같은 계열이라 리눅스의 F2FS, btrfs 등이 지원한다. FDP는 태그를 모르는 호스트에서도 평범한 SSD처럼 동작하는 하위 호환성 덕분에 2024년 이후 하이퍼스케일러(Meta, Google 등)가 주도해 도입이 빨라지고 있다. 두 방식 모두 핵심은 5절의 교훈 — <strong>수명이 비슷한 데이터를 같은 블록에 모으면 희생 블록의 \(u\)가 0에 가까워지고 WAF는 1에 가까워진다</strong> — 을 호스트의 지식으로 실현하는 것이다.</p>
+    <div class="callout deep"><strong>컴퓨테이셔널 스토리지와 CXL</strong>
+      <p>SSD 컨트롤러는 이미 여러 개의 CPU 코어를 가진 컴퓨터다. 데이터를 호스트로 옮기지 않고 SSD 안에서 필터링·압축·검색하는 <span class="term">컴퓨테이셔널 스토리지</span>, 그리고 CXL 인터페이스로 SSD를 바이트 단위로 접근하는 메모리 확장 장치처럼 쓰려는 시도가 진행 중이다. 12장의 PIM(Processing-in-Memory)과 같은 문제 의식 — 데이터 이동이 계산보다 비싸다 — 에서 출발한다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ summary -->
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>SSD는 컨트롤러(Arm 코어, LDPC ECC, 8~16 채널), 여러 NAND 다이, 매핑 테이블용 DRAM(또는 HMB)으로 구성된다. 속도는 느린 다이 수십 개를 채널·웨이·플레인으로 병렬 구동해 얻는다.</li>
+      <li>다이당 쓰기 처리량은 \(N_{plane} S_{prog}/(t_{xfer}+t_{PROG})\) — 수백 MB/s에 불과하므로 같은 컨트롤러라도 다이 수(용량)가 많을수록 빠르다. 읽기는 채널 버스가 병목이 되기 쉽다.</li>
+      <li>NAND는 덮어쓸 수 없고(erase-before-write), 쓰기 단위(페이지 16 KB)와 소거 단위(블록 수 MB~수십 MB)가 다르며, P/E 수명이 유한하다(TLC 약 1k~3k회).</li>
+      <li>FTL은 out-of-place 업데이트와 L2P 페이지 매핑으로 이를 숨긴다. 4 KB 매핑 × 4 B 항목이면 DRAM은 용량의 약 1/1000(1 TB당 1 GB). 대용량 QLC는 매핑 단위를 16 KB 이상으로 키운다.</li>
+      <li>가비지 컬렉션은 희생 블록의 유효 페이지를 복사한 뒤 소거한다. 정상 상태 WAF = 1/(1−u)이며, 오버 프로비저닝이 클수록 u가 낮아져 WAF가 줄어든다(균일 랜덤·greedy 근사 (1+ρ)/2ρ).</li>
+      <li>Greedy는 당장 복사량을 최소화하고, Cost-Benefit은 데이터 나이를 고려해 핫/콜드 편중 워크로드에서 유리하다. 스트림 분리(ZNS·FDP 포함)는 수명이 비슷한 데이터를 모아 WAF를 1에 가깝게 한다.</li>
+      <li>동적/정적 웨어 레벨링으로 소거를 고르게 분산한다. TBW ≈ C<sub>NAND</sub>·N<sub>PE</sub>/WAF, DWPD = TBW/(C·365·Y). TRIM은 무효 데이터를 알려 실질 OP를 늘리고 WAF를 낮춘다.</li>
+      <li>SLC 캐시는 쓰기를 1비트 모드로 빠르게 받지만 소진되면 쓰기 속도 절벽이 온다. NVMe는 코어별 다중 큐(최대 64K × 64K)로 병렬성을 끌어내며, 리틀의 법칙 IOPS = QD/지연이 성능을 지배한다.</li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ quiz -->
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. NAND 플래시에서 이미 쓴 페이지를 제자리에서 덮어쓸 수 없는 근본적인 이유는?</p><div class="opts">
+        <button class="opt">페이지 버퍼의 크기가 부족해서</button>
+        <button class="opt" data-correct>프로그램은 전자를 주입해 V<sub>t</sub>를 올리는 방향으로만 가능하고, 전자를 빼는 소거는 블록 단위로만 되기 때문에</button>
+        <button class="opt">ECC 패리티를 다시 계산할 수 없어서</button>
+        <button class="opt">PCIe 프로토콜이 덮어쓰기 명령을 지원하지 않아서</button>
+      </div><div class="quiz-exp">프로그램은 비트를 1→0(V<sub>t</sub> 상승)으로만 바꿀 수 있다. 0→1로 되돌리려면 웰에 고전압을 거는 소거가 필요하고, 이 고전압은 블록 전체에 걸린다. 그래서 FTL은 out-of-place 업데이트를 한다.</div></div>
+
+      <div class="quiz-q"><p>2. 4 TB SSD가 4 KB 페이지 매핑, 항목당 4 B를 쓴다면 L2P 테이블에 필요한 DRAM은 약 얼마인가?</p><div class="opts">
+        <button class="opt">약 4 MB</button>
+        <button class="opt">약 400 MB</button>
+        <button class="opt" data-correct>약 4 GB</button>
+        <button class="opt">약 16 GB</button>
+      </div><div class="quiz-exp">항목 수 = 4 TB / 4 KB ≈ 10<sup>9</sup>개, × 4 B ≈ 4 GB. 용량의 약 1/1000이라는 경험칙과 같다.</div></div>
+
+      <div class="quiz-q"><p>3. 정상 상태에서 GC가 고르는 희생 블록의 평균 유효 페이지 비율이 25%라면 쓰기 증폭 계수(WAF)는?</p><div class="opts">
+        <button class="opt">1.25</button>
+        <button class="opt" data-correct>약 1.33</button>
+        <button class="opt">4.0</button>
+        <button class="opt">0.75</button>
+      </div><div class="quiz-exp">WAF = 1/(1−u) = 1/0.75 ≈ 1.33. 블록 하나를 비울 때 0.25P를 복사하고 0.75P의 새 공간을 얻으므로, 호스트 0.75P 쓰기당 NAND에 P가 쓰인다.</div></div>
+
+      <div class="quiz-q"><p>4. 2 TB SSD의 NAND P/E 수명이 3,000회, WAF가 2.5일 때, 이상적 웨어 레벨링을 가정하고 OP는 무시한 5년 기준 DWPD는?</p><div class="opts">
+        <button class="opt">약 0.13</button>
+        <button class="opt" data-correct>약 0.66</button>
+        <button class="opt">약 1.6</button>
+        <button class="opt">약 3.3</button>
+      </div><div class="quiz-exp">TBW = 2 TB × 3000 / 2.5 = 2,400 TB. DWPD = 2400 / (2 × 365 × 5) ≈ 0.66. 실제 제품 정격은 보존 조건 등의 여유 때문에 이보다 낮게 매겨진다.</div></div>
+
+      <div class="quiz-q"><p>5. 4 KB 랜덤 읽기 평균 지연이 100 µs로 유지되는 구간에서 큐 깊이 32로 요청하면 IOPS는 약 얼마인가?</p><div class="opts">
+        <button class="opt">10 K IOPS</button>
+        <button class="opt">32 K IOPS</button>
+        <button class="opt" data-correct>320 K IOPS</button>
+        <button class="opt">3.2 M IOPS</button>
+      </div><div class="quiz-exp">리틀의 법칙: IOPS = QD / 지연 = 32 / 100 µs = 320,000. 대역폭으로는 약 1.3 GB/s다. 다이가 포화되면 QD를 더 올려도 IOPS는 그대로이고 지연만 늘어난다.</div></div>
+
+      <div class="quiz-q"><p>6. 운영체제가 삭제된 파일의 LBA에 대해 TRIM(Deallocate)을 보내면 SSD 내부에서 일어나는 가장 중요한 효과는?</p><div class="opts">
+        <button class="opt">해당 블록이 즉시 소거되어 P/E 카운트가 줄어든다</button>
+        <button class="opt">SLC 캐시가 TLC로 폴딩된다</button>
+        <button class="opt" data-correct>해당 페이지가 무효로 표시되어 GC 때 복사되지 않으므로, 실질 OP가 늘고 WAF가 낮아진다</button>
+        <button class="opt">매핑 단위가 4 KB에서 16 KB로 커진다</button>
+      </div><div class="quiz-exp">TRIM은 즉시 소거를 강제하지 않는다. 매핑을 지우고 페이지를 무효로 만들 뿐이며, 그 결과 GC 희생 블록의 유효 비율 u가 낮아져 WAF와 GC 부담이 줄어든다. P/E 카운트는 줄어들 수 없다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+/* ===================================================================
+   공통 헬퍼 (이 페이지 전용)
+   =================================================================== */
+(function () {
+  "use strict";
+  function hexA(c, a) {
+    c = (c || "").trim();
+    if (c[0] === "#") {
+      var h = c.slice(1);
+      if (h.length === 3) h = h.split("").map(function (x) { return x + x; }).join("");
+      var n = parseInt(h.slice(0, 6), 16);
+      return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
+    }
+    var m = c.match(/[\d.]+/g);
+    return m ? "rgba(" + m[0] + "," + m[1] + "," + m[2] + "," + a + ")" : c;
+  }
+  function font(px, mono) {
+    var cs = getComputedStyle(document.body);
+    return px + "px " + (mono ? cs.getPropertyValue("--mono") : cs.getPropertyValue("--font"));
+  }
+  function gbps(mbps) { // MB/s -> 문자열
+    return mbps >= 1000 ? (mbps / 1000).toFixed(2) + "<small>GB/s</small>" : Math.round(mbps) + "<small>MB/s</small>";
+  }
+  function kilo(x) {
+    if (x >= 1e6) return (x / 1e6).toFixed(2) + " M";
+    if (x >= 1e3) return (x / 1e3).toFixed(x >= 1e5 ? 0 : 1) + " K";
+    return Math.round(x) + " ";
+  }
+  window.SSDU = { hexA: hexA, font: font, gbps: gbps, kilo: kilo };
+})();
+
+/* ===================================================================
+   1) 채널 × 웨이 × 플레인 병렬성 + 간트 차트
+   =================================================================== */
+(function () {
+  "use strict";
+  var U = window.SSDU;
+  var PAGE = 16384;
+  var gMode = MB.seg("par-mode", upd);
+  var gTp, gTr;
+  var gCell = MB.seg("par-cell", function (v) {
+    var tp = { 1: 150, 3: 500, 4: 1600 }[v];
+    gTp.set(tp);
+  });
+  var gCh = MB.range("par-ch", function (v) { return v + " ch"; }, upd);
+  var gWay = MB.range("par-way", function (v) { return v + " 다이"; }, upd);
+  var gPl = MB.seg("par-plane", upd);
+  gTp = MB.range("par-tp", function (v) { return v + " µs"; }, upd);
+  gTr = MB.range("par-tr", function (v) { return v + " µs"; }, upd);
+  var gIo = MB.seg("par-io", upd);
+  var gHost = MB.seg("par-host", upd);
+
+  function model() {
+    var ch = gCh(), way = gWay(), pl = Number(gPl()), io = Number(gIo()), host = Number(gHost()) * 1000;
+    var bits = Number(gCell()), write = gMode() === "w";
+    var B = write ? pl * PAGE * bits : pl * PAGE;      // 한 사이클에 다이가 처리하는 바이트
+    var X = B / io;                                    // µs (io MT/s × 1 B = io MB/s)
+    var tOp = write ? gTp() : gTr();
+    var cycle = X + tOp;
+    var bwDie = B / cycle;                             // MB/s
+    var demand = way * bwDie;
+    var busSat = way * X >= cycle;
+    var bwCh = Math.min(demand, io);
+    var nand = ch * bwCh;
+    var fin = Math.min(nand, host);
+    var bn = fin >= host - 1e-9 && nand > host ? "호스트 링크" : busSat ? "채널 버스" : (write ? "다이 t_PROG" : "다이 t_R");
+    return { ch: ch, way: way, pl: pl, io: io, host: host, B: B, X: X, tOp: tOp, cycle: cycle, bwDie: bwDie, bwCh: bwCh,
+      util: Math.min(1, way * X / cycle), nand: nand, fin: fin, bn: bn, write: write };
+  }
+
+  function schedule(m) {
+    var segs = [], dr = [], chF = 0, i, k;
+    var period = Math.max(m.cycle, m.way * m.X);
+    var T = 2.6 * period;
+    for (i = 0; i < m.way; i++) dr.push(0);
+    for (k = 0; k < 400; k++) {
+      var best = 0;
+      if (m.write) {
+        for (i = 1; i < m.way; i++) if (dr[i] < dr[best] - 1e-9) best = i;
+        var s = Math.max(chF, dr[best]);
+        if (s > T) break;
+        segs.push({ d: best, t: "x", a: s, b: s + m.X });
+        segs.push({ d: best, t: "op", a: s + m.X, b: s + m.X + m.tOp });
+        chF = s + m.X; dr[best] = s + m.X + m.tOp;
+      } else {
+        for (i = 1; i < m.way; i++) if (dr[i] + m.tOp < dr[best] + m.tOp - 1e-9) best = i;
+        var r0 = dr[best];
+        if (r0 > T) break;
+        var s2 = Math.max(chF, r0 + m.tOp);
+        segs.push({ d: best, t: "op", a: r0, b: r0 + m.tOp });
+        segs.push({ d: best, t: "x", a: s2, b: s2 + m.X });
+        chF = s2 + m.X; dr[best] = s2 + m.X;
+      }
+    }
+    return { segs: segs, T: T };
+  }
+
+  function draw(ctx, w, h) {
+    var P = MB.palette(), m = model(), sc = schedule(m);
+    var left = 78, right = 14, top = 26, bottom = 40;
+    var rows = m.way + 1;
+    var rowH = Math.min(40, (h - top - bottom) / rows);
+    var pw = w - left - right;
+    var X = function (t) { return left + (t / sc.T) * pw; };
+    ctx.font = U.font(12, false); ctx.textBaseline = "middle";
+    ctx.fillStyle = P.dim; ctx.textAlign = "left";
+    ctx.fillText("채널 0 타임라인 (" + (m.write ? "쓰기" : "읽기") + ")", 10, 13);
+    // rows background
+    for (var r = 0; r < rows; r++) {
+      var y = top + r * rowH;
+      ctx.fillStyle = r % 2 ? "transparent" : U.hexA(P.text, 0.03);
+      ctx.fillRect(left, y, pw, rowH);
+      ctx.fillStyle = r === 0 ? P.accent2 : P.text; ctx.textAlign = "right";
+      ctx.fillText(r === 0 ? "CH0 버스" : "다이 " + (r - 1), left - 8, y + rowH / 2);
+    }
+    // segments
+    sc.segs.forEach(function (s) {
+      if (s.a > sc.T) return;
+      var x0 = X(s.a), x1 = Math.min(X(s.b), left + pw);
+      var yd = top + (s.d + 1) * rowH;
+      if (s.t === "x") {
+        ctx.fillStyle = U.hexA(P.accent2, 0.75);
+        ctx.fillRect(x0, yd + 4, Math.max(1, x1 - x0), rowH - 8);
+        ctx.fillRect(x0, top + 4, Math.max(1, x1 - x0), rowH - 8);
+        if (x1 - x0 > 14 && rowH > 16) {
+          ctx.fillStyle = P.bg; ctx.textAlign = "center"; ctx.font = U.font(10, true);
+          ctx.fillText(String(s.d), (x0 + x1) / 2, top + rowH / 2);
+          ctx.font = U.font(12, false);
+        }
+      } else {
+        ctx.fillStyle = U.hexA(P.accent, 0.55);
+        ctx.fillRect(x0, yd + 4, Math.max(1, x1 - x0), rowH - 8);
+        ctx.strokeStyle = P.accent; ctx.lineWidth = 1;
+        ctx.strokeRect(x0 + 0.5, yd + 4.5, Math.max(1, x1 - x0 - 1), rowH - 9);
+        if (x1 - x0 > 46 && rowH > 16) {
+          ctx.fillStyle = P.text; ctx.textAlign = "center"; ctx.font = U.font(11, true);
+          ctx.fillText(m.write ? "t_PROG" : "t_R", (x0 + x1) / 2, yd + rowH / 2);
+          ctx.font = U.font(12, false);
+        }
+      }
+    });
+    // axis
+    var yA = top + rows * rowH + 4;
+    ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(left, yA); ctx.lineTo(left + pw, yA); ctx.stroke();
+    var raw = sc.T / 6, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    var step = [1, 2, 5, 10].map(function (q) { return q * mag; }).find(function (s) { return sc.T / s <= 7; });
+    ctx.fillStyle = P.dim; ctx.font = U.font(11, true); ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (var t = 0; t <= sc.T; t += step) {
+      var px = X(t);
+      ctx.beginPath(); ctx.moveTo(px, yA); ctx.lineTo(px, yA + 4); ctx.stroke();
+      ctx.fillText(t >= 1000 ? (t / 1000) + " ms" : Math.round(t) + " µs", px, yA + 6);
+    }
+  }
+  var cv = MB.canvas("#par-cv", draw, { height: 320 });
+
+  function upd() {
+    var m = model();
+    MB.stat("par-dies", (m.ch * m.way) + " <small>(" + MB.bytes(m.ch * m.way * 128e9, 3, false) + ")</small>");
+    MB.stat("par-bwdie", U.gbps(m.bwDie));
+    MB.stat("par-util", Math.round(m.util * 100) + "<small>%</small>");
+    MB.stat("par-bwnand", U.gbps(m.nand));
+    MB.stat("par-bw", U.gbps(m.fin) + " <small>" + m.bn + "</small>");
+    cv.redraw();
+  }
+  upd();
+})();
+
+/* ===================================================================
+   2) 매핑 테이블 DRAM 요구량
+   =================================================================== */
+(function () {
+  "use strict";
+  var U = window.SSDU;
+  var CAPS = [0.256, 0.512, 1, 2, 4, 8, 16, 32, 64, 128]; // TB
+  var gCap = MB.range("map-cap", function (v) { return fmtTB(CAPS[v]); }, upd);
+  var gIu = MB.seg("map-iu", upd);
+  var gHmb = MB.range("map-hmb", function (v) { return v + " MB"; }, upd);
+  function fmtTB(tb) { return tb < 1 ? Math.round(tb * 1000) + " GB" : tb + " TB"; }
+  function calc(tb, iuKB) {
+    var entries = tb * 1e12 / (iuKB * 1024);
+    var bits = Math.ceil(Math.log2(entries * 1.1));
+    var E = Math.max(4, Math.ceil(bits / 8));
+    return { entries: entries, bits: bits, E: E, bytes: entries * E };
+  }
+  function draw(ctx, w, h) {
+    var P = MB.palette();
+    var iu = Number(gIu()), tb = CAPS[gCap()];
+    var ius = [4, 16, 32, 64], cols = [P.accent, P.accent2, P.warn, P.ok];
+    var series = ius.map(function (u, i) {
+      var d = [];
+      for (var k = 0; k <= 60; k++) { var c = 0.25 * Math.pow(2, k * 9 / 60); d.push([c, calc(c, u).bytes / 1e9]); }
+      return { data: d, color: cols[i], width: u === iu ? 3 : 1.5, dash: u === iu ? [] : [5, 4] };
+    });
+    var cur = calc(tb, iu);
+    var ch = MB.chart(ctx, null, {
+      x: [0.25, 128], y: [0.01, 1000], logX: true, logY: true,
+      xTicks: [0.25, 1, 4, 16, 64], xFmt: function (v) { return v < 1 ? v * 1000 + "G" : v + "T"; },
+      yFmt: function (v) { return v < 1 ? v * 1000 + " MB" : v + " GB"; },
+      xLabel: "SSD 용량", yLabel: "L2P 테이블 크기",
+      series: series,
+      hlines: [{ y: gHmb() / 1000, color: P.bad, label: "HMB " + gHmb() + " MB" }],
+      points: [{ x: tb, y: cur.bytes / 1e9, color: cols[ius.indexOf(iu)], r: 5 }],
+    });
+    ctx.font = U.font(12, false); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+    ius.forEach(function (u, i) {
+      var yy = ch.box.y + 12 + i * 18;
+      ctx.strokeStyle = cols[i]; ctx.lineWidth = u === iu ? 3 : 1.5; ctx.setLineDash(u === iu ? [] : [5, 4]);
+      ctx.beginPath(); ctx.moveTo(ch.box.x + 10, yy); ctx.lineTo(ch.box.x + 30, yy); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = P.text; ctx.fillText("IU " + u + " KB", ch.box.x + 36, yy);
+    });
+  }
+  var cv = MB.canvas("#map-cv", draw, { aspect: 0.62, maxHeight: 380, minHeight: 260 });
+  function upd() {
+    var iu = Number(gIu()), tb = CAPS[gCap()], c = calc(tb, iu);
+    MB.stat("map-n", (c.entries / 1e6 >= 1000 ? (c.entries / 1e9).toFixed(2) + " <small>× 10⁹</small>" : (c.entries / 1e6).toFixed(1) + " <small>× 10⁶</small>"));
+    MB.stat("map-e", c.E + " B <small>(" + c.bits + " bit)</small>");
+    MB.stat("map-size", MB.bytes(c.bytes, 3, false).replace(/ (\w+)$/, "<small>$1</small>"));
+    var cov = gHmb() * 1e6 / c.E * iu * 1024;
+    MB.stat("map-cov", MB.bytes(cov, 3, false).replace(/ (\w+)$/, "<small>$1</small>") + " <small>(" + Math.min(100, cov / (tb * 1e12) * 100).toFixed(cov / (tb * 1e12) < 0.1 ? 1 : 0) + "%)</small>");
+    cv.redraw();
+  }
+  upd();
+})();
+
+/* ===================================================================
+   3) FTL · GC 시뮬레이터 (핵심)
+   =================================================================== */
+(function () {
+  "use strict";
+  var U = window.SSDU;
+  var NB = 64, PP = 64, NP = NB * PP, GC_LOW = 2, WL_T = 12;
+  var S = null, running = false;
+
+  var gWl = MB.seg("gc-wl", function () { S.seq = 0; });
+  var gPol = MB.seg("gc-pol");
+  var gOp = MB.range("gc-op", function (v) { return v + " %"; }, function () { init(); refresh(); });
+  var gWlv = MB.seg("gc-wlv");
+  var gSpeed = MB.range("gc-speed", function (v) { return v + " 회"; });
+  var cbSep = document.getElementById("gc-sep");
+  cbSep.addEventListener("change", function () { if (!cbSep.checked) S.openG = -1; });
+
+  function init() {
+    var op = gOp() / 100;
+    var L = Math.floor(NP / (1 + op));
+    S = {
+      L: L, activeL: L,
+      l2p: new Int32Array(L).fill(-1), p2l: new Int32Array(NP).fill(-1), st: new Uint8Array(NP),
+      valid: new Int32Array(NB), wp: new Int32Array(NB), erase: new Int32Array(NB), lastW: new Float64Array(NB),
+      free: [], openH: -1, openG: -1, host: 0, nand: 0, gcs: 0, t: 0, seq: 0,
+      snaps: [], hist: [], nextHist: 0, lastGC: -1, flash: 0, stuck: false, lastMig: -1e9, migrating: false,
+    };
+    for (var b = 0; b < NB; b++) S.free.push(b);
+  }
+
+  function takeFree(preferOld) {
+    if (!S.free.length) return -1;
+    var mode = gWlv(), idx = 0;
+    if (mode !== "none") {
+      for (var i = 1; i < S.free.length; i++) {
+        var e = S.erase[S.free[i]], eb = S.erase[S.free[idx]];
+        if (preferOld ? e > eb : e < eb) idx = i;
+      }
+    }
+    return S.free.splice(idx, 1)[0];
+  }
+
+  function writePage(lpn, gcStream) {
+    var useG = gcStream && cbSep.checked;
+    var b = useG ? S.openG : S.openH;
+    if (b < 0 || S.wp[b] >= PP) {
+      b = takeFree(gcStream && S.migrating);
+      if (b < 0) { S.stuck = true; return false; }
+      if (useG) S.openG = b; else S.openH = b;
+    }
+    var p = b * PP + S.wp[b]++;
+    S.st[p] = 1; S.p2l[p] = lpn; S.valid[b]++; S.l2p[lpn] = p; S.lastW[b] = S.t; S.nand++;
+    return true;
+  }
+
+  function invalidate(p) {
+    if (S.st[p] !== 1) return;
+    S.st[p] = 2; S.valid[(p / PP) | 0]--; S.p2l[p] = -1;
+  }
+
+  function isCand(b) { return b !== S.openH && b !== S.openG && S.wp[b] > 0; }
+
+  function gc() {
+    var victim = -1, b, mig = false;
+    // 정적 웨어 레벨링: 소거 편차가 크면 가장 젊은 블록(콜드 데이터)을 강제로 비운다
+    if (gWlv() === "stat" && S.t - S.lastMig > PP) {
+      var mn = 1e9, mx = -1, mnB = -1;
+      for (b = 0; b < NB; b++) {
+        if (S.erase[b] > mx) mx = S.erase[b];
+        if (isCand(b) && S.erase[b] < mn) { mn = S.erase[b]; mnB = b; }
+      }
+      if (mnB >= 0 && mx - mn > WL_T && S.free.length >= 1) { victim = mnB; mig = true; S.lastMig = S.t; }
+    }
+    if (victim < 0) {
+      var pol = gPol(), best = -Infinity;
+      var cands = [];
+      for (b = 0; b < NB; b++) if (isCand(b)) cands.push(b);
+      if (!cands.length) return false;
+      if (pol === "rand") {
+        var ok = cands.filter(function (c) { return S.valid[c] < PP; });
+        if (!ok.length) return false;
+        victim = ok[(Math.random() * ok.length) | 0];
+      } else {
+        cands.forEach(function (c) {
+          var u = S.valid[c] / PP, sc;
+          if (pol === "greedy") sc = -S.valid[c] - (S.wp[c] < PP ? 0.5 : 0);
+          else sc = u === 0 ? Infinity : ((1 - u) * (S.t - S.lastW[c] + 1)) / (2 * u);
+          if (sc > best) { best = sc; victim = c; }
+        });
+      }
+      if (victim < 0 || S.valid[victim] >= S.wp[victim]) return false;
+    }
+    S.migrating = mig;
+    var base = victim * PP;
+    for (var i = 0; i < S.wp[victim]; i++) {
+      var p = base + i;
+      if (S.st[p] === 1) {
+        var lpn = S.p2l[p];
+        S.st[p] = 2; S.valid[victim]--; S.p2l[p] = -1;
+        if (!writePage(lpn, true)) { S.migrating = false; return false; }
+      }
+    }
+    S.migrating = false;
+    for (i = 0; i < PP; i++) { S.st[base + i] = 0; S.p2l[base + i] = -1; }
+    S.valid[victim] = 0; S.wp[victim] = 0; S.erase[victim]++;
+    S.free.push(victim);
+    S.gcs++; S.lastGC = victim; S.flash = 1;
+    return true;
+  }
+
+  function nextLpn() {
+    var n = S.activeL, wl = gWl();
+    if (wl === "seq") { var l = S.seq; S.seq = (S.seq + 1) % n; return l; }
+    if (wl === "hot") {
+      var hotN = Math.max(1, Math.floor(0.2 * n));
+      return Math.random() < 0.8 ? (Math.random() * hotN) | 0 : hotN + ((Math.random() * (n - hotN)) | 0);
+    }
+    return (Math.random() * n) | 0;
+  }
+
+  function hostWrite(lpn) {
+    if (S.stuck) return;
+    var guard = 0;
+    while (S.free.length < GC_LOW) {
+      if (!gc() || ++guard > 300) { S.stuck = true; return; }
+    }
+    var old = S.l2p[lpn];
+    if (old >= 0) invalidate(old);
+    if (!writePage(lpn, false)) return;
+    S.host++; S.t++;
+    if ((S.host & 127) === 0) { S.snaps.push([S.host, S.nand]); if (S.snaps.length > 600) S.snaps.shift(); }
+    if (S.host >= S.nextHist) {
+      S.hist.push([S.host / S.L, S.nand / S.host, recentWaf()]);
+      S.nextHist = S.host + Math.max(16, Math.floor(S.L / 24));
+      if (S.hist.length > 500) S.hist = S.hist.filter(function (_, i) { return i % 2 === 0; });
+    }
+  }
+
+  function recentWaf() {
+    if (S.snaps.length < 2) return S.host ? S.nand / S.host : 1;
+    var target = S.host - S.L, s0 = S.snaps[0];
+    for (var i = 0; i < S.snaps.length; i++) { if (S.snaps[i][0] >= target) { s0 = S.snaps[i]; break; } }
+    var dh = S.host - s0[0];
+    return dh > 0 ? (S.nand - s0[1]) / dh : S.nand / Math.max(1, S.host);
+  }
+
+  /* ---------- drawing: 블록 그리드 ---------- */
+  var gridWrap = document.getElementById("gc-cv").parentElement;
+  function drawGrid(ctx, w, h) {
+    var P = MB.palette();
+    if (!S) return;
+    var bpr = w >= 560 ? 64 : 32, rowsB = NB / bpr, pad = 10, top = 24;
+    var cellW = (w - 2 * pad) / bpr;
+    var strip = 6, gap = 12;
+    var cellH = Math.max(1, Math.floor((h - top - 6 - rowsB * (strip + gap)) / (rowsB * PP) * 4) / 4);
+    var colors = [P.surface, P.ok, P.bad];
+    var maxE = 1;
+    for (var b = 0; b < NB; b++) if (S.erase[b] > maxE) maxE = S.erase[b];
+    for (b = 0; b < NB; b++) {
+      var col = b % bpr, rb = (b / bpr) | 0;
+      var x0 = pad + col * cellW, y0 = top + rb * (PP * cellH + strip + gap);
+      var base = b * PP;
+      for (var i = 0; i < PP; i++) {
+        ctx.fillStyle = colors[S.st[base + i]];
+        ctx.fillRect(x0 + 0.5, y0 + i * cellH, Math.max(1, cellW - 1), cellH > 2 ? cellH - 0.4 : cellH);
+      }
+      // erase-count strip
+      ctx.fillStyle = P.surface; ctx.fillRect(x0 + 0.5, y0 + PP * cellH + 2, Math.max(1, cellW - 1), strip - 1);
+      ctx.fillStyle = U.hexA(P.accent, 0.1 + 0.9 * S.erase[b] / maxE);
+      ctx.fillRect(x0 + 0.5, y0 + PP * cellH + 2, Math.max(1, cellW - 1), strip - 1);
+      if (b === S.openH || b === S.openG) {
+        ctx.strokeStyle = P.accent2; ctx.lineWidth = 2;
+        ctx.strokeRect(x0 + 0.5, y0 - 1, cellW - 1, PP * cellH + 2);
+      }
+      if (b === S.lastGC && S.flash > 0.02) {
+        ctx.strokeStyle = U.hexA(P.warn, S.flash); ctx.lineWidth = 2.5;
+        ctx.strokeRect(x0 - 0.5, y0 - 2, cellW + 1, PP * cellH + 4);
+      }
+    }
+    ctx.font = U.font(12, false); ctx.textBaseline = "middle"; ctx.textAlign = "left"; ctx.fillStyle = P.dim;
+    var usedPct = (S.activeL / S.L * 100).toFixed(0);
+    ctx.fillText("블록 " + NB + " × 페이지 " + PP + " · 빈 블록 " + S.free.length + " · GC " + S.gcs + "회 · LBA 사용 " + usedPct + "%", pad, 12);
+    if (S.stuck) {
+      ctx.fillStyle = U.hexA(P.bg, 0.8); ctx.fillRect(0, h / 2 - 20, w, 40);
+      ctx.fillStyle = P.bad; ctx.textAlign = "center"; ctx.font = U.font(14, false);
+      ctx.fillText("여유 공간 부족으로 GC가 진행되지 않습니다 — 리셋하거나 OP를 늘리세요", w / 2, h / 2);
+    }
+  }
+  var cvGrid = MB.canvas("#gc-cv", drawGrid, {
+    get height() { return gridWrap.clientWidth >= 560 ? 250 : 330; },
+  });
+
+  /* ---------- drawing: WAF 그래프 + 블록별 소거 횟수 ---------- */
+  var chartWrap = document.getElementById("gc-cv2").parentElement;
+  function drawCharts(ctx, w, h) {
+    var P = MB.palette();
+    if (!S) return;
+    var side = w >= 560;
+    var b1, b2;
+    if (side) {
+      var half = w / 2;
+      b1 = { x: 52, y: 26, w: half - 52 - 20, h: h - 26 - 44 };
+      b2 = { x: half + 40, y: 26, w: half - 40 - 16, h: h - 26 - 44 };
+    } else {
+      var hh = h / 2;
+      b1 = { x: 52, y: 24, w: w - 52 - 14, h: hh - 24 - 40 };
+      b2 = { x: 52, y: hh + 24, w: w - 52 - 14, h: hh - 24 - 40 };
+    }
+    var rho = (NP - S.activeL) / S.activeL, theory = (1 + rho) / (2 * rho);
+    var maxW = 3, maxX = 1.5;
+    S.hist.forEach(function (d) { if (d[1] > maxW) maxW = d[1]; if (d[2] > maxW) maxW = d[2]; if (d[0] > maxX) maxX = d[0]; });
+    maxW = Math.max(maxW, theory) * 1.12;
+    MB.chart(ctx, b1, {
+      x: [0, Math.ceil(maxX * 1.05 * 2) / 2], y: [0, Math.ceil(maxW)],
+      xLabel: "호스트 쓰기량 (드라이브 채움 횟수)",
+      series: [
+        { data: S.hist.map(function (d) { return [d[0], d[1]]; }), color: P.accent, width: 2 },
+        { data: S.hist.map(function (d) { return [d[0], d[2]]; }), color: P.accent2, width: 1.6 },
+      ],
+      hlines: [{ y: theory, color: P.warn, label: "(1+ρ)/2ρ = " + theory.toFixed(2) }],
+    });
+    ctx.font = U.font(12, false); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillStyle = P.accent; ctx.fillText("● WAF 누적", b1.x + 6, b1.y - 12);
+    ctx.fillStyle = P.accent2; ctx.fillText("● 최근", b1.x + 90, b1.y - 12);
+    // erase bars
+    var maxE = 4, sum = 0, b;
+    for (b = 0; b < NB; b++) { if (S.erase[b] > maxE) maxE = S.erase[b]; sum += S.erase[b]; }
+    var avg = sum / NB;
+    var ch = MB.chart(ctx, b2, {
+      x: [0, NB], y: [0, Math.ceil(maxE * 1.1)], xTicks: [0, 16, 32, 48, 64],
+      xLabel: "블록 번호",
+      hlines: [{ y: avg, color: P.warn, label: "평균 " + avg.toFixed(1) }],
+    });
+    var bw = b2.w / NB;
+    for (b = 0; b < NB; b++) {
+      var y = ch.Y(S.erase[b]);
+      ctx.fillStyle = U.hexA(P.accent, 0.75);
+      ctx.fillRect(ch.X(b) + 0.5, y, Math.max(1, bw - 1), b2.y + b2.h - y);
+    }
+    ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.font = U.font(12, false);
+    ctx.fillText("블록별 소거 횟수", b2.x + 6, b2.y - 12);
+  }
+  var cvCharts = MB.canvas("#gc-cv2", drawCharts, {
+    aspect: 0.36,
+    get minHeight() { return chartWrap.clientWidth >= 560 ? 230 : 440; },
+  });
+
+  function refresh() {
+    cvGrid.redraw(); cvCharts.redraw();
+    var rho = (NP - S.activeL) / S.activeL;
+    MB.stat("gc-host", S.host.toLocaleString() + " <small>(" + (S.host / S.L).toFixed(2) + "×)</small>");
+    MB.stat("gc-nand", S.nand.toLocaleString());
+    MB.stat("gc-waf", S.host ? (S.nand / S.host).toFixed(2) : "—");
+    MB.stat("gc-wafr", S.host ? recentWaf().toFixed(2) : "—");
+    MB.stat("gc-theory", ((1 + rho) / (2 * rho)).toFixed(2) + " <small>ρ=" + (rho * 100).toFixed(0) + "%</small>");
+    var mn = 1e9, mx = 0, sm = 0;
+    for (var b = 0; b < NB; b++) { mn = Math.min(mn, S.erase[b]); mx = Math.max(mx, S.erase[b]); sm += S.erase[b]; }
+    MB.stat("gc-erase", mn + " / " + (sm / NB).toFixed(1) + " / " + mx);
+  }
+
+  var btnRun = document.getElementById("gc-run");
+  var loop = MB.loop(document.getElementById("sim-gc"), function () {
+    if (!running) return;
+    var n = gSpeed();
+    for (var k = 0; k < n && !S.stuck; k++) hostWrite(nextLpn());
+    S.flash *= 0.88;
+    refresh();
+    if (S.stuck) setRun(false);
+  });
+  loop.stop();
+  function setRun(on) {
+    running = on;
+    btnRun.textContent = on ? "⏸ 일시정지" : "▶ 실행";
+    if (on) loop.start(); else loop.stop();
+  }
+  btnRun.addEventListener("click", function () { setRun(!running); });
+  document.getElementById("gc-reset").addEventListener("click", function () { init(); refresh(); });
+  document.getElementById("gc-fill").addEventListener("click", function () {
+    for (var l = 0; l < S.activeL && !S.stuck; l++) hostWrite(l);
+    refresh();
+  });
+  document.getElementById("gc-trim").addEventListener("click", function () {
+    if (S.activeL <= S.L * 0.3) return;
+    var from = Math.floor(S.activeL * 0.75);
+    for (var l = from; l < S.activeL; l++) { if (S.l2p[l] >= 0) { invalidate(S.l2p[l]); S.l2p[l] = -1; } }
+    S.activeL = from; S.seq = S.seq % from;
+    refresh();
+  });
+
+  init();
+  refresh();
+})();
+
+/* ===================================================================
+   4) 내구성 계산기
+   =================================================================== */
+(function () {
+  "use strict";
+  var U = window.SSDU;
+  var CAPS = [0.5, 1, 2, 3.2, 3.84, 7.68, 15.36, 30.72, 61.44];
+  function dwOf(v) { return 10 * Math.pow(10, v / 100 * 3); } // GB/day 10 ~ 10,000
+  var gCap = MB.range("end-cap", function (v) { return CAPS[v] + " TB"; }, upd);
+  var gPe = MB.range("end-pe", function (v) { return v.toLocaleString() + " 회"; }, upd);
+  var gWaf = MB.range("end-waf", function (v) { return v.toFixed(1); }, upd);
+  var gDw = MB.range("end-dw", function (v) { var d = dwOf(v); return d >= 1000 ? (d / 1000).toFixed(2) + " TB" : Math.round(d) + " GB"; }, upd);
+  var gY = MB.seg("end-y", upd);
+  var gOp = MB.seg("end-op", upd);
+  function dwSlider(gb) { return Math.round(Math.log10(gb / 10) / 3 * 100); }
+  function preset(capIdx, pe, waf, gb, op) {
+    gOp.set(String(op), false);
+    gCap.set(capIdx); gPe.set(pe); gWaf.set(waf); gDw.set(dwSlider(gb));
+  }
+  document.getElementById("end-p1").addEventListener("click", function () { preset(1, 3000, 2.5, 50, 7); });
+  document.getElementById("end-p2").addEventListener("click", function () { preset(2, 1000, 3, 50, 7); });
+  document.getElementById("end-p3").addEventListener("click", function () { preset(3, 6000, 1.6, 9600, 28); });
+
+  function calc() {
+    var C = CAPS[gCap()], op = Number(gOp()) / 100, Y = Number(gY());
+    var tbw = C * (1 + op) * gPe() / gWaf();
+    var dw = dwOf(gDw()) / 1000; // TB/day
+    return { C: C, op: op, Y: Y, tbw: tbw, dwpd: tbw / (C * 365 * Y), dw: dw, life: tbw / (dw * 365) };
+  }
+  function draw(ctx, w, h) {
+    var P = MB.palette(), c = calc();
+    var yMax = Math.min(40, Math.max(c.Y * 1.6, c.life * 1.25));
+    var cum = c.dw * 365 * yMax;
+    var top = Math.max(c.tbw * 1.25, Math.min(cum, c.tbw * 4));
+    var line = [[0, 0], [yMax, cum]];
+    MB.chart(ctx, null, {
+      x: [0, yMax], y: [0, top],
+      xLabel: "사용 기간 (년)", yLabel: "누적 호스트 쓰기 (TB)",
+      yFmt: function (v) { return v >= 1000 ? (v / 1000) + " PB" : String(Number(v.toPrecision(3))); },
+      series: [{ data: line, color: P.accent, width: 2.4, fill: U.hexA(P.accent, 0.08) }],
+      hlines: [{ y: c.tbw, color: P.warn, label: "TBW " + (c.tbw >= 1000 ? (c.tbw / 1000).toFixed(2) + " PB" : Math.round(c.tbw) + " TB"), dash: [] }],
+      vlines: [{ x: c.Y, color: P.dim, label: "보증 " + c.Y + "년" }].concat(c.life <= yMax ? [{ x: c.life, color: P.bad, label: "수명 " + c.life.toFixed(1) + "년" }] : []),
+      points: c.life <= yMax ? [{ x: c.life, y: c.tbw, color: P.bad, r: 5 }] : [],
+    });
+  }
+  var cv = MB.canvas("#end-cv", draw, { aspect: 0.62, maxHeight: 380, minHeight: 260 });
+  function upd() {
+    var c = calc();
+    MB.stat("end-tbw", c.tbw >= 1000 ? (c.tbw / 1000).toFixed(2) + "<small>PB</small>" : Math.round(c.tbw) + "<small>TB</small>");
+    MB.stat("end-dwpd", c.dwpd.toFixed(2));
+    var nd = c.dw * gWaf();
+    MB.stat("end-nand", nd >= 1 ? nd.toFixed(2) + "<small>TB</small>" : Math.round(nd * 1000) + "<small>GB</small>");
+    MB.stat("end-life", (c.life > 100 ? "&gt; 100" : c.life.toFixed(1)) + "<small>년</small>");
+    var el = document.getElementById("end-life");
+    if (el) el.classList.toggle("ssd-warn", c.life < c.Y);
+    cv.redraw();
+  }
+  upd();
+})();
+
+/* ===================================================================
+   5) SLC 캐시 쓰기 속도 절벽
+   =================================================================== */
+(function () {
+  "use strict";
+  var U = window.SSDU;
+  var gCap = MB.seg("slc-cap", upd), gNand = MB.seg("slc-nand", upd), gMode = MB.seg("slc-mode", upd);
+  var gUsed = MB.range("slc-used", function (v) { return v + " %"; }, upd);
+  var gAmt = MB.range("slc-amt", function (v) { return v >= 1000 ? (v / 1000).toFixed(2) + " TB" : v + " GB"; }, upd);
+  var V_IN = 6.5;
+  var V_OUT = { 3: { 1: 1.4, 2: 2.2, 4: 2.8 }, 4: { 1: 0.15, 2: 0.3, 4: 0.45 } };
+  function calc() {
+    var cap = Number(gCap()), bits = Number(gNand()), used = gUsed() / 100;
+    var free = cap * 1000 * (1 - used);
+    var cache = gMode() === "stat" ? 24 * cap : 6 * cap + free / bits * 0.75;
+    cache = Math.min(cache, free);
+    var want = gAmt(), amt = Math.min(want, free);
+    var vOut = V_OUT[bits][cap];
+    var p1 = Math.min(amt, cache), p2 = amt - p1;
+    var t1 = p1 / V_IN, t2 = p2 / vOut;
+    return { cap: cap, free: free, cache: cache, want: want, amt: amt, vOut: vOut, p1: p1, t1: t1, t: t1 + t2 };
+  }
+  function draw(ctx, w, h) {
+    var P = MB.palette(), c = calc();
+    var xMax = Math.max(c.want, 50);
+    var data = [[0, V_IN], [c.p1, V_IN]];
+    if (c.amt > c.p1) { data.push([c.p1, c.vOut]); data.push([c.amt, c.vOut]); }
+    var bands = [];
+    if (c.want > c.free) bands.push({ x0: c.free, x1: xMax, color: U.hexA(P.bad, 0.1) });
+    MB.chart(ctx, null, {
+      x: [0, xMax], y: [0, 7.5],
+      xLabel: "연속으로 쓴 데이터 (GB)", yLabel: "쓰기 속도 (GB/s)",
+      bands: bands,
+      series: [{ data: data, color: P.accent, width: 2.6, fill: U.hexA(P.accent, 0.12) }],
+      vlines: c.cache < xMax ? [{ x: c.cache, color: P.warn, label: "SLC 캐시 소진 " + Math.round(c.cache) + " GB" }] : [],
+      hlines: [{ y: c.vOut, color: P.accent2, label: "캐시 밖 " + c.vOut + " GB/s" }],
+    });
+    if (c.want > c.free) {
+      ctx.fillStyle = P.bad; ctx.font = U.font(12, false); ctx.textAlign = "right"; ctx.textBaseline = "top";
+      ctx.fillText("빈 공간 초과", w - 24, 22);
+    }
+  }
+  var cv = MB.canvas("#slc-cv", draw, { aspect: 0.6, maxHeight: 380, minHeight: 260 });
+  function fmtT(s) { if (s < 60) return s.toFixed(1) + "<small>초</small>"; var r = Math.round(s); return Math.floor(r / 60) + "<small>분</small> " + (r % 60) + "<small>초</small>"; }
+  function upd() {
+    var c = calc();
+    MB.stat("slc-size", Math.round(c.cache) + "<small>GB</small>");
+    MB.stat("slc-v", V_IN + " / " + c.vOut + "<small>GB/s</small>");
+    MB.stat("slc-tc", c.amt > c.cache ? fmtT(c.cache / V_IN) : "—");
+    MB.stat("slc-t", fmtT(c.t));
+    MB.stat("slc-avg", (c.amt / Math.max(1e-9, c.t)).toFixed(2) + "<small>GB/s</small>");
+    cv.redraw();
+  }
+  upd();
+})();
+
+/* ===================================================================
+   6) 큐 깊이 vs IOPS · 지연 (리틀의 법칙)
+   =================================================================== */
+(function () {
+  "use strict";
+  var U = window.SSDU;
+  var CTRL = 2.5e6;
+  var gQd = MB.range("qd-qd", function (v) { return String(Math.pow(2, v)); }, upd);
+  var gDie = MB.seg("qd-die", upd);
+  var gTr = MB.range("qd-tr", function (v) { return v + " µs"; }, upd);
+  var gOv = MB.range("qd-ov", function (v) { return v + " µs"; }, upd);
+  var gLink = MB.seg("qd-link", upd);
+  var cbSata = document.getElementById("qd-sata");
+  cbSata.addEventListener("change", upd);
+
+  function perf(q, D, tR, ov, linkIops, ctrl, qCap) {
+    var qe = Math.min(q, qCap || q);
+    var busy = D * (1 - Math.pow(1 - 1 / D, qe));
+    var terms = [
+      { v: busy / tR * 1e6, n: "NAND 다이" },
+      { v: qe / (tR + ov) * 1e6, n: "큐 깊이(지연)" },
+      { v: ctrl, n: "컨트롤러" },
+      { v: linkIops, n: "호스트 링크" },
+    ];
+    var m = terms[0];
+    terms.forEach(function (t) { if (t.v < m.v) m = t; });
+    return { iops: m.v, lat: q / m.v * 1e6, busy: Math.min(busy, m.v * tR / 1e6), bn: m.n };
+  }
+  function params() {
+    return { D: Number(gDie()), tR: gTr(), ov: gOv(), link: Number(gLink()) * 1e9 / 4096 };
+  }
+  function draw(ctx, w, h) {
+    var P = MB.palette(), p = params(), q0 = Math.pow(2, gQd());
+    var nv = [], nl = [], sv = [], sl = [], maxI = 0, maxL = 0;
+    for (var k = 0; k <= 100; k++) {
+      var q = Math.pow(2, k / 10);
+      var a = perf(q, p.D, p.tR, p.ov, p.link, CTRL);
+      nv.push([q, a.iops / 1e3]); nl.push([q, a.lat]);
+      maxI = Math.max(maxI, a.iops / 1e3); maxL = Math.max(maxL, a.lat);
+      if (cbSata.checked) {
+        var s = perf(q, p.D, p.tR, p.ov + 15, 550e6 / 4096, CTRL, 32);
+        sv.push([q, s.iops / 1e3]); sl.push([q, s.lat]);
+        maxL = Math.max(maxL, s.lat);
+      }
+    }
+    var cur = perf(q0, p.D, p.tR, p.ov, p.link, CTRL);
+    var hh = h / 2;
+    var b1 = { x: 62, y: 20, w: w - 62 - 16, h: hh - 20 - 30 };
+    var b2 = { x: 62, y: hh + 14, w: w - 62 - 16, h: hh - 14 - 44 };
+    var xt = [1, 4, 16, 64, 256, 1024];
+    var series1 = [{ data: nv, color: P.accent, width: 2.4 }];
+    if (cbSata.checked) series1.push({ data: sv, color: P.dim, width: 1.6, dash: [5, 4] });
+    MB.chart(ctx, b1, {
+      x: [1, 1024], y: [0, Math.ceil(maxI * 1.15 / 100) * 100 || 100], logX: true, xTicks: xt,
+      xFmt: function () { return ""; },
+      yFmt: function (v) { return v >= 1000 ? (v / 1000) + "M" : v + "K"; },
+      series: series1,
+      vlines: [{ x: q0, color: P.warn }],
+      points: [{ x: q0, y: cur.iops / 1e3, color: P.warn, r: 5 }],
+    });
+    var series2 = [{ data: nl, color: P.accent2, width: 2.4 }];
+    if (cbSata.checked) series2.push({ data: sl, color: P.dim, width: 1.6, dash: [5, 4] });
+    var lmax = Math.min(maxL * 1.1, 20000);
+    MB.chart(ctx, b2, {
+      x: [1, 1024], y: [0, lmax], logX: true, xTicks: xt,
+      xFmt: function (v) { return String(v); },
+      yFmt: function (v) { return v >= 1000 ? (v / 1000) + " ms" : v + " µs"; },
+      xLabel: "큐 깊이 (QD, 로그 눈금)",
+      series: series2,
+      vlines: [{ x: q0, color: P.warn }],
+      points: [{ x: q0, y: Math.min(cur.lat, lmax), color: P.warn, r: 5 }],
+    });
+    ctx.font = U.font(12, false); ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillStyle = P.accent; ctx.fillText("IOPS (4 KB 랜덤 읽기)", b1.x + 8, b1.y + 4);
+    ctx.fillStyle = P.accent2; ctx.fillText("평균 지연 = QD / IOPS", b2.x + 8, b2.y + 4);
+    if (cbSata.checked) { ctx.fillStyle = P.dim; ctx.fillText("- - SATA/AHCI", b1.x + 8, b1.y + 22); }
+  }
+  var cv = MB.canvas("#qd-cv", draw, { aspect: 0.8, maxHeight: 460, minHeight: 340 });
+  function upd() {
+    var p = params(), q = Math.pow(2, gQd());
+    var r = perf(q, p.D, p.tR, p.ov, p.link, CTRL);
+    MB.stat("qd-iops", U.kilo(r.iops) + "<small>IOPS</small>");
+    MB.stat("qd-bw", U.gbps(r.iops * 4096 / 1e6));
+    MB.stat("qd-lat", r.lat >= 1000 ? (r.lat / 1000).toFixed(2) + "<small>ms</small>" : r.lat.toFixed(0) + "<small>µs</small>");
+    MB.stat("qd-busy", r.busy.toFixed(1) + " <small>/ " + p.D + "</small>");
+    MB.stat("qd-bn", r.bn);
+    cv.redraw();
+  }
+  upd();
+})();
+</script>
+</body>
+</html>
