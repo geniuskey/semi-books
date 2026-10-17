@@ -1,0 +1,1222 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and InfraBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>유틸리티 운영과 신뢰성 · InfraBook</title>
+<meta name="description" content="팹 유틸리티를 멈추지 않게 운영하는 공학: 가용도와 MTBF·MTTR, 직렬·병렬 블록 다이어그램, N·N+1·2N 이중화, 공통 원인 고장, 유틸리티 의존성 그래프, FMCS·SCADA 계층, 알람 설계와 경보 홍수, SPC·EWMA 이상 감지, 예지 정비와 잔여 수명, 디지털 트윈과 정기 셧다운 계획을 시뮬레이터로 계산한다.">
+<link rel="canonical" href="https://semi.euiyun.com/infra/chapters/operation.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#2f5f96">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="InfraBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="유틸리티 운영과 신뢰성 · InfraBook">
+<meta property="og:description" content="팹 유틸리티를 멈추지 않게 운영하는 공학: 가용도와 MTBF·MTTR, 직렬·병렬 블록 다이어그램, N·N+1·2N 이중화, 공통 원인 고장, 유틸리티 의존성 그래프, FMCS·SCADA 계층, 알람 설계와 경보 홍수, SPC·EWMA 이상 감지, 예지 정비와 잔여 수명, 디지털 트윈과 정기 셧다운 계획을 시뮬레이터로 계산한다.">
+<meta property="og:url" content="https://semi.euiyun.com/infra/chapters/operation.html">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/infra/chapters/operation.html#chapter","name":"유틸리티 운영과 신뢰성","headline":"유틸리티 운영과 신뢰성 · InfraBook","description":"팹 유틸리티를 멈추지 않게 운영하는 공학: 가용도와 MTBF·MTTR, 직렬·병렬 블록 다이어그램, N·N+1·2N 이중화, 공통 원인 고장, 유틸리티 의존성 그래프, FMCS·SCADA 계층, 알람 설계와 경보 홍수, SPC·EWMA 이상 감지, 예지 정비와 잔여 수명, 디지털 트윈과 정기 셧다운 계획을 시뮬레이터로 계산한다.","url":"https://semi.euiyun.com/infra/chapters/operation.html","position":15,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","dateModified":"2026-10-17","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/infra/#book","name":"InfraBook · 반도체 인프라 교과서","url":"https://semi.euiyun.com/infra/"}}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  [hidden] { display: none !important; }
+  figure.diagram svg .t { font-size: 14px; }
+  figure.diagram svg .t-dim { font-size: 13px; }
+  figure.diagram svg .t-mono { font-size: 12px; }
+  figure.diagram svg .t-acc { font-size: 14px; }
+  .op-presets { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 18px; border-bottom: 1px solid var(--border); align-items: center; }
+  .op-presets .lbl { font-size: 13px; color: var(--text-dim); margin-right: 4px; }
+  .op-presets .btn { font-size: 13px; padding: 7px 11px; }
+  .op-verdict { padding: 10px 18px; font-size: 14.5px; border-top: 1px solid var(--border); color: var(--text); background: var(--surface); line-height: 1.6; }
+  .op-verdict.ok { background: color-mix(in srgb, var(--ok) 13%, transparent); }
+  .op-verdict.warn { background: color-mix(in srgb, var(--warn) 15%, transparent); }
+  .op-verdict.bad { background: color-mix(in srgb, var(--bad) 13%, transparent); }
+  .op-tbl td:first-child { font-weight: 700; white-space: nowrap; }
+  .op-tbl td, .op-tbl th { font-size: 14.5px; }
+  #cv-dep { cursor: pointer; }
+</style>
+</head>
+<body data-chapter="operation">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 15</div>
+    <h1>유틸리티 운영과 신뢰성</h1>
+    <p class="lead">앞의 장들은 클린룸·초순수·가스·전력·냉동을 하나씩 <b>설계</b>하는 법을 다뤘다. 이 장은 그것들을 10년 넘게 <b>멈추지 않게 운영</b>하는 법을 다룬다. 팹 유틸리티는 1년 8,760시간 가운데 몇 분만 멈춰도 수십억 원이 사라지는 시스템이다. “얼마나 안 멈추는가”를 숫자로 말하는 신뢰성 공학, 하나가 멈추면 무엇이 따라 멈추는지 보여 주는 의존성 분석, 수십만 개 센서에서 진짜 이상만 골라내는 알람·통계 기법, 고장 나기 전에 고치는 예지 정비까지, 운영 엔지니어의 도구를 차례로 계산해 본다.</p>
+    <ul class="objectives">
+      <li>가용도 \(A = \mathrm{MTBF}/(\mathrm{MTBF}+\mathrm{MTTR})\)와 신뢰도 \(R(t)\)를 계산하고 “나인(nines)”을 연간 정지 시간으로 바꿀 수 있다.</li>
+      <li>직렬·병렬 블록 다이어그램과 k-out-of-n 식으로 N, N+1, 2N 구성의 가용도를 비교할 수 있다.</li>
+      <li>공통 원인 고장(β 인자)이 이중화의 효과를 어떻게 제한하는지 설명할 수 있다.</li>
+      <li>유틸리티 의존성 그래프에서 고장이 전파되는 순서와 완충 시간을 읽을 수 있다.</li>
+      <li>FMCS·SCADA·BMS 계층과 알람 설계 원칙(데드밴드, 지연, 경보 홍수)을 설명할 수 있다.</li>
+      <li>Shewhart·EWMA 관리도로 작은 변화를 감지하고, 진동 추세로 잔여 수명을 추정하며, Weibull 모델로 예방 정비 주기를 정할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1. 가용도 -->
+  <section id="availability">
+    <h2>가용도: “멈추지 않는다”를 숫자로</h2>
+    <p>설비가 고장 없이 버티는 평균 시간을 <span class="term">MTBF</span><span class="en">(Mean Time Between Failures)</span>, 고장 후 복구까지 걸리는 평균 시간을 <span class="term">MTTR</span><span class="en">(Mean Time To Repair)</span>이라 한다. 오랜 기간 동안 설비가 정상인 시간의 비율이 <span class="term">가용도</span><span class="en">(availability)</span>다.</p>
+    <div class="formula">$$A = \frac{\mathrm{MTBF}}{\mathrm{MTBF} + \mathrm{MTTR}},\qquad R(t) = e^{-t/\mathrm{MTBF}} \;(\text{고장률 일정}),\qquad \lambda = \frac{1}{\mathrm{MTBF}}$$
+      <div class="where">\(R(t)\): 시간 \(t\) 동안 한 번도 고장 나지 않을 확률(신뢰도). 고장률 \(\lambda\)가 일정하다는 가정은 그림 15-1의 “우발 고장” 구간에 해당한다. 가용도는 고장 <b>빈도</b>와 복구 <b>속도</b>를 함께 담는다. MTBF를 두 배로 늘리는 것과 MTTR을 절반으로 줄이는 것은 가용도에 거의 같은 효과를 준다.</div></div>
+
+    <div class="table-wrap">
+      <table class="op-tbl">
+        <thead><tr><th>가용도</th><th>흔한 이름</th><th>연간 정지 시간</th><th>팹에서의 느낌</th></tr></thead>
+        <tbody>
+          <tr><td>99 %</td><td>투 나인</td><td>약 87.6 시간</td><td>단일 펌프·팬 한 대 수준</td></tr>
+          <tr><td>99.9 %</td><td>스리 나인</td><td>약 8.8 시간</td><td>잘 관리된 단일 칠러</td></tr>
+          <tr><td>99.99 %</td><td>포 나인</td><td>약 53 분</td><td>N+1 구성 유틸리티 계통</td></tr>
+          <tr><td>99.999 %</td><td>파이브 나인</td><td>약 5.3 분</td><td>2N 전원·핵심 안전 계통의 목표</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 280" role="img" aria-label="초기 고장, 우발 고장, 마모 고장으로 이루어진 욕조 곡선">
+        <defs><marker id="op-ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-dim)"/></marker></defs>
+        <path d="M80 230 V30" class="s-axis" marker-end="url(#op-ar1)"/>
+        <path d="M80 230 H760" class="s-axis" marker-end="url(#op-ar1)"/>
+        <text x="40" y="130" text-anchor="middle" class="t-dim" transform="rotate(-90 40 130)">고장률 λ(t)</text>
+        <text x="420" y="262" text-anchor="middle" class="t-dim">사용 시간</text>
+        <rect x="80" y="40" width="140" height="190" class="f-warn-soft" style="opacity:.35;stroke:none"/>
+        <rect x="560" y="40" width="200" height="190" class="f-bad-soft" style="opacity:.35;stroke:none"/>
+        <path d="M86 50 C 120 150, 170 175, 240 178 L 560 178 C 630 176, 690 150, 750 60" class="s-acc" style="stroke-width:3.5"/>
+        <text x="150" y="64" text-anchor="middle" class="t" style="font-weight:700">초기 고장</text>
+        <text x="150" y="84" text-anchor="middle" class="t-dim">λ 감소 (β &lt; 1)</text>
+        <text x="390" y="150" text-anchor="middle" class="t" style="font-weight:700">우발 고장 · λ 일정 (β ≈ 1)</text>
+        <text x="390" y="170" text-anchor="middle" class="t-dim">R(t) = e^(−λt), MTBF = 1/λ</text>
+        <text x="660" y="64" text-anchor="middle" class="t" style="font-weight:700">마모 고장</text>
+        <text x="660" y="84" text-anchor="middle" class="t-dim">λ 증가 (β &gt; 1)</text>
+        <text x="150" y="210" text-anchor="middle" class="t-mono">시운전·번인으로 걸러냄</text>
+        <text x="660" y="210" text-anchor="middle" class="t-mono">예방·예지 정비의 영역</text>
+      </svg>
+      <figcaption><b>그림 15-1.</b> 욕조 곡선<span class="en">(bathtub curve)</span>. 설치 직후에는 제작·시공 결함으로 고장률이 높고(초기 고장), 안정기에는 거의 일정하며(우발 고장), 베어링·씰·임펠러가 닳으면 다시 오른다(마모 고장). 괄호 안의 β는 이 장 9절의 Weibull 형상 모수다. MTBF와 지수 분포 \(R(t)\)는 가운데 구간에서만 정확하다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-avail">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>MTBF · MTTR → 가용도와 1년 타임라인</h3></div>
+      <div class="op-presets">
+        <span class="lbl">설비 예</span>
+        <button class="btn" data-b="3000" data-r="24">순환 펌프</button>
+        <button class="btn" data-b="8000" data-r="12">원심 칠러</button>
+        <button class="btn" data-b="20000" data-r="4">FFU 한 대</button>
+        <button class="btn" data-b="40000" data-r="72">주변압기</button>
+        <button class="btn primary" id="av-roll">다시 뽑기</button>
+      </div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-avail"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>MTBF (로그) <output id="av-b-out"></output></span><input type="range" id="av-b" min="0" max="100" step="1" value="55"></label>
+          <label class="ctrl"><span>MTTR (로그) <output id="av-r-out"></output></span><input type="range" id="av-r" min="0" max="100" step="1" value="45"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">가용도 A</span><span class="v" id="o-av-a">—</span></div>
+        <div class="stat"><span class="k">나인 수</span><span class="v" id="o-av-n">—</span></div>
+        <div class="stat"><span class="k">연간 정지 시간 (기대값)</span><span class="v" id="o-av-down">—</span></div>
+        <div class="stat"><span class="k">연간 고장 횟수</span><span class="v" id="o-av-f">—</span></div>
+        <div class="stat"><span class="k">1년 무고장 확률 R(1년)</span><span class="v" id="o-av-r1">—</span></div>
+        <div class="stat"><span class="k">이번 표본의 정지 시간</span><span class="v" id="o-av-s">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① “원심 칠러”(MTBF 8,000 h)는 가용도가 99.85 %인데, 1년 무고장 확률은 약 33 %다. 가용도가 높다고 해서 1년 동안 안 멈춘다는 뜻이 아니다. ② “다시 뽑기”를 여러 번 눌러 보자. 같은 MTBF라도 어떤 해는 고장이 없고 어떤 해는 세 번 난다. 한 해의 실적만으로 설비를 평가하기 어려운 이유다. ③ MTTR을 절반으로 줄여 보자(예비품 현장 보관, 정비 절차 표준화). 가용도의 정지 시간이 정확히 절반이 된다. 타임라인은 고장 간격과 수리 시간을 지수 분포로 뽑은 몬테카를로 표본이다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2. 블록 다이어그램 -->
+  <section id="rbd">
+    <h2>직렬과 병렬: 신뢰성 블록 다이어그램</h2>
+    <p>유틸리티는 여러 설비가 이어진 사슬이다. 공정 냉각수를 장비에 보내려면 전원, 냉각탑, 칠러, 펌프, 열교환기, 배관이 <b>모두</b> 정상이어야 한다. 이런 관계를 <span class="term">신뢰성 블록 다이어그램</span><span class="en">(RBD, Reliability Block Diagram)</span>으로 그린다. 하나라도 멈추면 전체가 멈추는 연결은 직렬, 하나만 살아 있어도 되는 연결은 병렬이다.</p>
+    <div class="formula">$$A_{\text{직렬}} = \prod_{i} A_i,\qquad A_{\text{병렬}} = 1 - \prod_{i}(1 - A_i)$$
+      <div class="where">직렬 가용도는 가장 약한 고리보다 항상 낮다. 99.9 %짜리 다섯 개를 직렬로 이으면 약 99.5 %가 된다. 병렬은 비가용도(1 − A)를 곱하므로 99 %짜리 둘을 병렬로 두면 99.99 %가 된다. 단, 각 블록의 고장이 서로 <b>독립</b>일 때만 성립한다(4절).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 300" role="img" aria-label="공정 냉각수 공급 사슬의 직렬 블록 다이어그램과 병렬화한 다이어그램">
+        <text x="20" y="24" class="t" style="font-weight:700">(a) 직렬: 모든 블록이 정상이어야 PCW 공급</text>
+        <g class="u-cool" style="stroke-width:2"><path d="M20 70 H40 M140 70 H160 M260 70 H280 M380 70 H400 M500 70 H520 M620 70 H640"/></g>
+        <g class="f-surface">
+          <rect x="40" y="48" width="100" height="44" rx="6"/><rect x="160" y="48" width="100" height="44" rx="6"/>
+          <rect x="280" y="48" width="100" height="44" rx="6"/><rect x="400" y="48" width="100" height="44" rx="6"/>
+          <rect x="520" y="48" width="100" height="44" rx="6"/>
+        </g>
+        <text x="90" y="68" text-anchor="middle" class="t">22.9 kV</text><text x="90" y="85" text-anchor="middle" class="t-mono">0.9999</text>
+        <text x="210" y="68" text-anchor="middle" class="t">냉각탑</text><text x="210" y="85" text-anchor="middle" class="t-mono">0.998</text>
+        <text x="330" y="68" text-anchor="middle" class="t">칠러</text><text x="330" y="85" text-anchor="middle" class="t-mono">0.9985</text>
+        <text x="450" y="68" text-anchor="middle" class="t">PCW 펌프</text><text x="450" y="85" text-anchor="middle" class="t-mono">0.992</text>
+        <text x="570" y="68" text-anchor="middle" class="t">열교환기</text><text x="570" y="85" text-anchor="middle" class="t-mono">0.9995</text>
+        <text x="650" y="66" class="t-acc">A ≈ 0.988</text>
+        <text x="650" y="86" class="t-dim">연 약 105 h 정지</text>
+
+        <text x="20" y="140" class="t" style="font-weight:700">(b) 약한 블록을 병렬화(N+1)</text>
+        <g class="u-cool" style="stroke-width:2">
+          <path d="M20 220 H40 M140 220 H160 M500 220 H520 M620 220 H640"/>
+          <path d="M260 220 H270 V180 H280 M260 220 H270 V260 H280 M380 180 H390 V220 H400 M380 260 H390 V220"/>
+          <path d="M400 220 H410"/>
+          <path d="M410 220 V180 H420 M410 220 V260 H420 M480 180 H490 V220 H500 M480 260 H490 V220"/>
+          <path d="M260 220 H270"/>
+        </g>
+        <g class="f-surface">
+          <rect x="40" y="198" width="100" height="44" rx="6"/><rect x="160" y="198" width="100" height="44" rx="6"/>
+          <rect x="280" y="160" width="100" height="40" rx="6"/><rect x="280" y="240" width="100" height="40" rx="6"/>
+          <rect x="420" y="160" width="60" height="40" rx="6"/><rect x="420" y="240" width="60" height="40" rx="6"/>
+          <rect x="520" y="198" width="100" height="44" rx="6"/>
+        </g>
+        <text x="90" y="225" text-anchor="middle" class="t">22.9 kV</text>
+        <text x="210" y="225" text-anchor="middle" class="t">냉각탑</text>
+        <text x="330" y="185" text-anchor="middle" class="t">칠러 A</text><text x="330" y="265" text-anchor="middle" class="t">칠러 B</text>
+        <text x="450" y="185" text-anchor="middle" class="t-mono">펌프 A</text><text x="450" y="265" text-anchor="middle" class="t-mono">펌프 B</text>
+        <text x="570" y="225" text-anchor="middle" class="t">열교환기</text>
+        <text x="650" y="216" class="t-acc">A ≈ 0.9973</text>
+        <text x="650" y="236" class="t-dim">연 약 23 h 정지</text>
+      </svg>
+      <figcaption><b>그림 15-2.</b> 공정 냉각수(PCW) 공급 사슬의 블록 다이어그램. (a) 다섯 블록이 직렬이면 전체 가용도는 각 가용도의 곱인 약 0.988로, 가장 약한 펌프(0.992)보다 낮다. (b) 칠러와 펌프를 병렬로 바꾸면 그 블록의 비가용도가 제곱으로 작아져 전체 가용도가 0.9973으로 오른다. 이제 직렬로 남은 냉각탑(0.998)이 가장 약한 고리다. 숫자는 교육용 가정이다.</figcaption>
+    </figure>
+    <p>그림 15-2(b)가 보여 주는 교훈은 “병렬화는 가장 약한 직렬 블록을 옮길 뿐”이라는 것이다. 신뢰성 개선은 약한 고리를 찾아 보강하고, 다음 약한 고리를 찾는 반복이다. 실제 팹에서는 냉각탑도 여러 셀로 나뉘어 있고, 22.9 kV 모선도 이중이다. 그래도 끝까지 직렬로 남는 요소가 있다. 공용 배관 헤더, 공용 제어기, 한 건물 안의 화재 구획 같은 것들이다. 이런 요소를 <span class="term">단일 고장점</span><span class="en">(SPOF, Single Point of Failure)</span>이라고 한다.</p>
+  </section>
+
+  <!-- ============================================================ 3. 이중화 -->
+  <section id="redundancy">
+    <h2>N, N+1, 2N: 이중화의 값</h2>
+    <p>칠러·펌프·발전기처럼 같은 장치 여러 대가 함께 부하를 나누는 계통에서, 부하를 감당하는 데 필요한 대수를 <b>N</b>이라 한다. N+1은 한 대를 더 두어 아무 한 대가 고장 나거나 정비 중이어도 부하를 감당하게 한다. 2N은 완전히 독립된 두 계통을 각각 N대로 갖춘다. 대수가 n대이고 그중 k대 이상이 살아 있어야 하는 계통의 가용도는 이항 분포로 계산한다.</p>
+    <div class="formula">$$A_{k/n} = \sum_{i=k}^{n} \binom{n}{i} A^{i}(1-A)^{n-i}$$
+      <div class="where">\(A\): 한 대의 가용도(고장 정지와 계획 정비 정지를 모두 포함), \(k = N\): 필요한 대수, \(n\): 설치 대수. 각 대의 고장이 독립이라고 가정한다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="N, N+1, 2N 이중화 구성 비교">
+        <text x="130" y="24" text-anchor="middle" class="t" style="font-weight:700">N (= 3)</text>
+        <text x="390" y="24" text-anchor="middle" class="t" style="font-weight:700">N+1 (= 4)</text>
+        <text x="650" y="24" text-anchor="middle" class="t" style="font-weight:700">2N (= 3 + 3)</text>
+        <g class="f-acc-soft">
+          <rect x="40" y="50" width="50" height="40" rx="6"/><rect x="105" y="50" width="50" height="40" rx="6"/><rect x="170" y="50" width="50" height="40" rx="6"/>
+          <rect x="285" y="50" width="45" height="40" rx="6"/><rect x="340" y="50" width="45" height="40" rx="6"/><rect x="395" y="50" width="45" height="40" rx="6"/>
+          <rect x="530" y="40" width="50" height="34" rx="6"/><rect x="600" y="40" width="50" height="34" rx="6"/><rect x="670" y="40" width="50" height="34" rx="6"/>
+        </g>
+        <rect x="450" y="50" width="45" height="40" rx="6" class="f-ok-soft"/>
+        <g class="f-acc2-soft">
+          <rect x="530" y="96" width="50" height="34" rx="6"/><rect x="600" y="96" width="50" height="34" rx="6"/><rect x="670" y="96" width="50" height="34" rx="6"/>
+        </g>
+        <text x="472" y="75" text-anchor="middle" class="t-mono">+1</text>
+        <text x="740" y="62" class="t-mono">A계통</text><text x="740" y="118" class="t-mono">B계통</text>
+        <g class="u-cool" style="stroke-width:2"><path d="M30 120 H230 M275 120 H505 M520 150 H730"/></g>
+        <path d="M65 90 V120 M130 90 V120 M195 90 V120 M307 90 V120 M362 90 V120 M417 90 V120 M472 90 V120" class="u-cool" style="stroke-width:2"/>
+        <path d="M555 74 V86 M625 74 V86 M695 74 V86 M555 130 V150 M625 130 V150 M695 130 V150" class="u-cool" style="stroke-width:2"/>
+        <text x="130" y="160" text-anchor="middle" class="t-dim">여유 0 %</text>
+        <text x="130" y="180" text-anchor="middle" class="t-dim">한 대만 빠져도 용량 부족</text>
+        <text x="390" y="160" text-anchor="middle" class="t-dim">여유 33 %</text>
+        <text x="390" y="180" text-anchor="middle" class="t-dim">한 대 고장·정비까지 견딤</text>
+        <text x="650" y="180" text-anchor="middle" class="t-dim">여유 100 %</text>
+        <text x="650" y="200" text-anchor="middle" class="t-dim">한 계통 전체(배관·제어 포함) 상실 견딤</text>
+        <text x="390" y="230" text-anchor="middle" class="t-mono">대수가 많을수록 N+1의 상대 여유는 작아지고, 두 대 동시 정지 확률은 커진다</text>
+      </svg>
+      <figcaption><b>그림 15-3.</b> 이중화 구성. N+1은 장치 단위의 고장을 막지만 공용 헤더·제어기 같은 계통 단위 고장은 막지 못한다. 2N은 계통 자체를 둘로 나누어 그것까지 막지만 설비비가 거의 두 배다. 팹 유틸리티는 보통 장치는 N+1(대수가 많으면 N+2), 전원과 핵심 안전 계통은 2N에 가깝게 설계한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-kofn">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>칠러 플랜트 이중화: N · N+1 · N+2 · 2N</h3></div>
+      <div class="op-presets">
+        <span class="lbl">구성</span>
+        <div class="seg" id="kn-cfg"><button data-value="0">N</button><button data-value="1" class="on">N+1</button><button data-value="2">N+2</button><button data-value="2n">2N</button></div>
+      </div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-kofn"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>필요 냉동 부하 <output id="kn-l-out"></output></span><input type="range" id="kn-l" min="2000" max="60000" step="1000" value="54000"></label>
+          <label class="ctrl"><span>칠러 한 대 용량 <output id="kn-u-out"></output></span><input type="range" id="kn-u" min="1000" max="6000" step="250" value="3000"></label>
+          <label class="ctrl"><span>한 대의 가용도 A <output id="kn-a-out"></output></span><input type="range" id="kn-a" min="0.9" max="0.999" step="0.001" value="0.98"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">필요 대수 N</span><span class="v" id="o-kn-n">—</span></div>
+        <div class="stat"><span class="k">설치 대수</span><span class="v" id="o-kn-inst">—</span></div>
+        <div class="stat"><span class="k">계통 가용도</span><span class="v" id="o-kn-a">—</span></div>
+        <div class="stat"><span class="k">연간 용량 부족 시간</span><span class="v" id="o-kn-h">—</span></div>
+        <div class="stat"><span class="k">설비 용량 여유</span><span class="v" id="o-kn-x">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① FAB-E 수준(약 54,000 RT, 3,000 RT 칠러 18대)에서 N+1의 연간 용량 부족 시간을 보자. 대수가 많으면 두 대가 동시에 빠지는 일이 흔해져 N+1만으로는 부족하다. ② 칠러 용량을 6,000 RT로 키워 대수를 줄이면 같은 N+1이 훨씬 좋아진다. 대신 한 대가 빠질 때 잃는 용량이 커진다. ③ 한 대의 가용도를 0.98에서 0.995로 올려 보자(정비 시간 단축). 대수를 늘리는 것보다 싸게 같은 효과를 얻을 수 있다. “용량 부족”은 전체 정지가 아니라 부하를 다 못 감당하는 시간이며, 실제로는 축열조·부하 조정으로 일부를 흡수한다. 2N은 2N대 가운데 N대가 살아 있으면 되는 것으로 계산했다(장치 고장만 고려). 2N의 진짜 가치인 계통 단위 고장 대비는 4절에서 다룬다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4. 공통 원인 고장 -->
+  <section id="ccf">
+    <h2>공통 원인 고장: 이중화가 무너지는 방식</h2>
+    <p>병렬식 \(1-\prod(1-A_i)\)는 고장이 서로 독립이라는 가정 위에 서 있다. 현실에서는 한 원인이 여러 대를 동시에 멈춘다. 같은 모선에 물린 펌프 두 대는 모선 사고로 함께 멈추고, 같은 날 같은 정비원이 같은 잘못된 절차로 정비한 두 대는 같은 결함을 갖는다. 같은 제조 로트의 베어링, 같은 펌웨어 버그, 냉각탑 두 셀에 함께 들어온 이물질, 지진·침수·화재가 모두 <span class="term">공통 원인 고장</span><span class="en">(CCF, Common Cause Failure)</span>이다.</p>
+    <p>가장 간단한 정량 모델은 <b>β 인자 모델</b>이다. 한 대의 비가용도 \(Q = 1-A\) 가운데 비율 β는 “모든 대를 함께 멈추는 고장”, 나머지 \(1-\beta\)는 독립 고장이라고 본다.</p>
+    <div class="formula">$$Q_{1oo2} \approx \big[(1-\beta)Q\big]^2 + \beta Q,\qquad Q_{2oo3} \approx 3\big[(1-\beta)Q\big]^2 + \beta Q$$
+      <div class="where">1oo2: 두 대 중 한 대만 있으면 되는 구성(1-out-of-2), 2oo3: 세 대 중 두 대가 필요한 구성. β는 설비 종류와 분리 수준에 따라 대략 1~10 % 범위로 쓰인다(IEC 61508 계열 지침의 β 범위를 참고한 교육용 값). \(Q = 0.01\), β = 5 %이면 독립 항 \(\approx 9\times10^{-5}\)보다 공통 항 \(5\times10^{-4}\)이 다섯 배 크다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 260" role="img" aria-label="독립 고장과 공통 원인 고장이 두 펌프에 작용하는 방식">
+        <rect x="70" y="120" width="140" height="60" rx="8" class="f-acc-soft"/>
+        <text x="140" y="155" text-anchor="middle" class="t">펌프 A</text>
+        <rect x="290" y="120" width="140" height="60" rx="8" class="f-acc-soft"/>
+        <text x="360" y="155" text-anchor="middle" class="t">펌프 B</text>
+        <path d="M140 60 V118" class="s-line" style="stroke:var(--warn);stroke-width:2"/>
+        <path d="M360 60 V118" class="s-line" style="stroke:var(--warn);stroke-width:2"/>
+        <text x="140" y="50" text-anchor="middle" class="t-dim">독립 고장 (1−β)Q</text>
+        <text x="360" y="50" text-anchor="middle" class="t-dim">독립 고장 (1−β)Q</text>
+        <rect x="160" y="210" width="180" height="36" rx="8" class="f-bad-soft"/>
+        <text x="250" y="233" text-anchor="middle" class="t">공통 원인 βQ</text>
+        <path d="M200 210 L160 182 M300 210 L340 182" class="s-line" style="stroke:var(--bad);stroke-width:2.5"/>
+        <text x="500" y="40" class="t" style="font-weight:700">공통 원인의 예</text>
+        <g class="t-dim">
+          <text x="500" y="70">· 같은 모선·같은 제어기·같은 배관 헤더</text>
+          <text x="500" y="95">· 같은 정비 절차의 같은 실수</text>
+          <text x="500" y="120">· 같은 로트 부품, 같은 소프트웨어 버그</text>
+          <text x="500" y="145">· 화재·침수·지진 등 환경 사건</text>
+          <text x="500" y="170">· 같은 원수 수질 악화, 같은 외기 조건</text>
+        </g>
+        <text x="500" y="210" class="t" style="font-weight:700">대책: 다양성 · 분리 · 시차</text>
+        <text x="500" y="234" class="t-dim">다른 기종, 다른 모선, 다른 방화 구획, 정비 일정 분산</text>
+      </svg>
+      <figcaption><b>그림 15-4.</b> β 인자 모델. 한 대의 고장 가운데 일부(β)는 다른 대와 함께 일어난다. 독립 고장이 동시에 날 확률은 \(Q^2\)로 아주 작지만, 공통 원인은 \(Q\)에 비례하므로 이중화의 상한을 정한다. 다양성(diversity)·물리적 분리·정비 시차가 β를 낮추는 수단이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ccf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>β 인자: 이중화 효과의 천장</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-ccf"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>한 대의 가용도 A <output id="cc-a-out"></output></span><input type="range" id="cc-a" min="0.9" max="0.999" step="0.001" value="0.99"></label>
+          <label class="ctrl"><span>공통 원인 비율 β <output id="cc-b-out"></output></span><input type="range" id="cc-b" min="0" max="20" step="0.5" value="5"></label>
+          <div class="ctrl"><span>구성</span><div class="seg" id="cc-cfg"><button data-value="1oo2" class="on">1oo2</button><button data-value="2oo3">2oo3</button><button data-value="1oo3">1oo3</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">독립 고장만 고려</span><span class="v" id="o-cc-ind">—</span></div>
+        <div class="stat"><span class="k">β 포함 비가용도</span><span class="v" id="o-cc-q">—</span></div>
+        <div class="stat"><span class="k">공통 원인 비중</span><span class="v" id="o-cc-share">—</span></div>
+        <div class="stat"><span class="k">연간 정지 시간</span><span class="v" id="o-cc-h">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① β = 0이면 1oo3이 1oo2보다 100배 좋다. β를 2 %만 넣어도 두 구성의 차이가 거의 사라진다. 세 번째 대를 사는 돈은 β를 낮추는 데(다른 모선, 분리된 구획) 쓰는 편이 낫다. ② 한 대의 가용도를 높이면 독립 항(곡선의 왼쪽 끝)과 공통 항(오른쪽 기울기)이 모두 내려간다. ③ 그래프의 세로축은 로그다. 점선은 β가 없을 때의 값이다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5. 의존성 -->
+  <section id="dependency">
+    <h2>하나가 멈추면 무엇이 멈추나: 유틸리티 의존성</h2>
+    <p>팹 유틸리티는 서로 기대어 있다. 칠러는 전기와 냉각탑이 있어야 돌고, 공정 냉각수(PCW)는 칠러의 냉수로 식혀지며, 특수가스 캐비닛은 배기가 끊기면 안전 인터록으로 자동 차단된다. 공정 장비는 이 모든 것을 동시에 요구한다. 그래서 운영 엔지니어는 “X가 멈추면 몇 분 뒤 무엇이 멈추는가”를 표로 외우는 대신 <b>의존성 그래프</b>로 관리한다.</p>
+    <p>중요한 것은 <b>완충 시간</b><span class="en">(buffer/ride-through time)</span>이다. PCW 루프는 물의 열용량 덕분에 칠러가 멈춰도 공급 온도가 허용 범위를 넘기까지 수~십수 분이 걸린다. 초순수는 저장 탱크가 있어 생산이 멈춰도 일정 시간 공급된다. 질소는 액체 질소 저장 탱크와 기화기로 공기분리장치(ASU) 정지 후에도 몇 시간을 버틴다. 반대로 배기나 전원은 완충이 거의 없다. 완충 시간은 복구를 위한 시간 예산이며, 비상 대응 절차는 이 예산 안에서 무엇을 먼저 할지를 정한 것이다.</p>
+
+    <div class="sim" id="sim-dep">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>유틸리티 의존성 그래프: 고장 전파 따라가기</h3></div>
+      <div class="op-presets">
+        <span class="lbl">시나리오</span>
+        <button class="btn" data-s="chiller">칠러 플랜트 정지</button>
+        <button class="btn" data-s="grid">수전 정전</button>
+        <button class="btn" data-s="gridgen">정전 + 발전기 실패</button>
+        <button class="btn" data-s="exh">배기 팬 정지</button>
+        <button class="btn" data-s="asu">ASU 정지</button>
+        <button class="btn primary" id="dp-play">▶ 시간 재생</button>
+        <button class="btn" id="dp-reset">초기화</button>
+      </div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-dep"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>경과 시간 <output id="dp-t-out"></output></span><input type="range" id="dp-t" min="0" max="360" step="1" value="0"></label>
+          <label class="ctrl"><span>UPS 배터리 자립 <output id="dp-ups-out"></output></span><input type="range" id="dp-ups" min="5" max="60" step="5" value="15"></label>
+          <label class="ctrl"><span>PCW 열적 완충 <output id="dp-pcw-out"></output></span><input type="range" id="dp-pcw" min="2" max="40" step="1" value="12"></label>
+          <label class="ctrl"><span>액체 질소 백업 <output id="dp-n2-out"></output></span><input type="range" id="dp-n2" min="0" max="480" step="30" value="240"></label>
+          <p class="src-note" style="margin:0;font-size:13px;color:var(--text-dim)">노드를 눌러 고장 원인을 켜고 끈다.</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">고장 원인</span><span class="v" id="o-dp-src" style="font-size:15px">—</span></div>
+        <div class="stat"><span class="k">현재 멈춘 설비</span><span class="v" id="o-dp-n">—</span></div>
+        <div class="stat"><span class="k">공정 장비 정지 시점</span><span class="v" id="o-dp-tool">—</span></div>
+        <div class="stat"><span class="k">감시(FMCS) 상태</span><span class="v" id="o-dp-fmcs">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① “칠러 플랜트 정지”를 재생하면 공조와 PCW가 각각의 완충 시간 뒤에 무너지고 공정 장비가 따라 선다. PCW 열적 완충을 늘리면(루프 용량·축열조) 복구할 시간이 생긴다. ② “수전 정전”에서는 발전기가 비상 모선을 살려 배기·감시가 유지된다. “정전 + 발전기 실패”에서는 UPS 배터리 시간이 지나면 감시마저 꺼진다. 가장 위험한 상태다. ③ “ASU 정지”는 액체 질소 백업 시간 동안 아무 일도 일어나지 않는다. 백업을 0으로 줄여 차이를 보자. 그래프와 완충 시간은 개념을 보여 주기 위한 교육용 단순화다.</div>
+    </div>
+
+    <div class="callout fab"><strong>FAB-E의 비상 우선순위</strong>
+      <p>FAB-E의 비상 대응 절차는 의존성 그래프에서 거꾸로 만든다. 1순위는 사람과 안전(배기·스크러버·가스 감지·FMCS), 2순위는 되돌릴 수 없는 손상 방지(진공 펌프 안전 정지, 확산로 서냉, 케미컬 순환 유지), 3순위는 복구 시간을 줄이는 일(PCW·UPW 루프 유지, 클린룸 양압 유지), 마지막이 생산 재개다. 칠러가 멈췄을 때 남은 냉수를 노광 구역과 PCW에 몰아주는 것처럼, 완충 시간 안에 “무엇을 포기할지”를 미리 정해 둔다.</p>
+    </div>
+  </section>
+  <!-- ============================================================ 6. FMCS -->
+  <section id="fmcs">
+    <h2>FMCS·SCADA·BMS: 팹을 보는 눈과 손</h2>
+    <p>FAB-E 같은 팹에는 온도·압력·유량·전력·가스 농도·입자 수를 재는 센서와 밸브·펌프·팬 같은 구동기가 수만~수십만 점<span class="en">(point 또는 tag)</span> 있다. 이것을 모아 보여 주고 제어하는 시스템이 계층을 이룬다.</p>
+    <ul>
+      <li><span class="term">PLC·DDC</span><span class="en">(Programmable Logic Controller, Direct Digital Control)</span>: 현장 제어기. 칠러 대수 제어, 펌프 압력 PID, 인터록처럼 빠르고 끊기면 안 되는 제어를 직접 한다. 상위 시스템이 죽어도 현장 제어는 계속돼야 한다.</li>
+      <li><span class="term">SCADA</span><span class="en">(Supervisory Control and Data Acquisition)</span>: 여러 PLC의 데이터를 모아 운전 화면(HMI)과 알람을 제공하고, 운전원의 설정 변경을 내려보낸다.</li>
+      <li><span class="term">BMS</span><span class="en">(Building Management System)</span>: 사무동·일반 건물의 공조·조명·출입을 관리하는 건물 자동화 시스템. 팹에서는 클린룸 외 영역을 맡는 경우가 많다.</li>
+      <li><span class="term">FMCS</span><span class="en">(Facility Monitoring and Control System)</span>: 반도체 팹 특유의 이름으로, 유틸리티 전체의 SCADA·이력 데이터·알람·보고를 통합한 상위 시스템이다. 가스 감지·EMO 같은 안전 계통은 보통 별도의 안전 시스템으로 분리하고 FMCS는 그 상태를 받아 보여 준다.</li>
+    </ul>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 330" role="img" aria-label="현장 기기에서 PLC, SCADA, FMCS, 공장 운영 시스템으로 이어지는 계층">
+        <path d="M400 20 L700 300 L100 300 Z" class="f-surface" style="opacity:.5"/>
+        <g class="f-acc-soft">
+          <rect x="300" y="36" width="200" height="40" rx="8"/>
+          <rect x="245" y="92" width="310" height="40" rx="8"/>
+          <rect x="195" y="148" width="410" height="40" rx="8"/>
+          <rect x="145" y="204" width="510" height="40" rx="8"/>
+        </g>
+        <rect x="100" y="260" width="600" height="40" rx="8" class="f-elev"/>
+        <text x="400" y="61" text-anchor="middle" class="t" style="font-weight:700">MES · 에너지·정비 관리</text>
+        <text x="400" y="117" text-anchor="middle" class="t" style="font-weight:700">FMCS · 이력 DB · 분석 · 디지털 트윈</text>
+        <text x="400" y="173" text-anchor="middle" class="t" style="font-weight:700">SCADA / HMI · 알람 서버</text>
+        <text x="400" y="229" text-anchor="middle" class="t" style="font-weight:700">PLC · DDC · 안전 PLC (현장 제어, 인터록)</text>
+        <text x="400" y="285" text-anchor="middle" class="t" style="font-weight:700">센서 · 밸브 · 인버터 · 미터 · 가스 감지기</text>
+        <g class="t-mono">
+          <text x="18" y="61">수 분~일</text>
+          <text x="18" y="117">초~분</text>
+          <text x="18" y="173">≈ 1 s</text>
+          <text x="18" y="229">ms~100 ms</text>
+          <text x="18" y="285">연속 신호</text>
+        </g>
+        <g class="t-mono" text-anchor="end">
+          <text x="785" y="117">OPC UA · MQTT</text>
+          <text x="785" y="173">OPC UA · BACnet</text>
+          <text x="785" y="229">Modbus · PROFINET</text>
+          <text x="785" y="285">4–20 mA · HART</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 15-5.</b> 팹 유틸리티 제어·감시 계층. 아래로 갈수록 빠르고 단순하며 끊기면 안 되는 일을, 위로 갈수록 느리지만 넓은 범위를 다룬다. 왼쪽은 각 계층의 대표 시간 척도, 오른쪽은 흔히 쓰이는 통신 방식이다. 안전 기능(가스 누출 차단, EMO)은 하위 계층에서 독립적으로 완결되어야 하고, 상위 시스템 장애가 안전 기능을 막아서는 안 된다.</figcaption>
+    </figure>
+    <p>데이터의 양도 만만치 않다. 20만 개 태그를 1초마다 기록하면 하루 약 173억 개 샘플이고, 샘플당 10바이트면 하루 약 170 GB, 1년이면 약 60 TB다. 이력 데이터베이스<span class="en">(historian)</span>는 변화가 없으면 기록하지 않는 데드밴드 압축과 스윙도어 압축으로 이를 수십 분의 1로 줄인다. 이 데이터가 다음 절의 알람, 8절의 통계적 이상 감지, 9절의 예지 정비, 10절의 디지털 트윈의 재료다. 유틸리티 제어망은 사이버 보안상 공정 네트워크·사무 네트워크와 분리해 계층별로 방화벽을 두는 것이 원칙이다(IEC 62443 계열).</p>
+  </section>
+
+  <!-- ============================================================ 7. 알람 -->
+  <section id="alarm">
+    <h2>센서와 알람 설계: 경보 홍수를 막아라</h2>
+    <p>알람은 “운전원이 지금 무언가를 해야 한다”는 신호다. 그런데 설정을 쉽게 바꿀 수 있다 보니 많은 시스템이 알람을 너무 많이 만든다. 잡음 때문에 경계값 근처에서 켜졌다 꺼지기를 반복하는 <b>채터링</b><span class="en">(chattering)</span>, 원래 원인 하나에서 파생된 수백 개의 알람이 쏟아지는 <span class="term">경보 홍수</span><span class="en">(alarm flood)</span>, 늘 켜져 있어 아무도 보지 않는 <b>상주 알람</b><span class="en">(standing alarm)</span>이 대표적이다. 운전원이 알람을 무시하는 습관이 들면 진짜 알람도 놓친다. 여러 산업 사고 조사에서 경보 홍수가 운전원의 상황 판단을 방해한 요인으로 지목되었다.</p>
+    <p>알람 관리의 기준으로 ANSI/ISA-18.2와 EEMUA 191이 널리 쓰인다. 두 문서가 제시하는 대략적인 지표는 운전원 한 명당 평균 <b>10분에 1건(시간당 약 6건) 이하</b>가 감당 가능한 수준이고, <b>10분에 10건을 넘으면 경보 홍수</b>로 본다는 것이다. 이를 맞추기 위한 기본 기법은 다음과 같다.</p>
+    <ul>
+      <li><b>데드밴드</b><span class="en">(deadband, hysteresis)</span>: 경계값을 넘어 켜진 알람은 값이 경계값보다 일정 폭 아래로 내려가야 꺼진다. 잡음에 의한 채터링을 막는다.</li>
+      <li><b>지연</b><span class="en">(on-delay)</span>: 값이 일정 시간 연속으로 경계값을 넘어야 알람을 낸다. 짧은 스파이크를 거른다. 대신 진짜 이상의 감지도 그만큼 늦어진다.</li>
+      <li><b>억제와 그룹화</b>: 상위 원인(예: 칠러 정지)이 알람을 내면 그로 인한 하위 알람(냉수 온도 상승 수십 개)은 억제하거나 하나로 묶는다. 5절의 의존성 그래프가 억제 규칙의 근거다.</li>
+      <li><b>우선순위</b>: 대응 시간과 결과의 심각도로 우선순위를 나누고, 높은 우선순위 알람이 전체의 소수가 되도록 한다.</li>
+    </ul>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="경계값 근처의 잡음 신호가 데드밴드와 지연 없이는 알람을 반복해서 만드는 모습">
+        <path d="M60 210 H760" class="s-axis"/>
+        <rect x="60" y="88" width="700" height="22" class="f-warn-soft" style="opacity:.5;stroke:none"/>
+        <path d="M60 88 H760" class="s-line" style="stroke:var(--bad);stroke-width:2"/>
+        <path d="M60 110 H760" class="s-line" style="stroke:var(--warn);stroke-width:1.5;stroke-dasharray:5 4"/>
+        <text x="764" y="92" class="t-mono" style="fill:var(--bad)">경계값</text>
+        <text x="764" y="114" class="t-mono" style="fill:var(--warn)">해제값</text>
+        <path d="M60 130 L80 120 L95 128 L110 100 L125 118 L140 84 L155 112 L170 80 L185 104 L200 86 L215 116 L230 94 L245 122 L260 98 L275 118 L290 104 L305 126 L320 112 L340 120 L360 108 L380 90 L400 70 L420 58 L440 50 L460 46 L480 48 L500 54 L520 66 L540 84 L560 100 L580 114 L600 124 L620 118 L640 128 L660 120 L680 132 L700 124 L720 130 L740 126 L760 132" class="u-cool" style="stroke-width:2"/>
+        <g style="fill:var(--bad)">
+          <rect x="138" y="150" width="6" height="14"/><rect x="168" y="150" width="6" height="14"/><rect x="198" y="150" width="6" height="14"/><rect x="380" y="150" width="6" height="14"/>
+        </g>
+        <text x="60" y="160" class="t-mono">데드밴드 없음:</text>
+        <text x="420" y="162" class="t-dim">← 잡음으로 3번 + 진짜 이상 1번 = 알람 4건</text>
+        <rect x="380" y="178" width="186" height="14" style="fill:var(--ok);opacity:.8"/>
+        <text x="60" y="190" class="t-mono">데드밴드 + 지연:</text>
+        <text x="580" y="190" class="t-dim">진짜 이상만 1건 (조금 늦게 시작)</text>
+        <text x="400" y="236" text-anchor="middle" class="t-dim">시간 →</text>
+      </svg>
+      <figcaption><b>그림 15-6.</b> 채터링 알람과 데드밴드. 경계값 근처를 오르내리는 잡음은 데드밴드 없이 매번 새 알람을 만든다. 해제값을 경계값보다 낮게 두면(데드밴드) 한 번 켜진 알람이 잡음으로 꺼졌다 켜지지 않고, 짧은 지연을 더하면 순간 스파이크도 걸러진다. 대가는 진짜 이상의 감지가 조금 늦어지는 것이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-alarm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>PCW 공급 온도 24시간: 알람 설정 실험</h3></div>
+      <div class="op-presets">
+        <span class="lbl">설정 예</span>
+        <button class="btn" data-th="18.2" data-db="0" data-dl="0">초기 설정(엄격)</button>
+        <button class="btn" data-th="18.2" data-db="0.1" data-dl="30">데드밴드 + 지연</button>
+        <button class="btn" data-th="18.5" data-db="0.1" data-dl="300">느슨한 설정</button>
+        <button class="btn primary" id="al-roll">다른 날</button>
+      </div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-alarm"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>상한 경계값 <output id="al-th-out"></output></span><input type="range" id="al-th" min="18.1" max="18.8" step="0.05" value="18.2"></label>
+          <label class="ctrl"><span>데드밴드 <output id="al-db-out"></output></span><input type="range" id="al-db" min="0" max="0.3" step="0.02" value="0"></label>
+          <label class="ctrl"><span>지연 시간 <output id="al-dl-out"></output></span><input type="range" id="al-dl" min="0" max="600" step="10" value="0"></label>
+          <label class="ctrl"><span>센서 잡음 σ <output id="al-sg-out"></output></span><input type="range" id="al-sg" min="0.02" max="0.15" step="0.01" value="0.08"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">하루 알람 건수</span><span class="v" id="o-al-n">—</span></div>
+        <div class="stat"><span class="k">최대 10분 건수</span><span class="v" id="o-al-flood">—</span></div>
+        <div class="stat"><span class="k">진짜 이상 감지</span><span class="v" id="o-al-det">—</span></div>
+        <div class="stat"><span class="k">감지 지연</span><span class="v" id="o-al-lag">—</span></div>
+      </div>
+      <div class="op-verdict" id="al-verdict">—</div>
+      <div class="sim-note">해볼 것: ① “초기 설정”은 잡음 때문에 하루 백수십 건의 알람을 낸다. 진짜 이상(오후 2시 무렵 냉수 공급 문제로 온도가 서서히 오르는 사건)이 그 속에 묻힌다. ② 데드밴드만 0.1 °C 넣어 보고, 지연만 30초 넣어 보자. 무엇이 채터링을 더 줄이는가? ③ 경계값을 18.7 °C로 올리면 알람은 사라지지만 진짜 이상도 놓치거나 아주 늦게 잡는다. 알람 설계는 거짓 알람과 늦은 감지 사이의 거래다. 신호는 공급 온도 18.0 °C, 1초 간격, AR(1) 잡음을 가정한 합성 데이터다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8. SPC -->
+  <section id="spc">
+    <h2>이상 감지: SPC 관리도와 EWMA</h2>
+    <p>알람의 고정 경계값은 “이미 나빠진 것”을 잡는다. 그보다 앞서 “평소와 달라진 것”을 잡으려면 통계적 공정 관리<span class="en">(SPC, Statistical Process Control)</span>를 쓴다. 정상 상태에서 측정값의 평균 \(\mu_0\)와 표준편차 \(\sigma\)를 구해 두고, 새 측정값이 우연한 흔들림의 범위를 벗어나는지 본다.</p>
+    <div class="formula">$$\text{Shewhart: } \mu_0 \pm 3\sigma,\qquad z_t = \lambda x_t + (1-\lambda) z_{t-1},\qquad \text{EWMA 한계: } \mu_0 \pm L\sigma\sqrt{\frac{\lambda}{2-\lambda}\Big[1-(1-\lambda)^{2t}\Big]}$$
+      <div class="where">Shewhart 관리도는 개별 측정값을 ±3σ와 비교한다. 정상일 때 한계를 벗어날 확률은 약 0.27 %이므로 평균 약 370개마다 한 번 거짓 경보가 난다(평균 런 길이 ARL₀ ≈ 370). EWMA<span class="en">(Exponentially Weighted Moving Average)</span>는 과거 값을 지수적으로 잊어 가며 평균을 내므로 작고 지속적인 변화를 더 빨리 잡는다. 보통 λ = 0.1~0.3, L ≈ 2.7~3을 쓴다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 260" role="img" aria-label="관리도의 구성: 중심선, 관리 한계, 평균 이동 후의 점들">
+        <path d="M60 30 H760 M60 210 H760" class="s-line" style="stroke:var(--bad);stroke-dasharray:6 4"/>
+        <path d="M60 120 H760" class="s-line"/>
+        <rect x="430" y="30" width="330" height="180" class="f-warn-soft" style="opacity:.25;stroke:none"/>
+        <text x="764" y="34" class="t-mono" style="fill:var(--bad)">UCL</text>
+        <text x="764" y="124" class="t-mono">μ₀</text>
+        <text x="764" y="214" class="t-mono" style="fill:var(--bad)">LCL</text>
+        <path d="M70 128 L90 104 L110 140 L130 116 L150 96 L170 132 L190 120 L210 146 L230 110 L250 124 L270 100 L290 138 L310 118 L330 130 L350 108 L370 126 L390 142 L410 114 L430 100 L450 82 L470 108 L490 76 L510 96 L530 70 L550 88 L570 62 L590 92 L610 74 L630 56 L650 84 L670 66 L690 24 L710 70 L730 58 L750 80" class="s-acc" style="stroke-width:1.5"/>
+        <g class="f-acc"><circle cx="450" cy="82" r="3"/><circle cx="490" cy="76" r="3"/><circle cx="530" cy="70" r="3"/><circle cx="570" cy="62" r="3"/><circle cx="630" cy="56" r="3"/></g>
+        <circle cx="690" cy="24" r="6" style="fill:var(--bad)"/>
+        <path d="M430 30 V210" class="s-line" style="stroke-dasharray:3 3"/>
+        <text x="436" y="232" class="t-dim">평균이 1σ 이동</text>
+        <text x="690" y="250" text-anchor="middle" class="t-dim" style="fill:var(--bad)">Shewhart 첫 경보</text>
+        <text x="60" y="248" class="t-dim">이동 직후부터 점들이 중심선 위에 몰린다 → EWMA는 이것을 누적해 더 일찍 잡는다</text>
+      </svg>
+      <figcaption><b>그림 15-7.</b> 관리도의 구조. 평균이 1σ만 이동하면 개별 점은 대부분 여전히 관리 한계(UCL·LCL) 안에 있어 Shewhart 관리도는 수십 점 뒤에야 경보를 낸다(1σ 이동의 ARL은 약 44). 그러나 점들이 중심선 한쪽에 몰리는 패턴은 이미 분명하다. EWMA와 CUSUM은 이 “몰림”을 누적해 감지한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-spc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>Shewhart vs EWMA: 작은 이동을 누가 먼저 잡나</h3></div>
+      <div class="op-presets">
+        <button class="btn primary" id="sp-roll">새 데이터</button>
+      </div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-spc"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>평균 이동 크기 δ <output id="sp-d-out"></output></span><input type="range" id="sp-d" min="0" max="3" step="0.1" value="1"></label>
+          <label class="ctrl"><span>EWMA λ <output id="sp-l-out"></output></span><input type="range" id="sp-l" min="0.05" max="1" step="0.05" value="0.2"></label>
+          <label class="ctrl"><span>EWMA 한계 폭 L <output id="sp-L-out"></output></span><input type="range" id="sp-L" min="2" max="3.5" step="0.05" value="2.85"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Shewhart 첫 경보 (이동 후)</span><span class="v" id="o-sp-sh">—</span></div>
+        <div class="stat"><span class="k">EWMA 첫 경보 (이동 후)</span><span class="v" id="o-sp-ew">—</span></div>
+        <div class="stat"><span class="k">ARL₁ Shewhart (이론)</span><span class="v" id="o-sp-arls">—</span></div>
+        <div class="stat"><span class="k">ARL EWMA (몬테카를로)</span><span class="v" id="o-sp-arle">—</span></div>
+        <div class="stat"><span class="k">ARL₀ EWMA (거짓 경보 간격)</span><span class="v" id="o-sp-arl0">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① δ = 1σ에서 “새 데이터”를 여러 번 눌러 보자. EWMA가 대체로 훨씬 먼저 잡는다. ARL 값으로 보면 Shewhart 약 44점, EWMA 약 10점이다. ② δ = 3σ처럼 큰 이동에서는 Shewhart가 비슷하거나 더 빠르다. 큰 고장은 고정 알람이, 작은 드리프트는 EWMA가 맡는 분업이다. ③ λ를 1로 두면 EWMA는 Shewhart와 같아진다. L을 줄이면 빨리 잡지만 ARL₀(거짓 경보 간격)이 짧아진다. 데이터는 100점 중 51번째부터 평균이 δσ만큼 오르는 정규 난수이고, ARL은 400회 반복의 평균(최대 2,000점에서 중단)이다.</div>
+    </div>
+
+    <div class="callout tip"><strong>유틸리티에 SPC를 쓸 때 주의할 점</strong>
+      <p>유틸리티 데이터는 교과서의 SPC 가정(독립·정규·정상)을 잘 따르지 않는다. 외기 온도에 따른 일주기, 칠러 대수 변경에 따른 계단, 제어기가 만드는 진동, 1초 데이터의 강한 자기상관이 있다. 그대로 관리 한계를 그리면 거짓 경보가 쏟아진다. 실무에서는 일정 시간 평균(예: 10분 평균)을 쓰거나, 외기 조건·부하로 기대값을 예측하는 모델을 만들고 <b>잔차</b>(실측 − 예측)에 관리도를 적용한다. 10절의 디지털 트윈이 그 기대값 모델 역할을 한다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9. 예지 정비 -->
+  <section id="pdm">
+    <h2>예지 정비: 진동 추세로 잔여 수명 읽기</h2>
+    <p>정비 전략은 세 가지다. 고장 나면 고치는 <b>사후 정비</b><span class="en">(run-to-failure)</span>, 정해진 주기마다 교체하는 <b>예방 정비</b><span class="en">(PM, preventive maintenance)</span>, 상태를 측정해 고장이 다가올 때 고치는 <b>예지 정비</b><span class="en">(PdM, predictive maintenance)</span>다. 회전기(펌프·팬·칠러 압축기)는 예지 정비가 가장 잘 통하는 대상이다. 베어링 손상, 불평형, 축 정렬 불량, 캐비테이션이 진동으로 먼저 나타나기 때문이다.</p>
+    <p>회전기 진동의 판정에는 ISO 10816-3(현재 ISO 20816-3으로 개정)의 진동 속도 실효값 기준이 흔히 쓰인다. 15~300 kW급 중형 기계를 강성 기초에 설치한 경우 대략 1.4 mm/s(A/B), 2.8 mm/s(B/C), 4.5 mm/s(C/D)가 영역 경계다. A는 신규 설치 수준, B는 장기 운전 가능, C는 장기 운전 부적합(정비 계획), D는 손상 위험이다. 정확한 값은 기계 크기·기초 강성에 따라 다르므로 규격 원문을 따른다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 280" role="img" aria-label="잠재 고장 시점 P에서 기능 고장 F까지의 P-F 곡선과 감지 기술별 시점">
+        <defs><marker id="op-ar9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--text-dim)"/></marker></defs>
+        <path d="M70 240 V24" class="s-axis" marker-end="url(#op-ar9)"/>
+        <path d="M70 240 H770" class="s-axis" marker-end="url(#op-ar9)"/>
+        <text x="30" y="130" text-anchor="middle" class="t-dim" transform="rotate(-90 30 130)">설비 상태</text>
+        <text x="420" y="270" text-anchor="middle" class="t-dim">시간</text>
+        <path d="M80 50 H260 C 400 54, 560 90, 650 170 C 680 200, 700 225, 712 236" class="s-acc" style="stroke-width:3.5"/>
+        <circle cx="260" cy="50" r="7" class="f-acc"/>
+        <text x="260" y="38" text-anchor="middle" class="t-acc">P (잠재 고장 시작)</text>
+        <circle cx="712" cy="236" r="7" style="fill:var(--bad)"/>
+        <text x="712" y="224" text-anchor="end" class="t" style="fill:var(--bad);font-weight:700">F (기능 고장)</text>
+        <g class="t-mono">
+          <circle cx="340" cy="54" r="4.5" style="fill:var(--accent-2)"/><text x="340" y="80" text-anchor="middle">진동 분석</text>
+          <circle cx="470" cy="68" r="4.5" style="fill:var(--accent-2)"/><text x="470" y="94" text-anchor="middle">오일 분석</text>
+          <circle cx="580" cy="118" r="4.5" style="fill:var(--accent-2)"/><text x="556" y="146" text-anchor="end">소음·열화상</text>
+          <circle cx="650" cy="170" r="4.5" style="fill:var(--accent-2)"/><text x="630" y="196" text-anchor="end">손으로 느끼는 열</text>
+        </g>
+        <path d="M340 252 H712" class="s-line" marker-end="url(#op-ar9)" marker-start="url(#op-ar9)"/>
+        <text x="526" y="248" text-anchor="middle" class="t-dim">P-F 간격: 정비를 계획할 수 있는 시간</text>
+      </svg>
+      <figcaption><b>그림 15-8.</b> P-F 곡선. 결함이 시작되는 시점(P)과 기능을 잃는 시점(F) 사이에 상태가 서서히 나빠진다. 더 이른 신호를 잡는 기술일수록 P-F 간격이 길어 예비품 주문과 정비 일정을 맞출 여유가 생긴다. 측정 주기는 P-F 간격보다 충분히 짧아야 한다(보통 절반 이하).</figcaption>
+    </figure>
+
+    <p>진동 추세로 잔여 수명<span class="en">(RUL, Remaining Useful Life)</span>을 추정하는 가장 단순한 방법은 열화 모델을 데이터에 맞추고 경계값과 만나는 시점을 외삽하는 것이다. 베어링 손상처럼 진행이 가속되는 열화는 지수 모델이 잘 맞는다.</p>
+    <div class="formula">$$v(t) = v_0 + a\,e^{bt}\quad\Rightarrow\quad \ln\big(v(t) - v_0\big) = \ln a + b\,t,\qquad t_F = \frac{\ln\big((v_{\text{lim}} - v_0)/a\big)}{b},\quad \mathrm{RUL} = t_F - t_{\text{now}}$$
+      <div class="where">\(v_0\): 건전한 상태의 기저 진동, \(v_{\text{lim}}\): 정비가 필요한 경계(예: 4.5 mm/s). 최근 구간의 \(\ln(v-v_0)\)에 직선을 맞추면 기울기가 \(b\)다. 기울기의 표준오차로 RUL의 불확실성 범위를 함께 낸다.</div></div>
+
+    <div class="sim" id="sim-rul">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>PCW 펌프 진동 추세 → 잔여 수명 예측</h3></div>
+      <div class="op-presets">
+        <button class="btn primary" id="rl-roll">다른 펌프</button>
+      </div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-rul"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>오늘 (운전 일수) <output id="rl-now-out"></output></span><input type="range" id="rl-now" min="60" max="260" step="1" value="170"></label>
+          <label class="ctrl"><span>열화 속도 b <output id="rl-b-out"></output></span><input type="range" id="rl-b" min="0.006" max="0.03" step="0.001" value="0.012"></label>
+          <label class="ctrl"><span>측정 잡음 σ <output id="rl-s-out"></output></span><input type="range" id="rl-s" min="0.02" max="0.3" step="0.01" value="0.08"></label>
+          <label class="ctrl"><span>맞춤 구간 (최근) <output id="rl-w-out"></output></span><input type="range" id="rl-w" min="20" max="120" step="5" value="60"></label>
+          <label class="ctrl"><span>예비품 조달 기간 <output id="rl-lt-out"></output></span><input type="range" id="rl-lt" min="7" max="90" step="1" value="30"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">현재 진동</span><span class="v" id="o-rl-v">—</span></div>
+        <div class="stat"><span class="k">추정 b</span><span class="v" id="o-rl-b">—</span></div>
+        <div class="stat"><span class="k">예측 RUL (4.5 mm/s까지)</span><span class="v" id="o-rl-rul">—</span></div>
+        <div class="stat"><span class="k">실제 RUL (모델 정답)</span><span class="v" id="o-rl-true">—</span></div>
+      </div>
+      <div class="op-verdict" id="rl-verdict">—</div>
+      <div class="sim-note">해볼 것: ① “오늘”을 100일에서 220일까지 옮기며 예측 RUL과 불확실성 띠가 어떻게 변하는지 보자. 초기에는 신호가 잡음에 묻혀 예측이 크게 흔들리고, 고장이 가까울수록 정확해진다. ② 잡음 σ를 키우면 같은 시점에서도 예측 범위가 넓어진다. 측정 품질(센서 부착, 측정 조건 통일)이 곧 예측 품질이다. ③ 예비품 조달 기간보다 RUL 하한이 짧아지면 이미 늦은 것이다. 판정은 “RUL 하한 − 조달 기간”으로 했다. 데이터는 \(v = 1.0 + 0.2e^{bt}\) mm/s에 잡음을 더한 합성 데이터이며, 기저 진동 \(v_0\) = 1.0 mm/s는 안다고 가정했다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 10. PM·트윈 -->
+  <section id="pm">
+    <h2>예방 정비 주기, 정기 셧다운, 디지털 트윈</h2>
+    <h3>언제 교체할 것인가: Weibull과 나이 교체 정책</h3>
+    <p>상태를 측정하기 어려운 부품(씰, 필터, 접점, UV 램프)은 일정 사용 시간 \(T\)마다 교체한다. 너무 자주 바꾸면 멀쩡한 부품을 버리고, 너무 늦게 바꾸면 고장 비용을 치른다. 수명이 Weibull 분포를 따른다고 하면 단위 시간당 기대 비용을 최소화하는 \(T\)를 계산할 수 있다.</p>
+    <div class="formula">$$R(t) = e^{-(t/\eta)^{\beta}},\qquad C(T) = \frac{C_p\,R(T) + C_f\,\big[1-R(T)\big]}{\int_0^T R(t)\,dt}$$
+      <div class="where">\(\beta\): 형상 모수(β &lt; 1 초기 고장, β = 1 우발 고장, β &gt; 1 마모), \(\eta\): 척도 모수(약 63 %가 고장 나는 시간), \(C_p\): 계획 교체 비용, \(C_f\): 고장 후 교체 비용(부품 + 정지 손실 + 2차 피해). 분자는 한 주기의 기대 비용, 분모는 한 주기의 기대 길이다. 고장까지 쓰는 정책의 비용률은 \(C_f / \mathrm{MTTF}\), \(\mathrm{MTTF} = \eta\,\Gamma(1 + 1/\beta)\)이다.</div></div>
+
+    <div class="sim" id="sim-pm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>최적 예방 교체 주기 (Weibull 나이 교체)</h3></div>
+      <div class="op-presets">
+        <span class="lbl">부품 예</span>
+        <button class="btn" data-be="0.8" data-et="30000" data-cr="5">전자 제어 보드</button>
+        <button class="btn" data-be="1" data-et="20000" data-cr="10">무작위 고장 부품</button>
+        <button class="btn" data-be="2.5" data-et="25000" data-cr="12">펌프 기계 씰</button>
+        <button class="btn" data-be="4" data-et="9000" data-cr="20">UV 램프·필터</button>
+      </div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-pm"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>형상 모수 β <output id="pm-b-out"></output></span><input type="range" id="pm-b" min="0.5" max="5" step="0.1" value="2.5"></label>
+          <label class="ctrl"><span>척도 모수 η <output id="pm-e-out"></output></span><input type="range" id="pm-e" min="2000" max="50000" step="1000" value="25000"></label>
+          <label class="ctrl"><span>비용비 C_f / C_p <output id="pm-c-out"></output></span><input type="range" id="pm-c" min="1" max="30" step="0.5" value="12"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최적 교체 주기 T*</span><span class="v" id="o-pm-t">—</span></div>
+        <div class="stat"><span class="k">T*까지 생존 확률</span><span class="v" id="o-pm-r">—</span></div>
+        <div class="stat"><span class="k">MTTF</span><span class="v" id="o-pm-mttf">—</span></div>
+        <div class="stat"><span class="k">사후 정비 대비 비용</span><span class="v" id="o-pm-save">—</span></div>
+      </div>
+      <div class="op-verdict" id="pm-verdict">—</div>
+      <div class="sim-note">해볼 것: ① “무작위 고장 부품”(β = 1)에서는 곡선이 계속 내려가 최적점이 없다. 고장률이 일정하면 새 부품도 헌 부품만큼 고장 나므로 미리 바꿔도 소용이 없다. ② β = 0.8인 “전자 제어 보드”는 오히려 교체가 초기 고장을 불러들인다. ③ 마모 부품(β ≥ 2)은 비용비가 클수록 T*가 짧아지고 절감 폭이 커진다. 비용은 \(C_p\) = 1로 정규화했고, 곡선은 \(C(T)\)를 사후 정비 비용률로 나눈 상대값이다.</div>
+    </div>
+
+    <h3>정기 셧다운 계획</h3>
+    <p>대부분의 정비는 N+1 여유 덕분에 설비를 하나씩 빼서 할 수 있다. 그러나 22.9 kV 주 모선, 공용 배관 헤더, 주 배기 덕트처럼 이중화되지 않은 요소는 팹 전체나 큰 구역을 세워야만 손댈 수 있다. 그래서 팹은 1~수년에 한 번, 수일 규모의 <b>정기 셧다운</b>을 계획한다. 셧다운은 생산 손실이 확정된 사건이므로 하루라도 줄이는 것이 목표이고, 그 핵심은 공정 장비의 안전한 정지·기동 순서, 유틸리티 작업의 병렬화, 재기동 후 검증이다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 300" role="img" aria-label="정기 셧다운의 단계별 간트 차트">
+        <g class="s-axis" style="stroke-width:1;opacity:.4">
+          <path d="M200 40 V270 M290 40 V270 M380 40 V270 M470 40 V270 M560 40 V270 M650 40 V270 M740 40 V270"/>
+        </g>
+        <g class="t-mono" text-anchor="middle">
+          <text x="200" y="32">D−30</text><text x="290" y="32">D−1</text><text x="380" y="32">D1</text><text x="470" y="32">D2</text><text x="560" y="32">D3</text><text x="650" y="32">D4</text><text x="740" y="32">D5</text>
+        </g>
+        <g class="t" text-anchor="end">
+          <text x="190" y="64">작업 계획·자재·허가</text>
+          <text x="190" y="96">공정 WIP 소진·장비 정지</text>
+          <text x="190" y="128">전원 차단·잠금(LOTO)</text>
+          <text x="190" y="160">22.9 kV 모선·차단기 정비</text>
+          <text x="190" y="192">배관 헤더·밸브·덕트</text>
+          <text x="190" y="224">유틸리티 재기동·검증</text>
+          <text x="190" y="256">장비 기동·인증 웨이퍼</text>
+        </g>
+        <rect x="200" y="50" width="90" height="20" rx="4" class="f-surface"/>
+        <rect x="270" y="82" width="110" height="20" rx="4" class="f-warn-soft"/>
+        <rect x="380" y="114" width="40" height="20" rx="4" class="f-bad-soft"/>
+        <rect x="420" y="146" width="160" height="20" rx="4" class="f-acc-soft"/>
+        <rect x="420" y="178" width="200" height="20" rx="4" class="f-acc-soft"/>
+        <rect x="600" y="210" width="80" height="20" rx="4" class="f-ok-soft"/>
+        <rect x="650" y="242" width="110" height="20" rx="4" class="f-ok-soft"/>
+        <path d="M580 156 L600 220" class="s-line" style="stroke-dasharray:3 3"/>
+        <path d="M680 220 L690 252" class="s-line" style="stroke-dasharray:3 3"/>
+        <text x="500" y="290" text-anchor="middle" class="t-dim">임계 경로: 모선 정비 → 유틸리티 재기동 → 장비 인증. 이 줄을 하루 줄이는 것이 셧다운 계획의 목표</text>
+      </svg>
+      <figcaption><b>그림 15-9.</b> 정기 셧다운 일정의 개념도. 준비(작업 목록·자재·작업 허가)는 수주~수개월 전부터 시작한다. 정지는 공정 재공품을 소진하며 단계적으로, 전원 작업은 잠금·표지<span class="en">(LOTO, Lockout/Tagout)</span> 후에 한다. 가장 긴 작업 사슬(임계 경로)이 셧다운 길이를 정한다. 일정은 교육용 예시다.</figcaption>
+    </figure>
+
+    <h3>디지털 트윈</h3>
+    <p><span class="term">디지털 트윈</span><span class="en">(digital twin)</span>은 실제 설비와 같은 입력을 받아 같은 출력을 내도록 만든 계산 모델을 실시간 데이터와 함께 돌리는 것이다. 칠러 플랜트를 예로 들면 열역학 모델(11장)과 제조사 성능 곡선, 실측 데이터로 보정한 회귀 모델을 묶어 “지금 외기 조건과 부하에서 이 플랜트가 쓸 전력”을 계산한다. 쓰임새는 세 가지다.</p>
+    <ul>
+      <li><b>이상 감지의 기준선</b>: 트윈의 예측과 실측의 차이(잔차)가 커지면 열교환기 오염, 냉매 누설, 센서 고장을 의심한다. 8절의 SPC를 잔차에 적용한다.</li>
+      <li><b>운전 최적화</b>: 칠러 대수, 냉수 온도 설정, 냉각탑 팬 속도 조합을 트윈에서 먼저 돌려 전력이 가장 작은 조합을 찾는다(16장 에너지 절감과 연결).</li>
+      <li><b>가정 질문</b><span class="en">(what-if)</span>: “칠러 한 대를 내일 정비로 빼면 오후 피크에 냉수 온도를 지킬 수 있나?”, “셧다운 기동 순서를 바꾸면 몇 시간 줄어드나?”를 실제 설비를 건드리지 않고 시험한다.</li>
+    </ul>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 240" role="img" aria-label="실제 설비와 디지털 트윈 사이의 데이터 흐름과 피드백">
+        <defs><marker id="op-ar10" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker></defs>
+        <rect x="40" y="70" width="200" height="100" rx="12" class="f-elev"/>
+        <text x="140" y="110" text-anchor="middle" class="t" style="font-weight:700">실제 칠러 플랜트</text>
+        <text x="140" y="134" text-anchor="middle" class="t-dim">센서 수천 점</text>
+        <rect x="560" y="70" width="200" height="100" rx="12" class="f-acc2-soft"/>
+        <text x="660" y="110" text-anchor="middle" class="t" style="font-weight:700">디지털 트윈</text>
+        <text x="660" y="134" text-anchor="middle" class="t-dim">물리 모델 + 데이터 보정</text>
+        <path d="M240 95 H556" class="s-acc" marker-end="url(#op-ar10)"/>
+        <text x="400" y="86" text-anchor="middle" class="t-dim">실시간 측정 (외기, 부하, 온도, 전력)</text>
+        <path d="M560 145 H244" class="s-acc" marker-end="url(#op-ar10)"/>
+        <text x="400" y="166" text-anchor="middle" class="t-dim">최적 설정값 제안 · 운전원 승인 후 적용</text>
+        <rect x="320" y="190" width="160" height="38" rx="8" class="f-warn-soft"/>
+        <text x="400" y="214" text-anchor="middle" class="t">잔차 = 실측 − 예측</text>
+        <path d="M400 104 V188" class="s-line" style="stroke-dasharray:4 4"/>
+        <rect x="320" y="18" width="160" height="38" rx="8" class="f-surface"/>
+        <text x="400" y="42" text-anchor="middle" class="t">what-if 시나리오</text>
+        <path d="M480 37 H600 V68" class="s-line" style="stroke-dasharray:4 4"/>
+      </svg>
+      <figcaption><b>그림 15-10.</b> 디지털 트윈의 순환. 실측 데이터가 트윈을 보정하고, 트윈은 기대값(이상 감지 기준), 최적 설정값, 가정 시나리오의 답을 돌려준다. 설정값 변경은 보통 운전원 승인을 거쳐 적용한다. 트윈의 가치는 모델의 정밀도보다 “실측과 계속 맞춰지는가”에 달려 있다.</figcaption>
+    </figure>
+
+    <div class="callout warn"><strong>기록하지 않은 정비는 일어나지 않은 정비다</strong>
+      <p>신뢰성 계산의 입력인 MTBF·MTTR·Weibull 모수는 결국 정비 기록에서 나온다. 고장 원인, 교체 부품, 운전 시간을 표준 코드로 남기지 않으면 몇 년 뒤에도 “이 펌프의 β가 얼마인지” 알 수 없다. 전산화된 정비 관리 시스템<span class="en">(CMMS)</span>과 FMCS 운전 이력을 연결하는 것이 예지 정비와 디지털 트윈의 출발점이다.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 정리 -->
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>가용도 \(A = \mathrm{MTBF}/(\mathrm{MTBF}+\mathrm{MTTR})\). 99.99 %는 연간 약 53분 정지다. 가용도가 높아도 1년 무고장 확률 \(e^{-8760/\mathrm{MTBF}}\)은 낮을 수 있다.</li>
+      <li>직렬 가용도는 곱, 병렬 비가용도는 곱이다. 병렬화는 가장 약한 직렬 블록을 다른 곳으로 옮길 뿐이므로, 약한 고리 찾기를 반복해야 한다. 단일 고장점(SPOF)을 목록으로 관리한다.</li>
+      <li>k-out-of-n 식으로 N, N+1, 2N을 비교한다. 대수가 많으면 N+1로는 부족해 N+2나 한 대 용량 확대, 한 대 가용도 향상이 필요하다.</li>
+      <li>공통 원인 고장(β 인자)은 비가용도에 \(\beta Q\) 바닥을 깐다. 이중화를 더 쌓는 것보다 다양성·분리·정비 시차로 β를 낮추는 편이 효과적인 경우가 많다.</li>
+      <li>유틸리티 의존성 그래프와 완충 시간(PCW 열관성, UPW 탱크, 액체 질소, UPS 배터리)은 비상 대응의 시간 예산이며, 알람 억제 규칙의 근거다.</li>
+      <li>현장 제어(PLC)는 상위 시스템과 독립적으로 동작해야 하고, FMCS·SCADA는 감시·이력·알람을 맡는다. 알람은 운전원당 10분 1건 이하를 목표로 데드밴드·지연·억제·우선순위로 설계한다.</li>
+      <li>Shewhart는 큰 이동을, EWMA는 작은 지속 이동을 빨리 잡는다(1σ 이동 ARL 약 44 대 약 10). 유틸리티 데이터는 기대값 모델의 잔차에 관리도를 적용한다.</li>
+      <li>예지 정비는 P-F 간격 안에서 추세로 잔여 수명을 외삽하고 조달 기간과 비교한다. 예방 교체는 β &gt; 1인 마모 부품에서만 의미가 있고, 최적 주기는 비용비와 Weibull 모수로 정해진다.</li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ 퀴즈 -->
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. MTBF 4,000 h, MTTR 8 h인 펌프의 가용도와 연간 기대 정지 시간에 가장 가까운 것은?</p><div class="opts">
+        <button class="opt">99.2 %, 약 70 h</button>
+        <button class="opt" data-correct>99.8 %, 약 17.5 h</button>
+        <button class="opt">99.98 %, 약 1.8 h</button>
+        <button class="opt">99.8 %, 약 8 h</button>
+      </div><div class="quiz-exp">\(A = 4000/4008 \approx 0.998\). 정지 시간은 \((1-A)\times8760 \approx 17.5\) h이다. 연간 고장 약 2.2회 × MTTR 8 h로 계산해도 같다.</div></div>
+
+      <div class="quiz-q"><p>2. 가용도 0.99인 장치 두 대를 병렬(한 대만 있으면 됨)로 둔 계통과 직렬로 둔 계통의 가용도는? (독립 가정)</p><div class="opts">
+        <button class="opt" data-correct>병렬 0.9999, 직렬 0.9801</button>
+        <button class="opt">병렬 0.99, 직렬 0.98</button>
+        <button class="opt">병렬 0.995, 직렬 0.9801</button>
+        <button class="opt">병렬 0.9999, 직렬 0.99</button>
+      </div><div class="quiz-exp">병렬은 \(1-(0.01)^2 = 0.9999\), 직렬은 \(0.99^2 = 0.9801\). 병렬은 비가용도를, 직렬은 가용도를 곱한다.</div></div>
+
+      <div class="quiz-q"><p>3. 필요 대수 N = 2인 펌프 계통을 N+1(3대 중 2대)로 구성했다. 한 대의 가용도가 0.95일 때 계통 가용도는?</p><div class="opts">
+        <button class="opt">0.9025</button>
+        <button class="opt">0.95</button>
+        <button class="opt" data-correct>약 0.993</button>
+        <button class="opt">약 0.9999</button>
+      </div><div class="quiz-exp">\(A_{2/3} = A^3 + 3A^2(1-A) = 0.857 + 3\times0.9025\times0.05 = 0.857 + 0.135 \approx 0.993\). 0.9025는 N 구성(2대 모두 필요)의 값이다.</div></div>
+
+      <div class="quiz-q"><p>4. 1oo2 구성에서 한 대의 비가용도 Q = 0.02, 공통 원인 비율 β = 10 %일 때 계통 비가용도는 대략?</p><div class="opts">
+        <button class="opt">0.0004</button>
+        <button class="opt" data-correct>약 0.0023</button>
+        <button class="opt">0.02</button>
+        <button class="opt">약 0.0002</button>
+      </div><div class="quiz-exp">독립 항 \([(0.9)(0.02)]^2 = 0.000324\), 공통 항 \(0.1\times0.02 = 0.002\). 합 약 0.0023으로, β를 무시한 0.0004보다 약 6배 나쁘다. 공통 원인이 지배한다.</div></div>
+
+      <div class="quiz-q"><p>5. 칠러 플랜트가 멈췄다. PCW 루프의 열적 완충이 12분, 클린룸 공조는 10분 뒤 온도 이탈, 공정 장비는 PCW가 무너지면 즉시 정지한다고 할 때, 장비 정지까지 남은 시간과 가장 먼저 할 일은?</p><div class="opts">
+        <button class="opt">0분, 장비를 즉시 정지</button>
+        <button class="opt" data-correct>약 12분, 칠러 재기동·예비 냉수 투입과 함께 냉수를 PCW와 핵심 구역에 우선 배분</button>
+        <button class="opt">약 22분, 공조와 PCW의 완충 시간을 더한 값</button>
+        <button class="opt">완충 시간과 무관하게 FMCS 재부팅</button>
+      </div><div class="quiz-exp">공정 장비는 PCW에 직접 의존하므로 PCW 완충 12분이 시간 예산이다(클린룸 경로도 10분 + 그 이후 지연이 있다). 완충 시간은 더하는 것이 아니라 경로별로 따로 계산해 가장 짧은 것을 본다. 그 안에 냉동 능력을 되살리거나 남은 냉수를 우선순위에 따라 배분한다.</div></div>
+
+      <div class="quiz-q"><p>6. 잡음 때문에 경계값 근처에서 같은 알람이 하루 수백 번 켜졌다 꺼진다. 가장 먼저 적용할 대책은?</p><div class="opts">
+        <button class="opt">알람 우선순위를 높인다</button>
+        <button class="opt" data-correct>데드밴드(해제값 분리)와 짧은 지연을 둔다</button>
+        <button class="opt">센서를 하나 더 달아 알람을 두 배로 만든다</button>
+        <button class="opt">경계값을 대폭 올려 알람이 안 나게 한다</button>
+      </div><div class="quiz-exp">채터링의 원인은 잡음이 경계값을 반복해서 넘나드는 것이므로 데드밴드와 지연으로 막는다. 경계값을 크게 올리면 진짜 이상을 늦게 잡거나 놓친다. ISA-18.2·EEMUA 191은 운전원당 10분에 1건 이하를 목표로 한다.</div></div>
+
+      <div class="quiz-q"><p>7. 평균이 0.8σ만큼 천천히 이동한 드리프트를 가장 빨리 감지할 가능성이 큰 방법은?</p><div class="opts">
+        <button class="opt">±3σ Shewhart 개별값 관리도</button>
+        <button class="opt" data-correct>λ = 0.1~0.2의 EWMA 관리도</button>
+        <button class="opt">경계값을 ±5σ로 넓힌 고정 알람</button>
+        <button class="opt">하루 한 번 최댓값만 확인</button>
+      </div><div class="quiz-exp">EWMA는 과거 값을 지수적으로 누적해 작은 지속 이동에 민감하다. Shewhart는 개별 점이 3σ를 넘어야 하므로 1σ 이하 이동의 ARL이 수십~수백 점이다.</div></div>
+
+      <div class="quiz-q"><p>8. 수명이 Weibull β = 1(우발 고장)을 따르는 부품에 대해 옳은 것은?</p><div class="opts">
+        <button class="opt">고장 비용이 크면 짧은 주기로 미리 교체하는 것이 항상 이득이다</button>
+        <button class="opt" data-correct>고장률이 일정해 새 부품도 같은 확률로 고장 나므로, 나이 기반 예방 교체로 비용이 줄지 않는다</button>
+        <button class="opt">η의 63 % 시점에서 교체하는 것이 최적이다</button>
+        <button class="opt">β = 1이면 예지 정비도 의미가 없다</button>
+      </div><div class="quiz-exp">β = 1이면 \(C(T)\)가 \(T\)에 대해 단조 감소해 최적 교체 주기가 없다(무한대 = 사후 정비). 이런 부품은 예비품과 빠른 수리(MTTR 단축), 또는 상태 감시로 다룬다. 상태 신호가 있다면 예지 정비는 여전히 유효하다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+/* ---------------- 페이지 공용 헬퍼 */
+function opFont() { return getComputedStyle(document.body).getPropertyValue("--font"); }
+function opRng(seed) { var a = seed >>> 0; return function () { a = (a + 0x6D2B79F5) >>> 0; var t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function opNorm(rng) { var u = 0, v = 0; while (u === 0) u = rng(); v = rng(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+function opPhi(x) { var t = 1 / (1 + 0.3275911 * Math.abs(x) / Math.SQRT2), y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x / 2); return x >= 0 ? 0.5 * (1 + y) : 0.5 * (1 - y); }
+function opHours(h) { if (!isFinite(h)) return "—"; if (h >= 1) return IB.fmt(h, 3) + "<small>h</small>"; if (h * 60 >= 1) return IB.fmt(h * 60, 3) + "<small>분</small>"; return IB.fmt(h * 3600, 3) + "<small>초</small>"; }
+function opVerdict(id, cls, html) { var el = document.getElementById(id); if (!el) return; el.className = "op-verdict " + cls; el.innerHTML = html; }
+function opLegend(ctx, items, x, y, P) {
+  ctx.save(); ctx.font = "12px " + opFont(); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  items.forEach(function (it, i) {
+    var yy = y + i * 16; ctx.strokeStyle = it[1]; ctx.lineWidth = 2.5; ctx.setLineDash(it[2] || []);
+    ctx.beginPath(); ctx.moveTo(x, yy); ctx.lineTo(x + 16, yy); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = P.dim; ctx.fillText(it[0], x + 21, yy);
+  });
+  ctx.restore();
+}
+
+/* ================================================================ 1. 가용도 */
+(function () {
+  "use strict";
+  var toB = function (s) { return Math.pow(10, 2 + 2.7 * s / 100); }, fromB = function (b) { return Math.round((Math.log10(b) - 2) / 2.7 * 100); };
+  var toR = function (s) { return Math.pow(10, -0.3 + 2.6 * s / 100); }, fromR = function (r) { return Math.round((Math.log10(r) + 0.3) / 2.6 * 100); };
+  var seed = 7;
+  function redraw() { cv.redraw(); }
+  var gB = IB.range("av-b", function (s) { return Math.round(toB(s)).toLocaleString("en-US") + " h"; }, redraw);
+  var gR = IB.range("av-r", function (s) { return IB.fmt(toR(s), 3) + " h"; }, redraw);
+  document.querySelectorAll("#sim-avail .op-presets .btn[data-b]").forEach(function (b) {
+    b.addEventListener("click", function () { gB.set(fromB(+b.dataset.b)); gR.set(fromR(+b.dataset.r)); });
+  });
+  document.getElementById("av-roll").addEventListener("click", function () { seed++; redraw(); });
+  function draw(ctx, w, h) {
+    var P = IB.palette(), font = opFont();
+    var B = toB(gB()), R = toR(gR()), A = B / (B + R), Y = 8760;
+    var rng = opRng(seed * 7919), t = 0, ev = [], down = 0;
+    while (t < Y && ev.length < 3000) { t += -B * Math.log(1 - rng()); if (t >= Y) break; var r = -R * Math.log(1 - rng()); ev.push([t, Math.min(Y, t + r)]); down += Math.min(Y, t + r) - t; t += r; }
+    var sx = 52, sw = w - 52 - 18, sy = 26, sh = 30;
+    ctx.font = "12px " + font; ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+    ctx.fillText("1년 몬테카를로 표본: 고장 " + ev.length + "회, 정지 " + IB.fmt(down, 3) + " h", sx, sy - 4);
+    ctx.fillStyle = P.ok; ctx.globalAlpha = 0.35; ctx.fillRect(sx, sy, sw, sh); ctx.globalAlpha = 1;
+    ctx.fillStyle = P.bad;
+    ev.forEach(function (e) { var x0 = sx + e[0] / Y * sw, x1 = sx + e[1] / Y * sw; ctx.fillRect(x0, sy, Math.max(2, x1 - x0), sh); });
+    ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.font = "11px " + font;
+    for (var m = 0; m <= 12; m += (w < 480 ? 3 : 1)) ctx.fillText(m + "월", sx + m / 12 * sw, sy + sh + 3);
+    var box = { x: 52, y: sy + sh + 40, w: sw, h: h - (sy + sh + 40) - 46 };
+    var data = []; for (var i = 0; i <= 200; i++) { var tt = Y * i / 200; data.push([tt, Math.exp(-tt / B)]); }
+    var r1 = Math.exp(-Y / B);
+    IB.chart(ctx, box, { x: [0, Y], y: [0, 1], xLabel: "운전 시간 (h)", yLabel: "신뢰도 R(t)", xTicks: [0, 2190, 4380, 6570, 8760],
+      series: [{ data: data, color: P.accent, width: 3 }],
+      points: [{ x: Y, y: r1, color: P.bad, r: 5, label: "" }],
+      hlines: [{ y: r1, color: P.bad, label: "R(1년) = " + (r1 * 100).toFixed(1) + " %" }] });
+    var nines = -Math.log10(1 - A);
+    IB.stat("o-av-a", (A * 100).toFixed(A > 0.9999 ? 4 : 3) + "<small>%</small>");
+    IB.stat("o-av-n", nines.toFixed(2));
+    IB.stat("o-av-down", opHours((1 - A) * Y));
+    IB.stat("o-av-f", IB.fmt(Y / (B + R), 3) + "<small>회</small>");
+    IB.stat("o-av-r1", (r1 * 100).toFixed(1) + "<small>%</small>");
+    IB.stat("o-av-s", opHours(down));
+  }
+  var cv = IB.canvas("#cv-avail", draw, { aspect: 0.6, minHeight: 320, maxHeight: 400 });
+})();
+
+/* ================================================================ 2. k-out-of-n */
+(function () {
+  "use strict";
+  function kofn(k, n, A) {
+    if (k <= 0) return 1;
+    var s = 0, c = 1; // c = C(n, i)
+    for (var i = 0; i <= n; i++) { if (i > 0) c = c * (n - i + 1) / i; if (i >= k) s += c * Math.pow(A, i) * Math.pow(1 - A, n - i); }
+    return Math.min(1, s);
+  }
+  function redraw() { cv.redraw(); }
+  var gL = IB.range("kn-l", function (v) { return v.toLocaleString("en-US") + " RT"; }, redraw);
+  var gU = IB.range("kn-u", function (v) { return v.toLocaleString("en-US") + " RT"; }, redraw);
+  var gA = IB.range("kn-a", function (v) { return v.toFixed(3); }, redraw);
+  var cfg = IB.seg("kn-cfg", redraw);
+  function draw(ctx, w, h) {
+    var P = IB.palette(), font = opFont();
+    var N = Math.max(1, Math.ceil(gL() / gU() - 1e-9)), A = gA();
+    var keys = ["0", "1", "2", "2n"], names = ["N", "N+1", "N+2", "2N"];
+    var inst = keys.map(function (k) { return k === "2n" ? 2 * N : N + (+k); });
+    var av = inst.map(function (n) { return kofn(N, n, A); });
+    var hrs = av.map(function (a) { return Math.max(1e-3, (1 - a) * 8760); });
+    var sel = keys.indexOf(cfg());
+    var box = { x: 58, y: 24, w: w - 58 - 18, h: h - 24 - 50 };
+    IB.chart(ctx, box, { x: [0, 4], y: [1e-3, 1e4], logY: true, xTicks: [], yLabel: "연간 용량 부족 시간 (h, 로그)",
+      yFmt: function (v) { return v >= 1 ? String(v) : v.toString(); },
+      hlines: [{ y: 8.76, color: P.faint, label: "99.9 %" }, { y: 0.876, color: P.faint, label: "99.99 %" }] });
+    var Yl = function (v) { return box.y + box.h - (Math.log10(v) + 3) / 7 * box.h; };
+    var bw = box.w / 4;
+    hrs.forEach(function (v, i) {
+      var x = box.x + i * bw + bw * 0.2, y = Yl(Math.min(1e4, v)), y0 = box.y + box.h;
+      ctx.fillStyle = i === sel ? P.accent : P.faint; ctx.globalAlpha = i === sel ? 0.9 : 0.55;
+      ctx.fillRect(x, y, bw * 0.6, y0 - y); ctx.globalAlpha = 1;
+      ctx.fillStyle = P.text; ctx.font = (i === sel ? "600 " : "") + "12px " + font; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      ctx.fillText(v <= 1.001e-3 ? "< 0.001 h" : IB.fmt(v, 3) + " h", x + bw * 0.3, y - 3);
+      ctx.textBaseline = "top"; ctx.fillStyle = P.dim;
+      ctx.fillText(names[i] + " (" + inst[i] + "대)", x + bw * 0.3, y0 + 6);
+    });
+    IB.stat("o-kn-n", N + "<small>대</small>");
+    IB.stat("o-kn-inst", inst[sel] + "<small>대</small>");
+    IB.stat("o-kn-a", av[sel] > 0.999999 ? "> 99.9999<small>%</small>" : (av[sel] * 100).toFixed(4) + "<small>%</small>");
+    IB.stat("o-kn-h", opHours((1 - av[sel]) * 8760));
+    IB.stat("o-kn-x", Math.round((inst[sel] * gU() / gL() - 1) * 100) + "<small>%</small>");
+  }
+  var cv = IB.canvas("#cv-kofn", draw, { aspect: 0.55, minHeight: 300, maxHeight: 380 });
+})();
+
+/* ================================================================ 3. CCF β */
+(function () {
+  "use strict";
+  function qsys(cfg, Q, b) {
+    var qi = (1 - b) * Q, ind = cfg === "1oo2" ? qi * qi : cfg === "1oo3" ? qi * qi * qi : 3 * qi * qi - 2 * qi * qi * qi;
+    return ind + b * Q;
+  }
+  function redraw() { cv.redraw(); }
+  var gA = IB.range("cc-a", function (v) { return v.toFixed(3); }, redraw);
+  var gB = IB.range("cc-b", function (v) { return v + " %"; }, redraw);
+  var cfg = IB.seg("cc-cfg", redraw);
+  function draw(ctx, w, h) {
+    var P = IB.palette(), Q = 1 - gA(), b = gB() / 100, c = cfg();
+    var cfgs = ["1oo2", "2oo3", "1oo3"], cols = [P.accent, P.warn, P.ok];
+    var series = cfgs.map(function (k, i) {
+      var d = []; for (var bb = 0; bb <= 0.2001; bb += 0.0025) d.push([bb * 100, Math.max(1e-10, qsys(k, Q, bb))]);
+      return { data: d, color: cols[i], width: k === c ? 3.2 : 1.5 };
+    });
+    var q = qsys(c, Q, b), q0 = qsys(c, Q, 0);
+    var ymin = Math.pow(10, Math.floor(Math.log10(Math.max(1e-10, qsys("1oo3", Q, 0)))));
+    IB.chart(ctx, null, { x: [0, 20], y: [ymin, Math.max(1e-2, Q * 2)], logY: true, xLabel: "공통 원인 비율 β (%)", yLabel: "계통 비가용도 (로그)",
+      series: series.concat([{ data: [[0, Math.max(ymin, q0)], [20, Math.max(ymin, q0)]], color: cols[cfgs.indexOf(c)], width: 1.2, dash: [5, 4] }]),
+      hlines: [{ y: Q, color: P.bad, label: "한 대 Q = " + IB.fmt(Q, 2) }],
+      points: [{ x: b * 100, y: q, color: P.bad, r: 5 }] });
+    opLegend(ctx, cfgs.map(function (k, i) { return [k, cols[i]]; }), w - 90, h - 110, P);
+    IB.stat("o-cc-ind", IB.fmt(q0, 3));
+    IB.stat("o-cc-q", IB.fmt(q, 3));
+    IB.stat("o-cc-share", (b * Q / q * 100).toFixed(0) + "<small>%</small>");
+    IB.stat("o-cc-h", opHours(q * 8760));
+  }
+  var cv = IB.canvas("#cv-ccf", draw, { aspect: 0.58, minHeight: 300, maxHeight: 380 });
+})();
+
+/* ================================================================ 4. 의존성 그래프 */
+(function () {
+  "use strict";
+  var CX = [0.07, 0.23, 0.41, 0.59, 0.77, 0.93];
+  var NODES = [
+    { id: "grid", n: "수전", c: 0, y: 0.18, g: [] },
+    { id: "gen", n: "발전기", c: 0, y: 0.78, g: [] },
+    { id: "mv", n: "22.9kV", c: 1, y: 0.18, g: [[["grid"], 0]] },
+    { id: "emg", n: "비상모선", c: 1, y: 0.78, g: [[["mv", "gen"], 0]] },
+    { id: "ct", n: "냉각탑", c: 2, y: 0.06, g: [[["mv"], 0]] },
+    { id: "chl", n: "칠러", c: 2, y: 0.24, g: [[["mv"], 0], [["ct"], 3]] },
+    { id: "asu", n: "ASU", c: 2, y: 0.42, g: [[["mv"], 0]] },
+    { id: "upw", n: "UPW", c: 2, y: 0.60, g: [[["mv"], 20]] },
+    { id: "ups", n: "UPS", c: 2, y: 0.88, g: [[["emg"], "ups"]] },
+    { id: "pcw", n: "PCW", c: 3, y: 0.10, g: [[["chl"], "pcw"], [["mv"], 0]] },
+    { id: "hvac", n: "공조", c: 3, y: 0.28, g: [[["chl"], 8], [["mv"], 0]] },
+    { id: "n2", n: "N₂", c: 3, y: 0.46, g: [[["asu"], "n2"]] },
+    { id: "exh", n: "배기", c: 3, y: 0.68, g: [[["emg"], 0]] },
+    { id: "fmcs", n: "FMCS", c: 3, y: 0.88, g: [[["ups"], 0]] },
+    { id: "cr", n: "클린룸", c: 4, y: 0.24, g: [[["hvac"], 10]] },
+    { id: "cda", n: "CDA", c: 4, y: 0.46, g: [[["mv"], 3]] },
+    { id: "gas", n: "특수가스", c: 4, y: 0.68, g: [[["exh"], 0], [["ups"], 0]] },
+    { id: "tool", n: "공정 장비", c: 5, y: 0.46, g: [[["mv"], 0], [["pcw"], 0], [["cda"], 0], [["n2"], 0], [["upw"], 0], [["gas"], 0], [["cr"], 20], [["exh"], 0]] }
+  ];
+  var BY = {}; NODES.forEach(function (n) { BY[n.id] = n; });
+  var SCN = { chiller: ["chl"], grid: ["grid"], gridgen: ["grid", "gen"], exh: ["exh"], asu: ["asu"] };
+  var src = { chl: true };
+  function redraw() { cv.redraw(); }
+  var gT = IB.range("dp-t", function (v) { return v + " 분"; }, redraw);
+  var gU = IB.range("dp-ups", function (v) { return v + " 분"; }, redraw);
+  var gP = IB.range("dp-pcw", function (v) { return v + " 분"; }, redraw);
+  var gN = IB.range("dp-n2", function (v) { return v + " 분"; }, redraw);
+  function buf(b) { return b === "ups" ? gU() : b === "pcw" ? gP() : b === "n2" ? gN() : b; }
+  function failTimes() {
+    var ft = {}; NODES.forEach(function (n) { ft[n.id] = src[n.id] ? 0 : Infinity; });
+    for (var it = 0; it < 30; it++) {
+      NODES.forEach(function (n) {
+        if (src[n.id]) return;
+        var best = Infinity;
+        n.g.forEach(function (gr) { var m = Math.max.apply(null, gr[0].map(function (id) { return ft[id]; })); best = Math.min(best, m + buf(gr[1])); });
+        ft[n.id] = best;
+      });
+    }
+    return ft;
+  }
+  var playing = false;
+  var loop = IB.loop(document.getElementById("cv-dep"), function (dt) {
+    if (!playing) return;
+    var v = Math.min(360, gT() + dt * 40); gT.set(Math.round(v)); if (v >= 360) playing = false;
+  });
+  document.getElementById("dp-play").addEventListener("click", function () { if (gT() >= 360) gT.set(0); playing = true; loop.start(); });
+  document.getElementById("dp-reset").addEventListener("click", function () { playing = false; src = {}; gT.set(0); });
+  document.querySelectorAll("#sim-dep .op-presets .btn[data-s]").forEach(function (b) {
+    b.addEventListener("click", function () { src = {}; SCN[b.dataset.s].forEach(function (id) { src[id] = true; }); playing = false; gT.set(0); });
+  });
+  var geo = { bw: 60, bh: 30, pos: {} };
+  document.getElementById("cv-dep").addEventListener("click", function (e) {
+    var r = e.currentTarget.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    NODES.forEach(function (n) { var p = geo.pos[n.id]; if (p && Math.abs(x - p[0]) <= geo.bw / 2 && Math.abs(y - p[1]) <= geo.bh / 2) { if (src[n.id]) delete src[n.id]; else src[n.id] = true; } });
+    redraw();
+  });
+  function draw(ctx, w, h) {
+    var P = IB.palette(), font = opFont(), t = gT(), ft = failTimes();
+    var bw = Math.min(92, w * 0.15), bh = w < 500 ? 26 : 32, fs = w < 500 ? 10.5 : 13, padY = 22;
+    geo.bw = bw; geo.bh = bh;
+    NODES.forEach(function (n) { geo.pos[n.id] = [bw / 2 + 4 + n.c / 5 * (w - bw - 8), padY + 8 + n.y * (h - 2 * padY - 8)]; });
+    // 엣지
+    NODES.forEach(function (n) {
+      var p = geo.pos[n.id];
+      n.g.forEach(function (gr) {
+        gr[0].forEach(function (id) {
+          var q = geo.pos[id], dead = ft[id] <= t;
+          ctx.strokeStyle = dead ? P.bad : P.faint; ctx.globalAlpha = dead ? 0.8 : 0.5; ctx.lineWidth = dead ? 1.8 : 1.1;
+          ctx.setLineDash(gr[0].length > 1 ? [4, 3] : []);
+          ctx.beginPath(); ctx.moveTo(q[0] + bw / 2, q[1]); ctx.bezierCurveTo((q[0] + p[0]) / 2, q[1], (q[0] + p[0]) / 2, p[1], p[0] - bw / 2, p[1]); ctx.stroke();
+          ctx.setLineDash([]); ctx.globalAlpha = 1;
+          var b = buf(gr[1]);
+          if (b > 0 && w >= 560 && id !== "mv") { ctx.fillStyle = P.dim; ctx.font = "10.5px " + font; ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillText(b + "분", (q[0] + bw / 2 + p[0] - bw / 2) / 2, (q[1] + p[1]) / 2 - 2); }
+        });
+      });
+    });
+    // 노드
+    var nFail = 0;
+    NODES.forEach(function (n) {
+      var p = geo.pos[n.id], f = ft[n.id], dead = f <= t, soon = !dead && isFinite(f);
+      if (dead) nFail++;
+      ctx.fillStyle = dead ? P.bad : soon ? P.warn : P.surface; ctx.globalAlpha = dead ? 0.85 : soon ? 0.4 : 1;
+      ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(p[0] - bw / 2, p[1] - bh / 2, bw, bh, 6); else ctx.rect(p[0] - bw / 2, p[1] - bh / 2, bw, bh); ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = src[n.id] ? P.text : dead ? P.bad : soon ? P.warn : P.ok; ctx.lineWidth = src[n.id] ? 3 : 1.5; ctx.stroke();
+      ctx.fillStyle = dead ? (IB.isDark() ? P.text : "#fff") : P.text; ctx.font = (n.id === "tool" ? "600 " : "") + fs + "px " + font; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(n.n, p[0], p[1] - (soon || dead ? fs * 0.35 : 0));
+      if (soon || (dead && f > 0)) { ctx.font = (fs - 2) + "px " + font; ctx.fillText(soon ? Math.round(f - t) + "분 뒤" : Math.round(f) + "분", p[0], p[1] + fs * 0.6); }
+    });
+    ctx.fillStyle = P.dim; ctx.font = "12px " + font; ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillText(w < 560 ? "t = " + t + "분 · 빨강 정지 · 주황 곧 정지" : "t = " + t + "분 · 빨강: 정지, 주황: 완충 중(곧 정지), 굵은 테두리: 고장 원인 · 점선: 둘 다 죽어야 전파", 8, 4);
+    var names = Object.keys(src).map(function (id) { return BY[id].n; });
+    IB.stat("o-dp-src", names.length ? names.join(", ") : "없음");
+    IB.stat("o-dp-n", nFail + "<small>/ " + NODES.length + "</small>");
+    IB.stat("o-dp-tool", isFinite(ft.tool) ? Math.round(ft.tool) + "<small>분 후</small>" : "정지 안 함");
+    IB.stat("o-dp-fmcs", ft.fmcs <= t ? "<span style='color:var(--bad)'>꺼짐</span>" : isFinite(ft.fmcs) ? Math.round(ft.fmcs - t) + "<small>분 뒤 꺼짐</small>" : "유지");
+  }
+  var cv = IB.canvas("#cv-dep", draw, { aspect: 0.56, minHeight: 360, maxHeight: 440 });
+})();
+
+/* ================================================================ 5. 알람 설계 */
+(function () {
+  "use strict";
+  var seed = 3, N = 86400, EV0 = 50400;
+  function redraw() { cv.redraw(); }
+  var gTh = IB.range("al-th", function (v) { return v.toFixed(2) + " °C"; }, redraw);
+  var gDb = IB.range("al-db", function (v) { return v.toFixed(2) + " °C"; }, redraw);
+  var gDl = IB.range("al-dl", function (v) { return v + " s"; }, redraw);
+  var gSg = IB.range("al-sg", function (v) { return v.toFixed(2) + " °C"; }, redraw);
+  document.querySelectorAll("#sim-alarm .op-presets .btn[data-th]").forEach(function (b) {
+    b.addEventListener("click", function () { gTh.set(+b.dataset.th); gDb.set(+b.dataset.db); gDl.set(+b.dataset.dl); });
+  });
+  document.getElementById("al-roll").addEventListener("click", function () { seed++; redraw(); });
+  function truth(t) {
+    var base = 18.0 + 0.04 * Math.sin(2 * Math.PI * (t / 86400 - 0.375));
+    var d = t - EV0, e = 0;
+    if (d > 0 && d <= 1800) e = 0.6 * d / 1800; else if (d > 1800 && d <= 3600) e = 0.6; else if (d > 3600 && d <= 5400) e = 0.6 * (5400 - d) / 1800;
+    return base + e;
+  }
+  function draw(ctx, w, h) {
+    var P = IB.palette(), font = opFont();
+    var th = gTh(), db = gDb(), dl = gDl(), sg = gSg();
+    var rng = opRng(seed * 104729), phi = 0.98, es = sg * Math.sqrt(1 - phi * phi), n = 0;
+    var on = false, above = 0, acts = [], mins = new Float32Array(1440), maxs = new Float32Array(1440);
+    for (var i = 0; i < 1440; i++) { mins[i] = 99; maxs[i] = -99; }
+    for (var t = 0; t < N; t++) {
+      n = phi * n + es * opNorm(rng);
+      var x = truth(t) + n, m = (t / 60) | 0;
+      if (x < mins[m]) mins[m] = x; if (x > maxs[m]) maxs[m] = x;
+      if (x > th) above++; else above = 0;
+      if (!on && x > th && above >= Math.max(1, dl)) { on = true; acts.push(t); }
+      else if (on && x < th - db) on = false;
+    }
+    var box = { x: 56, y: 28, w: w - 56 - 16, h: h - 28 - 46 };
+    var C = IB.chart(ctx, box, { x: [0, 24], y: [17.6, 18.9], xLabel: "시각 (h)", yLabel: "PCW 공급 온도 (°C)", xTicks: [0, 4, 8, 12, 16, 20, 24],
+      bands: [{ x0: 14, x1: 15.5, color: "color-mix(in srgb, " + P.warn + " 18%, transparent)" }],
+      hlines: [{ y: th, color: P.bad, label: "경계 " + th.toFixed(2) }].concat(db > 0 ? [{ y: th - db, color: P.warn, label: "해제 " + (th - db).toFixed(2) }] : []) });
+    ctx.fillStyle = P.cool; ctx.globalAlpha = 0.55;
+    for (i = 0; i < 1440; i++) { var xx = C.X(i / 60), y1 = C.Y(Math.min(18.9, maxs[i])), y2 = C.Y(Math.max(17.6, mins[i])); ctx.fillRect(xx, y1, Math.max(1, box.w / 1440 + 0.3), Math.max(1, y2 - y1)); }
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = P.text; ctx.lineWidth = 1.2; ctx.beginPath();
+    for (i = 0; i <= 288; i++) { var tt = i * 300; i ? ctx.lineTo(C.X(tt / 3600), C.Y(truth(tt))) : ctx.moveTo(C.X(0), C.Y(truth(0))); } ctx.stroke();
+    ctx.fillStyle = P.bad;
+    acts.forEach(function (a) { ctx.fillRect(C.X(a / 3600) - 0.5, box.y - 12, 1.5, 9); });
+    ctx.fillStyle = P.dim; ctx.font = "11px " + font; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+    ctx.fillText("빨간 눈금 = 알람 발생 · 검은 선 = 실제 온도(잡음 없음) · 주황 띠 = 진짜 이상", box.x, box.y - 13);
+    // 10분 창 최대
+    var flood = 0, j = 0;
+    for (i = 0; i < acts.length; i++) { while (acts[i] - acts[j] >= 600) j++; flood = Math.max(flood, i - j + 1); }
+    var det = null; for (i = 0; i < acts.length; i++) if (acts[i] >= EV0 && acts[i] <= EV0 + 5400) { det = acts[i]; break; }
+    // 진짜 이상이 경계값을 넘는 시점(잡음 없는 신호 기준)
+    var cross = null; for (t = EV0; t <= EV0 + 3600; t += 10) if (truth(t) > th) { cross = t; break; }
+    IB.stat("o-al-n", acts.length + "<small>건</small>");
+    IB.stat("o-al-flood", flood + "<small>건</small>");
+    IB.stat("o-al-det", det !== null ? "감지" : cross === null ? "경계 미달" : "놓침");
+    IB.stat("o-al-lag", det !== null ? IB.fmt((det - EV0) / 60, 3) + "<small>분 (14시 기준)</small>" : "—");
+    var noise = acts.filter(function (a) { return a < EV0 || a > EV0 + 5400; }).length;
+    if (det === null) opVerdict("al-verdict", "bad", "<b>진짜 이상을 놓쳤다.</b> 경계값이 너무 높거나 지연이 너무 길다. 거짓 알람은 " + noise + "건.");
+    else if (acts.length > 144 || flood > 10) opVerdict("al-verdict", "bad", "진짜 이상은 잡았지만 <b>거짓 알람 " + noise + "건</b>, 최대 10분 " + flood + "건. 이 태그 하나가 운전원 한 명의 하루 감당량(약 144건)을 " + (acts.length > 144 ? "넘는다" : "위협한다") + ". 진짜 알람이 묻힌다.");
+    else if (noise > 6) opVerdict("al-verdict", "warn", "진짜 이상을 " + IB.fmt((det - EV0) / 60, 3) + "분 만에 잡았다. 거짓 알람 " + noise + "건은 줄일 여지가 있다.");
+    else opVerdict("al-verdict", "ok", "<b>좋은 설정이다.</b> 거짓 알람 " + noise + "건, 진짜 이상은 14시 이후 " + IB.fmt((det - EV0) / 60, 3) + "분에 감지.");
+  }
+  var cv = IB.canvas("#cv-alarm", draw, { aspect: 0.55, minHeight: 300, maxHeight: 380 });
+})();
+
+/* ================================================================ 6. SPC / EWMA */
+(function () {
+  "use strict";
+  var seed = 11, NPT = 100, S0 = 50;
+  function redraw() { cv.redraw(); }
+  var gD = IB.range("sp-d", function (v) { return v.toFixed(1) + " σ"; }, redraw);
+  var gL = IB.range("sp-l", function (v) { return v.toFixed(2); }, redraw);
+  var gLL = IB.range("sp-L", function (v) { return v.toFixed(2); }, redraw);
+  document.getElementById("sp-roll").addEventListener("click", function () { seed++; redraw(); });
+  function ewmaLim(lam, L, t) { return L * Math.sqrt(lam / (2 - lam) * (1 - Math.pow(1 - lam, 2 * t))); }
+  function arlEwma(d, lam, L) {
+    var rng = opRng(424242), tot = 0, R = 400;
+    for (var r = 0; r < R; r++) {
+      var z = 0, t = 1;
+      for (; t <= 2000; t++) { z = lam * (opNorm(rng) + d) + (1 - lam) * z; if (Math.abs(z) > ewmaLim(lam, L, t)) break; }
+      tot += Math.min(t, 2000);
+    }
+    return tot / R;
+  }
+  var cache = {};
+  function draw(ctx, w, h) {
+    var P = IB.palette(), font = opFont();
+    var d = gD(), lam = gL(), L = gLL();
+    var rng = opRng(seed * 2654435761), x = [], z = [], zz = 0;
+    for (var i = 0; i < NPT; i++) { var v = opNorm(rng) + (i >= S0 ? d : 0); x.push(v); zz = lam * v + (1 - lam) * zz; z.push(zz); }
+    var shA = -1, ewA = -1, fS = 0, fE = 0;
+    for (i = 0; i < NPT; i++) {
+      var sh = Math.abs(x[i]) > 3, ew = Math.abs(z[i]) > ewmaLim(lam, L, i + 1);
+      if (i < S0) { if (sh) fS++; if (ew) fE++; }
+      else { if (sh && shA < 0) shA = i; if (ew && ewA < 0) ewA = i; }
+    }
+    var hh = (h - 30) / 2;
+    var b1 = { x: 48, y: 22, w: w - 48 - 14, h: hh - 34 }, b2 = { x: 48, y: 22 + hh, w: w - 48 - 14, h: hh - 34 };
+    var C1 = IB.chart(ctx, b1, { x: [1, NPT], y: [-4, 4 + d], yTicks: [-3, 0, 3], xTicks: [],
+      series: [{ data: x.map(function (v, k) { return [k + 1, v]; }), color: P.accent, width: 1.2 }],
+      hlines: [{ y: 3, color: P.bad, label: "+3σ" }, { y: -3, color: P.bad }], vlines: [{ x: S0 + 0.5, color: P.warn, label: "이동 시작" }] });
+    x.forEach(function (v, k) { ctx.fillStyle = Math.abs(v) > 3 ? P.bad : P.accent; ctx.beginPath(); ctx.arc(C1.X(k + 1), C1.Y(v), Math.abs(v) > 3 ? 4 : 2.2, 0, 7); ctx.fill(); });
+    ctx.fillStyle = P.text; ctx.font = "600 12px " + font; ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText("Shewhart 개별값 (±3σ)", b1.x, b1.y - 3);
+    var lim = []; for (i = 1; i <= NPT; i++) lim.push([i, ewmaLim(lam, L, i)]);
+    var zmax = Math.max(1.5, Math.max.apply(null, z.map(Math.abs)) * 1.15, L * Math.sqrt(lam / (2 - lam)) * 1.3);
+    var C2 = IB.chart(ctx, b2, { x: [1, NPT], y: [-zmax, zmax], xLabel: "표본 번호", xTicks: [1, 25, 50, 75, 100],
+      series: [{ data: lim, color: P.bad, width: 1.3, dash: [5, 4] }, { data: lim.map(function (p) { return [p[0], -p[1]]; }), color: P.bad, width: 1.3, dash: [5, 4] },
+               { data: z.map(function (v, k) { return [k + 1, v]; }), color: P.accent2, width: 2.2 }],
+      vlines: [{ x: S0 + 0.5, color: P.warn }] });
+    if (ewA >= 0) { ctx.fillStyle = P.bad; ctx.beginPath(); ctx.arc(C2.X(ewA + 1), C2.Y(z[ewA]), 5, 0, 7); ctx.fill(); }
+    ctx.fillStyle = P.text; ctx.font = "600 12px " + font; ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText("EWMA z_t (λ = " + lam.toFixed(2) + ", L = " + L.toFixed(2) + ")", b2.x, b2.y - 3);
+    IB.stat("o-sp-sh", shA >= 0 ? (shA - S0 + 1) + "<small>점째</small>" : "없음");
+    IB.stat("o-sp-ew", ewA >= 0 ? (ewA - S0 + 1) + "<small>점째</small>" : "없음");
+    var p = opPhi(-3 + d) + opPhi(-3 - d);
+    IB.stat("o-sp-arls", IB.fmt(1 / p, 3) + "<small>점</small>");
+    var key = d.toFixed(1) + "|" + lam.toFixed(2) + "|" + L.toFixed(2);
+    if (!cache[key]) cache[key] = [arlEwma(d, lam, L), arlEwma(0, lam, L)];
+    IB.stat("o-sp-arle", (cache[key][0] >= 1999 ? "> 2000" : IB.fmt(cache[key][0], 3)) + "<small>점</small>");
+    IB.stat("o-sp-arl0", (cache[key][1] >= 1999 ? "> 2000" : IB.fmt(cache[key][1], 3)) + "<small>점</small>");
+  }
+  var cv = IB.canvas("#cv-spc", draw, { aspect: 0.66, minHeight: 380, maxHeight: 460 });
+})();
+
+/* ================================================================ 7. RUL */
+(function () {
+  "use strict";
+  var seed = 5, V0 = 1.0, VL = 4.5, TMAX = 300;
+  function redraw() { cv.redraw(); }
+  var gNow = IB.range("rl-now", function (v) { return v + " 일"; }, redraw);
+  var gB = IB.range("rl-b", function (v) { return v.toFixed(3) + " /일"; }, redraw);
+  var gS = IB.range("rl-s", function (v) { return v.toFixed(2) + " mm/s"; }, redraw);
+  var gW = IB.range("rl-w", function (v) { return v + " 일"; }, redraw);
+  var gLt = IB.range("rl-lt", function (v) { return v + " 일"; }, redraw);
+  document.getElementById("rl-roll").addEventListener("click", function () { seed++; redraw(); });
+  function draw(ctx, w, h) {
+    var P = IB.palette(), font = opFont();
+    var now = gNow(), b = gB(), s = gS(), W = gW(), lt = gLt();
+    var tTrue = Math.log((VL - V0) / 0.2) / b, last = Math.min(now, Math.floor(tTrue));
+    var rng = opRng(seed * 7477), pts = [];
+    for (var t = 0; t <= last; t++) pts.push([t, Math.max(0.2, V0 + 0.2 * Math.exp(b * t) + s * opNorm(rng))]);
+    // 최근 W일 로그 선형 회귀
+    var fit = pts.filter(function (p) { return p[0] > last - W && p[1] - V0 > 0.05; });
+    var n = fit.length, bh = NaN, se = NaN, yNow = NaN;
+    if (n >= 8) {
+      var mx = 0, my = 0; fit.forEach(function (p) { mx += p[0]; my += Math.log(p[1] - V0); }); mx /= n; my /= n;
+      var sxx = 0, sxy = 0; fit.forEach(function (p) { sxx += (p[0] - mx) * (p[0] - mx); sxy += (p[0] - mx) * (Math.log(p[1] - V0) - my); });
+      bh = sxy / sxx; var a = my - bh * mx, sse = 0;
+      fit.forEach(function (p) { var r = Math.log(p[1] - V0) - (a + bh * p[0]); sse += r * r; });
+      se = Math.sqrt(sse / Math.max(1, n - 2) / sxx); yNow = a + bh * last;
+    }
+    var yL = Math.log(VL - V0);
+    var rul = function (slope) { return slope > 1e-5 ? (yL - yNow) / slope : Infinity; };
+    var R = rul(bh), Rlo = rul(bh + 2 * se), Rhi = rul(bh - 2 * se);
+    var box = { x: 52, y: 16, w: w - 52 - 16, h: h - 16 - 46 };
+    var C = IB.chart(ctx, box, { x: [0, TMAX], y: [0, 7], xLabel: "운전 일수", yLabel: "진동 속도 (mm/s rms)" });
+    [[0, 1.4, P.ok, "A"], [1.4, 2.8, P.ok, "B"], [2.8, 4.5, P.warn, "C"], [4.5, 7, P.bad, "D"]].forEach(function (z, i) {
+      ctx.fillStyle = z[2]; ctx.globalAlpha = i === 1 ? 0.06 : 0.12; ctx.fillRect(box.x, C.Y(z[1]), box.w, C.Y(z[0]) - C.Y(z[1])); ctx.globalAlpha = 1;
+      ctx.fillStyle = z[2]; ctx.font = "600 12px " + font; ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(z[3], box.x + box.w - 6, C.Y((z[0] + z[1]) / 2));
+    });
+    ctx.save(); ctx.beginPath(); ctx.rect(box.x, box.y, box.w, box.h); ctx.clip();
+    pts.forEach(function (p) { var inFit = p[0] > last - W; ctx.fillStyle = inFit ? P.accent : P.faint; ctx.beginPath(); ctx.arc(C.X(p[0]), C.Y(p[1]), 2, 0, 7); ctx.fill(); });
+    if (isFinite(yNow) && bh > 0) {
+      [[bh, P.accent, []], [bh + 2 * se, P.accent2, [4, 4]], [Math.max(1e-6, bh - 2 * se), P.accent2, [4, 4]]].forEach(function (c) {
+        ctx.strokeStyle = c[1]; ctx.lineWidth = c === undefined ? 2 : 2; ctx.setLineDash(c[2]); ctx.beginPath();
+        for (var tt = last - W; tt <= TMAX; tt += 2) { var v = V0 + Math.exp(yNow + c[0] * (tt - last)); var px = C.X(tt), py = C.Y(Math.min(8, v)); tt === last - W ? ctx.moveTo(px, py) : ctx.lineTo(px, py); if (v > 8) break; }
+        ctx.stroke(); ctx.setLineDash([]);
+      });
+    }
+    ctx.restore();
+    ctx.strokeStyle = P.text; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(C.X(now), box.y); ctx.lineTo(C.X(now), box.y + box.h); ctx.stroke();
+    ctx.fillStyle = P.text; ctx.font = "12px " + font; ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("오늘", C.X(now) + 4, box.y + 4);
+    if (tTrue <= TMAX) { ctx.strokeStyle = P.bad; ctx.setLineDash([2, 4]); ctx.beginPath(); ctx.moveTo(C.X(tTrue), box.y); ctx.lineTo(C.X(tTrue), box.y + box.h); ctx.stroke(); ctx.setLineDash([]); }
+    var cur = pts.length ? pts[pts.length - 1][1] : V0;
+    IB.stat("o-rl-v", cur.toFixed(2) + "<small>mm/s</small>");
+    IB.stat("o-rl-b", isFinite(bh) ? bh.toFixed(4) + "<small>/일</small>" : "—");
+    var fmtR = function (x) { return isFinite(x) ? Math.round(x) : "∞"; };
+    IB.stat("o-rl-rul", isFinite(R) && isFinite(yNow) ? fmtR(R) + "<small>일 (" + fmtR(Math.max(0, Rlo)) + "~" + fmtR(Rhi) + ")</small>" : "—");
+    IB.stat("o-rl-true", now >= tTrue ? "이미 고장" : Math.round(tTrue - now) + "<small>일</small>");
+    if (now >= tTrue) opVerdict("rl-verdict", "bad", "<b>펌프는 " + Math.round(tTrue) + "일째 이미 경계(4.5 mm/s)를 넘었다.</b> 예측을 하기엔 늦었다. 예지 정비는 측정과 판단이 P-F 간격 안에서 이루어져야 한다.");
+    else if (!isFinite(yNow) || !(bh > 0) || !isFinite(R)) opVerdict("rl-verdict", "ok", "아직 뚜렷한 열화 추세가 없다(기울기가 잡음과 구별되지 않음). 측정을 계속한다.");
+    else if (Rlo - lt > 14) opVerdict("rl-verdict", "ok", "RUL 하한 " + fmtR(Rlo) + "일 − 조달 " + lt + "일 = <b>" + fmtR(Rlo - lt) + "일 여유</b>. 다음 정비 창에 교체를 계획한다.");
+    else if (Rlo - lt > 0) opVerdict("rl-verdict", "warn", "RUL 하한 " + fmtR(Rlo) + "일, 조달 " + lt + "일. <b>지금 예비품을 발주</b>하고 교체 일정을 잡아야 한다.");
+    else opVerdict("rl-verdict", "bad", "RUL 하한(" + fmtR(Math.max(0, Rlo)) + "일)이 조달 기간(" + lt + "일)보다 짧다. <b>현장 예비품·대기 펌프 전환</b>으로 대응하고 부하를 줄여야 한다.");
+  }
+  var cv = IB.canvas("#cv-rul", draw, { aspect: 0.58, minHeight: 320, maxHeight: 400 });
+})();
+
+/* ================================================================ 8. Weibull PM */
+(function () {
+  "use strict";
+  function gamma(z) {
+    var g = 7, c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+    if (z < 0.5) return Math.PI / (Math.sin(Math.PI * z) * gamma(1 - z));
+    z -= 1; var x = c[0]; for (var i = 1; i < g + 2; i++) x += c[i] / (z + i);
+    var t = z + g + 0.5; return Math.sqrt(2 * Math.PI) * Math.pow(t, z + 0.5) * Math.exp(-t) * x;
+  }
+  function redraw() { cv.redraw(); }
+  var gB = IB.range("pm-b", function (v) { return v.toFixed(1); }, redraw);
+  var gE = IB.range("pm-e", function (v) { return v.toLocaleString("en-US") + " h"; }, redraw);
+  var gC = IB.range("pm-c", function (v) { return v.toFixed(1); }, redraw);
+  document.querySelectorAll("#sim-pm .op-presets .btn").forEach(function (b) {
+    b.addEventListener("click", function () { gB.set(+b.dataset.be); gE.set(+b.dataset.et); gC.set(+b.dataset.cr); });
+  });
+  function draw(ctx, w, h) {
+    var P = IB.palette();
+    var be = gB(), et = gE(), cr = gC(), Tmax = 2.5 * et, M = 2500, dt = Tmax / M;
+    var Rf = function (t) { return Math.exp(-Math.pow(t / et, be)); };
+    var mttf = et * gamma(1 + 1 / be), cRTF = cr / mttf;
+    var integ = 0, prev = 1, data = [], best = Infinity, Tb = Tmax;
+    for (var i = 1; i <= M; i++) {
+      var t = i * dt, r = Rf(t); integ += (prev + r) / 2 * dt; prev = r;
+      var c = (r + cr * (1 - r)) / integ, rel = c / cRTF;
+      if (i % 5 === 0) data.push([t, Math.min(3, rel)]);
+      if (rel < best) { best = rel; Tb = t; }
+    }
+    var noOpt = Tb > 2.4 * et || best > 0.995;
+    IB.chart(ctx, null, { x: [0, Tmax], y: [0, 2], xFmt: function (v) { return v >= 1000 ? Math.round(v / 1000) + "k" : String(v); }, xLabel: "예방 교체 주기 T (h)", yLabel: "비용률 (사후 정비 = 1)",
+      series: [{ data: data, color: P.accent, width: 3 }],
+      hlines: [{ y: 1, color: P.bad, label: "사후 정비" }],
+      vlines: [{ x: mttf, color: P.faint, label: "MTTF" }],
+      points: noOpt ? [] : [{ x: Tb, y: best, color: P.ok, r: 6, label: "T*" }] });
+    IB.stat("o-pm-t", noOpt ? "없음" : Math.round(Tb).toLocaleString("en-US") + "<small>h</small>");
+    IB.stat("o-pm-r", noOpt ? "—" : (Rf(Tb) * 100).toFixed(1) + "<small>%</small>");
+    IB.stat("o-pm-mttf", Math.round(mttf).toLocaleString("en-US") + "<small>h</small>");
+    IB.stat("o-pm-save", noOpt ? "0<small>%</small>" : "−" + ((1 - best) * 100).toFixed(1) + "<small>%</small>");
+    if (be <= 1.05) opVerdict("pm-verdict", "warn", "β = " + be.toFixed(1) + ": 고장률이 일정하거나 줄어든다. <b>나이 기반 예방 교체는 이득이 없다.</b> 예비품 확보·MTTR 단축·상태 감시로 대응한다.");
+    else if (noOpt) opVerdict("pm-verdict", "warn", "마모 부품이지만 비용비가 작아 예방 교체 이득이 거의 없다. 고장 비용(정지 손실·2차 피해)을 다시 따져 보자.");
+    else opVerdict("pm-verdict", "ok", "T* ≈ " + Math.round(Tb).toLocaleString("en-US") + " h(약 " + IB.fmt(Tb / 8760 * 12, 2) + "개월)마다 교체하면 사후 정비보다 비용이 " + ((1 - best) * 100).toFixed(0) + " % 줄어든다. 이때 교체 전에 고장 날 확률은 " + ((1 - Rf(Tb)) * 100).toFixed(0) + " %다.");
+  }
+  var cv = IB.canvas("#cv-pm", draw, { aspect: 0.55, minHeight: 300, maxHeight: 380 });
+})();
+</script>
+</body>
+</html>

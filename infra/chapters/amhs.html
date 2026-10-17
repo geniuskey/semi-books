@@ -1,0 +1,1760 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and InfraBook contributors.
+Executable code: MIT (see ../../LICENSE-MIT).
+Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>물류 자동화(AMHS) · InfraBook</title>
+<meta name="description" content="FOUP 하루 이동량 추정부터 OHT·스토커·OHB 구성, 레일 교통 혼잡과 차량 수, M/M/c 대기열과 리틀의 법칙, 반송 시간이 사이클 타임·WIP에 주는 영향, 디스패칭 규칙까지 3D 모델과 시뮬레이터로 익힌다.">
+<link rel="canonical" href="https://semi.euiyun.com/infra/chapters/amhs.html">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta name="theme-color" content="#2f5f96">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="InfraBook">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:title" content="물류 자동화(AMHS) · InfraBook">
+<meta property="og:description" content="FOUP 하루 이동량 추정부터 OHT·스토커·OHB 구성, 레일 교통 혼잡과 차량 수, M/M/c 대기열과 리틀의 법칙, 반송 시간이 사이클 타임·WIP에 주는 영향, 디스패칭 규칙까지 3D 모델과 시뮬레이터로 익힌다.">
+<meta property="og:url" content="https://semi.euiyun.com/infra/chapters/amhs.html">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/infra/chapters/amhs.html#chapter","name":"물류 자동화(AMHS)","headline":"물류 자동화(AMHS) · InfraBook","description":"FOUP 하루 이동량 추정부터 OHT·스토커·OHB 구성, 레일 교통 혼잡과 차량 수, M/M/c 대기열과 리틀의 법칙, 반송 시간이 사이클 타임·WIP에 주는 영향, 디스패칭 규칙까지 3D 모델과 시뮬레이터로 익힌다.","url":"https://semi.euiyun.com/infra/chapters/amhs.html","position":13,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","dateModified":"2026-10-17","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/infra/#book","name":"InfraBook · 반도체 인프라 교과서","url":"https://semi.euiyun.com/infra/"}}]}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+svg .lbl { fill: var(--text); font-family: var(--font); font-size: 14px; }
+svg .lbl-b { fill: var(--text); font-family: var(--font); font-size: 14px; font-weight: 700; }
+svg .lbl-sm { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+svg .lbl-acc { fill: var(--accent); font-family: var(--font); font-size: 13px; font-weight: 700; }
+svg .lbl-acc2 { fill: var(--accent-2); font-family: var(--font); font-size: 13px; font-weight: 700; }
+svg .box { fill: var(--bg-elev); stroke: var(--border); stroke-width: 1.2; }
+svg .box2 { fill: var(--surface); stroke: var(--text-faint); stroke-width: 1.2; }
+svg .rail { stroke: var(--text); fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+svg .rail-dim { stroke: var(--text-faint); fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+svg .veh { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+svg .foup { fill: var(--accent-2-soft); stroke: var(--accent-2); stroke-width: 1.5; }
+svg .tool { fill: var(--surface-2); stroke: var(--text-faint); stroke-width: 1.2; }
+svg .wave-a { stroke: var(--accent); fill: none; stroke-width: 2.2; }
+svg .wave-p { stroke: var(--accent-2); fill: none; stroke-width: 2.2; }
+svg .grid-l { stroke: var(--grid); stroke-width: 1; fill: none; }
+svg .bad-l { stroke: var(--bad); fill: none; stroke-width: 2; }
+svg .ok-l { stroke: var(--ok); fill: none; stroke-width: 2; }
+svg .warn-l { stroke: var(--warn); fill: none; stroke-width: 2; }
+.am-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 8px 18px; font-size: 13px; color: var(--text-dim); border-top: 1px solid var(--border); background: var(--bg-elev); }
+.am-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.am-presets { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--border); background: var(--surface); font-size: 13px; color: var(--text-dim); }
+.am-verdict { padding: 10px 18px; font-size: 14px; border-top: 1px solid var(--border); background: var(--bg-elev); line-height: 1.6; }
+.am-verdict b.ok { color: var(--ok); } .am-verdict b.warn { color: var(--warn); } .am-verdict b.bad { color: var(--bad); }
+.am-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+</style>
+</head>
+<body data-chapter="amhs">
+<main class="chapter">
+<header class="chapter-hero">
+<div class="eyebrow">Chapter 13</div>
+<h1>물류 자동화(AMHS)</h1>
+<p class="lead">300 mm 웨이퍼 25장을 담은 FOUP 한 개는 약 8 kg이다. 첨단 팹에서는 이런 FOUP가 하루에 십수만 번 움직인다. 웨이퍼 한 장이 완성되기까지 수백~천 개의 공정 스텝을 거치고, 스텝마다 다른 장비로 옮겨 가야 하기 때문이다. 이 일을 사람 대신 천장 레일 위의 수백~천여 대 차량이 한다. AMHS<span class="en">(Automated Material Handling System, 자동 물류 반송 시스템)</span>는 클린룸 천장을 도는 무인 철도망이자, 팹의 사이클 타임과 재공(WIP)을 좌우하는 대기열 시스템이다. 이 장에서는 이동량을 어림하고, OHT·스토커·천장 버퍼의 역할을 3D로 살펴본 뒤, 교통 혼잡·대기열·디스패칭을 직접 시뮬레이션해 본다.</p>
+<ul class="objectives">
+<li>웨이퍼 투입량·공정 스텝 수·로트 크기로부터 하루 FOUP 이동 수와 필요한 OHT 차량 수를 어림할 수 있다.</li>
+<li>FOUP, 로드포트, OHT, 스토커, OHB·STB·UTB, 인터베이·인트라베이의 역할과 관련 SEMI 규격(E47.1, E15.1, E84 등)을 안다.</li>
+<li>단방향 레일 위 차량 수와 처리량의 관계가 왜 올라갔다가 떨어지는지(혼잡) 교통 기본도로 설명할 수 있다.</li>
+<li>리틀의 법칙과 M/M/c(Erlang C)·Erlang B로 반송 대기 시간과 버퍼 용량을 계산할 수 있다.</li>
+<li>반송 시간이 스텝마다 더해져 사이클 타임과 WIP를 얼마나 늘리는지 정량적으로 추정한다.</li>
+<li>최근접·FIFO 디스패칭 규칙의 평균 대기와 꼬리(최대 대기) 차이를 이산사건 시뮬레이션으로 비교한다.</li>
+<li>OHT 주행 프로파일·차륜·비접촉 급전이 클린룸 진동·입자 관리와 어떻게 이어지는지 안다.</li>
+</ul>
+</header>
+
+<!-- ============================================================ 1 -->
+<section id="moves">
+<h2>왜 물류 자동화인가: FOUP 이동량</h2>
+<p>반도체 공정은 직선 조립 라인이 아니다. 웨이퍼는 노광 → 식각 → 세정 → 증착 → 평탄화 → 계측의 한 바퀴를 마스크 층마다 반복한다. 같은 노광 장비 구역을 수십 번 다시 찾아오므로 이를 <span class="term">재진입 흐름</span><span class="en">(re-entrant flow)</span>이라 한다. 첨단 DRAM·로직 공정의 마스크 층은 약 60~90개 이상이고, 층 하나에 공정·계측 스텝이 10~15개 안팎 붙으므로 웨이퍼 한 장의 경로는 약 600~1,000 스텝을 넘는다(공정·제품마다 크게 다르다). 스텝마다 장비가 바뀌니 스텝 수만큼 반송이 필요하다.</p>
+<figure class="diagram">
+<svg viewBox="0 0 820 400" role="img" aria-label="재진입 흐름: 공정 영역 사이를 반복해서 오가는 웨이퍼 로트">
+<defs>
+<marker id="amhs-ar1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker>
+<marker id="amhs-ar1b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--text-faint)"/></marker>
+</defs>
+<circle cx="260" cy="200" r="140" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-dasharray="10 6" opacity="0.6"/>
+<g>
+<rect x="200" y="36" width="120" height="44" rx="9" class="f-acc-soft"/><text x="260" y="56" text-anchor="middle" class="lbl-b">포토(노광)</text><text x="260" y="72" text-anchor="middle" class="lbl-sm">층마다 1~3회</text>
+<rect x="350" y="92" width="110" height="40" rx="9" class="box"/><text x="405" y="117" text-anchor="middle" class="lbl">식각</text>
+<rect x="380" y="180" width="110" height="40" rx="9" class="box"/><text x="435" y="205" text-anchor="middle" class="lbl">세정·애싱</text>
+<rect x="350" y="268" width="110" height="40" rx="9" class="box"/><text x="405" y="293" text-anchor="middle" class="lbl">증착(CVD·ALD)</text>
+<rect x="200" y="320" width="120" height="40" rx="9" class="box"/><text x="260" y="345" text-anchor="middle" class="lbl">CMP</text>
+<rect x="60" y="268" width="110" height="40" rx="9" class="box"/><text x="115" y="293" text-anchor="middle" class="lbl">이온주입·열처리</text>
+<rect x="30" y="180" width="110" height="40" rx="9" class="box"/><text x="85" y="205" text-anchor="middle" class="lbl">계측·검사</text>
+<rect x="60" y="92" width="110" height="40" rx="9" class="box"/><text x="115" y="117" text-anchor="middle" class="lbl">세정</text>
+</g>
+<g fill="none" stroke="var(--accent)" stroke-width="2" marker-end="url(#amhs-ar1)">
+<path d="M322 66Q345 74 360 90"/><path d="M432 134Q440 155 440 176"/><path d="M440 222Q440 245 428 264"/>
+<path d="M350 300Q335 318 322 330"/><path d="M200 334Q180 322 162 310"/><path d="M100 266Q90 245 88 224"/><path d="M88 178Q92 155 104 136"/><path d="M170 106Q185 86 198 72"/>
+</g>
+<rect x="190" y="160" width="140" height="80" rx="12" class="f-acc2-soft"/>
+<text x="260" y="190" text-anchor="middle" class="lbl-b">FOUP 1개</text>
+<text x="260" y="208" text-anchor="middle" class="lbl-sm">웨이퍼 25장 · 약 8 kg</text>
+<text x="260" y="226" text-anchor="middle" class="lbl-acc2">× 60~90+ 바퀴</text>
+<g>
+<text x="560" y="58" class="lbl-b">한 장의 일생(대략)</text>
+<text x="560" y="84" class="lbl">마스크 층 수</text><text x="800" y="84" text-anchor="end" class="lbl-acc">60~90+</text>
+<text x="560" y="110" class="lbl">층당 스텝 수</text><text x="800" y="110" text-anchor="end" class="lbl-acc">10~15</text>
+<text x="560" y="136" class="lbl">총 공정 스텝</text><text x="800" y="136" text-anchor="end" class="lbl-acc">600~1,000+</text>
+<text x="560" y="162" class="lbl">스텝당 반송</text><text x="800" y="162" text-anchor="end" class="lbl-acc">1.2~1.5회</text>
+<line x1="560" y1="176" x2="800" y2="176" class="s-axis"/>
+<text x="560" y="200" class="lbl">로트 1개의 총 반송</text><text x="800" y="200" text-anchor="end" class="lbl-b">약 1,000회 이상</text>
+<text x="560" y="226" class="lbl">사이클 타임</text><text x="800" y="226" text-anchor="end" class="lbl-b">약 1.5~3개월</text>
+<rect x="556" y="250" width="248" height="108" rx="10" class="box2"/>
+<text x="570" y="274" class="lbl-sm">스텝당 반송이 1보다 큰 이유</text>
+<text x="570" y="296" class="lbl-sm">· 장비가 바쁘면 스토커·버퍼에 들렀다 간다</text>
+<text x="570" y="316" class="lbl-sm">· 계측 샘플링, 재작업, 소터 작업</text>
+<text x="570" y="336" class="lbl-sm">· 빈 FOUP 회수·세정(FOUP 클리너)</text>
+</g>
+</svg>
+<figcaption><b>그림 13-1.</b> 재진입 흐름. 같은 로트가 노광 구역을 수십 번 다시 방문한다. 스텝마다 장비가 바뀌므로 로트 하나가 일생 동안 1,000번 안팎 반송된다(값은 첨단 공정의 대략적 범위, 교육용).</figcaption>
+</figure>
+<p>팹 전체의 하루 이동 수는 정상 상태에서 간단한 곱으로 어림할 수 있다. 하루에 투입되는 로트 수에 로트 하나가 일생 동안 겪는 반송 수를 곱하면 된다. 정상 상태에서는 하루 투입량과 하루 완성량이 같으므로, 어느 날이든 팹 안에서 일어나는 이동 수는 이 곱과 같다.</p>
+<div class="formula">$$M_\text{day} = \frac{W_\text{month}}{D \cdot n_\text{lot}} \times N_\text{step} \times m, \qquad \lambda_\text{h} = \frac{M_\text{day}}{24}$$<div class="where">\(W_\text{month}\): 월 웨이퍼 투입(WSPM), \(D\): 한 달 일수(30일로 둔다), \(n_\text{lot}\): FOUP당 평균 웨이퍼 수(최대 25), \(N_\text{step}\): 공정 스텝 수, \(m\): 스텝당 반송 횟수. FAB-E 예: \(100{,}000/(30\times25) \approx 133\) 로트/일, × 900 스텝 × 1.3 ≈ 15.6만 이동/일 ≈ 시간당 6,500회.</div></div>
+<p>필요한 차량 수는 한 번 반송에 차량이 묶이는 시간으로 정해진다. 차량은 빈 채로 출발지에 가서(공차 주행), FOUP를 집어 올리고(호이스트), 목적지까지 싣고 가서(적재 주행), 내려놓는다. 이 네 구간을 합한 것이 반송 1회의 <span class="term">차량 점유 시간</span> \(T_\text{veh}\)이다. 시간당 \(\lambda_\text{h}\)번의 반송을 하려면 평균적으로 \(\lambda_\text{h}T_\text{veh}\)대가 항상 일하고 있어야 한다. 이는 5절에서 볼 리틀의 법칙 그 자체다. 다만 차량을 100 % 바쁘게 돌리면 요청이 줄을 서고 레일이 막히므로 목표 가동률 \(\rho\)로 나눠 여유를 둔다.</p>
+<div class="formula">$$T_\text{veh} = \frac{d_\text{empty}}{\bar v} + \frac{d_\text{load}}{\bar v} + 2t_\text{hoist}, \qquad N_\text{veh} \approx \frac{\lambda_\text{h}\,T_\text{veh}}{\rho}$$<div class="where">\(d_\text{empty}, d_\text{load}\): 공차·적재 평균 주행 거리, \(\bar v\): 가감속·곡선·정체를 포함한 평균 속도(최고 속도보다 훨씬 낮다), \(t_\text{hoist}\): 호이스트 1회(내려서 잡고 올리기) 시간.</div></div>
+
+<div class="sim" id="sim-moves">
+<div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>FOUP 이동량과 필요 차량 수 계산기</h3></div>
+<div class="am-presets"><span>프리셋</span><div class="seg" id="mv-pre"><button data-value="e" class="on">FAB-E</button><button data-value="small">소형 팹</button><button data-value="adv">초미세 로직</button></div></div>
+<div class="sim-body side">
+<div class="sim-view"><canvas id="cv-moves"></canvas></div>
+<div class="sim-controls">
+<label class="ctrl"><span>월 투입 <output id="mv-w-out"></output></span><input type="range" id="mv-w" min="5000" max="200000" step="5000" value="100000"></label>
+<label class="ctrl"><span>공정 스텝 수 <output id="mv-n-out"></output></span><input type="range" id="mv-n" min="200" max="1500" step="10" value="900"></label>
+<label class="ctrl"><span>스텝당 반송 횟수 <output id="mv-m-out"></output></span><input type="range" id="mv-m" min="1" max="2" step="0.05" value="1.3"></label>
+<label class="ctrl"><span>FOUP당 웨이퍼 <output id="mv-lot-out"></output></span><input type="range" id="mv-lot" min="5" max="25" step="1" value="25"></label>
+<label class="ctrl"><span>평균 적재 주행 거리 <output id="mv-dl-out"></output></span><input type="range" id="mv-dl" min="30" max="800" step="10" value="300"></label>
+<label class="ctrl"><span>평균 공차 주행 거리 <output id="mv-de-out"></output></span><input type="range" id="mv-de" min="10" max="500" step="10" value="150"></label>
+<label class="ctrl"><span>평균 속도 <output id="mv-v-out"></output></span><input type="range" id="mv-v" min="0.5" max="4" step="0.1" value="2"></label>
+<label class="ctrl"><span>호이스트 1회 <output id="mv-h-out"></output></span><input type="range" id="mv-h" min="5" max="30" step="1" value="15"></label>
+<label class="ctrl"><span>목표 차량 가동률 <output id="mv-r-out"></output></span><input type="range" id="mv-r" min="0.3" max="0.9" step="0.01" value="0.5"></label>
+</div>
+</div>
+<div class="sim-readout">
+<div class="stat"><span class="k">투입 로트/일</span><span class="v" id="o-mv-lot">—</span></div>
+<div class="stat"><span class="k">FOUP 이동/일</span><span class="v" id="o-mv-day">—</span></div>
+<div class="stat"><span class="k">이동/시간</span><span class="v" id="o-mv-h">—</span></div>
+<div class="stat"><span class="k">반송 1회 차량 점유</span><span class="v" id="o-mv-t">—</span></div>
+<div class="stat"><span class="k">평균 일하는 차량</span><span class="v" id="o-mv-busy">—</span></div>
+<div class="stat"><span class="k">필요 차량 수</span><span class="v" id="o-mv-n">—</span></div>
+</div>
+<div class="am-verdict" id="o-mv-verdict">—</div>
+<div class="sim-note">해볼 것: ① FAB-E 기본값에서 필요 차량이 1,000대 안팎으로 나오는지 확인하자. ② 평균 속도를 2 m/s에서 1 m/s로 낮추면(혼잡) 차량이 얼마나 더 필요한가? 주행 시간이 점유 시간의 대부분이라 거의 두 배가 된다. ③ FOUP당 웨이퍼를 25장에서 12장으로 줄이면(소량 다품종, 작은 로트) 이동 수가 두 배가 된다. 로트 크기는 물류 부하의 가장 큰 손잡이다. 아래 그래프는 목표 가동률에 따른 필요 차량 수다. 모든 값은 <b>교육용 가정</b>이다.</div>
+</div>
+<div class="callout fab"><strong>FAB-E의 물류 규모</strong><p>월 10만 장, 900 스텝, 스텝당 1.3회 반송이면 하루 약 15.6만 회, 시간당 약 6,500회, 초당 거의 2회의 FOUP 이동이 일어난다. 반송 1회에 차량이 약 4분 묶인다면 평균 약 460대가 항상 일하고 있어야 하고, 가동률 50 %를 목표로 하면 약 900~1,000대가 필요하다. 기준 팹 표의 "OHT 차량 약 1,000대"는 이 어림과 같은 자릿수다. 레일 총연장은 층 면적과 베이 수에 따라 수~수십 km 규모가 된다(약, 교육용 가정).</p></div>
+<div class="callout tip"><strong>사람이 들고 다니던 시절</strong><p>200 mm 시대 초기에는 작업자가 웨이퍼 카세트를 손이나 카트로 옮기는 팹이 많았다. 300 mm로 넘어오면서 FOUP 무게가 약 8 kg이 되었고, 반복 운반은 산업안전(근골격계) 문제가 되었다. 동시에 사람은 클린룸에서 가장 큰 입자 발생원이며(<a href="cleanroom.html">2장</a>), 낙하·오배송 사고는 수십 장의 웨이퍼를 한 번에 잃게 한다. 300 mm 팹이 처음부터 천장 반송 자동화를 전제로 설계된 이유다.</p></div>
+</section>
+
+<!-- ============================================================ 2 -->
+<section id="components">
+<h2>AMHS의 구성 요소: FOUP에서 스토커까지</h2>
+<p>AMHS는 "운반 용기 + 반송 차량 + 저장소 + 접점 + 제어 소프트웨어"로 이루어진다. 하나씩 살펴보자.</p>
+<h3>FOUP과 로드포트</h3>
+<p><span class="term">FOUP</span><span class="en">(Front Opening Unified Pod)</span>은 300 mm 웨이퍼 25장을 담는 밀폐형 용기다. 외형·위치 결정 핀·로봇 플랜지(OHT가 잡는 손잡이)·도어 규격은 SEMI E47.1에 정해져 있어, 어느 회사 차량이든 어느 회사 장비든 같은 FOUP를 다룰 수 있다. FOUP 안은 그 자체로 작은 청정 공간, 즉 <span class="term">미니인바이런먼트</span>의 일부다(<a href="amc.html">4장</a>). 웨이퍼는 장비 앞 <span class="term">로드포트</span><span class="en">(Load Port, SEMI E15.1)</span>에 FOUP가 놓인 뒤 도어가 EFEM 쪽으로 열리고 나서야 공기와 만난다. 로드포트의 FOUP 안착 높이는 바닥에서 약 900 mm로 규정되어 있어, OHT의 호이스트 하강 거리도 이 높이를 기준으로 정해진다.</p>
+<h3>OHT: 천장 주행 반송 차량</h3>
+<p><span class="term">OHT</span><span class="en">(Overhead Hoist Transport)</span>는 천장에 매단 레일을 달리는 무인 차량이다. 차량 아래의 호이스트가 벨트로 그리퍼를 내려 FOUP 상단 플랜지를 잡고 들어 올린다. 바닥 공간을 전혀 쓰지 않고, 장비 로드포트 바로 위에서 FOUP를 내려놓을 수 있어 300 mm 팹의 표준이 되었다. 대략적인 성능은 직선 최고 속도 약 3~5 m/s, 곡선 약 1 m/s 안팎, 호이스트 1회 약 10~20초 수준이다(제조사·세대마다 다르다). 전력은 레일을 따라 깔린 급전선에서 전자기 유도로 받는 <span class="term">비접촉 급전</span><span class="en">(contactless/inductive power transfer)</span>을 쓰는 경우가 많다. 접촉식 집전 레일처럼 마모 분진이 생기지 않기 때문이다.</p>
+<h3>스토커와 천장 버퍼</h3>
+<p>장비가 바빠 바로 들어갈 수 없는 FOUP는 어딘가에서 기다려야 한다. 전통적인 저장소는 <span class="term">스토커</span><span class="en">(Stocker)</span>다. 내부의 크레인 로봇이 선반 수백~수천 칸에 FOUP를 넣고 뺀다. 용량은 크지만 입출고 포트가 몇 개뿐이라 처리 속도에 한계가 있고, 장비에서 멀다. 그래서 요즘 팹은 레일 옆이나 아래 천장 공간을 저장소로 쓴다. 레일 옆 선반을 <span class="term">STB</span><span class="en">(Side Track Buffer)</span>, 레일 바로 아래 선반을 <span class="term">UTB</span><span class="en">(Under Track Buffer)</span>라 하고, 이 둘을 묶어 흔히 <span class="term">OHB</span><span class="en">(Overhead Buffer, 천장 버퍼)</span>라 부른다. OHT가 호이스트만 조금 내리면 닿으므로 장비 바로 옆에 다음 로트를 미리 갖다 둘 수 있다.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 860 470" role="img" aria-label="OHT, OHB, 로드포트, 공정 장비의 측면 단면">
+<defs>
+<marker id="amhs-ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--u-air)"/></marker>
+<marker id="amhs-ar2d" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--text-dim)"/></marker>
+</defs>
+<!-- 천장과 FFU -->
+<rect x="20" y="14" width="820" height="26" class="box2"/>
+<g class="lbl-sm"><text x="30" y="32">천장 그리드 · FFU</text></g>
+<g fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1"><rect x="200" y="18" width="90" height="18" rx="3"/><rect x="420" y="18" width="90" height="18" rx="3"/><rect x="640" y="18" width="90" height="18" rx="3"/></g>
+<g marker-end="url(#amhs-ar2)" class="u-air" stroke-dasharray="5 5"><path d="M245 44V110"/><path d="M465 44V110"/><path d="M685 44V110"/><path d="M245 330V400"/><path d="M465 300V400"/></g>
+<!-- 행거와 레일 -->
+<g class="s-line"><path d="M300 40V78"/><path d="M380 40V78"/><path d="M160 40V96"/></g>
+<rect x="260" y="78" width="160" height="12" rx="3" fill="var(--text)" opacity="0.8"/>
+<text x="430" y="88" class="lbl-sm">레일(급전선 내장)</text>
+<!-- OHT -->
+<rect x="290" y="92" width="100" height="62" rx="8" class="veh"/>
+<circle cx="306" cy="88" r="5" fill="var(--text-dim)"/><circle cx="374" cy="88" r="5" fill="var(--text-dim)"/>
+<text x="340" y="120" text-anchor="middle" class="lbl-b">OHT</text>
+<text x="340" y="138" text-anchor="middle" class="lbl-sm">호이스트·그리퍼</text>
+<!-- 벨트와 FOUP -->
+<g stroke="var(--text-dim)" stroke-width="1.4"><path d="M322 154V262"/><path d="M358 154V262"/></g>
+<rect x="312" y="262" width="56" height="8" rx="2" fill="var(--text-dim)"/>
+<rect x="306" y="270" width="68" height="58" rx="6" class="foup"/>
+<text x="340" y="304" text-anchor="middle" class="lbl-b">FOUP</text>
+<path d="M392 230V262" class="s-line" marker-end="url(#amhs-ar2d)"/><path d="M392 210V178" class="s-line" marker-end="url(#amhs-ar2d)"/>
+<text x="398" y="222" class="lbl-sm">호이스트 승강</text>
+<!-- 로드포트와 장비 -->
+<rect x="296" y="328" width="88" height="10" rx="2" class="box2"/>
+<rect x="318" y="338" width="44" height="92" class="box2"/>
+<text x="296" y="356" text-anchor="end" class="lbl-sm">로드포트</text>
+<rect x="384" y="250" width="70" height="180" class="tool"/><text x="419" y="338" text-anchor="middle" class="lbl-sm">EFEM</text>
+<rect x="454" y="200" width="230" height="230" class="tool"/><text x="569" y="300" text-anchor="middle" class="lbl-b">공정 장비</text><text x="569" y="320" text-anchor="middle" class="lbl-sm">(챔버·플랫폼)</text>
+<path d="M398 290h40" class="s-line" marker-end="url(#amhs-ar2d)"/>
+<!-- 높이 치수 -->
+<g class="s-axis"><path d="M250 338V430"/><path d="M244 338h12"/><path d="M244 430h12"/></g>
+<text x="244" y="390" text-anchor="end" class="lbl-sm">약 900 mm</text>
+<text x="244" y="406" text-anchor="end" class="lbl-sm">(SEMI E15.1)</text>
+<g class="s-axis"><path d="M60 84V430"/><path d="M54 84h12"/><path d="M54 430h12"/></g>
+<text x="70" y="260" class="lbl-sm">레일 높이</text><text x="70" y="276" class="lbl-sm">약 3~4 m</text><text x="70" y="292" class="lbl-sm">(팹마다 다름)</text>
+<!-- STB / UTB -->
+<rect x="120" y="96" width="80" height="8" class="box2"/><rect x="128" y="104" width="56" height="44" rx="5" class="foup" opacity="0.8"/>
+<text x="160" y="166" text-anchor="middle" class="lbl-sm">STB(레일 옆)</text>
+<rect x="700" y="78" width="120" height="12" rx="3" fill="var(--text)" opacity="0.5"/>
+<path d="M760 40V78" class="s-line"/>
+<rect x="716" y="150" width="88" height="8" class="box2"/><rect x="728" y="158" width="64" height="46" rx="5" class="foup" opacity="0.8"/>
+<g class="s-line"><path d="M716 90V150"/><path d="M804 90V150"/></g>
+<text x="760" y="222" text-anchor="middle" class="lbl-sm">UTB(레일 아래)</text>
+<!-- 바닥 -->
+<rect x="20" y="430" width="820" height="16" class="box2"/>
+<g stroke="var(--text-faint)" stroke-width="2"><path d="M40 438h10M70 438h10M100 438h10M130 438h10M160 438h10M700 438h10M730 438h10M760 438h10M790 438h10M820 438h10"/></g>
+<text x="430" y="462" text-anchor="middle" class="lbl-sm">타공 바닥(리턴 공기) · 아래 와플 슬래브</text>
+</svg>
+<figcaption><b>그림 13-2.</b> OHT와 천장 버퍼의 측면 단면(개략도, 치수 비례 아님). FFU의 하강 기류 속에서 레일과 차량이 장비 로드포트 바로 위를 지난다. 호이스트가 FOUP를 약 900 mm 높이의 로드포트까지 내린다. STB와 UTB는 레일 옆·아래의 선반으로, 다음 로트를 장비 가까이에 미리 갖다 둔다.</figcaption>
+</figure>
+
+<div class="table-wrap"><table>
+<thead><tr><th>구성 요소</th><th>역할</th><th>장점</th><th>한계</th></tr></thead>
+<tbody>
+<tr><td>OHT</td><td>천장 레일 위 반송, 호이스트로 로드포트 직접 적재</td><td>바닥 공간 0, 장비 간 직접 반송</td><td>단방향 레일 혼잡, 호이스트 중 차선 점유</td></tr>
+<tr><td>스토커</td><td>대용량 FOUP 저장(수백~수천 칸, 약)</td><td>밀도 높은 저장, 질소 퍼지 선반 가능</td><td>입출고 포트 병목, 장비와 거리</td></tr>
+<tr><td>STB·UTB(OHB)</td><td>레일 옆·아래 선반</td><td>장비 근처 버퍼, 빠른 접근</td><td>칸 수가 레일 길이에 묶임</td></tr>
+<tr><td>컨베이어</td><td>고정 경로 대량 이송(층간·인터베이)</td><td>연속 흐름, 대기 없음</td><td>경로 유연성 낮음</td></tr>
+<tr><td>리프터</td><td>층간 수직 이송</td><td>다층 팹 연결</td><td>포트 수가 적어 병목되기 쉬움</td></tr>
+<tr><td>AGV·AMR</td><td>바닥 주행 로봇(일부 장비·백엔드)</td><td>레일 공사 불필요</td><td>통로 점유, 처리량 낮음</td></tr>
+</tbody>
+</table></div>
+
+<h3>손 건네기: SEMI E84</h3>
+<p>차량이 FOUP를 로드포트에 내려놓는 순간은 두 기계가 맞닿는 순간이다. 장비가 "받을 준비가 됐다"고 말하기 전에 내리면 충돌하고, 차량이 다 놓기 전에 장비가 도어를 열면 FOUP가 떨어진다. 그래서 차량(능동 측)과 로드포트(수동 측)는 광통신 등으로 연결된 병렬 신호선으로 단계별 확인을 주고받는다. 이 핸드셰이크가 SEMI E84<span class="en">(Enhanced Carrier Handoff Parallel I/O Interface)</span>다.</p>
+<figure class="diagram">
+<svg viewBox="0 0 840 360" role="img" aria-label="SEMI E84 적재 핸드셰이크 타이밍도">
+<g class="grid-l"><path d="M150 30V320M200 30V320M250 30V320M300 30V320M350 30V320M400 30V320M450 30V320M560 30V320M610 30V320M660 30V320M710 30V320M760 30V320"/></g>
+<g class="lbl-sm" text-anchor="end">
+<text x="130" y="56">CS_0</text><text x="130" y="96">VALID</text><text x="130" y="136">L_REQ</text><text x="130" y="176">TR_REQ</text><text x="130" y="216">READY</text><text x="130" y="256">BUSY</text><text x="130" y="296">COMPT</text>
+</g>
+<g class="lbl-sm"><text x="16" y="56">차량</text><text x="16" y="96">차량</text><text x="16" y="136">장비</text><text x="16" y="176">차량</text><text x="16" y="216">장비</text><text x="16" y="256">차량</text><text x="16" y="296">차량</text></g>
+<path class="wave-a" d="M140 60H150V44H800V60H810"/>
+<path class="wave-a" d="M140 100H200V84H790V100H810"/>
+<path class="wave-p" d="M140 140H250V124H560V140H810"/>
+<path class="wave-a" d="M140 180H300V164H660V180H810"/>
+<path class="wave-p" d="M140 220H350V204H760V220H810"/>
+<path class="wave-a" d="M140 260H400V244H610V260H810"/>
+<path class="wave-a" d="M140 300H710V284H790V300H810"/>
+<rect x="455" y="234" width="100" height="36" rx="6" class="f-warn-soft"/>
+<text x="505" y="249" text-anchor="middle" class="lbl-sm">호이스트 하강</text><text x="505" y="264" text-anchor="middle" class="lbl-sm">FOUP 안착</text>
+<g class="lbl-sm" text-anchor="middle">
+<text x="150" y="340">①</text><text x="200" y="340">②</text><text x="250" y="340">③</text><text x="300" y="340">④</text><text x="350" y="340">⑤</text><text x="400" y="340">⑥</text><text x="560" y="340">⑦</text><text x="610" y="340">⑧</text><text x="660" y="340">⑨</text><text x="710" y="340">⑩</text><text x="760" y="340">⑪</text><text x="795" y="340">⑫</text>
+</g>
+<g class="lbl-sm"><text x="560" y="24">⑦ 장비가 FOUP 감지 → L_REQ 해제</text></g>
+</svg>
+<figcaption><b>그림 13-3.</b> SEMI E84 적재(load) 핸드셰이크의 개략 타이밍. 파란 선은 차량(능동 측), 청록 선은 장비(수동 측) 신호다. ① 포트 선택(CS_0) ② 유효(VALID) ③ 장비 적재 요청(L_REQ) ④ 이송 요청(TR_REQ) ⑤ 장비 준비(READY) ⑥ 이송 중(BUSY) ⑦ 안착 감지로 L_REQ 해제 ⑧~⑨ BUSY·TR_REQ 해제 ⑩ 완료(COMPT) ⑪ READY 해제 ⑫ VALID·COMPT·CS_0 해제. 각 단계에는 타임아웃이 걸려 있어 한 신호라도 늦으면 이송이 멈추고 알람이 뜬다(세부 타이밍은 규격 원문 참고).</figcaption>
+</figure>
+<p>핸드셰이크 한 번에는 수 초가 걸리고, 이 시간 동안 차량은 레일 위에 서 있다. 단방향 레일에서 서 있는 차량은 뒤따르는 모든 차량을 막는다. 4절의 혼잡 이야기는 여기서 시작한다.</p>
+
+<h3>제어 계층: MES에서 차량까지</h3>
+<p>"로트 A를 식각 장비 E-17로 보내라"는 결정은 생산 관리 시스템 <span class="term">MES</span><span class="en">(Manufacturing Execution System)</span>이 내린다. MES의 반송 요청은 <span class="term">MCS</span><span class="en">(Material Control System)</span>가 받아 경로(스토커 경유 여부, 버퍼 선택)를 정하고, 각 하위 제어기(OHT 제어기, 스토커 제어기)에 명령을 나눈다. OHT 제어기는 어느 차량을 보낼지(디스패칭, 7절)와 어떤 길로 갈지(경로 탐색), 구간 점유와 충돌 회피를 관리한다. 장비와 MCS 사이 반송 상태 보고는 SEMI E87<span class="en">(Carrier Management)</span>, AMHS 자체의 장비 모델은 SEMI E82(IBSEM)·E88(스토커)·E153(AMHS SEM) 계열 규격이 다룬다.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>규격</th><th>대상</th><th>요점</th></tr></thead>
+<tbody>
+<tr><td>SEMI E47.1</td><td>FOUP</td><td>300 mm FOUP의 외형·도어·로봇 플랜지·위치 결정</td></tr>
+<tr><td>SEMI E15.1</td><td>로드포트</td><td>300 mm 로드포트 치수, 안착 높이 약 900 mm</td></tr>
+<tr><td>SEMI E62</td><td>FIMS</td><td>로드포트 도어 개폐 인터페이스</td></tr>
+<tr><td>SEMI E84</td><td>반송 핸드오프</td><td>차량–로드포트 병렬 I/O 핸드셰이크</td></tr>
+<tr><td>SEMI E87</td><td>캐리어 관리</td><td>장비가 FOUP 도착·ID 확인·상태를 호스트에 보고</td></tr>
+<tr><td>SEMI E82 / E88 / E153</td><td>AMHS 장비 모델</td><td>인터베이·인트라베이 AMHS, 스토커, AMHS 일반의 통신 모델</td></tr>
+</tbody>
+</table></div>
+</section>
+
+<!-- ============================================================ 3 -->
+<section id="layout">
+<h2>레일 레이아웃: 인터베이와 인트라베이</h2>
+<p>클린룸은 보통 긴 통로를 따라 장비가 늘어선 <span class="term">베이</span><span class="en">(bay)</span>들로 나뉜다. 베이 안을 도는 반송을 <span class="term">인트라베이</span><span class="en">(intrabay)</span>, 베이와 베이를 잇는 간선 반송을 <span class="term">인터베이</span><span class="en">(interbay)</span>라 한다. 초기 300 mm 팹은 이 둘을 분리했다. 중앙 통로의 인터베이 레일이 베이 입구의 스토커들을 잇고, 베이 안의 인트라베이 차량이 스토커와 장비 사이를 오갔다. FOUP는 장비 → 스토커 → (인터베이) → 스토커 → 장비로, 스토커를 두 번씩 거쳤다.</p>
+<p>스토커 입출고는 한 번에 수십 초씩 걸리고 포트 수가 적어 곧 병목이 되었다. 그래서 오늘날의 표준은 <span class="term">통합형</span><span class="en">(unified)</span> 레이아웃이다. 인터베이와 인트라베이 레일을 하나의 망으로 연결해 OHT가 출발 장비에서 도착 장비로 바로 가는 <span class="term">직접 반송</span><span class="en">(tool-to-tool, direct delivery)</span>을 한다. 스토커는 장기 보관과 넘침 흡수용으로 물러나고, 장비 근처의 OHB가 단기 버퍼를 맡는다.</p>
+<figure class="diagram">
+<svg viewBox="0 0 860 400" role="img" aria-label="스토커 중심 분리형과 통합형 레일 레이아웃 비교">
+<defs>
+<marker id="amhs-ar4" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--text)"/></marker>
+<marker id="amhs-ar4a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker>
+</defs>
+<text x="205" y="22" text-anchor="middle" class="lbl-b">(가) 분리형: 스토커 중심</text>
+<text x="645" y="22" text-anchor="middle" class="lbl-b">(나) 통합형: 직접 반송 + 숏컷</text>
+<!-- (가) -->
+<rect x="20" y="180" width="370" height="40" rx="20" class="rail" marker-end="url(#amhs-ar4)"/>
+<text x="205" y="205" text-anchor="middle" class="lbl-sm">인터베이 레일(중앙 통로)</text>
+<g>
+<rect x="40" y="140" width="50" height="36" rx="4" class="f-acc2-soft"/><rect x="130" y="140" width="50" height="36" rx="4" class="f-acc2-soft"/><rect x="220" y="140" width="50" height="36" rx="4" class="f-acc2-soft"/><rect x="310" y="140" width="50" height="36" rx="4" class="f-acc2-soft"/>
+<rect x="40" y="224" width="50" height="36" rx="4" class="f-acc2-soft"/><rect x="130" y="224" width="50" height="36" rx="4" class="f-acc2-soft"/><rect x="220" y="224" width="50" height="36" rx="4" class="f-acc2-soft"/><rect x="310" y="224" width="50" height="36" rx="4" class="f-acc2-soft"/>
+</g>
+<g class="lbl-sm" text-anchor="middle"><text x="65" y="163">STK</text><text x="155" y="163">STK</text><text x="245" y="163">STK</text><text x="335" y="163">STK</text><text x="65" y="247">STK</text><text x="155" y="247">STK</text><text x="245" y="247">STK</text><text x="335" y="247">STK</text></g>
+<g class="rail-dim">
+<rect x="45" y="44" width="40" height="92" rx="14"/><rect x="135" y="44" width="40" height="92" rx="14"/><rect x="225" y="44" width="40" height="92" rx="14"/><rect x="315" y="44" width="40" height="92" rx="14"/>
+<rect x="45" y="264" width="40" height="92" rx="14"/><rect x="135" y="264" width="40" height="92" rx="14"/><rect x="225" y="264" width="40" height="92" rx="14"/><rect x="315" y="264" width="40" height="92" rx="14"/>
+</g>
+<g class="tool"><rect x="30" y="54" width="12" height="16"/><rect x="30" y="84" width="12" height="16"/><rect x="30" y="114" width="12" height="16"/><rect x="88" y="54" width="12" height="16"/><rect x="88" y="84" width="12" height="16"/><rect x="88" y="114" width="12" height="16"/>
+<rect x="120" y="274" width="12" height="16"/><rect x="120" y="304" width="12" height="16"/><rect x="178" y="274" width="12" height="16"/><rect x="178" y="304" width="12" height="16"/><rect x="178" y="334" width="12" height="16"/></g>
+<text x="205" y="382" text-anchor="middle" class="lbl-sm">장비 → STK → 인터베이 → STK → 장비 (스토커 2회 경유)</text>
+<!-- (나) -->
+<rect x="460" y="180" width="370" height="40" rx="20" class="rail"/>
+<g class="rail">
+<path d="M488 180V64Q488 44 508 44Q528 44 528 64V180"/><path d="M578 180V64Q578 44 598 44Q618 44 618 64V180"/><path d="M668 180V64Q668 44 688 44Q708 44 708 64V180"/><path d="M758 180V64Q758 44 778 44Q798 44 798 64V180"/>
+<path d="M488 220V336Q488 356 508 356Q528 356 528 336V220"/><path d="M578 220V336Q578 356 598 356Q618 356 618 336V220"/><path d="M668 220V336Q668 356 688 356Q708 356 708 336V220"/><path d="M758 220V336Q758 356 778 356Q798 356 798 336V220"/>
+</g>
+<g stroke="var(--accent)" stroke-width="3" fill="none" stroke-dasharray="6 4"><path d="M528 110H578"/><path d="M708 290H758"/><path d="M618 130H668"/></g>
+<text x="553" y="102" text-anchor="middle" class="lbl-acc">숏컷</text>
+<g class="tool"><rect x="470" y="60" width="14" height="16"/><rect x="470" y="94" width="14" height="16"/><rect x="470" y="128" width="14" height="16"/><rect x="532" y="60" width="14" height="16"/><rect x="532" y="128" width="14" height="16"/>
+<rect x="650" y="240" width="14" height="16"/><rect x="650" y="274" width="14" height="16"/><rect x="712" y="240" width="14" height="16"/><rect x="712" y="310" width="14" height="16"/></g>
+<g class="foup"><rect x="492" y="148" width="10" height="10"/><rect x="514" y="148" width="10" height="10"/><rect x="672" y="300" width="10" height="10"/><rect x="694" y="300" width="10" height="10"/></g>
+<text x="540" y="164" class="lbl-sm">OHB</text>
+<rect x="815" y="140" width="34" height="36" rx="4" class="f-acc2-soft"/><text x="832" y="163" text-anchor="middle" class="lbl-sm">STK</text>
+<path d="M470 76Q600 88 650 248" fill="none" stroke="var(--accent)" stroke-width="2" marker-end="url(#amhs-ar4a)" opacity="0.8"/>
+<text x="645" y="382" text-anchor="middle" class="lbl-sm">장비 → 장비 직접 반송, 스토커는 넘침·장기 보관용</text>
+</svg>
+<figcaption><b>그림 13-4.</b> 레일 레이아웃의 두 세대(평면 개략도). (가) 초기 300 mm 팹: 인터베이 레일이 스토커(STK)만 잇고, 베이 안은 별도 인트라베이 차량이 맡는다. (나) 통합형: 하나의 레일망에서 차량이 장비 사이를 직접 오가고, 베이 사이 숏컷과 바이패스로 먼 길 돌기를 줄인다. 레일은 모두 단방향이다.</figcaption>
+</figure>
+<p>레일은 거의 항상 <b>단방향</b>이다. 양방향 운행은 교차·대피 구간이 필요해 제어가 복잡하고 레일 공간을 두 배로 쓴다. 단방향의 대가는 "바로 뒤의 장비로 가려면 루프를 한 바퀴 돌아야 한다"는 점이다. 그래서 루프 사이를 잇는 <span class="term">숏컷</span><span class="en">(shortcut)</span>, 정체 구간을 우회하는 <span class="term">바이패스</span><span class="en">(bypass)</span>, 분기·합류 지점을 레이아웃에 넣는다. 분기와 합류가 늘면 경로 선택지가 많아지지만 합류부마다 진입 순서를 정하는 제어가 필요하고, 곡선 구간마다 감속이 생긴다. 레이아웃 설계는 결국 "평균 반송 거리 대 합류·곡선 수"의 타협이다.</p>
+
+<div class="sim" id="sim-3d">
+<div class="sim-head"><span class="sim-tag three">3D</span><h3>인트라베이 OHT 루프 3D 모델</h3></div>
+<div class="sim-body side">
+<div class="sim-view three" id="v3d-amhs"><span class="hint">드래그: 회전 · 휠: 확대</span></div>
+<div class="sim-controls">
+<label class="ctrl"><span>차량 수 <output id="a3-n-out"></output></span><input type="range" id="a3-n" min="1" max="30" step="1" value="8"></label>
+<label class="ctrl"><span>반송 요청률 <output id="a3-lam-out"></output></span><input type="range" id="a3-lam" min="20" max="600" step="10" value="160"></label>
+<label class="ctrl"><span>직선 최고 속도 <output id="a3-v-out"></output></span><input type="range" id="a3-v" min="1" max="5" step="0.1" value="3"></label>
+<label class="ctrl"><span>시간 배속 <output id="a3-ts-out"></output></span><input type="range" id="a3-ts" min="1" max="12" step="1" value="4"></label>
+<label class="check"><input type="checkbox" id="a3-lbl" checked> 라벨 보기</label>
+<label class="check"><input type="checkbox" id="a3-rot"> 자동 회전</label>
+<div class="am-btns"><button class="btn" id="a3-pause">일시정지</button><button class="btn" id="a3-reset">초기화</button></div>
+</div>
+</div>
+<div class="am-legend"><span><i style="background:#5f6b7d"></i>빈 차량(순회)</span><span><i style="background:#3b82f6"></i>집하하러 가는 중</span><span><i style="background:#22a06b"></i>FOUP 적재 주행</span><span><i style="background:#e8a33d"></i>호이스트 이송 중(차선 점유)</span><span><i style="background:#f05252"></i>반송 대기 FOUP</span></div>
+<div class="sim-readout">
+<div class="stat"><span class="k">처리량</span><span class="v" id="o-a3-th">—</span></div>
+<div class="stat"><span class="k">평균 반송 대기</span><span class="v" id="o-a3-w">—</span></div>
+<div class="stat"><span class="k">차량 가동률</span><span class="v" id="o-a3-u">—</span></div>
+<div class="stat"><span class="k">대기 중 요청</span><span class="v" id="o-a3-q">—</span></div>
+<div class="stat"><span class="k">정체 비율</span><span class="v" id="o-a3-blk">—</span></div>
+<div class="stat"><span class="k">경과 시간(모의)</span><span class="v" id="o-a3-t">—</span></div>
+</div>
+<div class="sim-note">길이 약 131 m의 단방향 인트라베이 루프(직선 50 m × 2, 반지름 5 m 곡선 2개)에 장비 12대, 스토커 포트 1개, 천장 버퍼 1개가 붙어 있다. 요청은 무작위(포아송)로 생기고, 가장 가까운 빈 차량이 배정된다. 곡선에서는 약 1.2 m/s로 감속하고, 호이스트 이송(약 12초) 동안 차량은 레일 위에 서서 뒤차를 막는다. 해볼 것: ① 요청률 160회/h에서 차량을 2대 → 8대 → 20대로 늘려 보자. 대기는 줄다가 20대 근처에서는 정체 비율이 커진다. ② 차량 8대에서 요청률을 400회/h 이상으로 올리면 대기 요청이 쌓이기 시작한다. ③ 최고 속도를 5 m/s로 올려도 처리량이 생각만큼 늘지 않는다. 곡선 감속과 호이스트 시간이 그대로이기 때문이다. 차량과 FOUP는 보기 쉽게 실제보다 크게 그렸다. 값은 교육용 가정이다.</div>
+</div>
+<div class="callout deep"><strong>차량끼리 어떻게 안 부딪히나</strong><p>OHT는 두 겹의 충돌 방지 장치를 쓴다. 하나는 차량 앞의 거리 센서(레이저·광학)로, 앞차와의 간격에 따라 감속·정지하는 차량 추종이다. 다른 하나는 제어기가 레일을 구간<span class="en">(block, zone)</span>으로 나누고 한 구간에 한 대씩만 들어가도록 허가를 주는 구간 점유 제어다. 특히 합류부는 두 방향에서 동시에 들어오면 센서만으로는 막을 수 없으므로 반드시 점유 허가를 받는다. 이 장의 시뮬레이터는 앞의 방식, 즉 "앞차와 정지 거리 이상의 간격을 유지한다"는 규칙만 단순화해 쓴다.</p></div>
+</section>
+
+<!-- ============================================================ 4 -->
+<section id="traffic">
+<h2>레일 위의 교통: 차량 수와 혼잡</h2>
+<p>차량을 많이 넣을수록 반송 능력이 커질 것 같지만, 단방향 레일은 도로와 같아서 어느 지점부터는 차량을 넣을수록 오히려 처리량이 떨어진다. 교통공학의 <span class="term">교통 기본도</span><span class="en">(fundamental diagram of traffic flow)</span>가 이 현상을 설명한다. 레일 길이당 차량 수를 밀도 \(k\), 한 지점을 단위 시간에 지나는 차량 수를 교통량 \(q\), 평균 속도를 \(v\)라 하면 세 양은 항상 \(q = k\,v\)로 묶인다. 밀도가 오르면 앞차 간격이 줄어 속도가 떨어진다. 가장 단순한 그린실즈<span class="en">(Greenshields)</span> 모형은 속도가 밀도에 대해 직선으로 준다고 본다.</p>
+<div class="formula">$$v(k) = v_f\left(1 - \frac{k}{k_j}\right), \qquad q(k) = v_f\,k\left(1-\frac{k}{k_j}\right), \qquad q_\text{max} = \frac{v_f k_j}{4}\ \text{at}\ k = \frac{k_j}{2}$$<div class="where">\(v_f\): 자유 주행 속도, \(k_j\): 정체 밀도(차량이 범퍼를 맞댄 상태, \(1/(\text{차량 길이}+\text{최소 간격})\)). 교통량은 \(k_j/2\)에서 최대가 되고, 그보다 밀도가 높으면 차량을 더 넣을수록 \(q\)가 줄어드는 혼잡 영역이다.</div></div>
+<figure class="diagram">
+<svg viewBox="0 0 820 330" role="img" aria-label="교통 기본도: 밀도와 교통량의 관계">
+<rect x="80" y="30" width="370" height="240" class="box" opacity="0.4"/>
+<path d="M80 270H460M80 270V24" class="s-axis"/>
+<path d="M80 270Q265 -90 450 270" class="s-acc" stroke-width="3"/>
+<path d="M265 90V270" class="s-line" stroke-dasharray="4 4"/>
+<rect x="80" y="30" width="185" height="240" class="f-ok-soft" opacity="0.35" stroke="none"/>
+<rect x="265" y="30" width="185" height="240" class="f-bad-soft" opacity="0.35" stroke="none"/>
+<circle cx="265" cy="90" r="5" fill="var(--accent)"/>
+<text x="273" y="84" class="lbl-acc">q_max (용량)</text>
+<text x="150" y="250" text-anchor="middle" class="lbl-sm">자유 흐름</text><text x="150" y="266" text-anchor="middle" class="lbl-sm">차량 ↑ → 처리량 ↑</text>
+<text x="370" y="250" text-anchor="middle" class="lbl-sm">혼잡</text><text x="370" y="266" text-anchor="middle" class="lbl-sm">차량 ↑ → 처리량 ↓</text>
+<text x="265" y="292" text-anchor="middle" class="lbl-sm">k_j / 2</text><text x="450" y="292" text-anchor="middle" class="lbl-sm">k_j</text>
+<text x="270" y="318" text-anchor="middle" class="lbl">밀도 k (대/m)</text>
+<text x="40" y="150" text-anchor="middle" class="lbl" transform="rotate(-90 40 150)">교통량 q (대/s)</text>
+<g>
+<text x="500" y="56" class="lbl-b">OHT 루프에서 더 일찍 막히는 이유</text>
+<text x="500" y="86" class="lbl">① 호이스트 이송 중 차선 점유</text>
+<text x="520" y="106" class="lbl-sm">한 대가 10~20초 서면 뒤차가 모두 선다</text>
+<text x="500" y="136" class="lbl">② 곡선·합류 감속</text>
+<text x="520" y="156" class="lbl-sm">병목 구간의 용량이 루프 전체를 정한다</text>
+<text x="500" y="186" class="lbl">③ 빈 차량의 순회</text>
+<text x="520" y="206" class="lbl-sm">일 없는 차량도 레일 용량을 쓴다</text>
+<text x="500" y="236" class="lbl">④ 정지 거리 확보</text>
+<text x="520" y="256" class="lbl-sm">빠를수록 필요한 차간 거리가 늘어난다</text>
+</g>
+</svg>
+<figcaption><b>그림 13-5.</b> 그린실즈 교통 기본도(개념도). 밀도가 정체 밀도의 절반을 넘으면 차량을 더 넣을수록 교통량이 줄어든다. OHT 루프는 차량이 수시로 멈춰 서는 "정류장 많은 도로"라서 순수한 도로보다 낮은 밀도에서 혼잡에 들어간다.</figcaption>
+</figure>
+<p>OHT 루프는 일반 도로보다 까다롭다. 버스처럼 정류장(로드포트)마다 서는데, 정류장이 차선 위에 있다. 아래 시뮬레이터는 이 상황을 그대로 계산한다. 각 차량은 앞차와의 간격 \(g\)에서 정지할 수 있는 속도 \(\sqrt{2bg}\)와 최고 속도, 곡선 제한 속도 가운데 가장 작은 값을 넘지 않도록 가속·감속하고, 이송 중에는 그 자리에 선다.</p>
+
+<div class="sim" id="sim-ring">
+<div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>단방향 루프 교통 애니메이션</h3></div>
+<div class="sim-body side">
+<div class="sim-view"><canvas id="cv-ring"></canvas></div>
+<div class="sim-controls">
+<label class="ctrl"><span>차량 수 <output id="rg-n-out"></output></span><input type="range" id="rg-n" min="1" max="60" step="1" value="10"></label>
+<label class="ctrl"><span>반송 요청률 <output id="rg-lam-out"></output></span><input type="range" id="rg-lam" min="20" max="800" step="10" value="240"></label>
+<label class="ctrl"><span>호이스트 1회 <output id="rg-h-out"></output></span><input type="range" id="rg-h" min="4" max="30" step="1" value="15"></label>
+<label class="ctrl"><span>직선 최고 속도 <output id="rg-v-out"></output></span><input type="range" id="rg-v" min="1" max="5" step="0.1" value="3"></label>
+<label class="ctrl"><span>시간 배속 <output id="rg-ts-out"></output></span><input type="range" id="rg-ts" min="1" max="20" step="1" value="6"></label>
+<label class="check"><input type="checkbox" id="rg-curve" checked> 곡선 감속(1 m/s)</label>
+<div class="am-btns"><button class="btn" id="rg-pause">일시정지</button><button class="btn" id="rg-reset">초기화</button></div>
+</div>
+</div>
+<div class="sim-readout">
+<div class="stat"><span class="k">처리량(최근 30분)</span><span class="v" id="o-rg-th">—</span></div>
+<div class="stat"><span class="k">평균 반송 대기</span><span class="v" id="o-rg-w">—</span></div>
+<div class="stat"><span class="k">평균 주행 속도</span><span class="v" id="o-rg-v">—</span></div>
+<div class="stat"><span class="k">정체 비율</span><span class="v" id="o-rg-blk">—</span></div>
+<div class="stat"><span class="k">대기 중 요청</span><span class="v" id="o-rg-q">—</span></div>
+</div>
+<div class="sim-note">루프 길이 약 158 m(직선 60 m × 2, 반지름 6 m 곡선 2개), 스테이션 10개. 색: 회색 빈 차량, 파랑 집하하러 가는 중, 초록 적재 주행, 주황 이송 중. 스테이션 옆 빨간 점은 기다리는 FOUP 수다. 정체 비율은 일이 있는 차량이 앞차·이송 차량에 막혀 거의 멈춰 있는 시간의 비율이다. 해볼 것: ① 요청률 240회/h에서 차량 4대는 요청을 다 못 따라간다(대기 요청이 계속 쌓임). ② 10대면 안정된다. ③ 40대 이상 넣어 보자. 차량이 줄줄이 붙어 다니고 평균 속도가 떨어지며 처리량이 오히려 줄어든다. ④ 곡선 감속을 끄면 처리량이 얼마나 늘어나는가?</div>
+</div>
+
+<p>애니메이션은 한 순간을 보여 줄 뿐이다. 차량 수와 처리량의 관계를 곡선으로 얻으려면 차량 수를 바꿔 가며 같은 실험을 반복해야 한다. 아래 시뮬레이터는 모든 스테이션에 반송할 FOUP가 항상 쌓여 있는 <b>포화 수요</b>를 가정하고, 차량 수마다 모의 1시간을 돌려 최대 처리량(용량)을 구한다. 점선은 "혼잡이 전혀 없다면" 차량 한 대의 처리량에 차량 수를 곱한 이상적 직선이다.</p>
+<div class="sim" id="sim-cong">
+<div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>차량 수–처리량 혼잡 곡선</h3></div>
+<div class="sim-body side">
+<div class="sim-view"><canvas id="cv-cong"></canvas></div>
+<div class="sim-controls">
+<label class="ctrl"><span>루프 직선 길이 <output id="cg-l-out"></output></span><input type="range" id="cg-l" min="30" max="150" step="5" value="60"></label>
+<label class="ctrl"><span>스테이션 수 <output id="cg-s-out"></output></span><input type="range" id="cg-s" min="4" max="24" step="1" value="10"></label>
+<label class="ctrl"><span>호이스트 1회 <output id="cg-h-out"></output></span><input type="range" id="cg-h" min="4" max="30" step="1" value="15"></label>
+<label class="ctrl"><span>직선 최고 속도 <output id="cg-v-out"></output></span><input type="range" id="cg-v" min="1" max="5" step="0.1" value="3"></label>
+<div class="ctrl"><span>빈 차량 배정</span><div class="seg" id="cg-rule"><button data-value="nearest" class="on">최근접 작업</button><button data-value="fifo">FIFO</button></div></div>
+<label class="check"><input type="checkbox" id="cg-curve" checked> 곡선 감속(1 m/s)</label>
+<label class="check"><input type="checkbox" id="cg-keep"> 이전 곡선 남기기</label>
+</div>
+</div>
+<div class="sim-readout">
+<div class="stat"><span class="k">최대 처리량</span><span class="v" id="o-cg-max">—</span></div>
+<div class="stat"><span class="k">최대가 되는 차량 수</span><span class="v" id="o-cg-nmax">—</span></div>
+<div class="stat"><span class="k">이상 직선의 80 % 이탈</span><span class="v" id="o-cg-n80">—</span></div>
+<div class="stat"><span class="k">정체 밀도(물리적 최대)</span><span class="v" id="o-cg-jam">—</span></div>
+<div class="stat"><span class="k">계산 상태</span><span class="v" id="o-cg-st">—</span></div>
+</div>
+<div class="sim-note">곡선의 세 구간을 찾아보자. 차량이 적을 때는 이상 직선을 거의 따라간다(자유 흐름). 그다음 이송 차량에 막히는 시간이 늘면서 기울기가 꺾이고(포화), 정체 밀도에 가까워지면 처리량이 떨어진다(혼잡). 해볼 것: ① 호이스트 시간을 15초에서 6초로 줄이면 최대 처리량이 얼마나 커지는가? 레일 점유 시간이 곧 용량이다. ② 스테이션을 4개에서 20개로 늘리면? 정차 지점이 분산되어 동시에 여러 대가 이송할 수 있다. ③ FIFO로 바꾸면 빈 차량이 멀리 있는 작업을 받으러 돌아가는 공차 주행이 늘어 용량이 줄어든다. 1 m 차량, 최소 차간 1 m, 가감속 1 m/s²의 교육용 모델이다.</div>
+</div>
+<div class="callout warn"><strong>차량을 더 사는 것이 답이 아닐 때</strong><p>반송 대기가 길어지면 차량을 늘리고 싶어진다. 그러나 이미 포화·혼잡 구간이라면 차량 추가는 레일을 더 막을 뿐이다. 이때 효과가 있는 것은 레일 용량 자체를 늘리는 조치다. 숏컷·바이패스로 경로를 분산하고, 이송 중인 차량을 본선에서 비켜 세우는 측선을 두고, 호이스트 속도를 올리고, 빈 차량을 본선 대신 대기 구간에 세우는 것이다. 차량 수는 시뮬레이션으로 찾은 최대점보다 충분히 왼쪽, 즉 기울기가 아직 살아 있는 구간에서 정한다.</p></div>
+</section>
+
+<!-- ============================================================ 5 -->
+<section id="queue">
+<h2>대기열 이론: 리틀의 법칙과 M/M/c</h2>
+<p>반송 시스템을 위에서 내려다보면 "요청이 도착하고, 차량(서버)이 처리하고, 처리 중이 아니면 줄을 서는" 대기열이다. 대기열 이론의 첫 번째 도구는 분포에 관계없이 성립하는 <span class="term">리틀의 법칙</span><span class="en">(Little's law)</span>이다.</p>
+<div class="formula">$$L = \lambda\,W$$<div class="where">\(L\): 시스템 안의 평균 개수(대기 + 처리 중), \(\lambda\): 평균 도착률, \(W\): 한 개가 시스템에 머무는 평균 시간. 시스템이 정상 상태이기만 하면 도착 분포·처리 분포·처리 순서에 관계없이 성립한다. 예: 시간당 6,500회 요청, 요청 하나가 끝날 때까지 평균 5분이면 동시에 진행 중인 반송은 평균 \(6500\times 5/60 \approx 542\)건이다.</div></div>
+<p>리틀의 법칙은 평균끼리의 관계일 뿐 대기 시간 자체를 알려 주지는 않는다. 대기 시간을 구하려면 도착과 처리의 확률 모형이 필요하다. 가장 기본적인 모형이 <span class="term">M/M/c</span>다. 요청이 포아송 과정(지수 분포 간격, 첫 번째 M)으로 도착하고, 처리 시간이 지수 분포(두 번째 M)이며, 서버가 \(c\)대인 대기열이다. 차량 한 대의 평균 처리율을 \(\mu = 1/T_\text{veh}\)라 하면 다음이 성립한다.</p>
+<div class="formula">$$a = \frac{\lambda}{\mu},\quad \rho = \frac{a}{c} < 1,\qquad C(c,a) = \frac{\dfrac{a^c}{c!}\dfrac{1}{1-\rho}}{\displaystyle\sum_{k=0}^{c-1}\frac{a^k}{k!} + \frac{a^c}{c!}\frac{1}{1-\rho}},\qquad W_q = \frac{C(c,a)}{c\mu - \lambda}$$<div class="where">\(a\): 제공 부하(평균적으로 바쁜 서버 수, 단위 얼랑), \(\rho\): 서버 가동률, \(C(c,a)\): 도착한 요청이 기다려야 할 확률(Erlang C), \(W_q\): 평균 대기 시간. 이어서 \(W = W_q + 1/\mu\), \(L_q = \lambda W_q\), \(L = \lambda W\)(리틀).</div></div>
+<figure class="diagram">
+<svg viewBox="0 0 820 260" role="img" aria-label="M/M/c 대기열 모식도">
+<defs><marker id="amhs-ar6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--text-dim)"/></marker></defs>
+<text x="60" y="110" text-anchor="middle" class="lbl-b">반송 요청</text>
+<text x="60" y="130" text-anchor="middle" class="lbl-sm">포아송 도착 λ</text>
+<path d="M110 120H170" class="s-line" marker-end="url(#amhs-ar6)"/>
+<path d="M180 92H400V148H180" fill="none" stroke="var(--text-faint)" stroke-width="1.5"/>
+<g class="foup"><rect x="330" y="104" width="30" height="32" rx="4"/><rect x="290" y="104" width="30" height="32" rx="4"/><rect x="250" y="104" width="30" height="32" rx="4"/></g>
+<text x="290" y="170" text-anchor="middle" class="lbl-sm">대기 Lq, 대기 시간 Wq</text>
+<path d="M405 120H440" class="s-line"/>
+<g class="s-line" marker-end="url(#amhs-ar6)"><path d="M440 120L500 50"/><path d="M440 120L500 100"/><path d="M440 120L500 150"/><path d="M440 120L500 210"/></g>
+<g class="veh"><rect x="505" y="32" width="90" height="36" rx="6"/><rect x="505" y="82" width="90" height="36" rx="6"/><rect x="505" y="132" width="90" height="36" rx="6"/><rect x="505" y="192" width="90" height="36" rx="6"/></g>
+<g class="lbl-sm" text-anchor="middle"><text x="550" y="55">차량 1</text><text x="550" y="105">차량 2</text><text x="550" y="155">차량 3</text><text x="550" y="215">차량 c</text></g>
+<text x="550" y="182" text-anchor="middle" class="lbl-sm">⋮</text>
+<text x="610" y="130" class="lbl-sm">각 μ = 1/T_veh</text>
+<path d="M700 120H760" class="s-line" marker-end="url(#amhs-ar6)"/>
+<text x="780" y="125" text-anchor="middle" class="lbl-sm">완료</text>
+<rect x="150" y="196" width="280" height="50" rx="10" class="f-acc-soft"/>
+<text x="290" y="218" text-anchor="middle" class="lbl-b">리틀: L = λW</text>
+<text x="290" y="236" text-anchor="middle" class="lbl-sm">점선 상자 전체(대기 + 처리 중)에 적용</text>
+</svg>
+<figcaption><b>그림 13-6.</b> 반송 시스템을 M/M/c 대기열로 본 모습. 요청은 무작위로 도착해 줄을 서고, \(c\)대의 차량 가운데 비어 있는 차량이 하나씩 처리한다. 실제 OHT는 처리 시간이 차량 위치·혼잡에 따라 달라지므로 이 모형은 자릿수 어림용이다.</figcaption>
+</figure>
+
+<div class="sim" id="sim-mmc">
+<div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>M/M/c 반송 대기열 계산기</h3></div>
+<div class="am-presets"><span>프리셋</span><div class="seg" id="mm-pre"><button data-value="bay" class="on">베이 하나</button><button data-value="fab">FAB-E 전체</button><button data-value="tight">빠듯한 베이</button></div></div>
+<div class="sim-body side">
+<div class="sim-view"><canvas id="cv-mmc"></canvas></div>
+<div class="sim-controls">
+<label class="ctrl"><span>요청률 λ <output id="mm-lam-out"></output></span><input type="range" id="mm-lam" min="0" max="4" step="0.01" value="1.78"></label>
+<label class="ctrl"><span>평균 점유 시간 1/μ <output id="mm-s-out"></output></span><input type="range" id="mm-s" min="0.5" max="10" step="0.05" value="3"></label>
+<label class="ctrl"><span>차량 수 c <output id="mm-c-out"></output></span><input type="range" id="mm-c" min="0" max="3.2" step="0.005" value="0.6"></label>
+<label class="ctrl"><span>목표 평균 대기 <output id="mm-tg-out"></output></span><input type="range" id="mm-tg" min="0.1" max="10" step="0.1" value="1"></label>
+</div>
+</div>
+<div class="sim-readout">
+<div class="stat"><span class="k">제공 부하 a</span><span class="v" id="o-mm-a">—</span></div>
+<div class="stat"><span class="k">가동률 ρ</span><span class="v" id="o-mm-rho">—</span></div>
+<div class="stat"><span class="k">기다릴 확률 C</span><span class="v" id="o-mm-c">—</span></div>
+<div class="stat"><span class="k">평균 대기 Wq</span><span class="v" id="o-mm-wq">—</span></div>
+<div class="stat"><span class="k">대기 Lq / 시스템 L = λW</span><span class="v" id="o-mm-lq">—</span></div>
+<div class="stat"><span class="k">목표 만족 최소 c</span><span class="v" id="o-mm-cmin">—</span></div>
+</div>
+<div class="am-verdict" id="o-mm-verdict">—</div>
+<div class="sim-note">그래프는 가동률 \(\rho\)에 따른 정규화 대기 \(W_q\mu\)(평균 점유 시간의 몇 배를 기다리는가)를 서버 수 1, 4, 16, 64, 256대에 대해 그린 것이고, 굵은 선이 현재 \(c\), 점이 현재 상태다. 해볼 것: ① "베이 하나"(λ = 60회/h, 3분, c = 4)에서 차량을 3대로 줄이면 \(\rho\)가 1에 가까워지며 대기가 폭증한다. ② "FAB-E 전체"에서는 가동률 90 %에서도 대기가 몇 초에 불과하다. 큰 공용 차량군은 같은 가동률에서 훨씬 덜 기다린다(풀링 효과). ③ 목표 대기를 1분으로 두고 λ를 4배로 늘려 보자. 필요한 차량은 4배보다 적게 는다.</div>
+</div>
+<div class="callout deep"><strong>제곱근 법칙과 차량군 풀링</strong><p>대규모 M/M/c에서 대기 확률을 일정하게 유지하는 데 필요한 서버 수는 근사적으로 \(c \approx a + \beta\sqrt{a}\)다(Halfin–Whitt 영역, \(\beta\)는 목표 서비스 수준에 따른 상수). 여유 차량은 부하에 비례하지 않고 그 제곱근에 비례해 늘어난다. 부하 \(a=16\)이면 여유 \(\sqrt{16}=4\)대(가동률 80 %)로 충분한 수준이, \(a=400\)이면 여유 20대(가동률 95 %)로 같은 서비스 수준이 된다. 베이마다 차량을 따로 묶어 두지 않고 팹 전체가 차량을 공유하는 통합 레일망이 유리한 대기열 이론의 이유다. 다만 실제 OHT는 위치에 따라 처리 시간이 달라 "가까운 차량"만 실질적인 서버이므로 풀링 효과는 이론보다 작다.</p></div>
+</section>
+
+<!-- ============================================================ 6 -->
+<section id="cycletime">
+<h2>반송 시간과 사이클 타임·WIP</h2>
+<p>팹 운영의 핵심 지표는 웨이퍼가 투입부터 완성까지 걸리는 <span class="term">사이클 타임</span><span class="en">(cycle time, CT)</span>과 팹 안에 머무는 미완성 웨이퍼, 즉 <span class="term">재공</span><span class="en">(WIP, Work In Process)</span>이다. 두 값은 리틀의 법칙으로 묶여 있다. 팹 전체를 하나의 시스템으로 보면 \(\text{WIP} = \text{TH}\times\text{CT}\)다(TH는 산출률). 같은 산출을 내면서 CT를 줄이면 WIP가 그만큼 줄고, 재고 금액·불량 노출 위험·신제품 출시 시간이 함께 준다.</p>
+<p>한 스텝의 사이클 타임은 대략 세 부분의 합이다. 반송(요청부터 로드포트 도착까지), 장비 앞 대기, 그리고 실제 가공이다. 장비 그룹의 대기는 가동률에 강하게 좌우되는데, \(m\)대의 병렬 장비를 가진 G/G/m 대기열에 대해 사카세가와<span class="en">(Sakasegawa)</span> 근사가 흔히 쓰인다(Hopp &amp; Spearman, <i>Factory Physics</i>).</p>
+<div class="formula">$$CT_\text{step} = t_\text{d} + \underbrace{\frac{c_a^2 + c_e^2}{2}\cdot\frac{u^{\sqrt{2(m+1)}-1}}{m(1-u)}\cdot t_e}_{W_q\ (\text{장비 앞 대기})} + t_e, \qquad CT = \sum_{\text{steps}} CT_\text{step}, \qquad X = \frac{CT}{\sum t_e}$$<div class="where">\(t_\text{d}\): 반송 시간(대기 포함), \(t_e\): 로트당 유효 가공 시간, \(u\): 장비 가동률, \(m\): 병렬 장비 수, \(c_a^2, c_e^2\): 도착·가공 시간의 변동계수 제곱. \(X\)는 <span class="term">X-팩터</span>로, CT가 순수 가공 시간의 몇 배인지 나타낸다. 첨단 팹은 대략 2.5~4 수준이 흔하다고 알려져 있다(약).</div></div>
+<figure class="diagram">
+<svg viewBox="0 0 820 300" role="img" aria-label="한 스텝 사이클 타임의 구성과 반송 시간 단축 효과">
+<text x="20" y="30" class="lbl-b">한 스텝의 사이클 타임(로트 기준, 교육용 예)</text>
+<text x="20" y="76" class="lbl">반송 10분</text>
+<rect x="150" y="56" width="60" height="32" class="f-acc-soft"/><rect x="210" y="56" width="264" height="32" class="f-warn-soft"/><rect x="474" y="56" width="120" height="32" class="f-ok-soft"/>
+<text x="180" y="77" text-anchor="middle" class="lbl-sm">반송</text><text x="342" y="77" text-anchor="middle" class="lbl-sm">장비 앞 대기 44분</text><text x="534" y="77" text-anchor="middle" class="lbl-sm">가공 20분</text>
+<text x="604" y="77" class="lbl-b">74분 × 900 = 약 46일</text>
+<text x="20" y="136" class="lbl">반송 3분</text>
+<rect x="150" y="116" width="18" height="32" class="f-acc-soft"/><rect x="168" y="116" width="264" height="32" class="f-warn-soft"/><rect x="432" y="116" width="120" height="32" class="f-ok-soft"/>
+<text x="300" y="137" text-anchor="middle" class="lbl-sm">장비 앞 대기 44분</text><text x="492" y="137" text-anchor="middle" class="lbl-sm">가공 20분</text>
+<text x="562" y="137" class="lbl-b">67분 × 900 = 약 42일</text>
+<path d="M150 170H600" class="s-axis"/>
+<g class="lbl-sm" text-anchor="middle"><text x="150" y="188">0</text><text x="240" y="188">15</text><text x="330" y="188">30</text><text x="420" y="188">45</text><text x="510" y="188">60</text><text x="600" y="188">75분</text></g>
+<rect x="20" y="210" width="780" height="76" rx="10" class="box2"/>
+<text x="36" y="236" class="lbl">스텝당 7분 단축은 작아 보이지만 900 스텝이면 약 4.4일이다.</text>
+<text x="36" y="258" class="lbl-sm">하루 3,333장을 투입하는 팹이라면 리틀의 법칙으로 WIP가 약 3,333 × 4.4 ≈ 14,600장(약 580 FOUP) 줄어든다.</text>
+<text x="36" y="276" class="lbl-sm">반송이 늦어 장비가 빈손으로 기다리면(교체 공백) 실효 가동률이 올라가 대기 시간까지 늘어난다.</text>
+</svg>
+<figcaption><b>그림 13-7.</b> 스텝 사이클 타임의 분해(교육용 예: 가공 20분, 장비 3대 병렬, 가동률 88 %). 반송은 스텝마다 더해지는 고정 지연이라 스텝 수가 곱해지면서 커진다. 장비 앞 대기가 가장 크지만, 반송 지연과 변동은 그 대기를 다시 키운다.</figcaption>
+</figure>
+<p>반송이 사이클 타임에 영향을 주는 길은 세 가지다. 첫째, 스텝마다 더해지는 <b>직접 지연</b> \(t_\text{d}\). 둘째, 반송 시간이 들쭉날쭉하면 장비에 도착하는 간격의 변동 \(c_a^2\)이 커져 장비 앞 대기가 늘어난다. 셋째, 다음 로트가 제때 오지 않아 장비가 놀면 그 공백만큼 장비의 실효 가공 시간이 늘어나 <b>실효 가동률</b>이 올라간다. 가동률이 이미 높은 장비에서는 셋째 효과가 가장 크다. 로드포트를 두 개 이상 두고 OHB에 다음 로트를 미리 갖다 두는 <span class="term">선행 적재</span><span class="en">(pre-staging)</span>가 중요한 이유다.</p>
+
+<div class="sim" id="sim-ct">
+<div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>반송 시간 → 사이클 타임·WIP 계산기</h3></div>
+<div class="sim-body side">
+<div class="sim-view"><canvas id="cv-ct"></canvas></div>
+<div class="sim-controls">
+<label class="ctrl"><span>반송 시간 t_d <output id="ct-td-out"></output></span><input type="range" id="ct-td" min="0" max="30" step="0.5" value="8"></label>
+<label class="ctrl"><span>교체 공백(선행 적재 없음) <output id="ct-tx-out"></output></span><input type="range" id="ct-tx" min="0" max="10" step="0.5" value="0"></label>
+<label class="ctrl"><span>로트당 가공 시간 t_e <output id="ct-te-out"></output></span><input type="range" id="ct-te" min="5" max="60" step="1" value="20"></label>
+<label class="ctrl"><span>장비 가동률 u <output id="ct-u-out"></output></span><input type="range" id="ct-u" min="0.5" max="0.97" step="0.01" value="0.88"></label>
+<label class="ctrl"><span>병렬 장비 수 m <output id="ct-m-out"></output></span><input type="range" id="ct-m" min="1" max="12" step="1" value="3"></label>
+<label class="ctrl"><span>도착 변동 c_a² <output id="ct-ca-out"></output></span><input type="range" id="ct-ca" min="0.2" max="3" step="0.1" value="1"></label>
+<label class="ctrl"><span>공정 스텝 수 <output id="ct-n-out"></output></span><input type="range" id="ct-n" min="200" max="1500" step="10" value="900"></label>
+</div>
+</div>
+<div class="sim-readout">
+<div class="stat"><span class="k">스텝당 CT</span><span class="v" id="o-ct-step">—</span></div>
+<div class="stat"><span class="k">총 사이클 타임</span><span class="v" id="o-ct-tot">—</span></div>
+<div class="stat"><span class="k">X-팩터</span><span class="v" id="o-ct-x">—</span></div>
+<div class="stat"><span class="k">반송 비중</span><span class="v" id="o-ct-tr">—</span></div>
+<div class="stat"><span class="k">실효 가동률</span><span class="v" id="o-ct-ue">—</span></div>
+<div class="stat"><span class="k">WIP (FAB-E 투입 기준)</span><span class="v" id="o-ct-wip">—</span></div>
+</div>
+<div class="am-verdict" id="o-ct-verdict">—</div>
+<div class="sim-note">위 막대는 스텝 하나의 구성, 아래 그래프는 장비 가동률에 따른 총 CT다(실선: 현재 반송 조건, 점선: 반송 0·공백 0). 가공 변동 \(c_e^2 = 1\)로 고정했다. WIP는 FAB-E의 하루 투입 약 3,333장에 CT(일)를 곱한 값이다. 해볼 것: ① 반송 시간을 8분에서 3분으로 줄이면 CT가 며칠 줄어드는가? ② 교체 공백을 1분만 넣어 보자. CT가 약 45일에서 68일로 늘어난다. 반송 시간을 1분 늘렸을 때(약 +0.6일)와 비교하면 훨씬 크다. 가동률 88 %의 장비가 실효 가동률 92 %가 되어 대기가 급증하기 때문이다. 2~3분이면 실효 가동률이 100 %에 다가가거나 넘어 계산이 발산한다. ③ 병렬 장비 수 m을 1로 줄이면 같은 가동률에서도 대기가 몇 배로 커진다. 모든 값은 교육용 가정이다.</div>
+</div>
+<div class="callout fab"><strong>FAB-E의 사이클 타임과 WIP</strong><p>FAB-E를 900 스텝, 스텝당 가공 20분, 3대 병렬, 가동률 88 %, 반송 8분으로 어림하면 CT는 약 45일, X-팩터는 약 3.6, WIP는 약 15만 장(약 6,000 FOUP)이다. 이 6,000개의 FOUP 대부분은 가공 중이 아니라 기다리는 중이다. 그 기다리는 FOUP가 놓일 자리, 즉 OHB와 스토커 용량이 8절의 주제다(교육용 가정).</p></div>
+<div class="callout tip"><strong>핫 로트</strong><p>고객 샘플이나 공정 개발용 로트는 <span class="term">핫 로트</span><span class="en">(hot lot)</span>로 지정해 반송과 장비 대기에서 우선권을 준다. 핫 로트는 X-팩터 1.5 안팎까지 빨라질 수 있지만, 그만큼 다른 로트가 기다린다. 우선권은 대기 시간을 없애는 것이 아니라 옮기는 것이다. 핫 로트 비율이 몇 %를 넘으면 팹 전체 CT가 눈에 띄게 늘어난다는 것이 운영 현장의 경험칙이다.</p></div>
+</section>
+
+<!-- ============================================================ 7 -->
+<section id="dispatch">
+<h2>디스패칭: 어느 차량이 어느 FOUP를</h2>
+<p>OHT 제어기는 매 순간 두 가지 결정을 내린다. 새 반송 요청이 왔을 때 빈 차량이 여럿이면 <b>어느 차량</b>을 보낼 것인가(요청 주도), 그리고 차량이 일을 마쳤을 때 기다리는 요청이 여럿이면 <b>어느 요청</b>을 맡길 것인가(차량 주도). 이 규칙을 <span class="term">디스패칭 규칙</span><span class="en">(dispatching rule)</span>이라 한다.</p>
+<figure class="diagram">
+<svg viewBox="0 0 820 320" role="img" aria-label="FIFO와 최근접 디스패칭 규칙 비교">
+<defs>
+<marker id="amhs-ar8a" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--bad)"/></marker>
+<marker id="amhs-ar8b" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--ok)"/></marker>
+<marker id="amhs-ar8c" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--text-faint)"/></marker>
+</defs>
+<text x="205" y="24" text-anchor="middle" class="lbl-b">FIFO: 가장 오래 기다린 요청</text>
+<text x="615" y="24" text-anchor="middle" class="lbl-b">최근접: 가장 가까운 요청</text>
+<g>
+<rect x="60" y="60" width="290" height="190" rx="95" class="rail-dim"/>
+<path d="M205 60H220" class="rail-dim" marker-end="url(#amhs-ar8c)"/>
+<rect x="80" y="44" width="34" height="22" rx="4" class="veh"/><text x="97" y="40" text-anchor="middle" class="lbl-sm">빈 차량</text>
+<rect x="130" y="250" width="18" height="18" rx="3" class="foup"/><text x="139" y="290" text-anchor="middle" class="lbl-sm">A: 9분 대기</text>
+<rect x="160" y="42" width="18" height="18" rx="3" class="foup"/><text x="200" y="86" text-anchor="middle" class="lbl-sm">B: 1분 대기</text>
+<rect x="342" y="146" width="18" height="18" rx="3" class="foup"/><text x="330" y="196" text-anchor="end" class="lbl-sm">C: 3분 대기</text>
+<path d="M118 52H260Q345 52 350 155Q345 255 155 258" fill="none" stroke="var(--bad)" stroke-width="2.5" marker-end="url(#amhs-ar8a)"/>
+<text x="205" y="150" text-anchor="middle" class="lbl-sm">A까지 루프의 약 3/4를 공차로 돈다</text>
+<text x="205" y="168" text-anchor="middle" class="lbl-sm">B, C를 지나쳐 간다</text>
+</g>
+<g>
+<rect x="470" y="60" width="290" height="190" rx="95" class="rail-dim"/>
+<path d="M615 60H630" class="rail-dim" marker-end="url(#amhs-ar8c)"/>
+<rect x="490" y="44" width="34" height="22" rx="4" class="veh"/><text x="507" y="40" text-anchor="middle" class="lbl-sm">빈 차량</text>
+<rect x="540" y="250" width="18" height="18" rx="3" class="foup"/><text x="549" y="290" text-anchor="middle" class="lbl-sm">A: 9분 대기</text>
+<rect x="570" y="42" width="18" height="18" rx="3" class="foup"/><text x="610" y="86" text-anchor="middle" class="lbl-sm">B: 1분 대기</text>
+<rect x="752" y="146" width="18" height="18" rx="3" class="foup"/><text x="740" y="196" text-anchor="end" class="lbl-sm">C: 3분 대기</text>
+<path d="M528 52H566" fill="none" stroke="var(--ok)" stroke-width="3" marker-end="url(#amhs-ar8b)"/>
+<text x="615" y="140" text-anchor="middle" class="lbl-sm">B를 바로 집는다: 공차 주행 최소</text>
+<text x="615" y="158" text-anchor="middle" class="lbl-sm">A는 계속 밀릴 수 있다(기아)</text>
+</g>
+</svg>
+<figcaption><b>그림 13-8.</b> 같은 상황에서 두 규칙의 선택. FIFO는 공평하지만 빈 차량이 멀리 돌아가는 공차 주행이 길어 차량 시간을 낭비한다. 최근접 규칙은 공차 주행을 줄여 같은 차량으로 더 많이 나르지만, 운 나쁜 요청이 계속 뒤로 밀리는 <span class="term">기아</span><span class="en">(starvation)</span>가 생길 수 있다.</figcaption>
+</figure>
+<div class="table-wrap"><table>
+<thead><tr><th>규칙</th><th>선택 기준</th><th>장점</th><th>약점</th></tr></thead>
+<tbody>
+<tr><td>FIFO(FCFS)</td><td>가장 오래 기다린 요청 / 가장 오래 쉰 차량</td><td>공평, 최대 대기 예측 가능</td><td>공차 주행 증가 → 용량 감소</td></tr>
+<tr><td>최근접(NVF·NJF)</td><td>가장 가까운 차량 / 가장 가까운 요청</td><td>공차 최소, 평균 대기·용량 우수</td><td>꼬리 대기(기아), 위치 편향</td></tr>
+<tr><td>혼합(나이 상한)</td><td>최근접이되 일정 시간 넘게 기다린 요청 우선</td><td>꼬리 억제</td><td>상한이 너무 짧으면 FIFO처럼 됨</td></tr>
+<tr><td>우선순위 가중</td><td>거리·대기 시간·로트 우선순위·장비 굶주림의 가중합</td><td>생산 목표 반영</td><td>가중치 튜닝 필요</td></tr>
+<tr><td>재배정(re-assignment)</td><td>집하하러 가는 중인 차량도 더 좋은 배정이 생기면 교체</td><td>동적 최적화</td><td>계산량, 진동(배정 뒤집기)</td></tr>
+</tbody>
+</table></div>
+<p>아래는 교통 간섭을 빼고 배정 결정만 비교하는 <span class="term">이산사건 시뮬레이션</span><span class="en">(discrete-event simulation)</span>이다. 시간을 일정 간격으로 쪼개지 않고 "요청 도착"과 "차량 작업 완료" 두 종류의 사건 시각으로 바로 건너뛴다. 세 규칙에 <b>같은 요청열</b>(같은 난수)을 넣으므로 결과 차이는 순전히 규칙 때문이다.</p>
+<div class="sim" id="sim-disp">
+<div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>디스패칭 규칙 비교 이산사건 시뮬레이션</h3></div>
+<div class="sim-body side">
+<div class="sim-view"><canvas id="cv-disp"></canvas></div>
+<div class="sim-controls">
+<label class="ctrl"><span>반송 요청률 <output id="ds-lam-out"></output></span><input type="range" id="ds-lam" min="20" max="260" step="5" value="120"></label>
+<label class="ctrl"><span>차량 수 <output id="ds-n-out"></output></span><input type="range" id="ds-n" min="2" max="16" step="1" value="6"></label>
+<label class="ctrl"><span>루프 길이 <output id="ds-l-out"></output></span><input type="range" id="ds-l" min="100" max="800" step="10" value="300"></label>
+<label class="ctrl"><span>혼합 규칙 나이 상한 <output id="ds-cap-out"></output></span><input type="range" id="ds-cap" min="60" max="1800" step="30" value="900"></label>
+<label class="check"><input type="checkbox" id="ds-hot"> 집중 스테이션(요청 35 %가 한 곳)</label>
+<div class="ctrl"><span>그래프</span><div class="seg" id="ds-view"><button data-value="cdf" class="on">대기 분포(CDF)</button><button data-value="bar">지표 비교</button></div></div>
+<button class="btn primary" id="ds-run">새 난수로 다시 실행</button>
+</div>
+</div>
+<div class="sim-readout">
+<div class="stat"><span class="k">FIFO 평균 / 최대</span><span class="v" id="o-ds-f">—</span></div>
+<div class="stat"><span class="k">최근접 평균 / 최대</span><span class="v" id="o-ds-n">—</span></div>
+<div class="stat"><span class="k">혼합 평균 / 최대</span><span class="v" id="o-ds-h">—</span></div>
+<div class="stat"><span class="k">공차 비율 F / N / H</span><span class="v" id="o-ds-e">—</span></div>
+<div class="stat"><span class="k">밀린 요청 F / N / H</span><span class="v" id="o-ds-b">—</span></div>
+</div>
+<div class="am-verdict" id="o-ds-verdict">—</div>
+<div class="sim-note">모델: 단방향 루프에 스테이션 12개, 차량 평균 속도 2.5 m/s, 호이스트 15초 × 2, 요청은 포아송 도착이며 출발·도착 스테이션은 무작위다. 모의 12시간(처음 30분은 준비 구간으로 통계에서 뺌)을 돌린다. 대기 시간은 요청 발생부터 차량이 출발 스테이션에 도착할 때까지다. 해볼 것: ① 요청률 60회/h(가벼운 부하)에서는 세 규칙의 차이가 작다. ② 기본값 120회/h에서 150~170회/h로 올리면 FIFO만 먼저 무너진다(밀린 요청 급증). 공차 주행이 용량을 깎았기 때문이다. ③ 최근접이 버티는 부하에서 최대 대기와 평균의 비를 보자. 평균은 짧아도 꼬리가 길다. ④ 상한이 길면 혼합 규칙은 최근접과 같은 결과를 낸다(곡선이 겹친다). 상한을 120초로 줄이면 높은 부하에서 FIFO처럼 무너진다.</div>
+</div>
+<div class="callout deep"><strong>평균과 꼬리, 무엇을 최적화하나</strong><p>최근접 규칙은 평균 대기를 줄이는 탐욕 알고리즘이다. 하지만 팹에서 아픈 것은 평균이 아니라 꼬리다. 큐 타임<span class="en">(Q-time)</span> 제한이 있는 로트(예: 세정 후 일정 시간 안에 증착해야 하는 로트, <a href="amc.html">4장</a>)가 꼬리에 걸리면 재작업이나 폐기가 된다. 그래서 실제 디스패칭은 거리와 대기 시간, 로트 우선순위, 큐 타임 잔여, 목적지 장비가 곧 놀게 되는지 여부를 함께 점수화하고, 일정 주기로 배정을 다시 푸는 최적화(헝가리안 할당, 휴리스틱, 최근에는 강화학습 연구)를 쓴다.</p></div>
+</section>
+
+<!-- ============================================================ 8 -->
+<section id="buffer">
+<h2>저장과 버퍼: 스토커와 OHB 용량</h2>
+<p>6절에서 FAB-E의 WIP가 약 6,000 FOUP라고 어림했다. 이 FOUP들은 어딘가에 있어야 한다. 장비 안(가공 중), 로드포트 위, OHB 선반, 스토커, 그리고 차량 위다. 가공 중인 FOUP는 장비 수와 비슷한 1,500개 안팎이고, 차량 위는 수백 개다. 나머지 대부분은 선반에서 기다린다. 저장 위치를 장비에서 멀리 두면 반송 시간이 늘고, 가까이 많이 두려면 레일 주변 천장 공간이 부족하다.</p>
+<p>베이 하나의 OHB를 생각해 보자. FOUP가 시간당 \(\lambda\)개 들어와 평균 \(\bar t\) 동안 머문다. 선반이 \(K\)칸이고 꽉 찼을 때 들어오는 FOUP는 멀리 있는 스토커로 돌려야 한다면, 이는 대기 공간이 없는 손실 시스템 M/G/K/K다. 돌려보내질 확률은 <span class="term">얼랑 B</span><span class="en">(Erlang B)</span> 식으로 주어진다.</p>
+<div class="formula">$$B(K, a) = \frac{a^K/K!}{\sum_{k=0}^{K} a^k/k!}, \qquad a = \lambda \bar t, \qquad B(K,a) = \frac{a\,B(K-1,a)}{K + a\,B(K-1,a)},\ B(0,a)=1$$<div class="where">\(a\): 평균 점유 칸 수(얼랑). 놀랍게도 이 식은 체류 시간의 분포 모양에 관계없이 평균에만 의존한다(얼랑 손실식의 무감도성). 오른쪽 점화식은 큰 \(K\)에서도 수치적으로 안정하다.</div></div>
+<div class="sim" id="sim-buf">
+<div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>OHB 버퍼 크기: 얼랑 B 넘침 확률</h3></div>
+<div class="sim-body side">
+<div class="sim-view"><canvas id="cv-buf"></canvas></div>
+<div class="sim-controls">
+<label class="ctrl"><span>버퍼 유입 <output id="bf-lam-out"></output></span><input type="range" id="bf-lam" min="5" max="400" step="1" value="30"></label>
+<label class="ctrl"><span>평균 체류 시간 <output id="bf-t-out"></output></span><input type="range" id="bf-t" min="2" max="180" step="1" value="20"></label>
+<label class="ctrl"><span>버퍼 칸 수 K <output id="bf-k-out"></output></span><input type="range" id="bf-k" min="1" max="150" step="1" value="14"></label>
+<label class="ctrl"><span>목표 넘침 확률 <output id="bf-tg-out"></output></span><input type="range" id="bf-tg" min="-4" max="-0.5" step="0.1" value="-2"></label>
+<label class="ctrl"><span>스토커 우회 추가 시간 <output id="bf-ex-out"></output></span><input type="range" id="bf-ex" min="1" max="20" step="0.5" value="6"></label>
+</div>
+</div>
+<div class="sim-readout">
+<div class="stat"><span class="k">평균 점유 a</span><span class="v" id="o-bf-a">—</span></div>
+<div class="stat"><span class="k">넘침 확률 B</span><span class="v" id="o-bf-b">—</span></div>
+<div class="stat"><span class="k">스토커 우회</span><span class="v" id="o-bf-ov">—</span></div>
+<div class="stat"><span class="k">칸 이용률</span><span class="v" id="o-bf-u">—</span></div>
+<div class="stat"><span class="k">목표 만족 최소 K</span><span class="v" id="o-bf-kmin">—</span></div>
+<div class="stat"><span class="k">우회로 늘어난 반송</span><span class="v" id="o-bf-x">—</span></div>
+</div>
+<div class="sim-note">그래프는 칸 수 \(K\)에 따른 넘침 확률(로그 축)이고, 점선이 목표다. 해볼 것: ① 기본값(시간당 30개, 20분 체류, \(a = 10\))에서 넘침 1 %를 맞추려면 몇 칸이 필요한가? 평균 점유의 약 1.8배다. ② 유입을 10배(시간당 300개, \(a = 100\))로 키우면 필요한 칸은 평균의 약 1.2배로 줄어든다. 큰 버퍼일수록 칸을 알뜰하게 쓴다(풀링 효과). ③ 체류 시간이 늘면(장비 다운으로 대기 증가) 같은 버퍼가 갑자기 넘친다.</div>
+</div>
+<div class="callout tip"><strong>스토커의 다른 역할: 질소 퍼지</strong><p>오래 기다리는 FOUP는 내부 습도·산소 때문에 자연 산화막이 자라거나 금속 배선이 부식될 수 있다. 그래서 큐 타임에 민감한 FOUP는 선반에서 FOUP 바닥 포트로 질소를 불어 넣는 <span class="term">퍼지 스토커</span>나 퍼지 OHB에 보관한다(<a href="amc.html">4장</a>). 이 경우 선반 하나하나가 질소 배관과 유량 제어기를 가진 작은 가스 사용처가 되어, AMHS가 가스 공급(<a href="gas.html">6장</a>)과 이어진다.</p></div>
+</section>
+
+<!-- ============================================================ 9 -->
+<section id="environment">
+<h2>클린룸 환경과 AMHS: 진동·입자·안전</h2>
+<p>OHT는 클린룸 천장, 즉 FFU 바로 아래의 가장 깨끗한 공기 속을 달린다. 하강 기류는 위에서 아래로 흐르므로 차량에서 생긴 입자는 그대로 아래의 로드포트와 장비 쪽으로 내려간다. 그래서 AMHS 설계에는 클린룸(<a href="cleanroom.html">2장</a>)과 진동(<a href="vibration.html">12장</a>)의 요구가 처음부터 들어간다.</p>
+<figure class="diagram">
+<svg viewBox="0 0 820 380" role="img" aria-label="OHT 차량과 레일의 단면: 입자 발생원과 진동 전달 경로">
+<defs>
+<marker id="amhs-ar9" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--u-air)"/></marker>
+<marker id="amhs-ar9b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--bad)"/></marker>
+</defs>
+<rect x="20" y="16" width="440" height="22" class="box2"/>
+<text x="30" y="32" class="lbl-sm">천장 구조(트러스) · FFU</text>
+<g class="s-line" stroke-width="3"><path d="M170 38V84"/><path d="M310 38V84"/></g>
+<text x="318" y="64" class="lbl-sm">행거(방진 마운트)</text>
+<!-- 레일 단면 -->
+<path d="M150 84H330V100H300V140H180V100H150Z" fill="var(--surface-2)" stroke="var(--text-dim)" stroke-width="1.5"/>
+<rect x="222" y="112" width="36" height="16" rx="3" fill="var(--u-power)" opacity="0.75"/>
+<text x="240" y="160" text-anchor="middle" class="lbl-sm">급전선(비접촉 유도)</text>
+<circle cx="168" cy="108" r="12" fill="var(--text-faint)"/><circle cx="312" cy="108" r="12" fill="var(--text-faint)"/>
+<text x="110" y="112" text-anchor="end" class="lbl-sm">주행 차륜</text>
+<text x="110" y="128" text-anchor="end" class="lbl-sm">(우레탄 등)</text>
+<rect x="200" y="140" width="80" height="12" fill="var(--text-faint)"/>
+<rect x="140" y="170" width="200" height="110" rx="12" class="veh"/>
+<text x="240" y="210" text-anchor="middle" class="lbl-b">차량 본체</text>
+<text x="240" y="230" text-anchor="middle" class="lbl-sm">수전 코일 · 구동 · 호이스트</text>
+<rect x="190" y="244" width="100" height="30" rx="5" class="foup"/><text x="240" y="264" text-anchor="middle" class="lbl-sm">FOUP</text>
+<!-- 기류와 입자 -->
+<g class="u-air" marker-end="url(#amhs-ar9)" stroke-dasharray="5 5"><path d="M70 44V340"/><path d="M400 44V340"/><path d="M440 44V340"/></g>
+<g fill="var(--bad)"><circle cx="150" cy="128" r="3"/><circle cx="140" cy="150" r="2.5"/><circle cx="132" cy="190" r="2.5"/><circle cx="126" cy="240" r="2"/><circle cx="330" cy="128" r="3"/><circle cx="342" cy="160" r="2.5"/></g>
+<path d="M132 200Q118 280 120 340" fill="none" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="3 4" marker-end="url(#amhs-ar9b)"/>
+<text x="130" y="362" text-anchor="middle" class="lbl-sm">입자는 하강 기류를 따라 아래로</text>
+<!-- 오른쪽 설명 -->
+<g>
+<text x="490" y="40" class="lbl-b">입자 대책</text>
+<text x="490" y="64" class="lbl-sm">· 비접촉 급전: 집전 브러시 분진 없음</text>
+<text x="490" y="84" class="lbl-sm">· 저발진 차륜·벨트 재질, 레일 커버</text>
+<text x="490" y="104" class="lbl-sm">· 구동부 국소 배기·밀폐</text>
+<text x="490" y="124" class="lbl-sm">· 정기 레일 청소, 차륜 마모 감시</text>
+<text x="490" y="168" class="lbl-b">진동 대책</text>
+<text x="490" y="192" class="lbl-sm">· 레일은 천장 구조에 매달고 장비 기초</text>
+<text x="490" y="210" class="lbl-sm">  (와플 슬래브)와 구조적으로 분리</text>
+<text x="490" y="230" class="lbl-sm">· 레일 이음매 단차 최소화, 방진 행거</text>
+<text x="490" y="250" class="lbl-sm">· 가가속도(jerk) 제한 주행 프로파일</text>
+<text x="490" y="294" class="lbl-b">FOUP 보호</text>
+<text x="490" y="318" class="lbl-sm">· 가감속 제한: 웨이퍼 미끄럼·흔들림 방지</text>
+<text x="490" y="338" class="lbl-sm">· 낙하 방지 그리퍼 잠금, 지진 시 정지</text>
+</g>
+</svg>
+<figcaption><b>그림 13-9.</b> OHT 레일과 차량의 단면(개략도). 차륜·벨트 마모 입자는 하강 기류를 따라 장비 쪽으로 내려갈 수 있다. 주행 진동은 행거를 통해 천장 구조로 전달되므로, 레일은 장비가 놓이는 와플 슬래브와 구조적으로 분리해 매단다.</figcaption>
+</figure>
+<h3>주행 프로파일: 빨리 가는 것과 부드럽게 가는 것</h3>
+<p>FOUP 안의 웨이퍼는 슬롯에 걸쳐 놓여 있을 뿐 고정되어 있지 않다. 급가속·급정지는 웨이퍼를 슬롯 안에서 미끄러지게 하거나 부딪혀 입자를 만들고, 레일·천장 구조를 흔든다. 그래서 OHT는 가속도뿐 아니라 가속도의 변화율인 <span class="term">가가속도</span><span class="en">(jerk)</span>도 제한하는 S자 속도 프로파일로 달린다. 이 제한이 있으면 짧은 구간에서는 최고 속도에 도달하지도 못한다. 3절의 평균 속도가 최고 속도보다 훨씬 낮은 이유 중 하나다.</p>
+<div class="formula">$$T_a(v) = \begin{cases}\dfrac{v}{a_\text{max}} + \dfrac{a_\text{max}}{J} & (v \ge a_\text{max}^2/J)\\[2mm] 2\sqrt{v/J} & (v < a_\text{max}^2/J)\end{cases},\qquad d_a(v) = \frac{v\,T_a(v)}{2},\qquad T = 2T_a(v_p) + \frac{D - 2d_a(v_p)}{v_p}$$<div class="where">\(T_a\): 정지 상태에서 속도 \(v\)까지 가속하는 시간(감속도 대칭), \(d_a\): 그동안 가는 거리, \(J\): 가가속도 한도, \(D\): 주행 거리, \(v_p\): 실제 도달 최고 속도(\(D < 2d_a(v_\text{max})\)이면 \(2d_a(v_p) = D\)인 \(v_p\)를 풀어 쓴다).</div></div>
+<div class="sim" id="sim-prof">
+<div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>S자 주행 프로파일과 평균 속도</h3></div>
+<div class="sim-body side">
+<div class="sim-view"><canvas id="cv-prof"></canvas></div>
+<div class="sim-controls">
+<div class="ctrl"><span>그래프</span><div class="seg" id="pf-view"><button data-value="vt" class="on">속도·가속도 시간 이력</button><button data-value="vd">거리별 평균 속도</button></div></div>
+<label class="ctrl"><span>주행 거리 D <output id="pf-d-out"></output></span><input type="range" id="pf-d" min="1" max="300" step="1" value="20"></label>
+<label class="ctrl"><span>최고 속도 <output id="pf-v-out"></output></span><input type="range" id="pf-v" min="1" max="6" step="0.1" value="4"></label>
+<label class="ctrl"><span>최대 가속도 <output id="pf-a-out"></output></span><input type="range" id="pf-a" min="0.3" max="4" step="0.1" value="1.5"></label>
+<label class="ctrl"><span>가가속도 한도 J <output id="pf-j-out"></output></span><input type="range" id="pf-j" min="0.5" max="20" step="0.5" value="3"></label>
+</div>
+</div>
+<div class="sim-readout">
+<div class="stat"><span class="k">주행 시간</span><span class="v" id="o-pf-t">—</span></div>
+<div class="stat"><span class="k">도달 최고 속도</span><span class="v" id="o-pf-vp">—</span></div>
+<div class="stat"><span class="k">평균 속도</span><span class="v" id="o-pf-avg">—</span></div>
+<div class="stat"><span class="k">피크 가속도</span><span class="v" id="o-pf-ap">—</span></div>
+<div class="stat"><span class="k">웨이퍼 1장 관성력</span><span class="v" id="o-pf-f">—</span></div>
+<div class="stat"><span class="k">등속 구간 비율</span><span class="v" id="o-pf-c">—</span></div>
+</div>
+<div class="sim-note">해볼 것: ① 이웃 장비 사이(D = 7~20 m)에서는 최고 속도를 4 m/s에서 6 m/s로 올려도 주행 시간이 거의 줄지 않는다. 가속 구간이 대부분이다. ② 같은 짧은 구간에서 가속도와 가가속도를 키우면 시간이 줄지만 피크 가속도(진동·웨이퍼 흔들림)가 커진다. ③ "거리별 평균 속도" 그래프에서 평균 속도가 최고 속도의 절반에 이르는 거리를 찾아보자. 웨이퍼 관성력은 300 mm 웨이퍼 약 128 g × 피크 가속도로 계산했다. 가속도·가가속도 값은 교육용 가정이며 실제 장비 사양이 아니다.</div>
+</div>
+<h3>안전과 신뢰성</h3>
+<p>머리 위로 8 kg짜리 FOUP가 수천 번 오르내리므로 낙하 방지는 AMHS 안전의 첫 항목이다. 그리퍼는 기계식으로 잠기고, 호이스트 벨트는 이중화하며, 호이스트 아래 사람이 있으면 내리지 않도록 영역 센서를 둔다. 지진이 감지되면 차량은 정지하고 FOUP를 붙잡는다. 이후 레일 정렬을 점검하고 재가동하는 절차가 필요하다(지진 대응은 <a href="safety.html">14장</a>). 정전 시 비접촉 급전이 끊기면 레일 위의 모든 차량이 그 자리에 서므로, 순간 전압 강하(<a href="power.html">10장</a>)는 물류 마비로 바로 이어진다. 차량 고장은 단방향 레일 전체를 막을 수 있어, 고장 차량을 밀어서 빼내는 회수 차량·유지보수 구간과 고장 지점을 우회하는 경로가 레이아웃에 포함된다. 이런 이중화와 가용도 계산은 <a href="operation.html">15장</a>에서 다룬다.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>AMHS 사건</th><th>직접 영향</th><th>팹 영향</th><th>주된 대책</th></tr></thead>
+<tbody>
+<tr><td>차량 1대 고장</td><td>해당 구간 정체</td><td>루프 전체 반송 정지 가능</td><td>바이패스, 회수 차량, 고장 진단</td></tr>
+<tr><td>순간 정전·전압 강하</td><td>급전 상실, 차량 정지</td><td>재가동까지 반송 공백</td><td>급전 계통 UPS, 차량 내 축전</td></tr>
+<tr><td>스토커 크레인 고장</td><td>저장 FOUP 출고 불가</td><td>특정 로트 정체</td><td>복수 크레인, 수동 포트</td></tr>
+<tr><td>MCS 소프트웨어 장애</td><td>반송 명령 중단</td><td>팹 전체 반송 정지</td><td>이중화 서버, 장애 전환</td></tr>
+<tr><td>지진</td><td>차량 정지, 레일 변위 가능</td><td>점검 동안 반송 정지</td><td>FOUP 고정, 레일 정렬 점검 절차</td></tr>
+</tbody>
+</table></div>
+<h3>앞으로의 방향</h3>
+<p>팹이 커지고 다층화되면서 AMHS도 바뀌고 있다. 층과 층, 팹과 팹을 잇는 고속 리프터와 연결 브리지 레일, 수천 대 규모 차량군의 경로 계획, 실제 레일망과 같은 모양의 <span class="term">디지털 트윈</span>에서 디스패칭 규칙을 미리 시험하는 운영 방식, 반송 이력 데이터로 다음 반송 요청을 예측해 빈 차량을 미리 보내는 예측 디스패칭이 대표적이다. 어느 것이든 이 장에서 본 세 가지 법칙, 즉 리틀의 법칙, 가동률에 따른 대기의 폭증, 레일 밀도에 따른 혼잡을 넘어설 수는 없다. 좋은 AMHS는 이 법칙들 안에서 공차 주행과 레일 점유 시간을 줄이는 시스템이다.</p>
+</section>
+
+<!-- ============================================================ 요약 -->
+<section class="keypoints" id="summary">
+<h2>핵심 정리</h2>
+<ol>
+<li>재진입 흐름 때문에 로트 하나는 일생 동안 약 1,000번 안팎 반송된다. 하루 이동 수 = 하루 투입 로트 × 스텝 수 × 스텝당 반송 횟수이며, FAB-E(월 10만 장)는 하루 약 15만 회, 시간당 약 6,500회 수준이다.</li>
+<li>필요 차량 수 ≈ 시간당 반송 × 반송 1회 차량 점유 시간 ÷ 목표 가동률. 점유 시간은 공차·적재 주행과 호이스트 2회의 합이고, 평균 속도는 최고 속도보다 훨씬 낮다.</li>
+<li>AMHS는 FOUP(SEMI E47.1), 로드포트(E15.1, 약 900 mm), OHT, 스토커, OHB(STB·UTB), 리프터와 MES–MCS–차량 제어기 계층으로 이루어지고, 차량과 장비는 E84 핸드셰이크로 FOUP를 주고받는다.</li>
+<li>현대 팹은 인터베이·인트라베이를 하나로 묶은 통합 단방향 레일망에서 장비 간 직접 반송을 하고, 숏컷·바이패스로 돌아가는 거리를 줄인다.</li>
+<li>교통량 q = k·v. 차량 밀도가 높아지면 속도가 떨어져 처리량이 최대점을 지나 감소한다. OHT는 이송 중 차선을 점유하므로 도로보다 낮은 밀도에서 혼잡해진다. 차량 수는 최대점보다 왼쪽에서 정한다.</li>
+<li>리틀의 법칙 L = λW는 분포와 무관하게 성립한다. M/M/c에서 대기는 ρ → 1에서 폭증하고, 큰 차량군은 제곱근 법칙에 따라 같은 가동률에서 훨씬 덜 기다린다(풀링).</li>
+<li>반송 시간은 스텝마다 더해져 CT를 늘리고, 도착 변동과 장비 교체 공백(실효 가동률 상승)을 통해 장비 앞 대기까지 키운다. WIP = TH × CT이므로 CT 단축은 곧 WIP 감소다.</li>
+<li>최근접 디스패칭은 공차 주행을 줄여 평균 대기와 용량에서 FIFO보다 유리하지만 꼬리 대기(기아)가 길다. 실무 규칙은 거리·대기 시간·우선순위·큐 타임을 함께 점수화한다.</li>
+<li>OHB·스토커 용량은 얼랑 B로 어림한다. 넘침 확률은 체류 시간 분포와 무관하고, 큰 버퍼일수록 평균 대비 필요한 여유 칸 비율이 작다.</li>
+<li>OHT는 하강 기류 속을 달리므로 저발진 차륜·비접촉 급전, 천장 구조에 매단 레일, 가가속도 제한 주행으로 입자와 진동을 관리한다.</li>
+</ol>
+</section>
+
+<!-- ============================================================ 퀴즈 -->
+<section class="quiz-sec" id="quiz">
+<h2>확인 퀴즈</h2>
+<div class="quiz">
+<div class="quiz-q"><p>1. 월 60,000장을 투입하는 팹(한 달 30일)에서 로트는 25장, 공정 스텝 800개, 스텝당 반송 1.25회다. 하루 FOUP 이동 수는 약 얼마인가?</p><div class="opts">
+<button class="opt">약 6.4만 회</button>
+<button class="opt" data-correct>약 8만 회</button>
+<button class="opt">약 200만 회</button>
+<button class="opt">약 3,300회</button>
+</div><div class="quiz-exp">하루 투입 로트는 \(60000/(30\times25) = 80\)개다. 정상 상태에서 하루 이동 수는 \(80\times800\times1.25 = 80{,}000\)회다. 스텝당 반송 횟수를 빼먹으면 6.4만 회, 로트가 아니라 웨이퍼 단위로 세면 200만 회가 나온다. 3,300회는 시간당 이동 수다.</div></div>
+
+<div class="quiz-q"><p>2. 시간당 3,000회 반송, 반송 1회에 차량이 평균 4분 묶이고, 목표 차량 가동률이 0.6이다. 필요한 차량 수는?</p><div class="opts">
+<button class="opt">약 120대</button>
+<button class="opt">약 200대</button>
+<button class="opt" data-correct>약 330대</button>
+<button class="opt">약 750대</button>
+</div><div class="quiz-exp">평균적으로 일하는 차량은 리틀의 법칙으로 \(3000\times4/60 = 200\)대다. 가동률 0.6을 목표로 하면 \(200/0.6 \approx 333\)대가 필요하다. 200대만 두면 가동률 100 %가 되어 대기가 무한히 늘어난다.</div></div>
+
+<div class="quiz-q"><p>3. 단방향 OHT 루프에 차량을 계속 추가했더니 어느 순간부터 처리량이 오히려 줄었다. 가장 적절한 설명은?</p><div class="opts">
+<button class="opt">차량이 많으면 MCS가 계산을 못 해서</button>
+<button class="opt" data-correct>밀도가 높아져 앞차 간격과 이송 중 정차에 막혀 평균 속도가 떨어지고, q = k·v의 감소가 밀도 증가를 넘어섰기 때문</button>
+<button class="opt">차량이 많으면 호이스트 시간이 길어지기 때문</button>
+<button class="opt">리틀의 법칙이 더 이상 성립하지 않기 때문</button>
+</div><div class="quiz-exp">교통량은 밀도와 속도의 곱이다. 정체 밀도의 절반 근처를 넘으면 속도 감소가 밀도 증가보다 커져 \(q\)가 줄어든다. OHT는 이송 중에 레일 위에 서므로 이 혼잡이 더 낮은 밀도에서 시작한다. 리틀의 법칙은 여전히 성립한다.</div></div>
+
+<div class="quiz-q"><p>4. 반송 요청이 시간당 60회, 평균 점유 3분, 차량 4대인 M/M/c 시스템의 가동률 ρ는?</p><div class="opts">
+<button class="opt">0.25</button>
+<button class="opt">0.5</button>
+<button class="opt" data-correct>0.75</button>
+<button class="opt">3.0</button>
+</div><div class="quiz-exp">제공 부하 \(a = \lambda/\mu = 60\times(3/60) = 3\) 얼랑, \(\rho = a/c = 3/4 = 0.75\)다. 이때 Erlang C는 약 0.51, 평균 대기 \(W_q = C/(c\mu-\lambda) \approx 0.51/(80-60)\) 시간 ≈ 1.5분이다. 차량을 3대로 줄이면 \(\rho = 1\)이 되어 대기열이 안정되지 않는다.</div></div>
+
+<div class="quiz-q"><p>5. 하루 3,000장을 투입·산출하는 팹에서 스텝당 반송 시간을 4분 줄였다. 스텝은 1,000개다. 다른 조건이 같다면 WIP는 대략 얼마나 줄어드는가?</p><div class="opts">
+<button class="opt">약 830장</button>
+<button class="opt" data-correct>약 8,300장</button>
+<button class="opt">약 83,000장</button>
+<button class="opt">줄지 않는다(WIP는 투입량으로만 정해진다)</button>
+</div><div class="quiz-exp">CT 감소 = 4분 × 1,000 = 4,000분 ≈ 2.78일. 리틀의 법칙 WIP = TH × CT에서 WIP 감소 ≈ 3,000장/일 × 2.78일 ≈ 8,300장이다. 실제로는 반송 변동과 교체 공백도 줄어 장비 앞 대기까지 줄면 효과가 더 크다.</div></div>
+
+<div class="quiz-q"><p>6. 최근접 디스패칭이 FIFO보다 높은 부하를 견디는 이유와 그 대가를 바르게 짝지은 것은?</p><div class="opts">
+<button class="opt">호이스트가 빨라진다 / 차량 마모 증가</button>
+<button class="opt" data-correct>공차 주행이 줄어 차량 시간을 더 많이 반송에 쓴다 / 일부 요청이 오래 밀리는 꼬리 대기(기아)</button>
+<button class="opt">요청 도착률이 줄어든다 / 처리량 감소</button>
+<button class="opt">레일 길이가 줄어든다 / 레이아웃 변경 필요</button>
+</div><div class="quiz-exp">FIFO는 가장 오래된 요청을 위해 빈 차량을 멀리 보내므로 반송 1회의 차량 점유 시간이 길어지고, 같은 차량 수로 처리할 수 있는 용량이 줄어든다. 최근접 규칙은 이 공차 시간을 줄이지만 운 나쁜 요청의 최대 대기가 길어진다. 큐 타임 제한 로트에는 이 꼬리가 치명적이다.</div></div>
+
+<div class="quiz-q"><p>7. 평균 점유 10칸(a = 10)인 OHB에서 넘침 확률 1 % 이하가 되려면 대략 몇 칸이 필요한가?</p><div class="opts">
+<button class="opt">10칸</button>
+<button class="opt">12칸</button>
+<button class="opt" data-correct>18칸</button>
+<button class="opt">40칸</button>
+</div><div class="quiz-exp">얼랑 B로 계산하면 \(B(17,10) \approx 1.3\,\%\), \(B(18,10) \approx 0.7\,\%\)이므로 18칸이다. 평균만큼(10칸) 두면 넘침 확률은 약 21 %에 이른다. 같은 1 %를 \(a = 100\)에서 맞추려면 약 117칸, 즉 평균의 1.17배면 된다(풀링 효과).</div></div>
+
+<div class="quiz-q"><p>8. OHT 레일을 장비가 놓이는 와플 슬래브가 아니라 천장 구조에 매달고, 비접촉 급전을 쓰는 주된 이유로 옳은 것은?</p><div class="opts">
+<button class="opt">레일을 싸게 설치하기 위해</button>
+<button class="opt">차량 속도를 높이기 위해</button>
+<button class="opt" data-correct>주행 진동이 장비 기초로 전달되는 것을 줄이고, 집전 마찰로 생기는 분진이 하강 기류를 타고 장비로 내려가는 것을 막기 위해</button>
+<button class="opt">FOUP 안의 질소 농도를 유지하기 위해</button>
+</div><div class="quiz-exp">레일과 차량은 FFU 하강 기류의 상류에 있으므로 여기서 생긴 입자는 아래의 로드포트로 향한다. 비접촉 급전과 저발진 차륜이 그 발생원을 줄인다. 진동은 행거를 통해 구조로 전달되므로 장비 기초와 분리해 매단다(<a href="vibration.html">12장</a>).</div></div>
+</div>
+</section>
+</main>
+<script>
+(function () {
+"use strict";
+function rng32(seed) {
+var a = seed >>> 0;
+return function () {
+a = (a + 0x6D2B79F5) | 0;
+var t = Math.imul(a ^ (a >>> 15), 1 | a);
+t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+}
+function expRand(r, rate) { return -Math.log(1 - r() * 0.999999) / rate; }
+function md(x, L) { x = x % L; return x < 0 ? x + L : x; }
+
+function LoopSim(o) {
+var L = o.L, r = rng32(o.seed || 7), S = o.st.length;
+var maxN = Math.max(1, Math.floor(L / (o.len + o.gap)) - 1);
+var N = Math.max(1, Math.min(o.N, maxN));
+var wsum = 0, cw = [];
+for (var k = 0; k < S; k++) { wsum += (o.w ? o.w[k] : 1); cw.push(wsum); }
+function pickSt() { var x = r() * wsum; for (var k = 0; k < S; k++) if (x <= cw[k]) return k; return S - 1; }
+var sim = { t: 0, veh: [], q: [], done: 0, waitSum: 0, waitN: 0, waits: [], busyT: 0, vehT: 0, blockT: 0, N: N, L: L, o: o, seq: 0, distEmpty: 0, distLoaded: 0 };
+for (var i = 0; i < N; i++) sim.veh.push({ id: i, s: (i * L) / N, v: 0, ph: 0, job: null, tm: 0, tgt: 0, idle: 0 });
+function newJob() {
+var a = pickSt(), b = a;
+if (S > 1) { var g = 0; while (b === a && g++ < 50) b = Math.floor(r() * S); if (b === a) b = (a + 1) % S; }
+sim.q.push({ o: a, d: b, t0: sim.t, id: sim.seq++, taken: false });
+}
+if (o.sat) for (var k2 = 0; k2 < S; k2++) { sim.q.push({ o: k2, d: (k2 + 1 + Math.floor(r() * Math.max(1, S - 1))) % S, t0: 0, id: sim.seq++ }); }
+sim.nextArr = o.lam > 0 ? expRand(r, o.lam) : Infinity;
+function effDist(vh, sPos) {
+var d = md(sPos - vh.s, L), stop = (vh.v * vh.v) / (2 * o.dec);
+return d < stop - 1e-6 ? d + L : d;
+}
+function assign(vh, job, idx) {
+sim.q.splice(idx, 1);
+vh.job = job; vh.ph = 1; vh.tgt = o.st[job.o];
+if (o.sat) { var b = job.o; var c = (b + 1 + Math.floor(r() * Math.max(1, S - 1))) % S; if (c === b) c = (b + 1) % S; sim.q.push({ o: b, d: c, t0: sim.t, id: sim.seq++ }); }
+}
+var need = true;
+function dispatch() {
+if (!need) return;
+need = false;
+var guard = 0;
+while (sim.q.length && guard++ < 64) {
+var idle = sim.veh.filter(function (v) { return v.ph === 0; });
+if (!idle.length) return;
+var bv = null, bj = -1;
+if (o.rule === "fifo") {
+bj = 0; idle.sort(function (a, b) { return a.idle - b.idle; }); bv = idle[0];
+} else {
+var best = Infinity;
+for (var a = 0; a < idle.length; a++) for (var j = 0; j < sim.q.length; j++) {
+var d = effDist(idle[a], o.st[sim.q[j].o]);
+if (d < best) { best = d; bv = idle[a]; bj = j; }
+}
+}
+assign(bv, sim.q[bj], bj);
+}
+}
+function limAhead(s) {
+if (!o.lim) return o.vmax;
+var vt = o.lim(s);
+for (var d = 1; d <= 9; d += 2) vt = Math.min(vt, Math.sqrt(Math.pow(o.lim(md(s + d, L)), 2) + 2 * o.dec * d));
+return vt;
+}
+var sOld = new Float64Array(N);
+sim.step = function (dt) {
+sim.t += dt;
+while (sim.t >= sim.nextArr) { newJob(); need = true; sim.nextArr += expRand(r, o.lam); }
+dispatch();
+var V = sim.veh, i;
+for (i = 0; i < N; i++) sOld[i] = V[i].s;
+for (i = 0; i < N; i++) {
+var vh = V[i];
+sim.vehT += dt;
+if (vh.ph) sim.busyT += dt;
+if (vh.ph === 2 || vh.ph === 4) {
+vh.v = 0; vh.tm -= dt;
+if (vh.tm <= 0) {
+if (vh.ph === 2) { vh.ph = 3; vh.tgt = o.st[vh.job.d]; }
+else { vh.ph = 0; vh.job = null; vh.idle = sim.t; sim.done++; need = true; }
+}
+continue;
+}
+var gap = N > 1 ? md(sOld[(i + 1) % N] - sOld[i], L) - o.len : L - o.len;
+var free = Math.max(0, gap - o.gap);
+var vt = Math.min(o.vmax, limAhead(vh.s), Math.sqrt(2 * o.dec * free));
+var dT = Infinity;
+if (vh.ph === 1 || vh.ph === 3) { dT = md(vh.tgt - vh.s, L); vt = Math.min(vt, Math.sqrt(2 * o.dec * dT) + 0.05); }
+vh.v = Math.max(0, Math.min(vh.v + o.acc * dt, vt));
+var mv = Math.min(vh.v * dt, free);
+if (vh.ph && vh.v < 0.05 && dT > 0.05) sim.blockT += dt;
+if (mv >= dT - 1e-9) {
+mv = dT; vh.s = vh.tgt; vh.v = 0;
+if (vh.ph === 1) { vh.ph = 2; vh.tm = o.hoist; var w = sim.t - vh.job.t0; sim.waitSum += w; sim.waitN++; if (sim.waits.length < 4000) sim.waits.push(w); }
+else { vh.ph = 4; vh.tm = o.hoist; }
+} else vh.s = md(vh.s + mv, L);
+if (vh.ph === 3) sim.distLoaded += mv; else sim.distEmpty += mv;
+}
+};
+return sim;
+}
+
+function erlangB(c, a) { var B = 1; for (var k = 1; k <= c; k++) B = (a * B) / (k + a * B); return B; }
+function erlangC(c, a) { if (a >= c) return 1; var B = erlangB(c, a), rho = a / c; return B / (1 - rho * (1 - B)); }
+
+function dispatchDES(p, rule) {
+// p: { L, S, N, v, h, lamH, hours, cap(s), jobs }
+var L = p.L, S = p.S, st = [], k;
+for (k = 0; k < S; k++) st.push((k * L) / S);
+var veh = [];
+for (k = 0; k < p.N; k++) veh.push({ pos: st[(k * S / p.N) | 0], free: 0, busy: false, idleSince: 0 });
+var jobs = p.jobs, ji = 0, q = [], warm = 1800, res = { w: [], empty: 0, loaded: 0, done: 0, busyT: 0 };
+var T = p.hours * 3600;
+function dist(a, b) { var d = (b - a) % L; return d < 0 ? d + L : d; }
+function start(vh, job, t) {
+var de = dist(vh.pos, st[job.o]), dl = dist(st[job.o], st[job.d]);
+var tp = t + de / p.v;
+if (job.t >= warm) { res.w.push(tp - job.t); res.empty += de; res.loaded += dl; }
+vh.busy = true; vh.free = tp + 2 * p.h + dl / p.v; vh.pos = st[job.d];
+res.busyT += Math.min(vh.free, T) - t;
+}
+function pickJob(vh, t) {
+if (rule === "fifo") return 0;
+var best = -1, bd = Infinity, i;
+if (rule === "hybrid") {
+for (i = 0; i < q.length; i++) if (t - q[i].t > p.cap) return i;
+}
+for (i = 0; i < q.length; i++) { var d = dist(vh.pos, st[q[i].o]); if (d < bd) { bd = d; best = i; } }
+return best;
+}
+function pickVeh(job) {
+var best = null, bd = Infinity;
+veh.forEach(function (vh) {
+if (vh.busy) return;
+var d = rule === "fifo" ? vh.idleSince : dist(vh.pos, st[job.o]);
+if (d < bd) { bd = d; best = vh; }
+});
+return best;
+}
+var t = 0, guard = 0;
+while (guard++ < 2e6) {
+var tA = ji < jobs.length ? jobs[ji].t : Infinity, tV = Infinity, nv = null;
+veh.forEach(function (vh) { if (vh.busy && vh.free < tV) { tV = vh.free; nv = vh; } });
+t = Math.min(tA, tV);
+if (t > T || t === Infinity) break;
+if (tV <= tA) {
+nv.busy = false; nv.idleSince = t; if (t >= warm) res.done++;
+if (q.length) { var i = pickJob(nv, t); start(nv, q.splice(i, 1)[0], t); }
+} else {
+var job = jobs[ji++], vh = pickVeh(job);
+if (vh) start(vh, job, t); else q.push(job);
+}
+}
+res.backlog = q.length;
+res.T = T - warm;
+return res;
+}
+function makeJobs(seed, lamH, hours, S, hot) {
+var r = rng32(seed), t = 0, out = [], T = hours * 3600, lam = lamH / 3600;
+while (true) {
+t += expRand(r, lam); if (t > T) break;
+var o = hot && r() < 0.35 ? 0 : Math.floor(r() * S), d = Math.floor(r() * S);
+if (d === o) d = (o + 1 + Math.floor(r() * (S - 1))) % S;
+out.push({ t: t, o: o, d: d });
+}
+return out;
+}
+
+function fontOf(px, bold) { return (bold ? "700 " : "") + px + "px " + (getComputedStyle(document.body).getPropertyValue("--font") || "sans-serif"); }
+function legend(ctx, items, x, y, P) {
+ctx.save(); ctx.font = fontOf(12); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+items.forEach(function (it, i) {
+var yy = y + i * 18;
+ctx.strokeStyle = it[1]; ctx.lineWidth = it[3] || 2.5; ctx.setLineDash(it[2] || []);
+ctx.beginPath(); ctx.moveTo(x, yy); ctx.lineTo(x + 20, yy); ctx.stroke(); ctx.setLineDash([]);
+ctx.fillStyle = P.dim; ctx.fillText(it[0], x + 26, yy);
+});
+ctx.restore();
+}
+function fmtT(s) {
+if (!isFinite(s)) return "∞";
+if (s < 100) return s.toFixed(0) + "<small>s</small>";
+if (s < 6000) return (s / 60).toFixed(1) + "<small>분</small>";
+return (s / 3600).toFixed(1) + "<small>h</small>";
+}
+function fmtN(x) { return Math.round(x).toLocaleString("ko-KR"); }
+function quant(arr, p) { if (!arr.length) return NaN; var a = arr.slice().sort(function (x, y) { return x - y; }); return a[Math.min(a.length - 1, Math.floor(p * a.length))]; }
+function stadium(Ls, R) {
+var h = Ls / 2, c = Math.PI * R, L = 2 * Ls + 2 * c;
+function pos(s) {
+s = md(s, L);
+if (s < Ls) return { x: -h + s, z: -R, a: 0, c: false };
+s -= Ls;
+if (s < c) { var t = -Math.PI / 2 + s / R; return { x: h + R * Math.cos(t), z: R * Math.sin(t), a: t + Math.PI / 2, c: true }; }
+s -= c;
+if (s < Ls) return { x: h - s, z: R, a: Math.PI, c: false };
+s -= Ls;
+var t2 = Math.PI / 2 + s / R;
+return { x: -h + R * Math.cos(t2), z: R * Math.sin(t2), a: t2 + Math.PI / 2, c: true };
+}
+return { L: L, Ls: Ls, R: R, pos: pos, sTop: function (x) { return x + h; }, sBot: function (x) { return Ls + c + (h - x); } };
+}
+var STATE_HEX = [0x5f6b7d, 0x3b82f6, 0xe8a33d, 0x22a06b, 0xe8a33d];
+
+/* ================================================================ 1. 이동량 계산기 */
+(function () {
+if (!document.getElementById("cv-moves")) return;
+function redraw() { cv.redraw(); }
+var gW = IB.range("mv-w", function (v) { return fmtN(v) + " 장"; }, redraw);
+var gN = IB.range("mv-n", function (v) { return v + " 스텝"; }, redraw);
+var gM = IB.range("mv-m", function (v) { return v.toFixed(2) + " 회"; }, redraw);
+var gLot = IB.range("mv-lot", function (v) { return v + " 장"; }, redraw);
+var gDl = IB.range("mv-dl", function (v) { return v + " m"; }, redraw);
+var gDe = IB.range("mv-de", function (v) { return v + " m"; }, redraw);
+var gV = IB.range("mv-v", function (v) { return v.toFixed(1) + " m/s"; }, redraw);
+var gH = IB.range("mv-h", function (v) { return v + " s"; }, redraw);
+var gR = IB.range("mv-r", function (v) { return Math.round(v * 100) + " %"; }, redraw);
+var PRE = {
+e: [100000, 900, 1.3, 25, 300, 150, 2, 15, 0.5],
+small: [20000, 400, 1.2, 25, 120, 60, 1.5, 12, 0.5],
+adv: [50000, 1300, 1.4, 20, 350, 150, 2, 15, 0.5]
+};
+IB.seg("mv-pre", function (k) {
+var p = PRE[k]; [gW, gN, gM, gLot, gDl, gDe, gV, gH, gR].forEach(function (g, i) { g.set(p[i]); });
+});
+function calc(r) {
+var lots = gW() / 30 / Math.max(1, gLot());
+var day = lots * gN() * gM(), perH = day / 24;
+var v = Math.max(0.1, gV());
+var tE = gDe() / v, tL = gDl() / v, tH = gH();
+var Tv = tE + tL + 2 * tH;
+var busy = (perH * Tv) / 3600;
+return { lots: lots, day: day, perH: perH, tE: tE, tL: tL, tH: tH, Tv: Tv, busy: busy, need: busy / Math.max(0.05, r) };
+}
+function draw(ctx, w, h) {
+var P = IB.palette(), r = gR(), c = calc(r);
+// 위: 반송 1회 차량 점유 시간 막대
+var bx = 58, bw = w - 58 - 18, by = 26, bh = 24, sc = bw / c.Tv;
+ctx.font = fontOf(12, true); ctx.fillStyle = P.text; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+ctx.fillText("반송 1회 차량 점유 " + (c.Tv / 60).toFixed(1) + "분의 구성", bx, 18);
+var parts = [["공차 주행", c.tE, P.faint], ["집하 호이스트", c.tH, P.warn], ["적재 주행", c.tL, P.accent], ["하역 호이스트", c.tH, P.warn]];
+var x = bx;
+parts.forEach(function (p) {
+var ww = p[1] * sc;
+ctx.fillStyle = p[2]; ctx.globalAlpha = 0.85; ctx.fillRect(x, by, Math.max(0, ww - 1), bh); ctx.globalAlpha = 1;
+if (ww > 60) { ctx.fillStyle = P.bg; ctx.font = fontOf(11, true); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(p[0] + " " + Math.round(p[1]) + "s", x + ww / 2, by + bh / 2); }
+x += ww;
+});
+// 아래: 목표 가동률별 필요 차량 수
+var top = 70, box = { x: 58, y: top, w: w - 58 - 18, h: h - top - 46 };
+var data = [];
+for (var rr = 0.3; rr <= 0.901; rr += 0.01) data.push([rr, calc(rr).need]);
+var ymax = Math.max(calc(0.3).need * 1.1, 10);
+var hl = [];
+if (1000 < ymax) hl.push({ y: 1000, color: P.accent2, label: "FAB-E 차량 약 1,000대" });
+IB.chart(ctx, box, {
+x: [0.3, 0.9], y: [0, ymax], xLabel: "목표 차량 가동률 ρ", yLabel: "필요 차량 수",
+xFmt: function (v) { return Math.round(v * 100) + "%"; },
+series: [{ data: data, color: P.accent, width: 2.6 }],
+hlines: hl,
+points: [{ x: r, y: c.need, color: P.bad, r: 5, label: fmtN(c.need) + "대" }]
+});
+IB.stat("o-mv-lot", c.lots.toFixed(1));
+IB.stat("o-mv-day", fmtN(c.day));
+IB.stat("o-mv-h", fmtN(c.perH) + "<small>회/h</small>");
+IB.stat("o-mv-t", (c.Tv / 60).toFixed(2) + "<small>분</small>");
+IB.stat("o-mv-busy", fmtN(c.busy) + "<small>대</small>");
+IB.stat("o-mv-n", fmtN(Math.ceil(c.need)) + "<small>대</small>");
+var travel = (c.tE + c.tL) / c.Tv;
+var msg = "초당 <b>" + (c.perH / 3600).toFixed(2) + "회</b>의 FOUP 이동. 차량 점유 시간의 <b>" + Math.round(travel * 100) + " %</b>가 주행이라 평균 속도와 주행 거리가 차량 수를 좌우한다. ";
+if (c.need > 1500) msg += "<b class='bad'>필요 차량이 1,500대를 넘는다.</b> 이 정도면 레일 혼잡(4절) 때문에 차량 추가만으로는 해결이 어렵고, 레이아웃(숏컷)·로트 크기·반송 횟수를 함께 줄여야 한다.";
+else if (c.need > 600) msg += "<b class='warn'>대형 팹 규모</b>의 차량군이다. FAB-E 기준값(약 1,000대)과 비교해 보자.";
+else msg += "<b class='ok'>중소 규모</b>의 차량군으로 충분하다.";
+document.getElementById("o-mv-verdict").innerHTML = msg;
+}
+var cv = IB.canvas("#cv-moves", draw, { aspect: 0.6, minHeight: 330, maxHeight: 420 });
+})();
+
+/* ================================================================ 2. 3D 인트라베이 OHT 루프 */
+(function () {
+var view = document.getElementById("v3d-amhs");
+if (!view) return;
+var T = IB.three(view, { camera: [18, 18, 30], target: [-3, 2.5, 0], fov: 40, minDistance: 8, maxDistance: 140 });
+if (!T) return;
+var THREE = T.THREE, R = 5, Ls = 50, G = stadium(Ls, R), RY = 4.6, HOIST = 12;
+var xs = [-15, -8, -1, 6, 13, 20];
+var st = [], info = [], wts = [];
+st.push(G.sTop(-21.5)); info.push({ x: -21.5, z: -R, kind: "stk", y: 2.2 }); wts.push(3);
+xs.forEach(function (x) { st.push(G.sTop(x)); info.push({ x: x, z: -R, kind: "tool", y: 0.9 }); wts.push(1); });
+xs.forEach(function (x) { st.push(G.sBot(x)); info.push({ x: x, z: R, kind: "tool", y: 0.9 }); wts.push(1); });
+st.push(G.sBot(-21.5)); info.push({ x: -21.5, z: R, kind: "ohb", y: 2.9 }); wts.push(1.5);
+
+var box = new THREE.BoxGeometry(1, 1, 1);
+function mesh(mat, sx, sy, sz, x, y, z, parent) { var m = new THREE.Mesh(box, mat); m.scale.set(sx, sy, sz); m.position.set(x, y, z); (parent || T.scene).add(m); return m; }
+var M = {
+floor: T.material(0xaeb6c2, { roughness: 0.95 }),
+tool: T.material(0x9ea9b8, { roughness: 0.6, metalness: 0.1 }),
+toolTop: T.material(0x8d98a8, { roughness: 0.5 }),
+lp: T.material(0x6b7686, { roughness: 0.5 }),
+stk: T.material(0x7d8fa8, { roughness: 0.45, metalness: 0.2 }),
+rail: T.material(0x4b5563, { roughness: 0.4, metalness: 0.5 }),
+hang: T.material(0x8a929e, { roughness: 0.5, metalness: 0.4 }),
+foup: T.material(0x55606f, { roughness: 0.35, metalness: 0.1 }),
+foupWait: T.material(0xf05252, { roughness: 0.4, emissive: 0x5a1010 }),
+belt: T.material(0x222831, { roughness: 0.6 }),
+shelf: T.material(0x9aa3ad, { roughness: 0.5, metalness: 0.3 })
+};
+var SM = STATE_HEX.map(function (c) { return T.material(c, { roughness: 0.35, metalness: 0.15 }); });
+// 바닥
+var fl = new THREE.Mesh(new THREE.PlaneGeometry(84, 36), M.floor); fl.rotation.x = -Math.PI / 2; T.scene.add(fl);
+var grid = new THREE.GridHelper(84, 42, 0x9aa3ad, 0xaeb6c1); grid.scale.z = 36 / 84; grid.position.y = 0.01; T.scene.add(grid);
+// 장비와 로드포트
+info.forEach(function (s) {
+var sg = s.z < 0 ? -1 : 1;
+if (s.kind === "tool") {
+mesh(M.lp, 0.7, 0.8, 0.7, s.x, 0.4, s.z);
+mesh(M.tool, 5.2, 2.6, 3, s.x, 1.3, s.z + sg * 2.0);
+mesh(M.toolTop, 5.2, 0.12, 3, s.x, 2.66, s.z + sg * 2.0);
+} else if (s.kind === "stk") {
+mesh(M.stk, 6, 4.2, 3.4, s.x, 2.1, s.z - 2.2);
+mesh(M.shelf, 1.0, 0.12, 1.0, s.x, s.y - 0.06, s.z);
+} else {
+[-2.4, 0, 2.4].forEach(function (dx) {
+mesh(M.shelf, 0.9, 0.08, 0.9, s.x + dx, s.y - 0.04, s.z);
+mesh(M.hang, 0.05, RY - s.y, 0.05, s.x + dx - 0.42, (RY + s.y) / 2, s.z); mesh(M.hang, 0.05, RY - s.y, 0.05, s.x + dx + 0.42, (RY + s.y) / 2, s.z);
+if (dx) mesh(M.foup, 0.6, 0.5, 0.6, s.x + dx, s.y + 0.25, s.z);
+});
+}
+});
+// 레일
+class RailCurve extends THREE.Curve {
+getPoint(t, target) { var p = G.pos(t * G.L); return (target || new THREE.Vector3()).set(p.x, RY, p.z); }
+}
+T.scene.add(new THREE.Mesh(new THREE.TubeGeometry(new RailCurve(), 320, 0.13, 8, true), M.rail));
+for (var s0 = 0; s0 < G.L; s0 += 6) { var hp = G.pos(s0); mesh(M.hang, 0.06, 2.2, 0.06, hp.x, RY + 1.1, hp.z); }
+// 정류 FOUP(대기·하역 표시)
+var stF = info.map(function (s) { var m = mesh(M.foup, 0.6, 0.5, 0.6, s.x, s.y + 0.25, s.z); m.visible = false; return m; });
+// 차량
+var NMAX = 30, VEH = [];
+for (var i = 0; i < NMAX; i++) {
+var g = new THREE.Group();
+var body = mesh(SM[0], 1.6, 0.85, 0.85, 0, RY - 0.6, 0, g);
+mesh(M.rail, 0.8, 0.2, 0.35, 0, RY - 0.12, 0, g);
+var b1 = mesh(M.belt, 0.03, 1, 0.03, -0.12, 0, 0, g), b2 = mesh(M.belt, 0.03, 1, 0.03, 0.12, 0, 0, g);
+var grip = mesh(M.belt, 0.62, 0.06, 0.62, 0, 0, 0, g);
+var f = mesh(M.foup, 0.6, 0.5, 0.6, 0, 0, 0, g);
+T.scene.add(g);
+VEH.push({ g: g, body: body, b1: b1, b2: b2, grip: grip, f: f });
+}
+// 라벨
+var LB = [];
+var lv = T.label("OHT 차량", [0, RY + 0.8, 0]); lv.obj = VEH[0].g; LB.push(lv);
+LB.push(T.label("단방향 레일 루프", [Ls / 2 + R + 0.5, RY + 0.8, 0]));
+LB.push(T.label("곡선: 감속 구간", [-Ls / 2 - R - 0.5, RY + 0.8, 0]));
+LB.push(T.label("스토커", [-21.5, 4.8, -R - 2.2]));
+LB.push(T.label("OHB(천장 버퍼)", [-21.5, 2.2, R + 0.6]));
+LB.push(T.label("로드포트 → 공정 장비", [6, 3.1, -R - 2]));
+LB.push(T.label("인트라베이 통로", [3, 0.3, 0]));
+
+var paused = false, sim = null, doneT = [], lastDone = 0, lastStat = 0, lastDrop = new Float64Array(st.length).fill(-99);
+function redraw() { build(); }
+var gN = IB.range("a3-n", function (v) { return v + " 대"; }, redraw);
+var gL = IB.range("a3-lam", function (v) { return v + " 회/h"; }, redraw);
+var gV = IB.range("a3-v", function (v) { return v.toFixed(1) + " m/s"; }, redraw);
+var gT = IB.range("a3-ts", function (v) { return "×" + v; });
+var cbL = document.getElementById("a3-lbl"), cbR = document.getElementById("a3-rot");
+cbL.addEventListener("change", function () { LB.forEach(function (L) { L.setVisible(cbL.checked); }); });
+cbR.addEventListener("change", function () { if (T.controls) T.controls.autoRotate = cbR.checked; });
+var pb = document.getElementById("a3-pause");
+pb.addEventListener("click", function () { paused = !paused; pb.textContent = paused ? "계속" : "일시정지"; });
+document.getElementById("a3-reset").addEventListener("click", build);
+function build() {
+var vmax = gV();
+sim = LoopSim({ L: G.L, st: st, N: gN(), vmax: vmax, acc: 1, dec: 1.5, len: 1, gap: 1, hoist: HOIST, lam: gL() / 3600, sat: false, rule: "nearest", w: wts, seed: 11,
+lim: function (s) { return G.pos(s).c ? Math.min(1.2, vmax) : vmax; } });
+doneT = []; lastDone = 0; lastStat = -1; lastDrop.fill(-99);
+VEH.forEach(function (v, k) { v.g.visible = k < sim.N; });
+}
+build();
+var pend = new Int32Array(st.length);
+T.onFrame(function (dt) {
+if (!paused) {
+var rem = Math.min(dt, 0.05) * gT();
+while (rem > 1e-6) { var d = Math.min(0.1, rem); sim.step(d); rem -= d; }
+while (lastDone < sim.done) { doneT.push(sim.t); lastDone++; }
+}
+pend.fill(0);
+sim.q.forEach(function (j) { pend[j.o]++; });
+for (var k = 0; k < sim.N; k++) {
+var vh = sim.veh[k], V = VEH[k], p = G.pos(vh.s);
+V.g.position.set(p.x, 0, p.z); V.g.rotation.y = -p.a;
+V.body.material = SM[vh.ph];
+var carry = vh.ph === 3, depth = 0;
+if (vh.ph === 1) pend[vh.job.o]++;
+if (vh.ph === 2 || vh.ph === 4) {
+var pr = 1 - Math.max(0, vh.tm) / HOIST, dst = vh.ph === 2 ? vh.job.o : vh.job.d;
+var full = RY - 1.33 - (info[dst].y + 0.25);
+depth = (pr < 0.4 ? pr / 0.4 : pr < 0.6 ? 1 : (1 - pr) / 0.4) * full;
+if (vh.ph === 2) { if (pr >= 0.5) carry = true; else pend[dst]++; }
+else { if (pr < 0.5) carry = true; else lastDrop[dst] = sim.t; }
+}
+var gy = RY - 1.05 - depth;
+V.grip.position.y = gy;
+var bl = Math.max(0.02, RY - 1.05 - gy);
+V.b1.scale.y = V.b2.scale.y = bl; V.b1.position.y = V.b2.position.y = RY - 1.05 - bl / 2;
+V.b1.visible = V.b2.visible = depth > 0.02;
+V.f.visible = carry; V.f.position.y = gy - 0.28;
+}
+for (var s = 0; s < st.length; s++) {
+var show = pend[s] > 0 || sim.t - lastDrop[s] < 6;
+stF[s].visible = show; stF[s].material = pend[s] > 0 ? M.foupWait : M.foup;
+}
+if (sim.t - lastStat > 1 || lastStat < 0) {
+lastStat = sim.t;
+var win = 1800, from = sim.t - win; while (doneT.length && doneT[0] < from) doneT.shift();
+var span = Math.min(win, Math.max(1, sim.t));
+IB.stat("o-a3-th", sim.t > 60 ? fmtN((doneT.length / span) * 3600) + "<small>회/h</small>" : "…");
+IB.stat("o-a3-w", sim.waitN ? fmtT(sim.waitSum / sim.waitN) : "—");
+IB.stat("o-a3-u", sim.vehT ? Math.round((sim.busyT / sim.vehT) * 100) + "<small>%</small>" : "—");
+IB.stat("o-a3-q", String(sim.q.length));
+IB.stat("o-a3-blk", sim.busyT ? Math.round((sim.blockT / sim.busyT) * 100) + "<small>%</small>" : "—");
+IB.stat("o-a3-t", (sim.t / 60).toFixed(1) + "<small>분</small>");
+}
+});
+})();
+
+/* ================================================================ 3. 단방향 루프 교통 애니메이션 */
+(function () {
+var cvEl = document.getElementById("cv-ring");
+if (!cvEl) return;
+var G = stadium(60, 6), st = [];
+[-24, -12, 0, 12, 24].forEach(function (x) { st.push(G.sTop(x)); });
+[24, 12, 0, -12, -24].forEach(function (x) { st.push(G.sBot(x)); });
+var sim, paused = false, doneT = [], lastDone = 0, vEma = 0;
+function build() {
+var vmax = gV(), curve = cbC.checked;
+sim = LoopSim({ L: G.L, st: st, N: gN(), vmax: vmax, acc: 1, dec: 1.5, len: 1, gap: 1, hoist: gH(), lam: gL() / 3600, sat: false, rule: "nearest", seed: 5,
+lim: curve ? function (s) { return G.pos(s).c ? Math.min(1, vmax) : vmax; } : null });
+doneT = []; lastDone = 0; vEma = 0;
+}
+var cbC = document.getElementById("rg-curve");
+var gN = IB.range("rg-n", function (v) { return v + " 대"; }, build);
+var gL = IB.range("rg-lam", function (v) { return v + " 회/h"; }, build);
+var gH = IB.range("rg-h", function (v) { return v + " s"; }, build);
+var gV = IB.range("rg-v", function (v) { return v.toFixed(1) + " m/s"; }, build);
+var gT = IB.range("rg-ts", function (v) { return "×" + v; });
+cbC.addEventListener("change", build);
+var pb = document.getElementById("rg-pause");
+pb.addEventListener("click", function () { paused = !paused; pb.textContent = paused ? "계속" : "일시정지"; });
+document.getElementById("rg-reset").addEventListener("click", build);
+build();
+function draw(ctx, w, h) {
+if (!sim) return;
+var P = IB.palette(), mx = 34, my = 46;
+var sx = (w - 2 * mx) / (G.Ls + 2 * G.R), sz = (h - 2 * my) / (2 * G.R);
+function X(x) { return w / 2 + x * sx; }
+function Y(z) { return h / 2 + z * sz; }
+// 레일
+ctx.strokeStyle = P.dim; ctx.lineWidth = 3; ctx.beginPath();
+for (var s = 0; s <= G.L + 0.5; s += 0.5) { var p = G.pos(s); s === 0 ? ctx.moveTo(X(p.x), Y(p.z)) : ctx.lineTo(X(p.x), Y(p.z)); }
+ctx.closePath(); ctx.stroke();
+// 방향 화살표
+ctx.fillStyle = P.faint;
+[G.sTop(-6), G.sBot(6)].forEach(function (s) {
+var p = G.pos(s), dir = Math.cos(p.a) > 0 ? 1 : -1, xx = X(p.x), yy = Y(p.z);
+ctx.beginPath(); ctx.moveTo(xx + dir * 7, yy); ctx.lineTo(xx - dir * 5, yy - 5); ctx.lineTo(xx - dir * 5, yy + 5); ctx.fill();
+});
+// 스테이션
+var cnt = new Array(st.length).fill(0);
+sim.q.forEach(function (j) { cnt[j.o]++; });
+st.forEach(function (s, k) {
+var p = G.pos(s), xx = X(p.x), yy = Y(p.z), out = p.z < 0 ? -1 : 1;
+ctx.fillStyle = P.surface; ctx.strokeStyle = P.border; ctx.lineWidth = 1;
+ctx.fillRect(xx - 12, yy + out * 10 - (out < 0 ? 16 : 0), 24, 16); ctx.strokeRect(xx - 12, yy + out * 10 - (out < 0 ? 16 : 0), 24, 16);
+ctx.fillStyle = P.dim; ctx.font = fontOf(10); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+ctx.fillText("S" + (k + 1), xx, yy + out * 18);
+ctx.fillStyle = P.bad;
+for (var q = 0; q < Math.min(cnt[k], 8); q++) { ctx.beginPath(); ctx.arc(xx - 14 + (q % 4) * 9.3, yy + out * (32 + Math.floor(q / 4) * 8), 3, 0, 7); ctx.fill(); }
+if (cnt[k] > 8) { ctx.fillStyle = P.bad; ctx.font = fontOf(10, true); ctx.fillText("+" + (cnt[k] - 8), xx + 24, yy + out * 32); }
+});
+// 차량
+var col = [P.faint, P.blue, P.warn, P.green, P.warn];
+sim.veh.forEach(function (vh) {
+var p = G.pos(vh.s), p2 = G.pos(vh.s + 0.5), xx = X(p.x), yy = Y(p.z);
+var ang = Math.atan2(Y(p2.z) - yy, X(p2.x) - xx);
+ctx.save(); ctx.translate(xx, yy); ctx.rotate(ang);
+ctx.fillStyle = col[vh.ph]; ctx.fillRect(-8, -6, 16, 12);
+if (vh.ph === 3 || vh.ph === 2 || vh.ph === 4) { ctx.fillStyle = P.text; ctx.fillRect(-3.5, -3.5, 7, 7); }
+ctx.restore();
+});
+ctx.fillStyle = P.dim; ctx.font = fontOf(12); ctx.textAlign = "left"; ctx.textBaseline = "top";
+ctx.fillText("모의 시간 " + (sim.t / 60).toFixed(1) + "분 · 완료 " + sim.done + "회", 10, 8);
+}
+var cv = IB.canvas(cvEl, draw, { aspect: 0.5, minHeight: 280, maxHeight: 380 });
+var lastStat = -1;
+IB.loop(cvEl, function (dt) {
+if (!paused) {
+var rem = dt * gT();
+while (rem > 1e-6) { var d = Math.min(0.1, rem); sim.step(d); rem -= d; }
+while (lastDone < sim.done) { doneT.push(sim.t); lastDone++; }
+var vs = 0, nm = 0;
+sim.veh.forEach(function (v) { if (v.ph !== 2 && v.ph !== 4) { vs += v.v; nm++; } });
+if (nm) vEma = vEma ? vEma * 0.98 + (vs / nm) * 0.02 : vs / nm;
+}
+cv.redraw();
+if (Math.abs(sim.t - lastStat) > 1) {
+lastStat = sim.t;
+var from = sim.t - 1800; while (doneT.length && doneT[0] < from) doneT.shift();
+var span = Math.min(1800, Math.max(1, sim.t));
+IB.stat("o-rg-th", sim.t > 60 ? fmtN((doneT.length / span) * 3600) + "<small>회/h</small>" : "…");
+IB.stat("o-rg-w", sim.waitN ? fmtT(sim.waitSum / sim.waitN) : "—");
+IB.stat("o-rg-v", vEma.toFixed(2) + "<small>m/s</small>");
+IB.stat("o-rg-blk", sim.busyT ? Math.round((sim.blockT / sim.busyT) * 100) + "<small>%</small>" : "—");
+IB.stat("o-rg-q", String(sim.q.length));
+}
+});
+})();
+
+/* ================================================================ 4. 차량 수–처리량 혼잡 곡선 */
+(function () {
+var cvEl = document.getElementById("cv-cong");
+if (!cvEl) return;
+var res = [], prev = null, token = 0, jam = 0, timer = 0;
+function sched() { clearTimeout(timer); timer = setTimeout(start, 150); }
+var gLs = IB.range("cg-l", function (v) { return v + " m"; }, sched);
+var gS = IB.range("cg-s", function (v) { return v + " 개"; }, sched);
+var gH = IB.range("cg-h", function (v) { return v + " s"; }, sched);
+var gV = IB.range("cg-v", function (v) { return v.toFixed(1) + " m/s"; }, sched);
+var rule = IB.seg("cg-rule", sched);
+var cbC = document.getElementById("cg-curve"), cbK = document.getElementById("cg-keep");
+cbC.addEventListener("change", sched);
+cbK.addEventListener("change", function () { if (!cbK.checked) prev = null; cv.redraw(); });
+function start() {
+if (cbK.checked && res.length) prev = res.slice(); else if (!cbK.checked) prev = null;
+var my = ++token, G = stadium(gLs(), 6), S = gS(), st = [], nTop = Math.ceil(S / 2), nBot = S - nTop, k;
+for (k = 0; k < nTop; k++) st.push(G.sTop(-G.Ls / 2 + ((k + 0.5) * G.Ls) / nTop));
+for (k = 0; k < nBot; k++) st.push(G.sBot(G.Ls / 2 - ((k + 0.5) * G.Ls) / nBot));
+jam = Math.floor(G.L / 2) - 1;
+var Ns = [], top = Math.max(4, Math.round(jam * 0.97)), n;
+for (n = 1; n <= top; n = Math.max(n + 1, Math.round(n * 1.18))) Ns.push(n);
+if (Ns[Ns.length - 1] !== top) Ns.push(top);
+res = []; var idx = 0, vmax = gV(), curve = cbC.checked, h = gH(), r = rule();
+IB.stat("o-cg-st", "계산 중…");
+function one() {
+if (my !== token) return;
+var N = Ns[idx];
+var sim = LoopSim({ L: G.L, st: st, N: N, vmax: vmax, acc: 1, dec: 1.5, len: 1, gap: 1, hoist: h, lam: 0, sat: true, rule: r, seed: 3,
+lim: curve ? function (s) { return G.pos(s).c ? Math.min(1, vmax) : vmax; } : null });
+var t;
+for (t = 0; t < 300; t += 0.25) sim.step(0.25);
+var d0 = sim.done;
+for (t = 0; t < 3600; t += 0.25) sim.step(0.25);
+res.push([sim.N, sim.done - d0]);
+idx++;
+cv.redraw();
+if (idx < Ns.length) setTimeout(one, 0); else { IB.stat("o-cg-st", "완료"); summary(); }
+}
+setTimeout(one, 0);
+}
+function summary() {
+if (!res.length) return;
+var best = res[0], one = res[0][1] / res[0][0], n80 = null;
+res.forEach(function (p) { if (p[1] > best[1]) best = p; if (n80 === null && p[1] < 0.8 * one * p[0]) n80 = p[0]; });
+IB.stat("o-cg-max", fmtN(best[1]) + "<small>회/h</small>");
+IB.stat("o-cg-nmax", "약 " + best[0] + "<small>대</small>");
+IB.stat("o-cg-n80", n80 === null ? "—" : "약 " + n80 + "<small>대</small>");
+IB.stat("o-cg-jam", jam + "<small>대</small>");
+}
+function draw(ctx, w, h) {
+var P = IB.palette();
+var xmax = Math.max(10, jam || 10);
+var ymax = 10;
+res.concat(prev || []).forEach(function (p) { ymax = Math.max(ymax, p[1] * 1.15); });
+var ideal = [];
+if (res.length) { var one = res[0][1]; ideal = [[0, 0], [xmax, one * xmax]]; }
+var series = [];
+if (prev && prev.length) series.push({ data: prev, color: P.faint, width: 2, dash: [3, 3] });
+series.push({ data: ideal, color: P.accent2, width: 1.6, dash: [6, 4] });
+series.push({ data: res, color: P.accent, width: 2.8 });
+var best = null; res.forEach(function (p) { if (!best || p[1] > best[1]) best = p; });
+IB.chart(ctx, null, {
+x: [0, xmax], y: [0, ymax], xLabel: "차량 수 N", yLabel: "처리량 (반송/시간)",
+series: series,
+vlines: jam ? [{ x: jam, color: P.bad, label: "정체 밀도" }] : [],
+points: res.map(function (p) { return { x: p[0], y: p[1], color: P.accent, r: 3 }; }).concat(best ? [{ x: best[0], y: best[1], color: P.bad, r: 5, label: "최대" }] : [])
+});
+var items = [["포화 수요 시뮬레이션", P.accent], ["혼잡 없는 이상 직선", P.accent2, [6, 4], 1.6]];
+if (prev && prev.length) items.push(["이전 곡선", P.faint, [3, 3], 2]);
+legend(ctx, items, Math.round(w * 0.42), h - 110, P);
+}
+var cv = IB.canvas(cvEl, draw, { aspect: 0.6, minHeight: 300, maxHeight: 420 });
+start();
+})();
+
+/* ================================================================ 5. M/M/c 계산기 */
+(function () {
+var cvEl = document.getElementById("cv-mmc");
+if (!cvEl) return;
+function redraw() { cv.redraw(); }
+var gLam = IB.range("mm-lam", function (v) { return fmtN(Math.pow(10, v)) + " 회/h"; }, redraw);
+var gS = IB.range("mm-s", function (v) { return v.toFixed(2) + " 분"; }, redraw);
+var gC = IB.range("mm-c", function (v) { return Math.max(1, Math.round(Math.pow(10, v))) + " 대"; }, redraw);
+var gTg = IB.range("mm-tg", function (v) { return v.toFixed(1) + " 분"; }, redraw);
+var PRE = { bay: [60, 3, 4, 1], fab: [6500, 4.25, 500, 0.5], tight: [100, 3, 6, 1] };
+IB.seg("mm-pre", function (k) {
+var p = PRE[k];
+gLam.set(Math.log10(p[0])); gS.set(p[1]); gC.set(Math.log10(p[2])); gTg.set(p[3]);
+});
+function cOf() { return Math.max(1, Math.round(Math.pow(10, gC()))); }
+function draw(ctx, w, h) {
+var P = IB.palette();
+var lamH = Math.pow(10, gLam()), s = gS(), c = cOf();
+var lam = lamH / 60, mu = 1 / s, a = lam / mu, rho = a / c;
+var cs = [1, 4, 16, 64, 256], series = [];
+function curve(cc) {
+var d = [];
+for (var r = 0.01; r < 0.995; r += 0.005) { var aa = r * cc; d.push([r, erlangC(cc, aa) / (cc * (1 - r))]); }
+return d;
+}
+cs.forEach(function (cc, i) { series.push({ data: curve(cc), color: P.faint, width: 1.3 }); });
+series.push({ data: curve(c), color: P.accent, width: 3 });
+var pts = [];
+if (rho < 1) pts.push({ x: Math.min(rho, 0.99), y: Math.max(1e-4, erlangC(c, a) / (c * (1 - rho))), color: P.bad, r: 5.5, label: "현재" });
+var ch = IB.chart(ctx, null, {
+x: [0, 1], y: [1e-4, 100], logY: true, xLabel: "가동률 ρ", yLabel: "정규화 대기 Wq·μ",
+xFmt: function (v) { return Math.round(v * 100) + "%"; },
+series: series, points: pts
+});
+// 곡선 라벨
+ctx.font = fontOf(11); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+cs.forEach(function (cc) {
+var r = 0.5, y = erlangC(cc, r * cc) / (cc * (1 - r));
+for (r = 0.2; r < 0.98; r += 0.01) { y = erlangC(cc, r * cc) / (cc * (1 - r)); if (y > 0.02) break; }
+if (y > 1e-4) ctx.fillText("c=" + cc, ch.X(r) + 4, ch.Y(y));
+});
+legend(ctx, [["현재 c = " + c, P.accent], ["c = 1, 4, 16, 64, 256", P.faint, null, 1.3]], 72, 26, P);
+// 결과
+IB.stat("o-mm-a", a.toFixed(a < 10 ? 2 : 0) + "<small>얼랑</small>");
+IB.stat("o-mm-rho", (rho * 100).toFixed(1) + "<small>%</small>");
+var vd = document.getElementById("o-mm-verdict"), tg = gTg();
+var cmin = Math.floor(a) + 1;
+while (cmin < 1e5 && erlangC(cmin, a) / (cmin * mu - lam) > tg) cmin++;
+IB.stat("o-mm-cmin", fmtN(cmin) + "<small>대</small>");
+if (rho >= 1) {
+["o-mm-c", "o-mm-wq", "o-mm-lq"].forEach(function (id) { IB.stat(id, "∞"); });
+vd.innerHTML = "<b class='bad'>불안정</b>: 제공 부하 " + a.toFixed(1) + "얼랑이 차량 " + c + "대보다 크다. 요청이 처리 속도보다 빨리 들어와 대기열이 끝없이 길어진다. 최소 " + (Math.floor(a) + 1) + "대가 필요하다.";
+return;
+}
+var C = erlangC(c, a), Wq = C / (c * mu - lam), W = Wq + s, Lq = lam * Wq, L = lam * W;
+IB.stat("o-mm-c", (C * 100).toFixed(1) + "<small>%</small>");
+IB.stat("o-mm-wq", fmtT(Wq * 60));
+IB.stat("o-mm-lq", (Lq < 10 ? Lq.toFixed(2) : fmtN(Lq)) + " / " + (L < 10 ? L.toFixed(2) : fmtN(L)));
+var spare = c - a, beta = spare / Math.sqrt(a);
+var msg = "여유 차량 c − a = " + spare.toFixed(1) + "대, 제곱근 단위로 β = (c−a)/√a ≈ " + beta.toFixed(2) + ". ";
+if (Wq <= tg) msg += "<b class='ok'>목표 만족</b>: 평균 대기 " + (Wq * 60).toFixed(1) + "초 ≤ 목표 " + (tg * 60).toFixed(0) + "초.";
+else msg += "<b class='" + (rho > 0.95 ? "bad" : "warn") + "'>목표 미달</b>: 평균 대기가 목표의 " + (Wq / tg).toFixed(1) + "배다. 차량을 " + cmin + "대로 늘리면 만족한다.";
+vd.innerHTML = msg;
+}
+var cv = IB.canvas(cvEl, draw, { aspect: 0.62, minHeight: 320, maxHeight: 430 });
+})();
+
+/* ================================================================ 6. 사이클 타임·WIP */
+(function () {
+var cvEl = document.getElementById("cv-ct");
+if (!cvEl) return;
+function redraw() { cv.redraw(); }
+var gTd = IB.range("ct-td", function (v) { return v.toFixed(1) + " 분"; }, redraw);
+var gTx = IB.range("ct-tx", function (v) { return v.toFixed(1) + " 분"; }, redraw);
+var gTe = IB.range("ct-te", function (v) { return v + " 분"; }, redraw);
+var gU = IB.range("ct-u", function (v) { return Math.round(v * 100) + " %"; }, redraw);
+var gM = IB.range("ct-m", function (v) { return v + " 대"; }, redraw);
+var gCa = IB.range("ct-ca", function (v) { return v.toFixed(1); }, redraw);
+var gN = IB.range("ct-n", function (v) { return v + " 스텝"; }, redraw);
+var START = 100000 / 30;
+function step(u, td, tx, te, m, ca) {
+var ue = (u * (te + tx)) / te;
+if (ue >= 0.995) return { ue: ue, wq: Infinity, ct: Infinity };
+var tEff = te + tx;
+var wq = ((ca + 1) / 2) * (Math.pow(ue, Math.sqrt(2 * (m + 1)) - 1) / (m * (1 - ue))) * tEff;
+return { ue: ue, wq: wq, ct: td + wq + te + tx };
+}
+function draw(ctx, w, h) {
+var P = IB.palette();
+var td = gTd(), tx = gTx(), te = gTe(), u = gU(), m = gM(), ca = gCa(), n = gN();
+var r = step(u, td, tx, te, m, ca);
+// 위 막대
+var bx = 58, bw = w - 58 - 18, by = 26, bh = 24;
+ctx.font = fontOf(12, true); ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+ctx.fillText(isFinite(r.ct) ? "스텝 하나의 사이클 타임 " + r.ct.toFixed(1) + "분의 구성" : "실효 가동률 ≥ 100 %: 대기열이 발산", bx, 18);
+if (isFinite(r.ct)) {
+var parts = [["반송", td, P.accent], ["교체 공백", tx, P.bad], ["장비 앞 대기", r.wq, P.warn], ["가공", te, P.ok]], x = bx, sc = bw / r.ct;
+parts.forEach(function (p) {
+var ww = p[1] * sc; if (ww <= 0) return;
+ctx.fillStyle = p[2]; ctx.globalAlpha = 0.85; ctx.fillRect(x, by, Math.max(0, ww - 1), bh); ctx.globalAlpha = 1;
+if (ww > 64) { ctx.fillStyle = P.bg; ctx.font = fontOf(11, true); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(p[0] + " " + p[1].toFixed(0) + "분", x + ww / 2, by + bh / 2); }
+x += ww;
+});
+}
+// 아래 곡선: 총 CT(일) vs 가동률
+var top = 70, box = { x: 58, y: top, w: w - 58 - 18, h: h - top - 46 };
+var cur = [], base = [], ymax = 10;
+for (var uu = 0.5; uu <= 0.971; uu += 0.005) {
+var a = step(uu, td, tx, te, m, ca), b = step(uu, 0, 0, te, m, ca);
+if (isFinite(a.ct)) cur.push([uu, (a.ct * n) / 1440]);
+if (isFinite(b.ct)) base.push([uu, (b.ct * n) / 1440]);
+}
+var ctNow = (r.ct * n) / 1440;
+ymax = Math.max(30, Math.min(400, (isFinite(ctNow) ? ctNow : 100) * 1.8));
+IB.chart(ctx, box, {
+x: [0.5, 0.97], y: [0, ymax], xLabel: "장비 가동률 u", yLabel: "총 사이클 타임 (일)",
+xFmt: function (v) { return Math.round(v * 100) + "%"; },
+series: [{ data: base, color: P.faint, width: 2, dash: [5, 4] }, { data: cur, color: P.accent, width: 2.8 }],
+points: isFinite(ctNow) ? [{ x: u, y: Math.min(ctNow, ymax), color: P.bad, r: 5, label: ctNow.toFixed(1) + "일" }] : []
+});
+legend(ctx, [["현재 반송·공백 조건", P.accent], ["반송 0 · 공백 0", P.faint, [5, 4], 2]], 72, top + 12, P);
+var vd = document.getElementById("o-ct-verdict");
+IB.stat("o-ct-ue", (r.ue * 100).toFixed(1) + "<small>%</small>");
+if (!isFinite(r.ct)) {
+["o-ct-step", "o-ct-tot", "o-ct-x", "o-ct-tr", "o-ct-wip"].forEach(function (id) { IB.stat(id, "∞"); });
+vd.innerHTML = "<b class='bad'>불안정</b>: 교체 공백 때문에 장비의 실효 가동률이 " + (r.ue * 100).toFixed(0) + " %가 되었다. 장비가 가공할 시간에 FOUP를 기다리느라 필요한 산출을 낼 수 없다. 선행 적재(공백 0)나 반송 단축이 필요하다.";
+return;
+}
+var tot = ctNow, X = r.ct / te, trShare = (td + tx) / r.ct, wip = START * tot;
+IB.stat("o-ct-step", r.ct.toFixed(1) + "<small>분</small>");
+IB.stat("o-ct-tot", tot.toFixed(1) + "<small>일</small>");
+IB.stat("o-ct-x", X.toFixed(2));
+IB.stat("o-ct-tr", (trShare * 100).toFixed(1) + "<small>%</small>");
+IB.stat("o-ct-wip", fmtN(wip / 25) + "<small>FOUP</small>");
+var b0 = step(u, 0, 0, te, m, ca), dDays = ((r.ct - b0.ct) * n) / 1440;
+var msg = "반송과 교체 공백이 없을 때보다 CT가 <b>" + dDays.toFixed(1) + "일</b> 길고, 그만큼 WIP가 약 <b>" + fmtN((START * dDays) / 25) + " FOUP</b> 많다. ";
+if (tx > 0) msg += "그중 교체 공백이 장비 앞 대기를 키운 몫이 " + (((r.wq - b0.wq) * n) / 1440).toFixed(1) + "일이다. ";
+msg += X > 4 ? "<b class='bad'>X-팩터 " + X.toFixed(1) + "</b>: 순수 가공 시간의 4배 이상을 기다린다." : X > 2.5 ? "<b class='warn'>X-팩터 " + X.toFixed(1) + "</b>: 첨단 팹에서 흔한 범위다." : "<b class='ok'>X-팩터 " + X.toFixed(1) + "</b>: 빠른 편이다.";
+vd.innerHTML = msg;
+}
+var cv = IB.canvas(cvEl, draw, { aspect: 0.6, minHeight: 330, maxHeight: 430 });
+})();
+
+/* ================================================================ 7. 디스패칭 규칙 DES */
+(function () {
+var cvEl = document.getElementById("cv-disp");
+if (!cvEl) return;
+var seed = 5, out = null, timer = 0;
+function sched() { clearTimeout(timer); timer = setTimeout(run, 120); }
+var gLam = IB.range("ds-lam", function (v) { return v + " 회/h"; }, sched);
+var gN = IB.range("ds-n", function (v) { return v + " 대"; }, sched);
+var gL = IB.range("ds-l", function (v) { return v + " m"; }, sched);
+var gCap = IB.range("ds-cap", function (v) { return (v / 60).toFixed(1) + " 분"; }, sched);
+var view = IB.seg("ds-view", function () { cv.redraw(); });
+var cbHot = document.getElementById("ds-hot");
+cbHot.addEventListener("change", sched);
+document.getElementById("ds-run").addEventListener("click", function () { seed = 1 + Math.floor(Math.random() * 1e6); run(); });
+var RULES = [["fifo", "FIFO"], ["nearest", "최근접"], ["hybrid", "혼합"]];
+function run() {
+var p = { L: gL(), S: 12, N: gN(), v: 2.5, h: 15, hours: 12, cap: gCap() };
+p.jobs = makeJobs(seed, gLam(), p.hours, p.S, cbHot.checked);
+out = RULES.map(function (r) {
+var x = dispatchDES(p, r[0]), wsum = 0;
+x.w.forEach(function (v) { wsum += v; });
+x.mean = x.w.length ? wsum / x.w.length : 0; x.p95 = quant(x.w, 0.95); x.max = x.w.length ? Math.max.apply(null, x.w) : 0;
+x.ef = x.empty + x.loaded > 0 ? x.empty / (x.empty + x.loaded) : 0;
+x.name = r[1];
+return x;
+});
+var ids = ["o-ds-f", "o-ds-n", "o-ds-h"];
+out.forEach(function (x, i) { IB.stat(ids[i], fmtT(x.mean) + " / " + fmtT(x.max)); });
+IB.stat("o-ds-e", out.map(function (x) { return Math.round(x.ef * 100); }).join(" / ") + "<small>%</small>");
+IB.stat("o-ds-b", out.map(function (x) { return x.backlog; }).join(" / "));
+var f = out[0], nn = out[1], hy = out[2], msg;
+var unstable = out.filter(function (x) { return x.backlog > 20; }).map(function (x) { return x.name; });
+if (unstable.length) msg = "<b class='bad'>" + unstable.join("·") + " 규칙은 이 부하를 못 버틴다</b>(종료 시점 밀린 요청 20건 초과). 공차 주행 비율이 높은 규칙일수록 같은 차량으로 낼 수 있는 처리량이 작다. ";
+else msg = "<b class='ok'>세 규칙 모두 안정</b>. ";
+msg += "최근접 규칙의 최대/평균 대기 비는 <b>" + (nn.mean > 0 ? (nn.max / nn.mean).toFixed(1) : "—") + "배</b>, FIFO는 " + (f.mean > 0 ? (f.max / f.mean).toFixed(1) : "—") + "배다. 혼합 규칙은 최대 대기를 " + fmtT(hy.max).replace(/<[^>]+>/g, "") + "로 묶는다.";
+document.getElementById("o-ds-verdict").innerHTML = msg;
+cv.redraw();
+}
+function draw(ctx, w, h) {
+if (!out) return;
+var P = IB.palette(), cols = [P.warn, P.accent, P.ok];
+if (view() === "cdf") {
+var mx = 10;
+out.forEach(function (x) { mx = Math.max(mx, x.max); });
+var xmax = Math.pow(10, Math.ceil(Math.log10(mx)));
+var series = out.map(function (x, i) {
+var a = x.w.slice().sort(function (p, q) { return p - q; }), d = [], nA = a.length, step = Math.max(1, Math.floor(nA / 400));
+for (var k = 0; k < nA; k += step) d.push([Math.max(1, a[k]), (k + 1) / nA]);
+if (nA) d.push([Math.max(1, a[nA - 1]), 1]);
+return { data: d, color: cols[i], width: 2.6 };
+});
+IB.chart(ctx, null, {
+x: [1, xmax], y: [0, 1], logX: true, xLabel: "반송 대기 시간 (초, 로그 축)", yLabel: "누적 비율",
+xFmt: function (v) { return v >= 3600 ? (v / 3600).toFixed(1) + "h" : v >= 60 ? Number((v / 60).toPrecision(2)) + "m" : v + "s"; },
+yFmt: function (v) { return Math.round(v * 100) + "%"; },
+series: series, hlines: [{ y: 0.95, color: P.faint, label: "95 %" }]
+});
+legend(ctx, out.map(function (x, i) { return [x.name, cols[i]]; }), 72, 26, P);
+} else {
+var box = { x: 58, y: 30, w: w - 58 - 18, h: h - 30 - 46 };
+var mets = [["평균 대기", "mean"], ["95 % 대기", "p95"], ["최대 대기", "max"]];
+var ymax = 1;
+out.forEach(function (x) { ymax = Math.max(ymax, x.max / 60); });
+ymax = Math.pow(10, Math.ceil(Math.log10(ymax)));
+var ch = IB.chart(ctx, box, { x: [0, 3], y: [0.1, ymax], logY: true, yLabel: "대기 시간 (분, 로그 축)", xTicks: [], series: [] });
+var gw = box.w / 3, bw = Math.min(40, gw / 4.5);
+mets.forEach(function (m, j) {
+var cx = box.x + gw * (j + 0.5);
+ctx.fillStyle = P.dim; ctx.font = fontOf(12); ctx.textAlign = "center"; ctx.textBaseline = "top";
+ctx.fillText(m[0], cx, box.y + box.h + 8);
+out.forEach(function (x, i) {
+var v = Math.max(0.1, x[m[1]] / 60), y = ch.Y(Math.min(v, ymax)), bx = cx + (i - 1.5) * bw * 1.1;
+ctx.fillStyle = cols[i]; ctx.globalAlpha = 0.85; ctx.fillRect(bx, y, bw, box.y + box.h - y); ctx.globalAlpha = 1;
+});
+});
+legend(ctx, out.map(function (x, i) { return [x.name, cols[i], null, 8]; }), 72, 40, P);
+}
+}
+var cv = IB.canvas(cvEl, draw, { aspect: 0.6, minHeight: 300, maxHeight: 420 });
+run();
+})();
+
+/* ================================================================ 8. OHB 버퍼: Erlang B */
+(function () {
+var cvEl = document.getElementById("cv-buf");
+if (!cvEl) return;
+function redraw() { cv.redraw(); }
+var gLam = IB.range("bf-lam", function (v) { return v + " FOUP/h"; }, redraw);
+var gT = IB.range("bf-t", function (v) { return v + " 분"; }, redraw);
+var gK = IB.range("bf-k", function (v) { return v + " 칸"; }, redraw);
+var gTg = IB.range("bf-tg", function (v) { return (Math.pow(10, v) * 100).toPrecision(2) + " %"; }, redraw);
+var gEx = IB.range("bf-ex", function (v) { return v.toFixed(1) + " 분"; }, redraw);
+function draw(ctx, w, h) {
+var P = IB.palette();
+var lam = gLam(), a = (lam * gT()) / 60, K = gK(), tg = Math.pow(10, gTg());
+var B = erlangB(K, a), kmin = 0;
+while (kmin < 2000 && erlangB(kmin, a) > tg) kmin++;
+var xmax = Math.min(400, Math.max(20, Math.ceil(Math.max(K, kmin, a) * 1.4 + 5)));
+var d = [];
+for (var k = 0; k <= xmax; k++) d.push([k, Math.max(1e-7, erlangB(k, a))]);
+IB.chart(ctx, null, {
+x: [0, xmax], y: [1e-6, 1], logY: true, xLabel: "버퍼 칸 수 K", yLabel: "넘침 확률 B",
+yFmt: function (v) { return v >= 0.01 ? Math.round(v * 100) + "%" : v.toExponential(0).replace("e", "e"); },
+series: [{ data: d, color: P.accent, width: 2.6 }],
+hlines: [{ y: tg, color: P.bad, label: "목표" }],
+vlines: [{ x: a, color: P.faint, label: "평균 점유 a" }],
+points: [{ x: K, y: Math.max(1e-6, B), color: P.bad, r: 5, label: "K = " + K }]
+});
+IB.stat("o-bf-a", a.toFixed(1) + "<small>칸</small>");
+IB.stat("o-bf-b", B >= 0.001 ? (B * 100).toFixed(2) + "<small>%</small>" : B.toExponential(1));
+IB.stat("o-bf-ov", (lam * B).toFixed(2) + "<small>FOUP/h</small>");
+IB.stat("o-bf-u", ((a * (1 - B)) / K * 100).toFixed(0) + "<small>%</small>");
+IB.stat("o-bf-kmin", kmin + "<small>칸 (" + (a > 0 ? (kmin / a).toFixed(2) : "—") + "×a)</small>");
+IB.stat("o-bf-x", ((lam * B * gEx()) / 60).toFixed(2) + "<small>대 상시 점유</small>");
+}
+var cv = IB.canvas(cvEl, draw, { aspect: 0.56, minHeight: 300, maxHeight: 400 });
+})();
+
+/* ================================================================ 9. S자 주행 프로파일 */
+(function () {
+var cvEl = document.getElementById("cv-prof");
+if (!cvEl) return;
+function redraw() { cv.redraw(); }
+var view = IB.seg("pf-view", redraw);
+var gD = IB.range("pf-d", function (v) { return v + " m"; }, redraw);
+var gV = IB.range("pf-v", function (v) { return v.toFixed(1) + " m/s"; }, redraw);
+var gA = IB.range("pf-a", function (v) { return v.toFixed(1) + " m/s²"; }, redraw);
+var gJ = IB.range("pf-j", function (v) { return v.toFixed(1) + " m/s³"; }, redraw);
+function Ta(v, a, J) { return v >= (a * a) / J ? v / a + a / J : 2 * Math.sqrt(v / J); }
+function da(v, a, J) { return (v * Ta(v, a, J)) / 2; }
+function prof(D, vmax, a, J) {
+var vp = vmax, tc;
+if (2 * da(vmax, a, J) <= D) tc = (D - 2 * da(vmax, a, J)) / vmax;
+else {
+var lo = 0, hi = vmax;
+for (var i = 0; i < 60; i++) { var mid = (lo + hi) / 2; if (2 * da(mid, a, J) > D) hi = mid; else lo = mid; }
+vp = Math.max(1e-6, lo); tc = 0;
+}
+var ta = Ta(vp, a, J), ap = vp >= (a * a) / J ? a : Math.sqrt(vp * J);
+return { vp: vp, ta: ta, tc: tc, T: 2 * ta + tc, ap: ap, tj: ap / J };
+}
+function accAt(t, r, J) {
+var tca = r.ta - 2 * r.tj;
+if (t < r.tj) return J * t;
+if (t < r.tj + tca) return r.ap;
+return Math.max(0, r.ap - J * (t - r.tj - tca));
+}
+function draw(ctx, w, h) {
+var P = IB.palette(), D = gD(), vmax = gV(), a = gA(), J = gJ(), r = prof(D, vmax, a, J);
+if (view() === "vt") {
+var n = 600, dt = r.T / n, v = 0, vd = [], ad = [];
+for (var i = 0; i <= n; i++) {
+var t = i * dt, acc;
+if (t < r.ta) acc = accAt(t, r, J);
+else if (t < r.ta + r.tc) acc = 0;
+else acc = -accAt(Math.min(r.ta, t - r.ta - r.tc), r, J);
+vd.push([t, Math.max(0, v)]); ad.push([t, acc]);
+v += acc * dt;
+}
+var ymax = Math.max(vmax, a) * 1.15;
+IB.chart(ctx, null, {
+x: [0, r.T], y: [-a * 1.2, ymax], xLabel: "시간 (s)", yLabel: "속도 m/s · 가속도 m/s²",
+series: [{ data: ad, color: P.warn, width: 2 }, { data: vd, color: P.accent, width: 2.8 }],
+hlines: [{ y: 0, color: P.axis, dash: [] }, { y: vmax, color: P.faint, label: "설정 최고 속도" }]
+});
+legend(ctx, [["속도 v(t)", P.accent], ["가속도 a(t)", P.warn]], 72, 26, P);
+} else {
+var d = [], dmax = 300;
+for (var x = 1; x <= dmax; x *= 1.04) { var q = prof(x, vmax, a, J); d.push([x, x / q.T]); }
+IB.chart(ctx, null, {
+x: [1, dmax], y: [0, vmax * 1.1], logX: true, xLabel: "주행 거리 D (m, 로그 축)", yLabel: "평균 속도 (m/s)",
+series: [{ data: d, color: P.accent, width: 2.8 }],
+hlines: [{ y: vmax, color: P.faint, label: "최고 속도" }, { y: vmax / 2, color: P.faint, label: "최고의 절반" }],
+points: [{ x: D, y: D / r.T, color: P.bad, r: 5, label: (D / r.T).toFixed(2) + " m/s" }]
+});
+}
+IB.stat("o-pf-t", r.T.toFixed(1) + "<small>s</small>");
+IB.stat("o-pf-vp", r.vp.toFixed(2) + "<small>m/s</small>");
+IB.stat("o-pf-avg", (D / r.T).toFixed(2) + "<small>m/s</small>");
+IB.stat("o-pf-ap", r.ap.toFixed(2) + "<small>m/s² (" + (r.ap / 9.81).toFixed(3) + " g)</small>");
+IB.stat("o-pf-f", (0.128 * r.ap).toFixed(3) + "<small>N</small>");
+IB.stat("o-pf-c", ((r.tc / r.T) * 100).toFixed(0) + "<small>%</small>");
+}
+var cv = IB.canvas(cvEl, draw, { aspect: 0.56, minHeight: 300, maxHeight: 400 });
+})();
+})();
+</script>
+</body>
+</html>
