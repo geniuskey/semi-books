@@ -695,3 +695,12 @@
     addSimulatorLinks();
   }
 })();
+
+// Series glossary tooltips (same runtime across independently deployed books).
+(function () {
+  const base = new URL(".", document.currentScript.src);
+  window.BOOK_GLOSSARY_CONFIG = { dataUrl: new URL("glossary-data.js", base).href };
+  const script = document.createElement("script");
+  script.src = new URL("glossary-tooltips.js", base).href;
+  document.head.append(script);
+})();
