@@ -36,7 +36,7 @@
 
   function card(book) {
     const title = titleOf(book), writing = book.status === "writing";
-    const meta = `<span>${book.chapters || 0}장</span>${writing ? '<span class="writing">집필 중</span>' : ""}`;
+    const meta = `<span>${book.chapters || 0}장</span>${writing ? '<span class="writing">집필 중</span>' : ""}<a href="${esc(book.url)}" aria-label="${esc(book.title)} 읽기">읽기 →</a>`;
     return `<article class="book${writing ? " writing" : ""}" data-book="${esc(book.id)}" style="--c:${esc(book.color || "#2f5f96")}">
       <div class="book-stand"><a class="book-cover" href="${esc(book.url)}" aria-label="${esc(title)} · ${esc(book.title)}${writing ? " (집필 중)" : ""} 읽기">
         <span class="book-top"><small>${esc(groupOf(book).label)}</small>${writing ? "<b>집필 중</b>" : ""}</span>
