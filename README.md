@@ -28,13 +28,13 @@
 | `/sensor/` | SensorBook · 이미지 센서 | `geniuskey/sensorbook` |
 | `/display/` | DisplayBook · 디스플레이 | `geniuskey/displaybook` |
 | `/industry/` | ChipIndustryBook · 반도체 산업 | `geniuskey/chipindustrybook` |
-| `/infra/` | InfraBook · 팹 인프라, 집필 중 | 이 저장소에서 별도 집필 |
+| `/infra/` | InfraBook · 팹 인프라 | 이 저장소에서 별도 집필 |
 
 기존 책 19권은 소스·실습 엔진·용어 데이터·저작권 안내를 포함해 가져왔습니다. `.git`, `node_modules`, 빌드 결과, 개별 사이트의 CNAME과 CI·패키지 설정은 복사 대상에서 제외합니다. 각 책의 CSS·JS와 실습은 독립적으로 유지하며, 공통 서가 연결과 테마는 `shared/`에서 지원합니다.
 
-## 한 달간 병행 관리
+## 원본 저장소에서 가져오기
 
-기존 저장소와 개별 도메인은 그대로 운영합니다. 서가에서 책 표지를 누르면 새 주소로 이동하며, 각 카드의 ‘기존 사이트’ 링크로 원래 주소에서도 읽을 수 있습니다.
+개별 도메인(`*book.euiyun.com`)은 운영을 마쳤습니다. 모든 책은 `semi.euiyun.com/{slug}/`에서만 제공하며, 책 사이의 링크도 내부 주소를 씁니다.
 
 가져오기 원본과 slug, 기존 URL은 `migration/books.json`에, 실제로 가져온 커밋과 파일별 해시는 `migration/import-state.json`에 기록합니다. 두 파일 모두 저장소에 보관합니다. 가져오기는 Git이 추적하는 파일을 대상으로 하므로 새 원본 파일은 먼저 해당 저장소에 추가합니다. 원본에 미커밋 수정이 있으면 상태 파일의 `sourceDirty`에도 기록합니다.
 

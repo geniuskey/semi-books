@@ -25,7 +25,6 @@ window.SEMI_BOOKS = [
    "BJT·광소자"
   ],
   "motif": "band",
-  "legacyUrl": "https://devicebook.euiyun.com/",
   "slug": "device",
   "local": true,
   "url": "device/"
@@ -54,7 +53,6 @@ window.SEMI_BOOKS = [
    "전력·신뢰성"
   ],
   "motif": "digital",
-  "legacyUrl": "https://digitalbook.euiyun.com/",
   "slug": "digital",
   "local": true,
   "url": "digital/"
@@ -82,7 +80,6 @@ window.SEMI_BOOKS = [
    "OPC·마스크"
   ],
   "motif": "circuit",
-  "legacyUrl": "https://designbook.euiyun.com/",
   "slug": "design",
   "local": true,
   "url": "design/"
@@ -111,7 +108,6 @@ window.SEMI_BOOKS = [
    "보안 부팅"
   ],
   "motif": "soc",
-  "legacyUrl": "https://socbook.euiyun.com/",
   "slug": "soc",
   "local": true,
   "url": "soc/"
@@ -140,7 +136,6 @@ window.SEMI_BOOKS = [
    "ADC·ΔΣ·PLL"
   ],
   "motif": "analog",
-  "legacyUrl": "https://analogbook.euiyun.com/",
   "slug": "analog",
   "local": true,
   "url": "analog/"
@@ -167,7 +162,6 @@ window.SEMI_BOOKS = [
    "FinFET·GAA"
   ],
   "motif": "process",
-  "legacyUrl": "https://processbook.euiyun.com/",
   "slug": "process",
   "local": true,
   "url": "process/"
@@ -196,7 +190,6 @@ window.SEMI_BOOKS = [
    "멀티 패터닝"
   ],
   "motif": "litho",
-  "legacyUrl": "https://lithobook.euiyun.com/",
   "slug": "litho",
   "local": true,
   "url": "litho/"
@@ -223,7 +216,6 @@ window.SEMI_BOOKS = [
    "원자층 식각"
   ],
   "motif": "etch",
-  "legacyUrl": "https://etchbook.euiyun.com/",
   "slug": "etch",
   "local": true,
   "url": "etch/"
@@ -277,7 +269,6 @@ window.SEMI_BOOKS = [
    "면저항·측정"
   ],
   "motif": "implant",
-  "legacyUrl": "https://dopingbook.euiyun.com/",
   "slug": "doping",
   "local": true,
   "url": "doping/"
@@ -305,7 +296,6 @@ window.SEMI_BOOKS = [
    "수율 탐정 게임"
   ],
   "motif": "wafermap",
-  "legacyUrl": "https://yieldbook.euiyun.com/",
   "slug": "yield",
   "local": true,
   "url": "yield/"
@@ -333,7 +323,6 @@ window.SEMI_BOOKS = [
    "근본 원인·8D"
   ],
   "motif": "probe",
-  "legacyUrl": "https://failurebook.euiyun.com/",
   "slug": "failure",
   "local": true,
   "url": "failure/"
@@ -362,7 +351,6 @@ window.SEMI_BOOKS = [
    "변동성"
   ],
   "motif": "tcad",
-  "legacyUrl": "https://tcadbook.euiyun.com/",
   "slug": "tcad",
   "local": true,
   "url": "tcad/"
@@ -417,7 +405,6 @@ window.SEMI_BOOKS = [
    "TSV·HBM"
   ],
   "motif": "package",
-  "legacyUrl": "https://packagingbook.euiyun.com/",
   "slug": "packaging",
   "local": true,
   "url": "packaging/"
@@ -446,7 +433,6 @@ window.SEMI_BOOKS = [
    "빈 분류·테스트 비용"
   ],
   "motif": "shmoo",
-  "legacyUrl": "https://testbook.euiyun.com/",
   "slug": "test",
   "local": true,
   "url": "test/"
@@ -472,7 +458,6 @@ window.SEMI_BOOKS = [
    "MRAM·PCM·CXL"
   ],
   "motif": "memory",
-  "legacyUrl": "https://memorybook.euiyun.com/",
   "slug": "memory",
   "local": true,
   "url": "memory/"
@@ -499,7 +484,6 @@ window.SEMI_BOOKS = [
    "RCWA·FDTD"
   ],
   "motif": "lens",
-  "legacyUrl": "https://opticsbook.euiyun.com/",
   "slug": "optics",
   "local": true,
   "url": "optics/"
@@ -525,7 +509,6 @@ window.SEMI_BOOKS = [
    "적층 센서·SPAD"
   ],
   "motif": "pixel",
-  "legacyUrl": "https://sensorbook.euiyun.com/",
   "slug": "sensor",
   "local": true,
   "url": "sensor/"
@@ -554,7 +537,6 @@ window.SEMI_BOOKS = [
    "XR 광학"
   ],
   "motif": "subpixel",
-  "legacyUrl": "https://displaybook.euiyun.com/",
   "slug": "display",
   "local": true,
   "url": "display/"
@@ -580,7 +562,6 @@ window.SEMI_BOOKS = [
    "공급망·지정학"
   ],
   "motif": "globe",
-  "legacyUrl": "https://chipindustrybook.euiyun.com/",
   "slug": "industry",
   "local": true,
   "url": "industry/"

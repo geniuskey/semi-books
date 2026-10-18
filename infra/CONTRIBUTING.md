@@ -48,7 +48,7 @@ MemoryBook(`../memorybook`)의 구조와 컴포넌트를 그대로 물려받았�
 계산 결과가 이 표와 어긋나면 표가 맞는 쪽으로 맞추거나 본문에 이유를 쓴다.
 
 ## 이어지는 책
-본문에서 자연스러울 때 링크한다: ProcessBook(https://processbook.euiyun.com/), LithoBook(https://lithobook.euiyun.com/), EtchBook(https://etchbook.euiyun.com/), YieldBook(https://yieldbook.euiyun.com/), FailureBook(https://failurebook.euiyun.com/), MemoryBook(https://memorybook.euiyun.com/), ChipIndustryBook(https://chipindustrybook.euiyun.com/).
+본문에서 자연스러울 때 링크한다: ProcessBook(/process/), LithoBook(/litho/), EtchBook(/etch/), YieldBook(/yield/), FailureBook(/failure/), MemoryBook(/memory/), ChipIndustryBook(/industry/).
 
 ## head 템플릿
 ```html

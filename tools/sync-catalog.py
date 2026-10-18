@@ -44,7 +44,7 @@ LOCAL = {
     },
 }
 
-KEYS = ["id", "code", "title", "subtitle", "headline", "description", "url", "stage", "status", "chapters", "simulators", "color", "colorDark", "topics", "motif", "legacyUrl"]
+KEYS = ["id", "code", "title", "subtitle", "headline", "description", "url", "stage", "status", "chapters", "simulators", "color", "colorDark", "topics", "motif"]
 
 
 def main():
@@ -61,8 +61,6 @@ def main():
         if entry["local"]:
             entry["url"] = slug + "/"
             entry["chapters"] = len(list((ROOT / slug / "chapters").glob("*.html")))
-        if book_id not in LOCAL:
-            entry["legacyUrl"] = src.get("legacyUrl") or src.get("url")
         entry.setdefault("motif", "layers")
         shelf.append(entry)
     body = json.dumps(shelf, ensure_ascii=False, indent=1)
