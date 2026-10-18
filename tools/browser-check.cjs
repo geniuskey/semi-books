@@ -35,7 +35,7 @@ const server = http.createServer((req, res) => {
 function pages() {
   const list = ["index.html"];
   for (const book of JSON.parse(fs.readFileSync(path.join(ROOT, "book.json"), "utf8")).books.map((p) => path.dirname(p))) {
-    if (importedOnly && book === "infra") continue;
+    if (importedOnly && (book === "infra" || book === "cmp")) continue;
     list.push(`${book}/index.html`);
     for (const f of fs.readdirSync(path.join(ROOT, book, "chapters")).filter((f) => f.endsWith(".html")).sort()) list.push(`${book}/chapters/${f}`);
   }

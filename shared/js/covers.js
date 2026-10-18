@@ -45,7 +45,7 @@
       range(6).forEach((i) => { s += `<rect x="${30 + i * 26}" y="22" width="6" height="8" fill="${W}" fill-opacity=".5"/>`; });
       return svg(s);
     },
-    // 이하 fab·process·etch는 SemiBooks에서 만들어 books 포털과 함께 쓰는 표지다. 움직임은 .fb-·.pr-·.et- 클래스가 맡고,
+    // 이하 fab·process·etch·cmp는 SemiBooks에서 만들어 books 포털과 함께 쓰는 표지다. 움직임은 .fb-·.pr-·.et- 클래스가 맡고,
     // 애니메이션이 없을 때(동작 줄이기)도 그 자체로 완성된 그림이 되도록 기본 도형을 첫 프레임과 같게 그린다.
     // 팹 인프라 단면: FFU가 내려보낸 공기는 바닥 구멍을 지나 양쪽 샤프트를 타고 천장으로 돌아가고,
     // 천장 레일의 OHT는 FOUP을 장비 앞 로드 포트에 내려놓는다. 바닥 아래 배관은 초순수와 가스를 장비로 올려 보낸다.
@@ -140,6 +140,29 @@
       }));
       s += `</g>`;
       open.forEach(([x, w], i) => { s += `<circle class="et-out" opacity="0" style="--ox:${i % 2 ? 6 : -6}px;animation-delay:-${(i * 0.55).toFixed(2)}s" cx="${x + w / 2}" cy="74" r="1.8" fill="#ffe8a3"/>`; });
+      return svg(s);
+    },
+    // CMP: 회전하는 정반 위 패드에 헤드가 웨이퍼를 눌러 돌리고, 노즐이 슬러리를 떨어뜨리며, 컨디셔너가 패드를 쓸고 지나간다.
+    // 왼쪽 위 단면에서는 울퉁불퉁한 막의 볼록한 곳부터 깎여 평평해진다.
+    cmp() {
+      const ring = (ry, o, k) => `<ellipse class="cv-flow" style="animation-duration:${(1.6 + k * 0.5).toFixed(1)}s" cx="104" cy="96" rx="${(ry * 3.6).toFixed(1)}" ry="${ry}" fill="none" stroke="${W}" stroke-opacity="${o}" stroke-dasharray="5 5"/>`;
+      let s = `<ellipse cx="104" cy="104" rx="94" ry="24" fill="${W}" fill-opacity=".18"/>`;
+      s += `<path d="M10 96 V104 A94 24 0 0 0 198 104 V96" fill="${W}" fill-opacity=".14"/>`;
+      s += `<ellipse cx="104" cy="96" rx="94" ry="24" fill="${W}" fill-opacity=".3" stroke="${W}" stroke-opacity=".55"/>`;
+      [6, 11, 16, 21].forEach((r, k) => { s += ring(r, ".35", k); });
+      // 슬러리 노즐과 방울
+      s += `<path d="M8 40 H62 V58" fill="none" stroke="${W}" stroke-opacity=".6" stroke-width="3" stroke-linecap="round"/>`;
+      [0, 0.45, 0.9].forEach((d) => { s += `<circle class="cm-drop" style="animation-delay:-${d}s" cx="62" cy="62" r="2.2" fill="#ffd8e4"/>`; });
+      s += `<ellipse cx="60" cy="96" rx="14" ry="3.6" fill="#ffd8e4" fill-opacity=".5"/>`;
+      // 컨디셔너 팔
+      s += `<g class="cm-sweep"><path d="M196 64 L162 90" stroke="${W}" stroke-opacity=".55" stroke-width="3" stroke-linecap="round"/><ellipse cx="160" cy="92" rx="11" ry="3.4" fill="${W}" fill-opacity=".75"/></g>`;
+      // 헤드
+      s += `<g class="cm-head"><rect x="113" y="50" width="6" height="22" fill="${W}" fill-opacity=".6"/><path d="M96 72 H136 V84 A20 5 0 0 1 96 84 Z" fill="${W}" fill-opacity=".7"/><ellipse cx="116" cy="72" rx="20" ry="5" fill="${W}" fill-opacity=".9"/></g>`;
+      // 단면 삽화: 볼록한 곳이 먼저 깎인다
+      s += `<rect x="110" y="8" width="84" height="34" rx="4" fill="#000" fill-opacity=".12" stroke="${W}" stroke-opacity=".35"/>`;
+      s += `<rect x="116" y="30" width="72" height="7" fill="${W}" fill-opacity=".35"/>`;
+      s += `<rect x="116" y="22" width="72" height="8" fill="${W}" fill-opacity=".55"/><path class="cm-flat" d="M130 22 V14 H146 V22 Z M160 22 V14 H176 V22 Z" fill="${W}" fill-opacity=".55"/>`;
+      s += `<path d="M116 22 H188" stroke="#ffd8e4" stroke-opacity=".8" stroke-dasharray="3 2"/>`;
       return svg(s);
     },
     // 인과적 어텐션 히트맵

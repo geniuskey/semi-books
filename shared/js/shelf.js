@@ -16,7 +16,7 @@
   // 세로 표지에는 books 포털처럼 짧은 이름을 쓴다.
   const coverTitles = {
     devicebook: "반도체 소자", digitalbook: "디지털 회로", designbook: "반도체 설계", socbook: "시스템 온 칩", analogbook: "아날로그 회로",
-    processbook: "제조 공정", lithobook: "노광", etchbook: "식각", dopingbook: "도핑", yieldbook: "수율 분석", failurebook: "불량 분석",
+    processbook: "제조 공정", lithobook: "노광", etchbook: "식각", cmpbook: "CMP·세정", dopingbook: "도핑", yieldbook: "수율 분석", failurebook: "불량 분석",
     tcadbook: "소자 시뮬레이션", infrabook: "반도체 인프라", packagingbook: "패키징", testbook: "반도체 테스트", memorybook: "메모리",
     opticsbook: "센서 광학", sensorbook: "이미지 센서", displaybook: "디스플레이", chipindustrybook: "반도체 산업",
   };

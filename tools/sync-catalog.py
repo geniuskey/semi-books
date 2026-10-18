@@ -3,7 +3,7 @@
 
 Usage: python3 tools/sync-catalog.py [path/to/books/data/books.json]
 Default source: migration/books.json. An external portal catalog is optional.
-InfraBook metadata stays separate from the imported repository snapshots.
+InfraBook and CMPBook metadata stay separate from the imported repository snapshots.
 """
 import json
 import sys
@@ -15,7 +15,7 @@ SOURCE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "migration" / "books
 # 서가 순서와 semi.euiyun.com/{slug}/ 경로
 ORDER = [
     ("devicebook", "device"), ("digitalbook", "digital"), ("designbook", "design"), ("socbook", "soc"),
-    ("analogbook", "analog"), ("processbook", "process"), ("lithobook", "litho"), ("etchbook", "etch"),
+    ("analogbook", "analog"), ("processbook", "process"), ("lithobook", "litho"), ("etchbook", "etch"), ("cmpbook", "cmp"),
     ("dopingbook", "doping"), ("yieldbook", "yield"), ("failurebook", "failure"), ("tcadbook", "tcad"),
     ("infrabook", "infra"),
     ("packagingbook", "packaging"), ("testbook", "test"), ("memorybook", "memory"), ("opticsbook", "optics"),
@@ -32,6 +32,15 @@ LOCAL = {
         "color": "#2f5f96", "colorDark": "#8db8ea",
         "topics": ["클린룸·공조", "초순수·폐수", "가스·케미컬", "배기·스크러버", "전력 품질", "냉동·냉각수", "진동·AMHS", "안전·신뢰성·탄소"],
         "motif": "fab",
+    },
+    "cmpbook": {
+        "id": "cmpbook", "code": "CMP", "title": "CMPBook", "subtitle": "반도체 CMP·세정 교과서",
+        "headline": "갈아서 평평하게, 씻어서 깨끗하게",
+        "description": "프레스턴 방정식과 운동학, 패드·컨디셔닝·슬러리, 마찰과 온도, 패턴 의존성과 디싱·이로전, 산화막·STI·구리·텅스텐 CMP, 종점 검출과 공정 제어, 결함, 세정의 기초와 CMP 후 세정, 하이브리드 본딩까지. 가상 기준 공정 CP-300으로 직접 깎고 씻어 보며 배우는 반도체 CMP·세정 교과서.",
+        "url": "cmp/", "stage": "process", "status": "published", "chapters": 18,
+        "color": "#0b7a75", "colorDark": "#63d2c6",
+        "topics": ["프레스턴 방정식", "패드·컨디셔닝", "슬러리 화학", "디싱·이로전", "STI·구리 CMP", "종점 검출·R2R", "결함", "세정·건조"],
+        "motif": "cmp",
     },
 }
 

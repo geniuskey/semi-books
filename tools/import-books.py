@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import the individual semiconductor repositories without writing to them or infra/.
+"""Import the individual semiconductor repositories without writing to them or infra/ and cmp/.
 
 python3 tools/import-books.py --write    # first import / safe refresh
 python3 tools/import-books.py --check    # compare with the sibling repositories
@@ -74,7 +74,7 @@ def main():
         slug = book["slug"]
         if args.book and slug not in args.book:
             continue
-        if slug == "infra" or not re.fullmatch(r"[a-z][a-z0-9-]*", slug):
+        if slug in ("infra", "cmp") or not re.fullmatch(r"[a-z][a-z0-9-]*", slug):
             raise ValueError("unsafe or reserved destination: " + slug)
         source = (ROOT / book["sourceDirectory"]).resolve()
         files = subprocess.check_output(["git", "ls-files", "-z"], cwd=source).decode().split("\0")
@@ -126,7 +126,7 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-    print(f"Imported {len(plan)} file(s). Individual repositories and infra/ were not modified.")
+    print(f"Imported {len(plan)} file(s). Individual repositories, infra/ and cmp/ were not modified.")
     return 0
 
 
