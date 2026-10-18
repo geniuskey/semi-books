@@ -45,6 +45,103 @@
       range(6).forEach((i) => { s += `<rect x="${30 + i * 26}" y="22" width="6" height="8" fill="${W}" fill-opacity=".5"/>`; });
       return svg(s);
     },
+    // 이하 fab·process·etch는 SemiBooks에서 만들어 books 포털과 함께 쓰는 표지다. 움직임은 .fb-·.pr-·.et- 클래스가 맡고,
+    // 애니메이션이 없을 때(동작 줄이기)도 그 자체로 완성된 그림이 되도록 기본 도형을 첫 프레임과 같게 그린다.
+    // 팹 인프라 단면: FFU가 내려보낸 공기는 바닥 구멍을 지나 양쪽 샤프트를 타고 천장으로 돌아가고,
+    // 천장 레일의 OHT는 FOUP을 장비 앞 로드 포트에 내려놓는다. 바닥 아래 배관은 초순수와 가스를 장비로 올려 보낸다.
+    fab() {
+      const flow = (d, k, o, dur) => `<path class="cv-flow" style="animation-duration:${dur}s;animation-delay:-${(k * 0.19).toFixed(2)}s" d="${d}" fill="none" stroke="${W}" stroke-opacity="${o}" stroke-width="1.2" stroke-dasharray="4 6"/>`;
+      let s = `<rect x="6" y="121" width="194" height="5" rx="1" fill="${W}" fill-opacity=".3"/>`;
+      s += `<rect x="22" y="12" width="168" height="109" rx="2" fill="${W}" fill-opacity=".06" stroke="${W}" stroke-opacity=".5" stroke-width="1.3"/>`;
+      s += `<rect x="23" y="86" width="166" height="34.4" fill="#000" fill-opacity=".16"/>`;
+      s += `<rect x="18" y="8" width="176" height="5" rx="1.5" fill="${W}" fill-opacity=".6"/>`;
+      [40, 150].forEach((x) => { s += `<rect x="${x}" y="2" width="22" height="6" rx="1" fill="${W}" fill-opacity=".42"/>`; });
+      // 되돌아가는 공기: 바닥 아래에서 양쪽 샤프트를 타고 천장 플레넘으로
+      s += flow("M100 91 H27 V17 H98", 0, ".3", 2.4) + flow("M112 91 H185 V17 H114", 3, ".3", 2.4);
+      range(6).forEach((i) => { s += `<rect x="${36 + i * 24}" y="20" width="20" height="5" rx="1" fill="${W}" fill-opacity=".62"/>`; });
+      s += `<path d="M32 25 V80 M180 25 V80" stroke="${W}" stroke-opacity=".35" stroke-width="1.2"/>`;
+      // 장비 세 대: 낮은 장비, 노광기처럼 높은 장비와 그 앞 로드 포트, 작은 장비
+      s += `<rect x="40" y="52" width="32" height="28" rx="1.5" fill="${W}" fill-opacity=".5"/>`;
+      s += `<rect x="112" y="42" width="34" height="38" rx="1.5" fill="${W}" fill-opacity=".62"/>`;
+      s += `<rect x="96" y="58" width="16" height="2.5" fill="${W}" fill-opacity=".85"/><rect x="102" y="60.5" width="4" height="19.5" fill="${W}" fill-opacity=".3"/>`;
+      s += `<rect x="154" y="56" width="22" height="24" rx="1.5" fill="${W}" fill-opacity=".48"/>`;
+      [[44, 47, 0], [158, 51, 0.8]].forEach(([x, y, d]) => { s += `<rect class="cv-blink" style="animation-delay:-${d}s" x="${x}" y="${y}" width="4" height="4" rx="1" fill="#9be7ff"/>`; });
+      // 층류: 장비 윗면이나 바닥까지 곧게 내려간다
+      [[36, 79], [56, 51], [84, 79], [129, 41], [150, 79], [177, 79]].forEach(([x, y], k) => { s += flow(`M${x} 26 V${y}`, k, ".62", 1.3); });
+      s += `<path d="M34 31 H178" stroke="${W}" stroke-opacity=".7" stroke-width="1.6"/>`;
+      [50, 90, 130, 170].forEach((x) => { s += `<path d="M${x} 25 V31" stroke="${W}" stroke-opacity=".35"/>`; });
+      // OHT: 레일을 따라 가다 로드 포트 위에서 멈추고 FOUP을 내렸다 올린다
+      const oht = "animation-delay:-1.2s";
+      s += `<g class="fb-oht" style="--dx:120px;${oht}"><rect x="36" y="31.5" width="16" height="6.5" rx="1.4" fill="${W}"/>`;
+      s += `<path class="fb-belt" style="${oht}" d="M39.5 38h.8v2h-.8zM47.7 38h.8v2h-.8z" fill="${W}" fill-opacity=".85"/>`;
+      s += `<rect class="fb-hoist" style="${oht}" x="38" y="40" width="12" height="8" rx="1.6" fill="${W}" fill-opacity=".9"/></g>`;
+      // 이중 바닥과 서브팹: 초순수·가스 헤더, 장비로 올라가는 배관, 진공 펌프와 스크러버
+      s += `<rect x="32" y="80" width="148" height="6" fill="${W}" fill-opacity=".38"/>`;
+      range(21).forEach((i) => { s += `<rect x="${35 + i * 7}" y="81.5" width="3" height="3" fill="#000" fill-opacity=".28"/>`; });
+      [["#9be7ff", 100, [58, 166]], ["#ffd27a", 106, [128]]].forEach(([c, y, risers]) => {
+        [`M36 ${y} H176`, ...risers.map((x) => `M${x} ${y} V80`)].forEach((d) => {
+          s += `<path d="${d}" stroke="${c}" stroke-opacity=".4" stroke-width="2" fill="none"/><path class="cv-flow" style="animation-duration:1.7s" d="${d}" stroke="${c}" stroke-width="2" stroke-dasharray="3 7" fill="none"/>`;
+        });
+      });
+      [[44, 16], [118, 18]].forEach(([x, w]) => { s += `<rect x="${x}" y="110" width="${w}" height="10" rx="2.5" fill="${W}" fill-opacity=".5"/>`; });
+      s += `<rect x="148" y="108" width="22" height="12" rx="1.5" fill="${W}" fill-opacity=".4"/>`;
+      return svg(s);
+    },
+    // 제조 공정: 막을 쌓고(증착) 빛으로 무늬를 옮기고(노광) 깎고(식각) 이온을 심고(주입) 배선을 이으면(배선)
+    // 트랜지스터 하나가 완성된다. 위의 다섯 점이 지금 단계를 따라가고, 멈춰 있을 때는 완성된 단면을 보여 준다.
+    process() {
+      const T = 7, at = (o) => `animation-delay:-${(T - o).toFixed(2)}s`;
+      let s = `<rect x="58" y="9" width="120" height="2" rx="1" fill="${W}" fill-opacity=".28"/>`;
+      s += `<rect class="pr-progress" x="58" y="9" width="120" height="2" rx="1" fill="${W}" fill-opacity=".9"/>`;
+      range(5).forEach((i) => { s += `<circle cx="${58 + i * 30}" cy="10" r="3.6" fill="${W}" fill-opacity=".45"/>`; });
+      s += `<circle class="pr-node" cx="178" cy="10" r="5.2" fill="${W}"/>`;
+      // 기판과 소자 분리막, 소스·드레인, 마지막 단계에 덮이는 층간 절연막
+      s += `<rect x="36" y="88" width="160" height="36" fill="${W}" fill-opacity=".22"/>`;
+      s += `<path d="M36 88h14v16h-14zM182 88h14v16h-14z" fill="${W}" fill-opacity=".45"/>`;
+      s += `<path class="pr-sd" d="M50 88 H98 V94 A5 5 0 0 1 93 99 H50 Z M182 88 H134 V94 A5 5 0 0 0 139 99 H182 Z" fill="${W}" fill-opacity=".6"/>`;
+      s += `<rect class="pr-ild" x="36" y="58" width="160" height="30" fill="${W}" fill-opacity=".1"/>`;
+      // 막: 양옆은 식각으로 사라지고 가운데만 게이트로 남는다
+      s += `<path class="pr-film" opacity="0" d="M50 76 H100 V88 H50 Z M132 76 H182 V88 H132 Z" fill="${W}" fill-opacity=".7"/>`;
+      s += `<rect class="pr-gate" x="100" y="76" width="32" height="12" fill="${W}" fill-opacity=".7"/>`;
+      s += `<path class="pr-spacer" d="M100 77 Q95 80 94 88 H100 Z M132 77 Q137 80 138 88 H132 Z" fill="${W}" fill-opacity=".42"/>`;
+      s += `<path class="pr-contact" d="M70 58 H76 V88 H70 Z M156 58 H162 V88 H156 Z" fill="${W}" fill-opacity=".85"/><rect class="pr-contact" x="113" y="58" width="6" height="18" fill="${W}" fill-opacity=".85"/>`;
+      s += `<path class="pr-metal" d="M60 52 H86 V58 H60 Z M104 52 H128 V58 H104 Z M146 52 H172 V58 H146 Z" fill="${W}" fill-opacity=".95"/>`;
+      // 감광막과 마스크, 마스크의 투명한 부분을 지나는 빛
+      s += `<path class="pr-resist-s" opacity="0" d="M50 70 H100 V76 H50 Z M132 70 H182 V76 H132 Z" fill="#ffe8a3" fill-opacity=".9"/>`;
+      s += `<rect class="pr-resist-c" opacity="0" x="100" y="70" width="32" height="6" fill="#ffe8a3" fill-opacity=".9"/>`;
+      s += `<g class="pr-mask" opacity="0"><rect x="50" y="34" width="132" height="5" fill="${W}" fill-opacity=".16" stroke="${W}" stroke-opacity=".55" stroke-width=".8"/><rect x="100" y="34" width="32" height="5" fill="${W}"/></g>`;
+      [58, 70, 82, 94, 138, 150, 162, 174].forEach((x, k) => { s += `<path class="pr-ray" opacity="0" style="animation-delay:0s,-${((k % 4) * 0.2).toFixed(1)}s" d="M${x} 16 V69" stroke="#fff3bf" stroke-width="1.6" stroke-dasharray="4 6" fill="none"/>`; });
+      // 식각 이온은 열린 곳만, 주입 이온은 게이트 양옆에만 떨어진다(자기 정렬)
+      [64, 80, 152, 168].forEach((x, k) => [0, 0.36].forEach((o) => { s += `<rect class="pr-etch" opacity="0" style="${at(o + k * 0.09)}" x="${x - 0.7}" y="40" width="1.4" height="7" rx=".7" fill="${W}"/>`; }));
+      [60, 74, 88, 144, 158, 172].forEach((x, k) => [0, 0.4].forEach((o) => { s += `<circle class="pr-ion" opacity="0" style="${at(o + (k % 3) * 0.12 + (k > 2 ? 0.06 : 0))}" cx="${x}" cy="18" r="2" fill="${W}"/>`; }));
+      return svg(s);
+    },
+    // 플라스마 식각: 빛나는 플라스마의 이온이 시스를 지나 수직으로 내리꽂혀 마스크 사이를 깎는다.
+    // 좁은 구멍일수록 덜 깎이고(ARDE), 옆벽에는 보호막이 쌓이며, 휘발성 부산물은 위로 빠져나간다.
+    etch() {
+      const open = [[60, 16, 1], [98, 12, 0.82], [132, 9, 0.64], [163, 6, 0.45]]; // x, 폭, 최종 깊이 비율
+      const mask = [[38, 60], [76, 98], [110, 132], [141, 163], [169, 196]];
+      let s = `<rect x="38" y="3" width="158" height="5" rx="1.5" fill="${W}" fill-opacity=".55"/>`;
+      s += `<g class="et-glow"><ellipse cx="117" cy="22" rx="80" ry="12" fill="${W}" fill-opacity=".1"/><ellipse cx="117" cy="22" rx="62" ry="8.5" fill="${W}" fill-opacity=".12"/><ellipse class="cv-pulse" cx="117" cy="22" rx="40" ry="5" fill="#f3d9fa" fill-opacity=".5"/></g>`;
+      [[70, 20], [96, 27], [128, 17], [150, 26], [172, 21]].forEach(([x, y], k) => { s += `<circle class="et-drift" style="animation-delay:-${(k * 0.5).toFixed(1)}s" cx="${x}" cy="${y}" r="1.6" fill="${W}" fill-opacity=".85"/>`; });
+      s += `<path d="M38 40 H196" stroke="${W}" stroke-opacity=".28" stroke-dasharray="2 3"/>`;
+      s += `<rect x="38" y="102" width="158" height="19" fill="${W}" fill-opacity=".2"/><rect x="34" y="121" width="166" height="5" rx="1.5" fill="${W}" fill-opacity=".5"/>`;
+      mask.forEach(([a, b]) => { s += `<rect x="${a}" y="62" width="${b - a}" height="40" fill="${W}" fill-opacity=".4"/><rect x="${a}" y="56" width="${b - a}" height="6" fill="${W}" fill-opacity=".9"/>`; });
+      // 열린 곳의 남은 막은 위에서부터 깎이고, 깎인 만큼 옆벽 보호막이 따라 내려간다. 기본 도형은 70% 깎인 모습이고
+      // 키프레임은 그 높이에 대한 배율이다: --k1은 다 깎였을 때, --kf는 새 막을 채웠을 때.
+      open.forEach(([x, w, d]) => {
+        const s0 = 1 - 0.7 * d, h = 40 * s0;
+        s += `<rect class="et-front" style="--k1:${((1 - d) / s0).toFixed(3)};--kf:${(1 / s0).toFixed(3)}" x="${x}" y="${(102 - h).toFixed(1)}" width="${w}" height="${h.toFixed(1)}" fill="${W}" fill-opacity=".4"/>`;
+        [x, x + w - 1.2].forEach((wx) => { s += `<rect class="et-wall" x="${wx}" y="62" width="1.2" height="${(28 * d).toFixed(1)}" fill="${W}" fill-opacity=".8"/>`; });
+      });
+      s += `<g class="et-gate">`;
+      open.forEach(([x, w, d], i) => [0, 0.45].forEach((o) => {
+        s += `<rect class="et-ion" style="--dy:${(62 + 40 * d * 0.85 - 35).toFixed(1)}px;animation-delay:-${(o + i * 0.21).toFixed(2)}s" x="${x + w / 2 - 0.7}" y="28" width="1.4" height="7" rx=".7" fill="${W}"/>`;
+      }));
+      s += `</g>`;
+      open.forEach(([x, w], i) => { s += `<circle class="et-out" opacity="0" style="--ox:${i % 2 ? 6 : -6}px;animation-delay:-${(i * 0.55).toFixed(2)}s" cx="${x + w / 2}" cy="74" r="1.8" fill="#ffe8a3"/>`; });
+      return svg(s);
+    },
     // 인과적 어텐션 히트맵
     attention() {
       const r = rnd(11); let s = ""; const n = 7, p = 15, x0 = 74, y0 = 14;

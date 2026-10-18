@@ -11,6 +11,10 @@ Copyright (c) 2026 geniuskey and SemiBooks contributors
 
 루트 `index.html`과 각 책 폴더(`infra/` 등)의 HTML에는 두 종류가 함께 있습니다. HTML 구조와 실행 코드는 MIT, 그 안의 본문·그림·문제·해설은 CC BY 4.0입니다. JS에 포함된 교육용 문장·용어·문제·해설도 CC BY 4.0이며, 이를 표시하거나 처리하는 코드는 MIT입니다. 그림을 생성하는 코드를 재사용할 때는 MIT를, 교재의 그림 자체를 복제하거나 수정할 때는 CC BY 4.0을 적용합니다. 문서 안의 실행 코드 예제는 MIT입니다.
 
+## 시뮬레이터 화면 (`shared/img/sims/`)
+
+서가 홈의 ‘직접 해보기’ 이미지는 각 교과서의 시뮬레이터 화면을 캡처한 것으로, `geniuskey/books`의 `img/sims/`에서 가져왔습니다. 해당 교과서의 콘텐츠로서 CC BY 4.0을 따르며, 파일 이름의 앞부분이 출처 책입니다. 예: `memorybook-sim-h3.jpg` → [MemoryBook](https://semi.euiyun.com/memory/).
+
 ## 재사용 조건
 
 - **코드:** 수정·재배포·상업적 이용이 가능합니다. 코드의 복사본이나 상당 부분을 배포할 때는 저작권 고지와 MIT 라이선스 전문을 유지하세요.

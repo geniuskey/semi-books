@@ -166,7 +166,7 @@ window.SEMI_BOOKS = [
    "CMP",
    "FinFET·GAA"
   ],
-  "motif": "layers",
+  "motif": "process",
   "legacyUrl": "https://processbook.euiyun.com/",
   "slug": "process",
   "local": true,
@@ -222,7 +222,7 @@ window.SEMI_BOOKS = [
    "ARDE·보잉",
    "원자층 식각"
   ],
-  "motif": "layers",
+  "motif": "etch",
   "legacyUrl": "https://etchbook.euiyun.com/",
   "slug": "etch",
   "local": true,
@@ -350,7 +350,7 @@ window.SEMI_BOOKS = [
   "url": "infra/",
   "stage": "infra",
   "status": "writing",
-  "chapters": 3,
+  "chapters": 18,
   "color": "#2f5f96",
   "colorDark": "#8db8ea",
   "topics": [
@@ -363,9 +363,9 @@ window.SEMI_BOOKS = [
    "진동·AMHS",
    "안전·신뢰성·탄소"
   ],
+  "motif": "fab",
   "slug": "infra",
-  "local": true,
-  "motif": "layers"
+  "local": true
  },
  {
   "id": "packagingbook",

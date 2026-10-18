@@ -72,7 +72,13 @@ for (const book of BOOKS) {
   const files = fs.readdirSync(path.join(ROOT, book, "chapters")).filter((f) => f.endsWith(".html")).map((f) => f.slice(0, -5));
   for (const f of files) if (!slugs.includes(f)) fail(`${book}/chapters/${f}.html is not registered in CHAPTERS`);
 }
-try { new vm.Script(fs.readFileSync(path.join(ROOT, "catalog.js"), "utf8")); } catch (e) { fail(`catalog.js: ${e.message}`); }
+try {
+  // 모르는 motif는 조용히 격자 표지로 대체되므로, 서가의 모든 책이 자기 표지를 갖는지 확인한다.
+  const shelf = { window: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(ROOT, "catalog.js"), "utf8") + "\n" + fs.readFileSync(path.join(ROOT, "shared/js/covers.js"), "utf8"), shelf);
+  const fallback = shelf.window.coverArt("");
+  for (const b of shelf.window.SEMI_BOOKS) if (shelf.window.coverArt(b.motif) === fallback) fail(`catalog.js: ${b.id} motif "${b.motif}" has no cover in shared/js/covers.js`);
+} catch (e) { fail(`catalog.js / covers.js: ${e.message}`); }
 
 warn.forEach((w) => console.log("warn  " + w));
 errors.forEach((e) => console.log("ERROR " + e));

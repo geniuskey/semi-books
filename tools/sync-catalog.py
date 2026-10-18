@@ -31,6 +31,7 @@ LOCAL = {
         "url": "infra/", "stage": "infra", "status": "writing", "chapters": 18,
         "color": "#2f5f96", "colorDark": "#8db8ea",
         "topics": ["클린룸·공조", "초순수·폐수", "가스·케미컬", "배기·스크러버", "전력 품질", "냉동·냉각수", "진동·AMHS", "안전·신뢰성·탄소"],
+        "motif": "fab",
     },
 }
 

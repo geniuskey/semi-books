@@ -55,11 +55,13 @@ npm run build
 ## 구성
 
 ```text
-index.html, shelf.css                 서가 홈, 분야 필터와 검색
+index.html, shelf.css                 서가 홈: 책장·분야 필터·검색, 대표 실험, 읽는 순서
 catalog.js                           생성된 책 목록
 book.json                            서가 메타데이터, 각 책의 book.json 목록
-shared/js/covers.js                   books 프로젝트의 SVG 책 표지
+shared/js/shelf.js                    서가 홈의 책장 렌더링·필터·실험 카드
+shared/js/covers.js                   books 프로젝트의 SVG 책 표지와 공정·식각·인프라 표지
 shared/css/cover-animations.css       표지 애니메이션, 동작 줄이기 지원
+shared/img/sims/                      홈 ‘직접 해보기’의 시뮬레이터 화면
 shared/js/book-shell.js               가져온 책의 ‘반도체 서가’ 연결
 {slug}/                              각 책의 본문, 실습, 용어 데이터, 집필 도구
 infra/                               별도 집필 중인 InfraBook
@@ -75,6 +77,8 @@ tools/browser-check.cjs               데스크톱·모바일 브라우저 검�
 ```
 
 `catalog.js`를 직접 수정하지 않고 `migration/books.json`의 책 정보를 수정한 후 생성합니다. 원본 포털의 목록을 다시 참고할 때는 `python3 tools/sync-catalog.py ../books/data/books.json`도 사용할 수 있습니다. 실제 장 수는 통합된 파일에서 계산합니다.
+
+표지 그림은 각 책의 `motif`로 고릅니다. ProcessBook의 `process`, EtchBook의 `etch`, InfraBook의 `fab`은 이 저장소에서 만들어 books 포털에도 같은 코드로 반영한 표지입니다. 표지를 고칠 때는 `shared/js/covers.js`·`shared/css/cover-animations.css`와 books의 `js/covers.js`·`css/style.css`를 함께 맞춥니다. `npm test`는 서가의 모든 `motif`에 표지가 있는지도 확인합니다.
 
 ## 실행·검사·배포
 
@@ -94,6 +98,6 @@ GitHub Pages 배포물은 `.book-dist/`입니다. `CNAME`은 `semi.euiyun.com`�
 
 ## 라이선스
 
-실행 코드는 [MIT](LICENSE-MIT), 본문·그림·문제·해설 등 교육 콘텐츠는 [CC BY 4.0](LICENSE-CC-BY-4.0)입니다. 각 책의 기여자와 저작권 안내도 해당 폴더에 보존했습니다. SVG 표지와 애니메이션은 `geniuskey/books`의 MIT 코드에서 가져왔습니다. 자세한 범위는 [LICENSE.md](LICENSE.md)를 참고하세요.
+실행 코드는 [MIT](LICENSE-MIT), 본문·그림·문제·해설 등 교육 콘텐츠는 [CC BY 4.0](LICENSE-CC-BY-4.0)입니다. 각 책의 기여자와 저작권 안내도 해당 폴더에 보존했습니다. SVG 표지와 애니메이션은 `geniuskey/books`의 MIT 코드에서 가져왔고, 공정·식각·인프라 표지는 이 저장소에서 추가했습니다. 홈의 시뮬레이터 화면(`shared/img/sims/`)은 각 책의 콘텐츠로 CC BY 4.0을 따릅니다. 자세한 범위는 [LICENSE.md](LICENSE.md)를 참고하세요.
 
 시뮬레이터 수치는 교육용 근사 모델입니다. InfraBook의 FAB-E는 가상의 기준 팹이며 특정 회사·팹의 실제 값이 아닙니다.
