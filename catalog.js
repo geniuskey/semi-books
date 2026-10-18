@@ -376,7 +376,7 @@ window.SEMI_BOOKS = [
   "description": "클린룸과 공조, 초순수, 가스·케미컬 공급, 배기·스크러버, 폐수와 물 재이용, 전력과 전력 품질, 냉동·냉각수, 진동, 물류 자동화, 가스 안전, 운영 신뢰성, 에너지·탄소, 팹 건설까지. 가상 기준 팹 FAB-E의 숫자로 직접 계산하며 배우는 반도체 인프라 교과서.",
   "url": "infra/",
   "stage": "infra",
-  "status": "writing",
+  "status": "published",
   "chapters": 18,
   "color": "#2f5f96",
   "colorDark": "#8db8ea",
