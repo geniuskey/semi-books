@@ -614,7 +614,10 @@
         if (!sec.id) sec.id = "s" + (i + 1);
         const numbered = !sec.classList.contains("keypoints") && !sec.classList.contains("quiz-sec") && !sec.hasAttribute("data-nonum");
         if (numbered && !h.querySelector(".h-num")) { n++; h.insertAdjacentHTML("afterbegin", `<span class="h-num">${String(n).padStart(2, "0")}</span>`); }
-        return `<a href="#${sec.id}">${h.textContent.replace(/^\d\d/, "").trim()}</a>`;
+        // 제목 텍스트를 쓰되, 빌드가 렌더링한 수식은 마크업 그대로 옮긴다.
+        const label = [...h.childNodes].filter((node) => !node.classList?.contains("h-num"))
+          .map((node) => (node.querySelector?.(".katex") ? node.outerHTML : node.textContent)).join("").trim();
+        return `<a href="#${sec.id}">${label}</a>`;
       }).join("");
       layout.appendChild(toc);
       const links = [...toc.querySelectorAll("a")];

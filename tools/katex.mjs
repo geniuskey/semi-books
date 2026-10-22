@@ -20,15 +20,27 @@ function decode(text, where) {
   });
 }
 
+// KaTeX warns on stderr about glyphs (♩, ¢ …) missing from its font metrics; browsers draw them fine.
+function quiet(render) {
+  const warn = console.warn;
+  console.warn = (message, ...rest) => { if (!String(message).startsWith('No character metrics')) warn(message, ...rest); };
+  try { return render(); } finally { console.warn = warn; }
+}
+
 function renderText(text, where, errors) {
   const parts = splitAtDelimiters(text, DELIMITERS);
   if (parts.length === 1 && parts[0].type === 'text') return { html: text, count: 0 };
   let count = 0;
   const html = parts.map((part) => {
     if (part.type === 'text') return part.data;
+    if (/<[a-zA-Z!/?]/.test(part.data)) {
+      // A browser parses this "<" as the start of a tag, so the source page shows broken math.
+      errors.push(`${where}: ${part.rawData.slice(0, 80)} — raw "<" before a letter; write \\lt or "< "`);
+      return part.rawData;
+    }
     try {
       // auto-render wraps each formula in a <span>; keep the same markup so the books' CSS still applies.
-      const rendered = katex.renderToString(decode(part.data, where), { displayMode: part.display, throwOnError: true, strict: 'ignore' });
+      const rendered = quiet(() => katex.renderToString(decode(part.data, where), { displayMode: part.display, throwOnError: true, strict: 'ignore' }));
       count++;
       return `<span>${rendered}</span>`;
     } catch (error) {

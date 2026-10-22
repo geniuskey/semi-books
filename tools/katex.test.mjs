@@ -25,6 +25,12 @@ test('leaves scripts, code, attributes and no-math subtrees alone', () => {
   assert.ok(html.startsWith('<script>if (a < b) s = "\\\\(x\\\\)";</script><code>\\(c\\)</code><div class="box no-math"><div>\\(d\\)</div></div><p title="\\(e\\)"><span>'));
 });
 
+test('rejects a raw "<" that a browser would read as a tag', () => {
+  const { errors } = renderMath('<p>\\(\\sum_{j<k} g_j\\) and \\(a < b\\)</p>', 'page.html');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /raw "<"/);
+});
+
 test('reports parse errors and keeps the source text', () => {
   const { html, count, errors } = renderMath('<p>\\(\\frac{1}\\)</p>', 'page.html');
   assert.equal(count, 0); assert.equal(errors.length, 1);
