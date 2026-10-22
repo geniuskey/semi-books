@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { renderMath, version as katexVersion } from './katex.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = join(root, '.book-dist');
 const book = JSON.parse(await readFile(join(root, 'book.json'), 'utf8'));
@@ -13,7 +14,8 @@ const origin = `https://${domain}`;
 const excluded = new Set(['.git', '.github', '.book-dist', 'node_modules', 'tools', 'scripts', 'migration', 'package.json', 'package-lock.json', 'pnpm-lock.yaml', '.DS_Store']);
 
 // Books written in this repository declare `meta` in their book.json. Their sources carry only <title> and
-// description; canonical, Open Graph and JSON-LD are generated here. Imported books keep their own tags so
+// description; canonical, Open Graph and JSON-LD are generated here, and their math is rendered to KaTeX HTML
+// so the pages need only the KaTeX stylesheet. Imported books keep their own tags so
 // that tools/import-books.py can still sync them byte for byte.
 const generated = new Map();
 for (const entry of book.books) {
@@ -27,6 +29,8 @@ for (const entry of book.books) {
   generated.set(slug, { ...meta, slug, chapters, title: decode(home.match(/<title>([^<]+)<\/title>/)[1]) });
 }
 const RESOURCE_TYPE = { glossary: '용어집, 퀴즈' };
+const katexCss = `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@${katexVersion}/dist/katex.min.css">\n`;
+const mathErrors = [];
 
 function decode(text) {
   return text.replace(/&(amp|lt|gt|quot|#39);/g, (_, name) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[name]);
@@ -97,7 +101,10 @@ async function pages(directory) {
       // Generated tags go right after the description so the head reads in the usual order.
       const description = /(<meta name="description" content="[^"]+">\n)/;
       if (!description.test(html)) throw new Error(`${rel}: <meta name="description"> must sit on its own line`);
-      html = html.replace(description, `$1${metadata(rel, html, info, url)}`);
+      if (/cdn\.jsdelivr\.net\/npm\/katex@/.test(html)) throw new Error(`${rel}: remove the KaTeX tags — the build renders ${info.slug}/ math`);
+      const math = renderMath(html, rel);
+      mathErrors.push(...math.errors);
+      html = math.html.replace(description, `$1${metadata(rel, html, info, url)}${math.count ? katexCss : ''}`);
     } else {
       const existing = html.match(/<link\b[^>]*rel=["']canonical["'][^>]*href=["']([^"']+)/i)?.[1];
       if (existing && existing !== url) throw new Error(`Wrong canonical in ${rel}: ${existing} (expected ${url})`);
@@ -109,6 +116,7 @@ async function pages(directory) {
   }
 }
 await pages(output);
+if (mathErrors.length) throw new Error(`KaTeX could not parse ${mathErrors.length} formula(s):\n${mathErrors.join('\n')}`);
 await writeFile(join(output, 'sitemap.xml'), '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
   urls.sort().map((url) => `  <url><loc>${url}</loc></url>`).join('\n') + '\n</urlset>\n');
 await writeFile(join(output, 'robots.txt'), `User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`);

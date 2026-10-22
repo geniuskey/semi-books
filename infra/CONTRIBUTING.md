@@ -12,7 +12,7 @@ MemoryBook(`../memorybook`)의 구조와 컴포넌트를 그대로 물려받았�
 - 한 장에 **시뮬레이터 6개 이상, 그림(figure) 6개 이상, 퀴즈 6문항 이상**. 태그에 `3d`가 있는 장은 three.js 3D 시뮬레이터를 최소 1개 둔다.
 - 시뮬레이터는 장식이 아니라 **계산하는 모델**이어야 한다. 입력을 끝까지 움직였을 때 물리적으로 말이 되는지(음수 유량, 0으로 나누기, NaN) 확인한다. 쓰는 식은 본문에 적는다.
 - 수치는 공개 자료에서 합리적인 범위를 쓴다. 확실하지 않은 수치는 '약', '~'로 표기하고 기준 연도를 적는다. 특정 회사·팹의 내부 값처럼 쓰지 않는다. 규격은 이름을 정확히 쓴다(ISO 14644-1:2015, SEMI F47, SEMI S2, SEMI F57, IEST-RP-CC012 VC 곡선, ASHRAE, ITRS/IRDS Yield Enhancement 표 등).
-- 외부 라이브러리는 아래 head 템플릿에 있는 것만(KaTeX, three.js r147). 이미지 파일 대신 인라인 SVG/canvas로 그린다.
+- 외부 라이브러리는 KaTeX(빌드가 처리)와 아래 head 템플릿의 three.js r147만 쓴다. 이미지 파일 대신 인라인 SVG/canvas로 그린다.
 - 색은 하드코딩하지 말고 CSS 변수나 `IB.palette()`를 쓴다. 라이트/다크 둘 다 읽혀야 한다. 3D 모델의 물리적 재질색(스테인리스, 콘크리트 등)은 고정색 가능.
 - 모바일(폭 360px)에서 가로 스크롤이 생기면 안 된다. SVG는 `viewBox`만 주고 width/height 속성 생략. 넓은 SVG는 `figure.diagram` 안에서 글자가 너무 작아지지 않게 viewBox 폭을 900 이하로.
 
@@ -63,9 +63,6 @@ MemoryBook(`../memorybook`)의 구조와 컴포넌트를 그대로 물려받았�
 <title>클린룸과 입자 · InfraBook</title>
 <meta name="description" content="한 문장 설명">
 <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 <link rel="stylesheet" href="../css/style.css">
 <script src="../js/common.js"></script>
 <!-- 3D가 필요한 페이지만 -->
@@ -91,7 +88,8 @@ MemoryBook(`../memorybook`)의 구조와 컴포넌트를 그대로 물려받았�
 </html>
 ```
 소스에는 `<title>`과 `<meta name="description">`만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 `tools/build.mjs`가 파일 경로, `<title>`·description, `js/common.js`의 `CHAPTERS`(장 이름과 순서), `infra/book.json`의 `meta`(사이트 이름, 테마 색, 책 소개), 그리고 git 마지막 커밋 날짜(`dateModified`)로 배포물에 생성한다. 소스에 이 태그들이 남아 있으면 `npm test`와 빌드가 실패한다. description은 `<meta>` 한 줄에 쓴다. Analytics beacon은 넣지 않는다(빌드가 넣는다).
-상단바, 챕터 서랍, 목차, 이전/다음, 푸터, 테마 토글, 퀴즈 동작, KaTeX 렌더, 검색은 `common.js`가 자동 처리한다.
+상단바, 챕터 서랍, 목차, 이전/다음, 푸터, 테마 토글, 퀴즈 동작, 검색은 `common.js`가 자동 처리한다.
+수식은 `tools/katex.mjs`가 빌드할 때 KaTeX HTML로 렌더링하고, 배포물에는 KaTeX 스타일시트만 붙인다. 소스에 KaTeX 태그를 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 렌더링하므로 미리보기는 그대로 된다. TeX 문법 오류가 있으면 빌드가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로, 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣으면 `npm test`가 실패한다.
 
 챕터를 추가할 때는 `js/common.js`의 `CHAPTERS`, 루트 `sitemap.xml`, `chapters/glossary.html`의 챕터 칩과 `TERMS`에도 함께 등록한다.
 

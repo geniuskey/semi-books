@@ -485,6 +485,8 @@
           const doc = new DOMParser().parseFromString(await response.text(), "text/html");
           const main = doc.querySelector("main.chapter");
           if (!main) return [];
+          // 미리 렌더링된 수식은 TeX 원문으로 되돌려 검색어와 맞춘다.
+          main.querySelectorAll(".katex").forEach((k) => k.replaceWith(k.querySelector("annotation")?.textContent || k.textContent));
           const entries = [];
           [...main.querySelectorAll("section > h2")].forEach((heading, i) => {
             entries.push({ type: "섹션", title: heading.textContent.trim(), chapter, hash: heading.parentElement.id || `s${i + 1}` });
@@ -657,18 +659,22 @@
       }));
     });
 
-    // KaTeX
-    const renderMath = () => {
-      if (window.renderMathInElement) {
-        renderMathInElement(document.body, {
+    // KaTeX: 배포물의 수식은 빌드(tools/katex.mjs)가 미리 렌더링한다. 소스 파일을 바로 열었을 때만 CDN에서 불러와 렌더링한다.
+    if (!document.querySelector(".katex") && /\\\(|\\\[|\$\$/.test(document.body.innerText)) {
+      const KATEX = "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/";
+      const load = (tag, props) => new Promise((resolve, reject) => {
+        const el = Object.assign(document.createElement(tag), props, { onload: resolve, onerror: reject });
+        document.head.insertBefore(el, tag === "link" ? document.head.querySelector('link[rel="stylesheet"]') : null);
+      });
+      Promise.all([load("link", { rel: "stylesheet", href: KATEX + "katex.min.css" }), load("script", { src: KATEX + "katex.min.js" })])
+        .then(() => load("script", { src: KATEX + "contrib/auto-render.min.js" }))
+        .then(() => renderMathInElement(document.body, {
           delimiters: [{ left: "$$", right: "$$", display: true }, { left: "\\(", right: "\\)", display: false }, { left: "\\[", right: "\\]", display: true }],
           throwOnError: false,
           ignoredClasses: ["no-math"],
-        });
-      }
-    };
-    if (window.renderMathInElement) renderMath();
-    else window.addEventListener("load", renderMath);
+        }))
+        .catch(() => {});
+    }
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", build);
