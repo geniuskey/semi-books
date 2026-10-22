@@ -94,7 +94,7 @@ node tools/browser-check.cjs --imported --offline  # Playwright 필요
 
 브라우저 검사에는 Playwright를 설치하거나 `PW_PATH`로 모듈 위치를 지정합니다. `CHROME`으로 브라우저 실행 파일을 지정할 수 있습니다. `--imported`는 이 저장소에서 집필하는 InfraBook·CMPBook을 제외하고 서가와 가져온 책들만 검사합니다. CDN을 사용할 수 있는 환경에서는 `--offline`을 생략해 수식·폰트·3D 라이브러리까지 확인합니다.
 
-빌드와 테스트에는 이전 개별 저장소나 books 프로젝트의 체크아웃이 필요하지 않습니다. 생성된 파일과 SVG 표지를 이 저장소에 포함합니다. KaTeX·three.js·웹 폰트는 각 책에서 사용하던 CDN을 계속 사용합니다. 소스 HTML의 canonical·OG·구조화 데이터는 통합 주소를 가리키고, 빌드 시 배포물에만 애널리틱스 비컨을 한 번 추가합니다.
+빌드와 테스트에는 이전 개별 저장소나 books 프로젝트의 체크아웃이 필요하지 않습니다. 생성된 파일과 SVG 표지를 이 저장소에 포함합니다. KaTeX·three.js·웹 폰트는 각 책에서 사용하던 CDN을 계속 사용합니다. 가져온 책의 소스 HTML에 있는 canonical·OG·구조화 데이터는 통합 주소를 가리킵니다. `book.json`에 `meta`가 있는 책(`/cmp/`, `/infra/`)은 소스에 이 태그들을 두지 않고, 빌드가 `<title>`·description·`CHAPTERS`·git 커밋 날짜로 생성합니다. 애널리틱스 비컨은 빌드할 때 배포물에만 한 번 추가합니다.
 
 GitHub Pages 배포물은 `.book-dist/`입니다. `CNAME`은 `semi.euiyun.com`입니다. 빌드는 소스와 `/infra/`를 읽기만 하며, 결과물과 통합 사이트맵은 `.book-dist/`에 씁니다.
 

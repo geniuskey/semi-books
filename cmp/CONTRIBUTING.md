@@ -65,17 +65,7 @@ InfraBook(`../infra`)의 구조와 컴포넌트를 그대로 물려받았다. �
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>프레스턴 방정식과 재료 제거 · CMPBook</title>
 <meta name="description" content="한 문장 설명">
-<link rel="canonical" href="https://semi.euiyun.com/cmp/chapters/preston.html">
 <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-<meta name="theme-color" content="#0b7a75">
-<meta property="og:type" content="article">
-<meta property="og:site_name" content="CMPBook">
-<meta property="og:locale" content="ko_KR">
-<meta property="og:title" content="프레스턴 방정식과 재료 제거 · CMPBook">
-<meta property="og:description" content="한 문장 설명">
-<meta property="og:url" content="https://semi.euiyun.com/cmp/chapters/preston.html">
-<meta name="twitter:card" content="summary_large_image">
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":["Chapter","LearningResource"],"@id":"https://semi.euiyun.com/cmp/chapters/preston.html#chapter","name":"프레스턴 방정식과 재료 제거","headline":"프레스턴 방정식과 재료 제거 · CMPBook","description":"한 문장 설명","url":"https://semi.euiyun.com/cmp/chapters/preston.html","position":2,"inLanguage":"ko","isAccessibleForFree":true,"learningResourceType":"인터랙티브 교재","educationalLevel":"공대 학부","dateModified":"2026-10-18","isPartOf":{"@type":"Book","@id":"https://semi.euiyun.com/cmp/#book","name":"CMPBook · 반도체 CMP·세정 교과서","url":"https://semi.euiyun.com/cmp/"}}]}</script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
@@ -103,10 +93,10 @@ InfraBook(`../infra`)의 구조와 컴포넌트를 그대로 물려받았다. �
 </body>
 </html>
 ```
-canonical은 빌드 도구가 파일 경로로 계산한 URL과 정확히 같아야 한다(다르면 빌드 실패). Analytics beacon은 넣지 않는다(빌드가 넣는다).
+소스에는 `<title>`과 `<meta name="description">`만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 `tools/build.mjs`가 파일 경로, `<title>`·description, `js/common.js`의 `CHAPTERS`(장 이름과 순서), `cmp/book.json`의 `meta`(사이트 이름, 테마 색, 책 소개), 그리고 git 마지막 커밋 날짜(`dateModified`)로 배포물에 생성한다. 소스에 이 태그들이 남아 있으면 `npm test`와 빌드가 실패한다. description은 `<meta>` 한 줄에 쓴다. Analytics beacon은 넣지 않는다(빌드가 넣는다).
 상단바, 챕터 서랍, 목차, 이전/다음, 푸터, 테마 토글, 퀴즈 동작, KaTeX 렌더, 검색은 `common.js`가 자동 처리한다.
 
-챕터를 추가할 때는 `js/common.js`의 `CHAPTERS`, 루트 `sitemap.xml`, `cmp/index.html`의 JSON-LD `hasPart`, `chapters/glossary.html`의 챕터 칩과 `TERMS`에도 함께 등록한다.
+챕터를 추가할 때는 `js/common.js`의 `CHAPTERS`, 루트 `sitemap.xml`, `chapters/glossary.html`의 챕터 칩과 `TERMS`에도 함께 등록한다.
 
 ## 컴포넌트
 ```html
