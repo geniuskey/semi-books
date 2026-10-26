@@ -26,9 +26,20 @@ test('leaves scripts, code, attributes and no-math subtrees alone', () => {
 });
 
 test('rejects a raw "<" that a browser would read as a tag', () => {
-  const { errors } = renderMath('<p>\\(\\sum_{j<k} g_j\\) and \\(a < b\\)</p>', 'page.html');
+  const { errors, count } = renderMath('<p>\\(\\sum_{j<k} g_j\\) and \\(a < b\\)</p>', 'page.html');
   assert.equal(errors.length, 1);
+  assert.equal(count, 1);
   assert.match(errors[0], /raw "<"/);
+});
+
+test('accepts safe less-than spellings in inline and display math', () => {
+  for (const tex of [String.raw`a \lt b`, 'a &lt;b', 'a < b', 'a <0']) {
+    for (const [left, right] of [[String.raw`\(`, String.raw`\)`], ['$$', '$$'], [String.raw`\[`, String.raw`\]`]]) {
+      const { count, errors } = renderMath(`<p>${left}${tex}${right}</p>`, 'page.html');
+      assert.equal(count, 1, tex);
+      assert.deepEqual(errors, [], tex);
+    }
+  }
 });
 
 test('reports parse errors and keeps the source text', () => {

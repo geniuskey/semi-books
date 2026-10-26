@@ -2,7 +2,7 @@
 /* Copyright (c) 2026 geniuskey and SemiBooks contributors. SPDX-License-Identifier: MIT */
 /* 브라우저 검사: 모든 페이지를 데스크톱(1280)·모바일(360) 폭에서 열어 콘솔 오류와 가로 넘침을 확인한다.
    Playwright가 필요하다: 이 저장소 또는 ../book 에 설치된 것을 쓴다.
-   사용: node tools/browser-check.cjs [--shots DIR] [페이지 경로 필터...] */
+   사용: node tools/browser-check.cjs [--dist] [--mobile] [--shots DIR] [페이지 경로 필터...] */
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -14,6 +14,11 @@ for (const p of [process.env.PW_PATH, "playwright", path.join(ROOT, "../book/nod
 if (!playwright) { console.error("playwright not found (npm i -D playwright, or keep ../book checked out)"); process.exit(2); }
 
 const args = process.argv.slice(2);
+const built = args.includes("--dist");
+if (built) args.splice(args.indexOf("--dist"), 1);
+const mobileOnly = args.includes("--mobile");
+if (mobileOnly) args.splice(args.indexOf("--mobile"), 1);
+const serveRoot = built ? path.join(ROOT, ".book-dist") : ROOT;
 const importedOnly = args.includes("--imported");
 if (importedOnly) args.splice(args.indexOf("--imported"), 1);
 const offline = args.includes("--offline");
@@ -26,8 +31,8 @@ const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", "
 const server = http.createServer((req, res) => {
   let p = decodeURIComponent(new URL(req.url, "http://x").pathname);
   if (p.endsWith("/")) p += "index.html";
-  const file = path.join(ROOT, p);
-  if (!file.startsWith(ROOT) || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
+  const file = path.join(serveRoot, p);
+  if (!file.startsWith(serveRoot + path.sep) || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
   res.writeHead(200, { "content-type": TYPES[path.extname(file)] || "application/octet-stream" });
   fs.createReadStream(file).pipe(res);
 });
@@ -43,13 +48,13 @@ function pages() {
 }
 
 (async () => {
-  await new Promise((r) => server.listen(0, r));
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${server.address().port}/`;
   const browser = await playwright.chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
   if (shots) fs.mkdirSync(shots, { recursive: true });
   let bad = 0;
   for (const rel of pages()) {
-    for (const [name, width] of [["desktop", 1280], ["mobile", 360]]) {
+    for (const [name, width] of mobileOnly ? [["mobile", 360]] : [["desktop", 1280], ["mobile", 360]]) {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
       const errs = [];
       page.on("pageerror", (e) => errs.push("pageerror: " + e.message));
@@ -57,6 +62,33 @@ function pages() {
       if (offline) await page.route(/^https?:\/\//, (route) => route.request().url().startsWith(base) ? route.continue() : route.abort());
       await page.goto(base + rel, { waitUntil: "networkidle", timeout: 60000 }).catch((e) => errs.push("goto: " + e.message));
       await page.waitForTimeout(600);
+      if (/^(cmp|infra)\/chapters\//.test(rel)) {
+        await page.evaluate(async () => {
+          if (!window.BookGlossary) throw new Error("glossary tooltips did not load");
+          const { count } = await window.BookGlossary.ready;
+          if (!count) throw new Error("no glossary terms annotated");
+          if (document.querySelector(".katex .gl-term, .quiz .gl-term, .sim-controls .gl-term")) {
+            throw new Error("glossary annotated an excluded component");
+          }
+        }).catch((e) => errs.push("glossary: " + e.message));
+        const term = page.locator(".gl-term").first();
+        if (await term.count()) {
+          await term.focus();
+          const tooltip = page.locator("#book-glossary-tooltip");
+          if (!await tooltip.isVisible()) errs.push("glossary: focus did not open tooltip");
+          const box = await tooltip.boundingBox();
+          if (box && (box.x < 0 || box.x + box.width > width)) errs.push("glossary: tooltip overflows viewport");
+          await page.keyboard.press("Escape");
+          if (await tooltip.isVisible()) errs.push("glossary: Escape did not close tooltip");
+          await term.click();
+          if (!await tooltip.isVisible()) errs.push("glossary: click did not open tooltip");
+          await page.keyboard.press("Escape");
+          await page.mouse.move(0, 0);
+          await term.hover();
+          if (!await tooltip.isVisible()) errs.push("glossary: hover did not open tooltip");
+          await page.keyboard.press("Escape");
+        }
+      }
       // 모든 range 입력을 끝까지 밀어 보며 예외가 나는지 본다
       await page.evaluate(() => {
         document.querySelectorAll('input[type="range"]').forEach((el) => {

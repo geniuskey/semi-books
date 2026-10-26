@@ -91,7 +91,7 @@ MemoryBook(`../memorybook`)의 구조와 컴포넌트를 그대로 물려받았�
 상단바, 챕터 서랍, 목차, 이전/다음, 푸터, 테마 토글, 퀴즈 동작, 검색은 `common.js`가 자동 처리한다.
 수식은 `tools/katex.mjs`가 빌드할 때 KaTeX HTML로 렌더링하고, 배포물에는 KaTeX 스타일시트만 붙인다. 소스에 KaTeX 태그를 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 렌더링하므로 미리보기는 그대로 된다. TeX 문법 오류가 있으면 빌드가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로, 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣으면 `npm test`가 실패한다.
 
-챕터를 추가할 때는 `js/common.js`의 `CHAPTERS`, 루트 `sitemap.xml`, `chapters/glossary.html`의 챕터 칩과 `TERMS`에도 함께 등록한다.
+챕터를 추가할 때는 `js/common.js`의 `CHAPTERS`, 루트 `sitemap.xml`, `chapters/glossary.html`의 챕터 칩과 `js/glossary-data.js`의 용어별 `chapters`에도 함께 등록한다. 용어 정의는 `js/glossary-data.js`에서 관리하며, 용어집과 본문 호버·포커스·터치 툴팁이 이 데이터를 함께 읽는다.
 
 ## 컴포넌트
 ```html

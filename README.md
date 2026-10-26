@@ -6,29 +6,31 @@
 
 ## 수록 책
 
-| 경로 | 책 | 원래 저장소 |
-|---|---|---|
-| `/device/` | DeviceBook · 반도체 소자 물리 | `geniuskey/devicebook` |
-| `/digital/` | DigitalBook · 디지털 회로 설계 | `geniuskey/digitalbook` |
-| `/design/` | DesignBook · 반도체 설계 | `geniuskey/designbook` |
-| `/soc/` | SoCBook · 시스템 온 칩 | `geniuskey/socbook` |
-| `/analog/` | AnalogBook · 아날로그 회로 | `geniuskey/analogbook` |
-| `/process/` | ProcessBook · 반도체 제조 공정 | `geniuskey/processbook` |
-| `/litho/` | LithoBook · 노광 | `geniuskey/lithobook` |
-| `/etch/` | EtchBook · 식각 | `geniuskey/etchbook` |
-| `/cmp/` | CMPBook · CMP·세정 | 이 저장소에서 별도 집필 |
-| `/doping/` | DopingBook · 도핑 | `geniuskey/dopingbook` |
-| `/yield/` | YieldBook · 수율 | `geniuskey/yieldbook` |
-| `/failure/` | FailureBook · 불량 분석 | `geniuskey/failurebook` |
-| `/tcad/` | TCADBook · 소자·공정 시뮬레이션 | `geniuskey/tcadbook` |
-| `/packaging/` | PackagingBook · 패키징 | `geniuskey/packagingbook` |
-| `/test/` | TestBook · 테스트 | `geniuskey/testbook` |
-| `/memory/` | MemoryBook · 메모리 반도체 | `geniuskey/memorybook` |
-| `/optics/` | OpticsBook · 이미지 센서 광학 | `geniuskey/opticsbook` |
-| `/sensor/` | SensorBook · 이미지 센서 | `geniuskey/sensorbook` |
-| `/display/` | DisplayBook · 디스플레이 | `geniuskey/displaybook` |
-| `/industry/` | ChipIndustryBook · 반도체 산업 | `geniuskey/chipindustrybook` |
-| `/infra/` | InfraBook · 팹 인프라 | 이 저장소에서 별도 집필 |
+| 경로 | 책 | 상태 | 원래 저장소 |
+|---|---|---|---|
+| `/device/` | DeviceBook · 반도체 소자 물리 | 공개 | `geniuskey/devicebook` |
+| `/digital/` | DigitalBook · 디지털 회로 설계 | 공개 | `geniuskey/digitalbook` |
+| `/design/` | DesignBook · 반도체 설계 | 공개 | `geniuskey/designbook` |
+| `/soc/` | SoCBook · 시스템 온 칩 | 공개 | `geniuskey/socbook` |
+| `/analog/` | AnalogBook · 아날로그 회로 | 공개 | `geniuskey/analogbook` |
+| `/process/` | ProcessBook · 반도체 제조 공정 | 공개 | `geniuskey/processbook` |
+| `/litho/` | LithoBook · 노광 | 공개 | `geniuskey/lithobook` |
+| `/etch/` | EtchBook · 식각 | 공개 | `geniuskey/etchbook` |
+| `/cmp/` | CMPBook · CMP·세정 | 공개 | 이 저장소에서 별도 집필 |
+| `/doping/` | DopingBook · 도핑 | 공개 | `geniuskey/dopingbook` |
+| `/yield/` | YieldBook · 수율 | 공개 | `geniuskey/yieldbook` |
+| `/failure/` | FailureBook · 불량 분석 | 공개 | `geniuskey/failurebook` |
+| `/tcad/` | TCADBook · 소자·공정 시뮬레이션 | 공개 | `geniuskey/tcadbook` |
+| `/packaging/` | PackagingBook · 패키징 | 공개 | `geniuskey/packagingbook` |
+| `/test/` | TestBook · 테스트 | 공개 | `geniuskey/testbook` |
+| `/memory/` | MemoryBook · 메모리 반도체 | 공개 | `geniuskey/memorybook` |
+| `/optics/` | OpticsBook · 이미지 센서 광학 | 공개 | `geniuskey/opticsbook` |
+| `/sensor/` | SensorBook · 이미지 센서 | 공개 | `geniuskey/sensorbook` |
+| `/display/` | DisplayBook · 디스플레이 | 공개 | `geniuskey/displaybook` |
+| `/industry/` | ChipIndustryBook · 반도체 산업 | 공개 | `geniuskey/chipindustrybook` |
+| `/infra/` | InfraBook · 팹 인프라 | 공개 | 이 저장소에서 별도 집필 |
+
+총 21권이 공개 상태(`book.json`의 `status: published`)이며, 위 경로마다 책 홈과 장 파일이 있습니다. 용어집을 포함한 장 목록은 각 책의 `js/common.js`에 등록되어 있습니다.
 
 기존 책 19권은 소스·실습 엔진·용어 데이터·저작권 안내를 포함해 가져왔습니다. `.git`, `node_modules`, 빌드 결과, 개별 사이트의 CNAME과 CI·패키지 설정은 복사 대상에서 제외합니다. 각 책의 CSS·JS와 실습은 독립적으로 유지하며, 공통 서가 연결과 테마는 `shared/`에서 지원합니다.
 
@@ -51,7 +53,7 @@ npm run build
 
 가져오기 도구는 개별 원본 저장소를 읽기만 합니다. 통합본에서 수정한 파일이 있으면 덮어쓰기를 거부하고 해당 경로를 알립니다. 원본에서 사라진 파일도 자동 삭제하지 않습니다. 병행 기간에 같은 책을 양쪽에서 수정했다면 먼저 차이를 합친 뒤 가져오기 상태를 정리하세요. 원본 저장소 삭제와 기존 도메인의 리디렉션 전환은 병행 기간 이후 별도 작업입니다.
 
-`/infra/`와 `/cmp/`는 가져오기 대상에 포함하지 않습니다. InfraBook과 CMPBook의 집필과 파일 관리는 이 저장소에서 이어서 수행합니다. 집필 규칙은 [infra/CONTRIBUTING.md](infra/CONTRIBUTING.md)와 [cmp/CONTRIBUTING.md](cmp/CONTRIBUTING.md)를 참고하세요.
+`/infra/`와 `/cmp/`는 가져오기 대상에 포함하지 않습니다. InfraBook과 CMPBook의 집필과 파일 관리는 이 저장소에서 이어서 수행합니다. 두 책의 `js/glossary-data.js`는 용어집과 본문 툴팁이 함께 사용하는 용어 원본입니다. 집필 규칙은 [infra/CONTRIBUTING.md](infra/CONTRIBUTING.md)와 [cmp/CONTRIBUTING.md](cmp/CONTRIBUTING.md)를 참고하세요.
 
 ## 구성
 
@@ -75,6 +77,7 @@ tools/sync-sitemap.py                 루트 사이트맵 생성
 tools/build.mjs                      하위 경로를 지원하는 정적 배포물 생성
 tools/check.cjs                       메타데이터·링크·스크립트 정적 검사
 tools/katex.mjs                       /cmp/·/infra/ 수식 빌드 렌더링
+tools/katex.test.mjs                  수식 렌더링·HTML의 < 거부 규칙 회귀 검사
 tools/migration.test.cjs              원본 보존·덮어쓰기 거부·infra 보호 회귀 검사
 tools/browser-check.cjs               데스크톱·모바일 브라우저 검사
 ```
@@ -91,13 +94,14 @@ npm ci
 npm test
 npm run build                       # .book-dist/ 생성
 node tools/browser-check.cjs --imported --offline  # Playwright 필요
+node tools/browser-check.cjs --dist --mobile cmp/ infra/  # 배포물의 360px 화면·툴팁 검사
 ```
 
-브라우저 검사에는 Playwright를 설치하거나 `PW_PATH`로 모듈 위치를 지정합니다. `CHROME`으로 브라우저 실행 파일을 지정할 수 있습니다. `--imported`는 이 저장소에서 집필하는 InfraBook·CMPBook을 제외하고 서가와 가져온 책들만 검사합니다. CDN을 사용할 수 있는 환경에서는 `--offline`을 생략해 수식·폰트·3D 라이브러리까지 확인합니다.
+브라우저 검사에는 Playwright를 설치하거나 `PW_PATH`로 모듈 위치를 지정합니다. `CHROME`으로 브라우저 실행 파일을 지정할 수 있습니다. `--imported`는 이 저장소에서 집필하는 InfraBook·CMPBook을 제외하고 서가와 가져온 책들만 검사합니다. `--dist`는 빌드 결과인 `.book-dist/`를 열고, `--mobile`은 폭 360px만 검사합니다. CMPBook·InfraBook 장에서는 용어 툴팁의 로딩·포커스·클릭·Escape 동작도 확인합니다. CDN을 사용할 수 있는 환경에서는 `--offline`을 생략해 수식·폰트·3D 라이브러리까지 확인합니다.
 
 빌드와 테스트에는 이전 개별 저장소나 books 프로젝트의 체크아웃이 필요하지 않습니다. 생성된 파일과 SVG 표지를 이 저장소에 포함합니다. KaTeX·three.js·웹 폰트는 각 책에서 사용하던 CDN을 계속 사용합니다. 단, `/cmp/`와 `/infra/`의 수식은 빌드가 `katex` 패키지로 미리 렌더링하고 배포물에는 KaTeX 스타일시트만 붙입니다. 가져온 책의 소스 HTML에 있는 canonical·OG·구조화 데이터는 통합 주소를 가리킵니다. `book.json`에 `meta`가 있는 책(`/cmp/`, `/infra/`)은 소스에 이 태그들을 두지 않고, 빌드가 `<title>`·description·`CHAPTERS`·git 커밋 날짜로 생성합니다. 애널리틱스 비컨은 빌드할 때 배포물에만 한 번 추가합니다.
 
-GitHub Pages 배포물은 `.book-dist/`입니다. `CNAME`은 `semi.euiyun.com`입니다. 빌드는 소스와 `/infra/`를 읽기만 하며, 결과물과 통합 사이트맵은 `.book-dist/`에 씁니다.
+GitHub Pages 배포물은 `.book-dist/`입니다. `CNAME`은 `semi.euiyun.com`입니다. 빌드는 소스를 읽기만 하며, 결과물과 통합 사이트맵은 `.book-dist/`에 씁니다.
 
 ## 라이선스
 
