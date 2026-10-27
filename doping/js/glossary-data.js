@@ -64,7 +64,7 @@ window.BOOK_GLOSSARY = {
     {"ko":"플래시 어닐","en":"Flash lamp anneal","abbr":"FLA","def":"예열한 웨이퍼 표면을 섬광으로 ms 동안 1200~1350 °C로 올리는 어닐.","chapters":["anneal"],"category":"anneal","related":["budget"]},
     {"ko":"레이저 어닐","en":"Laser anneal","abbr":"","def":"레이저로 표면을 훑어 sub-ms(용융하지 않음) 또는 ns(용융) 동안 가열하는 어닐.","chapters":["anneal"],"category":"anneal"},
     {"ko":"픽의 법칙","en":"Fick's laws","abbr":"","def":"흐름은 농도 기울기에 비례하고(J = −D∂C/∂x), 농도는 그 발산만큼 변한다.","chapters":["diffusion"],"category":"anneal"},
-    {"ko":"확산 계수","en":"Diffusivity","abbr":"D","def":"D = D₀exp(−Eₐ/kT). 실리콘 속 도펀트는 활성화 에너지 3.5~4 eV.","chapters":["diffusion"],"category":"anneal","related":["budget"]},
+    {"ko":"확산 계수","en":"Diffusivity","abbr":"D","def":"D = D₀exp(−Eₐ/kT). 실리콘 속 도펀트는 활성화 에너지 약 3.4~4.4 eV(붕소 3.46 eV).","chapters":["diffusion"],"category":"anneal","related":["budget"]},
     {"ko":"외인성 확산","en":"Extrinsic diffusion","abbr":"","def":"도펀트 농도가 nᵢ를 넘어 확산 계수가 p/nᵢ(n/nᵢ)에 비례해 커지는 것. 상자 모양 분포.","chapters":["diffusion"],"category":"anneal"},
     {"ko":"과도 확산","en":"Transient enhanced diffusion","abbr":"TED","def":"주입 손상의 과잉 격자간 원자 때문에 어닐 초기 붕소·인 확산이 일시적으로 크게 빨라지는 것.","chapters":["diffusion"],"category":"anneal","related":["budget"]},
     {"ko":"+1 모델","en":"+1 model","abbr":"","def":"재결합 뒤 넣은 이온 수만큼의 과잉 격자간 원자가 남는다는 TED 어림.","chapters":["diffusion"],"category":"anneal"},
