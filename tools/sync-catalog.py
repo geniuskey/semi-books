@@ -61,6 +61,8 @@ def main():
         if entry["local"]:
             entry["url"] = slug + "/"
             entry["chapters"] = len(list((ROOT / slug / "chapters").glob("*.html")))
+        if book_id in LOCAL:
+            entry["simulators"] = sum(f.read_text(encoding="utf-8").count('class="sim"') for f in (ROOT / slug / "chapters").glob("*.html"))
         entry.setdefault("motif", "layers")
         shelf.append(entry)
     body = json.dumps(shelf, ensure_ascii=False, indent=1)

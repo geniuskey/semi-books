@@ -245,7 +245,8 @@ window.SEMI_BOOKS = [
   ],
   "motif": "cmp",
   "slug": "cmp",
-  "local": true
+  "local": true,
+  "simulators": 142
  },
  {
   "id": "dopingbook",
@@ -380,7 +381,8 @@ window.SEMI_BOOKS = [
   ],
   "motif": "fab",
   "slug": "infra",
-  "local": true
+  "local": true,
+  "simulators": 129
  },
  {
   "id": "packagingbook",
