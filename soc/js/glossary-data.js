@@ -106,7 +106,7 @@ window.BOOK_GLOSSARY = {
     {"ko":"서비스 품질","en":"Quality of Service","abbr":"QoS","def":"마스터마다 우선순위·마감·대역폭 예산을 매겨 요청 처리 순서를 정하는 체계. 디스플레이 같은 실시간 마스터의 마감과 CPU의 지연을 지킨다.","chapters":["dram"]},
     {"ko":"언더플로","en":"Underflow","abbr":"","def":"실시간 마스터의 버퍼(FIFO)가 데이터를 받기 전에 바닥나는 현상. 디스플레이에서는 화면에 줄이 가거나 깜빡임으로 나타난다.","chapters":["dram"]},
     {"ko":"쓰기 배치","en":"Write batching","abbr":"","def":"쓰기 요청을 쓰기 큐에 모았다가 한꺼번에 처리해 읽기·쓰기 전환(tWTR, tRTW)으로 데이터 버스가 노는 손실을 줄이는 기법.","chapters":["dram"]},
-    {"ko":"고대역폭 메모리","en":"High Bandwidth Memory","abbr":"HBM","def":"DRAM 다이를 수직으로 쌓아 인터포저 위에 SoC 바로 옆에 두고 1024비트 같은 아주 넓은 버스로 연결한 메모리. 핀당 속도는 낮아도 스택당 TB/s급 대역폭을 낸다.","chapters":["dram"]},
+    {"ko":"고대역폭 메모리","en":"High Bandwidth Memory","abbr":"HBM","def":"DRAM 다이를 수직으로 쌓아 인터포저 위에 SoC 바로 옆에 두고 1024비트(HBM4는 2048비트) 같은 아주 넓은 버스로 연결한 메모리. 핀당 속도는 낮아도 스택당 TB/s급 대역폭을 낸다.","chapters":["dram"]},
     {"ko":"온칩 인터커넥트","en":"On-chip interconnect","abbr":"","def":"SoC 안의 여러 블록이 서로, 그리고 메모리와 데이터를 주고받도록 잇는 통로 전체. 공유 버스, 크로스바, 링, NoC 등의 형태가 있다.","chapters":["noc"]},
     {"ko":"핸드셰이크","en":"Valid/ready handshake","abbr":"","def":"송신자의 valid와 수신자의 ready가 같은 클럭 상승 에지에서 함께 1일 때 데이터 하나가 넘어가는 약속. 양쪽이 서로의 속도를 몰라도 데이터를 잃지 않는다.","chapters":["noc"]},
     {"ko":"백프레셔","en":"Backpressure","abbr":"","def":"수신자가 ready를 내려 송신자를 기다리게 하는 것. 막힘이 파이프라인 단계를 따라 한 단계씩 뒤로 전파되며 데이터는 사라지지 않는다.","chapters":["noc"]},
