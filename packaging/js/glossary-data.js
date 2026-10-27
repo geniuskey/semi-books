@@ -130,7 +130,7 @@ window.BOOK_GLOSSARY = {
     {"ko":"실리콘 브리지","en":"Silicon bridge","abbr":"","def":"칩과 칩이 맞닿는 가장자리 아래에만 넣는 작은 실리콘 배선 조각. 미세 배선이 필요한 곳에만 실리콘을 써서 대형 인터포저의 비용과 크기 한계를 피한다.","chapters":["interposer"]},
     {"ko":"EMIB","en":"Embedded Multi-die Interconnect Bridge","abbr":"EMIB","def":"유기 기판의 캐비티에 실리콘 브리지를 매립하는 인텔의 기술 명칭. 브리지 위쪽은 미세 피치 범프로, 나머지는 일반 피치 범프로 기판에 접속한다.","chapters":["interposer"]},
     {"ko":"칩렛","en":"Chiplet","abbr":"","def":"큰 칩을 기능별 작은 다이로 나눠 만든 뒤 패키지에서 다시 묶는 설계 방식과 그 다이. 작은 다이는 수율이 높고, 기능마다 알맞은 공정을 쓰고 재사용할 수 있다.","chapters":["interposer"]},
-    {"ko":"UCIe","en":"Universal Chiplet Interconnect Express","abbr":"UCIe","def":"칩렛 사이 다이 간 인터페이스의 공개 표준(2022년 첫 규격 발표). 물리 계층과 프로토콜을 정해 서로 다른 회사의 칩렛을 한 패키지에서 연결할 수 있게 한다.","chapters":["interposer"]},
+    {"ko":"UCIe","en":"Universal Chiplet Interconnect Express","abbr":"UCIe","def":"칩렛 사이 다이 간 인터페이스의 공개 표준(2022년 첫 규격 발표). 물리 계층과 프로토콜을 정해 서로 다른 회사의 칩렛을 한 패키지에서 연결할 수 있게 한다. 2.0(2024)에서 하이브리드 본딩 3D 접속을, 3.0(2025)에서 최대 64 GT/s를 더했다.","chapters":["interposer"]},
     {"ko":"유리 관통 비아","en":"Through Glass Via","abbr":"TGV","def":"유리 기판을 관통하는 구리 비아. 유리는 표면이 평탄하고 유전 손실이 작으며 대형 패널로 만들 수 있어 차세대 인터포저·코어 재료로 연구된다. 취성으로 인한 균열이 과제다.","chapters":["interposer"]},
     {"ko":"레티클 한계","en":"Reticle limit","abbr":"","def":"기존 DUV 및 0.33 NA EUV 풀필드의 대표 크기는 26 × 33 mm(858 mm²)다. 0.55 NA High-NA EUV는 26 × 16.5 mm 반필드를 쓴다. 실제 노광 필드보다 큰 인터포저는 여러 필드를 이어 붙이는 스티칭 노광이 필요하다.","chapters":["interposer"]},
     {"ko":"선폭 / 간격","en":"Line / Space","abbr":"L/S","def":"배선의 폭과 이웃 배선과의 간격. L/S가 2/2 µm이면 배선 피치는 4 µm이고, 한 층에서 1 mm 폭에 지나갈 수 있는 배선은 250개다.","chapters":["interposer"]},
