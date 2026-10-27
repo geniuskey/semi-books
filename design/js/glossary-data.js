@@ -133,7 +133,7 @@ window.BOOK_GLOSSARY = {
     {"ko":"분할","en":"Fracturing","abbr":"","def":"다각형을 전자빔 묘화기가 찍을 수 있는 사각형·사다리꼴 샷으로 쪼개는 것.","chapters":["mask"]},
     {"ko":"VSB 묘화","en":"Variable Shaped Beam writing","abbr":"VSB","def":"빔 모양을 사각형으로 바꿔 한 샷씩 찍는 전자빔 마스크 묘화. 시간이 샷 수에 비례한다.","chapters":["mask"]},
     {"ko":"멀티빔 묘화기","en":"Multi-beam mask writer","abbr":"MBMW","def":"수십만 개 빔을 동시에 켜고 끄는 마스크 묘화기. 묘화 시간이 무늬 복잡도와 거의 무관하다.","chapters":["mask"]},
-    {"ko":"레티클","en":"Reticle","abbr":"","def":"노광 장비에 넣는 마스크. 웨이퍼 크기의 4배로 그린 무늬를 축소 투영한다.","chapters":["mask"]},
+    {"ko":"레티클","en":"Reticle","abbr":"","def":"노광 장비에 넣는 마스크. 웨이퍼에 찍힐 크기의 4배로 그린 무늬를 1/4로 축소 투영한다.","chapters":["mask"]},
     {"ko":"MPW","en":"Multi-Project Wafer","abbr":"MPW","def":"여러 고객의 설계를 한 마스크 세트에 모아 비용을 나누는 시제품 제작 방식(셔틀).","chapters":["mask"]},
     {"ko":"금속 ECO","en":"Metal-only ECO","abbr":"","def":"트랜지스터 층은 그대로 두고 일부 금속 마스크만 바꿔 예비 셀을 연결하는 수정.","chapters":["mask"]},
     {"ko":"예비 셀","en":"Spare cell","abbr":"","def":"나중의 금속 ECO를 위해 미리 칩 곳곳에 뿌려 둔 연결되지 않은 게이트.","chapters":["mask"]},
