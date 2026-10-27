@@ -230,7 +230,7 @@ window.BOOK_GLOSSARY = {
     {"ko":"D-PHY·C-PHY","en":"MIPI physical layers","abbr":"","def":"DSI의 물리층. D-PHY는 차동 레인과 별도 클록, C-PHY는 3선 트리오에 클록을 실어 선당 전송률이 높다.","chapters":["interface"],"category":"iface"},
     {"ko":"eDP","en":"Embedded DisplayPort","abbr":"eDP","def":"노트북 내부 패널용 DisplayPort. 패널 셀프 리프레시(PSR) 같은 저전력 기능을 지원한다.","chapters":["interface"],"category":"iface"},
     {"ko":"DisplayPort","en":"DisplayPort","abbr":"DP","def":"VESA의 패킷 기반 외부 영상 인터페이스. 여러 레인과 DSC로 고해상도·고주사율을 전송한다.","chapters":["interface"],"category":"iface"},
-    {"ko":"HDMI","en":"High-Definition Multimedia Interface","abbr":"HDMI","def":"TV·AV 기기의 표준 영상·음성 인터페이스. HDMI 2.1은 FRL로 최대 48 Gbps와 VRR을 지원한다.","chapters":["interface"],"category":"iface"},
+    {"ko":"HDMI","en":"High-Definition Multimedia Interface","abbr":"HDMI","def":"TV·AV 기기의 표준 영상·음성 인터페이스. HDMI 2.1은 FRL로 최대 48 Gbps와 VRR을 지원하고, 2025년 발표된 HDMI 2.2는 96 Gbps로 두 배가 되었다.","chapters":["interface"],"category":"iface"},
     {"ko":"LVDS","en":"Low-voltage differential signaling","abbr":"LVDS","def":"작은 전압 차동 신호로 데이터를 보내는 방식. 과거 노트북·TV 내부 패널 연결에 쓰였다.","chapters":["interface"],"category":"iface"},
     {"ko":"DSC","en":"Display Stream Compression","abbr":"DSC","def":"VESA의 시각적 무손실 경량 압축(보통 약 3:1). 대역폭과 레인 수를 줄인다.","chapters":["interface"],"category":"iface"},
     {"ko":"크로마 서브샘플링","en":"Chroma subsampling","abbr":"4:2:0","def":"색차 신호의 해상도를 줄여 대역폭을 아끼는 부호화. 4:4:4는 전체, 4:2:0은 가로·세로 절반이다.","chapters":["interface"],"category":"iface"},
