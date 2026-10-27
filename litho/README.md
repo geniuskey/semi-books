@@ -43,7 +43,6 @@ python -m http.server 8000   # → http://localhost:8000
 - `css/style.css` — 디자인 토큰(라이트/다크)
 - `js/common.js` — 내비게이션, 캔버스·차트·끌기 헬퍼, 전역 `LB`
 - `js/litho.js` — 아베 결상, 레지스트 문턱 모델, 공정 윈도, OPC, 산탄 잡음, 박막 전달 행렬, 단면 모델, 전역 `LT`
-- `tools/head.py` — 챕터 `<head>`·사이트맵·JSON-LD 생성기
 - `tools/check.py` — 페이지 점검기(콘솔 오류, 가로 넘침, 조작 중 예외)
 
 챕터 작성 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.

@@ -27,7 +27,7 @@
 - 문체는 평서문 "~다". 이모지 금지. 다른 장을 언급할 때는 `<a href="arde.html">10장</a>`처럼 링크한다.
 
 ## head 블록
-각 챕터 `<head>`에는 아래 표식만 두고 `python3 tools/head.py <slug>`를 실행한다(인자를 주면 그 장만 고친다. 인자 없이 실행하면 전체 장 + 사이트맵 + `index.html`의 JSON-LD를 갱신한다). 제목·번호는 `js/common.js`의 `CHAPTERS`에서 읽는다.
+소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
 ```html
 <!doctype html>
 <!-- Copyright (c) 2026 geniuskey and EtchBook contributors.
@@ -35,11 +35,16 @@
      Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
 <html lang="ko">
 <head>
-<!--head:start {"desc": "한 문장 설명", "libs": ["et"]}-->
-<!--head:end-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>장 제목 · EtchBook</title>
+<meta name="description" content="한 문장 설명(검색 결과에 보일 120자 안팎)">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/etch.js"></script>
 </head>
 ```
-`libs`의 `et`는 `js/etch.js`, `three`는 three.js + OrbitControls를 불러온다. 쓰지 않으면 뺀다.
 
 ## 페이지 골격
 ```html
@@ -57,7 +62,7 @@
 <script>(function () { "use strict"; /* 시뮬레이터 */ })();</script>
 </body>
 ```
-상단바·챕터 목록·식각 흐름 띠·오른쪽 목차·h2 번호·이전/다음·푸터·퀴즈 동작·KaTeX 렌더는 `common.js`가 자동으로 만든다. 직접 넣지 않는다.
+상단바·챕터 목록·식각 흐름 띠·오른쪽 목차·h2 번호·이전/다음·푸터·퀴즈 동작는 `common.js`가 자동으로 만든다. 직접 넣지 않는다.
 
 ## 컴포넌트
 - 그림: `<figure class="diagram"><svg viewBox="0 0 720 300" role="img" aria-label="…">…</svg><figcaption><b>그림 제목.</b> 설명</figcaption></figure>`. SVG 안에서는 `.lbl`, `.lbl-dim`, `.lbl-b`, `.lbl-acc`, `.lbl-acc2`, `.lbl-bad`, `.t-mono`, `.s-line`, `.s-axis`, `.s-acc`, `.s-acc2`, `.s-dash`, `.s-bad`, `.f-surface`, `.f-elev`, `.f-acc`, `.f-acc2`, `.f-acc-soft`, `.f-acc2-soft`, `.f-ok-soft`, `.f-warn-soft`, `.f-bad-soft`, `.f-bad`, `.beam`, 재질 `.m-si .m-ox .m-nit .m-poly .m-w .m-cu .m-al .m-lowk .m-pr .m-barc .m-ac .m-sion .m-tin .m-cr .m-cfx(고분자) .m-wet(식각액) .m-plasma(플라스마 빛)` 클래스를 쓴다. 색을 직접 적지 않는다(다크 모드). 화살표 머리는 `<marker>`에 `fill="context-stroke"`.

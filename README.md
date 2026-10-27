@@ -23,7 +23,7 @@
 | `/tcad/` | TCADBook · 소자·공정 시뮬레이션 | 공개 | `geniuskey/tcadbook` |
 | `/packaging/` | PackagingBook · 패키징 | 공개 | `geniuskey/packagingbook` |
 | `/test/` | TestBook · 테스트 | 공개 | `geniuskey/testbook` |
-| `/memory/` | MemoryBook · 메모리 반도체 | 공개 | `geniuskey/memorybook`에서 가져와 이 저장소에서 집필 |
+| `/memory/` | MemoryBook · 메모리 반도체 | 공개 | `geniuskey/memorybook` |
 | `/optics/` | OpticsBook · 이미지 센서 광학 | 공개 | `geniuskey/opticsbook` |
 | `/sensor/` | SensorBook · 이미지 센서 | 공개 | `geniuskey/sensorbook` |
 | `/display/` | DisplayBook · 디스플레이 | 공개 | `geniuskey/displaybook` |
@@ -32,28 +32,13 @@
 
 총 21권이 공개 상태(`book.json`의 `status: published`)이며, 위 경로마다 책 홈과 장 파일이 있습니다. 용어집을 포함한 장 목록은 각 책의 `js/common.js`에 등록되어 있습니다.
 
-기존 책 19권은 소스·실습 엔진·용어 데이터·저작권 안내를 포함해 가져왔습니다. `.git`, `node_modules`, 빌드 결과, 개별 사이트의 CNAME과 CI·패키지 설정은 복사 대상에서 제외합니다. 각 책의 CSS·JS와 실습은 독립적으로 유지하며, 공통 서가 연결과 테마는 `shared/`에서 지원합니다.
+기존 책 19권은 소스·실습 엔진·용어 데이터·저작권 안내를 포함해 개별 저장소에서 가져왔고, InfraBook과 CMPBook은 처음부터 이 저장소에서 썼습니다. 이제 21권 모두 이 저장소에서 집필합니다(각 `book.json`에 `meta`). 각 책의 CSS·JS와 실습은 독립적으로 유지하며, 공통 서가 연결과 테마는 `shared/`에서 지원합니다. 각 책의 `js/glossary-data.js`는 용어집과 본문 툴팁이 함께 사용하는 용어 원본입니다. 집필 규칙은 책마다 있는 `CONTRIBUTING.md`를 참고하세요.
 
-## 원본 저장소에서 가져오기
+## 원본 저장소와 가져오기 기록
 
 개별 도메인(`*book.euiyun.com`)은 운영을 마쳤습니다. 모든 책은 `semi.euiyun.com/{slug}/`에서만 제공하며, 책 사이의 링크도 내부 주소를 씁니다.
 
-가져오기 원본과 slug, 기존 URL은 `migration/books.json`에, 실제로 가져온 커밋과 파일별 해시는 `migration/import-state.json`에 기록합니다. 두 파일 모두 저장소에 보관합니다. 가져오기는 Git이 추적하는 파일을 대상으로 하므로 새 원본 파일은 먼저 해당 저장소에 추가합니다. 원본에 미커밋 수정이 있으면 상태 파일의 `sourceDirty`에도 기록합니다.
-
-```bash
-# 개별 저장소를 semi-books와 같은 상위 폴더에 둡니다.
-python3 tools/import-books.py --check        # 원본과 통합본의 차이 확인
-python3 tools/import-books.py --write        # 안전하게 갱신
-python3 tools/import-books.py --write --book device  # 한 권만 갱신
-python3 tools/sync-catalog.py
-python3 tools/sync-sitemap.py
-npm test
-npm run build
-```
-
-가져오기 도구는 개별 원본 저장소를 읽기만 합니다. 통합본에서 수정한 파일이 있으면 덮어쓰기를 거부하고 해당 경로를 알립니다. 원본에서 사라진 파일도 자동 삭제하지 않습니다. 병행 기간에 같은 책을 양쪽에서 수정했다면 먼저 차이를 합친 뒤 가져오기 상태를 정리하세요. 원본 저장소 삭제와 기존 도메인의 리디렉션 전환은 병행 기간 이후 별도 작업입니다.
-
-`book.json`에 `meta`가 있는 책(`/infra/`, `/cmp/`, `/memory/`)은 이 저장소에서 집필하며 가져오기가 건너뜁니다. InfraBook과 CMPBook은 처음부터 이 저장소에서 썼고, MemoryBook은 가져온 뒤 이 저장소로 옮겼습니다. `migration/books.json`에 남은 MemoryBook 항목은 다른 책에 있는 옛 주소를 바꾸는 데만 씁니다. 세 책의 `js/glossary-data.js`는 용어집과 본문 툴팁이 함께 사용하는 용어 원본입니다. 집필 규칙은 [infra/CONTRIBUTING.md](infra/CONTRIBUTING.md), [cmp/CONTRIBUTING.md](cmp/CONTRIBUTING.md), [memory/CONTRIBUTING.md](memory/CONTRIBUTING.md)를 참고하세요.
+가져오기 원본과 slug, 기존 URL, 서가 정보는 `migration/books.json`에 남아 있습니다. `tools/import-books.py`는 `book.json`에 `meta`가 있는 책을 건너뛰므로 지금은 어떤 책도 덮어쓰지 않으며, `migration/import-state.json`의 가져오기 기록도 비어 있습니다. 개별 저장소는 더 이상 원본이 아닙니다. 책을 고칠 때는 이 저장소의 파일을 직접 수정합니다.
 
 ## 구성
 
@@ -65,25 +50,22 @@ shared/js/shelf.js                    서가 홈의 책장 렌더링·필터·�
 shared/js/covers.js                   books 프로젝트의 SVG 책 표지와 공정·식각·인프라 표지
 shared/css/cover-animations.css       표지 애니메이션, 동작 줄이기 지원
 shared/img/sims/                      홈 ‘직접 해보기’의 시뮬레이터 화면
-shared/js/book-shell.js               가져온 책의 ‘반도체 서가’ 연결
+shared/js/book-shell.js               기존 19권의 ‘반도체 서가’ 연결
 {slug}/                              각 책의 본문, 실습, 용어 데이터, 집필 도구
-infra/                               이 저장소에서 집필하는 InfraBook
-cmp/                                 이 저장소에서 집필하는 CMPBook
-memory/                              가져온 뒤 이 저장소에서 집필하는 MemoryBook
-migration/books.json                 원본·slug·서가 정보와 이전 경로 별칭
-migration/import-state.json          가져온 커밋과 파일 해시
-tools/import-books.py                보호된 가져오기·갱신
+migration/books.json                 원본·slug·서가 정보와 이전 경로 별칭(가져오기 기록)
+migration/import-state.json          가져오기 상태(모든 책을 이 저장소에서 집필하므로 비어 있음)
+tools/import-books.py                보호된 가져오기(meta가 있는 책은 건너뜀)
 tools/sync-catalog.py                 서가 목록 생성, 기본 입력은 migration/books.json
 tools/sync-sitemap.py                 루트 사이트맵 생성
 tools/build.mjs                      하위 경로를 지원하는 정적 배포물 생성
 tools/check.cjs                       메타데이터·링크·스크립트 정적 검사
-tools/katex.mjs                       집필 책(/cmp/·/infra/·/memory/) 수식 빌드 렌더링
+tools/katex.mjs                       모든 책의 수식 빌드 렌더링
 tools/katex.test.mjs                  수식 렌더링·HTML의 < 거부 규칙 회귀 검사
 tools/migration.test.cjs              원본 보존·덮어쓰기 거부·집필 책 보호 회귀 검사
 tools/browser-check.cjs               데스크톱·모바일 브라우저 검사
 ```
 
-`catalog.js`를 직접 수정하지 않고 `migration/books.json`의 책 정보를 수정한 후 생성합니다. 이 저장소에서 집필하는 책의 장 수와 시뮬레이터 수는 소스에서 셉니다. 원본 포털의 목록을 다시 참고할 때는 `python3 tools/sync-catalog.py ../books/data/books.json`도 사용할 수 있습니다. 가져온 책의 실제 장 수도 통합된 파일에서 계산합니다.
+`catalog.js`를 직접 수정하지 않고 `migration/books.json`의 책 정보를 수정한 후 생성합니다. 장 수와 시뮬레이터 수는 소스에서 셉니다. 원본 포털의 목록을 다시 참고할 때는 `python3 tools/sync-catalog.py ../books/data/books.json`도 사용할 수 있습니다. 
 
 표지 그림은 각 책의 `motif`로 고릅니다. ProcessBook의 `process`, EtchBook의 `etch`, InfraBook의 `fab`, CMPBook의 `cmp`는 이 저장소에서 만들어 books 포털에도 같은 코드로 반영한 표지입니다. 표지를 고칠 때는 `shared/js/covers.js`·`shared/css/cover-animations.css`와 books의 `js/covers.js`·`css/style.css`를 함께 맞춥니다. `npm test`는 서가의 모든 `motif`에 표지가 있는지도 확인합니다.
 
@@ -94,13 +76,13 @@ python3 -m http.server 8000          # http://localhost:8000/, /memory/, /digita
 npm ci
 npm test
 npm run build                       # .book-dist/ 생성
-node tools/browser-check.cjs --imported --offline  # Playwright 필요
-node tools/browser-check.cjs --dist --mobile cmp/ infra/ memory/  # 배포물의 360px 화면·툴팁 검사
+node tools/browser-check.cjs --offline  # Playwright 필요
+node tools/browser-check.cjs --dist --mobile cmp/ infra/  # 배포물의 360px 화면·툴팁 검사(책 경로로 거르기)
 ```
 
-브라우저 검사에는 Playwright를 설치하거나 `PW_PATH`로 모듈 위치를 지정합니다. `CHROME`으로 브라우저 실행 파일을 지정할 수 있습니다. `--imported`는 이 저장소에서 집필하는 책(InfraBook·CMPBook·MemoryBook)을 제외하고 서가와 가져온 책들만 검사합니다. `--dist`는 빌드 결과인 `.book-dist/`를 열고, `--mobile`은 폭 360px만 검사합니다. 이 저장소에서 집필하는 책의 장에서는 용어 툴팁의 로딩·포커스·클릭·Escape 동작도 확인합니다. CDN을 사용할 수 있는 환경에서는 `--offline`을 생략해 수식·폰트·3D 라이브러리까지 확인합니다.
+브라우저 검사에는 Playwright를 설치하거나 `PW_PATH`로 모듈 위치를 지정합니다. `CHROME`으로 브라우저 실행 파일을 지정할 수 있습니다. 인자로 경로 일부를 주면 해당 페이지만 검사합니다. `--dist`는 빌드 결과인 `.book-dist/`를 열고, `--mobile`은 폭 360px만 검사합니다. 모든 책의 장에서 용어 툴팁의 로딩·포커스·클릭·Escape 동작도 확인합니다. CDN을 사용할 수 있는 환경에서는 `--offline`을 생략해 수식·폰트·3D 라이브러리까지 확인합니다.
 
-빌드와 테스트에는 이전 개별 저장소나 books 프로젝트의 체크아웃이 필요하지 않습니다. 생성된 파일과 SVG 표지를 이 저장소에 포함합니다. KaTeX·three.js·웹 폰트는 각 책에서 사용하던 CDN을 계속 사용합니다. 단, `/cmp/`·`/infra/`·`/memory/`의 수식은 빌드가 `katex` 패키지로 미리 렌더링하고 배포물에는 KaTeX 스타일시트만 붙입니다. 가져온 책의 소스 HTML에 있는 canonical·OG·구조화 데이터는 통합 주소를 가리킵니다. `book.json`에 `meta`가 있는 책(`/cmp/`, `/infra/`, `/memory/`)은 소스에 이 태그들을 두지 않고, 빌드가 `<title>`·description·`CHAPTERS`·git 커밋 날짜로 생성합니다. 책 폴더에 `og.png`(1200×630)가 있으면 공유 이미지로도 씁니다. 애널리틱스 비컨은 빌드할 때 배포물에만 한 번 추가합니다.
+빌드와 테스트에는 이전 개별 저장소나 books 프로젝트의 체크아웃이 필요하지 않습니다. 생성된 파일과 SVG 표지를 이 저장소에 포함합니다. KaTeX·three.js·웹 폰트는 각 책에서 사용하던 CDN을 계속 사용합니다. 단, 수식은 빌드가 `katex` 패키지로 미리 렌더링하고 배포물에는 KaTeX 스타일시트만 붙입니다. canonical·OG·구조화 데이터는 소스에 두지 않습니다. `book.json`에 `meta`가 있는 책(지금은 모든 책)은 빌드가 `<title>`·description·`CHAPTERS`·git 커밋 날짜로 생성합니다. 책 폴더에 `og.png`(1200×630)가 있으면 공유 이미지로도 씁니다. 애널리틱스 비컨은 빌드할 때 배포물에만 한 번 추가합니다.
 
 GitHub Pages 배포물은 `.book-dist/`입니다. `CNAME`은 `semi.euiyun.com`입니다. 빌드는 소스를 읽기만 하며, 결과물과 통합 사이트맵은 `.book-dist/`에 씁니다.
 

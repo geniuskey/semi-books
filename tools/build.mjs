@@ -24,7 +24,7 @@ for (const entry of book.books) {
   const { meta } = JSON.parse(await readFile(join(root, entry), 'utf8'));
   if (!meta) continue;
   const js = await readFile(join(root, slug, 'js/common.js'), 'utf8');
-  const chapters = [...js.matchAll(/\{ slug: "([^"]+)",\s*num: "[^"]*",\s*title: "([^"]+)"/g)].map(([, slug, title]) => ({ slug, title }));
+  const chapters = [...js.matchAll(/\{\s*slug:\s*"([^"]+)",[^{}]*?\btitle:\s*"([^"]+)"/g)].map(([, slug, title]) => ({ slug, title }));
   if (!chapters.length) throw new Error(`${slug}: no CHAPTERS in js/common.js`);
   const home = await readFile(join(root, slug, 'index.html'), 'utf8');
   // A book that ships og.png (1200×630) gets it as the share image on every page.
@@ -54,20 +54,24 @@ function metadata(rel, html, info, url) {
   const isHome = rel === `${info.slug}/index.html`;
   const chapterSlug = rel.match(/\/chapters\/([^/]+)\.html$/)?.[1];
   const position = info.chapters.findIndex((c) => c.slug === chapterSlug) + 1;
-  if (!isHome && !position) throw new Error(`${rel}: not a book home or a chapter registered in CHAPTERS`);
+  // Other pages at the book root (AnalogBook's sims.html) are plain web pages of the book.
+  const isPage = !isHome && !chapterSlug && /^[^/]+\/[^/]+\.html$/.test(rel);
+  if (!isHome && !isPage && !position) throw new Error(`${rel}: not a book home, a root page or a chapter registered in CHAPTERS`);
   const common = { inLanguage: 'ko', isAccessibleForFree: true, image: info.image };
   const node = isHome
     ? { '@type': 'Book', '@id': `${bookUrl}#book`, name: info.title, alternateName: info.alternateName, url: bookUrl, ...common,
         educationalLevel: info.educationalLevel, about: info.about, description: info.summary, dateModified: lastCommitDate(info.slug),
         isPartOf: { '@type': 'WebSite', '@id': `${origin}/#site`, name: book.title, url: `${origin}/` },
         hasPart: info.chapters.map((c, i) => ({ '@type': 'Chapter', name: c.title, position: i + 1, url: `${bookUrl}chapters/${c.slug}.html` })) }
+    : isPage ? { '@type': 'WebPage', '@id': `${url}#page`, name: decode(title), description: decode(description), url, ...common, dateModified: lastCommitDate(rel),
+        isPartOf: { '@type': 'Book', '@id': `${bookUrl}#book`, name: info.title, url: bookUrl } }
     : { '@type': ['Chapter', 'LearningResource'], '@id': `${url}#chapter`, name: info.chapters[position - 1].title, headline: decode(title),
         description: decode(description), url, position, ...common, learningResourceType: RESOURCE_TYPE[chapterSlug] || '인터랙티브 교재',
         educationalLevel: info.educationalLevel, dateModified: lastCommitDate(rel),
         isPartOf: { '@type': 'Book', '@id': `${bookUrl}#book`, name: info.title, url: bookUrl } };
   const crumbs = isHome ? [] : [{ '@type': 'BreadcrumbList', itemListElement: [
     { '@type': 'ListItem', position: 1, name: info.siteName, item: bookUrl },
-    { '@type': 'ListItem', position: 2, name: info.chapters[position - 1].title, item: url }] }];
+    { '@type': 'ListItem', position: 2, name: isPage ? decode(title).replace(/ · [^·]+$/, '') : info.chapters[position - 1].title, item: url }] }];
   const json = JSON.stringify({ '@context': 'https://schema.org', '@graph': [node, ...crumbs] }).replace(/</g, '\\u003c');
   return [
     `<link rel="canonical" href="${url}">`,

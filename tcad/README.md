@@ -46,7 +46,6 @@ python -m http.server 8000   # → http://localhost:8000
 - `js/process.js` — 이온 주입, 확산·어닐, 산화, 형상 진화, TN-45 공정 흐름
 - `js/device1d.js` — 1D 포아송·드리프트-확산, 다이오드, MOS 커패시터, 슈뢰딩거-포아송, 몬테카를로 수송
 - `js/device2d.js` — 2D 격자, 2D 포아송·드리프트-확산, I-V 스윕과 특성 추출, 컴팩트 모델, TN-45 소자
-- `tools/head.py` — 챕터 `<head>`·사이트맵·JSON-LD 생성기
 - `tools/check.py` — 페이지 점검기(콘솔 오류, 가로 넘침, 조작 중 예외)
 
 챕터 작성 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.

@@ -34,7 +34,7 @@
 
 모든 HTML 페이지에는 아래 Cloudflare Web Analytics 코드를 `<head>`에 한 번 포함한다. SEO 자동 생성 블록 밖에 두며, 공통 Site Token을 유지한다.
 
-각 챕터 `<head>`에는 아래 표식만 두고 `python tools/head.py <slug>`를 실행한다(인자를 주면 그 장만 고친다). 제목·번호는 `js/common.js`의 `CHAPTERS`에서 읽는다.
+소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
 ```html
 <!doctype html>
 <!-- Copyright (c) 2026 geniuskey and ChipIndustryBook contributors.
@@ -42,15 +42,20 @@
      Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
 <html lang="ko">
 <head>
-<!--head:start {"desc": "한 문장 설명(검색 결과에 보일 120자 안팎)", "libs": ["ind"]}-->
-<!--head:end-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>장 제목 · ChipIndustryBook</title>
+<meta name="description" content="한 문장 설명(검색 결과에 보일 120자 안팎)">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/industry.js"></script>
 <style> /* 이 장 전용 */ </style>
 <!-- Cloudflare Web Analytics -->
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token":"3d6151a0abc94ede89285d462527fa80"}'></script>
 <!-- End Cloudflare Web Analytics -->
 </head>
 ```
-`libs`의 `ind`는 `js/industry.js`, `three`는 three.js r147 + OrbitControls를 불러온다.
 
 ## 페이지 골격
 ```html
@@ -67,7 +72,7 @@
 <script>(function () { "use strict"; /* 시뮬레이터 */ })();</script>
 </body>
 ```
-상단바·챕터 목록·가치사슬 띠·오른쪽 목차·h2 번호·이전/다음·푸터·퀴즈 동작·KaTeX 렌더·"시뮬레이터만" 모드·시뮬레이터 바로가기(#) 링크는 `common.js`가 자동으로 만든다. 직접 넣지 않는다.
+상단바·챕터 목록·가치사슬 띠·오른쪽 목차·h2 번호·이전/다음·푸터·퀴즈 동작·"시뮬레이터만" 모드·시뮬레이터 바로가기(#) 링크는 `common.js`가 자동으로 만든다. 직접 넣지 않는다.
 "시뮬레이터만" 모드에서는 `section` 바로 아래의 `h2`, `.sim`, `.sim-group`만 보인다. 시뮬레이터를 `figure`나 다른 `div`로 감싸지 않는다(숨겨진다).
 
 ## 컴포넌트
@@ -186,7 +191,7 @@ const unit = (c.dieCost + hbm + A.pkg.cost + A.test) / A.pkg.yield + A.board;   
 - `IND.arc(ctx, x0, y0, x1, y1, bend)` 두 점을 잇는 활 모양 경로를 만든다(stroke는 호출한 쪽이). 반환 함수 `f(t)` → 경로 위 점(0~1), 흐름 애니메이션용.
 
 ## 점검
-- `python tools/head.py <slug>` 로 head를 채운다.
+소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
 - `python tools/check.py <slug>` (playwright 필요). 넓은 화면·라이트와 360px·다크로 열어 콘솔 오류, 가로 넘침, 조작 중 예외, 그려지지 않은 캔버스를 보고한다. `--shots 폴더`로 스크린샷을 남겨 눈으로도 본다. **문제가 0이 될 때까지 고친다.**
 - `python tools/sims.py` 로 갤러리 목록(`js/sims.js`)을 다시 만든다(data-desc 누락을 알려 준다).
 - 모바일(폭 360px)에서 가로 스크롤 금지. 캔버스 글자는 `CB.font()`로, 색은 `CB.palette()`·`CB.segColor()`·`CB.regionColor()`로. 다크·라이트 모두 확인.

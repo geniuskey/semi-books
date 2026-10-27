@@ -39,7 +39,6 @@ python3 -m http.server 8000   # → http://localhost:8000
 - `js/common.js` — 내비게이션, 캔버스·차트 헬퍼, 전역 `PB`
 - `js/xsec.js` — 2D 단면 공정 엔진과 단계별 단면 위젯, 전역 `XS`
 - `js/optics.js` — 1D 부분 결맞음 결상 엔진, 전역 `OPT`
-- `tools/head.py` — 챕터 `<head>`·사이트맵·JSON-LD 생성기
 
 챕터 작성 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.
 시뮬레이터의 수치는 교육용 근사 모델입니다. 양산 수치는 2024~2026년 공개 자료 기준의 대략값입니다.

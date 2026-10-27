@@ -31,7 +31,8 @@ function checkPage(rel, opts = {}) {
     if (/cdn\.jsdelivr\.net\/npm\/katex@/.test(html)) fail(`${rel}: KaTeX tags are added by the build — remove them from the source`);
     // 빌드는 정적 HTML의 수식만 렌더링하므로, 스크립트가 넣는 수식은 배포물에서 TeX 원문으로 보인다.
     for (const m of html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)) {
-      if (/\\\\[([]|\$\$/.test(m[1])) fail(`${rel}: a script writes math (\\( \\[ $$) — the build only renders math in static HTML`);
+      // `$${x}`는 템플릿 리터럴의 달러 기호와 치환식이지 $$ 수식이 아니다.
+      if (/\\\\[([]|\$\$(?!\{)/.test(m[1])) fail(`${rel}: a script writes math (\\( \\[ $$) — the build only renders math in static HTML`);
     }
   } else {
     const canonical = (html.match(/<link\b[^>]*rel="canonical"[^>]*href="([^"]+)"/) || [])[1];

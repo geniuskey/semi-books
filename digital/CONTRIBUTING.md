@@ -26,11 +26,7 @@ ProcessBook·SoCBook·DesignBook과 같은 디자인 시스템과 컴포넌트�
 - 인터랙티브 요소 안의 `button`, `select`, `input[type=range]`는 아무 순서로 눌러도 예외가 나지 않아야 한다(`tools/check.js`가 전부 눌러 본다).
 
 ## head 블록
-각 챕터 `<head>`에는 아래 표식만 두고 `python3 tools/head.py`를 실행한다. 제목·번호는 `js/common.js`의 `CHAPTERS`에서 읽고, canonical·OG·JSON-LD·사이트맵·`index.html`의 `hasPart`를 함께 갱신한다.
-```html
-<!--head:start {"desc": "한 문장 설명"}-->
-<!--head:end-->
-```
+소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
 그 아래에 장 전용 `<style>`을 둘 수 있다. 챕터를 추가하면 `CHAPTERS`, `chapters/glossary.html`의 `SHORT`, `tools/glossary/<slug>.json`에도 등록한다.
 
 용어 원본은 `tools/glossary/<slug>.json`이다. `npm run generate`는 시리즈 공통 v1 형식의 `js/glossary-data.js`와 종합 퀴즈를 함께 만든다. `js/glossary-data.js`나 용어집의 `DATA` 구역을 직접 고치지 않는다. 본문 툴팁은 생성된 정의를 그대로 사용한다.
@@ -45,8 +41,14 @@ ProcessBook·SoCBook·DesignBook과 같은 디자인 시스템과 컴포넌트�
      Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
 <html lang="ko">
 <head>
-<!--head:start {"desc": "..."}-->
-<!--head:end-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>장 제목 · DigitalBook</title>
+<meta name="description" content="한 문장 설명(검색 결과에 보일 120자 안팎)">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/dig.js"></script>
 <style> /* 장 전용 스타일(선택) */ </style>
 </head>
 <body data-chapter="inverter">
@@ -88,7 +90,7 @@ ProcessBook·SoCBook·DesignBook과 같은 디자인 시스템과 컴포넌트�
 </div>
 ```
 - 작은 그림: `<figure class="play" id="fig-x"><div class="play-view"><canvas id="cv-x"></canvas></div><div class="play-ctrl"><label class="ctrl"><span>… <output id="x-a-out"></output></span><input type="range" id="x-a" …></label></div><figcaption><span class="try">해 보기</span> …</figcaption></figure>`
-- 퀴즈: `<div class="quiz-q"><p>Q1. 질문</p><div class="opts"><button class="opt">보기</button><button class="opt" data-correct>정답</button>…</div><div class="quiz-exp">해설</div></div>`. 동작·목차·이전/다음·KaTeX 렌더는 `common.js`가 자동 처리한다.
+- 퀴즈: `<div class="quiz-q"><p>Q1. 질문</p><div class="opts"><button class="opt">보기</button><button class="opt" data-correct>정답</button>…</div><div class="quiz-exp">해설</div></div>`. 동작·목차·이전/다음는 `common.js`가 자동 처리한다.
 - 수식: 인라인 `\( … \)`, 블록 `<div class="formula">$$ … $$<div class="where">…</div></div>`.
 - 컨트롤 바인딩: `SB.range("vt-vdd", fmt, cb)`(출력은 `id-out`), `SB.seg("vt-mode", cb)`.
 - 실제 마크업 예시는 SoCBook(https://github.com/geniuskey/socbook)의 `chapters/logic.html` 등을 참고한다. 컴포넌트 클래스는 같다.
@@ -109,6 +111,6 @@ ProcessBook·SoCBook·DesignBook과 같은 디자인 시스템과 컴포넌트�
 
 ## 점검
 ```bash
-python3 tools/head.py && python3 tools/glossary.py
+python3 tools/glossary.py
 node tools/check.js            # playwright 필요 (전역 설치라면 PW_PATH=$(npm root -g)/playwright)
 ```

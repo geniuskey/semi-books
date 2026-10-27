@@ -16,11 +16,7 @@
 - 문체는 평서문 "~다". 다른 장을 언급할 때는 `<a href="flipchip.html">7장</a>`처럼 링크한다.
 
 ## head 블록
-각 챕터 `<head>`에는 아래 표식만 두고 `python3 tools/head.py`를 실행한다. 제목·번호는 `js/common.js`의 `CHAPTERS`에서 읽고, canonical·OG·JSON-LD·사이트맵·`index.html`의 `hasPart`를 함께 갱신한다.
-```html
-<!--head:start {"desc": "한 문장 설명", "libs": ["pkg", "three"]}-->
-<!--head:end-->
-```
+소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
 챕터를 추가하면 `CHAPTERS`, `chapters/glossary.html`의 용어·문제 은행에도 등록한다.
 
 ## 페이지 뼈대
@@ -37,7 +33,7 @@
 <script>(function () { "use strict"; /* 시뮬레이터 */ })();</script>
 </body>
 ```
-h2 번호·목차·이전/다음·퀴즈 동작·KaTeX 렌더는 `common.js`가 자동 처리한다.
+h2 번호·목차·이전/다음·퀴즈 동작는 `common.js`가 자동 처리한다.
 
 ## 컴포넌트
 - 그림: `<figure class="diagram"><svg viewBox="0 0 780 260" role="img" aria-label="…">…</svg><figcaption><b>그림 N-1.</b> …</figcaption></figure>`

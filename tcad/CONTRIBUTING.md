@@ -27,16 +27,24 @@
 - 문체는 평서문 "~다". 이모지 금지. 다른 장을 언급할 때는 `<a href="mesh.html">4장</a>`처럼 링크한다.
 
 ## head 블록
-각 챕터 `<head>`에는 아래 표식만 두고 `python tools/head.py <slug>`를 실행한다(인자를 주면 그 장만 고친다. 인자 없이 실행하면 전체 장 + 사이트맵 + `index.html`의 JSON-LD를 갱신한다). 제목·번호는 `js/common.js`의 `CHAPTERS`에서 읽는다.
+소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
 ```html
 <!doctype html>
 <html lang="ko">
 <head>
-<!--head:start {"desc": "한 문장 설명", "libs": ["d1"]}-->
-<!--head:end-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>장 제목 · TCADBook</title>
+<meta name="description" content="한 문장 설명(검색 결과에 보일 120자 안팎)">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/tcad.js"></script>
+<script src="../js/device1d.js"></script>
+<script src="../js/device2d.js"></script>
 </head>
 ```
-엔진 코어 `js/tcad.js`는 항상 불러온다. `libs`의 `proc`은 `js/process.js`(공정), `d1`은 `js/device1d.js`(1D 소자), `d2`는 `js/device2d.js`(2D 소자), `three`는 three.js + OrbitControls를 불러온다. 쓰지 않는 것은 뺀다.
+엔진 코어 `js/tcad.js`는 항상 불러온다. 필요한 장만 `js/process.js`(공정), `js/device1d.js`(1D 소자), `js/device2d.js`(2D 소자), three.js + OrbitControls를 `<script>`로 불러온다. 쓰지 않는 것은 뺀다.
 
 ## 페이지 골격
 ```html
@@ -53,7 +61,7 @@
 <script>(function () { "use strict"; /* 시뮬레이터 */ })();</script>
 </body>
 ```
-상단바·챕터 목록·공정 흐름 띠·오른쪽 목차·h2 번호·이전/다음·푸터·퀴즈 동작·KaTeX 렌더는 `common.js`가 자동으로 만든다. 직접 넣지 않는다.
+상단바·챕터 목록·공정 흐름 띠·오른쪽 목차·h2 번호·이전/다음·푸터·퀴즈 동작는 `common.js`가 자동으로 만든다. 직접 넣지 않는다.
 
 ## 컴포넌트
 - 그림: `<figure class="diagram"><svg viewBox="0 0 720 300" role="img" aria-label="…">…</svg><figcaption><b>그림 제목.</b> 설명</figcaption></figure>`. SVG 안에서는 `.lbl`, `.lbl-dim`, `.lbl-b`, `.lbl-acc`, `.lbl-acc2`, `.lbl-bad`, `.t-mono`, `.s-line`, `.s-axis`, `.s-acc`, `.s-acc2`, `.s-dash`, `.s-bad`, `.f-surface`, `.f-elev`, `.f-acc`, `.f-acc2`, `.f-acc-soft`, `.f-acc2-soft`, `.f-ok-soft`, `.f-warn-soft`, `.f-bad-soft`, `.f-bad`, `.beam`, 재질 `.m-si .m-ox .m-nit .m-poly .m-hk .m-sige .m-ge .m-w .m-cu .m-al .m-tin .m-sil .m-pr .m-sp`, 도핑 `.m-n .m-p`(반투명) 클래스를 쓴다. 색을 직접 적지 않는다(다크 모드). 화살표 머리는 `<marker>`에 `fill="context-stroke"`.
@@ -148,7 +156,7 @@
   - `TC.cmap(name, t)` → [r,g,b], `TC.cmapCss(name, t, alpha)`, `TC.CMAPS`(viridis, inferno, turbo, div, doping, gray), `TC.dopingColor(net)` p형 빨강 – n형 파랑.
   - `TC.matColor(key)`(CSS `--m-key`), `TC.drawStruct(ctx, box, regions, view, {outline, alpha})` 재질 단면(`regions: [{m, x0, x1, y0, y1} | {m, poly}]`, nm) → `{X, Y}`.
 
-### 공정 (`js/process.js`, libs "proc")
+### 공정 (`js/process.js`)
 단위: 길이 nm, 농도 cm⁻³, 도즈 cm⁻², 이온 에너지 keV, 공정 온도 °C(산화·어닐), 시간 s(`TC.MIN` = 60, `TC.HR` = 3600을 곱해 쓴다), 확산 계수 cm²/s. 2D 배열은 `[j·nx + i]`(i: x, j: 깊이 y). 수치는 node로 검증한 값이다.
 - 주입 표: `TC.IMPLANT[ion]`(B, BF2, P, As, Sb, In; 비정질 Si의 LSS/Gibbons 계열 Rp·ΔRp·왜도 γ, 1~500 keV log-log 보간), `TC.implantMoments(ion, E)` → `{Rp, dRp, gamma, beta, lat}`. β는 피어슨 IV 영역이 되도록 자동으로 올린다. BF2는 B 원자 몫 에너지(E·11/49). 대표값: B 10 keV Rp 35 nm·ΔRp 18 nm·γ −0.3, B 30 keV 99/37, B 100 keV 300/71, BF2 25 keV(= B 5.6 keV) 22/12.8, P 30 keV 38/17, As 2 keV 3.8/1.6, As 20 keV 15.9/5.9, As 40 keV 27/9.9, Sb 50 keV 24.4/8.1. 1e15 cm⁻²의 정점: B 10 keV 2.4e20, As 20 keV 7.2e20, As 2 keV 2.7e21.
 - `TC.pearson4(x, Rp, dRp, γ, β)` 정규화 밀도(1/nm, 평균·표준편차·왜도가 입력과 일치). γ=0, β=3이면 가우시안.
@@ -173,7 +181,7 @@
   - 2D 소자(device2d, 기본 격자): Vt,lin 0.34 V, Vt,sat 0.255 V, SS 80 mV/dec, DIBL 90 mV/V, Ion 0.70 mA/µm, Ioff 2 nA/µm(해석식 TN-45: 0.356, 0.259, 79, 101, 0.715, 1.5 nA).
   - 민감도: TED 끄면 xjExt 16.1·Leff 29.7, 스파이크 1000 °C면 14.9·33.2, 1100 °C면 43·13(확장부가 S/D 꼬리와 이어진다). Lg 30이면 Leff 10 nm, Lg 60이면 40 nm. 할로 없으면 xjExt 45 nm(웰만으로는 확장부가 깊어진다), 스페이서 15 nm면 S/D 측면 꼬리가 게이트 끝까지 와서 xjExt 62 nm. 깊은 S/D As 20 keV면 xjSD 50 nm.
 
-### 1D 소자 (`js/device1d.js`, libs "d1")
+### 1D 소자 (`js/device1d.js`)
 실제로 방정식을 푸는 1D 풀이기 모음이다. API의 x는 nm(내부 cm), 농도 cm⁻³, 전압 V, 에너지 eV, 전계 V/cm, 전류 밀도 A/cm². 전위 ψ는 진성 준위 기준(n = ni·e^{(ψ−φn)/Vt}), 밴드 에너지는 접지 전극의 평형 페르미 준위 = 0 eV. 드리프트-확산은 볼츠만 통계만(포아송·MOS는 `stats: "fd"` 가능). 아래 수치는 node에서 직접 돌려 확인한 값이고 시간은 데스크톱 node 기준(브라우저도 비슷하다).
 - 공통 수치: `TC.geoMesh(x0, x1, h0, r, hmax)` 기하급수 격자(nm 배열), `TC.blockTri(N, m, L, D, U, R)` 블록 삼중 대각 풀이(m×m 블록, 행 평형 + 블록 안 부분 피벗, `TC.blockTri.res` = 평형 후 잔차), `TC.schrod1d(x, V(eV), mEff, nStates)` → `{E: [eV], psi: [∫ψ²dx = 1, nm⁻¹]}`(양 끝 ψ = 0, 비균일 격자 대칭화 + 스투름 이분법 + 역반복. 10 nm 무한 우물 m0: 3.76·15.04·33.84 meV로 해석해와 5자리 일치, 300점 10준위 2.5 ms), `TC.VALLEYS` (100) 계곡(Δ2: mz 0.916·md 0.19·g 2, Δ4: mz 0.19·md 0.417·g 4, 정공 HH/LH는 근사).
 - 포아송: `TC.poisson1d({x(nm 배열 | mesh1d 사양) | L, nodes, net(배열 | fn(x)), T, stats:"mb"|"fd", bgn, phin, phip(배열 | 스칼라), bc:{left:{type:"ohmic"|"dirichlet"|"neumann", V}, right}, regions:[{x0, x1, eps | m}](절연막), sheets:[{x, Q(cm⁻²)}], damping:"log"|"clamp"|"none", dmax, init:"neutral"|"zero"|배열, tol, maxIter})` → `{x, psi, n, p, E(노드), Ee(구간), rho(C/cm³), Ec, Ev, Ei, Efn, Efp(eV), iters, history:[{it, res, upd}], converged, diverged}`. 오믹 경계는 국소 중성 전위. pn 1e17/1e17(182점): 13회 뉴턴, 약 5 ms, Vbi 0.8334 V(해석 0.8334), Emax 1.083e5 V/cm(공핍 근사 1.135e5, 2kT/q 보정 1.100e5). 1e16/1e16: Emax 3.19e4(보정 3.20e4). 한쪽이 고농도인 접합(1e18/1e16, 1e20/1e17)은 다수 캐리어 꼬리 때문에 접합면 전계가 공핍 근사보다 25%~ 이상 높게 나온다(볼츠만 해의 실제 차이).
@@ -195,7 +203,7 @@
 - NEGF 투과: `TC.transmission1d({x(균일 nm 배열) | {L, dx}, U(eV 배열 | fn), m(0.067), E(배열 | {e0, e1, n}), eta})` → `{E, T, t0}`(강결합 + 반무한 리드 자기 에너지, 재귀 그린 함수), `TC.barrier1d({kind:"single"|"double", height, width, well, lead, L, dx})` → `{x, U}`. 0.3 eV × 2 nm 단일 장벽이 해석해와 0.07% 안에서 일치, 이중 장벽(1.5/5/1.5 nm)은 0.084·0.371 eV에서 T = 1.000 공명. 200 에너지 × 301점 0.7 ms.
 - 열: `TC.heat1d({x | {L, n}, k(W/cm·K, 1.5), C(J/cm³·K, 1.63), Q(W/cm³), bc:{left, right: {type:"T", T} | {type:"flux", q} | {type:"conv", h, T}}, T0, transient:{dt, steps, every}})` → `{x, T, Tmax, t, Thist, TmaxHist}`(유한 체적, 후진 오일러). 균일 발열 양끝 고정: 상승량 QL²/8k와 1e-7까지 일치, 시정수 1.11e-9 s(L²/π²α 1.10e-9). 양 끝이 모두 flux이면 정상 해가 없다.
 
-### 2D 소자와 TN-45 (`js/device2d.js`, libs "d2")
+### 2D 소자와 TN-45 (`js/device2d.js`)
 텐서곱 비균일 격자 위 박스 적분(유한 체적) + 샤페터-거멜 전류. 볼츠만 통계, ψ는 진성 준위 기준(n = ni·e^{(ψ−φn)/Vt}, p = ni·e^{(φp−ψ)/Vt}). 양자 보정·밴드갭 좁아짐·재결합은 넣지 않았다(전자 연속 방정식은 R = 0). 기본은 전자만 풀고 정공은 φp = Vb로 고정(holes: true면 정공도 푼다). n⁺ poly 게이트는 포아송만 풀어 게이트 공핍이 생긴다. 배열은 모두 `data[j·nx + i]`(TC.putField 순서), 좌표 nm, 단자 전류 A/µm(들어가는 방향 +).
 
 - TN-45 타깃

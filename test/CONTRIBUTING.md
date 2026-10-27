@@ -19,12 +19,7 @@
 - 시각 정보와 상호작용을 최대한 많이: 장마다 **그림(SVG) 4개 이상, 시뮬레이터 4개 이상**. 시뮬레이터는 슬라이더만 있는 그래프보다 "직접 눌러 보고 결과가 바뀌는" 것(폴트 주입, 상태 기계 클릭, 애니메이션 단계 실행, 게임처럼 목표 맞추기)을 우선한다.
 
 ## head 블록
-각 챕터 `<head>`에는 아래 표식만 두고 `python3 tools/head.py`를 실행한다. 제목·번호는 `js/common.js`의 `CHAPTERS`에서 읽고, canonical·OG·JSON-LD·사이트맵을 함께 갱신한다.
-```html
-<!--head:start {"desc": "한 문장 설명", "libs": ["wm", "three"]}-->
-<!--head:end-->
-```
-`libs`의 `wm`은 `js/wafer.js`(웨이퍼 맵 엔진), `three`는 three.js + OrbitControls를 불러온다. 쓰지 않으면 뺀다.
+소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
 챕터를 추가하면 `CHAPTERS`, `chapters/glossary.html`의 용어 목록에도 등록한다.
 
 ## 페이지 골격
@@ -35,8 +30,14 @@
      Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
 <html lang="ko">
 <head>
-<!--head:start {"desc": "…", "libs": []}-->
-<!--head:end-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>장 제목 · TestBook</title>
+<meta name="description" content="한 문장 설명(검색 결과에 보일 120자 안팎)">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/wafer.js"></script>
 <style> /* 이 장에서만 쓰는 스타일(최소한으로) */ </style>
 </head>
 <body data-chapter="slug">
@@ -55,7 +56,7 @@
 </body>
 </html>
 ```
-상단바·챕터 목록·테스트 흐름 단계 띠·오른쪽 목차·h2 번호·이전/다음·푸터·퀴즈 동작·KaTeX 렌더는 `common.js`가 자동으로 만든다. 직접 넣지 않는다.
+상단바·챕터 목록·테스트 흐름 단계 띠·오른쪽 목차·h2 번호·이전/다음·푸터·퀴즈 동작는 `common.js`가 자동으로 만든다. 직접 넣지 않는다.
 
 ## 컴포넌트
 - 그림: `<figure class="diagram"><svg viewBox="0 0 720 300" role="img" aria-label="…">…</svg><figcaption><b>그림 제목.</b> 설명</figcaption></figure>`. SVG 안에서는 `.lbl`, `.lbl-dim`, `.lbl-b`, `.lbl-acc`, `.lbl-acc2`, `.lbl-bad`, `.t-mono`, `.s-line`, `.s-axis`, `.s-acc`, `.s-acc2`, `.s-dash`, `.s-bad`, `.f-surface`, `.f-elev`, `.f-acc`, `.f-acc2`, `.f-acc-soft`, `.f-acc2-soft`, `.f-ok-soft`, `.f-warn-soft`, `.f-bad-soft`, `.f-bad`, `.beam`, 재질 `.m-si .m-ox .m-nit .m-poly .m-w .m-cu .m-al .m-bar .m-lowk .m-au .m-n .m-sil` 클래스를 쓴다. 색을 직접 적지 않는다(다크 모드). 화살표 머리는 `<marker>`에 `fill="context-stroke"`. SVG `<defs>`의 id는 페이지 안에서 겹치지 않게 장 접두사를 붙인다(예: `ate-arr`).
@@ -100,8 +101,8 @@
 - `TB.range(id, fmt, onInput)` → getter `get()`, `get.set(v)`. `TB.seg(id, onChange)` → getter. `TB.stat(id, html)`.
 - `TB.palette()` 테마 색(`bg,text,dim,faint,grid,axis,border,surface,accent,accent2,ok,warn,bad,red,green,blue,series[]`), `TB.color('accent')`, `TB.onTheme(cb)`, `TB.isDark()`, `TB.font(px, mono, weight)`.
 - `TB.randn()`, `TB.poisson(λ)`, `TB.rng(seed)`(재현 가능한 난수), `TB.erf/erfc`, `TB.fmt(x, digits)`, `TB.si(x,'s')`, `TB.clamp/lerp/map`, `TB.debounce`, `TB.kB`(eV/K), `TB.C = {h,c,q,k,…}`.
-- `TB.three(el, {...})` three.js 씬 헬퍼(필요할 때만, `libs: ["three"]`).
-- 웨이퍼 맵(`libs: ["wm"]`, 전역 `WM`): `WM.wafer({dieW, dieH, shot:[c,r], edge})`, `WM.map(W, {d0, seed, layers:[{p:"edge"|"center"|"donut"|"cluster"|"scratch"|"repeater"|…, s, bin}]})` → `{fail, bin, yield}`, `WM.draw(ctx, W, box, {map, bins:true, values, fill:(d,k)=>색, sel, hi, shots})` → `{at(px,py)}`, `WM.pos(canvas, e)`, `WM.BINS`(1 합격, 2 연속성, 3 누설, 4 기능·스캔, 5 속도, 6 메모리, 7 파라메트릭, 8 전원 단락), `WM.binColor(id)`, `WM.passColor()`, `WM.Y.poisson(λ)` 등. 자세한 설명은 `js/wafer.js` 머리 주석.
+- `TB.three(el, {...})` three.js 씬 헬퍼(필요할 때만 three.js를 불러온다).
+- 웨이퍼 맵(`js/wafer.js`, 전역 `WM`): `WM.wafer({dieW, dieH, shot:[c,r], edge})`, `WM.map(W, {d0, seed, layers:[{p:"edge"|"center"|"donut"|"cluster"|"scratch"|"repeater"|…, s, bin}]})` → `{fail, bin, yield}`, `WM.draw(ctx, W, box, {map, bins:true, values, fill:(d,k)=>색, sel, hi, shots})` → `{at(px,py)}`, `WM.pos(canvas, e)`, `WM.BINS`(1 합격, 2 연속성, 3 누설, 4 기능·스캔, 5 속도, 6 메모리, 7 파라메트릭, 8 전원 단락), `WM.binColor(id)`, `WM.passColor()`, `WM.Y.poisson(λ)` 등. 자세한 설명은 `js/wafer.js` 머리 주석.
 
 ## 이어지는 예제: 제품 TB-7
 모든 장은 같은 가상의 제품 하나의 **테스트 계획서**를 한 장씩 채워 간다. 각 장 끝(핵심 정리 앞)에 `.casefile` 하나를 넣고 아래 표에서 자기 장에 해당하는 결정만 다룬다. 숫자는 아래 값을 그대로 쓴다(필요한 파생값은 이 값에서 계산).

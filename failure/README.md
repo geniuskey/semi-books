@@ -40,7 +40,6 @@ python -m http.server 8000   # → http://localhost:8000
 - `css/style.css` — 디자인 토큰(라이트/다크), 재질 색, 사건 파일·수사 단계 띠
 - `js/common.js` — 내비게이션, 캔버스·차트 헬퍼, 전역 `FB`
 - `js/fa.js` — 불량 분석 엔진(결함을 심은 배선 단면, 웨이퍼 맵, 레이아웃, 현미경 영상 헬퍼), 전역 `FA`
-- `tools/head.py` — 챕터 `<head>`·사이트맵·JSON-LD 생성기
 - `tools/check.py` — 페이지 점검기(콘솔 오류, 가로 넘침, 조작 중 예외)
 
 챕터 작성 규칙과 이어지는 사건의 설정은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.

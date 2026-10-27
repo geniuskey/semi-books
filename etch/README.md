@@ -42,7 +42,6 @@ python -m http.server 8000   # → http://localhost:8000
 - `css/style.css` — 디자인 토큰(라이트/다크), 재질 색
 - `js/common.js` — 내비게이션, 캔버스·차트·끌기 헬퍼, 전역 `EB`
 - `js/etch.js` — 식각 엔진, 전역 `ET`. 셀 단면 위에서 이온·라디칼·고분자 전구체를 몬테카를로로 날려 이방성, 언더컷, ARDE, 보잉, 마이크로트렌칭, 패시팅, 노칭이 저절로 나오게 한다. 등방성 습식 식각은 도달 시간(fast marching)으로 푼다.
-- `tools/head.py` — 챕터 `<head>`·사이트맵·JSON-LD 생성기
 - `tools/check.py` — 페이지 점검기(콘솔 오류, 가로 넘침, 조작 중 예외)
 
 챕터 작성 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.

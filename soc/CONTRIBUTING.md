@@ -19,17 +19,13 @@ ProcessBook·MemoryBook과 같은 디자인 시스템과 컴포넌트를 쓰는 
 - 끌기 조작은 `SOC.pointer(el, {...}, {drag:true})`로 마우스·터치를 함께 지원한다.
 
 ## head 블록
-각 챕터 `<head>`에는 아래 표식만 두고 `python3 tools/head.py`를 실행한다. 제목·번호는 `js/common.js`의 `CHAPTERS`에서 읽고, canonical·OG·JSON-LD·사이트맵·`index.html`의 `hasPart`를 함께 갱신한다.
-```html
-<!--head:start {"desc": "한 문장 설명", "libs": ["three"]}-->
-<!--head:end-->
-```
+소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
 챕터를 추가하면 `CHAPTERS`, `chapters/glossary.html`의 `TERMS`·`BANK`·`SHORT`에도 등록한다.
 
 ## 컴포넌트
 - `header.chapter-hero` 안에 `.eyebrow`, `h1`, `p.lead`, `ul.objectives`, 그리고 `<div class="soc-locator" data-blocks="gpu"></div>`(이 장이 칩의 어디인지 보여 주는 미니 지도. 블록 종류나 id를 공백으로 구분).
 - 본문: `section > h2`(번호 자동), `figure.diagram`(정적 SVG), `figure.play`(작은 인터랙티브: `.play-view` + `.play-ctrl` + `figcaption`), `.sim`(큰 시뮬레이터: `.sim-head` + `.sim-body` + `.sim-readout` + `.sim-note`), `.callout`(`.tip`/`.warn`/`.deep`), `.predict`(예측 → `<details>`로 답), `.formula`, `.table-wrap`, `section.keypoints`, `section.quiz-sec` + `.quiz-q`.
-- 퀴즈 동작·목차·이전/다음·KaTeX 렌더는 `common.js`가 자동 처리한다.
+- 퀴즈 동작·목차·이전/다음는 `common.js`가 자동 처리한다.
 
 ## JS 헬퍼
 `SB` (`js/common.js`)

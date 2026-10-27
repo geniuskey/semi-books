@@ -67,7 +67,7 @@ window.SEMI_BOOKS = [
   "stage": "design",
   "status": "published",
   "chapters": 16,
-  "simulators": 45,
+  "simulators": 52,
   "color": "#6d3fd1",
   "colorDark": "#a98bff",
   "topics": [
@@ -94,7 +94,7 @@ window.SEMI_BOOKS = [
   "stage": "design",
   "status": "published",
   "chapters": 19,
-  "simulators": 150,
+  "simulators": 44,
   "color": "#c8285f",
   "colorDark": "#ff7aa2",
   "topics": [
@@ -150,7 +150,7 @@ window.SEMI_BOOKS = [
   "stage": "process",
   "status": "published",
   "chapters": 16,
-  "simulators": 50,
+  "simulators": 44,
   "color": "#c2550c",
   "colorDark": "#fb9a4b",
   "topics": [
@@ -176,7 +176,7 @@ window.SEMI_BOOKS = [
   "stage": "process",
   "status": "published",
   "chapters": 19,
-  "simulators": 150,
+  "simulators": 160,
   "color": "#ae3ec9",
   "colorDark": "#e599f7",
   "topics": [
@@ -246,7 +246,7 @@ window.SEMI_BOOKS = [
   "motif": "cmp",
   "slug": "cmp",
   "local": true,
-  "simulators": 142
+  "simulators": 143
  },
  {
   "id": "dopingbook",
@@ -284,7 +284,7 @@ window.SEMI_BOOKS = [
   "stage": "process",
   "status": "published",
   "chapters": 16,
-  "simulators": 50,
+  "simulators": 58,
   "color": "#3b5bdb",
   "colorDark": "#8ea6ff",
   "topics": [
@@ -311,7 +311,7 @@ window.SEMI_BOOKS = [
   "stage": "process",
   "status": "published",
   "chapters": 16,
-  "simulators": 50,
+  "simulators": 57,
   "color": "#5c940d",
   "colorDark": "#a9e34b",
   "topics": [
@@ -394,7 +394,7 @@ window.SEMI_BOOKS = [
   "stage": "packaging",
   "status": "published",
   "chapters": 17,
-  "simulators": 50,
+  "simulators": 68,
   "color": "#2f9e44",
   "colorDark": "#69db7c",
   "topics": [
@@ -525,7 +525,7 @@ window.SEMI_BOOKS = [
   "stage": "device",
   "status": "published",
   "chapters": 20,
-  "simulators": 170,
+  "simulators": 178,
   "color": "#c99700",
   "colorDark": "#ffd43b",
   "topics": [

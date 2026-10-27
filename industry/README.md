@@ -47,7 +47,6 @@ python -m http.server 8000   # → http://localhost:8000
 - `js/common.js` — 내비게이션, 시뮬레이터만 보기, 캔버스·차트·끌기·정보 상자 헬퍼, 전역 `CB`
 - `js/industry.js` — 지역·가치사슬·회사·시장·노드 데이터, 다이 원가·수율·팹·칩렛·집중도·사이클 모델, 세계 지도, 전역 `IND`
 - `js/sims.js` — 시뮬레이터 목록(자동 생성)
-- `tools/head.py` — 챕터 `<head>`·사이트맵·JSON-LD 생성기
 - `tools/sims.py` — 시뮬레이터 갤러리 목록 생성기
 - `tools/check.py` — 페이지 점검기(콘솔 오류, 가로 넘침, 조작 중 예외)
 

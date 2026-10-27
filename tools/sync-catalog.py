@@ -3,9 +3,10 @@
 
 Usage: python3 tools/sync-catalog.py [path/to/books/data/books.json]
 Default source: migration/books.json. An external portal catalog is optional.
-InfraBook and CMPBook metadata stay separate from the imported repository snapshots.
+InfraBook and CMPBook metadata live in LOCAL below. Chapter and simulator counts come from the sources.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -44,6 +45,9 @@ LOCAL = {
     },
 }
 
+# 시뮬레이터 블록: class 목록에 sim이 있는 요소 (class="sim", class="sim fc" …)
+SIM = re.compile(r'class="(?:[^"]*\s)?sim(?:\s[^"]*)?"')
+
 KEYS = ["id", "code", "title", "subtitle", "headline", "description", "url", "stage", "status", "chapters", "simulators", "color", "colorDark", "topics", "motif"]
 
 
@@ -63,7 +67,7 @@ def main():
             entry["chapters"] = len(list((ROOT / slug / "chapters").glob("*.html")))
         # 이 저장소에서 집필하는 책(book.json에 meta)은 시뮬레이터 수도 소스에서 센다.
         if entry["local"] and "meta" in json.loads((ROOT / slug / "book.json").read_text(encoding="utf-8")):
-            entry["simulators"] = sum(f.read_text(encoding="utf-8").count('class="sim"') for f in (ROOT / slug / "chapters").glob("*.html"))
+            entry["simulators"] = sum(len(SIM.findall(f.read_text(encoding="utf-8"))) for f in (ROOT / slug / "chapters").glob("*.html"))
         entry.setdefault("motif", "layers")
         shelf.append(entry)
     body = json.dumps(shelf, ensure_ascii=False, indent=1)

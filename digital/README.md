@@ -53,7 +53,6 @@ npm run build                 # 용어 데이터 갱신 → .book-dist/ 생성
 - `css/style.css` — 디자인 토큰(라이트/다크), 논리값 색(`--hi` `--lo` `--lx` `--lz`)과 트랜지스터 색(`--nmos` `--pmos`)
 - `js/common.js` — 내비게이션, 캔버스·차트·컨트롤 헬퍼, 전역 `SB`
 - `js/dig.js` — 기준 공정 DG-7, MOSFET 근사 모델과 인버터 VTC, 게이트·트랜지스터 기호, 타이밍 파형, 이벤트 구동 논리 시뮬레이터, 추상화 사다리, 전역 `DG`
-- `tools/head.py` — 챕터 `<head>`·사이트맵·JSON-LD 생성기
 - `tools/glossary.py` — `tools/glossary/<slug>.json`(용어·문제 은행)으로 공통 용어 데이터와 종합 퀴즈 생성
 - `js/glossary-data.js` — 생성된 시리즈 공통 v1 용어 데이터(`ko`, `en`, `abbr`, `def`, `chapters`)
 - `js/glossary-tooltips.js`, `css/glossary-tooltips.css` — 다른 시리즈와 같은 본문 용어 뜻풀이
@@ -66,7 +65,7 @@ npm run build                 # 용어 데이터 갱신 → .book-dist/ 생성
 
 ## 점검
 ```bash
-python3 tools/head.py && python3 tools/glossary.py
+python3 tools/glossary.py
 python3 tools/glossary.py --check   # 생성된 용어 데이터·퀴즈의 최신 여부 확인
 node tools/check.js            # playwright 필요 (전역 설치라면 PW_PATH=$(npm root -g)/playwright)
 ```

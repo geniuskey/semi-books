@@ -50,7 +50,6 @@ python -m http.server 8000   # → http://localhost:8000
 - `js/common.js` — 내비게이션, 시뮬레이터만 보기, 캔버스·차트·끌기 헬퍼, 전역 `AB`
 - `js/analog.js` — 가상 공정 AB180, MOSFET 모델, 브라우저 SPICE(`AN.circuit`), 전달 함수·보드·안정도 여유, FFT·SNDR, 회로도·오실로스코프 그리기, 전역 `AN`
 - `js/sims.js` — 시뮬레이터 갤러리 목록(자동 생성)
-- `tools/head.py` — 챕터 `<head>`·사이트맵·JSON-LD 생성기
 - `tools/sims.py` — 갤러리 목록 생성기
 - `tools/check.py` — 페이지 점검기(콘솔 오류, 가로 넘침, 조작 중 예외)
 

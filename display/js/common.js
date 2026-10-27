@@ -735,6 +735,8 @@
           const doc = new DOMParser().parseFromString(await response.text(), "text/html");
           const main = doc.querySelector("main.chapter");
           if (!main) return [];
+          // 미리 렌더링된 수식은 TeX 원문으로 되돌려 검색어와 맞춘다.
+          main.querySelectorAll(".katex").forEach((k) => k.replaceWith(k.querySelector("annotation")?.textContent || k.textContent));
           const entries = [];
           [...main.querySelectorAll("section > h2")].forEach((heading, i) => {
             entries.push({ type: "섹션", title: heading.textContent.trim(), chapter, hash: heading.parentElement.id || `s${i + 1}` });
@@ -862,7 +864,10 @@
         if (!sec.id) sec.id = "s" + (i + 1);
         const numbered = !sec.classList.contains("keypoints") && !sec.classList.contains("quiz-sec") && !sec.hasAttribute("data-nonum");
         if (numbered && !h.querySelector(".h-num")) { n++; h.insertAdjacentHTML("afterbegin", `<span class="h-num">${String(n).padStart(2, "0")}</span>`); }
-        return `<a href="#${sec.id}">${h.textContent.replace(/^\d\d/, "").trim()}</a>`;
+        // 제목 텍스트를 쓰되, 빌드가 렌더링한 수식은 마크업 그대로 옮긴다.
+        const label = [...h.childNodes].filter((node) => !node.classList?.contains("h-num"))
+          .map((node) => (node.querySelector?.(".katex") ? node.outerHTML : node.textContent)).join("").trim();
+        return `<a href="#${sec.id}">${label}</a>`;
       }).join("");
       layout.appendChild(toc);
       const links = [...toc.querySelectorAll("a")];
@@ -911,18 +916,22 @@
       }));
     });
 
-    // KaTeX
-    const renderMath = () => {
-      if (window.renderMathInElement) {
-        renderMathInElement(document.body, {
+    // KaTeX: 배포물의 수식은 빌드(tools/katex.mjs)가 미리 렌더링한다. 소스 파일을 바로 열었을 때만 CDN에서 불러와 렌더링한다.
+    if (!document.querySelector(".katex") && /\\\(|\\\[|\$\$/.test(document.body.innerText)) {
+      const KATEX = "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/";
+      const load = (tag, props) => new Promise((resolve, reject) => {
+        const el = Object.assign(document.createElement(tag), props, { onload: resolve, onerror: reject });
+        document.head.insertBefore(el, tag === "link" ? document.head.querySelector('link[rel="stylesheet"]') : null);
+      });
+      Promise.all([load("link", { rel: "stylesheet", href: KATEX + "katex.min.css" }), load("script", { src: KATEX + "katex.min.js" })])
+        .then(() => load("script", { src: KATEX + "contrib/auto-render.min.js" }))
+        .then(() => renderMathInElement(document.body, {
           delimiters: [{ left: "$$", right: "$$", display: true }, { left: "\\(", right: "\\)", display: false }, { left: "\\[", right: "\\]", display: true }],
           throwOnError: false,
           ignoredClasses: ["no-math"],
-        });
-      }
-    };
-    if (window.renderMathInElement) renderMath();
-    else window.addEventListener("load", renderMath);
+        }))
+        .catch(() => {});
+    }
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", build);

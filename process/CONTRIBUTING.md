@@ -15,15 +15,11 @@
 - 모바일(폭 360px)에서 가로 스크롤 금지. SVG는 `viewBox`만 주고 width/height 생략.
 
 ## head 블록
-각 챕터 `<head>`에는 아래 표식만 두고 `python3 tools/head.py`를 실행한다. 제목·번호는 `js/common.js`의 `CHAPTERS`에서 읽고, canonical·OG·JSON-LD·사이트맵·`index.html`의 `hasPart`를 함께 갱신한다.
-```html
-<!--head:start {"desc": "한 문장 설명", "libs": ["xsec", "optics", "three"]}-->
-<!--head:end-->
-```
+소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
 챕터를 추가하면 `CHAPTERS`, `chapters/glossary.html`의 챕터 칩·`TERMS`·`SHORT`에도 등록한다.
 
 ## 컴포넌트
-본문 컴포넌트(`figure.diagram`, `.sim`, `.callout`, `.formula`, `.table-wrap`, `.quiz-q`)는 MemoryBook과 같다. 퀴즈 동작·목차·이전/다음·KaTeX 렌더는 `common.js`가 자동 처리한다.
+본문 컴포넌트(`figure.diagram`, `.sim`, `.callout`, `.formula`, `.table-wrap`, `.quiz-q`)는 MemoryBook과 같다. 퀴즈 동작·목차·이전/다음는 `common.js`가 자동 처리한다.
 
 ## JS 헬퍼 (`PB`, `js/common.js`)
 - `PB.canvas(el, draw, {aspect, minHeight, maxHeight})`, `PB.chart(ctx, box, opts)`, `PB.range(id, fmt, cb)`, `PB.seg(id, cb)`, `PB.stat(id, html)`, `PB.loop`, `PB.three`.

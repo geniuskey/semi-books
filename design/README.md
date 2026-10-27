@@ -40,7 +40,6 @@ python3 -m http.server 8000   # → http://localhost:8000
 - `js/flow.js` — 미니 설계 흐름: 식 파서·합성·행 배치·채널 배선·STA·이름 기반 LVS·GDSII 생성 (전역 `FLOW`)
 - `js/optics.js` — 1D 부분 결맞음 결상 엔진 (ProcessBook에서 가져옴, 전역 `OPT`)
 - 학습 진행·배지는 `js/common.js`의 `PB.track`/`PB.progress`가 브라우저 localStorage에 저장 (서버 전송 없음)
-- `tools/head.py` — 챕터 `<head>`·사이트맵·JSON-LD 생성기
 
 챕터 작성 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.
 시뮬레이터의 수치는 교육용 근사 모델이며, EDU45는 실제 공정이 아닌 가상 PDK입니다. 공정 세대별 수치는 공개 자료 기준의 대략값입니다.

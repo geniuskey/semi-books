@@ -37,7 +37,7 @@ python3 -m http.server 8000   # → http://localhost:8000
 
 공통 코드: `css/style.css`(디자인 토큰, 라이트/다크), `js/common.js`(내비게이션, 캔버스·차트·3D 헬퍼, 색채 과학·CIE 색도도 헬퍼).
 챕터 작성 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.
-챕터를 추가하거나 제목·설명을 바꾼 뒤에는 `python tools/seo.py`로 canonical/OG/JSON-LD 태그와 `sitemap.xml`을 다시 만듭니다.
+챕터 `<head>`의 canonical·OG·JSON-LD와 사이트맵은 SemiBooks 루트의 빌드(`npm run build`, `npm run sitemap`)가 생성합니다.
 
 시뮬레이터의 수치는 교육용 근사 모델입니다.
 

@@ -42,7 +42,6 @@ python -m http.server 8000   # → http://localhost:8000
 - `css/style.css` — 디자인 토큰(라이트/다크), 재질 색, n형·p형 색
 - `js/common.js` — 내비게이션, 캔버스·차트·끌기 헬퍼, 전역 `DB`
 - `js/doping.js` — 도핑 엔진, 전역 `DP`. 사정거리 표와 피어슨 분포, ZBL·LSS 저지능과 단순 몬테카를로, 린하드 임계각, 열 이력·확산(TED 포함)·활성화, 이동도와 면저항, 2차원 단면.
-- `tools/head.py` — 챕터 `<head>`·사이트맵·JSON-LD 생성기
 - `tools/check.py` — 페이지 점검기(콘솔 오류, 가로 넘침, 조작 중 예외)
 
 챕터 작성 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.

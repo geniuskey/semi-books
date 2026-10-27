@@ -27,12 +27,7 @@
 - 문체는 평서문 "~다". 이모지 금지. 다른 장을 언급할 때는 `<a href="stopping.html">8장</a>`처럼 링크한다.
 
 ## head 블록
-각 챕터 `<head>`에는 아래 표식만 두고 `python3 tools/head.py <slug>`를 실행한다. 제목·번호는 `js/common.js`의 `CHAPTERS`에서 읽는다. 인자 없이 실행하면 전체 장 + 사이트맵 + `index.html`의 JSON-LD를 갱신한다.
-```html
-<!--head:start {"desc": "한 문장 설명", "libs": ["dp"]}-->
-<!--head:end-->
-```
-`libs`의 `dp`는 `js/doping.js`를 불러온다. Cloudflare Web Analytics 비컨은 `<!--head:end-->` 뒤, `</head>` 앞에 둔다(head.py가 지우지 않도록).
+소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
 
 ## 페이지 골격과 컴포넌트
 EtchBook의 [CONTRIBUTING.md](https://github.com/geniuskey/etchbook/blob/main/CONTRIBUTING.md)와 같다(`.sim`, `.sim-head`, `.sim-body side`, `.sim-controls`, `.sim-readout`, `.sim-note`, `.formula`, `.callout`, `.table-wrap`, `.casefile`, `.keypoints`, `.quiz-q`). 이 책에서 더한 것:

@@ -41,7 +41,6 @@ python -m http.server 8000   # → http://localhost:8000
 - `css/style.css` — 디자인 토큰(라이트/다크)
 - `js/common.js` — 내비게이션, 캔버스·차트 헬퍼, 전역 `YB`
 - `js/wafer.js` — 다이 격자, 공간 패턴, 불량 맵 통계, 결함 좌표 맵, 검사 영상 합성, 전역 `WM`
-- `tools/head.py` — 챕터 `<head>`·사이트맵·JSON-LD 생성기
 - `tools/check.py` — 페이지 점검기(콘솔 오류, 가로 넘침, 조작 중 예외)
 
 챕터 작성 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.

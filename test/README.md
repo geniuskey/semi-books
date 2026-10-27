@@ -44,7 +44,6 @@ python3 -m http.server 8000   # → http://localhost:8000
 - `js/wafer.js` — 웨이퍼 맵 엔진(YieldBook과 같은 모델), 전역 `WM`
 
 도구
-- `python3 tools/head.py` — 챕터 `<head>`(canonical·OG·JSON-LD)와 `sitemap.xml` 생성. `python3 tools/head.py scan bist`처럼 장을 지정할 수도 있습니다.
 - `python3 tools/check.py [slug…] [--shots 폴더]` — Playwright로 페이지를 넓은 화면·라이트, 좁은 화면(360px)·다크로 열어 콘솔 오류, 가로 넘침, 그려지지 않은 캔버스를 점검합니다.
 
 챕터 작성 규칙과 예제 제품 TB-7의 숫자는 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.

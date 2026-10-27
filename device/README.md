@@ -36,7 +36,6 @@ python3 -m http.server 8000   # → http://localhost:8000
 - `css/style.css` — 디자인 토큰(라이트/다크), 전자·정공·밴드 색
 - `js/common.js` — 내비게이션, 캔버스·차트 헬퍼, 전역 `PB`
 - `js/semi.js` — 소자 물리 엔진, 전역 `SC`: 재료 상수, 캐리어 통계, 이동도, pn·MOS·MOSFET 모델, 1D 포아송·드리프트–확산 솔버(샤페터–거멜), 밴드 다이어그램 그리기
-- `tools/head.py` — 챕터 `<head>`·사이트맵·JSON-LD 생성기
 - `tools/check.mjs` — Playwright 점검(JS 오류, 360px 가로 넘침, 빈 캔버스)
 
 챕터 작성 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.

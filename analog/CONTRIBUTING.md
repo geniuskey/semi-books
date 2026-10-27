@@ -40,7 +40,7 @@
 - **공통 파일(`js/*.js`, `css/style.css`)은 고치지 않는다.** 장 전용 스타일은 그 장 `<head>`의 `<style>`에, 장 전용 함수는 그 장 인라인 스크립트에. 엔진의 버그나 부족한 기능을 발견하면 장 안에서 우회하고, 보고한다.
 
 ## head 블록
-각 챕터 `<head>`에는 아래 표식만 두고 `python tools/head.py <slug>`를 실행한다(인자를 주면 그 장만 고친다). 제목·번호는 `js/common.js`의 `CHAPTERS`에서 읽는다.
+소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
 ```html
 <!doctype html>
 <!-- Copyright (c) 2026 geniuskey and AnalogBook contributors.
@@ -48,12 +48,17 @@
      Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
 <html lang="ko">
 <head>
-<!--head:start {"desc": "한 문장 설명(검색 결과에 보일 120자 안팎)", "libs": ["an"]}-->
-<!--head:end-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>장 제목 · AnalogBook</title>
+<meta name="description" content="한 문장 설명(검색 결과에 보일 120자 안팎)">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/analog.js"></script>
 <style> /* 이 장 전용 */ </style>
 </head>
 ```
-`libs`의 `an`은 `js/analog.js`, `three`는 three.js r147 + OrbitControls를 불러온다.
 
 ## 페이지 골격
 ```html
@@ -70,7 +75,7 @@
 <script>(function () { "use strict"; /* 시뮬레이터 */ })();</script>
 </body>
 ```
-상단바·챕터 목록·설계 계층 띠·오른쪽 목차·h2 번호·이전/다음·푸터·퀴즈 동작·KaTeX 렌더·"시뮬레이터만" 모드·시뮬레이터 바로가기(#) 링크는 `common.js`가 자동으로 만든다. 직접 넣지 않는다.
+상단바·챕터 목록·설계 계층 띠·오른쪽 목차·h2 번호·이전/다음·푸터·퀴즈 동작·"시뮬레이터만" 모드·시뮬레이터 바로가기(#) 링크는 `common.js`가 자동으로 만든다. 직접 넣지 않는다.
 "시뮬레이터만" 모드에서는 `section` 바로 아래의 `h2`, `.sim`, `.sim-group`만 보인다. 시뮬레이터를 `figure`나 다른 `div`로 감싸지 않는다(숨겨진다).
 
 ## 컴포넌트
@@ -216,7 +221,7 @@ const sw = c.dc(AN.linspace(0, 1.8, 61), (c, v) => c.set("Vin", "dc", v));  // s
 - `AN.bode(ctx, box, bd | [bd…], {f: [f0, f1], db: [lo, hi], ph: [lo, hi], marks: true, vlines, hlines, xTicks})`(좁으면 눈금을 자동으로 건너뛴다). `AN.margins(bd, {ref})`는 저주파 기울기로 적분기 개수를 세어 기준 위상(반전의 ±180°)을 스스로 정한다(2형 PLL처럼 원점 극점이 있어도 된다). 결과의 `ref`가 그 기준이다 → `{X, Ym, Yp}`. `marks: true`면 단위 이득 주파수와 PM을 표시한다.
 
 ## 점검
-- `python tools/head.py <slug>` 로 head를 채운다.
+소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
 - `python tools/check.py <slug>` (playwright 필요). 넓은 화면·라이트와 360px·다크로 열어 콘솔 오류, 가로 넘침, 조작 중 예외, 그려지지 않은 캔버스를 보고한다. `--shots 폴더`로 스크린샷을 남겨 **눈으로도 본다**(겹친 글자, 잘린 회로도, 빈 그래프). **문제가 0이 될 때까지 고친다.**
 - `python tools/sims.py` 로 갤러리 목록(`js/sims.js`)을 다시 만든다(data-desc 누락을 알려 준다).
 - 모바일(폭 360px)에서 가로 스크롤 금지. 캔버스 글자는 `AB.font()`로, 색은 `AB.palette()`·`AB.color()`로. 다크·라이트 모두 확인. 고정 색은 오실로스코프 화면(`AN.scope`)처럼 실제로 어두운 경우에만.
