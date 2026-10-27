@@ -770,6 +770,7 @@
     const cB = Math.min(H - 1, depthRow + 1) * W + wrap(xc);
     const frac = s.mat[cB] ? 1 - s.phi[cB] : 0;
     const out = { depth: depth + (frac < 0.5 ? frac : 0) * dx, maxDepth, micro: maxDepth - depth, widths };
+    out.bow = 0; // 아직 열린 홈이 없으면 보잉도 없다
     if (widths.length) {
       const w0 = widths[0].w;
       const at = (f) => { const k = Math.min(widths.length - 1, Math.max(0, Math.round(f * (widths.length - 1)))); return widths[k]; };
