@@ -9,6 +9,8 @@
   const norm = (s) => String(s || "").normalize("NFC").replace(/\s+/g, " ").trim().toLowerCase();
   const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const unique = (names) => names.filter((name, i) => name && !names.slice(0, i).some((s) => norm(s) === norm(name)));
+  // All-caps abbreviations (PR, TRIM, NM) match only as written, so "Pr", "Trim" and "45 nm" stay plain text.
+  const capsOnly = (s) => /^[A-Z0-9&-]+$/.test(s) && /[A-Z]/.test(s);
 
   // Split lists outside parentheses. Preserve units and names such as I/O, P/E and A/B.
   function names(text) {
@@ -27,10 +29,12 @@
   }
 
   function indexTerms(terms, customAliases) {
-    const index = new Map();
-    function put(alias, entry) {
+    const index = new Map(), cased = new Map(), uncased = new Set();
+    function put(alias, entry, fromAbbr) {
+      const written = String(alias || "").trim();
       alias = norm(alias);
       if (!alias) return;
+      if (fromAbbr && capsOnly(written)) cased.set(alias, written); else uncased.add(alias);
       const entries = index.get(alias) || [];
       entries.push(entry);
       index.set(alias, entries);
@@ -42,14 +46,14 @@
         const abbreviation = abbr.length === parts.length ? abbr[i] : (abbr.length === 1 ? abbr[0] : "");
         return unique([name, abbreviation]).join(" · ");
       };
-      [term.ko, term.en, term.abbr].filter(Boolean).forEach((alias) => {
-        put(alias, { term, title: unique([term.ko, names(term.abbr).length === 1 ? term.abbr : ""]).join(" · "), exact: true });
+      [term.ko, term.en, term.abbr].forEach((alias, k) => {
+        if (alias) put(alias, { term, title: unique([term.ko, names(term.abbr).length === 1 ? term.abbr : ""]).join(" · "), exact: true }, k === 2);
       });
-      [ko, en, abbr].forEach((parts) => parts.forEach((alias, i) => {
+      [ko, en, abbr].forEach((parts, k) => parts.forEach((alias, i) => {
         const title = titleFor(parts, i, alias);
-        put(alias, { term, title, exact: parts.length === 1 });
+        put(alias, { term, title, exact: parts.length === 1 }, k === 2);
         const bare = alias.replace(/\s*\([^()]*\)/g, "").trim();
-        if (bare !== alias) put(bare, { term, title, exact: false });
+        if (bare !== alias) put(bare, { term, title, exact: false }, k === 2);
         // Parenthesized short forms are useful names, but prose qualifications are not.
         for (const match of alias.matchAll(/\(([^()]+)\)/g)) {
           if (match[1].length <= 40 && !/[=;:]/.test(match[1])) {
@@ -69,6 +73,9 @@
         Number((a.term.chapters || []).some((ch) => ch.split("#")[0] === chapter)));
       best.set(alias, entries[0]);
     });
+    // A name that is also a word or a mixed-case spelling elsewhere keeps case-insensitive matching.
+    uncased.forEach((alias) => cased.delete(alias));
+    best.cased = cased;
     return best;
   }
 
@@ -110,6 +117,7 @@
             (/[가-힣]/.test(label[0]) && /[가-힣]/.test(text[start - 1] || ""))) continue;
         const entry = index.get(norm(label));
         if (!entry) continue;
+        if (index.cased.has(norm(label)) && index.cased.get(norm(label)) !== label) continue;
         fragment.append(text.slice(end, start));
         const span = document.createElement("span");
         span.className = "gl-term";
