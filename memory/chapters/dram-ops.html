@@ -649,7 +649,7 @@
         <div class="stat"><span class="k">평균 지연 FCFS / FR</span><span class="v" id="sch-o4">—</span></div>
         <div class="stat"><span class="k">FR-FCFS에서 더 늦어진 요청 (최대)</span><span class="v" id="sch-o5">—</span></div>
       </div>
-      <div class="sim-note">해볼 것: 요청 40개가 2 ns 간격으로 도착하고, 각 뱅크에는 '핫 로우' 하나와 다른 로우 3개가 섞여 요청된다. FR-FCFS는 탐색 창 안에서 열린 로우에 히트하는 요청(특히 핫 로우)을 앞당겨 묶어서 완료 시간을 줄인다. 다만 지역성이 아주 높으면(95 %) FCFS도 이미 대부분 히트라 차이가 줄고, 경우에 따라 FR-FCFS가 오히려 조금 늦기도 한다. 그 대가로 일부 요청은 FCFS 때보다 <em>더 늦게</em> 끝난다(마지막 칸: 개수와 최대 지연 증가량). 데이터 버스트의 숫자(도착 순번)가 뒤섞인 모습에서 재정렬을 확인하자. 히트를 계속 만드는 스트림이 끝없이 들어오면 이렇게 밀린 요청이 기아에 빠진다. 탐색 창을 1로 줄이면 FR-FCFS가 FCFS와 똑같아진다.</div>
+      <div class="sim-note">해볼 것: 요청 40개가 2 ns 간격으로 도착하고, 각 뱅크에는 '핫 로우' 하나와 다른 로우 3개가 섞여 요청된다(슬라이더는 핫 로우 비율이라 0 %에서도 나머지 세 로우끼리 히트가 생긴다). FR-FCFS는 탐색 창 안에서 열린 로우에 히트하는 요청(특히 핫 로우)을 앞당겨 묶어서 완료 시간을 줄인다. 다만 지역성이 아주 높으면(95 %) FCFS도 이미 대부분 히트라 차이가 줄고, 경우에 따라 FR-FCFS가 오히려 조금 늦기도 한다. 그 대가로 일부 요청은 FCFS 때보다 <em>더 늦게</em> 끝난다(마지막 칸: 개수와 최대 지연 증가량). 데이터 버스트의 숫자(도착 순번)가 뒤섞인 모습에서 재정렬을 확인하자. 히트를 계속 만드는 스트림이 끝없이 들어오면 이렇게 밀린 요청이 기아에 빠진다. 탐색 창을 1로 줄이면 FR-FCFS가 FCFS와 똑같아진다.</div>
     </div>
   </section>
 
@@ -784,23 +784,33 @@
 
   /* 단순 DRAM 뱅크 타이밍 모델 (ns 단위, 명령 순서대로 발행) */
   function dramSim(p) {
-    var S = { banks: [], cmdFree: 0, lastAct: -1e9, acts: [], lastRd: -1e9, busFree: 0, ev: [] };
+    var S = { banks: [], cmdFree: 0, lastAct: -1e9, acts: [], lastRd: -1e9, busFree: 0, ev: [], slots: [] };
     for (var i = 0; i < p.banks; i++) S.banks.push({ row: -1, actT: -1e9, lastRd: -1e9, rdOK: 0, readyAct: 0 });
+    /* 명령 버스는 tCMD마다 명령 하나: t 이후 이미 예약된 명령과 겹치지 않는 첫 시각을 잡는다 */
+    function slot(t) {
+      for (var moved = true; moved;) {
+        moved = false;
+        for (var k = 0; k < S.slots.length; k++) if (Math.abs(S.slots[k] - t) < p.tCMD - 1e-9) { t = S.slots[k] + p.tCMD; moved = true; }
+      }
+      S.slots.push(t);
+      return t;
+    }
     S.serve = function (req, tMin) {
       var b = S.banks[req.bank], t = Math.max(S.cmdFree, tMin || 0), kind, pre = null, act = null, rd;
       if (p.policy === "open" && b.row === req.row) { kind = "hit"; rd = Math.max(t, b.rdOK); }
       else {
         if (p.policy === "open" && b.row >= 0) {
           kind = "conf";
-          pre = Math.max(t, b.actT + p.tRAS, b.lastRd + p.tRTP);
+          pre = slot(Math.max(t, b.actT + p.tRAS, b.lastRd + p.tRTP));
           act = pre + p.tRP;
         } else { kind = "miss"; act = Math.max(t, b.readyAct); }
         act = Math.max(act, S.lastAct + p.tRRD);
         if (S.acts.length >= 4) act = Math.max(act, S.acts[S.acts.length - 4] + p.tFAW);
+        act = slot(act);
         rd = act + p.tRCD;
       }
-      rd = Math.max(rd, S.lastRd + p.tCCD);
-      var data = Math.max(rd + p.CL, S.busFree); rd = data - p.CL;
+      rd = slot(Math.max(rd, S.lastRd + p.tCCD, S.busFree - p.CL));
+      var data = rd + p.CL;
       S.busFree = data + p.tBL;
       var first = pre !== null ? pre : act !== null ? act : rd;
       S.cmdFree = first + p.tCMD;
@@ -1342,7 +1352,8 @@
       var A = sched(reqs, false, 1, p), F = sched(reqs, true, gWin(), p);
       R = { A: A, F: F, p: p, B: B, T: Math.max(A.busFree, F.busFree) * 1.02 };
       MB.stat("sch-o1", A.busFree.toFixed(0) + "<small> ns</small>");
-      MB.stat("sch-o2", F.busFree.toFixed(0) + "<small> ns (" + (100 * (1 - F.busFree / A.busFree)).toFixed(0) + "% ↓)</small>");
+      var gain = 100 * (1 - F.busFree / A.busFree);
+      MB.stat("sch-o2", F.busFree.toFixed(0) + "<small> ns (" + Math.abs(gain).toFixed(0) + "% " + (gain < 0 ? "↑" : "↓") + ")</small>");
       MB.stat("sch-o3", (100 * A.stat.hit).toFixed(0) + " / " + (100 * F.stat.hit).toFixed(0) + "<small> %</small>");
       MB.stat("sch-o4", A.stat.avg.toFixed(0) + " / " + F.stat.avg.toFixed(0) + "<small> ns</small>");
       var endA = {}, late = 0, worst = 0;
