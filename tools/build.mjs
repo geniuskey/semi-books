@@ -2,6 +2,7 @@
 /* Static monorepo build. Directory home canonicals use /memory/, rather than /memory/index.html. */
 import { execFileSync } from 'node:child_process';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderMath, version as katexVersion } from './katex.mjs';
@@ -26,7 +27,9 @@ for (const entry of book.books) {
   const chapters = [...js.matchAll(/\{ slug: "([^"]+)",\s*num: "[^"]*",\s*title: "([^"]+)"/g)].map(([, slug, title]) => ({ slug, title }));
   if (!chapters.length) throw new Error(`${slug}: no CHAPTERS in js/common.js`);
   const home = await readFile(join(root, slug, 'index.html'), 'utf8');
-  generated.set(slug, { ...meta, slug, chapters, title: decode(home.match(/<title>([^<]+)<\/title>/)[1]) });
+  // A book that ships og.png (1200×630) gets it as the share image on every page.
+  const image = existsSync(join(root, slug, 'og.png')) ? `${origin}/${slug}/og.png` : undefined;
+  generated.set(slug, { ...meta, slug, chapters, image, title: decode(home.match(/<title>([^<]+)<\/title>/)[1]) });
 }
 const RESOURCE_TYPE = { glossary: '용어집, 퀴즈' };
 const katexCss = `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@${katexVersion}/dist/katex.min.css">\n`;
@@ -52,7 +55,7 @@ function metadata(rel, html, info, url) {
   const chapterSlug = rel.match(/\/chapters\/([^/]+)\.html$/)?.[1];
   const position = info.chapters.findIndex((c) => c.slug === chapterSlug) + 1;
   if (!isHome && !position) throw new Error(`${rel}: not a book home or a chapter registered in CHAPTERS`);
-  const common = { inLanguage: 'ko', isAccessibleForFree: true };
+  const common = { inLanguage: 'ko', isAccessibleForFree: true, image: info.image };
   const node = isHome
     ? { '@type': 'Book', '@id': `${bookUrl}#book`, name: info.title, alternateName: info.alternateName, url: bookUrl, ...common,
         educationalLevel: info.educationalLevel, about: info.about, description: info.summary, dateModified: lastCommitDate(info.slug),
@@ -62,7 +65,10 @@ function metadata(rel, html, info, url) {
         description: decode(description), url, position, ...common, learningResourceType: RESOURCE_TYPE[chapterSlug] || '인터랙티브 교재',
         educationalLevel: info.educationalLevel, dateModified: lastCommitDate(rel),
         isPartOf: { '@type': 'Book', '@id': `${bookUrl}#book`, name: info.title, url: bookUrl } };
-  const json = JSON.stringify({ '@context': 'https://schema.org', '@graph': [node] }).replace(/</g, '\\u003c');
+  const crumbs = isHome ? [] : [{ '@type': 'BreadcrumbList', itemListElement: [
+    { '@type': 'ListItem', position: 1, name: info.siteName, item: bookUrl },
+    { '@type': 'ListItem', position: 2, name: info.chapters[position - 1].title, item: url }] }];
+  const json = JSON.stringify({ '@context': 'https://schema.org', '@graph': [node, ...crumbs] }).replace(/</g, '\\u003c');
   return [
     `<link rel="canonical" href="${url}">`,
     `<meta name="theme-color" content="${info.themeColor}">`,
@@ -72,6 +78,7 @@ function metadata(rel, html, info, url) {
     `<meta property="og:title" content="${title}">`,
     `<meta property="og:description" content="${description}">`,
     `<meta property="og:url" content="${url}">`,
+    ...(info.image ? [`<meta property="og:image" content="${info.image}">`, '<meta property="og:image:width" content="1200">', '<meta property="og:image:height" content="630">'] : []),
     '<meta name="twitter:card" content="summary_large_image">',
     `<script type="application/ld+json">${json}</script>`,
   ].join('\n') + '\n';

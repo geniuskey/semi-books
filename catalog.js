@@ -449,7 +449,7 @@ window.SEMI_BOOKS = [
   "stage": "device",
   "status": "published",
   "chapters": 17,
-  "simulators": 90,
+  "simulators": 92,
   "color": "#0e9384",
   "colorDark": "#2dd4bf",
   "topics": [

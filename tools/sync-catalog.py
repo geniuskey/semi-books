@@ -61,7 +61,8 @@ def main():
         if entry["local"]:
             entry["url"] = slug + "/"
             entry["chapters"] = len(list((ROOT / slug / "chapters").glob("*.html")))
-        if book_id in LOCAL:
+        # 이 저장소에서 집필하는 책(book.json에 meta)은 시뮬레이터 수도 소스에서 센다.
+        if entry["local"] and "meta" in json.loads((ROOT / slug / "book.json").read_text(encoding="utf-8")):
             entry["simulators"] = sum(f.read_text(encoding="utf-8").count('class="sim"') for f in (ROOT / slug / "chapters").glob("*.html"))
         entry.setdefault("motif", "layers")
         shelf.append(entry)

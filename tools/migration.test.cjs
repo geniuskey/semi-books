@@ -45,5 +45,10 @@ test('imports preserve source repositories, normalize navigation, and refuse loc
     manifest.books[0].slug = 'infra'; fs.writeFileSync(path.join(target, 'migration/books.json'), JSON.stringify(manifest));
     assert.equal(run('--write').status, 1);
     assert.equal(fs.readFileSync(path.join(target, 'infra/keep.txt'), 'utf8'), 'another author owns this');
+    // A book whose book.json has `meta` is written in the monorepo: skipped even without a source checkout.
+    fs.mkdirSync(path.join(target, 'written')); fs.writeFileSync(path.join(target, 'written/book.json'), '{"meta": {}}');
+    manifest.books[0] = { ...manifest.books[0], slug: 'written', sourceDirectory: '../missing' }; fs.writeFileSync(path.join(target, 'migration/books.json'), JSON.stringify(manifest));
+    result = run('--write'); assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /written: written in this repository, skipped/);
+    assert.deepEqual(fs.readdirSync(path.join(target, 'written')), ['book.json']);
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 });

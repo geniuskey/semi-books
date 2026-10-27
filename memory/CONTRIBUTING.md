@@ -1,6 +1,6 @@
 # MemoryBook 챕터 작성 가이드
 
-빌드 과정 없는 정적 사이트다. `index.html` + `chapters/<slug>.html` + 공통 `css/style.css`, `js/common.js`.
+소스는 빌드 없이 열리는 정적 사이트다(배포물의 메타데이터와 수식은 루트 빌드가 생성한다). `index.html` + `chapters/<slug>.html` + 공통 `css/style.css`, `js/common.js`.
 로컬 실행: `python3 -m http.server 8000` → http://localhost:8000 (file://로 열어도 동작하게 classic script만 사용한다. ES module 금지.)
 
 ## 기여물의 라이선스
@@ -11,7 +11,7 @@
 - **한국어**, 대상은 공대 학부생(전자회로·반도체 소자·컴퓨터 구조 기초가 있다고 가정). 영어 원어는 `<span class="en">(Sense Amplifier)</span>`처럼 병기.
 - 개념 → 직관 그림(SVG) → 수식(KaTeX) → 시뮬레이터 → 실제 수치 예 → 요약/퀴즈 순서.
 - 수치는 실제 제품에서 합리적인 범위를 쓴다(예: DRAM 셀 커패시턴스 8~25 fF, 비트라인 60~120 fF, tRCD ≈ 14 ns, 리프레시 창 DDR4 64 ms·DDR5 32 ms(85 °C 초과 시 절반), HBM3E 스택당 ~1.2 TB/s, 3D NAND 200~400단대(2026), TLC P/E 1k~3k회). 확실하지 않은 최신 수치는 '약', '~' 로 표기하고 연도를 적는다.
-- 외부 라이브러리는 아래 head 템플릿에 있는 것만(KaTeX, three.js r147). 이미지 파일 대신 인라인 SVG/canvas로 그린다.
+- 외부 라이브러리는 KaTeX(빌드가 처리)와 아래 head 템플릿의 three.js r147만 쓴다. 이미지 파일 대신 인라인 SVG/canvas로 그린다.
 - 색은 하드코딩하지 말고 CSS 변수(`var(--accent)` 등)나 `MB.palette()`를 쓴다. 라이트/다크 둘 다 읽혀야 한다. 단, 물리적 재질색(구리, 실리콘, 산화막 등 3D 모델)은 고정색 가능.
 - 모바일(폭 360px)에서 가로 스크롤이 생기면 안 된다. SVG는 `viewBox`만 주고 width/height 속성 생략.
 
@@ -24,10 +24,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DRAM 셀과 어레이 · MemoryBook</title>
 <meta name="description" content="한 문장 설명">
-<!-- canonical · Open Graph · JSON-LD: 기존 챕터의 블록을 복사해 URL·제목·설명만 바꾼다 -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 <link rel="stylesheet" href="../css/style.css">
 <script src="../js/common.js"></script>
 <!-- 3D가 필요한 페이지만 -->
@@ -52,9 +48,11 @@
 </body>
 </html>
 ```
-상단바, 챕터 서랍, 목차, 이전/다음, 푸터, 테마 토글, 퀴즈 동작, KaTeX 렌더는 `common.js`가 자동 처리한다.
+소스에는 `<title>`과 `<meta name="description">`만 쓴다. canonical, `theme-color`, Open Graph(`og.png` 포함), Twitter 카드, JSON-LD는 `tools/build.mjs`가 파일 경로, `<title>`·description, `js/common.js`의 `CHAPTERS`(장 이름과 순서), `memory/book.json`의 `meta`(사이트 이름, 테마 색, 책 소개), 그리고 git 마지막 커밋 날짜(`dateModified`)로 배포물에 생성한다. 소스에 이 태그들이 남아 있으면 `npm test`와 빌드가 실패한다. description은 `<meta>` 한 줄에 쓴다.
+상단바, 챕터 서랍, 목차, 이전/다음, 푸터, 테마 토글, 퀴즈 동작, 검색은 `common.js`가 자동 처리한다.
+수식은 `tools/katex.mjs`가 빌드할 때 KaTeX HTML로 렌더링하고, 배포물에는 KaTeX 스타일시트만 붙인다. 소스에 KaTeX 태그를 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 렌더링하므로 미리보기는 그대로 된다. TeX 문법 오류가 있으면 빌드가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로, 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣으면 `npm test`가 실패한다.
 
-챕터를 추가할 때는 `js/common.js`의 `CHAPTERS`, `sitemap.xml`, `index.html`의 JSON-LD `hasPart`, `chapters/glossary.html`의 챕터 칩(`#gl-ch`)과 `TERMS`에도 함께 등록한다.
+챕터를 추가할 때는 `js/common.js`의 `CHAPTERS`, 루트 `sitemap.xml`(`npm run sitemap`), `chapters/glossary.html`의 챕터 칩(`#gl-ch`)과 `TERMS`에도 함께 등록한다.
 
 ## 컴포넌트
 ```html

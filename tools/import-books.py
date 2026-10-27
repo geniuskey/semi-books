@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Import the individual semiconductor repositories without writing to them or infra/ and cmp/.
+"""Import the individual semiconductor repositories without writing to them or to the books written here.
 
 python3 tools/import-books.py --write    # first import / safe refresh
 python3 tools/import-books.py --check    # compare with the sibling repositories
 
 Local changes in imported files are never overwritten. Resolve those changes before
-refreshing a snapshot. Per-file hashes and original revisions live in migration/.
+refreshing a snapshot. A book whose book.json has `meta` (infra/, cmp/, memory/) is written in
+this repository: it is skipped, and its manifest entry only keeps its legacy URL rewritten. Per-file hashes and original revisions live in migration/.
 """
 import argparse
 import hashlib
@@ -76,6 +77,11 @@ def main():
             continue
         if slug in ("infra", "cmp") or not re.fullmatch(r"[a-z][a-z0-9-]*", slug):
             raise ValueError("unsafe or reserved destination: " + slug)
+        local = ROOT / slug / "book.json"
+        if local.exists() and "meta" in json.loads(local.read_text()):
+            state["books"].pop(slug, None)
+            reports.append(f"{slug}: written in this repository, skipped")
+            continue
         source = (ROOT / book["sourceDirectory"]).resolve()
         files = subprocess.check_output(["git", "ls-files", "-z"], cwd=source).decode().split("\0")
         files = [Path(f) for f in files if f and not set(Path(f).parts).intersection(EXCLUDED)]
@@ -126,7 +132,7 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-    print(f"Imported {len(plan)} file(s). Individual repositories, infra/ and cmp/ were not modified.")
+    print(f"Imported {len(plan)} file(s). Individual repositories and the books written here were not modified.")
     return 0
 
 

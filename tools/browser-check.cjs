@@ -20,6 +20,9 @@ const mobileOnly = args.includes("--mobile");
 if (mobileOnly) args.splice(args.indexOf("--mobile"), 1);
 const serveRoot = built ? path.join(ROOT, ".book-dist") : ROOT;
 const importedOnly = args.includes("--imported");
+// book.json에 meta가 있는 책은 이 저장소에서 집필한다(--imported에서 제외, 용어 툴팁까지 검사).
+const BOOKS = JSON.parse(fs.readFileSync(path.join(ROOT, "book.json"), "utf8")).books.map((p) => path.dirname(p));
+const WRITTEN = new Set(BOOKS.filter((book) => JSON.parse(fs.readFileSync(path.join(ROOT, book, "book.json"), "utf8")).meta));
 if (importedOnly) args.splice(args.indexOf("--imported"), 1);
 const offline = args.includes("--offline");
 if (offline) args.splice(args.indexOf("--offline"), 1);
@@ -39,8 +42,8 @@ const server = http.createServer((req, res) => {
 
 function pages() {
   const list = ["index.html"];
-  for (const book of JSON.parse(fs.readFileSync(path.join(ROOT, "book.json"), "utf8")).books.map((p) => path.dirname(p))) {
-    if (importedOnly && (book === "infra" || book === "cmp")) continue;
+  for (const book of BOOKS) {
+    if (importedOnly && WRITTEN.has(book)) continue;
     list.push(`${book}/index.html`);
     for (const f of fs.readdirSync(path.join(ROOT, book, "chapters")).filter((f) => f.endsWith(".html")).sort()) list.push(`${book}/chapters/${f}`);
   }
@@ -62,7 +65,7 @@ function pages() {
       if (offline) await page.route(/^https?:\/\//, (route) => route.request().url().startsWith(base) ? route.continue() : route.abort());
       await page.goto(base + rel, { waitUntil: "networkidle", timeout: 60000 }).catch((e) => errs.push("goto: " + e.message));
       await page.waitForTimeout(600);
-      if (/^(cmp|infra)\/chapters\//.test(rel)) {
+      if (WRITTEN.has(rel.split("/")[0]) && rel.includes("/chapters/")) {
         await page.evaluate(async () => {
           if (!window.BookGlossary) throw new Error("glossary tooltips did not load");
           const { count } = await window.BookGlossary.ready;
