@@ -113,7 +113,7 @@ window.BOOK_GLOSSARY = {
     {"ko":"듀얼 픽셀","en":"Dual pixel","abbr":"2PD","def":"한 마이크로렌즈 아래 포토다이오드를 좌우 둘로 나눈 픽셀. 모든 픽셀이 PDAF에 참여하고, 합치면 일반 픽셀처럼 영상을 만든다.","chapters":["advanced"]},
     {"ko":"리모자이크","en":"Remosaic","abbr":"","def":"쿼드·노나 배열의 RAW를 일반 베이어 배열로 재배치·보간하는 처리. 밝은 장면에서 풀해상도를 얻기 위해 쓴다.","chapters":["advanced"]},
     {"ko":"비닝","en":"Binning","abbr":"","def":"인접한 같은 색 픽셀 여러 개의 신호를 합쳐 하나로 출력하는 것. k×k 비닝은 해상도를 1/k²로 줄이는 대신 SNR을 약 k배 높이고 프레임률을 올린다.","chapters":["advanced"]},
-    {"ko":"노나셀","en":"Nonacell","abbr":"","def":"같은 색 3×3 픽셀을 한 묶음으로 한 CFA. 108~200 MP급 초고화소 센서에서 9-in-1 비닝으로 저조도 성능을 확보한다.","chapters":["advanced"]},
+    {"ko":"노나셀","en":"Nonacell","abbr":"","def":"같은 색 3×3 픽셀을 한 묶음으로 한 CFA. 108 MP급 초고화소 센서에서 9-in-1 비닝으로 저조도 성능을 확보한다.","chapters":["advanced"]},
     {"ko":"적층 센서","en":"Stacked sensor","abbr":"","def":"픽셀 웨이퍼와 로직(ADC·ISP·메모리) 웨이퍼를 따로 만들어 위아래로 붙인 센서. 각 층에 최적 공정을 쓰고 다이 면적을 줄인다. 3층(DRAM 포함) 구조도 있다.","chapters":["advanced"]},
     {"ko":"하이브리드 본딩","en":"Hybrid bonding (Cu–Cu)","abbr":"","def":"두 웨이퍼의 구리 패드와 산화막을 동시에 직접 접합하는 기술. 수 µm 피치의 초고밀도 연결로 픽셀 단위 적층(픽셀 병렬 ADC)을 가능하게 한다.","chapters":["advanced"]},
     {"ko":"실리콘 관통 전극","en":"Through-silicon via","abbr":"TSV","def":"실리콘 기판을 수직으로 관통하는 전극. 초기 적층 센서에서 두 웨이퍼를 주변부에서 연결하는 데 썼다.","chapters":["advanced"]},
