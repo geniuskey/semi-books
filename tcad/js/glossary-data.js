@@ -8,7 +8,7 @@ window.BOOK_GLOSSARY = {
     {"ko":"에너지 밴드","en":"Energy band","abbr":"","def":"결정 속 전자가 가질 수 있는 에너지가 띠 모양으로 모인 것. 전도대 바닥 Ec와 가전자대 꼭대기 Ev 사이가 밴드갭이다. TCAD는 매 격자점에서 이 밴드 끝의 위치를 전위로부터 계산한다.","chapters":["carriers"],"category":"phys"},
     {"ko":"밴드갭","en":"Band gap","abbr":"Eg","def":"전도대와 가전자대 사이의 금지된 에너지 폭. 실리콘은 300 K에서 약 1.12 eV이고 온도가 오르면 줄어든다(Varshni 식). 진성 농도가 밴드갭에 지수적으로 의존하므로 작은 차이도 누설 전류를 크게 바꾼다.","chapters":["carriers"],"category":"phys"},
     {"ko":"상태 밀도","en":"Density of states","abbr":"DOS","def":"단위 에너지·단위 부피당 전자가 들어갈 수 있는 자리의 수. 밴드 끝 근처에서는 에너지의 제곱근에 비례한다. 페르미-디랙 분포와 곱해 적분하면 캐리어 농도가 나온다.","chapters":["carriers"],"category":"phys"},
-    {"ko":"유효 상태 밀도","en":"Effective density of states","abbr":"Nc, Nv","def":"밴드 전체의 상태를 밴드 끝 한 준위에 모았다고 본 등가 밀도. 실리콘 300 K에서 Nc ≈ 2.8×10¹⁹, Nv ≈ 1.0×10¹⁹ cm⁻³ 정도로 쓴다(문헌마다 조금 다르다).","chapters":["carriers"],"category":"phys"},
+    {"ko":"유효 상태 밀도","en":"Effective density of states","abbr":"Nc, Nv","def":"밴드 전체의 상태를 밴드 끝 한 준위에 모았다고 본 등가 밀도. 실리콘 300 K에서 이 책의 엔진은 Nc ≈ 2.86×10¹⁹, Nv ≈ 3.10×10¹⁹ cm⁻³를 쓴다(문헌마다 다르다. 옛 교과서의 Nv는 약 1.04×10¹⁹).","chapters":["carriers"],"category":"phys"},
     {"ko":"페르미-디랙 통계","en":"Fermi–Dirac statistics","abbr":"FD","def":"에너지 E인 상태가 전자로 채워질 확률 1/(1+exp((E−EF)/kT)). 페르미 준위가 밴드 끝에 가깝거나 밴드 안에 있는 고농도 영역에서는 이 식을 그대로 써야 한다.","chapters":["carriers"],"category":"phys"},
     {"ko":"볼츠만 근사","en":"Boltzmann approximation","abbr":"","def":"페르미-디랙 분포를 지수 함수 exp(−(E−EF)/kT)로 바꾼 근사. 페르미 준위가 밴드 끝에서 약 3kT 이상 떨어져 있을 때 정확하다. n⁺ 소스/드레인처럼 축퇴된 영역에서는 농도를 과대평가한다.","chapters":["carriers"],"category":"phys"},
     {"ko":"페르미 준위","en":"Fermi level","abbr":"EF","def":"열평형에서 전자가 채워질 확률이 1/2인 에너지. 평형 상태의 소자 전체에서 평평하며, 도핑에 따라 밴드 안에서의 위치가 달라진다.","chapters":["carriers"],"category":"phys"},
