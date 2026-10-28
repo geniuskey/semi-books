@@ -1,7 +1,7 @@
 # OpticsBook — 이미지 센서를 위한 인터랙티브 광학 교과서
 
 렌즈를 지나 실리콘에 닿기까지. 이미지 센서 픽셀 개발자를 위한 한국어 광학 학습 사이트입니다.
-[SensorBook](https://github.com/geniuskey/sensorbook)의 후속편으로, 기하광학에서 파동광학, 박막 TMM, PSF·MTF, CRA와 마이크로렌즈, RCWA·FDTD까지 18개 챕터와 80여 개의 시뮬레이터로 구성됩니다.
+[SensorBook](https://github.com/geniuskey/sensorbook)의 후속편으로, 기하광학에서 파동광학, 박막 TMM, PSF·MTF, CRA와 마이크로렌즈, RCWA·FDTD까지 18개 챕터와 120여 개의 시뮬레이터로 구성됩니다.
 
 ## 실행
 빌드 과정이 없는 정적 사이트입니다.
