@@ -1,0 +1,1857 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.ico" sizes="any">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<title>화질 평가: 사진을 숫자로 · SensorBook</title>
+<meta name="description" content="카메라 화질을 숫자로 재는 법. 슬랜티드 에지 SFR과 MTF50, 샤프닝 과처리, 데드리브스 텍스처 손실, CSF 가중 시각 노이즈, 컬러체커 ΔE00과 CCM, OECF와 다이내믹 레인지, 왜곡·배율 색수차, 베일링 글레어, 어큐턴스와 종합 점수를 측정 에뮬레이션 시뮬레이터로 익힌다.">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  .fig-lg svg .t, .fig-lg svg .t-acc { font-size: 16px; }
+  .fig-lg svg .t-dim { font-size: 14px; }
+  .fig-lg svg .t-mono { font-size: 13px; }
+  .iq-tight td, .iq-tight th { padding: 6px 9px; font-size: 14px; }
+  svg .de-e { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; }
+  svg .de-c { fill: none; stroke: var(--warn); stroke-width: 1.2; stroke-dasharray: 4 3; }
+  svg .f-warn-soft { fill: color-mix(in srgb, var(--warn) 18%, transparent); stroke: var(--warn); }
+  svg .f-ok-soft { fill: color-mix(in srgb, var(--ok) 16%, transparent); stroke: var(--ok); }
+  .sim .seg button { padding: 5px 9px; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="sensor"></script>
+</head>
+<body data-chapter="iq">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 20</div>
+    <h1>화질 평가: 사진을 숫자로</h1>
+    <p class="lead">8장에서는 렌즈를 떼어 낸 센서를 균일광과 암흑 속에서 쟀다. 그런데 사람들이 실제로 비교하는 것은 렌즈와 ISP를 거쳐 나온 사진이다. "이 폰이 더 선명하다", "저 카메라는 색이 정확하다"는 말을 숫자로 바꾸려면 무엇을 찍고, 어떤 알고리즘으로 읽고, 그 숫자가 사람이 느끼는 품질과 어떻게 이어지는지 알아야 한다. 이 장은 카메라 수준의 화질 평가를 다룬다. 시뮬레이터마다 정답을 숨긴 합성 차트 영상을 만들고, 실제 분석 알고리즘을 돌려 측정값이 참값과 얼마나 맞는지 확인한다.</p>
+    <ul class="objectives">
+      <li>센서 특성 평가(EMVA 1288), 카메라 화질 측정(ISO·IEEE), 주관 평가(JND·MOS)의 관계와 주요 표준의 범위를 설명한다.</li>
+      <li>슬랜티드 에지 SFR 알고리즘을 단계별로 구현해 보고, 에지 각도·노이즈·감마·샤프닝이 측정 MTF를 어떻게 바꾸는지 안다.</li>
+      <li>샤프닝 과처리와 NR의 텍스처 손실이 에지 MTF만으로는 보이지 않는 이유를 데드리브스 측정으로 설명한다.</li>
+      <li>시각 노이즈, ΔE00·CCM 색 정확도, OECF·다이내믹 레인지, 왜곡·배율 색수차, 베일링 글레어를 측정하는 원리와 함정을 안다.</li>
+      <li>CSF를 이용한 어큐턴스·SQF와 종합 점수가 보는 조건과 가중치에 따라 순위를 바꾸는 이유를 이해한다.</li>
+    </ul>
+  </header>
+
+  <!-- =============================================================== 1 -->
+  <section id="intro">
+    <h2>화질은 어떻게 숫자가 되는가</h2>
+    <p>"좋은 사진"은 결국 사람이 판단한다. 가장 직접적인 방법은 여러 사람에게 사진을 보여 주고 점수를 매기게 하는 <span class="term">주관 평가</span>다. 5단계 척도 점수를 평균한 <span class="term">MOS</span><span class="en">(Mean Opinion Score)</span>, 두 장을 나란히 놓고 고르게 하는 쌍대 비교가 대표적이다. 쌍대 비교에서 관찰자의 75 %가 한쪽을 고르는 품질 차이를 <span class="term">JND</span><span class="en">(Just Noticeable Difference)</span> 하나로 정의한다. 절반은 차이를 알아보고, 알아보지 못한 나머지 절반이 반반으로 찍으면 75 : 25가 되기 때문이다(ISO 20462의 정의).</p>
+    <p>주관 평가는 정확하지만 비싸고 느리다. 수십 명이 같은 조명·같은 모니터 앞에 앉아야 하고, 카메라 설정 하나 바꿀 때마다 다시 할 수는 없다. 그래서 <b>차트를 찍고 알고리즘으로 숫자를 뽑는</b> 객관 지표를 만들고, 그 숫자가 JND와 어떤 관계인지를 주관 실험으로 한 번만 맞춰 둔다. 이 장의 측정은 모두 그 다리 위에 있다.</p>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 250" role="img" aria-label="센서 특성, 카메라 화질 지표, 지각 품질의 세 층위">
+        <defs><marker id="iq-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker></defs>
+        <rect x="10" y="30" width="200" height="180" rx="10" class="f-surface"/>
+        <rect x="10" y="30" width="200" height="38" rx="10" fill="var(--text-dim)" opacity="0.22"/>
+        <text x="110" y="55" class="t" text-anchor="middle">센서 (8장)</text>
+        <text x="24" y="92" class="t-dim">EMVA 1288 · 렌즈 없음</text>
+        <text x="24" y="120" class="t">QE · 읽기 노이즈</text>
+        <text x="24" y="144" class="t">풀웰 · PRNU · DSNU</text>
+        <text x="24" y="168" class="t">암전류 · 선형성</text>
+        <text x="24" y="196" class="t-mono">단위: e⁻, %, DN</text>
+        <rect x="240" y="30" width="200" height="180" rx="10" class="f-acc-soft"/>
+        <text x="340" y="55" class="t" text-anchor="middle">카메라 (이 장)</text>
+        <text x="254" y="92" class="t-dim">ISO TC 42 · IEEE 1858</text>
+        <text x="254" y="120" class="t">SFR · 텍스처 · 노이즈</text>
+        <text x="254" y="144" class="t">ΔE · OECF · DR</text>
+        <text x="254" y="168" class="t">왜곡 · 플레어 · 지연</text>
+        <text x="254" y="196" class="t-mono">단위: cy/px, ΔE00, 스톱</text>
+        <rect x="470" y="30" width="200" height="180" rx="10" class="f-acc2-soft"/>
+        <text x="570" y="55" class="t" text-anchor="middle">사람</text>
+        <text x="484" y="92" class="t-dim">주관 실험 · 보는 조건</text>
+        <text x="484" y="120" class="t">JND · MOS</text>
+        <text x="484" y="144" class="t">품질 손실(QL)</text>
+        <text x="484" y="168" class="t">종합 점수</text>
+        <text x="484" y="196" class="t-mono">단위: JND, 점수</text>
+        <path d="M212 120 H236" class="s-acc" marker-end="url(#iq-arr)"/>
+        <path d="M442 120 H466" class="s-acc" marker-end="url(#iq-arr)"/>
+        <text x="225" y="236" class="t-dim" text-anchor="middle">+ 렌즈, ISP</text>
+        <text x="455" y="236" class="t-dim" text-anchor="middle">+ CSF, 출력 크기, 거리</text>
+      </svg>
+      <figcaption><b>그림 20-1.</b> 화질 평가의 세 층위. 센서 특성은 렌즈와 ISP를 빼고 잰 물리량이고, 카메라 지표는 완성된 영상에서 잰 값이다. 카메라 지표를 지각 품질로 옮기려면 사람 눈의 대비 감도와 보는 조건이 더 필요하다.</figcaption>
+    </figure>
+
+    <p>센서 데이터시트의 숫자와 카메라 화질의 숫자는 다른 질문에 답한다. 읽기 노이즈 1 e⁻의 센서도 ISP가 노이즈를 지우며 텍스처까지 뭉개면 사진은 나빠 보이고, 렌즈 플레어는 센서의 다이내믹 레인지를 몇 스톱씩 깎는다. 카메라 측정은 렌즈·센서·ISP가 합쳐진 <b>시스템</b>을 블랙박스로 보고, 정해진 차트·조명·노출에서 출력 영상만 분석한다. 주요 표준은 다음과 같다.</p>
+    <div class="table-wrap"><table class="iq-tight">
+      <thead><tr><th>표준</th><th>대상</th><th>이 장</th></tr></thead>
+      <tbody>
+        <tr><td>ISO 12233:2023</td><td>해상력과 공간 주파수 응답(e-SFR 슬랜티드 에지, s-SFR 사인 스타, 시각 해상력)</td><td>2·3절</td></tr>
+        <tr><td>ISO 19567-1, -2</td><td>텍스처 재현(주기 패턴, 비주기 무작위 패턴)</td><td>4절</td></tr>
+        <tr><td>ISO 15739:2023</td><td>노이즈 측정: SNR, 시각 노이즈, 다이내믹 레인지</td><td>5·7절</td></tr>
+        <tr><td>ISO 17321-1</td><td>디지털 카메라의 색 특성화(자극, 계측, 절차)</td><td>6절</td></tr>
+        <tr><td>ISO 14524</td><td>광전 변환 함수(OECF) 측정</td><td>7절</td></tr>
+        <tr><td>ISO 17850 · 19084 · 17957</td><td>기하 왜곡 · 배율 색 변위 · 쉐이딩</td><td>8절</td></tr>
+        <tr><td>ISO 18844</td><td>영상 플레어(렌즈·센서·바디의 미광 포함)</td><td>9절</td></tr>
+        <tr><td>ISO 15781</td><td>촬영 지연, 셔터 릴리스 지연, 연사 속도, 기동 시간</td><td>10절</td></tr>
+        <tr><td>IEEE 1858-2023 (CPIQ)</td><td>폰 카메라 지각 품질: 지표를 JND 단위 품질 손실로 변환</td><td>5·10절</td></tr>
+        <tr><td>IEEE 2020-2024</td><td>차량용 카메라 화질: 플레어, 노이즈, DR, SFR, 플리커, 대비 검출 확률</td><td><a href="automotive.html">15장</a></td></tr>
+      </tbody>
+    </table></div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 270" role="img" aria-label="카메라 화질 측정용 복합 차트의 구성">
+        <defs>
+          <pattern id="iq-dl" width="40" height="40" patternUnits="userSpaceOnUse">
+            <rect width="40" height="40" fill="var(--text-dim)" opacity="0.35"/>
+            <circle cx="8" cy="10" r="9" fill="var(--text)" opacity="0.55"/><circle cx="30" cy="8" r="6" fill="var(--surface)"/><circle cx="22" cy="28" r="12" fill="var(--text-faint)"/><circle cx="6" cy="33" r="5" fill="var(--text)" opacity="0.35"/><circle cx="35" cy="30" r="4" fill="var(--surface)"/>
+          </pattern>
+        </defs>
+        <rect x="10" y="10" width="660" height="250" rx="8" class="f-elev"/>
+        <g transform="translate(40,40) rotate(-5 40 40)"><rect width="80" height="80" fill="var(--text)" opacity="0.75"/></g>
+        <g transform="translate(560,150) rotate(-5 40 40)"><rect width="80" height="80" fill="var(--text)" opacity="0.75"/></g>
+        <text x="80" y="150" class="t-dim" text-anchor="middle">슬랜티드 에지</text>
+        <circle cx="340" cy="105" r="70" fill="url(#iq-dl)" stroke="var(--border)"/>
+        <text x="340" y="196" class="t-dim" text-anchor="middle">데드리브스</text>
+        <g transform="translate(470,30)">
+          <rect x="0" y="0" width="22" height="22" fill="#735244"/><rect x="25" y="0" width="22" height="22" fill="#c29682"/><rect x="50" y="0" width="22" height="22" fill="#627a9d"/><rect x="75" y="0" width="22" height="22" fill="#576c43"/><rect x="100" y="0" width="22" height="22" fill="#8580b1"/><rect x="125" y="0" width="22" height="22" fill="#67bdaa"/>
+          <rect x="0" y="25" width="22" height="22" fill="#d67e2c"/><rect x="25" y="25" width="22" height="22" fill="#505ba6"/><rect x="50" y="25" width="22" height="22" fill="#c15a63"/><rect x="75" y="25" width="22" height="22" fill="#5e3c6c"/><rect x="100" y="25" width="22" height="22" fill="#9dbc40"/><rect x="125" y="25" width="22" height="22" fill="#e0a32e"/>
+          <rect x="0" y="50" width="22" height="22" fill="#383d96"/><rect x="25" y="50" width="22" height="22" fill="#469449"/><rect x="50" y="50" width="22" height="22" fill="#af363c"/><rect x="75" y="50" width="22" height="22" fill="#e7c71f"/><rect x="100" y="50" width="22" height="22" fill="#bb5695"/><rect x="125" y="50" width="22" height="22" fill="#0885a1"/>
+          <rect x="0" y="75" width="22" height="22" fill="#f3f3f2"/><rect x="25" y="75" width="22" height="22" fill="#c8c8c8"/><rect x="50" y="75" width="22" height="22" fill="#a0a0a0"/><rect x="75" y="75" width="22" height="22" fill="#7a7a79"/><rect x="100" y="75" width="22" height="22" fill="#555555"/><rect x="125" y="75" width="22" height="22" fill="#343434"/>
+          <text x="73" y="118" class="t-dim" text-anchor="middle">24색 차트</text>
+        </g>
+        <g transform="translate(40,200)">
+          <rect x="0" y="0" width="26" height="30" fill="var(--text)" opacity="0.06"/><rect x="26" y="0" width="26" height="30" fill="var(--text)" opacity="0.16"/><rect x="52" y="0" width="26" height="30" fill="var(--text)" opacity="0.3"/><rect x="78" y="0" width="26" height="30" fill="var(--text)" opacity="0.45"/><rect x="104" y="0" width="26" height="30" fill="var(--text)" opacity="0.6"/><rect x="130" y="0" width="26" height="30" fill="var(--text)" opacity="0.75"/><rect x="156" y="0" width="26" height="30" fill="var(--text)" opacity="0.9"/>
+          <text x="91" y="50" class="t-dim" text-anchor="middle">회색 스텝 (OECF·노이즈)</text>
+        </g>
+        <g fill="var(--text)" opacity="0.7">
+          <circle cx="440" cy="190" r="3"/><circle cx="460" cy="190" r="3"/><circle cx="480" cy="190" r="3"/><circle cx="500" cy="190" r="3"/>
+          <circle cx="440" cy="210" r="3"/><circle cx="460" cy="210" r="3"/><circle cx="480" cy="210" r="3"/><circle cx="500" cy="210" r="3"/>
+          <circle cx="440" cy="230" r="3"/><circle cx="460" cy="230" r="3"/><circle cx="480" cy="230" r="3"/><circle cx="500" cy="230" r="3"/>
+        </g>
+        <text x="470" y="252" class="t-dim" text-anchor="middle">점 격자 (왜곡)</text>
+        <circle cx="250" cy="225" r="13" fill="var(--text)"/><circle cx="250" cy="225" r="16" fill="none" stroke="var(--text-dim)"/>
+        <text x="300" y="230" class="t-dim">광 트랩 (플레어)</text>
+      </svg>
+      <figcaption><b>그림 20-2.</b> 복합 화질 차트의 구성(개략). 한 장의 촬영으로 SFR, 텍스처, 색, 톤·노이즈, 기하를 함께 잰다. 실제 차트는 반사율·크기·배치가 표준이나 장비사 규격으로 정해져 있고, 색 패치 색은 표시용 근사값이다.</figcaption>
+    </figure>
+
+    <p>모든 측정에는 공통의 함정이 있다. <b>ISP는 차트를 사진처럼 처리하지 않을 수 있다.</b> 장면 인식, 국소 톤 매핑, 내용 적응형 샤프닝과 NR이 들어간 카메라는 대비가 높고 깨끗한 차트에서 실제 장면과 다르게 동작한다. 그래서 같은 지표를 여러 대비·조도에서 재고, 에지 MTF와 텍스처 MTF처럼 서로 다른 성격의 차트를 같이 쓰며, 마지막에는 실제 장면의 주관 평가와 맞춰 본다.</p>
+
+    <h3>주관 평가를 숫자로: 쌍대 비교와 서스톤 척도</h3>
+    <p>관찰자에게 두 영상 i, j를 보여 주고 더 좋은 쪽을 고르게 하면, i를 고른 비율 \(p_{ij}\)를 얻는다. 서스톤의 <span class="en">(Thurstone)</span> Case V 모델은 각 영상의 지각 품질이 정규분포로 흔들린다고 보고, 비율을 정규분포의 역함수로 펴서 척도를 만든다.</p>
+    <div class="formula">$$z_{ij} = \Phi^{-1}(p_{ij}),\qquad s_i = \frac{1}{n}\sum_{j} z_{ij},\qquad \text{JND}_i = \frac{s_i}{\Phi^{-1}(0.75)} = \frac{s_i}{0.6745}$$
+      <div class="where">\(\Phi^{-1}\): 표준 정규분포의 역누적분포 함수. 차이 하나가 1 JND이면 \(p = 0.75\), \(z = 0.6745\)이다. 모두가 한쪽을 고르면(\(p = 0\) 또는 1) \(z\)가 무한대가 되므로 \(1/(2N)\) 같은 값으로 잘라야 하고, 그만큼 큰 차이는 척도가 눌린다.</div>
+    </div>
+
+    <div class="sim" id="sim-jnd">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>가상 관찰자 패널: 쌍대 비교에서 JND 척도로</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-jnd"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>관찰자 수 <output id="jn-obs-out"></output></span><input type="range" id="jn-obs" min="5" max="100" value="20" step="1"></label>
+          <label class="ctrl"><span>관찰자 간 취향 차이 <output id="jn-bias-out"></output></span><input type="range" id="jn-bias" min="0" max="1" value="0.3" step="0.05"></label>
+          <label class="ctrl"><span>가장 큰 품질 차이 <output id="jn-max-out"></output></span><input type="range" id="jn-max" min="1" max="8" value="4" step="0.5"></label>
+          <button class="btn primary" id="jn-run">새 패널 모집</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">척도 RMS 오차</span><span class="v" id="o-jn-rms">—</span></div>
+        <div class="stat"><span class="k">최대 차이 추정 / 참</span><span class="v" id="o-jn-max">—</span></div>
+        <div class="stat"><span class="k">만장일치 쌍</span><span class="v" id="o-jn-un">—</span></div>
+        <div class="stat"><span class="k">E의 95 % 구간 폭</span><span class="v" id="o-jn-ci">—</span></div>
+      </div>
+      <div class="sim-note">숨은 참값: 영상 A~E의 품질이 최대 차이의 0, 10, 30, 60, 100 %만큼 좋다(JND 단위). 가상 관찰자는 매 비교마다 지각 노이즈(1 JND에서 정확히 75 %가 되도록)와 자기 취향(영상마다 고정된 치우침)을 더해 판단한다. 왼쪽은 선호 비율 행렬, 오른쪽은 서스톤 척도(점, 부트스트랩 95 % 구간)와 참값(선). 해볼 것: 관찰자를 5명으로 줄이면 만장일치 쌍이 늘어 E가 참값 4 JND보다 크게 눌려(2 JND 남짓) 추정된다. 관찰자 20명이라도 최대 차이를 8 JND로 키우면 E의 추정이 4 JND 근처에서 포화된다. 이 때문에 큰 품질 차이는 품질 자(Quality Ruler)처럼 기준 영상 사다리와 비교하는 방법을 쓴다.</div>
+    </div>
+  </section>
+
+  <!-- =============================================================== 2 -->
+  <section id="sfr">
+    <h2>해상력: 슬랜티드 에지 SFR</h2>
+    <p>5장에서 시스템 MTF는 렌즈·픽셀·디모자이크 MTF의 곱이라고 했다(<a href="optics.html#mtf">5장 MTF</a>). 카메라에서 이것을 재려면 사인파 줄무늬를 주파수마다 찍는 대신, 날카로운 에지 하나를 찍는다. 에지는 모든 주파수를 다 담고 있기 때문이다. 문제는 샘플링이다. 픽셀 간격으로만 에지 단면을 읽으면 나이퀴스트 근처를 제대로 볼 수 없고, 그보다 높은 주파수는 낮은 주파수로 접혀 들어온다. <span class="term">슬랜티드 에지</span>(경사 에지)법은 에지를 픽셀 격자에 대해 몇 도 기울여 이 문제를 푼다(<a href="characterization.html#spectral">8장</a>의 픽셀 MTF 측정과 같은 원리).</p>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 230" role="img" aria-label="슬랜티드 에지 알고리즘의 다섯 단계">
+        <defs><marker id="iq-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker></defs>
+        <g transform="translate(10,20)">
+          <rect width="110" height="110" class="f-surface"/>
+          <path d="M0 0 H52 L62 110 H0 Z" fill="var(--text)" opacity="0.7"/>
+          <g stroke="var(--border)" stroke-width="0.6"><path d="M0 22 H110 M0 44 H110 M0 66 H110 M0 88 H110 M22 0 V110 M44 0 V110 M66 0 V110 M88 0 V110"/></g>
+          <g fill="var(--warn)"><circle cx="53" cy="11" r="2.4"/><circle cx="55" cy="33" r="2.4"/><circle cx="57" cy="55" r="2.4"/><circle cx="59" cy="77" r="2.4"/><circle cx="61" cy="99" r="2.4"/></g>
+          <line x1="52" y1="0" x2="62" y2="110" stroke="var(--bad)" stroke-width="1.5"/>
+          <text x="55" y="132" class="t" text-anchor="middle">① 행별 중심</text>
+          <text x="55" y="152" class="t-dim" text-anchor="middle">미분 → 무게중심</text>
+          <text x="55" y="170" class="t-dim" text-anchor="middle">→ 직선 맞춤</text>
+        </g>
+        <path d="M126 75 H140" class="s-acc" marker-end="url(#iq-arr2)"/>
+        <g transform="translate(146,20)">
+          <rect width="110" height="110" class="f-surface"/>
+          <g fill="var(--accent)"><circle cx="8" cy="96" r="2"/><circle cx="17" cy="95" r="2"/><circle cx="27" cy="95" r="2"/><circle cx="36" cy="93" r="2"/><circle cx="42" cy="88" r="2"/><circle cx="47" cy="78" r="2"/><circle cx="51" cy="64" r="2"/><circle cx="55" cy="50" r="2"/><circle cx="59" cy="36" r="2"/><circle cx="64" cy="25" r="2"/><circle cx="70" cy="19" r="2"/><circle cx="79" cy="16" r="2"/><circle cx="90" cy="15" r="2"/><circle cx="101" cy="15" r="2"/></g>
+          <g stroke="var(--text-dim)" stroke-width="0.6"><path d="M38 8 V104 M44 8 V104 M50 8 V104 M56 8 V104 M62 8 V104 M68 8 V104"/></g>
+          <text x="55" y="132" class="t" text-anchor="middle">② 투영 · 빈닝</text>
+          <text x="55" y="152" class="t-dim" text-anchor="middle">에지까지 거리를</text>
+          <text x="55" y="170" class="t-dim" text-anchor="middle">1/4 픽셀 칸에 평균</text>
+        </g>
+        <path d="M262 75 H276" class="s-acc" marker-end="url(#iq-arr2)"/>
+        <g transform="translate(282,20)">
+          <rect width="110" height="110" class="f-surface"/>
+          <path d="M6 96 C30 96 38 94 44 86 C50 70 52 40 56 30 C60 22 70 16 104 15" fill="none" stroke="var(--accent)" stroke-width="2.2"/>
+          <text x="55" y="132" class="t" text-anchor="middle">③ ESF</text>
+          <text x="55" y="152" class="t-dim" text-anchor="middle">4× 오버샘플된</text>
+          <text x="55" y="170" class="t-dim" text-anchor="middle">에지 확산 함수</text>
+        </g>
+        <path d="M398 75 H412" class="s-acc" marker-end="url(#iq-arr2)"/>
+        <g transform="translate(418,20)">
+          <rect width="110" height="110" class="f-surface"/>
+          <path d="M6 100 C30 100 40 99 46 80 C50 40 54 18 56 18 C58 18 62 40 66 80 C72 99 82 100 104 100" fill="none" stroke="var(--accent)" stroke-width="2.2"/>
+          <path d="M6 100 C25 40 40 20 56 18 C72 20 87 40 104 100" fill="none" stroke="var(--warn)" stroke-width="1.3" stroke-dasharray="4 3"/>
+          <text x="55" y="132" class="t" text-anchor="middle">④ LSF × 창</text>
+          <text x="55" y="152" class="t-dim" text-anchor="middle">중앙 차분 미분,</text>
+          <text x="55" y="170" class="t-dim" text-anchor="middle">해밍 창</text>
+        </g>
+        <path d="M534 75 H548" class="s-acc" marker-end="url(#iq-arr2)"/>
+        <g transform="translate(554,20)">
+          <rect width="110" height="110" class="f-surface"/>
+          <path d="M6 12 C30 14 50 40 66 70 C78 90 92 100 104 104" fill="none" stroke="var(--accent)" stroke-width="2.2"/>
+          <line x1="58" y1="6" x2="58" y2="106" stroke="var(--text-dim)" stroke-dasharray="3 3"/>
+          <text x="62" y="20" class="t-mono">Nyq</text>
+          <text x="55" y="132" class="t" text-anchor="middle">⑤ |DFT| = MTF</text>
+          <text x="55" y="152" class="t-dim" text-anchor="middle">DC로 정규화,</text>
+          <text x="55" y="170" class="t-dim" text-anchor="middle">미분 보정</text>
+        </g>
+        <text x="340" y="218" class="t-dim" text-anchor="middle">에지가 행마다 1/N 픽셀씩 옮겨 가므로 N행이 모이면 픽셀 간격보다 촘촘한 단면이 된다 (5°면 N = 1/tan 5° ≈ 11.4행)</text>
+      </svg>
+      <figcaption><b>그림 20-3.</b> e-SFR 알고리즘(ISO 12233 계열). 에지를 기울이면 행마다 에지와 픽셀 중심의 상대 위치가 달라져, 모든 픽셀을 에지까지의 거리로 투영하면 서브픽셀 간격으로 샘플링된 에지 단면을 얻는다.</figcaption>
+    </figure>
+
+    <p>단계를 식으로 쓰면 다음과 같다. 각 행 \(y\)에서 가로 미분의 무게중심으로 에지 위치 \(x_c(y)\)를 구하고 직선 \(x_c = a + by\)로 맞춘다. 모든 픽셀을 에지 법선 방향 거리 \(u\)로 투영해 폭 \(\Delta = 1/4\) 픽셀인 칸에 평균하면 에지 확산 함수(ESF)가 되고, 미분하면 선 확산 함수(LSF)가 된다.</p>
+    <div class="formula">$$u = \big(x - a - b\,y\big)\cos\theta,\qquad \text{LSF}_k = \frac{\text{ESF}_{k+1}-\text{ESF}_{k-1}}{2},\qquad \text{MTF}(f) = \frac{\left|\sum_k w_k\,\text{LSF}_k\,e^{-i2\pi f k\Delta}\right|}{\left|\sum_k w_k\,\text{LSF}_k\right|}\cdot\frac{1}{\operatorname{sinc}(2f\Delta)\,\operatorname{sinc}(f\Delta)}$$
+      <div class="where">\(\theta = \arctan b\): 에지 기울기, \(w_k\): LSF 중심에 맞춘 해밍 창, \(f\): cycles/pixel. 마지막 항은 중앙 차분 미분과 1/4 픽셀 칸 평균이 고주파를 깎는 몫을 되돌리는 보정이다(나이퀴스트에서 각각 0.90, 0.97). 고전적 구현(sfrmat3 계열)은 직선 맞춤과 해밍 창을 쓰고, ISO 12233:2023은 렌즈 왜곡으로 휜 에지를 위한 고차 다항식 맞춤, Tukey 창, 각도에 따른 샘플링 보정을 넣었다.</div>
+    </div>
+    <p>결과는 보통 한두 숫자로 요약한다. <span class="term">MTF50</span>은 MTF가 0.5로 떨어지는 주파수로, 사람이 느끼는 선명도와 상관이 좋다. MTF10(또는 MTF20)은 해상 한계에 가깝다. 단위는 cycles/pixel(cy/px), 영상 높이당 선쌍(lp/ph), 또는 선폭 수(LW/PH = 2 × lp/ph)로 쓴다. 센서 크기가 다른 카메라를 비교할 때는 lp/ph가, 같은 픽셀의 처리 차이를 볼 때는 cy/px가 편하다.</p>
+    <p><b>계산 예.</b> 가우시안 렌즈 블러 σ = 0.6 픽셀의 MTF는 \(e^{-2\pi^2\sigma^2 f^2}\)이고 0.5가 되는 곳은 \(f = \sqrt{\ln 2/2}/(\pi\sigma) = 0.312\) cy/px다. 100 % 개구 픽셀의 sinc를 곱하면 MTF50은 <b>0.281</b> cy/px로 내려간다. 세로 3000 픽셀 영상이면 0.281 × 3000 = 843 lp/ph(1686 LW/PH), 피치 1.0 µm이면 281 lp/mm다. 아래 시뮬레이터의 기본값이 바로 이 조건이다.</p>
+
+    <div class="sim" id="sim-sfr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>슬랜티드 에지 SFR 측정: 합성 에지 → ESF → LSF → MTF</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-sfr"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>에지 각도 <output id="sf-ang-out"></output></span><input type="range" id="sf-ang" min="0" max="30" value="5" step="0.5"></label>
+          <label class="ctrl"><span>렌즈 블러 σ <output id="sf-sig-out"></output></span><input type="range" id="sf-sig" min="0.2" max="2" value="0.6" step="0.05"></label>
+          <label class="ctrl"><span>노이즈 σ <output id="sf-noise-out"></output></span><input type="range" id="sf-noise" min="0" max="5" value="0.5" step="0.1"></label>
+          <label class="ctrl"><span>샤프닝 양 <output id="sf-amt-out"></output></span><input type="range" id="sf-amt" min="0" max="2" value="0" step="0.05"></label>
+          <label class="ctrl"><span>ROI 행 수 <output id="sf-rows-out"></output></span><input type="range" id="sf-rows" min="16" max="128" value="96" step="8"></label>
+          <div class="ctrl"><span>에지 대비</span><div class="seg" id="sf-con"><button data-value="4" class="on">4 : 1</button><button data-value="40">40 : 1</button></div></div>
+          <div class="ctrl"><span>출력과 분석</span><div class="seg" id="sf-gam"><button data-value="lin" class="on">선형</button><button data-value="dec">감마→선형화</button><button data-value="raw">감마 그대로</button></div></div>
+          <button class="btn" id="sf-run">노이즈 다시 뽑기</button>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>측정</span><span><i style="background:var(--text-dim)"></i>참값(해석해)</span><span><i style="background:var(--warn)"></i>에지 중심·맞춤</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">추정 각도</span><span class="v" id="o-sf-ang">—</span></div>
+        <div class="stat"><span class="k">MTF50 측정 / 참</span><span class="v" id="o-sf-50">—</span></div>
+        <div class="stat"><span class="k">MTF@Nyq 측정 / 참</span><span class="v" id="o-sf-ny">—</span></div>
+        <div class="stat"><span class="k">MTF 오차 RMS (0~Nyq)</span><span class="v" id="o-sf-rms">—</span></div>
+        <div class="stat"><span class="k">빈 칸 / 전체</span><span class="v" id="o-sf-emp">—</span></div>
+        <div class="stat"><span class="k">오버슈트</span><span class="v" id="o-sf-ov">—</span></div>
+      </div>
+      <div class="sim-note">숨은 참값: 가우시안 렌즈 PSF와 100 % 개구 정사각 픽셀(법선 방향 투영은 사다리꼴), 선택 시 언샤프 마스크의 이산 전달 함수를 곱한 해석 MTF. 영상은 이 연속 에지를 픽셀 면적으로 적분해 만들고 노이즈(백색 기준 전체 스케일의 %)를 더한다. 분석은 위 다섯 단계를 그대로 수행한다. 해볼 것: 기본값(5°, 노이즈 0.5 %)에서 MTF50 측정값이 참값 0.281과 0.003 이내로 맞는다(나이퀴스트 MTF는 노이즈를 다시 뽑을 때마다 ±0.01 정도 흔들린다). 각도를 0°로 하면 모든 행의 위상이 같아 빈 칸이 170개 넘게 생기고 MTF50이 약 0.245로 틀어진다. tan θ = 1/2에 가까운 26.5°에서도 위상이 몇 가지뿐이라 빈 칸이 다시 수십 개 생긴다. ROI를 16행으로 줄이면 맞춤과 평균이 나빠져 MTF50이 약 0.265로 낮게 나온다. 40 : 1 대비에서 "감마 그대로" 분석하면 MTF50이 약 0.26으로 낮게 나오고, "감마→선형화"를 고르면 다시 0.28이 된다. 반드시 OECF로 선형화한 뒤 분석해야 하는 이유다.</div>
+    </div>
+
+    <div class="callout tip">
+      <strong>측정 조건이 숫자를 바꾼다</strong>
+      <p>에지 각도는 약 5°가 무난하다. 0°나 45°, tan θ = 1/2처럼 위상이 몇 가지뿐인 각도는 피한다. 같은 위상이 한 바퀴 돌 만큼(5°면 약 12행) 이상의 행을 ROI에 담고, 에지가 렌즈 왜곡으로 휘면 ROI를 짧게 하거나 고차 맞춤을 쓴다. ISO 12233은 노이즈와 클리핑, ISP 비선형을 줄이려고 4 : 1의 낮은 대비 에지를 쓴다. 측정값은 화면 위치(중앙/코너)와 방향(사지털/탄젠셜)마다 다르므로, MTF50 하나를 말할 때는 어디서 쟀는지를 함께 적어야 한다.</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== 3 -->
+  <section id="sharpen">
+    <h2>샤프닝과 과처리: MTF가 1을 넘을 때</h2>
+    <p>ISP의 샤프닝(<a href="isp.html#nr-sharp">10장</a>)은 언샤프 마스크처럼 고주파를 키운다. 선형 USM의 전달 함수는 \(H(f) = 1 + a\,[1 - G_\sigma(f)]\)이므로 중간 주파수에서 MTF가 1을 넘을 수 있다. 공간 영역에서 이것은 에지 양옆의 <b>오버슈트·언더슈트</b>, 즉 밝은 테두리와 어두운 테두리인 <span class="term">헤일로</span>다.</p>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 240" role="img" aria-label="샤프닝 전후의 에지 단면과 MTF">
+        <g transform="translate(20,20)">
+          <line x1="0" y1="170" x2="300" y2="170" class="s-axis"/><line x1="0" y1="0" x2="0" y2="170" class="s-axis"/>
+          <path d="M0 140 C90 140 120 138 140 110 C150 90 155 60 165 45 C180 30 210 30 300 30" fill="none" stroke="var(--text-dim)" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <path d="M0 140 C80 140 105 140 118 152 C128 160 135 150 145 100 C153 55 158 18 170 12 C185 6 195 22 215 30 C240 32 270 30 300 30" fill="none" stroke="var(--accent)" stroke-width="2.4"/>
+          <line x1="150" y1="30" x2="300" y2="30" stroke="var(--ok)" stroke-dasharray="3 3"/>
+          <line x1="0" y1="140" x2="150" y2="140" stroke="var(--ok)" stroke-dasharray="3 3"/>
+          <path d="M172 12 V30" stroke="var(--bad)" stroke-width="1.5"/><text x="180" y="18" class="t-mono" style="fill:var(--bad)">오버슈트</text>
+          <path d="M122 140 V158" stroke="var(--bad)" stroke-width="1.5"/><text x="20" y="162" class="t-mono" style="fill:var(--bad)">언더슈트</text>
+          <text x="150" y="200" class="t-dim" text-anchor="middle">에지 단면: 점선 샤프닝 전, 실선 후</text>
+        </g>
+        <g transform="translate(370,20)">
+          <line x1="0" y1="170" x2="290" y2="170" class="s-axis"/><line x1="0" y1="0" x2="0" y2="170" class="s-axis"/>
+          <line x1="0" y1="70" x2="290" y2="70" stroke="var(--text-faint)" stroke-dasharray="2 3"/>
+          <text x="294" y="74" class="t-mono">1</text>
+          <path d="M0 70 C60 72 120 100 170 130 C210 150 250 160 290 164" fill="none" stroke="var(--text-dim)" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <path d="M0 70 C50 58 90 40 130 48 C170 60 210 110 250 145 C265 155 280 160 290 162" fill="none" stroke="var(--accent)" stroke-width="2.4"/>
+          <line x1="232" y1="0" x2="232" y2="170" stroke="var(--text-dim)" stroke-dasharray="3 3"/><text x="236" y="14" class="t-mono">Nyq</text>
+          <line x1="0" y1="105" x2="290" y2="105" stroke="var(--warn)" stroke-dasharray="3 3"/>
+          <circle cx="176" cy="105" r="4" fill="var(--warn)"/><text x="182" y="100" class="t-mono" style="fill:var(--warn)">MTF50</text>
+          <circle cx="207" cy="122" r="4" fill="var(--accent-2)"/><text x="160" y="140" class="t-mono" style="fill:var(--accent-2)">MTF50P</text>
+          <text x="145" y="200" class="t-dim" text-anchor="middle">MTF: 정점이 1을 넘는다</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 20-4.</b> 샤프닝의 두 얼굴. 에지 단면에는 오버슈트와 언더슈트(헤일로)가 생기고, MTF는 중간 주파수에서 1을 넘는다. MTF50은 0.5에서, MTF50P는 정점의 절반에서 읽으므로 과한 샤프닝일수록 두 값이 벌어진다.</figcaption>
+    </figure>
+
+    <p>MTF50은 샤프닝으로 얼마든지 올릴 수 있다. 그래서 MTF50 하나로 카메라를 비교하면 과하게 샤프닝한 쪽이 이긴다. 이것을 보완하는 방법이 몇 가지 있다.</p>
+    <ul>
+      <li><b>MTF50P</b>: MTF가 <em>정점</em>의 50 %로 떨어지는 주파수. 정점이 1.3이면 0.65에서 읽으므로 과장된 이득을 일부 걸러 낸다.</li>
+      <li><b>오버슈트 비율</b>: 에지 단면에서 위쪽 평탄부를 넘어선 높이 ÷ 에지 높이. 헤일로의 크기를 직접 본다.</li>
+      <li><b>노이즈와 함께 보기</b>: 선형 샤프닝의 노이즈 이득은 커널 \(h\)의 \(\sqrt{\sum h^2}\)이다. MTF가 오른 만큼 평탄부 노이즈도 커진다.</li>
+      <li><b>대비 의존성 확인</b>: 코어링(작은 차이 무시)이나 내용 적응형 샤프닝은 비선형이라, 대비가 다른 에지에서 MTF가 다르게 나온다. 선형 시스템이라는 MTF의 전제가 깨진 것이다.</li>
+    </ul>
+
+    <div class="sim" id="sim-usm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>샤프닝 과처리: 헤일로, MTF &gt; 1, 대비에 따라 달라지는 MTF</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-usm"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>샤프닝 양 a <output id="us-amt-out"></output></span><input type="range" id="us-amt" min="0" max="3" value="1.2" step="0.05"></label>
+          <label class="ctrl"><span>반경 σ <output id="us-rad-out"></output></span><input type="range" id="us-rad" min="0.5" max="3" value="1" step="0.1"></label>
+          <label class="ctrl"><span>코어링 임계 <output id="us-thr-out"></output></span><input type="range" id="us-thr" min="0" max="0.1" value="0" step="0.005"></label>
+          <label class="ctrl"><span>렌즈 블러 σ <output id="us-sig-out"></output></span><input type="range" id="us-sig" min="0.3" max="1.5" value="0.7" step="0.05"></label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--text-dim)"></i>샤프닝 전</span><span><i style="background:var(--accent)"></i>4 : 1 에지</span><span><i style="background:var(--warn)"></i>40 : 1 에지</span><span><i style="background:var(--accent-2)"></i>선형 예측</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">오버슈트 (4 : 1)</span><span class="v" id="o-us-ov">—</span></div>
+        <div class="stat"><span class="k">MTF 정점</span><span class="v" id="o-us-pk">—</span></div>
+        <div class="stat"><span class="k">MTF50 / MTF50P</span><span class="v" id="o-us-50">—</span></div>
+        <div class="stat"><span class="k">MTF50 (40 : 1)</span><span class="v" id="o-us-hc">—</span></div>
+        <div class="stat"><span class="k">노이즈 이득</span><span class="v" id="o-us-ng">—</span></div>
+      </div>
+      <div class="sim-note">같은 카메라(가우시안 렌즈 + 100 % 개구 픽셀 + USM)로 4 : 1(0.2→0.8)과 40 : 1(0.02→0.8) 슬랜티드 에지를 찍어 앞의 SFR 알고리즘으로 잰다. 출력은 0~1로 클리핑된다. 왼쪽 위는 4 : 1 에지 영상(샤프닝 전/후), 왼쪽 아래는 측정 ESF. 해볼 것: 기본값(a = 1.2, 반경 1)에서 MTF 정점은 약 1.1, 오버슈트는 약 9 %, 노이즈 이득은 약 2배다. 반경을 2로 키우면 같은 양으로도 정점이 1.5를 넘고 오버슈트가 약 24 %로 커진다. a = 3, 임계 0.06이면 4 : 1 에지의 MTF50은 약 0.29로 떨어지지만 40 : 1 에지는 약 0.37로 남는다. 같은 카메라의 MTF가 차트 대비에 따라 달라지는 것이다. 임계가 0이어도 40 : 1 에지는 언더슈트가 0 아래에서 잘려 MTF50이 선형 예측보다 높게 나온다(클리핑도 비선형이다). 노이즈 이득은 임계 0일 때의 선형 값이다.</div>
+    </div>
+
+    <div class="callout warn">
+      <strong>숫자를 맞추는 샤프닝</strong>
+      <p>MTF50이나 MTF 면적만 보는 평가는 샤프닝으로 쉽게 "개선"된다. 텍스처가 없는 평탄부에서는 노이즈가 커지고, 고대비 에지에는 헤일로가 생기며, 하늘의 가는 전선 옆에는 밝은 테두리가 붙는다. 그래서 화질 평가에서는 MTF50과 MTF50P, 오버슈트, 노이즈, 텍스처 지표를 함께 보고, 차트 촬영만으로 내린 결론은 실제 장면 사진으로 다시 확인한다.</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== 4 -->
+  <section id="texture">
+    <h2>텍스처: 데드리브스와 사라지는 디테일</h2>
+    <p>NR은 "에지는 지키고 평탄부는 매끈하게"를 목표로 한다. 바이래터럴 같은 에지 보존 필터(<a href="isp.html#nr-sharp">10장</a>)는 밝기 차가 큰 에지는 남기고, 차가 작은 곳은 평균해 버린다. 문제는 잔디, 머리카락, 천의 결 같은 <b>저대비 텍스처</b>도 밝기 차가 작다는 점이다. 고대비 슬랜티드 에지는 그대로이니 에지 MTF는 좋게 나오지만, 사진 속 질감은 수채화처럼 뭉개진다. 이것을 재는 차트가 <span class="term">데드리브스</span><span class="en">(Dead Leaves)</span> 차트다.</p>
+    <p>데드리브스 패턴은 크기가 다른 원판(낙엽)을 무작위 위치·밝기로 겹쳐 쌓은 것이다. 반지름 분포를 \(p(r) \propto r^{-3}\)으로 하면 패턴이 확대·축소에 대해 통계적으로 같아(척도 불변), 파워 스펙트럼이 대략 \(1/f^{2}\)를 따르는 자연 영상과 닮는다. 원판 경계는 에지이고 내부는 다양한 크기의 텍스처여서, 카메라의 비선형 처리가 실제 장면에서처럼 동작한다.</p>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 230" role="img" aria-label="고대비 에지와 저대비 텍스처에 대한 에지 보존 NR의 차이">
+        <g transform="translate(20,20)">
+          <rect width="130" height="130" fill="var(--surface)" stroke="var(--border)"/>
+          <rect x="65" width="65" height="130" fill="var(--text)" opacity="0.78"/>
+          <text x="65" y="152" class="t" text-anchor="middle">고대비 에지</text>
+          <text x="65" y="172" class="t-dim" text-anchor="middle">NR 후에도 보존</text>
+        </g>
+        <g transform="translate(180,20)">
+          <rect width="130" height="130" fill="var(--text-dim)" opacity="0.45"/>
+          <circle cx="30" cy="35" r="26" fill="var(--text-dim)" opacity="0.6"/><circle cx="85" cy="30" r="18" fill="var(--text-faint)" opacity="0.7"/><circle cx="100" cy="90" r="30" fill="var(--text-dim)" opacity="0.35"/><circle cx="45" cy="95" r="20" fill="var(--text-faint)" opacity="0.9"/><circle cx="68" cy="65" r="10" fill="var(--text-dim)" opacity="0.8"/><circle cx="15" cy="120" r="12" fill="var(--text-dim)" opacity="0.6"/>
+          <text x="65" y="152" class="t" text-anchor="middle">저대비 텍스처</text>
+          <text x="65" y="172" class="t-dim" text-anchor="middle">원판 사이 차이가 작다</text>
+        </g>
+        <g transform="translate(340,20)">
+          <rect width="130" height="130" fill="var(--text-dim)" opacity="0.5"/>
+          <circle cx="30" cy="35" r="26" fill="var(--text-dim)" opacity="0.2"/><circle cx="100" cy="90" r="30" fill="var(--text-dim)" opacity="0.12"/>
+          <text x="65" y="152" class="t" text-anchor="middle">NR 후 텍스처</text>
+          <text x="65" y="172" class="t-dim" text-anchor="middle">작은 차이는 평균됨</text>
+        </g>
+        <g transform="translate(500,20)">
+          <line x1="0" y1="130" x2="160" y2="130" class="s-axis"/><line x1="0" y1="0" x2="0" y2="130" class="s-axis"/>
+          <path d="M5 10 L155 120" stroke="var(--text-dim)" stroke-width="1.6"/>
+          <path d="M5 10 L70 58 C100 85 120 112 155 128" stroke="var(--accent)" stroke-width="2.2" fill="none"/>
+          <text x="80" y="20" class="t-mono">log PSD</text>
+          <text x="96" y="80" class="t-mono" style="fill:var(--text-dim)">원본 ∝ 1/f²</text>
+          <text x="80" y="152" class="t" text-anchor="middle">log f →</text>
+          <text x="80" y="172" class="t-dim" text-anchor="middle">텍스처 MTF = √(PSD 비)</text>
+        </g>
+        <text x="340" y="215" class="t-dim" text-anchor="middle">같은 카메라라도 에지 MTF는 높고 텍스처 MTF는 낮을 수 있다 — 비선형 NR은 입력 대비에 따라 다르게 동작한다</text>
+      </svg>
+      <figcaption><b>그림 20-5.</b> 텍스처 손실의 원리. 에지 보존 NR은 고대비 에지를 지키지만 저대비 텍스처를 평탄하게 만든다. 데드리브스 차트는 원본 스펙트럼을 알고 있으므로, 출력 스펙트럼과의 비로 텍스처 MTF를 구한다.</figcaption>
+    </figure>
+
+    <p>원본 차트의 파워 스펙트럼 밀도(PSD)를 \(S_R(f)\), 카메라 출력의 PSD를 \(S_O(f)\)라 하면, 가장 단순한 텍스처 MTF는 그 비의 제곱근이다. 출력에는 노이즈도 들어 있으므로 평탄한 패치에서 잰 노이즈 PSD \(S_N\)를 빼야 한다(Cao 등). 그런데 비선형 NR은 평탄부와 텍스처 위에서 노이즈를 다르게 지우므로 이 뺄셈도 정확하지 않다. 원본 영상 \(R\)을 알고 있으면 교차 스펙트럼을 쓸 수 있다. 원본과 상관된 성분만 남고, 원본과 무관한 노이즈는 평균에서 사라진다(Kirk 등의 "intrinsic" 방식).</p>
+    <div class="formula">$$\text{MTF}_{\text{tex}}(f) = \sqrt{\frac{S_O(f) - S_N(f)}{S_R(f)}},\qquad \text{MTF}_{\text{int}}(f) = \frac{\left|\langle \hat O(\mathbf f)\,\hat R^{*}(\mathbf f)\rangle_{|\mathbf f| = f}\right|}{\langle |\hat R(\mathbf f)|^2\rangle_{|\mathbf f| = f}}$$
+      <div class="where">\(\hat O, \hat R\): 출력과 원본의 2차원 푸리에 변환(창을 곱한 뒤), \(\langle\cdot\rangle_{|\mathbf f| = f}\): 반지름 \(f\)인 고리 위의 평균. 교차 방식은 출력이 원본과 정확히 정렬되어 있어야 하므로, 실제 측정에서는 기준 마크로 차트 영상을 원본에 맞춰 변형한 뒤 계산한다.</div>
+    </div>
+
+    <div class="sim" id="sim-dl">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>데드리브스 텍스처 손실: 같은 파이프라인의 에지 MTF와 텍스처 MTF</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-dl"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>노이즈 저감</span><div class="seg" id="dl-nr"><button data-value="none">없음</button><button data-value="gauss">가우시안</button><button data-value="bil" class="on">에지 보존</button></div></div>
+          <label class="ctrl"><span>NR 강도 <output id="dl-str-out"></output></span><input type="range" id="dl-str" min="0" max="1" value="1" step="0.05"></label>
+          <label class="ctrl"><span>노이즈 σ <output id="dl-noise-out"></output></span><input type="range" id="dl-noise" min="0" max="4" value="3" step="0.1"></label>
+          <label class="ctrl"><span>샤프닝 양 <output id="dl-amt-out"></output></span><input type="range" id="dl-amt" min="0" max="1.5" value="0" step="0.05"></label>
+          <label class="ctrl"><span>렌즈 블러 σ <output id="dl-sig-out"></output></span><input type="range" id="dl-sig" min="0.4" max="1.2" value="0.7" step="0.05"></label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--text-dim)"></i>참값(렌즈)</span><span><i style="background:var(--warn)"></i>에지 SFR</span><span><i style="background:var(--accent)"></i>텍스처(교차)</span><span><i style="background:var(--accent-2)"></i>텍스처(PSD, 노이즈 보정)</span><span><i style="background:var(--bad)"></i>보정 없음</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">참값 MTF50</span><span class="v" id="o-dl-t">—</span></div>
+        <div class="stat"><span class="k">에지 MTF50</span><span class="v" id="o-dl-e">—</span></div>
+        <div class="stat"><span class="k">텍스처 MTF50 (교차)</span><span class="v" id="o-dl-x">—</span></div>
+        <div class="stat"><span class="k">텍스처 / 에지</span><span class="v" id="o-dl-r">—</span></div>
+        <div class="stat"><span class="k">평탄부 노이즈 σ</span><span class="v" id="o-dl-n">—</span></div>
+      </div>
+      <div class="sim-note">원본은 128 × 128 데드리브스(반지름 1.2~50 픽셀, \(r^{-3}\) 분포, 밝기 0.25~0.75)이고, 카메라는 가우시안 렌즈(전달 함수를 정확히 아는 FFT 곱) → 노이즈 → NR → 샤프닝이다. 같은 카메라로 4 : 1 슬랜티드 에지와 평탄 패치를 함께 찍는다. 해볼 것: 기본값(에지 보존 NR 강도 1, 노이즈 3 %)에서 에지 MTF50은 렌즈 참값보다도 높게(약 0.37) 나오지만 텍스처 MTF50은 그 절반 아래(약 0.17)다. 가우시안 NR로 바꾸면 선형이라 에지와 텍스처 곡선이 겹친다. 샤프닝을 더하면 노이즈 보정 PSD 방식은 노이즈를 덜 빼 텍스처 MTF를 과대평가하고, 교차 방식은 덜 흔들린다.</div>
+    </div>
+  </section>
+
+  <!-- =============================================================== 5 -->
+  <section id="noise">
+    <h2>노이즈: SNR에서 시각 노이즈로</h2>
+    <p>카메라 노이즈의 가장 기본적인 측정은 회색 패치의 평균과 표준편차, 즉 SNR이다. 7장의 센서 SNR(<a href="noise.html">7장</a>)과 다른 점은 ISP를 지난 영상에서 잰다는 것이다. WB 게인과 CCM은 채널을 섞으며 노이즈를 키우고(<a href="isp.html#ccm">10장</a>), 감마와 톤 커브는 밝기마다 노이즈를 다르게 늘리거나 줄이며, NR은 노이즈를 지우는 대신 그 모양을 바꾼다. 그래서 카메라 노이즈는 보통 <b>휘도</b>(Y 또는 L*) 노이즈와 <b>색</b>(a*, b* 또는 크로마) 노이즈로 나눠 본다. 색 노이즈는 같은 σ라도 휘도 노이즈보다 덜 보이지만, NR이 남긴 큰 얼룩으로 뭉치면 눈에 잘 띈다.</p>
+    <p>표준편차 하나는 노이즈의 <b>크기</b>만 말하고 <b>모양</b>은 말하지 않는다. 같은 σ라도 픽셀 하나 크기의 고운 노이즈와 NR이 남긴 몇 픽셀짜리 얼룩 노이즈는 전혀 다르게 보인다. 사람 눈의 민감도가 공간 주파수마다 다르기 때문이다. 이것을 나타내는 것이 <span class="term">대비 감도 함수</span><span class="en">(Contrast Sensitivity Function, CSF)</span>다. 휘도 CSF는 약 4 cycles/degree에서 가장 높고 양쪽으로 떨어지는 띠통과형이며, 색 CSF는 저주파에서 가장 높고 휘도보다 일찍 떨어지는 저역 통과형이다.</p>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 250" role="img" aria-label="휘도와 색의 대비 감도 함수와 보는 조건별 나이퀴스트">
+        <line x1="60" y1="190" x2="480" y2="190" class="s-axis"/><line x1="60" y1="20" x2="60" y2="190" class="s-axis"/>
+        <g class="t-mono" text-anchor="middle"><text x="96" y="208">0.5</text><text x="144" y="208">1</text><text x="193" y="208">2</text><text x="257" y="208">5</text><text x="306" y="208">10</text><text x="354" y="208">20</text><text x="419" y="208">50</text><text x="467" y="208">100</text></g>
+        <text x="270" y="232" class="t-dim" text-anchor="middle">공간 주파수 (cycles/degree, 로그)</text>
+        <text x="50" y="34" class="t-mono" text-anchor="end">1</text><text x="50" y="194" class="t-mono" text-anchor="end">0</text>
+        <path d="M60 148 L67 145 L74 141 L81 138 L88 134 L95 129 L102 125 L109 121 L116 116 L123 111 L130 105 L137 100 L144 94 L151 88 L158 82 L165 76 L172 70 L179 64 L186 59 L193 53 L200 48 L207 43 L214 39 L221 35 L228 32 L235 31 L242 30 L249 31 L256 33 L263 37 L270 42 L277 48 L284 57 L291 66 L298 77 L305 88 L312 101 L319 113 L326 125 L333 137 L340 148 L347 158 L354 166 L361 173 L368 178 L375 182 L382 185 L389 187 L396 189 L403 189 L410 190 L417 190 L424 190 L431 190 L438 190 L445 190 L452 190 L459 190 L466 190 L473 190 L480 190" fill="none" stroke="var(--accent)" stroke-width="2.6"/>
+        <path d="M60 42 L67 43 L74 44 L81 45 L88 47 L95 49 L102 50 L109 52 L116 55 L123 57 L130 59 L137 62 L144 65 L151 68 L158 72 L165 76 L172 80 L179 84 L186 88 L193 93 L200 98 L207 103 L214 109 L221 114 L228 120 L235 126 L242 131 L249 137 L256 143 L263 149 L270 154 L277 160 L284 164 L291 169 L298 173 L305 176 L312 180 L319 182 L326 184 L333 186 L340 187 L347 188 L354 189 L361 189 L368 190 L375 190 L382 190 L389 190 L396 190 L403 190 L410 190 L417 190 L424 190 L431 190 L438 190 L445 190 L452 190 L459 190 L466 190 L473 190 L480 190" fill="none" stroke="var(--bad)" stroke-width="2" stroke-dasharray="6 3"/>
+        <path d="M60 45 L67 47 L74 48 L81 50 L88 52 L95 54 L102 57 L109 59 L116 62 L123 65 L130 68 L137 71 L144 75 L151 79 L158 83 L165 88 L172 92 L179 97 L186 102 L193 108 L200 113 L207 119 L214 125 L221 131 L228 137 L235 142 L242 148 L249 154 L256 159 L263 164 L270 168 L277 172 L284 176 L291 179 L298 182 L305 184 L312 186 L319 187 L326 188 L333 189 L340 189 L347 190 L354 190 L361 190 L368 190 L375 190 L382 190 L389 190 L396 190 L403 190 L410 190 L417 190 L424 190 L431 190 L438 190 L445 190 L452 190 L459 190 L466 190 L473 190 L480 190" fill="none" stroke="var(--warn)" stroke-width="2" stroke-dasharray="2 3"/>
+        <g stroke="var(--text-dim)" stroke-dasharray="3 4"><line x1="344" y1="40" x2="344" y2="190"/><line x1="412" y1="40" x2="412" y2="190"/></g>
+        <text x="340" y="52" class="t-mono" text-anchor="end">100 % 확대</text><text x="416" y="52" class="t-mono">A3 인쇄</text>
+        <text x="476" y="84" class="t-mono" text-anchor="end">폰 화면 → 113</text>
+        <g transform="translate(500,40)">
+          <line x1="0" y1="6" x2="26" y2="6" stroke="var(--accent)" stroke-width="2.6"/><text x="34" y="11" class="t">휘도 (L*)</text>
+          <line x1="0" y1="34" x2="26" y2="34" stroke="var(--bad)" stroke-width="2" stroke-dasharray="6 3"/><text x="34" y="39" class="t">적–녹 (a*)</text>
+          <line x1="0" y1="62" x2="26" y2="62" stroke="var(--warn)" stroke-width="2" stroke-dasharray="2 3"/><text x="34" y="67" class="t">황–청 (b*)</text>
+          <text x="0" y="104" class="t-dim">세로선: 3000 px 영상의</text>
+          <text x="0" y="124" class="t-dim">나이퀴스트가 놓이는 곳</text>
+          <text x="0" y="150" class="t-dim">100 %: 0.25 mm/px, 50 cm</text>
+          <text x="0" y="170" class="t-dim">A3: 높이 29.7 cm, 50 cm</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 20-6.</b> 대비 감도 함수(정점 1로 정규화). 휘도는 CPIQ 어큐턴스와 같은 \(a\nu^{c}e^{-b\nu}\) 형태(정점 약 4 cpd)이고, 색 두 곡선은 이 장의 시뮬레이터가 쓰는 단순한 저역형 모델이다. 같은 영상을 크게, 가까이 볼수록 픽셀 단위 주파수가 눈의 민감한 대역으로 내려온다.</figcaption>
+    </figure>
+
+    <p>영상의 공간 주파수(cycles/pixel)를 눈의 주파수(cycles/degree)로 옮기는 것은 보는 조건이다. 세로 \(N\) 픽셀 영상을 높이 \(H\)로 출력해 거리 \(d\)에서 보면</p>
+    <div class="formula">$$\nu_{\text{cpd}} = f_{\text{cy/px}}\cdot\frac{N}{\theta_H},\qquad \theta_H = 2\arctan\frac{H}{2d}\ \ (\text{도}),\qquad \sigma'^2 = \sum_{\mathbf f} S_N(\mathbf f)\,\text{CSF}^2\!\big(\nu_{\text{cpd}}(\mathbf f)\big)$$
+      <div class="where">\(S_N\): 노이즈 파워 스펙트럼(합하면 분산), \(\sigma'\): CSF로 거른 "보이는" 노이즈. ISO 15739와 CPIQ의 시각 노이즈는 이렇게 거른 L*, a*, b* 노이즈의 분산(과 공분산)에 실험으로 정한 가중치를 곱해 \(\log_{10}(1 + \cdots)\) 꼴로 합친다. 가중치와 색 공간은 판마다 바뀌어 왔으므로(예: ISO 15739의 시각 노이즈는 CIELUV에서 계산해 왔고, 최신 개정 과정에서 CIELAB으로 옮기는 안이 논의되었다) 값을 인용할 때는 판을 확인해야 한다.</div>
+    </div>
+    <p><b>계산 예.</b> 세로 3000 픽셀 영상을 A3(높이 29.7 cm)로 뽑아 50 cm에서 보면 \(\theta_H = 2\arctan(14.85/50) = 33.1°\), 도당 90.6 픽셀이므로 나이퀴스트(0.5 cy/px)는 45 cpd다. 눈이 가장 민감한 4 cpd는 0.044 cy/px, 즉 주기 약 23 픽셀짜리 무늬에 해당한다. 같은 영상을 폰 화면(높이 7 cm, 30 cm)으로 보면 나이퀴스트가 113 cpd로 올라가 픽셀 단위 노이즈는 거의 보이지 않고, 몇 픽셀 크기의 얼룩만 남는다.</p>
+
+    <div class="sim" id="sim-vn">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>시각 노이즈: SNR이 같아도, 더 좋아도 더 지저분할 수 있다</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-vn"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>B 휘도 노이즈 σ(L*) <output id="vn-sb-out"></output></span><input type="range" id="vn-sb" min="0.5" max="3" value="1.2" step="0.05"></label>
+          <label class="ctrl"><span>B 노이즈 입자 크기 <output id="vn-gb-out"></output></span><input type="range" id="vn-gb" min="0" max="3" value="1.5" step="0.1"></label>
+          <label class="ctrl"><span>B 색 노이즈 비 <output id="vn-cb-out"></output></span><input type="range" id="vn-cb" min="0" max="1.5" value="0.8" step="0.05"></label>
+          <div class="ctrl"><span>보는 조건</span><div class="seg" id="vn-view"><button data-value="34.4" class="on">100 % 확대</button><button data-value="90.6">A3 인쇄</button><button data-value="225">폰 화면</button></div></div>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--text-dim)"></i>카메라 A</span><span><i style="background:var(--accent)"></i>카메라 B</span><span><i style="background:var(--warn)"></i>휘도 CSF²</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">σ(L*) A / B</span><span class="v" id="o-vn-s">—</span></div>
+        <div class="stat"><span class="k">보이는 σ′(L*) A / B</span><span class="v" id="o-vn-w">—</span></div>
+        <div class="stat"><span class="k">시각 노이즈 지수 A / B</span><span class="v" id="o-vn-v">—</span></div>
+        <div class="stat"><span class="k">판정</span><span class="v" id="o-vn-j">—</span></div>
+      </div>
+      <div class="sim-note">카메라 A는 σ(L*) = 2의 고운 백색 노이즈(색 노이즈 비 0.5), 카메라 B는 NR이 노이즈를 줄이며 가우시안 입자로 뭉친 상태를 흉내 낸다. 128 × 128 평탄 패치(L* = 55)를 FFT로 거른 뒤 시각 노이즈 지수 log₁₀(1 + σ′²(L*) + 0.5 σ′²(a*) + 0.25 σ′²(b*))를 계산한다. 이 가중치는 휘도 > 적–녹 > 황–청 순서만 반영한 설명용 값이다. 오른쪽 그래프는 L* 노이즈의 반지름 평균 스펙트럼(cpd 축)과 CSF²다. 해볼 것: 기본값에서 B는 σ가 1.2로 A(2.0)보다 SNR이 좋은데도 100 % 확대에서 지수가 비슷하고(0.33 대 0.36), 폰 화면에서는 A가 0.01, B가 0.10으로 B가 훨씬 지저분하다. 입자 크기를 0으로 하면 B가 모든 조건에서 낫다.</div>
+    </div>
+  </section>
+
+  <!-- =============================================================== 6 -->
+  <section id="color">
+    <h2>색 정확도: 컬러체커와 ΔE</h2>
+    <p>색 정확도는 반사율을 아는 패치를 찍어, 카메라 출력의 색이 기준 색과 얼마나 다른지로 잰다. 가장 널리 쓰는 차트가 24색 <span class="term">컬러체커</span><span class="en">(ColorChecker Classic)</span>다. 피부, 하늘, 잎 같은 기억색과 원색, 6단계 회색으로 이루어져 있다. 차이는 지각적으로 균일하도록 만든 <span class="term">CIELAB</span> 공간에서 거리로 잰다.</p>
+    <div class="formula">$$L^* = 116\,f\!\left(\tfrac{Y}{Y_n}\right) - 16,\quad a^* = 500\left[f\!\left(\tfrac{X}{X_n}\right) - f\!\left(\tfrac{Y}{Y_n}\right)\right],\quad b^* = 200\left[f\!\left(\tfrac{Y}{Y_n}\right) - f\!\left(\tfrac{Z}{Z_n}\right)\right],\qquad \Delta E^*_{ab} = \sqrt{\Delta L^{*2} + \Delta a^{*2} + \Delta b^{*2}}$$
+      <div class="where">\(f(t) = t^{1/3}\)(아주 어두운 곳은 선형 구간), \((X_n, Y_n, Z_n)\): 기준 흰색. 채도 \(C^* = \sqrt{a^{*2}+b^{*2}}\), 색상각 \(h = \operatorname{atan2}(b^*, a^*)\).</div>
+    </div>
+    <p>CIELAB도 완전히 균일하지는 않다. 채도가 높은 색에서는 같은 ΔE*ab라도 차이가 덜 보이고, 파랑 영역에서는 색상 방향의 민감도가 기울어져 있으며, 회색 근처는 작은 차이도 잘 보인다. <span class="term">CIEDE2000</span>(ΔE00)은 밝기·채도·색상 차를 각각의 가중 함수 \(S_L, S_C, S_H\)로 나누고, 파랑 영역의 회전 항 \(R_T\)를 더해 이를 보정한다.</p>
+    <div class="formula">$$\Delta E_{00} = \sqrt{\left(\frac{\Delta L'}{S_L}\right)^2 + \left(\frac{\Delta C'}{S_C}\right)^2 + \left(\frac{\Delta H'}{S_H}\right)^2 + R_T\,\frac{\Delta C'}{S_C}\,\frac{\Delta H'}{S_H}},\qquad S_C = 1 + 0.045\,\bar C',\quad S_H = 1 + 0.015\,\bar C'\,T$$
+      <div class="where">\(a' = (1+G)\,a^*\)로 회색 근처의 a* 축을 늘린 뒤(\(G\)는 평균 채도가 작을수록 0.5에 가까움) \(C', h'\)를 다시 계산한다. \(S_L\)은 L* = 50에서 1이고 밝거나 어두울수록 커지며, \(T\)는 색상각에 따른 보정, \(R_T\)는 색상각 275° 부근(파랑)에서만 커지는 회전 항이다. 세부 식은 Sharma, Wu, Dalal(2005)의 구현 노트와 시험 데이터를 따른다.</div>
+    </div>
+    <p><b>계산 예.</b> Sharma 시험 쌍의 첫 줄, Lab (50, 2.6772, −79.7751)과 (50, 0, −82.7485)는 진한 파랑 두 개다. ΔE*ab = \(\sqrt{2.677^2 + 2.973^2}\) = 4.00이지만 ΔE00 = <b>2.04</b>로 절반이다. 높은 채도에서 \(S_C\)와 \(S_H\)가 커지고 회전 항이 색상·채도 차의 일부를 상쇄하기 때문이다. 같은 4.00이라도 회색 근처라면 ΔE00도 3 이상으로 남는다. 나란히 놓고 볼 때 ΔE00 1 전후가 겨우 알아챌 정도의 차이로 흔히 쓰인다.</p>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 340" role="img" aria-label="a*b* 평면에서 ΔE*ab 원과 ΔE00 등거리선 비교">
+        <line x1="40" y1="170" x2="340" y2="170" class="s-axis"/><line x1="190" y1="20" x2="190" y2="320" class="s-axis"/>
+        <text x="336" y="186" class="t-mono" text-anchor="end">+a*</text><text x="196" y="32" class="t-mono">+b*</text>
+        <text x="44" y="186" class="t-mono">−a*</text><text x="196" y="316" class="t-mono">−b*</text>
+<path d="M198.6 170.0 L198.6 169.3 L198.5 168.5 L198.4 167.7 L198.3 167.0 L198.2 166.2 L198.0 165.4 L197.8 164.6 L197.5 163.7 L197.1 162.9 L196.7 162.0 L196.2 161.1 L195.6 160.3 L194.9 159.5 L194.1 158.7 L193.2 158.1 L192.2 157.6 L191.1 157.2 L190.0 157.1 L188.9 157.2 L187.8 157.6 L186.8 158.1 L185.9 158.7 L185.1 159.5 L184.4 160.3 L183.8 161.1 L183.3 162.0 L182.9 162.9 L182.5 163.7 L182.2 164.6 L182.0 165.4 L181.8 166.2 L181.7 167.0 L181.6 167.7 L181.5 168.5 L181.4 169.3 L181.4 170.0 L181.4 170.7 L181.5 171.5 L181.6 172.3 L181.7 173.0 L181.8 173.8 L182.0 174.6 L182.2 175.4 L182.5 176.3 L182.9 177.1 L183.3 178.0 L183.8 178.9 L184.4 179.7 L185.1 180.5 L185.9 181.3 L186.8 181.9 L187.8 182.4 L188.9 182.8 L190.0 182.9 L191.1 182.8 L192.2 182.4 L193.2 181.9 L194.1 181.3 L194.9 180.5 L195.6 179.7 L196.2 178.9 L196.7 178.0 L197.1 177.1 L197.5 176.3 L197.8 175.4 L198.0 174.6 L198.2 173.8 L198.3 173.0 L198.4 172.3 L198.5 171.5 L198.6 170.7 Z" class="de-e"/>
+<circle cx="190" cy="170" r="12" class="de-c"/>
+<circle cx="190" cy="170" r="1.8" fill="var(--text)"/>
+<path d="M312.4 120.0 L314.5 117.0 L316.5 113.6 L317.9 109.8 L318.7 105.9 L318.4 102.1 L316.9 98.7 L314.4 95.9 L311.0 94.0 L307.1 92.9 L303.1 92.5 L299.2 92.6 L295.5 93.1 L292.2 93.7 L289.3 94.5 L286.6 95.4 L284.2 96.3 L282.0 97.1 L280.0 98.0 L278.2 98.9 L276.4 99.8 L274.8 100.6 L273.3 101.5 L271.8 102.4 L270.3 103.3 L268.9 104.2 L267.5 105.1 L266.1 106.1 L264.7 107.2 L263.3 108.3 L261.8 109.5 L260.3 110.8 L258.7 112.2 L257.0 113.9 L255.3 115.7 L253.6 117.7 L251.7 120.0 L250.0 122.6 L248.3 125.6 L247.0 128.8 L246.3 132.3 L246.5 135.6 L247.7 138.6 L250.0 141.0 L252.9 142.7 L256.2 143.8 L259.6 144.3 L262.9 144.4 L266.0 144.3 L268.8 144.0 L271.4 143.6 L273.8 143.1 L276.0 142.6 L278.1 142.0 L280.0 141.4 L281.8 140.8 L283.6 140.1 L285.2 139.5 L286.8 138.8 L288.4 138.1 L290.0 137.3 L291.6 136.5 L293.2 135.7 L294.8 134.8 L296.4 133.8 L298.1 132.7 L299.9 131.5 L301.8 130.1 L303.7 128.6 L305.8 126.9 L307.9 124.9 L310.1 122.6 Z" class="de-e"/>
+<circle cx="280" cy="120" r="12" class="de-c"/>
+<circle cx="280" cy="120" r="1.8" fill="var(--text)"/>
+<path d="M224.8 46.0 L225.0 44.3 L225.2 42.6 L225.5 40.8 L225.6 38.9 L225.8 36.8 L225.9 34.5 L226.0 32.0 L226.0 29.2 L225.9 26.1 L225.7 22.5 L225.2 18.5 L224.4 14.1 L223.1 9.4 L221.0 4.7 L218.2 0.6 L214.5 -2.1 L210.3 -2.7 L206.0 -1.2 L202.1 2.0 L198.9 5.9 L196.4 10.2 L194.4 14.2 L192.9 18.0 L191.8 21.4 L190.9 24.4 L190.2 27.1 L189.6 29.6 L189.1 31.8 L188.7 33.9 L188.4 35.9 L188.2 37.7 L187.9 39.4 L187.7 41.1 L187.6 42.7 L187.4 44.4 L187.3 46.0 L187.2 47.6 L187.2 49.3 L187.1 51.1 L187.1 52.9 L187.1 54.8 L187.2 56.9 L187.3 59.1 L187.5 61.5 L187.8 64.2 L188.2 67.2 L188.8 70.6 L189.7 74.2 L191.0 78.2 L192.9 82.1 L195.4 85.6 L198.6 88.0 L202.3 88.5 L206.0 87.2 L209.4 84.4 L212.2 81.1 L214.5 77.6 L216.3 74.2 L217.7 71.1 L218.9 68.3 L219.9 65.8 L220.6 63.5 L221.3 61.3 L221.9 59.3 L222.4 57.5 L222.9 55.7 L223.3 54.0 L223.6 52.4 L223.9 50.8 L224.2 49.2 L224.5 47.6 Z" class="de-e"/>
+<circle cx="206" cy="46" r="12" class="de-c"/>
+<circle cx="206" cy="46" r="1.8" fill="var(--text)"/>
+<path d="M131.8 110.0 L130.4 107.3 L129.0 104.9 L127.5 102.6 L126.0 100.5 L124.5 98.6 L122.9 96.8 L121.3 95.1 L119.7 93.5 L118.1 91.9 L116.4 90.5 L114.6 89.1 L112.9 87.7 L111.0 86.4 L109.0 85.1 L107.0 83.9 L104.8 82.7 L102.5 81.5 L100.0 80.4 L97.3 79.4 L94.4 78.5 L91.3 77.7 L88.0 77.1 L84.5 76.7 L80.8 76.7 L77.0 77.1 L73.2 78.1 L69.7 79.7 L66.5 81.9 L63.8 84.7 L61.9 88.0 L60.7 91.7 L60.2 95.5 L60.5 99.4 L61.3 103.2 L62.6 106.7 L64.2 110.0 L65.9 113.0 L67.8 115.7 L69.8 118.1 L71.8 120.3 L73.8 122.2 L75.7 124.0 L77.7 125.6 L79.6 127.1 L81.5 128.5 L83.5 129.7 L85.4 130.9 L87.3 132.0 L89.3 133.0 L91.3 134.0 L93.3 134.9 L95.5 135.7 L97.7 136.5 L100.0 137.2 L102.4 137.9 L105.0 138.4 L107.7 138.9 L110.6 139.2 L113.7 139.3 L116.8 139.2 L120.1 138.7 L123.4 137.8 L126.5 136.5 L129.3 134.6 L131.6 132.1 L133.3 129.2 L134.3 126.0 L134.7 122.6 L134.5 119.2 L133.9 116.0 L132.9 112.9 Z" class="de-e"/>
+<circle cx="100" cy="110" r="12" class="de-c"/>
+<circle cx="100" cy="110" r="1.8" fill="var(--text)"/>
+<path d="M238.0 280.0 L237.1 278.5 L236.2 277.1 L235.4 275.9 L234.7 274.7 L233.9 273.5 L233.2 272.4 L232.4 271.3 L231.7 270.2 L230.9 269.1 L230.1 267.9 L229.3 266.7 L228.4 265.4 L227.4 264.1 L226.3 262.6 L225.1 260.9 L223.7 259.0 L222.0 256.7 L220.0 254.1 L217.5 250.9 L214.2 246.8 L209.7 241.6 L203.6 234.9 L195.1 226.6 L185.1 219.6 L180.1 223.0 L181.9 234.6 L185.7 245.7 L189.3 254.2 L192.1 260.5 L194.4 265.2 L196.3 268.9 L197.8 271.9 L199.1 274.4 L200.2 276.5 L201.3 278.4 L202.2 280.0 L203.0 281.5 L203.8 282.9 L204.5 284.2 L205.2 285.4 L205.9 286.6 L206.6 287.7 L207.3 288.9 L208.0 290.1 L208.7 291.3 L209.5 292.5 L210.3 293.9 L211.2 295.3 L212.2 296.8 L213.3 298.5 L214.5 300.5 L216.0 302.7 L217.8 305.4 L220.0 308.6 L222.8 312.5 L226.6 317.5 L231.8 323.9 L238.8 331.6 L247.5 339.1 L255.9 342.2 L260.0 337.2 L259.3 326.8 L256.1 316.1 L252.6 307.4 L249.5 300.7 L246.9 295.5 L244.8 291.6 L243.0 288.4 L241.5 285.8 L240.2 283.6 L239.1 281.7 Z" class="de-e"/>
+<circle cx="220" cy="280" r="12" class="de-c"/>
+<circle cx="220" cy="280" r="1.8" fill="var(--text)"/>
+<path d="M147.6 226.0 L148.4 223.5 L149.0 220.9 L149.5 218.1 L149.6 215.2 L149.4 212.3 L148.8 209.4 L147.6 206.7 L145.9 204.2 L143.8 202.2 L141.2 200.7 L138.4 199.7 L135.5 199.1 L132.6 198.9 L129.8 199.0 L127.2 199.3 L124.6 199.8 L122.2 200.4 L120.0 201.1 L117.9 201.8 L115.9 202.6 L114.0 203.5 L112.1 204.4 L110.4 205.4 L108.7 206.4 L107.0 207.5 L105.4 208.6 L103.8 209.8 L102.2 211.0 L100.6 212.4 L99.0 213.9 L97.4 215.4 L95.8 217.2 L94.2 219.1 L92.6 221.2 L91.1 223.5 L89.6 226.0 L88.3 228.8 L87.2 231.8 L86.5 235.0 L86.1 238.3 L86.2 241.7 L87.0 245.1 L88.3 248.2 L90.3 250.9 L92.7 253.3 L95.6 255.0 L98.8 256.3 L102.1 257.1 L105.4 257.3 L108.6 257.3 L111.7 256.9 L114.7 256.2 L117.4 255.4 L120.0 254.4 L122.4 253.3 L124.6 252.2 L126.7 251.0 L128.6 249.7 L130.4 248.4 L132.2 247.1 L133.8 245.7 L135.3 244.3 L136.8 242.8 L138.2 241.3 L139.6 239.7 L140.9 238.0 L142.1 236.3 L143.3 234.5 L144.5 232.6 L145.6 230.5 L146.6 228.3 Z" class="de-e"/>
+<circle cx="120" cy="226" r="12" class="de-c"/>
+<circle cx="120" cy="226" r="1.8" fill="var(--text)"/>
+<path d="M326.7 240.0 L324.7 237.0 L322.5 234.3 L320.4 231.9 L318.3 229.7 L316.3 227.8 L314.3 226.0 L312.3 224.4 L310.3 222.9 L308.4 221.6 L306.5 220.3 L304.6 219.1 L302.7 218.0 L300.8 216.9 L298.8 215.9 L296.7 215.0 L294.6 214.0 L292.3 213.1 L290.0 212.3 L287.5 211.5 L284.9 210.8 L282.0 210.2 L279.0 209.7 L275.7 209.3 L272.2 209.2 L268.6 209.4 L264.9 210.1 L261.3 211.3 L258.1 213.2 L255.5 215.8 L253.8 219.1 L253.0 222.7 L253.0 226.5 L253.8 230.3 L255.1 233.8 L256.6 237.1 L258.3 240.0 L260.0 242.6 L261.7 245.0 L263.4 247.1 L265.1 249.1 L266.8 250.8 L268.4 252.5 L270.0 254.0 L271.6 255.5 L273.2 256.8 L274.8 258.2 L276.4 259.5 L278.0 260.7 L279.8 261.9 L281.6 263.2 L283.5 264.4 L285.5 265.6 L287.7 266.8 L290.0 268.0 L292.6 269.3 L295.4 270.5 L298.5 271.6 L301.9 272.7 L305.7 273.6 L309.7 274.2 L314.1 274.4 L318.5 273.9 L322.7 272.7 L326.5 270.6 L329.5 267.7 L331.5 264.0 L332.5 259.8 L332.5 255.5 L331.8 251.2 L330.4 247.1 L328.7 243.4 Z" class="de-e"/>
+<circle cx="290" cy="240" r="12" class="de-c"/>
+<circle cx="290" cy="240" r="1.8" fill="var(--text)"/>
+<path d="M279.6 160.0 L279.9 157.4 L279.7 154.8 L279.0 152.2 L277.8 149.9 L276.1 147.8 L274.2 146.0 L272.1 144.6 L269.8 143.4 L267.5 142.5 L265.3 141.8 L263.1 141.3 L260.9 141.0 L258.9 140.9 L257.0 140.8 L255.1 140.9 L253.4 141.0 L251.6 141.2 L250.0 141.4 L248.4 141.7 L246.8 142.1 L245.3 142.5 L243.8 142.9 L242.3 143.4 L240.8 144.0 L239.3 144.7 L237.8 145.4 L236.3 146.3 L234.7 147.2 L233.2 148.2 L231.7 149.4 L230.2 150.8 L228.8 152.3 L227.5 154.0 L226.4 155.8 L225.4 157.9 L224.8 160.0 L224.6 162.2 L224.7 164.5 L225.3 166.6 L226.2 168.7 L227.4 170.5 L228.9 172.2 L230.5 173.6 L232.3 174.9 L234.1 175.9 L235.9 176.7 L237.8 177.4 L239.6 178.0 L241.4 178.4 L243.2 178.7 L244.9 179.0 L246.6 179.1 L248.3 179.2 L250.0 179.2 L251.7 179.1 L253.3 178.9 L255.0 178.7 L256.7 178.4 L258.4 178.0 L260.1 177.5 L261.9 177.0 L263.7 176.3 L265.5 175.5 L267.3 174.6 L269.2 173.5 L271.1 172.2 L272.9 170.7 L274.7 169.0 L276.3 167.0 L277.7 164.9 L278.9 162.5 Z" class="de-e"/>
+<circle cx="250" cy="160" r="12" class="de-c"/>
+<circle cx="250" cy="160" r="1.8" fill="var(--text)"/>
+<path d="M194.9 110.0 L194.8 108.7 L194.7 107.4 L194.6 106.1 L194.4 104.7 L194.2 103.4 L194.0 101.9 L193.7 100.4 L193.3 98.9 L192.8 97.2 L192.2 95.4 L191.5 93.6 L190.6 91.6 L189.5 89.5 L188.2 87.4 L186.6 85.3 L184.7 83.3 L182.5 81.6 L180.0 80.4 L177.4 79.8 L174.7 80.0 L172.2 80.9 L170.0 82.4 L168.1 84.5 L166.6 86.8 L165.5 89.2 L164.6 91.7 L164.1 94.1 L163.7 96.3 L163.5 98.4 L163.4 100.4 L163.3 102.2 L163.4 104.0 L163.5 105.6 L163.7 107.1 L163.9 108.6 L164.1 110.0 L164.4 111.4 L164.7 112.7 L165.1 114.0 L165.4 115.3 L165.8 116.6 L166.3 117.9 L166.8 119.3 L167.3 120.6 L168.0 122.0 L168.7 123.5 L169.5 125.0 L170.4 126.6 L171.5 128.2 L172.8 129.9 L174.2 131.6 L175.9 133.2 L177.8 134.7 L180.0 135.8 L182.3 136.3 L184.6 136.2 L186.8 135.3 L188.6 133.7 L190.2 131.8 L191.4 129.7 L192.3 127.6 L193.1 125.6 L193.6 123.6 L194.0 121.8 L194.3 120.0 L194.6 118.4 L194.7 116.9 L194.8 115.4 L194.9 114.0 L194.9 112.6 L194.9 111.3 Z" class="de-e"/>
+<circle cx="180" cy="110" r="12" class="de-c"/>
+<circle cx="180" cy="110" r="1.8" fill="var(--text)"/>
+        <g transform="translate(380,40)">
+          <path d="M0 8 h28" stroke="var(--accent)" stroke-width="2"/><text x="36" y="13" class="t">ΔE00 = 3 등거리선</text>
+          <path d="M0 38 h28" stroke="var(--warn)" stroke-width="1.5" stroke-dasharray="4 3"/><text x="36" y="43" class="t">ΔE*ab = 3 원</text>
+          <text x="0" y="80" class="t-dim">L* = 50 평면, 등거리선은 2배 확대</text>
+          <text x="0" y="112" class="t">· 회색 근처: ΔE00가 더 엄격</text>
+          <text x="0" y="138" class="t-dim">   (같은 ΔE00 영역이 원보다 작음)</text>
+          <text x="0" y="168" class="t">· 높은 채도: 채도 방향으로 길쭉</text>
+          <text x="0" y="194" class="t-dim">   (채도 차에 둔감, S_C가 큼)</text>
+          <text x="0" y="224" class="t">· 파랑(아래): 축이 기울어짐</text>
+          <text x="0" y="250" class="t-dim">   (회전 항 R_T)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 20-7.</b> a*b* 평면(L* = 50)의 아홉 기준색 주위에서 ΔE00 = 3이 되는 경계(파란 면, 이 장의 CIEDE2000 구현으로 계산해 2배 확대)와 ΔE*ab = 3인 원(주황 점선). CIELAB 거리가 같아도 지각 차이는 색마다 다르다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-de">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>ΔE 탐색기: ΔE*ab와 ΔE00가 갈라지는 곳</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-de"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>기준색</span><div class="seg" id="de-base"><button data-value="gray">회색</button><button data-value="blue" class="on">진한 파랑</button><button data-value="skin">피부색</button><button data-value="yellow">노랑</button></div></div>
+          <label class="ctrl"><span>ΔL* <output id="de-dl-out"></output></span><input type="range" id="de-dl" min="-5" max="5" value="0" step="0.1"></label>
+          <label class="ctrl"><span>ΔC* (채도) <output id="de-dc-out"></output></span><input type="range" id="de-dc" min="-10" max="10" value="0" step="0.1"></label>
+          <label class="ctrl"><span>Δh (색상각) <output id="de-dh-out"></output></span><input type="range" id="de-dh" min="-15" max="15" value="3" step="0.5"></label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>ΔE00 = 1, 2, 3</span><span><i style="background:var(--warn)"></i>ΔE*ab = 1, 2, 3</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">ΔE*ab</span><span class="v" id="o-de-ab">—</span></div>
+        <div class="stat"><span class="k">ΔE94</span><span class="v" id="o-de-94">—</span></div>
+        <div class="stat"><span class="k">ΔE00</span><span class="v" id="o-de-00">—</span></div>
+        <div class="stat"><span class="k">ΔE00 성분 L / C / H / R</span><span class="v" id="o-de-t">—</span></div>
+        <div class="stat"><span class="k">Sharma 34쌍 최대 오차</span><span class="v" id="o-de-v">—</span></div>
+      </div>
+      <div class="sim-note">기준색 Lab: 회색 (50, 0, 0), 진한 파랑 (35, 15, −55), 피부색 (65, 18, 18), 노랑 (85, 2, 80). 두 번째 색은 기준색의 LCh에 ΔL·ΔC·Δh를 더해 만든다. 오른쪽은 기준색 주위 a*b* 평면에서 ΔE00 = 1, 2, 3 등거리선(72방향 이분 탐색)과 ΔE*ab 원이다. 마지막 칸은 페이지를 열 때 이 구현을 Sharma 외(2005)의 34개 시험 쌍과 비교한 최대 오차로, 표의 반올림(소수 넷째 자리) 수준이다. 해볼 것: 회색에서 Δh는 거의 의미가 없고(채도 0), ΔC* 2만 줘도 ΔE00이 ΔE*ab보다 크다. 진한 파랑에서 ΔC* 10은 ΔE*ab 10이지만 ΔE00은 약 2.6이다. 노랑에서는 ΔL* 차이가 \(S_L\) 때문에 덜 무겁다.</div>
+    </div>
+
+    <h3>카메라의 색: 분광에서 ΔE까지</h3>
+    <p>카메라 색 측정은 사슬 전체를 시험한다. 조명 분광 \(S(\lambda)\) × 패치 반사율 \(r(\lambda)\) × 센서 감도 \(Q_c(\lambda)\)가 카메라 RGB를 만들고, WB와 CCM(<a href="isp.html#ccm">10장</a>)이 이것을 sRGB로 옮기며, 결과를 기준 Lab과 비교한다. 사람의 눈(CIE 등색 함수)과 센서 감도가 서로의 선형 결합이 아니면(<a href="color.html">4장</a>의 루터–아이브스 조건), 3 × 3 행렬로는 모든 패치를 동시에 맞출 수 없어 잔차가 남는다. 이 잔차는 조명에 따라 달라진다. 한 조명에서 같은 색으로 보이던 두 물체가 다른 조명에서 달라지는 <span class="term">조건 등색</span><span class="en">(Metamerism)</span> 실패가 카메라에서도 일어나는 것이다. 그래서 색 정확도에는 반드시 조명과 CCM의 교정 조건을 붙여야 한다.</p>
+    <ul>
+      <li><b>평균·최대 ΔE00</b>: 24패치(또는 18개 유채색) 평균이 대표값이다. 최대값과 어느 패치인지가 함께 나와야 피부색 같은 중요한 색의 오차를 놓치지 않는다.</li>
+      <li><b>채도</b>: 출력 채도 ÷ 기준 채도(%). 사진은 일부러 채도를 높여(110~120 %) 만드는 경우가 많아, ΔE가 큰 것이 결함이 아니라 의도된 "선호 색"일 수 있다. 그래서 채도 차를 보정한 ΔE를 따로 보기도 한다.</li>
+      <li><b>WB 오차</b>: 회색 패치들의 Δ(a*, b*). 장면 조명 추정(AWB)의 품질을 나타내며, 다른 모든 색에 그대로 퍼진다.</li>
+    </ul>
+
+    <div class="sim" id="sim-cc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>컬러체커 측정: 분광 → 카메라 RGB → WB·CCM → ΔE00</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-cc"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>촬영 조명</span><div class="seg" id="cc-ill"><button data-value="d65" class="on">주광 6500 K</button><button data-value="a">텅스텐</button><button data-value="f11">삼파장 형광</button><button data-value="led">백색 LED</button></div></div>
+          <div class="ctrl"><span>센서 분광 감도</span><div class="seg" id="cc-sen"><button data-value="std" class="on">표준</button><button data-value="wide">넓은 필터</button><button data-value="li">루터–아이브스</button></div></div>
+          <div class="ctrl"><span>CCM</span><div class="seg" id="cc-ccm"><button data-value="d65" class="on">D65에서 교정</button><button data-value="same">촬영 조명에서</button><button data-value="none">없음</button></div></div>
+          <div class="ctrl"><span>화이트 밸런스</span><div class="seg" id="cc-wb"><button data-value="white" class="on">흰 패치</button><button data-value="gray">회색 세계</button><button data-value="d65">D65 고정</button></div></div>
+          <label class="check"><input type="checkbox" id="cc-row"> CCM 행 합 = 1 (흰색 보존)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">평균 ΔE00</span><span class="v" id="o-cc-m">—</span></div>
+        <div class="stat"><span class="k">최대 ΔE00</span><span class="v" id="o-cc-x">—</span></div>
+        <div class="stat"><span class="k">평균 ΔE*ab</span><span class="v" id="o-cc-ab">—</span></div>
+        <div class="stat"><span class="k">WB 오차 (회색 Δab)</span><span class="v" id="o-cc-wb">—</span></div>
+        <div class="stat"><span class="k">채도</span><span class="v" id="o-cc-s">—</span></div>
+        <div class="stat"><span class="k">CCM 노이즈 이득</span><span class="v" id="o-cc-g">—</span></div>
+      </div>
+      <div class="sim-note">패치 분광 반사율은 실측값이 아니라 공개된 컬러체커 Lab(D50) 값을 재현하도록 400~700 nm에서 만든 매끈한 근사 스펙트럼이다. 주광과 텅스텐은 6504 K·2856 K 흑체, 형광등은 436·545·611 nm 선 스펙트럼, LED는 청색 칩 + 형광체로 근사했다. 기준색 = 사람(CIE 1931 등색 함수의 해석 근사)이 촬영 조명에서 본 색을 브래드퍼드 변환으로 D65에 순응시킨 값. CCM은 \(M = TC^{\top}(CC^{\top})^{-1}\) 최소자승 해다. 패치 위쪽 절반이 기준, 아래쪽이 카메라 출력이고 숫자는 ΔE00, 오른쪽 위는 a*b* 평면의 기준(○)→출력(●) 화살표, 아래는 조명 분광과 센서 감도. 해볼 것: 표준 센서·주광에서 평균 ΔE00은 약 1.0(최대는 블루 패치)이다. 텅스텐으로 바꾸면 D65 CCM으로는 약 2.6, 촬영 조명에서 다시 교정하면 약 1.0이다. 형광등에서는 1.9 대 0.5로, 스펙트럼이 뾰족할수록 교정 조명의 영향이 크다. 루터–아이브스 센서는 주광에서 0.1 수준이지만 노이즈 이득이 약 2.8로 가장 크다. CCM 없이 WB만 하면 채도가 약 61 %로 떨어지고, 텅스텐에서 D65 고정 WB를 쓰면 평균 ΔE00이 20을 넘는다.</div>
+    </div>
+
+    <div class="callout deep">
+      <strong>왜 루터–아이브스 센서도 텅스텐에서 틀리나</strong>
+      <p>시뮬레이터에서 루터–아이브스 센서에 "D65에서 교정" CCM을 쓰고 텅스텐으로 바꾸면 평균 ΔE00이 3 이상으로 커진다. 센서는 사람 눈과 선형 관계라 정보는 잃지 않았지만, 카메라 RGB 공간에서 채널별 게인을 곱하는 WB(폰 크리스 순응)가 기준값을 만들 때 쓴 브래드퍼드 공간의 순응과 다르기 때문이다. "촬영 조명에서" 교정하면 행렬이 이 차이까지 흡수해 오차가 0.03 수준으로 사라진다. 실제 카메라가 2~3개 조명에서 CCM을 교정해 두고 추정 색온도로 보간하는 이유다(<a href="isp.html#wb">10장</a>).</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== 7 -->
+  <section id="tone">
+    <h2>톤 재현과 다이내믹 레인지</h2>
+    <p>장면 휘도가 출력 코드로 바뀌는 관계를 <span class="term">OECF</span><span class="en">(Opto-Electronic Conversion Function)</span>라 한다(ISO 14524). 농도를 아는 회색 스텝을 찍어 각 스텝의 평균 출력을 장면 휘도(로그)에 대해 그린 곡선이다. OECF는 그 자체로 톤 재현(감마, 하이라이트 롤오프, 암부 들림)을 보여 주고, 다른 측정의 전처리로도 쓰인다. 2절의 SFR처럼 선형성을 전제하는 분석은 OECF의 역함수로 출력을 먼저 선형화해야 한다.</p>
+    <p>카메라의 다이내믹 레인지는 투과형 스텝 차트(뒤에서 비추는 농도 스텝, 보통 농도 범위 3~4 이상)로 잰다. 핵심은 SNR을 <b>장면 기준</b>으로 정의하는 것이다. 톤 커브가 암부를 끌어올리면 출력 코드의 평균과 표준편차가 함께 커지므로, 출력에서 잰 평균 ÷ 표준편차는 톤 커브에 따라 달라진다. ISO 15739는 OECF의 기울기로 이를 보정한 증분 SNR을 쓴다.</p>
+    <div class="formula">$$\text{SNR}_{\text{inc}}(L) = \frac{L\,\dfrac{dY}{dL}}{\sigma_Y},\qquad \text{DR} = \log_2\frac{L_{\text{sat}}}{L_{\text{min}}(\text{SNR}_{\text{inc}} = s)}\ \ [\text{스톱}]$$
+      <div class="where">\(Y\): 출력, \(\sigma_Y\): 패치 안 표준편차, \(L\): 장면 휘도. 신호와 노이즈가 같은 기울기로 늘거나 줄므로 톤 커브의 영향이 지워진다. ISO 15739는 SNR = 1을 하한으로 쓰고, 실무에서는 더 엄격한 SNR 10·4·2 기준의 DR도 함께 보고한다.</div>
+    </div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 250" role="img" aria-label="OECF와 증분 SNR로 다이내믹 레인지를 정하는 방법">
+        <g transform="translate(40,20)">
+          <line x1="0" y1="180" x2="270" y2="180" class="s-axis"/><line x1="0" y1="0" x2="0" y2="180" class="s-axis"/>
+          <path d="M0 176 C40 175 70 170 100 150 C140 115 180 60 220 28 C235 18 250 14 270 13" fill="none" stroke="var(--accent)" stroke-width="2.4"/>
+          <path d="M0 150 C40 149 70 146 100 136 C140 110 180 58 220 28" fill="none" stroke="var(--bad)" stroke-width="1.8" stroke-dasharray="5 3"/>
+          <text x="10" y="142" class="t-mono" style="fill:var(--bad)">플레어로 들린 암부</text>
+          <text x="135" y="210" class="t-dim" text-anchor="middle">log 장면 휘도 →</text>
+          <text x="-8" y="10" class="t-mono" text-anchor="end">Y</text>
+          <text x="135" y="-4" class="t" text-anchor="middle">OECF</text>
+        </g>
+        <g transform="translate(370,20)">
+          <line x1="0" y1="180" x2="270" y2="180" class="s-axis"/><line x1="0" y1="0" x2="0" y2="180" class="s-axis"/>
+          <line x1="0" y1="140" x2="270" y2="140" stroke="var(--warn)" stroke-dasharray="4 3"/><text x="266" y="134" class="t-mono" text-anchor="end" style="fill:var(--warn)">SNR = 1</text>
+          <line x1="0" y1="70" x2="270" y2="70" stroke="var(--ok)" stroke-dasharray="4 3"/><text x="266" y="64" class="t-mono" text-anchor="end" style="fill:var(--ok)">SNR = 10</text>
+          <path d="M10 175 C40 150 60 140 90 120 C140 85 190 50 250 20" fill="none" stroke="var(--accent)" stroke-width="2.4"/>
+          <line x1="250" y1="0" x2="250" y2="180" stroke="var(--bad)" stroke-width="1.4"/><text x="246" y="194" class="t-mono" text-anchor="end">포화</text>
+          <path d="M58 150 V186" stroke="var(--warn)"/><path d="M155 76 V186" stroke="var(--ok)"/>
+          <path d="M58 168 H250" stroke="var(--warn)" stroke-width="1.6"/><text x="150" y="164" class="t-mono" text-anchor="middle" style="fill:var(--warn)">DR (SNR 1)</text>
+          <path d="M155 100 H250" stroke="var(--ok)" stroke-width="1.6"/><text x="202" y="96" class="t-mono" text-anchor="middle" style="fill:var(--ok)">DR (SNR 10)</text>
+          <text x="135" y="210" class="t-dim" text-anchor="middle">log 장면 휘도 →</text>
+          <text x="135" y="-4" class="t" text-anchor="middle">증분 SNR (로그)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 20-8.</b> OECF와 다이내믹 레인지. 증분 SNR이 기준값까지 떨어지는 휘도와 포화 휘도의 비가 DR이다. 베일링 글레어가 암부에 일정한 빛을 더하면 OECF가 눕고(기울기 감소) 증분 SNR이 무너져, 센서가 가진 것보다 DR이 작게 측정된다.</figcaption>
+    </figure>
+
+    <p><b>계산 예.</b> 풀웰 10,000 e⁻, 읽기 노이즈 2 e⁻인 센서의 SNR = 1 신호는 \(S/\sqrt{S + 4} = 1\)에서 S = 2.56 e⁻이므로 센서 DR은 \(\log_2(10000/2.56)\) = 11.9 스톱(71.8 dB)이다. 여기에 렌즈가 가장 밝은 스텝의 1 %만큼 미광을 고르게 더하면, 어두운 스텝은 신호 몇 e⁻ 위에 미광 90 e⁻가 얹혀 그 샷 노이즈에 묻힌다. 아래 시뮬레이터로 재면 DR(SNR 1)이 약 9.8 스톱으로 2스톱 넘게 줄어든다. 카메라 DR 측정에 작은 차트와 검은 주변 마스크를 쓰는 이유다.</p>
+
+    <div class="sim" id="sim-oecf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>투과형 스텝 차트로 OECF와 다이내믹 레인지 재기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-oecf"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>읽기 노이즈 <output id="oe-rn-out"></output></span><input type="range" id="oe-rn" min="0.5" max="8" value="2" step="0.1"></label>
+          <label class="ctrl"><span>베일링 글레어 <output id="oe-fl-out"></output></span><input type="range" id="oe-fl" min="0" max="3" value="0.3" step="0.05"></label>
+          <label class="ctrl"><span>차트 농도 범위 <output id="oe-dm-out"></output></span><input type="range" id="oe-dm" min="2" max="6" value="4" step="0.1"></label>
+          <label class="ctrl"><span>노출 <output id="oe-ev-out"></output></span><input type="range" id="oe-ev" min="-2" max="1" value="0" step="0.1"></label>
+          <div class="ctrl"><span>톤 커브</span><div class="seg" id="oe-tone"><button data-value="raw">RAW 선형</button><button data-value="srgb" class="on">sRGB 감마</button><button data-value="tm">로그 톤 매핑</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">DR (SNR 1)</span><span class="v" id="o-oe-1">—</span></div>
+        <div class="stat"><span class="k">DR (SNR 10)</span><span class="v" id="o-oe-10">—</span></div>
+        <div class="stat"><span class="k">센서 모델 DR</span><span class="v" id="o-oe-t">—</span></div>
+        <div class="stat"><span class="k">차트 범위</span><span class="v" id="o-oe-c">—</span></div>
+        <div class="stat"><span class="k">가장 어두운 스텝 코드</span><span class="v" id="o-oe-k">—</span></div>
+      </div>
+      <div class="sim-note">센서 가정: 풀웰 10,000 e⁻, 노출 0이면 가장 밝은 스텝이 풀웰의 90 %. 스텝 20개(농도 등간격), 스텝마다 400픽셀에 샷·읽기 노이즈를 넣고 12-bit RAW 또는 8-bit 톤 커브로 출력한다. 베일링 글레어는 가장 밝은 스텝 휘도의 %만큼을 모든 스텝에 더하는 단순 모델이다. 위: 스텝 차트 영상, 왼쪽: OECF, 오른쪽: 스텝별 증분 SNR과 기준선. 해볼 것: 글레어 0이면 DR(SNR 1)이 센서 모델의 11.9 스톱과 맞는다. 톤 커브를 바꿔도 DR은 거의 그대로다(증분 SNR이 톤 커브를 지운다). 기본값 0.3 %에서 약 10.8, 1 %에서 9.8, 3 %에서 8.9 스톱으로 준다. 농도 범위를 3으로 줄이면 차트가 10스톱밖에 없어 "차트 한계"가 뜬다. 노출을 +1로 올리면 밝은 스텝 두 개가 포화된다.</div>
+    </div>
+  </section>
+
+  <!-- =============================================================== 8 -->
+  <section id="geometry">
+    <h2>기하·광학 결함: 왜곡, 배율 색수차, 쉐이딩</h2>
+    <p>왜곡은 선명도와 상관없이 상의 모양을 휘게 하는 수차다(<a href="optics.html#aberration">5장</a>). 방사 대칭 렌즈의 왜곡은 상 높이 \(r\)의 다항식으로 쓴다. 점 격자 차트를 찍어 점 중심을 찾고, 이상 격자 위치와 비교해 계수를 맞춘다.</p>
+    <div class="formula">$$r_d = s\,r_u\left(1 + k_1 r_u^2 + k_2 r_u^4\right),\qquad D(r) = 100\,\frac{r_d - s\,r_u}{s\,r_u}\ \% ,\qquad \text{SMIA TV} = 100\,\frac{A - B}{B}\ \%$$
+      <div class="where">\(r_u\): 이상 위치의 정규화 반지름(대각선 절반 = 1), \(s\): 배율. \(k_1 \lt 0\)이면 배럴(술통), \(\gt 0\)이면 핀쿠션(실패)이고, \(k_1\)과 \(k_2\)의 부호가 다르면 중앙은 배럴, 가장자리는 핀쿠션인 콧수염형이 된다. SMIA TV 왜곡의 \(A\)는 왼쪽·오른쪽 끝 세로 길이의 평균, \(B\)는 가운데 세로 길이다. 배럴이면 음수이고, 전통적인 TV 왜곡(ISO)은 그 절반이다.</div>
+    </div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 250" role="img" aria-label="SMIA TV 왜곡 정의와 배율 색수차">
+        <g transform="translate(30,20)">
+          <path d="M10 14 Q120 -2 230 14 Q244 100 230 186 Q120 202 10 186 Q-4 100 10 14 Z" fill="none" stroke="var(--accent)" stroke-width="2"/>
+          <path d="M120 6 V194" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3 3"/>
+          <path d="M10 14 V186 M230 14 V186" stroke="var(--warn)" stroke-width="1.6"/>
+          <path d="M120 6 V194" stroke="var(--ok)" stroke-width="2"/>
+          <text x="4" y="104" class="t-mono" text-anchor="end" style="fill:var(--warn)">A₁</text><text x="236" y="104" class="t-mono" style="fill:var(--warn)">A₂</text>
+          <text x="126" y="104" class="t-mono" style="fill:var(--ok)">B</text>
+          <text x="120" y="224" class="t-dim" text-anchor="middle">배럴: A = (A₁+A₂)/2 &lt; B → 음수</text>
+        </g>
+        <g transform="translate(330,20)">
+          <rect x="0" y="0" width="150" height="190" class="f-surface"/>
+          <circle cx="75" cy="95" r="5" fill="var(--text)"/>
+          <g opacity="0.85"><circle cx="128" cy="30" r="6" fill="#e0443e"/><circle cx="125" cy="32" r="6" fill="#2da44e"/><circle cx="122" cy="34" r="6" fill="#2f6fe0"/></g>
+          <g opacity="0.85"><circle cx="24" cy="160" r="6" fill="#2f6fe0"/><circle cx="21" cy="162" r="6" fill="#2da44e"/><circle cx="18" cy="164" r="6" fill="#e0443e"/></g>
+          <path d="M75 95 L128 30" stroke="var(--text-dim)" stroke-dasharray="3 3"/>
+          <text x="75" y="224" class="t-dim" text-anchor="middle">배율 색수차: R·G·B 배율이 다름</text>
+        </g>
+        <g transform="translate(510,20)">
+          <rect x="0" y="0" width="150" height="190" class="f-surface"/>
+          <defs><radialGradient id="iq-vig" cx="0.5" cy="0.5" r="0.7"><stop offset="0" stop-color="var(--text)" stop-opacity="0"/><stop offset="1" stop-color="var(--text)" stop-opacity="0.55"/></radialGradient></defs>
+          <rect x="0" y="0" width="150" height="190" fill="url(#iq-vig)"/>
+          <text x="75" y="100" class="t-mono" text-anchor="middle">중심 100 %</text>
+          <text x="6" y="18" class="t-mono">코너</text>
+          <text x="75" y="224" class="t-dim" text-anchor="middle">쉐이딩: 코너 ÷ 중심</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 20-9.</b> 기하·광학 결함의 정의. 왼쪽: SMIA TV 왜곡은 영상 끝의 세로 길이(A)와 가운데 세로 길이(B)의 차를 B로 나눈다. 가운데: 배율 색수차는 색마다 배율이 달라 중심에서 멀수록 R·G·B 점이 방사 방향으로 벌어진다. 오른쪽: 휘도 쉐이딩은 균일광 영상의 코너/중심 비, 색 쉐이딩은 위치에 따른 R/G·B/G 비의 변화다.</figcaption>
+    </figure>
+
+    <p><span class="term">배율 색수차</span><span class="en">(Lateral Chromatic Aberration)</span>는 파장마다 배율이 달라 생기므로, 같은 점 격자 영상의 R·G·B 채널에서 점 중심을 따로 찾아 그 차이를 반지름에 대해 맞추면 된다(ISO 19084는 에지의 색 경계 폭으로 잰다). 결과는 코너에서의 픽셀 수나 중심–코너 거리에 대한 %로 쓴다. 대부분 반지름에 비례하므로 ISP에서 채널별로 배율을 살짝 바꿔 보정할 수 있지만, 보정 뒤 남은 0.5 픽셀 정도의 어긋남도 고대비 에지에서는 색 테두리로 보인다.</p>
+    <p><b>쉐이딩</b>(ISO 17957)은 균일한 확산광을 찍어 잰다. 휘도 쉐이딩은 코너 평균 ÷ 중심 평균(또는 EV 차이), 색 쉐이딩은 위치별 R/G·B/G 비나 ΔC*의 최대 편차다. 원인과 보정은 <a href="optics.html#shading">5장의 cos⁴ 법칙과 CRA</a>, <a href="isp.html#raw-domain">10장의 LSC</a>에서 다뤘다. 카메라 측정에서 중요한 것은 <b>보정 후</b>에 남은 값이고, 색 쉐이딩은 조명 스펙트럼에 따라 달라지므로(IR 컷 필터의 각도 의존) 여러 광원에서 확인한다.</p>
+
+    <div class="sim" id="sim-dist">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>점 격자 측정: 왜곡 계수와 배율 색수차 맞추기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-dist"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>렌즈 예</span><div class="seg" id="di-pre"><button data-value="main" class="on">메인</button><button data-value="uw">초광각</button><button data-value="tele">망원</button><button data-value="mus">콧수염</button></div></div>
+          <label class="ctrl"><span>k₁ <output id="di-k1-out"></output></span><input type="range" id="di-k1" min="-0.25" max="0.1" value="-0.08" step="0.005"></label>
+          <label class="ctrl"><span>k₂ <output id="di-k2-out"></output></span><input type="range" id="di-k2" min="-0.05" max="0.1" value="0.01" step="0.0025"></label>
+          <label class="ctrl"><span>배율 색수차 (R +, B −) <output id="di-lca-out"></output></span><input type="range" id="di-lca" min="0" max="0.5" value="0.15" step="0.01"></label>
+          <label class="ctrl"><span>노이즈 σ <output id="di-noise-out"></output></span><input type="range" id="di-noise" min="0" max="5" value="1" step="0.1"></label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--text-dim)"></i>참값</span><span><i style="background:var(--accent)"></i>측정(G 점)</span><span><i style="background:var(--red)"></i>R−G</span><span><i style="background:var(--blue)"></i>B−G</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">k₁ 측정 / 참</span><span class="v" id="o-di-k1">—</span></div>
+        <div class="stat"><span class="k">k₂ 측정 / 참</span><span class="v" id="o-di-k2">—</span></div>
+        <div class="stat"><span class="k">SMIA TV 측정 / 참</span><span class="v" id="o-di-tv">—</span></div>
+        <div class="stat"><span class="k">격자 코너 왜곡</span><span class="v" id="o-di-dc">—</span></div>
+        <div class="stat"><span class="k">LCA R−G @대각 끝</span><span class="v" id="o-di-lc">—</span></div>
+        <div class="stat"><span class="k">맞춤 잔차 RMS</span><span class="v" id="o-di-rs">—</span></div>
+      </div>
+      <div class="sim-note">320 × 240 영상에 13 × 9 점 격자(간격 24 픽셀)를 렌즈 모델로 옮겨 R·G·B 채널을 따로 그리고 노이즈를 더한다(배율 색수차는 R 배율 1 + c, B 배율 1 − c). 측정은 중앙 점에서 시작해 이웃 점 위치를 예측하며 넓혀 가는 무게중심 검출 → G 채널로 \(r_d = Ar + Br^3 + Cr^5\) 선형 최소자승 → R−G·B−G 방사 변위의 기울기 맞춤이다. SMIA TV는 격자 바깥 행의 점으로 계산한다. 해볼 것: 기본값(k₁ = −0.08, k₂ = 0.01)에서 k₁은 −0.080, SMIA TV는 −3.7 %로 참값과 맞고, LCA는 대각 끝(반지름 200픽셀)에서 R +0.30, B −0.30픽셀로 나온다. 노이즈를 5 %로 올려도 점 수백 픽셀의 무게중심은 0.1픽셀 이내로 안정하다. 콧수염 렌즈(k₁ = −0.08, k₂ = +0.08)는 SMIA TV 왜곡이 −0.1 %로 0에 가깝지만 반지름 0.6에서는 −1.8 %의 배럴이 남는다. TV 왜곡 한 숫자만으로는 모양을 알 수 없다.</div>
+    </div>
+  </section>
+
+  <!-- =============================================================== 9 -->
+  <section id="flare">
+    <h2>플레어, 고스트, 베일링 글레어</h2>
+    <p>렌즈면 사이의 반사, 경통 내벽의 산란, 커버 글라스·IR 컷 필터·센서 표면의 반사(<a href="optics.html#module">5장 카메라 모듈</a>)는 빛 일부를 엉뚱한 곳으로 보낸다. 넓게 퍼져 영상 전체에 뿌연 막을 씌우는 성분을 <span class="term">베일링 글레어</span><span class="en">(Veiling Glare)</span>, 밝은 광원의 상이 렌즈면 반사로 다른 위치에 맺힌 것을 <b>고스트</b>라 한다. 고스트는 대개 광축을 기준으로 광원의 반대편에 나타난다.</p>
+    <p>시스템의 점 확산 함수를 "날카로운 코어 + 넓게 퍼진 꼬리"로 나눠 생각하면 편하다. 꼬리가 <span class="term">글레어 확산 함수</span><span class="en">(Glare Spread Function, GSF)</span>이고, 그 에너지 비율 β가 미광의 양이다.</p>
+    <div class="formula">$$\text{PSF} = (1-\beta)\,\text{PSF}_{\text{core}} + \beta\,\text{GSF},\qquad \text{VGI} = \frac{L_{\text{hole}}}{L_{\text{white}}} \approx \beta\!\!\sum_{\mathbf x\,\in\,\text{밝은 영역}}\!\!\text{GSF}(\mathbf x - \mathbf x_{\text{hole}})$$
+      <div class="where">VGI(베일링 글레어 지수): 밝은 균일 영역 가운데 둔 광 트랩(완전히 검은 구멍)의 출력 ÷ 주변 흰 영역의 출력. GSF는 합이 1이므로, 구멍이 작고 밝은 영역이 무한히 넓으면 VGI → β다. 실제 차트에서는 구멍 크기와 밝은 영역의 넓이만큼 덜 받으므로, VGI는 차트 기하와 함께 적어야 한다. ISO 18844는 이런 패턴과 측정 조건을 규정한다.</div>
+    </div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 230" role="img" aria-label="코어와 넓은 꼬리로 이루어진 PSF와 광 트랩 차트">
+        <g transform="translate(40,20)">
+          <line x1="0" y1="160" x2="280" y2="160" class="s-axis"/><line x1="140" y1="0" x2="140" y2="160" class="s-axis"/>
+          <path d="M120 160 C132 158 136 10 140 6 C144 10 148 158 160 160" fill="none" stroke="var(--accent)" stroke-width="2.2"/>
+          <path d="M0 152 C60 148 100 136 125 120 C135 112 140 110 140 110 C140 110 145 112 155 120 C180 136 220 148 280 152" fill="none" stroke="var(--warn)" stroke-width="2" stroke-dasharray="5 3"/>
+          <text x="150" y="22" class="t-mono" style="fill:var(--accent)">코어 (1 − β)</text>
+          <text x="192" y="132" class="t-mono" style="fill:var(--warn)">GSF 꼬리 β (로그 축)</text>
+          <text x="140" y="190" class="t-dim" text-anchor="middle">PSF 단면 (로그 세로축)</text>
+        </g>
+        <g transform="translate(380,10)">
+          <rect x="0" y="0" width="260" height="180" fill="var(--surface)" stroke="var(--border)"/>
+          <rect x="20" y="20" width="220" height="140" fill="var(--bg-elev)" stroke="var(--border)"/>
+          <circle cx="130" cy="90" r="22" fill="var(--text)" opacity="0.92"/>
+          <circle cx="130" cy="90" r="22" fill="var(--text-faint)" opacity="0.35"/>
+          <text x="130" y="95" class="t-mono" text-anchor="middle" style="fill:var(--bg-elev)">광 트랩</text>
+          <circle cx="210" cy="40" r="5" fill="var(--warn)"/><text x="200" y="36" class="t-mono" text-anchor="end">광원</text>
+          <circle cx="50" cy="140" r="9" fill="var(--warn)" opacity="0.35"/><text x="64" y="150" class="t-mono">고스트</text>
+          <text x="130" y="205" class="t-dim" text-anchor="middle">밝은 영역 가운데 검은 구멍: 들뜬 만큼이 VGI</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 20-10.</b> 미광 모델과 측정 차트. PSF의 대부분은 좁은 코어지만, 몇 %의 에너지가 수십~수백 픽셀까지 퍼진 꼬리(GSF)로 간다. 넓은 밝은 영역에서 모인 꼬리가 광 트랩을 채워 검은색이 회색으로 뜬다. 화면 안 광원의 고스트는 광축 반대편에 흐린 상으로 맺힌다.</figcaption>
+    </figure>
+
+    <p>VGI 몇 %는 작아 보이지만, 선형 값이라는 점을 기억해야 한다. sRGB 감마를 지나면 선형 2.5 %는 8-bit 코드 약 44가 된다. 검은색이 짙은 회색으로 뜨고, 명암비는 40 : 1 남짓으로 묶이며, 7절의 DR 측정도 \(\log_2(1/\text{VGI})\) ≈ 5.3스톱 근처에서 막힌다. 역광 인물 사진이 뿌옇게 나오고, 야경의 가로등 주위가 번지는 것이 모두 같은 현상이다.</p>
+
+    <div class="sim" id="sim-glare">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>광 트랩 차트로 베일링 글레어 재기 (FFT 컨볼루션)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-glare"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>미광 비율 β <output id="gl-beta-out"></output></span><input type="range" id="gl-beta" min="0" max="10" value="3" step="0.1"></label>
+          <label class="ctrl"><span>GSF 퍼짐 r₀ <output id="gl-r0-out"></output></span><input type="range" id="gl-r0" min="5" max="80" value="20" step="1"></label>
+          <label class="ctrl"><span>밝은 영역 크기 <output id="gl-field-out"></output></span><input type="range" id="gl-field" min="0.2" max="0.95" value="0.8" step="0.05"></label>
+          <label class="ctrl"><span>광 트랩 반지름 <output id="gl-hole-out"></output></span><input type="range" id="gl-hole" min="4" max="40" value="10" step="1"></label>
+          <label class="check"><input type="checkbox" id="gl-src"> 화면 안 광원과 고스트</label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--text-dim)"></i>장면</span><span><i style="background:var(--accent)"></i>카메라 출력</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">측정 VGI</span><span class="v" id="o-gl-v">—</span></div>
+        <div class="stat"><span class="k">숨은 β / 기하 예측</span><span class="v" id="o-gl-e">—</span></div>
+        <div class="stat"><span class="k">구멍의 sRGB 코드</span><span class="v" id="o-gl-c">—</span></div>
+        <div class="stat"><span class="k">흰/검 명암비</span><span class="v" id="o-gl-cr">—</span></div>
+        <div class="stat"><span class="k">측정 가능 DR 상한</span><span class="v" id="o-gl-dr">—</span></div>
+      </div>
+      <div class="sim-note">256 × 256 장면(어두운 배경 안 흰 정사각형, 가운데 광 트랩)을 PSF = (1 − β)·가우시안 코어 + β·GSF, GSF ∝ (1 + r²/r₀²)^(−3/2)로 FFT 컨볼루션한다. 고스트는 광원을 광축 대칭 위치로 뒤집어 반지름 10픽셀 원판으로 흐린 상(광원 세기의 0.3 %)이다. 왼쪽 영상은 로그 표시(10⁻⁴~1), 오른쪽은 가운데 행의 단면. "기하 예측"은 β × (밝은 영역 위의 GSF 합)이다. 해볼 것: 기본값(β = 3 %)에서 VGI는 약 2.5 %로 β보다 작고, 밝은 영역을 40 %로 줄이면 약 2.0 %, 트랩 반지름을 30으로 키우면 약 1.4 %가 된다. 같은 렌즈인데 차트만 바꿔 VGI가 달라진다. 구멍의 코드 값은 흰색을 0.9로 둔 sRGB 8-bit다.</div>
+    </div>
+  </section>
+
+  <!-- =============================================================== 10 -->
+  <section id="time">
+    <h2>시간 지표와 종합 지표</h2>
+    <h3>셔터 지연과 AF</h3>
+    <p>화질에는 "언제 찍혔는가"도 들어간다. ISO 15781은 셔터 버튼을 누른 순간부터 실제 노출까지를 <span class="term">셔터 지연</span><span class="en">(Shooting Time Lag)</span>으로, 미리 초점을 맞춰 둔 상태(반셔터)에서의 지연을 셔터 릴리스 지연으로 구분하고, 연사 속도와 기동 시간도 정의한다. 측정은 LED가 일정 간격(예: 1 ms)으로 차례로 켜지는 타이머 판을 찍어, 영상에 찍힌 LED 위치로 노출 시각을 읽는 식이다. 롤링 셔터 카메라는 행마다 노출 시각이 다르므로(<a href="shutter.html">9장</a>) 어느 행을 기준으로 읽었는지도 적어야 한다.</p>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 220" role="img" aria-label="셔터 지연의 구성과 제로 셔터 랙">
+        <line x1="30" y1="60" x2="660" y2="60" class="s-axis"/>
+        <g class="t-mono" text-anchor="middle"><text x="200" y="40">누름</text></g>
+        <path d="M200 46 V180" stroke="var(--bad)" stroke-width="2"/>
+        <rect x="200" y="70" width="150" height="26" rx="4" class="f-acc-soft"/><text x="275" y="88" class="t-mono" text-anchor="middle">AF 탐색·구동</text>
+        <rect x="350" y="70" width="60" height="26" rx="4" class="f-acc2-soft"/><text x="380" y="88" class="t-mono" text-anchor="middle">AE</text>
+        <rect x="410" y="70" width="40" height="26" rx="4" class="f-warn-soft"/><text x="430" y="88" class="t-mono" text-anchor="middle">대기</text>
+        <rect x="450" y="70" width="70" height="26" rx="4" class="f-ok-soft"/><text x="485" y="88" class="t-mono" text-anchor="middle">노출</text>
+        <path d="M200 112 H485" stroke="var(--text-dim)" stroke-width="1.4"/><text x="342" y="128" class="t-dim" text-anchor="middle">촬영 지연 (AF 포함)</text>
+        <g fill="var(--accent)" opacity="0.8">
+          <rect x="40" y="146" width="34" height="22" rx="3"/><rect x="80" y="146" width="34" height="22" rx="3"/><rect x="120" y="146" width="34" height="22" rx="3"/><rect x="160" y="146" width="34" height="22" rx="3"/>
+        </g>
+        <rect x="160" y="146" width="34" height="22" rx="3" fill="none" stroke="var(--bad)" stroke-width="2.4"/>
+        <text x="117" y="190" class="t-dim" text-anchor="middle">ZSL: 미리 찍어 둔 프레임 링 버퍼</text>
+        <text x="200" y="212" class="t-mono" text-anchor="middle">→ 누르기 직전 프레임 선택 (지연 ≈ 0 또는 음수)</text>
+        <text x="560" y="140" class="t-dim" text-anchor="middle">비 ZSL: 다음 프레임 경계까지</text>
+        <text x="560" y="160" class="t-dim" text-anchor="middle">기다리는 시간(평균 반 프레임)</text>
+      </svg>
+      <figcaption><b>그림 20-11.</b> 셔터 지연의 구성. 전통적인 촬영은 누른 뒤 AF·AE를 마치고 다음 프레임 경계에서 노출하므로 수십~수백 ms가 걸린다. 제로 셔터 랙(ZSL)은 프리뷰 프레임을 링 버퍼에 계속 담아 두었다가 누른 시점의 프레임을 꺼내므로(<a href="computational.html">11장</a>) 지연이 0에 가깝거나 음수가 된다.</figcaption>
+    </figure>
+
+    <p>AF는 속도와 정확도를 따로 잰다. 같은 장면을 수십 번 반복해 초점을 처음부터 다시 맞추게 하고, 매번 걸린 시간과 그때 찍힌 영상의 MTF50(최고 초점 대비 %)을 기록한다. 평균 시간이 짧아도 가끔 초점이 빗나가면 사용자는 그 한 장을 기억하므로, 분포와 실패율이 함께 나와야 한다. AF 구동과 제어 루프는 <a href="module.html">14장</a>에서 다뤘다.</p>
+
+    <h3>선명도를 사람의 눈으로: 어큐턴스와 SQF</h3>
+    <p>MTF50은 곡선의 한 점이다. 사람이 느끼는 선명도는 보는 조건에서 눈이 민감한 대역 전체의 MTF에 달려 있다. <span class="term">어큐턴스</span><span class="en">(Acutance)</span>는 시스템 MTF를 CSF로 가중 평균한 값이고(CPIQ), <span class="term">SQF</span><span class="en">(Subjective Quality Factor)</span>는 Granger와 Cupery가 제안한, 약 3~12 cpd 대역에서 MTF를 로그 주파수로 평균한 값이다.</p>
+    <div class="formula">$$A = \frac{\int_0^{\nu_N} \text{MTF}(\nu)\,\text{CSF}(\nu)\,d\nu}{\int_0^{\infty} \text{CSF}(\nu)\,d\nu},\qquad \text{CSF}(\nu) = \frac{a\,\nu^{c}\,e^{-b\nu}}{K},\qquad \text{SQF} = \frac{100}{\ln 4}\int_{3}^{12} \text{MTF}(\nu)\,d(\ln\nu)$$
+      <div class="where">\(\nu\): cycles/degree(보는 조건으로 변환), \(\nu_N\): 영상의 나이퀴스트, CPIQ 상수 \(a = 75,\ b = 0.2,\ c = 0.8,\ K = 34.05\)(정점 약 4 cpd). 나이퀴스트 너머에는 영상 정보가 없으므로 분자는 거기서 끊고 분모는 끊지 않았다(이 장의 구현). CPIQ는 어큐턴스를 다시 실험식으로 JND 단위 품질 손실로 바꾼다.</div>
+    </div>
+    <p>어큐턴스의 결론은 직관과 다를 때가 있다. 작게 보는 조건에서는 영상의 나이퀴스트가 눈의 해상 한계보다 훨씬 높아, 고주파 해상력은 의미가 없고 저·중주파 MTF가 1을 넘도록 샤프닝한 카메라가 이긴다. 크게, 가까이 보면 나이퀴스트가 눈의 민감 대역 안으로 내려와 화소 수가 많은 쪽이 이긴다. 같은 두 카메라의 순위가 출력 크기에 따라 뒤집히는 것이다.</p>
+
+    <div class="sim" id="sim-acu">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>어큐턴스와 SQF: 보는 조건에 따라 바뀌는 순위</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-acu"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>보는 조건</span><div class="seg" id="ac-pre"><button data-value="phone">폰 화면</button><button data-value="mon">모니터</button><button data-value="a3" class="on">A3 인쇄</button><button data-value="big">큰 인쇄</button></div></div>
+          <label class="ctrl"><span>그림 높이 H <output id="ac-ph-out"></output></span><input type="range" id="ac-ph" min="5" max="100" value="29.7" step="0.1"></label>
+          <label class="ctrl"><span>보는 거리 d <output id="ac-d-out"></output></span><input type="range" id="ac-d" min="20" max="150" value="50" step="1"></label>
+          <label class="ctrl"><span>B의 샤프닝 양 <output id="ac-amt-out"></output></span><input type="range" id="ac-amt" min="0" max="1.5" value="0.8" step="0.05"></label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent-2)"></i>A: 48 MP, 약한 샤프닝</span><span><i style="background:var(--accent)"></i>B: 12 MP, 강한 샤프닝</span><span><i style="background:var(--warn)"></i>CSF</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">그림 높이 시야각</span><span class="v" id="o-ac-th">—</span></div>
+        <div class="stat"><span class="k">어큐턴스 A / B</span><span class="v" id="o-ac-a">—</span></div>
+        <div class="stat"><span class="k">SQF A / B</span><span class="v" id="o-ac-s">—</span></div>
+        <div class="stat"><span class="k">나이퀴스트 A / B</span><span class="v" id="o-ac-n">—</span></div>
+        <div class="stat"><span class="k">어큐턴스 판정</span><span class="v" id="o-ac-w">—</span></div>
+      </div>
+      <div class="sim-note">카메라 A: 세로 6000픽셀, 렌즈 σ 0.5 px, USM 0.3. 카메라 B: 세로 3000픽셀, 렌즈 σ 0.55 px, USM 양 조절(반경 1). 둘 다 100 % 개구 픽셀. 왼쪽은 현재 조건의 MTF(cpd 축)와 CSF, 오른쪽은 거리 d를 고정하고 그림 높이를 5~100 cm로 바꿀 때의 어큐턴스다. 해볼 것: A3(29.7 cm, 50 cm)에서는 B가 앞서고(1.03 대 0.99), 큰 인쇄(60 cm)에서는 A가 앞선다(0.97 대 0.94). 이 거리에서 순위가 바뀌는 높이는 약 49 cm다. SQF는 3~12 cpd만 보므로 큰 인쇄에서도 B를 높게 쳐, 같은 MTF로도 지표마다 결론이 다르다. B의 샤프닝을 0으로 하면 A가 모든 조건에서 이긴다.</div>
+    </div>
+
+    <h3>종합 점수는 어떻게 만들어지나</h3>
+    <p>벤치마크와 표준은 수십 개 지표를 하나의 점수로 묶는다. 공통된 뼈대는 세 단계다. (1) 각 지표를 주관 실험으로 맞춘 함수로 <b>JND 단위 품질 손실</b>로 바꾼다. (2) 이 손실들을 더한다. (3) 장면·조도별 결과를 가중 평균한다. 중요한 것은 (2)다. 품질 손실은 단순히 더해지지 않는다. Keelan의 다변량 공식(CPIQ가 채택)은 민코프스키 합을 쓰되, 지수를 가장 큰 손실에 따라 키워 <b>가장 나쁜 속성이 전체를 지배</b>하게 한다. 노이즈가 심한 사진은 색이 아무리 정확해도 나쁜 사진이기 때문이다.</p>
+    <div class="formula">$$\Delta Q_{\text{total}} = \left(\sum_i \Delta Q_i^{\,n}\right)^{1/n},\qquad n = 1 + c_1\tanh\!\left(\frac{\Delta Q_{\max}}{c_2}\right)$$
+      <div class="where">\(\Delta Q_i\): 속성 i의 품질 손실(JND), \(c_1, c_2\): 실험으로 정한 상수. 손실이 작을 때는 \(n \approx 1\)(단순 합), 한 속성의 손실이 클수록 \(n\)이 커져 최대값에 가까워진다.</div>
+    </div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 220" role="img" aria-label="지표에서 JND 품질 손실을 거쳐 종합 점수로">
+        <defs><marker id="iq-arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker></defs>
+        <g class="t-mono">
+          <rect x="10" y="20" width="130" height="28" rx="5" class="f-surface"/><text x="20" y="39">어큐턴스</text>
+          <rect x="10" y="56" width="130" height="28" rx="5" class="f-surface"/><text x="20" y="75">시각 노이즈 Ω</text>
+          <rect x="10" y="92" width="130" height="28" rx="5" class="f-surface"/><text x="20" y="111">평균 ΔE00 · 채도</text>
+          <rect x="10" y="128" width="130" height="28" rx="5" class="f-surface"/><text x="20" y="147">텍스처 · LCA · 왜곡</text>
+          <rect x="10" y="164" width="130" height="28" rx="5" class="f-surface"/><text x="20" y="183">노출 · WB · 지연</text>
+        </g>
+        <path d="M146 106 H186" class="s-acc" marker-end="url(#iq-arr3)"/>
+        <rect x="192" y="60" width="150" height="92" rx="8" class="f-acc-soft"/>
+        <text x="267" y="88" class="t" text-anchor="middle">실험식으로</text>
+        <text x="267" y="110" class="t" text-anchor="middle">JND 품질 손실</text>
+        <text x="267" y="134" class="t-mono" text-anchor="middle">ΔQ₁ … ΔQₙ</text>
+        <path d="M348 106 H388" class="s-acc" marker-end="url(#iq-arr3)"/>
+        <rect x="394" y="60" width="130" height="92" rx="8" class="f-acc2-soft"/>
+        <text x="459" y="88" class="t" text-anchor="middle">민코프스키 합</text>
+        <text x="459" y="110" class="t-mono" text-anchor="middle">(ΣΔQᵢⁿ)^(1/n)</text>
+        <text x="459" y="134" class="t-dim" text-anchor="middle">최악이 지배</text>
+        <path d="M530 106 H566" class="s-acc" marker-end="url(#iq-arr3)"/>
+        <rect x="572" y="60" width="98" height="92" rx="8" class="f-elev"/>
+        <text x="621" y="92" class="t" text-anchor="middle">장면·조도</text>
+        <text x="621" y="114" class="t" text-anchor="middle">가중 평균</text>
+        <text x="621" y="136" class="t-acc" text-anchor="middle">점수</text>
+        <text x="340" y="210" class="t-dim" text-anchor="middle">가중치(어떤 장면, 어떤 조도, 어떤 보는 조건)를 바꾸면 순위도 바뀐다</text>
+      </svg>
+      <figcaption><b>그림 20-12.</b> 종합 화질 점수의 일반적인 구조. 객관 지표 → JND 품질 손실 → 다변량 결합 → 장면 가중 평균. 벤치마크마다 지표 목록, 변환식, 가중치가 다르고 공개 범위도 다르므로, 서로 다른 출처의 종합 점수는 같은 잣대로 비교할 수 없다.</figcaption>
+    </figure>
+
+    <div class="callout">
+      <strong>종합 점수를 읽는 법</strong>
+      <p>종합 점수 하나는 "어떤 사람이, 어떤 크기로, 어떤 장면을 볼 때"라는 가정을 품고 있다. 폰 화면으로 보는 사진 위주라면 노이즈 입자와 샤프닝이, 큰 인쇄나 크롭이 많다면 해상력과 텍스처가 더 중요하다. 같은 하위 점수로도 가중치만 바꾸면 순위가 바뀐다. 점수를 볼 때는 하위 지표와 조건을 함께 보고, 내 사용 조건에 맞는 항목을 골라 읽어야 한다. 차량용 카메라처럼 사람이 아니라 알고리즘이 영상을 "보는" 경우에는 지각 품질 대신 검출 성능과 이어지는 지표(IEEE 2020의 대비 검출 확률 등)를 쓴다(<a href="automotive.html">15장</a>).</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== summary -->
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>센서 특성(EMVA 1288)은 렌즈·ISP를 뺀 물리량이고, 카메라 화질 지표(ISO TC 42, IEEE 1858)는 완성된 영상에서 잰 값이며, 지각 품질(JND, MOS)로 옮기려면 CSF와 보는 조건이 더 필요하다. 1 JND는 쌍대 비교에서 75 : 25 선호다.</li>
+      <li>슬랜티드 에지 SFR은 행별 에지 중심 → 직선 맞춤 → 1/4 픽셀 투영·빈닝 → ESF 미분 → 해밍 창 → DFT 순이다. 약 5°의 각도, 충분한 행 수, OECF 선형화가 필요하며, 0°나 tan θ = 1/2 같은 각도는 빈 칸을 만든다.</li>
+      <li>샤프닝은 MTF를 1 위로 올리고 헤일로를 만든다. MTF50만으로는 과처리를 구별할 수 없으므로 MTF50P, 오버슈트, 노이즈 이득과 함께 본다. 코어링·클리핑 같은 비선형 처리는 MTF를 대비에 따라 다르게 만든다.</li>
+      <li>에지 보존 NR은 고대비 에지를 지키고 저대비 텍스처를 지운다. 데드리브스 차트의 PSD 비(노이즈 보정) 또는 원본과의 교차 스펙트럼으로 텍스처 MTF를 재면 에지 MTF가 숨기는 손실이 보인다.</li>
+      <li>노이즈는 크기(σ, SNR)와 모양(스펙트럼)을 함께 봐야 한다. 시각 노이즈는 CSF로 거른 휘도·색 노이즈를 가중 합산하며, SNR이 더 좋은 카메라도 입자가 굵으면 더 지저분해 보인다.</li>
+      <li>색 정확도는 컬러체커의 기준 Lab과 출력의 ΔE00로 잰다. CIEDE2000은 높은 채도·파랑·회색에서 ΔE*ab의 불균일을 보정한다. 센서가 루터–아이브스 조건을 만족하지 않으면 CCM 잔차가 조명에 따라 달라지므로 조명과 교정 조건을 함께 적는다.</li>
+      <li>DR은 증분 SNR(OECF 기울기로 톤 커브 영향을 지운 SNR)이 기준값에 닿는 휘도와 포화 휘도의 비다. 렌즈 미광은 암부를 들어 올려 측정 DR을 센서 DR보다 몇 스톱씩 줄이고, 차트의 농도 범위도 상한이 된다.</li>
+      <li>왜곡은 점 격자 중심을 \(r(1 + k_1r^2 + k_2r^4)\)로 맞춰 재고, SMIA TV 왜곡은 전통 TV 왜곡의 두 배다. 배율 색수차는 채널별 점 중심 차의 반지름 기울기, 쉐이딩은 보정 후 남은 코너/중심 비와 색 편차로 본다.</li>
+      <li>베일링 글레어는 PSF의 넓은 꼬리(GSF)다. VGI는 광 트랩의 들뜬 출력 ÷ 흰 영역 출력으로, β보다 작고 차트 기하에 따라 달라진다. 선형 몇 %도 감마를 지나면 검은색을 짙은 회색으로 띄운다.</li>
+      <li>셔터 지연과 AF는 분포와 실패율로 본다. 어큐턴스·SQF는 MTF를 CSF로 가중해 보는 조건을 반영하며, 같은 두 카메라의 순위가 출력 크기에 따라 뒤집힌다. 종합 점수는 JND 손실을 최악이 지배하도록 합친 뒤 장면 가중 평균한 것이므로 가중치를 함께 읽어야 한다.</li>
+    </ol>
+  </section>
+
+  <!-- =============================================================== quiz -->
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. 슬랜티드 에지를 정확히 0°(픽셀 열과 평행)로 놓고 찍으면 생기는 문제는?</p><div class="opts">
+        <button class="opt">에지 위치를 맞출 수 없어 측정이 불가능하다</button>
+        <button class="opt" data-correct>모든 행에서 에지와 픽셀의 상대 위상이 같아 서브픽셀 샘플링이 되지 않는다</button>
+        <button class="opt">LSF의 면적이 0이 되어 MTF를 정규화할 수 없다</button>
+        <button class="opt">렌즈 왜곡 때문에 에지가 휘어 보인다</button>
+      </div><div class="quiz-exp">슬랜티드 에지법은 행마다 에지가 조금씩 옮겨 가는 것을 이용해 1/4 픽셀 간격의 ESF를 만든다. 0°에서는 모든 행이 같은 위상이라 빈 칸이 생기고, 나이퀴스트 근처와 그 너머의 에일리어싱을 구별할 수 없다.</div></div>
+
+      <div class="quiz-q"><p>Q2. 카메라 X의 MTF50이 카메라 Y보다 30 % 높지만 MTF50P는 거의 같고, 에지 오버슈트가 25 %다. 가장 그럴듯한 해석은?</p><div class="opts">
+        <button class="opt">X의 렌즈가 더 날카롭다</button>
+        <button class="opt">X의 화소 수가 더 많다</button>
+        <button class="opt">X가 디모자이크를 더 잘한다</button>
+        <button class="opt" data-correct>X가 더 강하게 샤프닝해 MTF 정점이 1을 넘었다</button>
+      </div><div class="quiz-exp">샤프닝은 중간 주파수 MTF를 1 위로 올려 MTF50을 키우지만, 정점 대비 50 %에서 읽는 MTF50P는 덜 오른다. 큰 오버슈트(헤일로)가 같은 사실을 보여 준다.</div></div>
+
+      <div class="quiz-q"><p>Q3. 어떤 폰 카메라가 슬랜티드 에지에서는 렌즈 한계보다 높은 MTF50을 보이는데, 데드리브스 차트에서는 텍스처 MTF50이 그 절반이다. 원인으로 가장 적절한 것은?</p><div class="opts">
+        <button class="opt" data-correct>에지 보존형(비선형) NR이 고대비 에지는 지키고 저대비 텍스처를 평균해 버렸다</button>
+        <button class="opt">데드리브스 차트가 슬랜티드 에지보다 대비가 높아 클리핑되었다</button>
+        <button class="opt">렌즈 MTF가 방향에 따라 달라서</button>
+        <button class="opt">텍스처 MTF는 원래 에지 MTF의 제곱이라서</button>
+      </div><div class="quiz-exp">선형 시스템이라면 두 차트의 MTF가 같아야 한다. 차이는 처리가 입력 대비에 따라 다르게 동작한다는 뜻이고, 에지 보존 NR이 전형적인 원인이다. 에지 근처만 보는 필터는 에지를 오히려 가파르게 만들기도 한다.</div></div>
+
+      <div class="quiz-q"><p>Q4. 같은 회색 패치에서 카메라 A의 휘도 노이즈 σ는 2.0, 카메라 B는 1.2다. 그런데 폰 화면에서 보면 B가 더 지저분하다. 가능한 이유는?</p><div class="opts">
+        <button class="opt">폰 화면의 감마가 B의 노이즈만 키워서</button>
+        <button class="opt">σ는 장면 기준 SNR이 아니라서</button>
+        <button class="opt" data-correct>B의 노이즈가 NR로 뭉쳐 저주파(굵은 입자)에 몰려 있어, 작게 볼 때도 눈이 민감한 대역에 남기 때문</button>
+        <button class="opt">A의 노이즈가 색 노이즈뿐이라서</button>
+      </div><div class="quiz-exp">작게 보면 픽셀 단위의 고운 노이즈는 눈의 해상 한계 밖으로 밀려나 보이지 않지만, 몇 픽셀짜리 얼룩은 CSF 정점 근처로 내려와 남는다. σ는 크기만, 스펙트럼은 모양을 말한다.</div></div>
+
+      <div class="quiz-q"><p>Q5. 두 진한 파랑의 ΔE*ab는 4.0인데 CIEDE2000으로는 2.0이다. 이 차이를 만드는 주된 요인은?</p><div class="opts">
+        <button class="opt">L* 차이가 커서 \(S_L\)이 작아졌다</button>
+        <button class="opt" data-correct>높은 채도에서 커지는 \(S_C\)·\(S_H\)와 파랑 영역의 회전 항 \(R_T\)</button>
+        <button class="opt">회색 근처에서 a* 축을 늘리는 \(G\) 보정</button>
+        <button class="opt">ΔE00이 ΔE*ab의 제곱근이라서</button>
+      </div><div class="quiz-exp">Sharma 시험 쌍 (50, 2.68, −79.78)/(50, 0, −82.75)의 예다. 두 색은 L*이 같고 채도가 80 이상이라 \(S_C\), \(S_H\)가 크며, 색상각 약 270°에서 \(R_T\)가 채도·색상 차를 일부 상쇄한다.</div></div>
+
+      <div class="quiz-q"><p>Q6. 주광에서 교정한 CCM을 쓰는 카메라를 삼파장 형광등 아래에서 찍었더니 평균 ΔE00이 크게 늘었다. 형광등 아래에서 CCM을 다시 교정하면 크게 준다. 이 현상의 근본 원인은?</p><div class="opts">
+        <button class="opt">형광등의 플리커 때문에 노출이 흔들려서</button>
+        <button class="opt">화이트 밸런스 게인이 클리핑되어서</button>
+        <button class="opt">CIELAB이 형광등에서는 정의되지 않아서</button>
+        <button class="opt" data-correct>센서 분광 감도가 등색 함수의 선형 결합이 아니어서, 최적 3 × 3 행렬이 조명 스펙트럼에 따라 달라진다</button>
+      </div><div class="quiz-exp">루터–아이브스 조건을 만족하지 않는 센서는 조명이 바뀌면 사람과 다른 조건 등색을 보인다. 뾰족한 선 스펙트럼일수록 차이가 커서, 조명별 교정이나 보간이 필요하다.</div></div>
+
+      <div class="quiz-q"><p>Q7. 카메라 DR을 투과형 스텝 차트로 쟀더니 센서 데이터시트로 계산한 값보다 2~3스톱 작았다. 가장 먼저 의심할 것은?</p><div class="opts">
+        <button class="opt" data-correct>렌즈 미광(베일링 글레어)이 어두운 스텝을 들어 올려 증분 SNR을 떨어뜨렸다</button>
+        <button class="opt">톤 커브가 감마여서 출력 SNR이 달라졌다</button>
+        <button class="opt">스텝 수가 너무 많아서</button>
+        <button class="opt">센서의 PRNU가 커서</button>
+      </div><div class="quiz-exp">증분 SNR은 톤 커브의 영향을 지우므로 감마는 원인이 아니다. 밝은 스텝에서 온 미광은 어두운 스텝에 신호 없이 샷 노이즈만 더하고 OECF를 눕혀, 측정 DR을 \(\log_2(1/\text{VGI})\) 근처로 제한한다. 차트 농도 범위가 부족한 경우도 확인한다.</div></div>
+
+      <div class="quiz-q"><p>Q8. 같은 렌즈를 두 연구소가 쟀는데 VGI가 2.5 %와 1.4 %로 달랐다. 둘 다 측정을 제대로 했다면 가능한 설명은?</p><div class="opts">
+        <button class="opt">VGI는 β와 항상 같으므로 한쪽이 틀렸다</button>
+        <button class="opt" data-correct>광 트랩 크기나 밝은 영역의 넓이가 달라 GSF 꼬리를 모으는 양이 달랐다</button>
+        <button class="opt">한 곳은 sRGB 코드로, 한 곳은 선형으로 재서 정확히 두 배 차이가 났다</button>
+        <button class="opt">VGI는 노출 시간에 비례한다</button>
+      </div><div class="quiz-exp">VGI ≈ β × (밝은 영역 위의 GSF 합)이다. 트랩이 크면 가까운 꼬리 에너지가 트랩 안으로 빠지고, 밝은 영역이 작으면 먼 꼬리를 덜 모은다. 그래서 VGI는 차트 기하와 함께 적어야 한다.</div></div>
+
+      <div class="quiz-q"><p>Q9. 세로 3000픽셀 영상을 A3(높이 29.7 cm)로 뽑아 50 cm에서 볼 때, 영상의 나이퀴스트는 대략 몇 cycles/degree인가?</p><div class="opts">
+        <button class="opt">약 4 cpd</button>
+        <button class="opt">약 17 cpd</button>
+        <button class="opt" data-correct>약 45 cpd</button>
+        <button class="opt">약 113 cpd</button>
+      </div><div class="quiz-exp">그림 높이의 시야각은 \(2\arctan(14.85/50) = 33.1°\)이므로 도당 3000/33.1 = 90.6픽셀, 나이퀴스트는 그 절반인 45 cpd다. 17 cpd는 100 % 확대(0.25 mm 픽셀, 50 cm), 113 cpd는 폰 화면 조건이다.</div></div>
+
+      <div class="quiz-q"><p>Q10. 종합 화질 점수에서 하위 품질 손실을 단순 합 대신 "최악이 지배하는" 민코프스키 합으로 결합하는 이유는?</p><div class="opts">
+        <button class="opt">계산이 더 간단해서</button>
+        <button class="opt">JND가 로그 척도라서</button>
+        <button class="opt">객관 지표의 단위가 서로 달라서</button>
+        <button class="opt" data-correct>한 속성이 크게 나쁘면 다른 속성이 좋아도 전체 품질이 그 속성에 끌려 내려간다는 주관 실험 결과 때문</button>
+      </div><div class="quiz-exp">단위 문제는 각 지표를 JND 손실로 바꾸는 단계에서 이미 해결된다. 결합 단계의 지수는 가장 큰 손실이 클수록 커져, 작은 손실들은 거의 단순 합으로, 큰 손실 하나는 거의 그 자체로 전체를 결정하게 한다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+/* ENGINE START */
+const IQ = (function () {
+  "use strict";
+  const E = {};
+  const PI = Math.PI;
+  E.rng = (s) => () => { s = (s + 0x6D2B79F5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  E.gauss = (r) => Math.sqrt(-2 * Math.log(r() || 1e-12)) * Math.cos(2 * PI * r());
+  E.erf = function (x) { const s = x < 0 ? -1 : 1; x = Math.abs(x); const t = 1 / (1 + 0.3275911 * x); const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x); return s * y; };
+  E.Phi = (x) => 0.5 * (1 + E.erf(x / Math.SQRT2));
+  E.sinc = (x) => (Math.abs(x) < 1e-9 ? 1 : Math.sin(PI * x) / (PI * x));
+
+  /* ---------- FFT (radix-2, in place) */
+  const fc = {};
+  E.fft = function (re, im, inv) {
+    const n = re.length; let c = fc[n];
+    if (!c) {
+      const lg = Math.round(Math.log2(n)), rev = new Uint32Array(n), cs = new Float64Array(n >> 1), sn = new Float64Array(n >> 1);
+      for (let i = 0; i < n; i++) { let r = 0, x = i; for (let b = 0; b < lg; b++) { r = (r << 1) | (x & 1); x >>= 1; } rev[i] = r; }
+      for (let i = 0; i < n >> 1; i++) { cs[i] = Math.cos(2 * PI * i / n); sn[i] = Math.sin(2 * PI * i / n); }
+      c = fc[n] = { rev, cs, sn };
+    }
+    for (let i = 0; i < n; i++) { const j = c.rev[i]; if (j > i) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+    const sg = inv ? 1 : -1;
+    for (let size = 2; size <= n; size <<= 1) {
+      const h = size >> 1, step = n / size;
+      for (let i = 0; i < n; i += size) for (let k = 0; k < h; k++) {
+        const wr = c.cs[k * step], wi = sg * c.sn[k * step], a = i + k, b = a + h;
+        const tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+      }
+    }
+    if (inv) for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
+  };
+  E.fft2 = function (re, im, n, inv) {
+    const r = new Float64Array(n), q = new Float64Array(n);
+    for (let y = 0; y < n; y++) { const o = y * n; for (let x = 0; x < n; x++) { r[x] = re[o + x]; q[x] = im[o + x]; } E.fft(r, q, inv); for (let x = 0; x < n; x++) { re[o + x] = r[x]; im[o + x] = q[x]; } }
+    for (let x = 0; x < n; x++) { for (let y = 0; y < n; y++) { r[y] = re[y * n + x]; q[y] = im[y * n + x]; } E.fft(r, q, inv); for (let y = 0; y < n; y++) { re[y * n + x] = r[y]; im[y * n + x] = q[y]; } }
+  };
+  E.fq = (k, n) => (k <= n / 2 ? k : k - n) / n; // FFT index -> cycles/pixel
+
+  /* ---------- discrete Gaussian kernel and its DTFT */
+  E.gk = function (s) { if (s < 0.05) return [1]; const R = Math.max(1, Math.ceil(3 * s)), k = []; let t = 0; for (let i = -R; i <= R; i++) { const v = Math.exp(-0.5 * i * i / (s * s)); k.push(v); t += v; } return k.map((v) => v / t); };
+  E.gkH = function (k, f) { const R = (k.length - 1) / 2; let s = 0; for (let i = 0; i < k.length; i++) s += k[i] * Math.cos(2 * PI * f * (i - R)); return s; };
+  E.conv2 = function (img, W, H, k) { // separable, clamp edges
+    const R = (k.length - 1) / 2, t = new Float64Array(W * H), o = new Float64Array(W * H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { let s = 0; for (let i = -R; i <= R; i++) { const xx = x + i < 0 ? 0 : x + i >= W ? W - 1 : x + i; s += k[i + R] * img[y * W + xx]; } t[y * W + x] = s; }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { let s = 0; for (let i = -R; i <= R; i++) { const yy = y + i < 0 ? 0 : y + i >= H ? H - 1 : y + i; s += k[i + R] * t[yy * W + x]; } o[y * W + x] = s; }
+    return o;
+  };
+  /* unsharp mask with soft coring threshold */
+  E.usm = function (img, W, H, amt, rad, thr) {
+    if (amt <= 0) return Float64Array.from(img);
+    const b = E.conv2(img, W, H, E.gk(rad)), o = new Float64Array(W * H);
+    for (let i = 0; i < W * H; i++) { let d = img[i] - b[i]; if (thr > 0) d = Math.sign(d) * Math.max(0, Math.abs(d) - thr); o[i] = img[i] + amt * d; }
+    return o;
+  };
+  /* bilateral filter (range weight on value difference) */
+  E.bilateral = function (img, W, H, ss, sr) {
+    const R = Math.max(1, Math.ceil(2 * ss)), o = new Float64Array(W * H), sw = [];
+    for (let j = -R; j <= R; j++) for (let i = -R; i <= R; i++) sw.push(Math.exp(-0.5 * (i * i + j * j) / (ss * ss)));
+    const NL = 512, LMAX = 4, lut = new Float64Array(NL + 1); for (let i = 0; i <= NL; i++) { const z = (i / NL) * LMAX; lut[i] = Math.exp(-0.5 * z * z); }
+    const inv = NL / (LMAX * sr);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const c = img[y * W + x]; let s = 0, ws = 0, q = 0;
+      for (let j = -R; j <= R; j++) { const yy = y + j < 0 ? 0 : y + j >= H ? H - 1 : y + j, row = yy * W;
+        for (let i = -R; i <= R; i++, q++) { const xx = x + i < 0 ? 0 : x + i >= W ? W - 1 : x + i; const v = img[row + xx]; const li = Math.abs(v - c) * inv; if (li >= NL) continue; const w = sw[q] * lut[li | 0]; s += w * v; ws += w; } }
+      o[y * W + x] = s / ws;
+    }
+    return o;
+  };
+
+  /* ---------- slanted edge: render with known truth */
+  // P: {W,H,ang(deg),sig(lens px),ap(pixel aperture /pitch),lo,hi,noise,seed,amt,rad,thr,gam(bool)}
+  E.edgeTruth = function (P, f) {
+    const t = P.ang * PI / 180, c = Math.cos(t), s = Math.sin(t);
+    let m = Math.exp(-2 * PI * PI * P.sig * P.sig * f * f) * Math.abs(E.sinc(P.ap * f * c) * E.sinc(P.ap * f * s));
+    if (P.amt > 0) { const k = E.gk(P.rad); m *= 1 + P.amt * (1 - E.gkH(k, f * c) * E.gkH(k, f * s)); }
+    return m;
+  };
+  E.renderEdge = function (P) {
+    const W = P.W, H = P.H, t = P.ang * PI / 180, c = Math.cos(t), sn = Math.sin(t), tn = Math.tan(t);
+    // pre-sampled ESF table along normal: lens Gaussian * trapezoid(pixel aperture projection)
+    const DU = 1 / 64, U = 14, NT = Math.round(2 * U / DU) + 1, esf = new Float64Array(NT);
+    // box(w1) * Gaussian ESF in closed form (Ψ(x) = xΦ(x) + φ(x)), then box(w2) by 9-point average
+    const w1 = P.ap * c, w2 = P.ap * sn, sg = Math.max(P.sig, 0.02);
+    const Psi = (x) => x * E.Phi(x) + Math.exp(-0.5 * x * x) / Math.sqrt(2 * PI);
+    const e1 = (u) => (w1 < 1e-3 ? E.Phi(u / sg) : (sg / w1) * (Psi((u + w1 / 2) / sg) - Psi((u - w1 / 2) / sg)));
+    const nq = w2 < 1e-3 ? 1 : 9;
+    for (let i = 0; i < NT; i++) { const u = -U + i * DU; let s = 0; for (let k = 0; k < nq; k++) s += e1(u + (nq === 1 ? 0 : w2 * ((k + 0.5) / nq - 0.5))); esf[i] = s / nq; }
+    const at = (u) => { const p = (u + U) / DU; if (p <= 0) return esf[0]; if (p >= NT - 1) return esf[NT - 1]; const i = p | 0, fr = p - i; return esf[i] * (1 - fr) + esf[i + 1] * fr; };
+    const x0 = W / 2 + 0.23, y0 = H / 2, img = new Float64Array(W * H), r = E.rng(P.seed || 1);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const u = ((x + 0.5 - x0) - (y + 0.5 - y0) * tn) * c;
+      img[y * W + x] = P.lo + (P.hi - P.lo) * at(u) + (P.noise > 0 ? P.noise * E.gauss(r) : 0);
+    }
+    let o = E.usm(P.nrf ? P.nrf(img, W, H) : img, W, H, P.amt || 0, P.rad || 1, P.thr || 0);
+    for (let i = 0; i < o.length; i++) { let v = Math.min(1, Math.max(0, o[i])); if (P.gam) v = Math.pow(v, 1 / 2.2); o[i] = v; }
+    return o;
+  };
+  /* ISO 12233-style e-SFR: centroid per row -> line fit -> 4x binned ESF -> LSF -> Hamming -> DFT */
+  E.sfr = function (img, W, H, opt) {
+    opt = opt || {};
+    const lin = opt.lin ? (v) => Math.pow(v, 2.2) : (v) => v;
+    const a = new Float64Array(W * H); for (let i = 0; i < W * H; i++) a[i] = lin(img[i]);
+    const ys = [], xs = [];
+    let fit = null;
+    for (let pass = 0; pass < 3; pass++) {
+      ys.length = 0; xs.length = 0;
+      for (let y = 0; y < H; y++) {
+        let s = 0, sx = 0; const xc = fit ? fit[0] + fit[1] * (y + 0.5) : W / 2, hw = pass === 1 ? W / 2 - 1 : Math.min(W / 2 - 1, 12);
+        for (let x = 0; x < W - 1; x++) {
+          let d = a[y * W + x + 1] - a[y * W + x]; const px = x + 1;
+          if (fit) { const z = (px - xc) / hw; d *= Math.abs(z) < 1 ? 0.54 + 0.46 * Math.cos(PI * z) : 0; }
+          s += d; sx += d * px;
+        }
+        if (Math.abs(s) > 1e-9) { ys.push(y + 0.5); xs.push(sx / s); }
+      }
+      const n = ys.length; let my = 0, mx = 0; for (let i = 0; i < n; i++) { my += ys[i]; mx += xs[i]; } my /= n; mx /= n;
+      let sxy = 0, syy = 0; for (let i = 0; i < n; i++) { sxy += (ys[i] - my) * (xs[i] - mx); syy += (ys[i] - my) * (ys[i] - my); }
+      const b = syy > 0 ? sxy / syy : 0; fit = [mx - b * my, b];
+    }
+    const ang = Math.atan(fit[1]), c = Math.cos(ang), D = 0.25;
+    const UM = (W / 2 - 3) * c, NB = Math.floor(2 * UM / D), sum = new Float64Array(NB), cnt = new Uint32Array(NB);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const u = (x + 0.5 - (fit[0] + fit[1] * (y + 0.5))) * c, k = Math.floor((u + UM) / D);
+      if (k >= 0 && k < NB) { sum[k] += a[y * W + x]; cnt[k]++; }
+    }
+    let empty = 0; const esf = new Float64Array(NB);
+    for (let k = 0; k < NB; k++) { if (cnt[k]) esf[k] = sum[k] / cnt[k]; else { esf[k] = NaN; empty++; } }
+    for (let k = 0; k < NB; k++) if (isNaN(esf[k])) { let l = k - 1, r = k + 1; while (l >= 0 && isNaN(esf[l])) l--; while (r < NB && isNaN(esf[r])) r++; const vl = l >= 0 ? esf[l] : esf[r], vr = r < NB ? esf[r] : vl; esf[k] = l >= 0 && r < NB ? vl + (vr - vl) * (k - l) / (r - l) : (l >= 0 ? vl : vr); }
+    const lsf = new Float64Array(NB);
+    for (let k = 1; k < NB - 1; k++) lsf[k] = (esf[k + 1] - esf[k - 1]) / 2;
+    let s0 = 0, s1 = 0; for (let k = 0; k < NB; k++) { s0 += lsf[k]; s1 += lsf[k] * k; }
+    const kc = s0 !== 0 ? s1 / s0 : NB / 2, hw = Math.max(4, Math.min(kc, NB - 1 - kc));
+    const lw = new Float64Array(NB); for (let k = 0; k < NB; k++) { const z = (k - kc) / hw; lw[k] = Math.abs(z) <= 1 ? lsf[k] * (0.54 + 0.46 * Math.cos(PI * z)) : 0; }
+    const NF = opt.nf || 101, FM = opt.fmax || 1, freq = [], mtf = [];
+    let dc = 0; for (let k = 0; k < NB; k++) dc += lw[k];
+    for (let i = 0; i < NF; i++) {
+      const f = FM * i / (NF - 1); let re = 0, im = 0;
+      for (let k = 0; k < NB; k++) { const ph = -2 * PI * f * k * D; re += lw[k] * Math.cos(ph); im += lw[k] * Math.sin(ph); }
+      let m = Math.hypot(re, im) / Math.abs(dc || 1);
+      const corr = E.sinc(2 * f * D) * E.sinc(f * D); // central-difference and bin-box corrections
+      m /= Math.max(corr, 0.2);
+      freq.push(f); mtf.push(m);
+    }
+    // ESF plateaus for overshoot
+    const q = Math.max(4, Math.round(NB * 0.12)); let lo = 0, hi = 0; for (let k = 0; k < q; k++) { lo += esf[k]; hi += esf[NB - 1 - k]; } lo /= q; hi /= q;
+    let mx = -1e9, mn = 1e9; for (let k = 0; k < NB; k++) { mx = Math.max(mx, esf[k]); mn = Math.min(mn, esf[k]); }
+    const sgn = hi >= lo ? 1 : -1, amp = Math.abs(hi - lo) || 1;
+    const over = sgn > 0 ? (mx - hi) / amp : (lo - mn) / amp;
+    return { ang: ang * 180 / PI, fit, esf, lsf: lw, NB, D, UM, freq, mtf, empty, over: Math.max(0, over), pts: opt.pts ? null : null };
+  };
+  E.cross = function (fr, m, lvl, fromPeak) { // first frequency where m falls below lvl (after peak if fromPeak)
+    let i0 = 0; if (fromPeak) { let pk = 0; for (let i = 0; i < m.length; i++) if (m[i] > m[pk]) pk = i; i0 = pk; lvl *= m[pk]; }
+    for (let i = i0 + 1; i < m.length; i++) if (m[i] < lvl && m[i - 1] >= lvl) return fr[i - 1] + (fr[i] - fr[i - 1]) * (m[i - 1] - lvl) / (m[i - 1] - m[i]);
+    return NaN;
+  };
+
+  /* ---------- dead leaves */
+  E.deadLeaves = function (N, seed, rmin, rmax, g0, g1) {
+    const r = E.rng(seed), img = new Float64Array(N * N), fill = new Uint8Array(N * N); let left = N * N, guard = 0;
+    const a = Math.pow(rmin, -2), b = Math.pow(rmax, -2);
+    while (left > 0 && guard++ < 200000) {
+      const rad = Math.pow(a - r() * (a - b), -0.5), cx = r() * (N + 2 * rad) - rad, cy = r() * (N + 2 * rad) - rad, v = g0 + (g1 - g0) * r();
+      const x0 = Math.max(0, Math.floor(cx - rad)), x1 = Math.min(N - 1, Math.ceil(cx + rad)), y0 = Math.max(0, Math.floor(cy - rad)), y1 = Math.min(N - 1, Math.ceil(cy + rad)), r2 = rad * rad;
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const i = y * N + x; if (fill[i]) continue; const dx = x + 0.5 - cx, dy = y + 0.5 - cy; if (dx * dx + dy * dy <= r2) { img[i] = v; fill[i] = 1; left--; } }
+    }
+    return img;
+  };
+  E.lensFFT = function (img, N, sig) { // periodic Gaussian blur in frequency domain (exact transfer exp(-2π²σ²f²))
+    const re = Float64Array.from(img), im = new Float64Array(N * N); E.fft2(re, im, N, false);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const fx = E.fq(x, N), fy = E.fq(y, N), g = Math.exp(-2 * PI * PI * sig * sig * (fx * fx + fy * fy)); re[y * N + x] *= g; im[y * N + x] *= g; }
+    E.fft2(re, im, N, true); return re;
+  };
+  /* radial spectra: returns {f, pA, pB?, cross?} with Hann window, density normalized by window energy */
+  E.radial = function (A, B, N, nb) {
+    const w = new Float64Array(N); for (let i = 0; i < N; i++) w[i] = 0.5 - 0.5 * Math.cos(2 * PI * (i + 0.5) / N);
+    const prep = (X) => { let m = 0; for (let i = 0; i < N * N; i++) m += X[i]; m /= N * N; const re = new Float64Array(N * N), im = new Float64Array(N * N); for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) re[y * N + x] = (X[y * N + x] - m) * w[x] * w[y]; E.fft2(re, im, N, false); return [re, im]; };
+    let we = 0; for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) we += Math.pow(w[x] * w[y], 2);
+    const a = prep(A), b = B ? prep(B) : null;
+    const pA = new Float64Array(nb), pB = new Float64Array(nb), cr = new Float64Array(nb), ci = new Float64Array(nb), n = new Float64Array(nb);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const fx = E.fq(x, N), fy = E.fq(y, N), f = Math.hypot(fx, fy), k = Math.floor(f / 0.5 * nb); if (k >= nb || (x === 0 && y === 0)) continue;
+      const i = y * N + x; pA[k] += a[0][i] * a[0][i] + a[1][i] * a[1][i]; n[k]++;
+      if (b) { pB[k] += b[0][i] * b[0][i] + b[1][i] * b[1][i]; cr[k] += a[0][i] * b[0][i] + a[1][i] * b[1][i]; ci[k] += a[1][i] * b[0][i] - a[0][i] * b[1][i]; }
+    }
+    const f = []; for (let k = 0; k < nb; k++) { f.push((k + 0.5) * 0.5 / nb); const d = n[k] * we || 1; pA[k] /= d; pB[k] /= d; cr[k] /= d; ci[k] /= d; }
+    return { f, pA, pB, cr, ci };
+  };
+
+  /* ---------- colour science */
+  const g3 = (x, m, s1, s2) => { const t = (x - m) / (x < m ? s1 : s2); return Math.exp(-0.5 * t * t); };
+  E.cmf = (l) => [1.056 * g3(l, 599.8, 37.9, 31.0) + 0.362 * g3(l, 442.0, 16.0, 26.7) - 0.065 * g3(l, 501.1, 20.4, 26.2), 0.821 * g3(l, 568.8, 46.9, 40.5) + 0.286 * g3(l, 530.9, 16.3, 31.1), 1.217 * g3(l, 437.0, 11.8, 36.0) + 0.681 * g3(l, 459.0, 26.0, 13.8)];
+  E.planck = (l, T) => { const x = l * 1e-9; return 1 / (Math.pow(x, 5) * (Math.exp(1.4387769e-2 / (x * T)) - 1)); };
+  E.WL = []; for (let l = 400; l <= 700; l += 10) E.WL.push(l);
+  E.CC = "57,57,57,57,57,57,58,58,59,60,61,63,66,69,74,80,89,99,111,123,136,147,157,164,168,171,172,172,173,173,173|227,227,227,227,226,225,223,222,221,220,222,225,232,243,260,283,311,345,382,419,453,482,503,518,527,531,534,535,535,535,536|333,333,332,330,327,320,311,299,285,269,253,238,222,207,194,181,169,159,150,143,138,134,131,129,128,127,127,127,127,127,127|49,49,49,50,52,55,60,67,78,91,106,123,139,152,160,161,157,149,138,127,118,111,105,102,100,99,99,98,98,98,98|453,453,451,447,438,422,400,373,342,311,282,257,237,223,213,207,206,208,212,218,224,230,235,239,241,242,242,242,243,243,243|361,361,363,368,377,393,415,444,476,510,539,560,568,561,539,501,451,395,340,291,252,223,204,193,186,183,181,180,180,179,179|53,53,53,53,54,56,60,64,70,78,88,100,116,138,167,207,261,327,403,479,547,601,639,664,678,685,688,690,691,691,692|427,427,425,418,404,382,350,310,268,228,192,162,139,121,108,98,90,85,82,79,78,77,77,76,76,76,76,76,76,76,76|146,146,145,143,137,128,115,102,90,79,72,67,65,66,71,82,102,137,190,265,355,445,520,572,603,619,626,628,629,629,629|169,169,167,162,153,140,122,104,86,72,61,53,47,44,43,44,47,52,60,69,80,92,102,110,115,118,120,120,120,121,121|55,55,56,58,61,69,82,104,140,193,264,348,430,497,538,553,542,511,468,420,375,338,311,293,283,278,275,274,274,274,273|50,50,50,51,53,58,65,76,91,114,143,180,226,279,336,396,453,505,550,585,613,632,646,655,660,664,665,666,666,666,666|329,329,326,319,304,281,249,213,175,142,114,92,76,64,55,48,43,39,36,34,33,32,32,31,31,31,31,31,31,31,31|53,53,54,56,59,65,76,93,120,159,209,263,310,337,338,314,272,224,180,145,120,103,92,86,83,81,80,79,79,79,79|54,55,55,54,53,50,46,42,38,35,33,32,32,33,36,42,53,73,108,164,242,335,424,494,540,564,575,577,576,574,573|45,45,46,47,50,56,67,86,116,163,232,320,418,513,591,648,685,708,720,724,724,723,720,718,717,716,716,716,716,717,717|373,373,369,359,337,302,257,210,166,131,107,90,81,77,78,86,103,132,180,247,329,413,486,537,569,585,591,594,595,595,596|331,332,333,336,341,348,358,369,379,383,380,363,334,292,243,194,151,117,92,75,64,56,51,48,47,46,45,45,45,45,45|828,828,828,829,832,835,840,847,854,861,868,874,879,883,885,886,887,886,885,883,881,879,878,877,876,876,876,876,876,876,876|583,583,583,583,584,584,585,586,588,589,590,591,592,593,593,592,592,591,590,588,587,586,586,585,585,585,585,585,585,585,585|364,364,364,364,365,365,365,366,366,367,368,368,368,368,368,367,366,365,363,362,361,360,360,359,359,359,359,359,359,359,359|190,190,190,190,190,190,190,190,190,190,191,191,191,191,191,191,191,191,191,190,190,190,190,190,190,190,190,190,190,190,190|90,90,90,90,90,90,90,90,90,90,90,89,89,89,89,89,88,88,88,87,87,87,87,86,86,86,86,86,86,86,86|32,32,32,32,32,32,32,32,32,32,32,32,32,32,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31".split("|").map((s) => s.split(",").map((v) => v / 1000));
+  E.CCN = ["다크 스킨", "라이트 스킨", "블루 스카이", "폴리지", "블루 플라워", "블루이시 그린", "오렌지", "퍼플리시 블루", "모더레이트 레드", "퍼플", "옐로 그린", "오렌지 옐로", "블루", "그린", "레드", "옐로", "마젠타", "시안", "화이트", "뉴트럴 8", "뉴트럴 6.5", "뉴트럴 5", "뉴트럴 3.5", "블랙"];
+  E.D65 = [0.95047, 1, 1.08883];
+  const f3 = (t) => (t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116);
+  E.lab = (X, Wp) => { Wp = Wp || E.D65; const fx = f3(X[0] / Wp[0]), fy = f3(X[1] / Wp[1]), fz = f3(X[2] / Wp[2]); return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)]; };
+  E.labInv = (L, Wp) => { Wp = Wp || E.D65; const fy = (L[0] + 16) / 116, fx = fy + L[1] / 500, fz = fy - L[2] / 200; const fi = (t) => (t > 6 / 29 ? t * t * t : 3 * (6 / 29) * (6 / 29) * (t - 4 / 29)); return [Wp[0] * fi(fx), Wp[1] * fi(fy), Wp[2] * fi(fz)]; };
+  E.mul = (M, v) => [M[0][0] * v[0] + M[0][1] * v[1] + M[0][2] * v[2], M[1][0] * v[0] + M[1][1] * v[1] + M[1][2] * v[2], M[2][0] * v[0] + M[2][1] * v[1] + M[2][2] * v[2]];
+  E.mm = (A, B) => A.map((r) => [0, 1, 2].map((j) => r[0] * B[0][j] + r[1] * B[1][j] + r[2] * B[2][j]));
+  E.inv3 = function (m) { const [a, b, c] = m[0], [d, e, f] = m[1], [g, h, i] = m[2]; const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g, det = a * A + b * B + c * C; return [[A / det, -(b * i - c * h) / det, (b * f - c * e) / det], [B / det, (a * i - c * g) / det, -(a * f - c * d) / det], [C / det, -(a * h - b * g) / det, (a * e - b * d) / det]]; };
+  E.M_XYZ2RGB = [[3.2404542, -1.5371385, -0.4985314], [-0.969266, 1.8760108, 0.041556], [0.0556434, -0.2040259, 1.0572252]];
+  E.M_RGB2XYZ = E.inv3(E.M_XYZ2RGB);
+  const BFD = [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]], BFDi = E.inv3(BFD);
+  E.bradford = function (Ws, Wd) { const s = E.mul(BFD, Ws), d = E.mul(BFD, Wd); return E.mm(BFDi, E.mm([[d[0] / s[0], 0, 0], [0, d[1] / s[1], 0], [0, 0, d[2] / s[2]]], BFD)); };
+  E.enc = (v) => { v = Math.min(1, Math.max(0, v)); return v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055; };
+  E.labToCss = (L) => { const r = E.mul(E.M_XYZ2RGB, E.labInv(L)); return "rgb(" + r.map((v) => Math.round(255 * E.enc(v))).join(",") + ")"; };
+  E.inGamut = (L) => E.mul(E.M_XYZ2RGB, E.labInv(L)).every((v) => v > -0.002 && v < 1.002);
+  E.de76 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  E.de94 = function (a, b) { const C1 = Math.hypot(a[1], a[2]), C2 = Math.hypot(b[1], b[2]), dL = a[0] - b[0], dC = C1 - C2, dE = E.de76(a, b), dH = Math.sqrt(Math.max(0, dE * dE - dL * dL - dC * dC)); return Math.hypot(dL, dC / (1 + 0.045 * C1), dH / (1 + 0.015 * C1)); };
+  /* CIEDE2000 (Sharma, Wu, Dalal 2005), returns {de, terms:[dL/SL, dC/SC, dH/SH, RT term]} */
+  E.de00 = function (p, q, full) {
+    const [L1, a1, b1] = p, [L2, a2, b2] = q, R = PI / 180;
+    const C1 = Math.hypot(a1, b1), C2 = Math.hypot(a2, b2), Cb = (C1 + C2) / 2, Cb7 = Math.pow(Cb, 7);
+    const G = 0.5 * (1 - Math.sqrt(Cb7 / (Cb7 + Math.pow(25, 7))));
+    const a1p = (1 + G) * a1, a2p = (1 + G) * a2, C1p = Math.hypot(a1p, b1), C2p = Math.hypot(a2p, b2);
+    const hp = (b, a) => { if (a === 0 && b === 0) return 0; let h = Math.atan2(b, a) / R; return h < 0 ? h + 360 : h; };
+    const h1p = hp(b1, a1p), h2p = hp(b2, a2p);
+    const dLp = L2 - L1, dCp = C2p - C1p;
+    let dhp = 0; if (C1p * C2p !== 0) { dhp = h2p - h1p; if (dhp > 180) dhp -= 360; else if (dhp < -180) dhp += 360; }
+    const dHp = 2 * Math.sqrt(C1p * C2p) * Math.sin(dhp * R / 2);
+    const Lbp = (L1 + L2) / 2, Cbp = (C1p + C2p) / 2;
+    let hbp = h1p + h2p; if (C1p * C2p !== 0) { if (Math.abs(h1p - h2p) > 180) hbp = h1p + h2p < 360 ? (h1p + h2p + 360) / 2 : (h1p + h2p - 360) / 2; else hbp = (h1p + h2p) / 2; }
+    const T = 1 - 0.17 * Math.cos((hbp - 30) * R) + 0.24 * Math.cos(2 * hbp * R) + 0.32 * Math.cos((3 * hbp + 6) * R) - 0.2 * Math.cos((4 * hbp - 63) * R);
+    const dth = 30 * Math.exp(-Math.pow((hbp - 275) / 25, 2)), Cbp7 = Math.pow(Cbp, 7), RC = 2 * Math.sqrt(Cbp7 / (Cbp7 + Math.pow(25, 7)));
+    const SL = 1 + 0.015 * Math.pow(Lbp - 50, 2) / Math.sqrt(20 + Math.pow(Lbp - 50, 2)), SC = 1 + 0.045 * Cbp, SH = 1 + 0.015 * Cbp * T, RT = -Math.sin(2 * dth * R) * RC;
+    const tL = dLp / SL, tC = dCp / SC, tH = dHp / SH, de = Math.sqrt(tL * tL + tC * tC + tH * tH + RT * tC * tH);
+    return full ? { de, tL, tC, tH, rt: RT * tC * tH, SL, SC, SH, RT } : de;
+  };
+  /* illuminants (relative SPD on WL) */
+  E.illum = function (id) {
+    return E.WL.map((l) => {
+      if (id === "d65") return E.planck(l, 6504) / E.planck(560, 6504);
+      if (id === "a") return E.planck(l, 2856) / E.planck(560, 2856);
+      if (id === "f11") return 0.06 + 1.0 * Math.exp(-0.5 * Math.pow((l - 436) / 6, 2)) + 1.6 * Math.exp(-0.5 * Math.pow((l - 545) / 6, 2)) + 1.3 * Math.exp(-0.5 * Math.pow((l - 611) / 6, 2)) + 0.2 * Math.exp(-0.5 * Math.pow((l - 490) / 12, 2));
+      if (id === "led") return 0.9 * Math.exp(-0.5 * Math.pow((l - 450) / 10, 2)) + 0.62 * Math.exp(-0.5 * Math.pow((l - 565) / 52, 2));
+      if (id === "d50") return E.planck(l, 5003) / E.planck(560, 5003);
+      return 1;
+    });
+  };
+  /* camera spectral sensitivities */
+  E.sens = function (id) {
+    const ir = (l) => 1 / (1 + Math.exp((l - 655) / 9)), qe = (l) => 0.45 + 0.35 * (l - 400) / 300;
+    return E.WL.map((l) => {
+      if (id === "li") { const x = E.cmf(l); const L = 0.38971 * x[0] + 0.68898 * x[1] - 0.07868 * x[2], M = -0.22981 * x[0] + 1.1834 * x[1] + 0.04641 * x[2]; return [Math.max(0, 1.6 * L - 0.9 * M), Math.max(0, M), x[2] * 0.55]; }
+      const k = qe(l) * ir(l);
+      let r = (1 / (1 + Math.exp(-(l - 588) / 11)) + 0.04) * k, g = Math.exp(-0.5 * Math.pow((l - 535) / 40, 2)) * k + 0.03 * k, b = Math.exp(-0.5 * Math.pow((l - 458) / 30, 2)) * k + 0.02 * k;
+      if (id === "wide") { const R = 0.78 * r + 0.16 * g + 0.06 * b, G = 0.13 * r + 0.74 * g + 0.13 * b, B = 0.05 * r + 0.17 * g + 0.78 * b; r = R; g = G; b = B; }
+      return [r, g, b];
+    });
+  };
+  /* XYZ (Y of perfect white = 1) and camera RGB of a reflectance under an illuminant */
+  E.xyzOf = function (refl, S) { const o = [0, 0, 0]; let n = 0; E.WL.forEach((l, i) => { const c = E.cmf(l); n += S[i] * c[1]; for (let k = 0; k < 3; k++) o[k] += (refl ? refl[i] : 1) * S[i] * c[k]; }); return o.map((v) => v / n); };
+  E.camOf = function (refl, S, Q) { const o = [0, 0, 0]; E.WL.forEach((l, i) => { for (let k = 0; k < 3; k++) o[k] += refl[i] * S[i] * Q[i][k]; }); return o; };
+  /* least-squares CCM: M = T Cᵀ (C Cᵀ)⁻¹, optional rows sum to 1 (white preserving) */
+  E.fitCCM = function (Cm, Tm, rowSum) {
+    const n = Cm.length, CC = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], TC = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (let k = 0; k < n; k++) for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { CC[i][j] += Cm[k][i] * Cm[k][j]; TC[i][j] += Tm[k][i] * Cm[k][j]; }
+    const Ci = E.inv3(CC); let M = E.mm(TC, Ci);
+    if (rowSum) { // Lagrange: M' = M + (1 - M·1)(1ᵀ Ci 1)^{-1} 1ᵀ Ci
+      const one = [1, 1, 1], u = E.mul(Ci, one), den = u[0] + u[1] + u[2];
+      M = M.map((r) => { const e = 1 - (r[0] + r[1] + r[2]); return r.map((v, j) => v + e * u[j] / den); });
+    }
+    return M;
+  };
+  /* full ColorChecker evaluation */
+  E.ccEval = function (o) {
+    const Q = E.sens(o.sensor), Sc = E.illum(o.illum), Sk = E.illum(o.calib === "same" ? o.illum : "d65");
+    const prep = (S, wbS) => { // WB'd, exposure-normalized camera RGB + reference linear sRGB for each patch
+      const Wx = E.xyzOf(null, S), Ad = E.bradford(Wx, E.D65);
+      const ref = E.CC.map((r) => E.mul(Ad, E.xyzOf(r, S)));
+      const cam = E.CC.map((r) => E.camOf(r, S, Q));
+      let w; if (wbS === "gray") { w = [0, 0, 0]; cam.forEach((c) => { for (let k = 0; k < 3; k++) w[k] += c[k] / 24; }); } else if (wbS === "d65") { w = E.camOf(E.CC[18], E.illum("d65"), Q); } else w = cam[18];
+      const gain = [w[1] / w[0], 1, w[1] / w[2]];
+      const wb = cam.map((c) => c.map((v, k) => v * gain[k]));
+      const ny = ref[18][1] / wb[18][1];
+      return { ref, cam: wb.map((c) => c.map((v) => v * ny)), gain };
+    };
+    const cal = prep(Sk, "white");
+    const Tgt = cal.ref.map((x) => E.mul(E.M_XYZ2RGB, x));
+    const M = o.ccm === "none" ? [[1, 0, 0], [0, 1, 0], [0, 0, 1]] : E.fitCCM(cal.cam, Tgt, o.rowSum);
+    const cap = prep(Sc, o.wb);
+    const out = cap.cam.map((c) => E.mul(M, c));
+    const refLab = cap.ref.map((x) => E.lab(x)), outLab = out.map((r) => E.lab(E.mul(E.M_RGB2XYZ, r)));
+    const de = refLab.map((r, i) => E.de00(r, outLab[i])), dab = refLab.map((r, i) => E.de76(r, outLab[i]));
+    let sat = 0; for (let i = 0; i < 18; i++) sat += Math.hypot(outLab[i][1], outLab[i][2]) / Math.hypot(refLab[i][1], refLab[i][2]); sat /= 18;
+    let wbErr = 0; for (let i = 18; i < 24; i++) wbErr += Math.hypot(outLab[i][1] - refLab[i][1], outLab[i][2] - refLab[i][2]) / 6;
+    const ng = Math.max(...M.map((r) => Math.hypot(r[0], r[1], r[2])));
+    return { M, refLab, outLab, de, dab, sat, wbErr, ng, gain: cap.gain, out };
+  };
+
+  /* ---------- CSF (CPIQ acutance form) and acutance / SQF */
+  E.csf = (v) => (v <= 0 ? 0 : 75 * Math.pow(v, 0.8) * Math.exp(-0.2 * v) / 34.05);
+  E.acutance = function (mtfFn, nyqCpd) { // mtfFn(cpd); MTF=0 beyond Nyquist; denominator to 60 cpd
+    let num = 0, den = 0; const dv = 0.05;
+    for (let v = dv / 2; v < 60; v += dv) { const c = E.csf(v); den += c; if (v < nyqCpd) num += c * mtfFn(v); }
+    return num / den;
+  };
+  E.sqf = function (mtfFn, nyqCpd) { let s = 0; const n = 200, a = Math.log(3), b = Math.log(12); for (let i = 0; i < n; i++) { const v = Math.exp(a + (b - a) * (i + 0.5) / n); s += v < nyqCpd ? mtfFn(v) : 0; } return 100 * s / n; };
+
+  /* ---------- Thurstone Case V from paired comparisons */
+  E.thurstone = function (P, clip) { // P[i][j] = proportion preferring i over j
+    const n = P.length, cl = clip || 0.015, z = (p) => { p = Math.min(1 - cl, Math.max(cl, p)); const t = Math.sqrt(-2 * Math.log(p < 0.5 ? p : 1 - p)); const x = t - (2.515517 + 0.802853 * t + 0.010328 * t * t) / (1 + 1.432788 * t + 0.189269 * t * t + 0.001308 * t * t * t); return p < 0.5 ? -x : x; };
+    const s = []; for (let i = 0; i < n; i++) { let a = 0; for (let j = 0; j < n; j++) if (j !== i) a += z(P[i][j]); s.push(a / n); }
+    return s;
+  };
+
+  /* ---------- texture loss pipeline (dead leaves + edge through the same camera) */
+  E.texCache = null;
+  E.texture = function (P) {
+    const N = 128, NF = 64, NB = 32;
+    if (!E.texCache) { const R = E.deadLeaves(N, 11, 1.2, 50, 0.25, 0.75); E.texCache = { R }; }
+    const R = E.texCache.R, rn = E.rng(P.seed || 5);
+    const nrf = (img, W, H) => {
+      if (P.nr === "none" || P.str <= 0) return img;
+      if (P.nr === "gauss") return E.conv2(img, W, H, E.gk(0.3 + 1.5 * P.str));
+      return E.bilateral(img, W, H, 0.6 + 0.8 * P.str, P.noise * (0.8 + 3 * P.str) + 0.004);
+    };
+    const pipe = (img, W, H) => { const a = new Float64Array(W * H); for (let i = 0; i < W * H; i++) a[i] = img[i] + P.noise * E.gauss(rn); let o = E.usm(nrf(a, W, H), W, H, P.amt, 1, 0); return o; };
+    const O = pipe(E.lensFFT(R, N, P.sig), N, N);
+    const Fl = new Float64Array(NF * NF).fill(0.5), F = pipe(Fl, NF, NF);
+    const sp = E.radial(O, R, N, NB), sn = E.radial(F, null, NF, NB / 2);
+    const direct = [], raw = [], intr = [];
+    for (let k = 0; k < NB; k++) {
+      const pn = sn.pA[Math.min(NB / 2 - 1, k >> 1)], pr = sp.pB[k];
+      raw.push(Math.sqrt(sp.pA[k] / pr)); direct.push(Math.sqrt(Math.max(0, sp.pA[k] - pn) / pr)); intr.push(Math.hypot(sp.cr[k], sp.ci[k]) / pr);
+    }
+    const EP = { W: 64, H: 96, ang: 5, sig: P.sig, ap: 0, lo: 0.2, hi: 0.8, noise: P.noise, seed: (P.seed || 5) + 7, amt: P.amt, rad: 1, thr: 0, gam: false, nrf };
+    const eImg = E.renderEdge(EP), es = E.sfr(eImg, 64, 96, {});
+    let s2 = 0; for (let i = 0; i < NF * NF; i++) s2 += (F[i] - 0.5) * (F[i] - 0.5);
+    return { f: sp.f, raw, direct, intr, ef: es.freq, em: es.mtf, O, N, noiseOut: Math.sqrt(s2 / (NF * NF)) };
+  };
+
+  /* ---------- visual noise: CSF-weighted noise in L*, a*, b* */
+  E.csfL = (v) => E.csf(v) / 3.0028; // peak (at 4 cpd) normalised to 1
+  E.csfC = (v, v0) => Math.exp(-v / v0);
+  E.noiseField = function (n, grain, sigma, seed) {
+    const r = E.rng(seed), re = new Float64Array(n * n), im = new Float64Array(n * n);
+    for (let i = 0; i < n * n; i++) re[i] = E.gauss(r);
+    if (grain > 0.05) { E.fft2(re, im, n, false); for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { const fx = E.fq(x, n), fy = E.fq(y, n), g = Math.exp(-2 * PI * PI * grain * grain * (fx * fx + fy * fy)); re[y * n + x] *= g; im[y * n + x] *= g; } E.fft2(re, im, n, true); }
+    let m = 0, s = 0; for (let i = 0; i < n * n; i++) m += re[i]; m /= n * n; for (let i = 0; i < n * n; i++) s += (re[i] - m) * (re[i] - m); s = Math.sqrt(s / (n * n));
+    const o = new Float64Array(n * n); for (let i = 0; i < n * n; i++) o[i] = (re[i] - m) / s * sigma; return o;
+  };
+  E.weighted = function (X, n, wfn) { // returns CSF-weighted std (Parseval)
+    const re = Float64Array.from(X), im = new Float64Array(n * n); E.fft2(re, im, n, false); let s = 0;
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { if (!x && !y) continue; const f = Math.hypot(E.fq(x, n), E.fq(y, n)), w = wfn(f); s += (re[y * n + x] * re[y * n + x] + im[y * n + x] * im[y * n + x]) * w * w; }
+    return Math.sqrt(s / (n * n) / (n * n));
+  };
+  E.vn = function (cam, ppd) { // cam: {L,a,b fields}
+    const sl = E.weighted(cam.L, cam.n, (f) => E.csfL(f * ppd)), sa = E.weighted(cam.a, cam.n, (f) => E.csfC(f * ppd, 4)), sb = E.weighted(cam.b, cam.n, (f) => E.csfC(f * ppd, 3));
+    return { sl, sa, sb, vn: Math.log10(1 + sl * sl + 0.5 * sa * sa + 0.25 * sb * sb) };
+  };
+
+  /* ---------- OECF / dynamic range from a transmissive step chart */
+  E.oecf = function (P) {
+    const n = 20, np = 400, r = E.rng(P.seed || 9), k = P.fw * 0.9 * Math.pow(2, P.ev), F = P.flare / 100;
+    const tone = (y) => (P.tone === "raw" ? Math.round(y * 4095) / 4095 : P.tone === "srgb" ? Math.round(255 * E.enc(y)) / 255 : Math.round(255 * Math.log(1 + 40 * y) / Math.log(41)) / 255);
+    const st = [];
+    for (let i = 0; i < n; i++) {
+      const D = i * P.dmax / (n - 1), L = Math.pow(10, -D), e = k * (L + F);
+      let s = 0, s2 = 0, sat = 0;
+      for (let j = 0; j < np; j++) { let x = e + Math.sqrt(e) * E.gauss(r) + P.rn * E.gauss(r); if (x >= P.fw) sat++; const v = tone(Math.min(1, Math.max(0, x / P.fw))); s += v; s2 += v * v; }
+      const m = s / np, sd = Math.sqrt(Math.max(0, s2 / np - m * m));
+      st.push({ D, L, e, m, sd: Math.max(sd, (P.tone === "raw" ? 1 / 4095 : 1 / 255) / Math.sqrt(12)), sat: sat / np });
+    }
+    for (let i = 0; i < n; i++) { const a = st[Math.max(0, i - 1)], b = st[Math.min(n - 1, i + 1)]; const g = (a.m - b.m) / (Math.log(a.L) - Math.log(b.L)); st[i].snr = Math.max(1e-3, g / st[i].sd); }
+    let hi = -1; for (let i = 0; i < n; i++) if (st[i].sat < 0.01 && st[i].snr > 1e-2) { hi = i; break; }
+    const dr = (thr) => {
+      if (hi < 0) return { stops: NaN, lim: false };
+      let lo = -1; for (let i = hi; i < n - 1; i++) if (st[i].snr >= thr && st[i + 1].snr < thr) { lo = i; break; }
+      if (lo < 0) { if (st[hi].snr < thr) return { stops: 0, lim: false }; return { stops: Math.log2(st[hi].L / st[n - 1].L), lim: true }; }
+      const a = st[lo], b = st[lo + 1], t = (Math.log(a.snr) - Math.log(thr)) / (Math.log(a.snr) - Math.log(b.snr));
+      const lL = Math.log(a.L) + t * (Math.log(b.L) - Math.log(a.L));
+      return { stops: Math.log2(st[hi].L) - lL / Math.LN2, lim: false };
+    };
+    const S1 = (1 + Math.sqrt(1 + 4 * P.rn * P.rn)) / 2;
+    return { st, hi, dr1: dr(1), dr10: dr(10), drT: Math.log2(P.fw / S1), chart: P.dmax / Math.log10(2), k };
+  };
+
+  /* ---------- dot-grid distortion + lateral colour */
+  E.dots = function (P) {
+    const W = 320, H = 240, cx = W / 2, cy = H / 2, RN = Math.hypot(cx, cy), pit = 24, NX = 6, NY = 4, sig = 2.0, r = E.rng(P.seed || 4);
+    const ideal = []; for (let j = -NY; j <= NY; j++) for (let i = -NX; i <= NX; i++) ideal.push([i, j, cx + i * pit, cy + j * pit]);
+    const map = (x, y, m) => { const dx = (x - cx) / RN, dy = (y - cy) / RN, r2 = dx * dx + dy * dy, s = m * (1 + P.k1 * r2 + P.k2 * r2 * r2); return [cx + dx * s * RN, cy + dy * s * RN]; };
+    const mags = [1 + P.lca / 100, 1, 1 - P.lca / 100];
+    const truePos = mags.map((m) => ideal.map((d) => map(d[2], d[3], m)));
+    const img = [0, 1, 2].map(() => new Float64Array(W * H).fill(0.85));
+    for (let c = 0; c < 3; c++) truePos[c].forEach(([x, y]) => { const R = 7; for (let yy = Math.max(0, Math.floor(y - R)); yy <= Math.min(H - 1, Math.ceil(y + R)); yy++) for (let xx = Math.max(0, Math.floor(x - R)); xx <= Math.min(W - 1, Math.ceil(x + R)); xx++) { const d2 = (xx + 0.5 - x) ** 2 + (yy + 0.5 - y) ** 2; img[c][yy * W + xx] -= 0.7 * Math.exp(-0.5 * d2 / (sig * sig)); } });
+    if (P.noise > 0) for (let c = 0; c < 3; c++) for (let i = 0; i < W * H; i++) img[c][i] += P.noise * E.gauss(r);
+    // measurement: centroid in a window around a prediction, grown outward from the centre (BFS)
+    const cent = (ch, px, py) => { const R = 8; let s = 0, sx = 0, sy = 0; for (let yy = Math.max(0, Math.round(py) - R); yy <= Math.min(H - 1, Math.round(py) + R); yy++) for (let xx = Math.max(0, Math.round(px) - R); xx <= Math.min(W - 1, Math.round(px) + R); xx++) { const v = Math.max(0, 0.85 - img[ch][yy * W + xx] - 3 * P.noise); s += v; sx += v * (xx + 0.5); sy += v * (yy + 0.5); } return s > 0 ? [sx / s, sy / s] : [px, py]; };
+    const meas = [0, 1, 2].map(() => new Array(ideal.length).fill(null)), idx = (i, j) => (j + NY) * (2 * NX + 1) + (i + NX);
+    for (let c = 0; c < 3; c++) {
+      const q = [[0, 0]]; let p0 = cent(c, cx, cy); p0 = cent(c, p0[0], p0[1]); meas[c][idx(0, 0)] = p0;
+      while (q.length) { const [i, j] = q.shift(); const p = meas[c][idx(i, j)];
+        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ii = i + di, jj = j + dj; if (Math.abs(ii) > NX || Math.abs(jj) > NY || meas[c][idx(ii, jj)]) continue;
+          const back = meas[c][idx(i - di, j - dj)] && Math.abs(i - di) <= NX && Math.abs(j - dj) <= NY ? meas[c][idx(i - di, j - dj)] : null;
+          const pr = back ? [2 * p[0] - back[0], 2 * p[1] - back[1]] : [p[0] + di * pit, p[1] + dj * pit];
+          let m = cent(c, pr[0], pr[1]); m = cent(c, m[0], m[1]); meas[c][idx(ii, jj)] = m; q.push([ii, jj]); } }
+    }
+    // fit r_d = A r + B r^3 + C r^5 (normalised), G channel
+    const fit = (pos) => { const M = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], v = [0, 0, 0];
+      ideal.forEach((d, n) => { if (!d[0] && !d[1]) return; const ru = Math.hypot(d[2] - cx, d[3] - cy) / RN, rd = Math.hypot(pos[n][0] - cx, pos[n][1] - cy) / RN, b = [ru, ru ** 3, ru ** 5]; for (let a = 0; a < 3; a++) { v[a] += b[a] * rd; for (let c = 0; c < 3; c++) M[a][c] += b[a] * b[c]; } });
+      const s = E.mul(E.inv3(M), v); return { s: s[0], k1: s[1] / s[0], k2: s[2] / s[0] }; };
+    const fm = fit(meas[1]), ft = { s: 1, k1: P.k1, k2: P.k2 };
+    let res = 0; ideal.forEach((d, n) => { const ru = Math.hypot(d[2] - cx, d[3] - cy) / RN, ang = Math.atan2(d[3] - cy, d[2] - cx), rr = fm.s * ru * (1 + fm.k1 * ru * ru + fm.k2 * ru ** 4) * RN; res += (cx + rr * Math.cos(ang) - meas[1][n][0]) ** 2 + (cy + rr * Math.sin(ang) - meas[1][n][1]) ** 2; }); res = Math.sqrt(res / ideal.length);
+    const tv = (pos) => { const g = (i, j) => pos[idx(i, j)]; const A = (Math.abs(g(-NX, NY)[1] - g(-NX, -NY)[1]) + Math.abs(g(NX, NY)[1] - g(NX, -NY)[1])) / 2, B = Math.abs(g(0, NY)[1] - g(0, -NY)[1]); return 100 * (A - B) / B; };
+    const lcaFit = (c) => { let sxy = 0, sxx = 0; ideal.forEach((d, n) => { const ux = meas[1][n][0] - cx, uy = meas[1][n][1] - cy, rr = Math.hypot(ux, uy); if (rr < 1) return; const dr = ((meas[c][n][0] - meas[1][n][0]) * ux + (meas[c][n][1] - meas[1][n][1]) * uy) / rr; sxy += dr * rr; sxx += rr * rr; }); return sxy / sxx * RN; };
+    const corner = Math.hypot(NX * pit, NY * pit) / RN;
+    return { W, H, img, ideal, truePos, meas, fm, ft, res, tvM: tv(meas[1]), tvT: tv(truePos[1]), lcaR: lcaFit(0), lcaB: lcaFit(2), lcaT: P.lca / 100 * RN, corner, dC: 100 * (fm.k1 * corner ** 2 + fm.k2 * corner ** 4), dCT: 100 * (P.k1 * corner ** 2 + P.k2 * corner ** 4), cx, cy, RN, NX, NY, pit };
+  };
+
+  /* ---------- veiling glare: PSF = (1-β)·core + β·GSF, FFT convolution */
+  E.glare = function (P) {
+    const N = 256, c = N / 2, sc = new Float64Array(N * N), src = new Float64Array(N * N), half = Math.round(P.field * N / 2);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const dx = x + 0.5 - c, dy = y + 0.5 - c, i = y * N + x; if (Math.abs(dx) < half && Math.abs(dy) < half && Math.hypot(dx, dy) > P.hole) sc[i] = 1; if (P.src > 0 && Math.hypot(x + 0.5 - c - 70, y + 0.5 - c + 70) < 4) { sc[i] = P.src; src[i] = P.src; } }
+    const ker = new Float64Array(N * N); let ks = 0;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const dx = E.fq(x, N) * N, dy = E.fq(y, N) * N, v = Math.pow(1 + (dx * dx + dy * dy) / (P.r0 * P.r0), -1.5); ker[y * N + x] = v; ks += v; }
+    const kr = new Float64Array(N * N), ki = new Float64Array(N * N); for (let i = 0; i < N * N; i++) kr[i] = ker[i] / ks; E.fft2(kr, ki, N, false);
+    const re = Float64Array.from(sc), im = new Float64Array(N * N); E.fft2(re, im, N, false);
+    const gr = new Float64Array(N * N), gi = new Float64Array(N * N);
+    if (P.ghost > 0 && P.src > 0) { for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) gr[y * N + x] = src[((N - 1 - y) * N) + (N - 1 - x)]; E.fft2(gr, gi, N, false); }
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const fx = E.fq(x, N), fy = E.fq(y, N), i = y * N + x, core = Math.exp(-2 * PI * PI * 1.0 * (fx * fx + fy * fy));
+      const hr = (1 - P.beta) * core + P.beta * kr[i], hi = P.beta * ki[i];
+      const ar = re[i] * hr - im[i] * hi, ai = re[i] * hi + im[i] * hr;
+      let br = 0, bi = 0; if (P.ghost > 0 && P.src > 0) { const f = Math.hypot(fx, fy) * 2 * PI * 10, J = f < 1e-6 ? 1 : 2 * E.j1(f) / f; br = P.ghost * gr[i] * J; bi = P.ghost * gi[i] * J; }
+      re[i] = ar + br; im[i] = ai + bi;
+    }
+    E.fft2(re, im, N, true);
+    let sh = 0, nh = 0, sw = 0, nw = 0; const rr = Math.max(1, P.hole / 3);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const d = Math.hypot(x + 0.5 - c, y + 0.5 - c); if (d < rr) { sh += re[y * N + x]; nh++; } else if (d > P.hole + 6 && d < P.hole + 20 && sc[y * N + x] === 1) { sw += re[y * N + x]; nw++; } }
+    // encircled energy of GSF within hole radius (for the estimate β·(1−EE)·coverage)
+    let ee = 0; for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const dx = E.fq(x, N) * N, dy = E.fq(y, N) * N; if (Math.hypot(dx, dy) <= P.hole) ee += ker[y * N + x] / ks; }
+    let cov = 0; for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { if (sc[y * N + x] === 1) cov += ker[(((y - c + N) % N) * N) + ((x - c + N) % N)] / ks; }
+    return { N, sc, out: re, vgi: sh / nh / (sw / nw), white: sw / nw, est: P.beta * cov, ee };
+  };
+  E.j1 = function (x) { // Bessel J1 (Numerical Recipes rational approx.)
+    const ax = Math.abs(x); if (ax < 8) { const y = x * x; return x * (72362614232.0 + y * (-7895059235.0 + y * (242396853.1 + y * (-2972611.439 + y * (15704.4826 + y * (-30.16036606)))))) / (144725228442.0 + y * (2300535178.0 + y * (18583304.74 + y * (99447.43394 + y * (376.9991397 + y))))); }
+    const z = 8 / ax, y = z * z, xx = ax - 2.356194491; const a = 1 + y * (0.183105e-2 + y * (-0.3516396496e-4 + y * (0.2457520174e-5 + y * (-0.240337019e-6)))), b = 0.04687499995 + y * (-0.2002690873e-3 + y * (0.8449199096e-5 + y * (-0.88228987e-6 + y * 0.105787412e-6))); const v = Math.sqrt(0.636619772 / ax) * (Math.cos(xx) * a - z * Math.sin(xx) * b); return x < 0 ? -v : v;
+  };
+
+  /* ---------- observer panel: paired comparison -> Thurstone Case V -> JND scale */
+  E.panel = function (P) { // P: {q:[JND], obs, bias, seed}
+    const n = P.q.length, r = E.rng(P.seed || 2), sd = 1 / (0.6745 * Math.SQRT2); // 1 JND -> 75 % preference
+    const run = (pick) => { const W = [...Array(n)].map(() => new Array(n).fill(0));
+      for (let o = 0; o < P.obs; o++) { const ob = pick ? pick[o] : o, rr = E.rng(1000 + ob * 31 + (P.seed || 2) * 7919), b = P.q.map(() => P.bias * E.gauss(rr));
+        for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) { const a = P.q[i] + b[i] + sd * E.gauss(rr), c = P.q[j] + b[j] + sd * E.gauss(rr); if (a > c) W[i][j]++; else W[j][i]++; } }
+      const Pm = W.map((row, i) => row.map((v, j) => (i === j ? 0.5 : v / P.obs)));
+      const s = E.thurstone(Pm, 0.5 / P.obs).map((z) => z / 0.6745); // z (difference units) -> JND (1 JND = 0.6745 z)
+      const s0 = s[0]; return { Pm, s: s.map((v) => v - s0) }; };
+    const base = run(null), boots = [];
+    for (let k = 0; k < 40; k++) { const pick = []; for (let o = 0; o < P.obs; o++) pick.push(Math.floor(r() * P.obs)); boots.push(run(pick).s); }
+    const ci = P.q.map((_, i) => { const v = boots.map((b) => b[i]).sort((a, b) => a - b); return [v[1], v[38]]; });
+    let unan = 0; for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) if (base.Pm[i][j] === 0 || base.Pm[i][j] === 1) unan++;
+    let e = 0; for (let i = 1; i < n; i++) e += Math.pow(base.s[i] - (P.q[i] - P.q[0]), 2); e = Math.sqrt(e / (n - 1));
+    return { Pm: base.Pm, s: base.s, ci, unan, rms: e };
+  };
+  return E;
+})();
+/* ENGINE END */
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const cssv = (n) => getComputedStyle(document.body).getPropertyValue(n);
+  const font = (sz, mono, w) => (w ? w + " " : "") + sz + "px " + (mono ? cssv("--mono") : cssv("--font"));
+  const later = (fn) => { let q = 0; return () => { if (q) return; q = requestAnimationFrame(() => { q = 0; fn(); }); }; };
+  const fx = (v, d) => (isFinite(v) ? v.toFixed(d) : "—");
+  const sg = (v, d) => (isFinite(v) ? (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d) : "—");
+  const narrowEl = (el) => (el.parentElement.clientWidth || 600) < 560;
+  const dyn = (el, nar, wide, extra) => Object.assign({ get aspect() { return narrowEl(el) ? nar : wide; } }, extra || {});
+  function offscreen(W, H, fill) { const c = document.createElement("canvas"); c.width = W; c.height = H; const g = c.getContext("2d"), id = g.createImageData(W, H); fill(id.data); g.putImageData(id, 0, 0); return c; }
+  function grayImg(arr, W, H, map) { return offscreen(W, H, (d) => { for (let i = 0; i < W * H; i++) { const v = Math.round(255 * Math.min(1, Math.max(0, map ? map(arr[i]) : arr[i]))); d[4 * i] = d[4 * i + 1] = d[4 * i + 2] = v; d[4 * i + 3] = 255; } }); }
+  function blit(ctx, img, x, y, w, h) { ctx.save(); ctx.imageSmoothingEnabled = false; ctx.drawImage(img, x, y, w, h); ctx.restore(); }
+  function txt(ctx, t, x, y, col, sz, align, mono) { ctx.fillStyle = col; ctx.font = font(sz || 12, mono); ctx.textAlign = align || "left"; ctx.textBaseline = "alphabetic"; ctx.fillText(t, x, y); }
+  function panel(ctx, x, y, w, h, opts, title, xl) {
+    const P = SB.palette(), box = { x: x + 42, y: y + 22, w: Math.max(40, w - 52), h: Math.max(30, h - 22 - 36) };
+    const c = SB.chart(ctx, box, opts);
+    txt(ctx, title, x + 42, y + 14, P.text, 12);
+    if (xl) txt(ctx, xl, box.x + box.w / 2, box.y + box.h + 31, P.dim, 11, "center");
+    return c;
+  }
+  const lin = (a, b, n) => { const o = []; for (let i = 0; i < n; i++) o.push(a + (b - a) * i / (n - 1)); return o; };
+
+  /* =================================================== Sim 0: observer panel → JND */
+  (function () {
+    const el = $("cv-jnd"); let seed = 2, R = null;
+    const upd = () => { const mx = gM(); const q = [0, 0.1, 0.3, 0.6, 1].map((f) => f * mx); R = IQ.panel({ q, obs: gO(), bias: gB(), seed }); R.q = q; stats(); cv.redraw(); };
+    const gO = SB.range("jn-obs", (v) => v + "명", upd), gB = SB.range("jn-bias", (v) => v.toFixed(2) + " JND", upd), gM = SB.range("jn-max", (v) => v.toFixed(1) + " JND", upd);
+    $("jn-run").addEventListener("click", () => { seed++; upd(); });
+    function stats() {
+      const n = R.q.length, w = R.ci[n - 1][1] - R.ci[n - 1][0];
+      SB.stat("o-jn-rms", fx(R.rms, 2) + " <small>JND</small>");
+      SB.stat("o-jn-max", fx(R.s[n - 1], 2) + " <small>/ " + fx(R.q[n - 1], 1) + "</small>");
+      SB.stat("o-jn-un", R.unan + " <small>/ 10쌍</small>");
+      SB.stat("o-jn-ci", fx(w, 2) + " <small>JND</small>");
+    }
+    function draw(ctx, w, h) {
+      if (!R) return; const P = SB.palette(), nar = narrowEl(el), L = ["A", "B", "C", "D", "E"];
+      const mw = nar ? w : w * 0.42, mh = nar ? h * 0.46 : h, s = Math.min(mw - 50, mh - 50) / 5, ox = 34, oy = 30;
+      txt(ctx, "선호 비율 p(행 > 열)", ox, 16, P.text, 12);
+      for (let i = 0; i < 5; i++) { txt(ctx, L[i], ox - 10, oy + s * (i + 0.6), P.dim, 12, "center"); txt(ctx, L[i], ox + s * (i + 0.5), oy + 5 * s + 16, P.dim, 12, "center");
+        for (let j = 0; j < 5; j++) { const p = R.Pm[i][j]; ctx.fillStyle = i === j ? P.surface : P.accent; ctx.globalAlpha = i === j ? 1 : 0.1 + 0.85 * p; ctx.fillRect(ox + s * j + 1, oy + s * i + 1, s - 2, s - 2); ctx.globalAlpha = 1;
+          if (i !== j) txt(ctx, p.toFixed(2), ox + s * (j + 0.5), oy + s * (i + 0.5) + 4, p > 0.55 ? "#fff" : P.text, Math.max(9, Math.min(12, s / 4)), "center", true); } }
+      const x0 = nar ? 0 : mw, y0 = nar ? mh : 0, cw = nar ? w : w - mw, chh = nar ? h - mh : h, ym = Math.max(2, R.q[4] * 1.15 + 0.5);
+      const c = panel(ctx, x0, y0, cw, chh, { x: [-0.4, 4.4], y: [-1, ym], xTicks: [0, 1, 2, 3, 4], xFmt: (v) => L[v] || "", series: [{ data: R.q.map((v, i) => [i, v]), color: P.dim, width: 1.6, dash: [5, 4] }] }, "JND 척도: 추정(점, 95 % 구간)과 참값(점선)", "영상");
+      ctx.strokeStyle = P.accent; ctx.fillStyle = P.accent; ctx.lineWidth = 1.6;
+      R.s.forEach((v, i) => { const X = c.X(i); ctx.beginPath(); ctx.moveTo(X, c.Y(R.ci[i][0])); ctx.lineTo(X, c.Y(R.ci[i][1])); ctx.stroke(); ctx.beginPath(); ctx.arc(X, c.Y(v), 4.5, 0, 7); ctx.fill(); });
+    }
+    const cv = SB.canvas(el, draw, dyn(el, 1.25, 0.46, { minHeight: 250, maxHeight: 520 }));
+    upd();
+  })();
+
+  /* =================================================== Sim 1: slanted-edge SFR */
+  (function () {
+    const el = $("cv-sfr"); let seed = 1, R = null;
+    const q = later(compute);
+    const gA = SB.range("sf-ang", (v) => v.toFixed(1) + "°", q), gS = SB.range("sf-sig", (v) => v.toFixed(2) + " px", q), gN = SB.range("sf-noise", (v) => v.toFixed(1) + " %", q), gU = SB.range("sf-amt", (v) => v.toFixed(2), q), gR = SB.range("sf-rows", (v) => v + "행", q);
+    const con = SB.seg("sf-con", q), gam = SB.seg("sf-gam", q);
+    $("sf-run").addEventListener("click", () => { seed++; q(); });
+    function compute() {
+      const P = { W: 64, H: gR(), ang: gA(), sig: gS(), ap: 1, lo: con() === "40" ? 0.02 : 0.2, hi: 0.8, noise: gN() / 100, seed, amt: gU(), rad: 1, thr: 0, gam: gam() !== "lin" };
+      const img = IQ.renderEdge(P), mode = gam(), r = IQ.sfr(img, P.W, P.H, { lin: mode === "dec" });
+      const tr = r.freq.map((f) => IQ.edgeTruth(P, f));
+      const L = mode === "dec" ? (v) => Math.pow(v, 2.2) : (v) => v, c = Math.cos(r.ang * Math.PI / 180), pts = [];
+      for (let y = 0; y < P.H; y++) for (let x = 0; x < P.W; x++) { const u = (x + 0.5 - (r.fit[0] + r.fit[1] * (y + 0.5))) * c; if (Math.abs(u) < 6) pts.push([u, L(img[y * P.W + x])]); }
+      R = { P, img, r, tr, pts, m50: IQ.cross(r.freq, r.mtf, 0.5), t50: IQ.cross(r.freq, tr, 0.5) };
+      let e = 0, n = 0; r.freq.forEach((f, i) => { if (f <= 0.5) { e += (r.mtf[i] - tr[i]) ** 2; n++; } }); R.rms = Math.sqrt(e / n);
+      const ny = r.freq.findIndex((f) => f >= 0.5 - 1e-9);
+      SB.stat("o-sf-ang", fx(r.ang, 2) + "° <small>/ " + P.ang.toFixed(1) + "°</small>");
+      SB.stat("o-sf-50", (isFinite(R.m50) ? R.m50.toFixed(3) : "&gt; 1") + " <small>/ " + (isFinite(R.t50) ? R.t50.toFixed(3) : "&gt; 1") + "</small>");
+      SB.stat("o-sf-ny", fx(r.mtf[ny], 3) + " <small>/ " + fx(tr[ny], 3) + "</small>");
+      SB.stat("o-sf-rms", fx(R.rms, 4));
+      SB.stat("o-sf-emp", r.empty + " <small>/ " + r.NB + "</small>");
+      SB.stat("o-sf-ov", fx(r.over * 100, 1) + " %");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!R) return; const P = SB.palette(), r = R.r, nar = narrowEl(el);
+      const cw = w / 2, ch = h / 2;
+      // ROI image
+      const im = grayImg(R.img, R.P.W, R.P.H), sc = Math.min((cw - 30) / R.P.W, (ch - 30) / R.P.H), iw = R.P.W * sc, ih = R.P.H * sc, ix = (cw - iw) / 2, iy = 22;
+      txt(ctx, nar ? "ROI " + R.P.W + "×" + R.P.H : "ROI (" + R.P.W + " × " + R.P.H + ")와 맞춘 에지", 10, 14, P.text, 12);
+      blit(ctx, im, ix, iy, iw, ih);
+      ctx.strokeStyle = P.warn; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(ix + r.fit[0] * sc, iy); ctx.lineTo(ix + (r.fit[0] + r.fit[1] * R.P.H) * sc, iy + ih); ctx.stroke();
+      ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(ix, iy, iw, ih);
+      // ESF
+      const lo = Math.min(...R.pts.map((p) => p[1])), hi = Math.max(...R.pts.map((p) => p[1])), pad = (hi - lo) * 0.12 + 0.01;
+      const esfD = []; for (let k = 0; k < r.NB; k++) { const u = (k + 0.5) * r.D - r.UM; if (Math.abs(u) < 6) esfD.push([u, r.esf[k]]); }
+      const c1 = panel(ctx, cw, 0, cw, ch, { x: [-6, 6], y: [lo - pad, hi + pad], xTicks: nar ? [-5, 0, 5] : null, series: [{ data: esfD, color: P.accent, width: 2 }] }, nar ? "ESF (점: 투영 샘플)" : "ESF: 투영 샘플(점)과 1/4 px 빈", "에지까지 거리 (px)");
+      ctx.fillStyle = P.dim; ctx.globalAlpha = 0.35; const step = Math.max(1, Math.floor(R.pts.length / 1500));
+      for (let i = 0; i < R.pts.length; i += step) ctx.fillRect(c1.X(R.pts[i][0]) - 0.8, c1.Y(R.pts[i][1]) - 0.8, 1.6, 1.6); ctx.globalAlpha = 1;
+      // LSF
+      let pk = 0, kp = 0; for (let k = 0; k < r.NB; k++) if (Math.abs(r.lsf[k]) > pk) { pk = Math.abs(r.lsf[k]); kp = k; }
+      const lsfD = []; for (let k = 0; k < r.NB; k++) { const u = (k - kp) * r.D; if (Math.abs(u) < 4) lsfD.push([u, r.lsf[k] / (pk || 1) * Math.sign(r.lsf[kp] || 1)]); }
+      panel(ctx, 0, ch, cw, ch, { x: [-4, 4], y: [-0.4, 1.1], xTicks: nar ? [-4, -2, 0, 2, 4] : null, series: [{ data: lsfD, color: P.accent, width: 2 }], hlines: [{ y: 0, color: P.faint, dash: [2, 3] }] }, "LSF × 해밍 창 (정점 = 1)", "거리 (px)");
+      // MTF
+      const ym = Math.max(1.15, Math.max(...r.mtf.slice(0, 60), ...R.tr.slice(0, 60)) + 0.1);
+      const c3 = panel(ctx, cw, ch, cw, ch, { x: [0, 1], y: [0, ym], xTicks: nar ? [0, 0.5, 1] : null, series: [{ data: r.freq.map((f, i) => [f, R.tr[i]]), color: P.dim, width: 1.6, dash: [5, 4] }, { data: r.freq.map((f, i) => [f, r.mtf[i]]), color: P.accent, width: 2.2 }], vlines: [{ x: 0.5, label: "Nyq" }], hlines: [{ y: 0.5, color: P.faint }], points: isFinite(R.m50) ? [{ x: R.m50, y: 0.5, color: P.warn, r: 4 }] : [] }, nar ? "MTF" : "MTF: 측정 vs 참값", "cy/px");
+      if (nar) return;
+      txt(ctx, "MTF50 " + (isFinite(R.m50) ? R.m50.toFixed(3) : "> 1"), c3.box.x + c3.box.w - 4, c3.box.y + 30, P.warn, 11, "right", true);
+    }
+    const cv = SB.canvas(el, draw, dyn(el, 1.15, 0.74, { minHeight: 300, maxHeight: 640 }));
+    compute();
+  })();
+
+  /* =================================================== Sim 2: sharpening */
+  (function () {
+    const el = $("cv-usm"); let R = null, base = null, baseSig = -1;
+    const q = later(compute);
+    const gA = SB.range("us-amt", (v) => v.toFixed(2), q), gR = SB.range("us-rad", (v) => v.toFixed(1) + " px", q), gT = SB.range("us-thr", (v) => v.toFixed(3), q), gS = SB.range("us-sig", (v) => v.toFixed(2) + " px", q);
+    function meas(lo, P0) { const P = Object.assign({}, P0, { lo }); const img = IQ.renderEdge(P); return { img, r: IQ.sfr(img, 64, 96, {}), P }; }
+    function compute() {
+      const P0 = { W: 64, H: 96, ang: 5, sig: gS(), ap: 1, hi: 0.8, noise: 0, seed: 1, amt: gA(), rad: gR(), thr: gT(), gam: false };
+      if (baseSig !== gS()) { base = meas(0.2, Object.assign({}, P0, { amt: 0 })); baseSig = gS(); }
+      const a = meas(0.2, P0), b = meas(0.02, P0), lp = a.r.freq.map((f) => IQ.edgeTruth(Object.assign({}, P0, { thr: 0 }), f));
+      const pk = Math.max(...a.r.mtf.slice(0, 51));
+      const k = IQ.gk(gR()), Rk = (k.length - 1) / 2; let s2 = 0; for (let y = 0; y < k.length; y++) for (let x = 0; x < k.length; x++) { const v = (x === Rk && y === Rk ? 1 + gA() : 0) - gA() * k[x] * k[y]; s2 += v * v; }
+      R = { a, b, lp, pk, m50: IQ.cross(a.r.freq, a.r.mtf, 0.5), m50p: IQ.cross(a.r.freq, a.r.mtf, 0.5, true), hc: IQ.cross(b.r.freq, b.r.mtf, 0.5), ng: Math.sqrt(s2) };
+      SB.stat("o-us-ov", fx(a.r.over * 100, 1) + " %");
+      SB.stat("o-us-pk", fx(pk, 2));
+      SB.stat("o-us-50", fx(R.m50, 3) + " <small>/ " + fx(R.m50p, 3) + "</small>");
+      SB.stat("o-us-hc", fx(R.hc, 3));
+      SB.stat("o-us-ng", fx(R.ng, 2) + "×");
+      cv.redraw();
+    }
+    function esfData(r, norm) { const o = []; let lo = 0, hi = 0; const qn = Math.round(r.NB * 0.12); for (let k = 0; k < qn; k++) { lo += r.esf[k]; hi += r.esf[r.NB - 1 - k]; } lo /= qn; hi /= qn;
+      for (let k = 0; k < r.NB; k++) { const u = (k + 0.5) * r.D - r.UM; if (Math.abs(u) < 5) o.push([u, norm ? (r.esf[k] - lo) / (hi - lo) : r.esf[k]]); } return o; }
+    function draw(ctx, w, h) {
+      if (!R) return; const P = SB.palette(), nar = narrowEl(el);
+      const tw = nar ? w : w * 0.36, th = nar ? 96 : h * 0.42;
+      txt(ctx, "4 : 1 에지: 샤프닝 전 | 후", 10, 14, P.text, 12);
+      const ih = th - 26, iw = Math.min((tw - 30) / 2, ih * 0.9);
+      const crop = (img) => { const o = new Float64Array(24 * 32); for (let y = 0; y < 32; y++) for (let x = 0; x < 24; x++) o[y * 24 + x] = img[(y + 32) * 64 + x + 20]; return grayImg(o, 24, 32); };
+      blit(ctx, crop(base.img), 10, 22, iw, ih); blit(ctx, crop(R.a.img), 20 + iw, 22, iw, ih);
+      const ex = nar ? 0 : 0, ey = nar ? th : th, ew = nar ? w : tw, eh = nar ? (h - th) * 0.45 : h - th;
+      panel(ctx, ex, ey, ew, eh, { x: [-5, 5], y: [-0.4, 1.5], series: [{ data: esfData(base.r, true), color: P.dim, width: 1.6, dash: [5, 4] }, { data: esfData(R.b.r, true), color: P.warn, width: 1.6 }, { data: esfData(R.a.r, true), color: P.accent, width: 2.2 }], hlines: [{ y: 1, color: P.faint }, { y: 0, color: P.faint }] }, "측정 ESF (정규화)", "거리 (px)");
+      const mx = nar ? 0 : tw, my = nar ? th + eh : 0, mw = nar ? w : w - tw, mh = nar ? h - th - eh : h;
+      const ym = Math.max(1.2, R.pk + 0.15, Math.max(...R.b.r.mtf.slice(0, 51)) + 0.1);
+      const fr = R.a.r.freq, cut = (arr) => fr.map((f, i) => [f, arr[i]]).filter((p) => p[0] <= 0.75);
+      panel(ctx, mx, my, mw, mh, { x: [0, 0.75], y: [0, ym], series: [{ data: cut(base.r.mtf), color: P.dim, width: 1.6, dash: [5, 4] }, { data: cut(R.lp), color: P.accent2, width: 1.4, dash: [3, 3] }, { data: cut(R.b.r.mtf), color: P.warn, width: 1.8 }, { data: cut(R.a.r.mtf), color: P.accent, width: 2.4 }], vlines: [{ x: 0.5, label: "Nyq" }], hlines: [{ y: 1, color: P.faint }, { y: 0.5, color: P.faint }] }, "측정 MTF (슬랜티드 에지)", "공간 주파수 (cy/px)");
+    }
+    const cv = SB.canvas(el, draw, dyn(el, 1.45, 0.56, { minHeight: 260, maxHeight: 620 }));
+    compute();
+  })();
+
+  /* =================================================== Sim 3: dead leaves texture */
+  (function () {
+    const el = $("cv-dl"); let R = null, refImg = null;
+    const q = later(compute);
+    const nr = SB.seg("dl-nr", q);
+    const gS = SB.range("dl-str", (v) => v.toFixed(2), q), gN = SB.range("dl-noise", (v) => v.toFixed(1) + " %", q), gA = SB.range("dl-amt", (v) => v.toFixed(2), q), gL = SB.range("dl-sig", (v) => v.toFixed(2) + " px", q);
+    function compute() {
+      const sig = gL(); R = IQ.texture({ sig, noise: gN() / 100, nr: nr(), str: gS(), amt: gA(), seed: 5 });
+      if (!refImg) refImg = grayImg(IQ.texCache.R, 128, 128);
+      R.img = grayImg(R.O, 128, 128); R.sig = sig;
+      R.t50 = Math.sqrt(Math.log(2) / 2) / (Math.PI * sig);
+      R.e50 = IQ.cross(R.ef, R.em, 0.5); R.x50 = IQ.cross(R.f, R.intr, 0.5);
+      SB.stat("o-dl-t", fx(R.t50, 3)); SB.stat("o-dl-e", isFinite(R.e50) ? R.e50.toFixed(3) : "&gt; 1"); SB.stat("o-dl-x", isFinite(R.x50) ? R.x50.toFixed(3) : "&gt; 0.5");
+      SB.stat("o-dl-r", isFinite(R.e50) && isFinite(R.x50) ? (100 * R.x50 / R.e50).toFixed(0) + " %" : "—");
+      SB.stat("o-dl-n", fx(R.noiseOut * 100, 2) + " %");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!R) return; const P = SB.palette(), nar = narrowEl(el);
+      const s = nar ? Math.min((w - 30) / 2, 150) : Math.min(w * 0.3, (h - 60) / 2);
+      if (nar) { txt(ctx, "원본 차트", 10, 14, P.text, 12); txt(ctx, "카메라 출력", 20 + s, 14, P.text, 12); blit(ctx, refImg, 10, 20, s, s); blit(ctx, R.img, 20 + s, 20, s, s); }
+      else { txt(ctx, "원본 차트", 10, 14, P.text, 12); blit(ctx, refImg, 10, 20, s, s); txt(ctx, "카메라 출력", 10, 40 + s, P.text, 12); blit(ctx, R.img, 10, 46 + s, s, s); }
+      const x0 = nar ? 0 : s + 20, y0 = nar ? s + 28 : 0;
+      const tr = lin(0, 0.5, 51).map((f) => [f, Math.exp(-2 * Math.PI * Math.PI * R.sig * R.sig * f * f)]);
+      const D = (arr) => R.f.map((f, i) => [f, arr[i]]), E = R.ef.map((f, i) => [f, R.em[i]]).filter((p) => p[0] <= 0.5);
+      const ym = Math.max(1.2, ...R.em.slice(0, 51).map((v) => v + 0.1));
+      panel(ctx, x0, y0, w - x0, h - y0, { x: [0, 0.5], y: [0, Math.min(2, ym)], series: [{ data: tr, color: P.dim, width: 1.6, dash: [5, 4] }, { data: D(R.raw), color: P.bad, width: 1.2 }, { data: D(R.direct), color: P.accent2, width: 1.8 }, { data: E, color: P.warn, width: 2 }, { data: D(R.intr), color: P.accent, width: 2.4 }], hlines: [{ y: 0.5, color: P.faint }] }, "에지 MTF vs 텍스처 MTF", "공간 주파수 (cy/px)");
+    }
+    const cv = SB.canvas(el, draw, dyn(el, 1.25, 0.6, { minHeight: 280, maxHeight: 560 }));
+    compute();
+  })();
+
+  /* =================================================== Sim 4: visual noise */
+  (function () {
+    const el = $("cv-vn"), n = 128; let A = null, B = null, R = null, keyB = "";
+    const q = later(compute);
+    const gS = SB.range("vn-sb", (v) => v.toFixed(2), q), gG = SB.range("vn-gb", (v) => v.toFixed(1) + " px", q), gC = SB.range("vn-cb", (v) => v.toFixed(2), q);
+    const view = SB.seg("vn-view", q);
+    const mk = (sL, g, c, s0) => ({ n, sL, L: IQ.noiseField(n, g, sL, s0), a: IQ.noiseField(n, g, sL * c, s0 + 1), b: IQ.noiseField(n, g, sL * c, s0 + 2) });
+    function patch(C) { return offscreen(n, n, (d) => { for (let i = 0; i < n * n; i++) { const X = IQ.labInv([55 + C.L[i], C.a[i], C.b[i]]), r = IQ.mul(IQ.M_XYZ2RGB, X); for (let k = 0; k < 3; k++) d[4 * i + k] = Math.round(255 * IQ.enc(r[k])); d[4 * i + 3] = 255; } }); }
+    function compute() {
+      if (!A) { A = mk(2, 0, 0.5, 11); A.img = patch(A); A.sp = IQ.radial(A.L, null, n, 32); }
+      const k = [gS(), gG(), gC()].join(); if (k !== keyB) { B = mk(gS(), gG(), gC(), 21); B.img = patch(B); B.sp = IQ.radial(B.L, null, n, 32); keyB = k; }
+      const ppd = Number(view()), va = IQ.vn(A, ppd), vb = IQ.vn(B, ppd);
+      R = { ppd, va, vb };
+      SB.stat("o-vn-s", "2.00 <small>/ " + gS().toFixed(2) + "</small>");
+      SB.stat("o-vn-w", fx(va.sl, 2) + " <small>/ " + fx(vb.sl, 2) + "</small>");
+      SB.stat("o-vn-v", fx(va.vn, 3) + " <small>/ " + fx(vb.vn, 3) + "</small>");
+      const d = vb.vn - va.vn; SB.stat("o-vn-j", Math.abs(d) < 0.02 ? "비슷함" : d > 0 ? "B가 더 거슬림" : "A가 더 거슬림");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!R) return; const P = SB.palette(), nar = narrowEl(el);
+      const s = nar ? Math.min((w - 30) / 2, 150) : Math.min(w * 0.22, h - 40);
+      txt(ctx, "A (고운 노이즈)", 10, 14, P.text, 12); txt(ctx, "B (뭉친 노이즈)", 20 + s, 14, P.text, 12);
+      blit(ctx, A.img, 10, 20, s, s); blit(ctx, B.img, 20 + s, 20, s, s);
+      txt(ctx, "패치는 확대 표시", 10, 36 + s, P.faint, 11);
+      const x0 = nar ? 0 : 2 * s + 30, y0 = nar ? s + 44 : 0, nyq = R.ppd / 2, xm = Math.min(nyq, 60);
+      const toC = (sp) => sp.f.map((f, i) => [f * R.ppd, sp.pA[i]]).filter((p) => p[0] <= xm);
+      const da = toC(A.sp), db = toC(B.sp), ym = Math.max(...da.map((p) => p[1]), ...db.map((p) => p[1])) * 1.1 || 1;
+      const cs = lin(0.2, xm, 80).map((v) => [v, ym * Math.pow(IQ.csfL(v), 2)]);
+      panel(ctx, x0, y0, w - x0, h - y0, { x: [0, xm], y: [0, ym], yFmt: () => "", series: [{ data: cs, color: P.warn, width: 1.4, fill: P.warn + "22" }, { data: da, color: P.dim, width: 1.8 }, { data: db, color: P.accent, width: 2.4 }] }, "L* 노이즈 스펙트럼과 휘도 CSF²", "cycles/degree (나이퀴스트 " + nyq.toFixed(0) + ")");
+    }
+    const cv = SB.canvas(el, draw, dyn(el, 1.15, 0.42, { minHeight: 240, maxHeight: 520 }));
+    compute();
+  })();
+
+  /* =================================================== Sim 5: ColorChecker ΔE */
+  (function () {
+    const el = $("cv-cc"); let R = null, O = null;
+    const ill = SB.seg("cc-ill", upd), sen = SB.seg("cc-sen", upd), ccm = SB.seg("cc-ccm", upd), wb = SB.seg("cc-wb", upd);
+    $("cc-row").addEventListener("change", upd);
+    function upd() {
+      O = { illum: ill(), sensor: sen(), calib: ccm() === "same" ? "same" : "d65", ccm: ccm() === "none" ? "none" : "fit", wb: wb(), rowSum: $("cc-row").checked };
+      R = IQ.ccEval(O);
+      const mean = R.de.reduce((a, b) => a + b, 0) / 24, mab = R.dab.reduce((a, b) => a + b, 0) / 24; let mi = 0; R.de.forEach((v, i) => { if (v > R.de[mi]) mi = i; });
+      SB.stat("o-cc-m", fx(mean, 2)); SB.stat("o-cc-x", fx(R.de[mi], 2) + " <small>" + IQ.CCN[mi] + "</small>"); SB.stat("o-cc-ab", fx(mab, 2));
+      SB.stat("o-cc-wb", fx(R.wbErr, 2)); SB.stat("o-cc-s", fx(R.sat * 100, 1) + " %"); SB.stat("o-cc-g", fx(R.ng, 2) + "×");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!R) return; const P = SB.palette(), nar = narrowEl(el);
+      const gw = nar ? w - 20 : w * 0.5 - 16, cs = Math.min(gw / 6, nar ? 60 : (h - 40) / 4), ox = 10, oy = 22;
+      txt(ctx, "위: 기준 · 아래: 카메라 (ΔE00)", ox, 14, P.text, 12);
+      for (let i = 0; i < 24; i++) { const x = ox + (i % 6) * cs, y = oy + Math.floor(i / 6) * cs;
+        ctx.fillStyle = IQ.labToCss(R.refLab[i]); ctx.fillRect(x + 1, y + 1, cs - 2, cs / 2 - 1);
+        ctx.fillStyle = "rgb(" + R.out[i].map((v) => Math.round(255 * IQ.enc(v))).join(",") + ")"; ctx.fillRect(x + 1, y + cs / 2, cs - 2, cs / 2 - 1);
+        txt(ctx, R.de[i].toFixed(1), x + cs / 2, y + cs * 0.86, R.outLab[i][0] > 55 ? "#111" : "#f4f4f4", Math.max(10, Math.min(13, cs / 4.2)), "center", true); }
+      if (!nar && h - (oy + 4 * cs) > 80) { const my = oy + 4 * cs + 24; txt(ctx, O.ccm === "none" ? "CCM 없음 (단위 행렬)" : "CCM (WB 후 카메라 RGB → 선형 sRGB)", ox, my, P.text, 12);
+        R.M.forEach((row, i) => row.forEach((v, j) => txt(ctx, (v >= 0 ? " " : "") + v.toFixed(3), ox + 10 + j * 70, my + 22 + i * 19, v < 0 ? P.bad : P.text, 13, "left", true)));
+        txt(ctx, "WB 게인 R " + R.gain[0].toFixed(2) + " · B " + R.gain[2].toFixed(2), ox, my + 22 + 3 * 19 + 6, P.dim, 12, "left", true); }
+      const x0 = nar ? 0 : w * 0.5, y0 = nar ? oy + 4 * cs + 8 : 0, cw = nar ? w : w * 0.5, hh = h - y0, h1 = hh * 0.62;
+      const c = panel(ctx, x0, y0, cw, h1, { x: [-55, 65], y: [-60, 90] }, "a*b*: 기준 ○ → 카메라 ●", "a*");
+      for (let i = 0; i < 24; i++) { const a = R.refLab[i], b = R.outLab[i], col = IQ.labToCss(a);
+        ctx.strokeStyle = P.dim; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(c.X(a[1]), c.Y(a[2])); ctx.lineTo(c.X(b[1]), c.Y(b[2])); ctx.stroke();
+        ctx.strokeStyle = P.text; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(c.X(a[1]), c.Y(a[2]), 4.5, 0, 7); ctx.stroke();
+        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(c.X(b[1]), c.Y(b[2]), 3.5, 0, 7); ctx.fill(); ctx.strokeStyle = P.text; ctx.lineWidth = 0.8; ctx.stroke(); }
+      const S = IQ.illum(O.illum), Q = IQ.sens(O.sensor), sm = Math.max(...S), qm = Math.max(...Q.map((v) => Math.max(...v)));
+      panel(ctx, x0, y0 + h1, cw, hh - h1, { x: [400, 700], y: [0, 1.05], yTicks: [0, 1], series: [{ data: IQ.WL.map((l, i) => [l, S[i] / sm]), color: P.dim, width: 1.4, fill: P.dim + "22" }, { data: IQ.WL.map((l, i) => [l, Q[i][0] / qm]), color: "#e0443e", width: 1.8 }, { data: IQ.WL.map((l, i) => [l, Q[i][1] / qm]), color: "#2da44e", width: 1.8 }, { data: IQ.WL.map((l, i) => [l, Q[i][2] / qm]), color: "#2f6fe0", width: 1.8 }] }, "조명 분광(회색)과 센서 감도", "파장 (nm)");
+    }
+    const cv = SB.canvas(el, draw, dyn(el, 1.75, 0.62, { minHeight: 300, maxHeight: 700 }));
+    upd();
+  })();
+
+  /* =================================================== Sim 6: ΔE explorer */
+  (function () {
+    const el = $("cv-de"), BASE = { gray: [50, 0, 0], blue: [35, 15, -55], skin: [65, 18, 18], yellow: [85, 2, 80] };
+    const SH = [[50,2.6772,-79.7751,50,0,-82.7485,2.0425],[50,3.1571,-77.2803,50,0,-82.7485,2.8615],[50,2.8361,-74.02,50,0,-82.7485,3.4412],[50,-1.3802,-84.2814,50,0,-82.7485,1],[50,-1.1848,-84.8006,50,0,-82.7485,1],[50,-0.9009,-85.5211,50,0,-82.7485,1],[50,0,0,50,-1,2,2.3669],[50,-1,2,50,0,0,2.3669],[50,2.49,-0.001,50,-2.49,0.0009,7.1792],[50,2.49,-0.001,50,-2.49,0.001,7.1792],[50,2.49,-0.001,50,-2.49,0.0011,7.2195],[50,2.49,-0.001,50,-2.49,0.0012,7.2195],[50,-0.001,2.49,50,0.0009,-2.49,4.8045],[50,-0.001,2.49,50,0.001,-2.49,4.8045],[50,-0.001,2.49,50,0.0011,-2.49,4.7461],[50,2.5,0,50,0,-2.5,4.3065],[50,2.5,0,73,25,-18,27.1492],[50,2.5,0,61,-5,29,22.8977],[50,2.5,0,56,-27,-3,31.903],[50,2.5,0,58,24,15,19.4535],[50,2.5,0,50,3.1736,0.5854,1],[50,2.5,0,50,3.2972,0,1],[50,2.5,0,50,1.8634,0.5757,1],[50,2.5,0,50,3.2592,0.335,1],[60.2574,-34.0099,36.2677,60.4626,-34.1751,39.4387,1.2644],[63.0109,-31.0961,-5.8663,62.8187,-29.7946,-4.0864,1.263],[61.2901,3.7196,-5.3901,61.4292,2.248,-4.962,1.8731],[35.0831,-44.1164,3.7933,35.0232,-40.0716,1.5901,1.8645],[22.7233,20.0904,-46.694,23.0331,14.973,-42.5619,2.0373],[36.4612,47.858,18.3852,36.2715,50.5065,21.2231,1.4146],[90.8027,-2.0831,1.441,91.1528,-1.6435,0.0447,1.4441],[90.9257,-0.5406,-0.9208,88.6381,-0.8985,-0.7239,1.5381],[6.7747,-0.2908,-2.4247,5.8714,-0.0985,-2.2286,0.6377],[2.0776,0.0795,-1.135,0.9033,-0.0636,-0.5514,0.9082]];
+    let vmax = 0; SH.forEach((r) => { vmax = Math.max(vmax, Math.abs(IQ.de00(r.slice(0, 3), r.slice(3, 6)) - r[6])); });
+    SB.stat("o-de-v", vmax.toFixed(5));
+    let R = null;
+    const base = SB.seg("de-base", upd), gL = SB.range("de-dl", (v) => sg(v, 1), upd), gC = SB.range("de-dc", (v) => sg(v, 1), upd), gH = SB.range("de-dh", (v) => sg(v, 1) + "°", upd);
+    function upd() {
+      const b = BASE[base()], C = Math.hypot(b[1], b[2]), hh = Math.atan2(b[2], b[1]), C2 = Math.max(0, C + gC()), h2 = hh + gH() * Math.PI / 180;
+      const c2 = [b[0] + gL(), C2 * Math.cos(h2), C2 * Math.sin(h2)], d = IQ.de00(b, c2, true);
+      const cont = [1, 2, 3].map((lv) => { const o = []; for (let k = 0; k <= 72; k++) { const ph = k * 5 * Math.PI / 180; let lo = 0, hi = 60; for (let it = 0; it < 36; it++) { const t = (lo + hi) / 2; if (IQ.de00(b, [b[0], b[1] + t * Math.cos(ph), b[2] + t * Math.sin(ph)]) < lv) lo = t; else hi = t; } o.push([b[1] + lo * Math.cos(ph), b[2] + lo * Math.sin(ph)]); } return o; });
+      R = { b, c2, d, cont, ab: IQ.de76(b, c2), d94: IQ.de94(b, c2) };
+      SB.stat("o-de-ab", fx(R.ab, 2)); SB.stat("o-de-94", fx(R.d94, 2)); SB.stat("o-de-00", fx(d.de, 2));
+      SB.stat("o-de-t", [d.tL, d.tC, d.tH, d.rt].map((v) => fx(Math.abs(v) < 0.05 ? 0 : v, 1)).join(" / "));
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!R) return; const P = SB.palette(), nar = narrowEl(el);
+      const sw = nar ? (w - 30) / 2 : Math.min(w * 0.2, (h - 70)), sy = 22;
+      txt(ctx, "기준색", 10, 14, P.text, 12); txt(ctx, "비교색", 20 + sw, 14, P.text, 12);
+      const sh = nar ? 90 : h - 70;
+      ctx.fillStyle = IQ.labToCss(R.b); ctx.fillRect(10, sy, sw, sh); ctx.fillStyle = IQ.labToCss(R.c2); ctx.fillRect(20 + sw, sy, sw, sh);
+      const lab = (L) => L.map((v) => v.toFixed(1)).join(", ");
+      txt(ctx, lab(R.b), 10, sy + sh + 16, P.dim, 11, "left", true); txt(ctx, lab(R.c2), 20 + sw, sy + sh + 16, P.dim, 11, "left", true);
+      if (!IQ.inGamut(R.c2) || !IQ.inGamut(R.b)) txt(ctx, "sRGB 밖 (표시는 잘림)", 10, sy + sh + 32, P.warn, 11);
+      const x0 = nar ? 0 : 2 * sw + 30, y0 = nar ? sy + sh + 36 : 0, cw = w - x0, chh = h - y0;
+      let span = 4; R.cont[2].forEach((p) => { span = Math.max(span, Math.abs(p[0] - R.b[1]) * 1.15, Math.abs(p[1] - R.b[2]) * 1.15); });
+      span = Math.max(span, Math.abs(R.c2[1] - R.b[1]) * 1.15 + 0.5, Math.abs(R.c2[2] - R.b[2]) * 1.15 + 0.5);
+      const pw = cw - 52, ph = chh - 58, asp = pw / Math.max(1, ph), sx = span * Math.max(1, asp), sy2 = span * Math.max(1, 1 / asp);
+      const c = panel(ctx, x0, y0, cw, chh, { x: [R.b[1] - sx, R.b[1] + sx], y: [R.b[2] - sy2, R.b[2] + sy2], series: R.cont.map((o, i) => ({ data: o, color: P.accent, width: i === 0 ? 2.2 : 1.2 })) }, "기준색 주위 a*b* (L* 고정)", "a*");
+      ctx.strokeStyle = P.warn; ctx.setLineDash([4, 3]); ctx.lineWidth = 1.2;
+      [1, 2, 3].forEach((r) => { ctx.beginPath(); ctx.ellipse(c.X(R.b[1]), c.Y(R.b[2]), Math.abs(c.X(R.b[1] + r) - c.X(R.b[1])), Math.abs(c.Y(R.b[2] + r) - c.Y(R.b[2])), 0, 0, 7); ctx.stroke(); }); ctx.setLineDash([]);
+      ctx.fillStyle = P.text; ctx.beginPath(); ctx.arc(c.X(R.b[1]), c.Y(R.b[2]), 3, 0, 7); ctx.fill();
+      ctx.fillStyle = P.bad; ctx.beginPath(); ctx.arc(c.X(R.c2[1]), c.Y(R.c2[2]), 4.5, 0, 7); ctx.fill();
+    }
+    const cv = SB.canvas(el, draw, dyn(el, 1.25, 0.5, { minHeight: 260, maxHeight: 560 }));
+    upd();
+  })();
+
+  /* =================================================== Sim 7: OECF & DR */
+  (function () {
+    const el = $("cv-oecf"); let R = null, Pm = null;
+    const q = later(compute);
+    const gR = SB.range("oe-rn", (v) => v.toFixed(1) + " e⁻", q), gF = SB.range("oe-fl", (v) => v.toFixed(2) + " %", q), gD = SB.range("oe-dm", (v) => v.toFixed(1) + " (" + (v / Math.log10(2)).toFixed(1) + " 스톱)", q), gE = SB.range("oe-ev", (v) => sg(v, 1) + " EV", q);
+    const tone = SB.seg("oe-tone", q);
+    function lowL(st, hi, thr) { for (let i = hi; i < st.length - 1; i++) if (st[i].snr >= thr && st[i + 1].snr < thr) { const a = st[i], b = st[i + 1], t = (Math.log(a.snr) - Math.log(thr)) / (Math.log(a.snr) - Math.log(b.snr)); return Math.log10(a.L) + t * (Math.log10(b.L) - Math.log10(a.L)); } return NaN; }
+    function compute() {
+      Pm = { fw: 10000, rn: gR(), ev: gE(), flare: gF(), tone: tone(), dmax: gD(), seed: 9 };
+      R = IQ.oecf(Pm);
+      const show = (d) => (!isFinite(d.stops) ? "—" : (d.lim ? "≥ " : "") + d.stops.toFixed(2) + " <small>스톱" + (d.lim ? " · 차트 한계" : " · " + (d.stops * 20 * Math.log10(2)).toFixed(1) + " dB") + "</small>");
+      SB.stat("o-oe-1", show(R.dr1)); SB.stat("o-oe-10", show(R.dr10));
+      SB.stat("o-oe-t", fx(R.drT, 2) + " <small>스톱</small>"); SB.stat("o-oe-c", fx(R.chart, 1) + " <small>스톱</small>");
+      const last = R.st[R.st.length - 1]; SB.stat("o-oe-k", Pm.tone === "raw" ? Math.round(last.m * 4095) + " <small>/ 4095</small>" : Math.round(last.m * 255) + " <small>/ 255</small>");
+      R.l1 = lowL(R.st, R.hi, 1); R.l10 = lowL(R.st, R.hi, 10);
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!R) return; const P = SB.palette(), nar = narrowEl(el), n = R.st.length;
+      const sh = 34, pw = (w - 20) / n; txt(ctx, "투과형 스텝 차트 (출력 그대로)", 10, 14, P.text, 12);
+      R.st.forEach((s, i) => { const v = Math.round(255 * (Pm.tone === "raw" ? IQ.enc(s.m) : s.m)); ctx.fillStyle = "rgb(" + v + "," + v + "," + v + ")"; ctx.fillRect(10 + i * pw, 20, pw - 1, sh); });
+      const y0 = 20 + sh + 4, cw = nar ? w : w / 2, ch = nar ? (h - y0) / 2 : h - y0, xs = [-Pm.dmax - 0.1, 0.1];
+      const oe = R.st.map((s) => [Math.log10(s.L), s.m]);
+      panel(ctx, 0, y0, cw, ch, { x: xs, y: [0, 1.05], series: [{ data: oe, color: P.accent, width: 2 }], points: oe.map((p) => ({ x: p[0], y: p[1], r: 2.5, color: P.accent })) }, "OECF", "log₁₀ 상대 휘도");
+      const sn = R.st.map((s) => [Math.log10(s.L), Math.max(0.05, s.snr)]), vl = [];
+      if (isFinite(R.l1)) vl.push({ x: R.l1, color: P.warn, label: "SNR 1" }); if (isFinite(R.l10)) vl.push({ x: R.l10, color: P.ok, label: "10" });
+      panel(ctx, nar ? 0 : cw, nar ? y0 + ch : y0, cw, ch, { x: xs, y: [0.1, 2000], logY: true, series: [{ data: sn, color: P.accent, width: 2 }], hlines: [{ y: 1, color: P.warn }, { y: 10, color: P.ok }], vlines: vl, points: sn.map((p, i) => ({ x: p[0], y: p[1], r: 2.5, color: R.st[i].sat > 0.01 ? P.bad : P.accent })) }, "증분 SNR (빨간 점: 포화)", "log₁₀ 상대 휘도");
+    }
+    const cv = SB.canvas(el, draw, dyn(el, 1.3, 0.52, { minHeight: 280, maxHeight: 600 }));
+    compute();
+  })();
+
+  /* =================================================== Sim 8: distortion & LCA */
+  (function () {
+    const el = $("cv-dist"); let R = null;
+    const q = later(compute);
+    const g1 = SB.range("di-k1", (v) => sg(v, 3), q), g2 = SB.range("di-k2", (v) => sg(v, 4), q), gC = SB.range("di-lca", (v) => v.toFixed(2) + " %", q), gN = SB.range("di-noise", (v) => v.toFixed(1) + " %", q);
+    const PRE = { main: [-0.08, 0.01, 0.15], uw: [-0.22, 0.04, 0.4], tele: [0.05, 0, 0.05], mus: [-0.08, 0.08, 0.15] };
+    SB.seg("di-pre", (v) => { const p = PRE[v]; g1.set(p[0]); g2.set(p[1]); gC.set(p[2]); });
+    function compute() {
+      R = IQ.dots({ k1: g1(), k2: g2(), lca: gC(), noise: gN() / 100, seed: 4 });
+      const d = R; R.img2 = offscreen(d.W, d.H, (px) => { for (let i = 0; i < d.W * d.H; i++) { for (let c = 0; c < 3; c++) px[4 * i + c] = Math.round(255 * Math.min(1, Math.max(0, d.img[c][i]))); px[4 * i + 3] = 255; } });
+      SB.stat("o-di-k1", sg(d.fm.k1, 4) + " <small>/ " + sg(g1(), 3) + "</small>");
+      SB.stat("o-di-k2", sg(d.fm.k2, 4) + " <small>/ " + sg(g2(), 4) + "</small>");
+      SB.stat("o-di-tv", sg(d.tvM, 2) + " % <small>/ " + sg(d.tvT, 2) + "</small>");
+      SB.stat("o-di-dc", sg(d.dC, 2) + " % <small>/ " + sg(d.dCT, 2) + "</small>");
+      SB.stat("o-di-lc", sg(d.lcaR, 2) + " <small>/ " + sg(d.lcaT, 2) + " px</small>");
+      SB.stat("o-di-rs", fx(d.res, 3) + " px");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!R) return; const P = SB.palette(), nar = narrowEl(el), d = R;
+      const iw = nar ? w - 20 : w * 0.56, ih = iw * d.H / d.W, s = iw / d.W;
+      txt(ctx, "점 격자 영상 (RGB)과 측정 중심(+)", 10, 14, P.text, 12);
+      blit(ctx, d.img2, 10, 20, iw, ih);
+      ctx.strokeStyle = P.accent; ctx.lineWidth = 1;
+      d.meas[1].forEach((p) => { const X = 10 + p[0] * s, Y = 20 + p[1] * s; ctx.beginPath(); ctx.moveTo(X - 3, Y); ctx.lineTo(X + 3, Y); ctx.moveTo(X, Y - 3); ctx.lineTo(X, Y + 3); ctx.stroke(); });
+      // zoom of top-right dot
+      const tp = d.truePos[1][d.NX * 2], zs = Math.min(90, iw * 0.26), zx = 10 + iw - zs - 4, zy = 24;
+      ctx.save(); ctx.beginPath(); ctx.rect(zx, zy, zs, zs); ctx.clip(); ctx.imageSmoothingEnabled = false;
+      const half = 7; ctx.drawImage(d.img2, tp[0] - half, tp[1] - half, 2 * half, 2 * half, zx, zy, zs, zs); ctx.restore();
+      ctx.strokeStyle = P.text; ctx.lineWidth = 1.2; ctx.strokeRect(zx, zy, zs, zs); ctx.fillStyle = P.bg; ctx.globalAlpha = 0.8; ctx.fillRect(zx, zy + zs - 16, zs, 16); ctx.globalAlpha = 1; txt(ctx, "코너 점 확대", zx + zs / 2, zy + zs - 4, P.text, 11, "center");
+      const x0 = nar ? 0 : iw + 20, y0 = nar ? ih + 28 : 0, cw = w - x0, ch = (h - y0) / 2;
+      const rr = lin(0, d.corner, 40), mp = [], lr = [], lb = [];
+      d.ideal.forEach((p, n) => { const ru = Math.hypot(p[2] - d.cx, p[3] - d.cy) / d.RN; if (ru < 0.05) return; const rm = Math.hypot(d.meas[1][n][0] - d.cx, d.meas[1][n][1] - d.cy) / d.RN; mp.push({ x: ru, y: 100 * (rm / (d.fm.s * ru) - 1), r: 2.2, color: P.accent });
+        const ux = (d.meas[1][n][0] - d.cx) / (rm * d.RN), uy = (d.meas[1][n][1] - d.cy) / (rm * d.RN);
+        lr.push({ x: rm, y: (d.meas[0][n][0] - d.meas[1][n][0]) * ux + (d.meas[0][n][1] - d.meas[1][n][1]) * uy, r: 2, color: P.red }); lb.push({ x: rm, y: (d.meas[2][n][0] - d.meas[1][n][0]) * ux + (d.meas[2][n][1] - d.meas[1][n][1]) * uy, r: 2, color: P.blue }); });
+      const tc = rr.map((r) => [r, 100 * (g1() * r * r + g2() * r ** 4)]), fc = rr.map((r) => [r, 100 * (d.fm.k1 * r * r + d.fm.k2 * r ** 4)]);
+      const ys = [...tc.map((p) => p[1]), ...mp.map((p) => p.y)], y1 = Math.min(-0.5, ...ys) * 1.1, y2 = Math.max(0.5, ...ys) * 1.1;
+      panel(ctx, x0, y0, cw, ch, { x: [0, 0.9], y: [y1, y2], series: [{ data: tc, color: P.dim, width: 1.6, dash: [5, 4] }, { data: fc, color: P.accent, width: 2 }], points: mp, hlines: [{ y: 0, color: P.faint }] }, "방사 왜곡 D(r) (%)", "정규화 반지름 r");
+      const lm = Math.max(0.3, gC() / 100 * d.RN * 1.3), lt = rr.map((r) => [r, gC() / 100 * r * d.RN]);
+      panel(ctx, x0, y0 + ch, cw, ch, { x: [0, 0.9], y: [-lm, lm], series: [{ data: lt, color: P.dim, width: 1.4, dash: [5, 4] }, { data: lt.map((p) => [p[0], -p[1]]), color: P.dim, width: 1.4, dash: [5, 4] }], points: lr.concat(lb), hlines: [{ y: 0, color: P.faint }] }, "배율 색수차: R−G, B−G 방사 변위 (px)", "정규화 반지름 r");
+    }
+    const cv = SB.canvas(el, draw, dyn(el, 1.6, 0.62, { minHeight: 300, maxHeight: 680 }));
+    compute();
+  })();
+
+  /* =================================================== Sim 9: veiling glare */
+  (function () {
+    const el = $("cv-glare"); let R = null;
+    const q = later(compute);
+    const gB = SB.range("gl-beta", (v) => v.toFixed(1) + " %", q), gR = SB.range("gl-r0", (v) => v + " px", q), gF = SB.range("gl-field", (v) => Math.round(v * 100) + " %", q), gH = SB.range("gl-hole", (v) => v + " px", q);
+    $("gl-src").addEventListener("change", q);
+    function compute() {
+      const src = $("gl-src").checked; R = IQ.glare({ beta: gB() / 100, r0: gR(), field: gF(), hole: gH(), src: src ? 300 : 0, ghost: src ? 0.003 : 0 }); R.srcOn = src;
+      R.img = grayImg(R.out, R.N, R.N, (v) => (Math.log10(Math.max(v, 1e-4)) + 4) / 4);
+      const v = R.vgi;
+      SB.stat("o-gl-v", v < 1e-5 ? "≈ 0 %" : (v * 100).toFixed(2) + " %");
+      SB.stat("o-gl-e", gB().toFixed(1) + " % <small>/ " + (R.est * 100).toFixed(2) + " %</small>");
+      SB.stat("o-gl-c", Math.round(255 * IQ.enc(Math.max(0, v) * 0.9)) + " <small>/ 255</small>");
+      SB.stat("o-gl-cr", v < 1e-5 ? "&gt; 100000 : 1" : Math.round(1 / v) + " : 1");
+      SB.stat("o-gl-dr", v < 1e-5 ? "&gt; 16.6 스톱" : Math.log2(1 / v).toFixed(1) + " 스톱");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!R) return; const P = SB.palette(), nar = narrowEl(el), N = R.N;
+      const s = nar ? Math.min(w - 20, 230) : Math.min(w * 0.42, h - 30);
+      txt(ctx, "카메라 출력 (로그 표시 10⁻⁴~1)", 10, 14, P.text, 12); blit(ctx, R.img, 10, 20, s, s);
+      const x0 = nar ? 0 : s + 20, y0 = nar ? s + 26 : 0, row = N / 2, sc = [], ou = [];
+      for (let x = 0; x < N; x++) { sc.push([x - N / 2 + 0.5, Math.max(1e-4, R.sc[row * N + x])]); ou.push([x - N / 2 + 0.5, Math.max(1e-4, R.out[row * N + x])]); }
+      panel(ctx, x0, y0, w - x0, h - y0, { x: [-128, 128], y: [1e-4, R.srcOn ? 1000 : 3], logY: true, series: [{ data: sc, color: P.dim, width: 1.4, dash: [4, 3] }, { data: ou, color: P.accent, width: 2 }], hlines: [{ y: Math.max(1e-4, R.vgi * R.white), color: P.warn, label: "VGI" }] }, "가운데 행 단면 (로그)", "위치 (px)");
+    }
+    const cv = SB.canvas(el, draw, dyn(el, 1.4, 0.5, { minHeight: 260, maxHeight: 560 }));
+    compute();
+  })();
+
+  /* =================================================== Sim 10: acutance & SQF */
+  (function () {
+    const el = $("cv-acu"); let R = null;
+    const gP = SB.range("ac-ph", (v) => v.toFixed(1) + " cm", upd), gD = SB.range("ac-d", (v) => v + " cm", upd), gA = SB.range("ac-amt", (v) => v.toFixed(2), upd);
+    const PRE = { phone: [7, 30], mon: [30, 60], a3: [29.7, 50], big: [60, 50] };
+    SB.seg("ac-pre", (v) => { gP.set(PRE[v][0]); gD.set(PRE[v][1]); });
+    const camM = (sig, amt) => (f) => Math.exp(-2 * Math.PI * Math.PI * sig * sig * f * f) * Math.abs(IQ.sinc(f)) * (1 + amt * (1 - Math.exp(-2 * Math.PI * Math.PI * f * f)));
+    function evalAt(cam, th) { const ny = 0.5 * cam.N / th, fn = (v) => cam.m(v * th / cam.N); return { a: IQ.acutance(fn, ny), s: IQ.sqf(fn, ny), ny }; }
+    function upd() {
+      const A = { N: 6000, m: camM(0.5, 0.3) }, B = { N: 3000, m: camM(0.55, gA()) }, d = gD();
+      const th = 2 * Math.atan(gP() / (2 * d)) * 180 / Math.PI, ea = evalAt(A, th), eb = evalAt(B, th);
+      const sweep = lin(5, 100, 64).map((ph) => { const t = 2 * Math.atan(ph / (2 * d)) * 180 / Math.PI; return [ph, evalAt(A, t).a, evalAt(B, t).a]; });
+      R = { A, B, th, ea, eb, sweep };
+      SB.stat("o-ac-th", th.toFixed(1) + "°"); SB.stat("o-ac-a", ea.a.toFixed(3) + " <small>/ " + eb.a.toFixed(3) + "</small>");
+      SB.stat("o-ac-s", ea.s.toFixed(1) + " <small>/ " + eb.s.toFixed(1) + "</small>"); SB.stat("o-ac-n", ea.ny.toFixed(0) + " <small>/ " + eb.ny.toFixed(0) + " cpd</small>");
+      const df = ea.a - eb.a; SB.stat("o-ac-w", (Math.abs(df) < 0.005 ? "비김" : df > 0 ? "A" : "B") + " <small>(" + sg(df, 3) + ")</small>");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!R) return; const P = SB.palette(), nar = narrowEl(el), cw = nar ? w : w / 2, ch = nar ? h / 2 : h;
+      const mk = (cam, ny) => lin(0, Math.min(60, ny), 80).map((v) => [v, cam.m(v * R.th / cam.N)]);
+      const ya = Math.max(1.2, ...mk(R.B, R.eb.ny).map((p) => p[1] + 0.1));
+      const cs = lin(0.1, 60, 100).map((v) => [v, IQ.csfL(v)]);
+      const vl = []; if (R.ea.ny < 60) vl.push({ x: R.ea.ny, color: P.accent2, label: "A Nyq" }); if (R.eb.ny < 60) vl.push({ x: R.eb.ny, color: P.accent, label: "B Nyq" });
+      panel(ctx, 0, 0, cw, ch, { x: [0, 60], y: [0, ya], series: [{ data: cs, color: P.warn, width: 1.2, fill: P.warn + "22" }, { data: mk(R.A, R.ea.ny), color: P.accent2, width: 2.2 }, { data: mk(R.B, R.eb.ny), color: P.accent, width: 2.2 }], vlines: vl }, "MTF (보는 조건 반영)과 CSF", "cycles/degree");
+      const am = R.sweep.map((p) => p[1]).concat(R.sweep.map((p) => p[2]));
+      panel(ctx, nar ? 0 : cw, nar ? ch : 0, cw, ch, { x: [5, 100], y: [Math.min(...am) - 0.05, Math.max(...am) + 0.05], series: [{ data: R.sweep.map((p) => [p[0], p[1]]), color: P.accent2, width: 2.2 }, { data: R.sweep.map((p) => [p[0], p[2]]), color: P.accent, width: 2.2 }], vlines: [{ x: gP(), color: P.dim, label: "현재" }] }, "어큐턴스 vs 그림 높이 (d = " + gD() + " cm)", "그림 높이 (cm)");
+    }
+    const cv = SB.canvas(el, draw, dyn(el, 1.25, 0.46, { minHeight: 260, maxHeight: 560 }));
+    upd();
+  })();
+})();
+</script>
+</body>
+</html>

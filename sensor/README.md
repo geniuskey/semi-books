@@ -31,8 +31,11 @@ python3 -m http.server 8000   # → http://localhost:8000
 | 15 | chapters/automotive.html | LED 플리커 억제, 차량용 HDR 픽셀, 고온 동작, 기능 안전, DMS |
 | 16 | chapters/space.html | 과학용 CCD, 방사선 손상과 CTE, HgCdTe·up-the-ramp, TDI, 광자 계수 |
 | 17 | chapters/invisible.html | 열화상 마이크로볼로미터, X선 검출기, 초분광, 편광 이미징 |
-| 18 | chapters/design.html | 센서 설계 플레이그라운드, 스펙시트 읽기 |
-| 19 | chapters/glossary.html | 용어집(190개), 종합 퀴즈(34문항) |
+| 18 | chapters/nanophotonics.html | 파동 광학 픽셀, FDTD, 박막 간섭, 광 포획, 컬러 라우터·메타표면 |
+| 19 | chapters/interface.html | MIPI D-PHY·C-PHY, CSI-2 패킷, 라인·프레임 타이밍, PLL, 레지스터 제어, 다중 카메라 동기 |
+| 20 | chapters/iq.html | 슬랜티드 에지 MTF, 텍스처 손실, 시각 노이즈, ΔE 색 정확도, 왜곡·플레어 측정 |
+| 21 | chapters/design.html | 센서 설계 플레이그라운드, 스펙시트 읽기 |
+| 22 | chapters/glossary.html | 용어집(190개), 종합 퀴즈(34문항) |
 
 공통 코드: `css/style.css`(디자인 토큰, 라이트/다크), `js/common.js`(내비게이션, 캔버스·차트·3D 헬퍼).
 챕터 작성 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.

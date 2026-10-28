@@ -25,8 +25,11 @@
     { slug: "automotive", num: "15", title: "차량용 센서",            desc: "LED 플리커 억제, 140 dB HDR 픽셀, 고온 암전류, 기능 안전, NIR 글로벌 셔터.", tags: ["응용", "sim"] },
     { slug: "space",      num: "16", title: "우주·천문 센서",          desc: "허블의 CCD와 방사선 손상, JWST의 적외선 검출기, TDI 스캔, 광자 계수.", tags: ["응용", "sim"] },
     { slug: "invisible",  num: "17", title: "가시광 너머의 이미징",     desc: "열화상 마이크로볼로미터, X선 검출기, 초분광, 편광 센서.", tags: ["응용", "sim"] },
-    { slug: "design",     num: "18", title: "센서 설계 플레이그라운드", desc: "픽셀 크기·해상도·광학 포맷을 정하고 성능을 한눈에 비교해 보자.", tags: ["종합", "sim"] },
-    { slug: "glossary",   num: "19", title: "용어집 & 종합 퀴즈",       desc: "핵심 용어 190여 개를 검색하고, 실력을 점검하자.", tags: ["정리"] },
+    { slug: "nanophotonics", num: "18", title: "파동 광학과 나노포토닉 픽셀", desc: "파장만 한 픽셀에서 빛은 광선이 아니다. FDTD, 박막 간섭, 광 포획, 컬러 라우터와 메타표면.", tags: ["광학", "sim"] },
+    { slug: "interface",  num: "19", title: "센서 인터페이스와 타이밍",  desc: "MIPI D-PHY·C-PHY, CSI-2 패킷, 라인·프레임 타이밍, 레지스터 제어, 다중 카메라 동기.", tags: ["시스템", "sim"] },
+    { slug: "iq",         num: "20", title: "화질 평가: 사진을 숫자로",  desc: "슬랜티드 에지 MTF, 색 정확도 ΔE, 텍스처 손실, 시각 노이즈, 플레어와 왜곡 측정.", tags: ["측정", "sim"] },
+    { slug: "design",     num: "21", title: "센서 설계 플레이그라운드", desc: "픽셀 크기·해상도·광학 포맷을 정하고 성능을 한눈에 비교해 보자.", tags: ["종합", "sim"] },
+    { slug: "glossary",   num: "22", title: "용어집 & 종합 퀴즈",       desc: "핵심 용어 190여 개를 검색하고, 실력을 점검하자.", tags: ["정리"] },
   ];
 
   const SB = (window.SB = {});
