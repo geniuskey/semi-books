@@ -56,7 +56,7 @@ npm run build                 # 용어 데이터 갱신 → .book-dist/ 생성
 - `tools/glossary.py` — `tools/glossary/<slug>.json`(용어·문제 은행)으로 공통 용어 데이터와 종합 퀴즈 생성
 - `js/glossary-data.js` — 생성된 시리즈 공통 v1 용어 데이터(`ko`, `en`, `abbr`, `def`, `chapters`)
 - `js/glossary-tooltips.js`, `css/glossary-tooltips.css` — 다른 시리즈와 같은 본문 용어 뜻풀이
-- `tools/check.js` — Playwright로 모든 페이지의 콘솔 오류·모바일 가로 넘침 점검
+- `tools/check.cjs` — Playwright로 모든 페이지의 콘솔 오류·모바일 가로 넘침 점검
 
 챕터 작성 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.
 시뮬레이터의 수치는 교육용 근사 모델입니다. 실제 공정·제품 수치는 2020~2026년 공개 자료 기준의 대략값입니다.
@@ -67,7 +67,7 @@ npm run build                 # 용어 데이터 갱신 → .book-dist/ 생성
 ```bash
 python3 tools/glossary.py
 python3 tools/glossary.py --check   # 생성된 용어 데이터·퀴즈의 최신 여부 확인
-node tools/check.js            # playwright 필요 (전역 설치라면 PW_PATH=$(npm root -g)/playwright)
+node tools/check.cjs            # playwright 필요 (전역 설치라면 PW_PATH=$(npm root -g)/playwright)
 ```
 
 ## 배포 (GitHub Pages)

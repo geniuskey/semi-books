@@ -44,7 +44,7 @@ python3 -m http.server 8000   # → http://localhost:8000
 - `js/common.js` — 내비게이션, 캔버스·차트·컨트롤 헬퍼, 전역 `SB`
 - `js/soc.js` — 기준 칩 SB-1 평면도, 다이 위젯, 장 위치 지도, 타이밍 파형, 포인터 헬퍼, 전역 `SOC`
 - `tools/glossary.py` — `tools/glossary/<slug>.json`(용어·문제 은행)으로 용어집 데이터 생성
-- `tools/check.js` — Playwright로 모든 페이지의 콘솔 오류·모바일 가로 넘침 점검
+- `tools/check.cjs` — Playwright로 모든 페이지의 콘솔 오류·모바일 가로 넘침 점검
 
 챕터 작성 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.
 시뮬레이터의 수치는 교육용 근사 모델입니다. 실제 제품 수치는 2023~2026년 공개 자료 기준의 대략값입니다.
@@ -52,7 +52,7 @@ python3 -m http.server 8000   # → http://localhost:8000
 ## 점검
 ```bash
 python3 tools/glossary.py
-node tools/check.js            # playwright 필요 (전역 설치라면 PW_PATH=$(npm root -g)/playwright)
+node tools/check.cjs            # playwright 필요 (전역 설치라면 PW_PATH=$(npm root -g)/playwright)
 ```
 
 ## 배포 (GitHub Pages)

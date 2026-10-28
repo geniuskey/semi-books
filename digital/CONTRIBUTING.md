@@ -23,7 +23,7 @@ ProcessBook·SoCBook·DesignBook과 같은 디자인 시스템과 컴포넌트�
   - 강조는 `--accent`(파랑), 두 번째 강조는 `--accent-2`(주황).
 - 모바일(폭 360px)에서 가로 스크롤 금지. SVG는 `viewBox`만 주고 width/height 생략. 캔버스는 `SB.canvas`로 부모 폭을 따른다.
 - 끌기 조작은 `DG.pointer(el, {...}, {drag:true})`로 마우스·터치를 함께 지원한다. 끌기가 없는 캔버스에는 drag를 켜지 않는다(스크롤 보존).
-- 인터랙티브 요소 안의 `button`, `select`, `input[type=range]`는 아무 순서로 눌러도 예외가 나지 않아야 한다(`tools/check.js`가 전부 눌러 본다).
+- 인터랙티브 요소 안의 `button`, `select`, `input[type=range]`는 아무 순서로 눌러도 예외가 나지 않아야 한다(`tools/check.cjs`가 전부 눌러 본다).
 
 ## head 블록
 소스에는 `<title>`과 `<meta name="description">`(한 줄)만 쓴다. canonical, `theme-color`, Open Graph, Twitter 카드, JSON-LD는 루트의 `tools/build.mjs`가 `js/common.js`의 `CHAPTERS`와 `book.json`의 `meta`로 배포물에 생성하고, 수식도 빌드가 KaTeX로 미리 렌더링한다. 소스에 이 태그들이나 KaTeX 태그를 넣으면 `npm test`가 실패한다. 빌드는 정적 HTML의 수식만 렌더링하므로 스크립트가 `\(`·`\[`·`$$`가 든 문자열을 DOM에 넣지 않는다. 소스 파일을 바로 열면 `common.js`가 CDN에서 KaTeX를 불러와 미리보기를 렌더링한다. 사이트맵은 루트에서 `npm run sitemap`으로 갱신한다.
@@ -112,5 +112,5 @@ ProcessBook·SoCBook·DesignBook과 같은 디자인 시스템과 컴포넌트�
 ## 점검
 ```bash
 python3 tools/glossary.py
-node tools/check.js            # playwright 필요 (전역 설치라면 PW_PATH=$(npm root -g)/playwright)
+node tools/check.cjs            # playwright 필요 (전역 설치라면 PW_PATH=$(npm root -g)/playwright)
 ```

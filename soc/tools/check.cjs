@@ -1,6 +1,6 @@
-// Copyright (c) 2026 geniuskey and DigitalBook contributors. MIT (see ../LICENSE-MIT).
+// Copyright (c) 2026 geniuskey and SoCBook contributors. MIT (see ../LICENSE-MIT).
 // 페이지 점검: 콘솔 오류, 360px 가로 넘침, 스크린샷.
-// 실행: node tools/check.js [slug ...]   (기본: 전체 챕터 + index)
+// 실행: node tools/check.cjs [slug ...]   (기본: 전체 챕터 + index)
 // 환경 변수 SHOT=dir 이면 스크린샷 저장, CDN 차단 환경에서도 동작하도록 외부 요청은 무시한다.
 const { chromium } = require(process.env.PW_PATH || "playwright");
 const path = require("path"), fs = require("fs");

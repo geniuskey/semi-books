@@ -31,8 +31,8 @@ test("generated glossary and quiz bank retain all authored content and chapter l
 
 test("the series build manifest and all chapter scripts are valid", () => {
   const book = JSON.parse(read("book.json"));
-  assert.equal(book.domain, read("CNAME").trim());
-  assert.equal(book.url, "https://" + book.domain + "/");
+  assert.equal(book.domain, fs.readFileSync(path.join(root, "..", "CNAME"), "utf8").trim());
+  assert.equal(book.url, "https://" + book.domain + "/" + book.path);
   const files = ["index.html", ...fs.readdirSync(path.join(root, "chapters")).filter((file) => file.endsWith(".html")).map((file) => "chapters/" + file)];
   for (const file of files) {
     const html = read(file);
