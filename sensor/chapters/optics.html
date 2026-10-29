@@ -7,7 +7,7 @@
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png">
 <title>렌즈와 마이크로 광학 · SensorBook</title>
-<meta name="description" content="얇은 렌즈 결상, F-넘버와 심도, 화각과 광학 포맷, 회절 한계와 MTF, 수차, 주광선각(CRA)과 마이크로렌즈 시프트, 렌즈 쉐이딩, 카메라 모듈 구성을 시뮬레이터로 배운다.">
+<meta name="description" content="얇은 렌즈 결상, F-넘버와 심도, 화각과 광학 포맷, 회절 한계와 MTF, 수차와 실제 렌즈 광선 추적, 파면 수차와 FFT로 계산한 PSF, 주광선각(CRA)과 마이크로렌즈 시프트, 렌즈 쉐이딩, IR 컷 필터의 박막 간섭과 카메라 모듈 구성을 시뮬레이터로 배운다.">
 <link rel="stylesheet" href="../css/style.css">
 <script src="../js/common.js"></script>
 <style>
@@ -17,6 +17,8 @@
   .fig-lg svg .t-mono { font-size: 14px; }
   #cv-ray { touch-action: pan-y; cursor: ew-resize; }
   .fmt-seg button { padding: 5px 8px; }
+  #cv-rt { touch-action: pan-y; cursor: ew-resize; }
+  .seg.tight button { padding: 5px 8px; }
 </style>
 <!-- Cloudflare Web Analytics -->
 <!-- End Cloudflare Web Analytics -->
@@ -34,7 +36,8 @@
       <li>F-넘버가 노출·심도·회절에 동시에 미치는 영향을 정량적으로 설명한다.</li>
       <li>광학 포맷(1/2.55", 1", APS-C, 풀프레임)의 실제 크기와 35mm 환산 초점거리를 구한다.</li>
       <li>에어리 디스크와 픽셀 피치, 렌즈 MTF와 나이퀴스트 주파수의 관계를 이해한다.</li>
-      <li>CRA와 마이크로렌즈 시프트, cos⁴ 법칙에 따른 렌즈 쉐이딩, 카메라 모듈 부품의 역할을 안다.</li>
+      <li>실제 렌즈를 면 단위로 광선 추적해 스폿과 상면 만곡을 구하고, 동공 함수의 FFT로 PSF·MTF·스트렐 비를 계산한다.</li>
+      <li>CRA와 마이크로렌즈 시프트, cos⁴ 법칙에 따른 렌즈 쉐이딩, 간섭형 IR 컷 필터의 각도 의존성, 카메라 모듈 부품의 역할을 안다.</li>
     </ul>
   </header>
 
@@ -471,6 +474,179 @@
     </div>
   </section>
 
+  <!-- =============================================================== 6b -->
+  <section id="raytrace">
+    <h2>광선 추적: 실제 렌즈를 면 하나씩 따라가기</h2>
+    <p>얇은 렌즈 공식과 3차(자이델) 수차 이론은 모두 근사다. 실제 렌즈의 성능은 광선 하나하나를 면마다 스넬 법칙으로 꺾어 상면까지 따라가는 <span class="term">순차 광선 추적</span><span class="en">(Sequential Ray Tracing)</span>으로 계산한다. 렌즈 전체는 면마다 곡률 \(c_i = 1/R_i\), 원뿔 상수 \(k_i\), 다음 면까지 거리 \(t_i\), 면 뒤 매질의 굴절률 \(n_i\)를 적은 표, 곧 <b>렌즈 처방</b><span class="en">(Lens Prescription)</span>으로 정의된다. 면의 모양은 앞 절의 비구면 식(\(A_4\) 이후 항을 뺀 원뿔 곡면)을 쓴다.</p>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 255" role="img" aria-label="구면 한 면에서의 광선 굴절과 순차 광선 추적의 단계">
+        <path d="M209.8 49.8 A170 170 0 0 0 172.4 233.7 L300 233.7 L300 49.8 Z" class="f-acc-soft" stroke="none"/>
+        <path d="M209.8 49.8 A170 170 0 0 0 172.4 233.7" fill="none" stroke="var(--accent)" stroke-width="2.2"/>
+        <line x1="20" y1="170" x2="430" y2="170" class="s-axis"/>
+        <line x1="300" y1="40" x2="300" y2="240" class="s-line" stroke-dasharray="5 4"/>
+        <line x1="330" y1="170" x2="135.8" y2="66.7" class="s-line" stroke-dasharray="4 4"/>
+        <circle cx="330" cy="170" r="4" fill="var(--text)"/><text x="336" y="190" class="t-dim">C (곡률 중심)</text>
+        <circle cx="160" cy="170" r="3.5" fill="var(--text)"/><text x="146" y="192" class="t-dim">V</text>
+        <polyline points="30,90.2 179.9,90.2" fill="none" stroke="var(--warn)" stroke-width="2.4"/>
+        <polyline points="179.9,90.2 420,131.5" fill="none" stroke="var(--warn)" stroke-width="2.4"/>
+        <path d="M100 86 l10 4.2 l-10 4.2 z" fill="var(--warn)"/>
+        <path d="M150 90.2 A30 30 0 0 1 153.4 76.1" fill="none" stroke="var(--text-dim)" stroke-width="1.4"/>
+        <text x="120" y="80" class="t">θᵢ</text>
+        <path d="M216 109.6 A40 40 0 0 0 219.3 97" fill="none" stroke="var(--text-dim)" stroke-width="1.4"/>
+        <text x="226" y="112" class="t">θₜ</text>
+        <text x="255" y="140" class="t-dim">R</text>
+        <text x="40" y="140" class="t">n</text><text x="232" y="210" class="t">n′</text>
+        <line x1="96" y1="90.2" x2="96" y2="170" class="s-line"/><text x="82" y="136" class="t-dim">r</text>
+        <line x1="160" y1="246" x2="300" y2="246" class="s-line"/><text x="230" y="244" class="t-mono" text-anchor="middle">t</text>
+        <text x="305" y="34" class="t-dim">다음 면</text>
+        <text x="455" y="40" class="t">면 i의 처방</text>
+        <text x="455" y="64" class="t-mono">c = 1/R, k, t, n′</text>
+        <text x="455" y="96" class="t">광선마다 반복</text>
+        <text x="455" y="122" class="t-dim">① 광선–면 교점 (2차 방정식)</text>
+        <text x="455" y="146" class="t-dim">② 교점에서 면의 법선 n̂</text>
+        <text x="455" y="170" class="t-dim">③ 벡터 스넬 법칙으로 꺾기</text>
+        <text x="455" y="194" class="t-dim">④ 다음 면으로, 끝나면 상면</text>
+        <text x="455" y="226" class="t-mono">부호: C가 오른쪽이면 R &gt; 0</text>
+      </svg>
+      <figcaption><b>그림 5-7.</b> 구면 한 면에서의 굴절. 광선은 곡률 중심 C를 지나는 법선과의 각도로 스넬 법칙을 따른다(\(n'>n\)이면 법선 쪽으로 꺾인다). 순차 광선 추적은 이 과정을 면 순서대로, 입사동을 채운 수백 개의 광선마다 반복한다.</figcaption>
+    </figure>
+
+    <p>3차원에서는 굴절을 벡터로 쓰는 것이 편하다. 입사 방향 단위 벡터를 \(\mathbf d\), 교점에서 진행 방향 쪽을 향한 면의 단위 법선을 \(\hat{\mathbf n}\)이라 하면</p>
+    <div class="formula">$$\mathbf d' = \mu\,\mathbf d + \left(\cos\theta_t - \mu\cos\theta_i\right)\hat{\mathbf n},\qquad \mu = \frac{n}{n'},\quad \cos\theta_i = \hat{\mathbf n}\cdot\mathbf d,\quad \cos\theta_t = \sqrt{1-\mu^2\left(1-\cos^2\theta_i\right)}$$
+      <div class="where">근호 안이 음수이면 전반사다. 교점은 광선 \(\mathbf P + s\,\mathbf d\)를 원뿔 곡면 식 \(c(x^2+y^2) + c(1+k)z^2 - 2z = 0\)에 넣은 \(s\)의 2차 방정식에서 꼭짓점에 가까운 근으로 얻는다.</div>
+    </div>
+    <p>평행광을 입사동 전체에 고르게 채워 상면까지 추적하면 상면 위 교점들의 분포가 생긴다. 이것이 <span class="term">스폿 다이어그램</span><span class="en">(Spot Diagram)</span>이고, 크기는 무게중심에 대한 RMS 반경으로 나타낸다. 마지막 면 뒤의 광선은 직선이므로 \(r_{\text{rms}}^2\)은 상면 위치 \(z\)의 2차식이고, 최소가 되는 <b>최적 초점</b>을 닫힌 식으로 구할 수 있다.</p>
+    <div class="formula">$$r_{\text{rms}} = \sqrt{\frac{1}{M}\sum_{j=1}^{M}\left[(x_j-\bar x)^2 + (y_j-\bar y)^2\right]}$$
+      <div class="where">\(M\): 광선 수. RMS 반경이 에어리 반경(\(1.22\lambda N\)) 정도까지 내려오면 기하광학의 스폿은 더 이상 의미가 없고, 다음 절의 파동광학 계산이 필요하다.</div>
+    </div>
+
+    <div class="callout tip">
+      <strong>계산 예: 같은 렌즈를 뒤집으면</strong>
+      <p>BK7 평볼록 렌즈(\(f\) = 100 mm, 두께 5 mm)로 F/5(입사동 20 mm) 평행광을 모은다(λ = 587.6 nm). 평면을 물체 쪽으로 두면 최적 초점에서 RMS 스폿이 <b>75 µm</b>, 볼록면을 물체 쪽으로 돌리면 <b>19 µm</b>로 약 4배 작다. 굴절을 두 면에 나눠 맡길수록 각 면의 입사각이 작아져 3차 항이 줄기 때문이다. 굽힘 인자 \(q = (R_2+R_1)/(R_2-R_1)\)를 바꿔 보면 최소는 \(q \approx +0.75\)(17.3 µm)로, 3차 이론의 \(q = 2(n^2-1)/(n+2) \approx 0.74\)와 맞는다. 그래도 에어리 지름 \(2.44\lambda N\) = 7.2 µm보다 훨씬 크다. 평면이 앞인 배치에서 F·d·C 세 파장을 함께 추적하면 축상 색수차 때문에 최적 초점의 RMS가 89 µm로 커지고, 같은 \(f\)·F/5의 BK7+F2 접합 색지움 더블릿은 3.7 µm까지 내려간다.</p>
+    </div>
+
+    <div class="sim" id="sim-rt">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>광선 추적기: 실제 렌즈의 광선 팬과 스폿 다이어그램</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-rt"></canvas><canvas id="cv-rts"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>렌즈</span><div class="seg tight" id="rt-pre"><button data-value="sph" class="on">구면 단렌즈</button><button data-value="asph">비구면 단렌즈</button><button data-value="dbl">색지움 더블릿</button><button data-value="cooke">쿠크 트리플릿</button></div></div>
+          <label class="ctrl"><span>단렌즈 굽힘 q <output id="rt-q-out"></output></span><input type="range" id="rt-q" min="-1" max="1.5" value="-1" step="0.05"></label>
+          <label class="ctrl"><span>조리개 위치 (단렌즈 앞) <output id="rt-stop-out"></output></span><input type="range" id="rt-stop" min="0" max="40" value="0" step="1"></label>
+          <label class="ctrl"><span>최대 반화각 <output id="rt-th-out"></output></span><input type="range" id="rt-th" min="0" max="20" value="5" step="0.5"></label>
+          <label class="ctrl"><span>F-넘버 <output id="rt-n-out"></output></span><input type="range" id="rt-n" min="4" max="16" value="5" step="0.1"></label>
+          <label class="ctrl"><span>상면 이동 Δz <output id="rt-dz-out"></output></span><input type="range" id="rt-dz" min="-5" max="5" value="0" step="0.01"></label>
+          <div class="ctrl"><span>파장</span><div class="seg" id="rt-wl"><button data-value="d" class="on">d 단색</button><button data-value="fdc">F·d·C</button></div></div>
+          <button class="btn" id="rt-best">축상 최적 초점</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">유효 초점거리</span><span class="v" id="o-rt-efl">—</span></div>
+        <div class="stat"><span class="k">축상 RMS 스폿</span><span class="v" id="o-rt-r0">—</span></div>
+        <div class="stat"><span class="k">최대 화각 RMS</span><span class="v" id="o-rt-r1">—</span></div>
+        <div class="stat"><span class="k">에어리 지름</span><span class="v" id="o-rt-airy">—</span></div>
+        <div class="stat"><span class="k">왜곡 (최대 화각)</span><span class="v" id="o-rt-dist">—</span></div>
+        <div class="stat"><span class="k">상면 만곡 T / S</span><span class="v" id="o-rt-fc">—</span></div>
+      </div>
+      <div class="sim-note">위: 자오면 광선 팬(파랑 0°, 초록 0.7 화각, 주황 최대 화각)과 상면(진한 세로선, 캔버스를 좌우로 끌어 옮긴다). 점선 세로선은 근축 상면이고 Δz는 거기서 잰 거리다. 세로축은 보기 좋게 확대했다. 아래: 세 화각의 스폿 다이어그램(같은 축척, 무게중심 기준), 점선 원은 에어리 디스크. 상면 만곡은 최대 화각의 자오(T)·구결(S) 초점이 근축 상면에서 얼마나 떨어졌는지(음수 = 렌즈 쪽)다. 렌즈를 고르면 화각·F-넘버·Δz가 그 렌즈의 기본값으로 바뀐다. 렌즈 데이터: 단렌즈 \(f\) = 100 mm(BK7, 두께 5 mm), 비구면 단렌즈는 평면이 앞이고 뒷면 원뿔 상수 \(k = -n^2\), 더블릿 \(f\) = 100 mm(BK7+F2, R = 49.91 / −40.47 / −279.99 mm), 쿠크 트리플릿 \(f\) = 50 mm(SK16·F2·SK16 교과서 설계, F/5). 해볼 것: ① 기본값(평면이 앞, q = −1)에서 '축상 최적 초점'을 누르면 축상 RMS가 227 → 75.1 µm. q를 +0.75로 옮기고 버튼을 다시 누르면 17.3 µm까지 준다. ② '비구면 단렌즈'는 축상 스폿이 0이지만 3° 화각에서 RMS 68.3 µm의 코마가 남는다. 'F·d·C'로 바꾸면 축상도 49.0 µm로 커진다. ③ 더블릿을 F·d·C로 두고 최적 초점을 누르면 축상 RMS 3.7 µm로 에어리 지름(7.2 µm) 안에 든다. ④ 쿠크 트리플릿(20°)은 왜곡 0.05 %, 상면 만곡 T/S −0.55 / −0.41 mm. ⑤ 구면 단렌즈 q = −1에서 조리개를 30 mm 앞으로 빼고 반화각 10°로 두면 T와 S가 −1.00 mm에서 겹친다(아래 심화 상자). 왜곡은 −0.86 % 술통형이 된다.</div>
+    </div>
+
+    <div class="callout deep">
+      <strong>상면 만곡과 페츠발 합</strong>
+      <p>비점수차를 없애도 상면은 평면이 되지 않는다. 얇은 렌즈들의 상면 곡률은 <b>페츠발 합</b><span class="en">(Petzval Sum)</span> \(1/R_P = -\sum_i \phi_i / n_i\)로 정해지며(\(\phi_i\): 각 렌즈의 굴절력), 렌즈를 어떻게 굽히거나 조리개를 어디 두든 변하지 않는다. BK7 단렌즈(\(f\) = 100 mm)는 \(R_P = -nf \approx -152\) mm이므로 반화각 10°(상 높이 \(h\) = 17.6 mm)에서 페츠발 면은 근축 상면보다 \(h^2/(2|R_P|) \approx 1.02\) mm 렌즈 쪽으로 휜다. 위 시뮬레이터 ⑤의 조리개 위치는 이 렌즈의 비점수차가 0이 되는 곳이라 T와 S 초점이 함께 −1.00 mm, 곧 페츠발 면 위에 모인다(19세기 '풍경 렌즈'의 원리). 상면을 평평하게 하려면 굴절력이 양인 렌즈와 음인 렌즈를 <b>떨어뜨려</b> 놓아 \(\sum\phi_i/n_i\)를 줄이면서 전체 굴절력은 유지해야 한다. 쿠크 트리플릿의 가운데 오목 렌즈가 하는 일이 이것이고, 스마트폰 렌즈의 마지막 갈매기 날개형 비구면은 남은 상면 만곡과 왜곡, CRA를 한꺼번에 다듬는다.</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== 6c -->
+  <section id="wavefront">
+    <h2>파면 수차에서 PSF와 MTF로</h2>
+    <p>스폿이 에어리 디스크 크기까지 줄어든 좋은 렌즈는 광선이 아니라 파동으로 평가해야 한다. 출사동에서 상점으로 수렴하는 이상적인 구면파와 실제 파면 사이의 광로차를 <span class="term">파면 수차</span><span class="en">(Wavefront Aberration)</span> \(W(\rho,\theta)\)라 하고, 동공의 투과 진폭 \(A\)와 위상을 합친 <span class="term">동공 함수</span><span class="en">(Pupil Function)</span>가 결상 정보를 모두 담는다. 원거리 회절(프라운호퍼) 근사에서 상면의 점 확산 함수는 동공 함수의 푸리에 변환의 제곱이다.</p>
+    <div class="formula">$$P(\xi,\eta) = A(\xi,\eta)\,e^{\,i2\pi W(\xi,\eta)/\lambda},\qquad \mathrm{PSF}(x,y) = \bigl|\mathcal F\{P\}\bigr|^2,\qquad \mathrm{OTF}(\nu_x,\nu_y) = \frac{\mathcal F\{\mathrm{PSF}\}}{\mathcal F\{\mathrm{PSF}\}(0,0)}$$
+      <div class="where">\(\mathrm{MTF} = |\mathrm{OTF}|\). OTF는 동공 함수의 자기상관과 같으므로 동공 지름의 두 배에 해당하는 \(\nu_c = 1/(\lambda N)\) 밖에서는 정확히 0이다. 앞 절의 회절 MTF 식은 \(W = 0\)인 원형 동공의 결과이고, 수차는 이 위에 위상 무늬를 얹어 MTF를 그 아래로 끌어내린다.</div>
+    </div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 200" role="img" aria-label="동공 함수에서 PSF와 OTF, MTF로 이어지는 계산 흐름">
+        <defs>
+          <linearGradient id="op-wf" x1="0" x2="1" y1="0" y2="1">
+            <stop offset="0" stop-color="var(--blue)"/><stop offset="0.5" stop-color="var(--bg-elev)"/><stop offset="1" stop-color="var(--bad)"/>
+          </linearGradient>
+          <radialGradient id="op-psf">
+            <stop offset="0" stop-color="var(--accent)"/><stop offset="0.35" stop-color="var(--accent)" stop-opacity="0.35"/><stop offset="0.55" stop-color="var(--accent)" stop-opacity="0.04"/><stop offset="0.7" stop-color="var(--accent)" stop-opacity="0.18"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/>
+          </radialGradient>
+          <marker id="op-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--text-dim)"/></marker>
+        </defs>
+        <circle cx="62" cy="86" r="40" class="f-acc-soft"/>
+        <text x="62" y="152" class="t" text-anchor="middle">동공 A(ξ,η)</text><text x="62" y="174" class="t-mono" text-anchor="middle">원형 개구</text>
+        <circle cx="212" cy="86" r="40" fill="url(#op-wf)" stroke="var(--border)"/>
+        <text x="212" y="152" class="t" text-anchor="middle">파면 W(ρ,θ)</text><text x="212" y="174" class="t-mono" text-anchor="middle">수차 = 위상</text>
+        <rect x="312" y="46" width="80" height="80" class="f-surface"/><circle cx="352" cy="86" r="36" fill="url(#op-psf)"/>
+        <text x="352" y="152" class="t" text-anchor="middle">PSF</text><text x="352" y="174" class="t-mono" text-anchor="middle">|FFT{P}|²</text>
+        <g transform="translate(452,46)">
+          <rect x="0" y="0" width="80" height="80" class="f-surface"/>
+          <path d="M4 76 L40 6 L76 76" fill="none" stroke="var(--accent)" stroke-width="2"/>
+          <path d="M14 76 Q40 10 66 76" fill="none" stroke="var(--accent-2)" stroke-width="1.6" stroke-dasharray="4 3"/>
+        </g>
+        <text x="492" y="152" class="t" text-anchor="middle">OTF</text><text x="492" y="174" class="t-mono" text-anchor="middle">FFT{PSF}</text>
+        <g transform="translate(578,46)">
+          <line x1="0" y1="80" x2="92" y2="80" class="s-axis"/><line x1="0" y1="0" x2="0" y2="80" class="s-axis"/>
+          <path d="M0 4 Q30 28 50 56 T90 80" fill="none" stroke="var(--text-dim)" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <path d="M0 4 Q24 40 46 66 T90 80" fill="none" stroke="var(--accent)" stroke-width="2"/>
+          <path d="M0 4 Q18 52 40 74 T90 80" fill="none" stroke="var(--accent-2)" stroke-width="2"/>
+        </g>
+        <text x="624" y="152" class="t" text-anchor="middle">MTF (T/S)</text><text x="624" y="174" class="t-mono" text-anchor="middle">|OTF|의 단면</text>
+        <path d="M106 86 H164" class="s-line" marker-end="url(#op-ar)"/><text x="135" y="74" class="t-mono" text-anchor="middle">e^{i2πW/λ}</text>
+        <path d="M256 86 H306" class="s-line" marker-end="url(#op-ar)"/><text x="281" y="74" class="t-mono" text-anchor="middle">FFT</text>
+        <path d="M396 86 H446" class="s-line" marker-end="url(#op-ar)"/><text x="421" y="74" class="t-mono" text-anchor="middle">FFT</text>
+        <path d="M536 86 H572" class="s-line" marker-end="url(#op-ar)"/>
+        <text x="340" y="22" class="t-dim" text-anchor="middle">동공 좌표를 λN 단위로 표본화하면 FFT 두 번으로 PSF와 MTF가 나온다</text>
+      </svg>
+      <figcaption><b>그림 5-8.</b> 파동광학으로 본 결상. 동공 함수의 FFT 제곱이 PSF이고, PSF를 한 번 더 FFT하면 OTF가 된다. 자오(T) 방향과 구결(S) 방향의 단면이 렌즈 데이터시트의 두 MTF 곡선이다.</figcaption>
+    </figure>
+
+    <p>축외 상 높이 \(h\)(최대 화각에서 1)까지 포함한 3차 파면 수차는 네 항으로 정리된다. 각 계수는 동공 가장자리에서의 광로차(파장 단위)다.</p>
+    <div class="formula">$$W(\rho,\theta) = W_{020}\,\rho^2 + W_{040}\,\rho^4 + W_{131}\,h\,\rho^3\cos\theta + W_{222}\,h^2\rho^2\cos^2\theta,\qquad \delta z = 8N^2 W_{020}$$
+      <div class="where">\(\rho\): 정규화된 동공 반경, \(\theta\): 자오면에서 잰 동공 방위각. 차례로 디포커스, 구면수차, 코마, 비점수차다(상면 만곡과 왜곡은 각각 디포커스·기울기 항으로 흡수된다). \(\delta z\)는 디포커스 계수에 해당하는 축 방향 초점 이동이다.</div>
+    </div>
+    <p>수차가 작을 때 PSF의 꼭짓값은 RMS 파면 오차 \(\sigma_W\)만으로 거의 정해진다. 수차가 없을 때 대비 PSF 꼭짓값의 비가 <span class="term">스트렐 비</span><span class="en">(Strehl Ratio)</span>이며, 마레샬 근사로</p>
+    <div class="formula">$$S = \frac{\max \mathrm{PSF}}{\max \mathrm{PSF}_{W=0}} \approx \exp\!\left[-\left(\frac{2\pi\sigma_W}{\lambda}\right)^{2}\right]$$
+      <div class="where">\(\sigma_W\)는 피스톤과 기울기(상의 이동일 뿐 흐림이 아님)를 뺀 RMS 값. \(\sigma_W \le \lambda/14\), 곧 \(S \ge 0.8\)이면 흔히 '회절 한계' 렌즈라 부른다(마레샬 기준).</div>
+    </div>
+
+    <div class="callout tip">
+      <strong>계산 예: 1/4 파장 기준과 초점 심도</strong>
+      <p>레일리는 파면 오차가 \(\lambda/4\)(P-V) 이하이면 완벽한 렌즈와 구별하기 어렵다고 보았다. 디포커스로 \(W_{020} = \lambda/4\)이면 \(\delta z = 8N^2\cdot\lambda/4 = 2\lambda N^2\), 곧 초점 심도는 \(\pm 2\lambda N^2\)이다. f/1.8, 550 nm에서 ±3.56 µm로, 14장에서 픽셀 기준(\(\pm Nc\), \(c\) = 2 µm)으로 구한 ±3.6 µm와 거의 같다. 이때 \(\sigma_W = W_{020}/\sqrt{12} = 0.072\lambda\)이므로 마레샬 근사 \(S \approx 0.81\)이고, 디포커스의 정확한 값 \([\sin(\pi/4)/(\pi/4)]^2 = 0.81\)과 일치한다. 구면수차는 다르게 행동한다. \(W_{040} = \lambda/2\)이면 근축 초점에서 \(S = 0.38\)이지만, 디포커스 \(W_{020} = -\lambda/2\)를 더해 초점을 옮기면 \(\sigma_W\)가 1/4로 줄어 \(S = 0.95\)가 된다. 구면수차의 '최적 초점'이 근축 초점 앞에 있는 이유다.</p>
+    </div>
+
+    <div class="sim" id="sim-psf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>동공 → PSF → MTF: 128² FFT 파동광학 계산</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-pf"></canvas><canvas id="cv-pfm"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>디포커스 W₀₂₀ <output id="pf-w020-out"></output></span><input type="range" id="pf-w020" min="-1.5" max="1.5" value="0" step="0.05"></label>
+          <label class="ctrl"><span>구면수차 W₀₄₀ <output id="pf-w040-out"></output></span><input type="range" id="pf-w040" min="-1.5" max="1.5" value="0.5" step="0.05"></label>
+          <label class="ctrl"><span>코마 W₁₃₁ <output id="pf-w131-out"></output></span><input type="range" id="pf-w131" min="-1.5" max="1.5" value="0" step="0.05"></label>
+          <label class="ctrl"><span>비점수차 W₂₂₂ <output id="pf-w222-out"></output></span><input type="range" id="pf-w222" min="-1.5" max="1.5" value="0" step="0.05"></label>
+          <label class="ctrl"><span>F-넘버 <output id="pf-n-out"></output></span><input type="range" id="pf-n" min="1.4" max="8" value="1.8" step="0.1"></label>
+          <label class="ctrl"><span>파장 λ <output id="pf-wl-out"></output></span><input type="range" id="pf-wl" min="450" max="650" value="550" step="5"></label>
+          <label class="ctrl"><span>픽셀 피치 <output id="pf-p-out"></output></span><input type="range" id="pf-p" min="0.5" max="3" value="1" step="0.05"></label>
+          <label class="check"><input type="checkbox" id="pf-log" checked> PSF 감마 표시 (주변 고리 강조)</label>
+          <button class="btn" id="pf-zero">수차 모두 0</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">스트렐 비 (FFT)</span><span class="v" id="o-pf-s">—</span></div>
+        <div class="stat"><span class="k">마레샬 근사</span><span class="v" id="o-pf-m">—</span></div>
+        <div class="stat"><span class="k">RMS 파면 오차</span><span class="v" id="o-pf-rms">—</span></div>
+        <div class="stat"><span class="k">W₀₂₀의 초점 이동</span><span class="v" id="o-pf-dz">—</span></div>
+        <div class="stat"><span class="k">MTF@나이퀴스트 T / S</span><span class="v" id="o-pf-ny">—</span></div>
+      </div>
+      <div class="sim-note">위 왼쪽: PSF(최댓값으로 정규화, 회색 격자 = 픽셀, 점선 원 = 무수차 에어리 첫 암환). 위 오른쪽: 동공 위 파면(파랑 −, 빨강 +, 기울기 제외 전). 아래: 자오(T)·구결(S) 방향 MTF와 회절 한계(점선). 계산은 지름 32칸 동공을 128 × 128 격자에 넣은 2-D FFT 두 번이며, PSF 한 칸은 λN/4다. 해볼 것: ① 기본값(W₀₄₀ = 0.5λ)의 스트렐 비는 0.381(마레샬 0.404). 디포커스를 −0.5λ로 옮기면 0.945로 회복된다. ② 다른 수차를 0으로 두고 W₀₂₀ = 0.25λ이면 스트렐 0.808, 초점 이동은 f/1.8·550 nm에서 3.56 µm. ③ 비점수차 0.5λ만 주면 T 방향 MTF만 떨어진다. 디포커스를 −0.25λ로 두면(자오·구결 초점의 중간) T와 S가 같아진다. ④ 코마는 PSF를 한쪽으로 끌고 꼭짓점 위치를 옮기지만, 0.5λ에서도 스트렐은 0.855로 구면수차보다 너그럽다. ⑤ 모든 계수를 1.5λ로 올리면 마레샬 근사는 0으로 무너지지만 FFT 값은 0.011로 남는다. 근사는 \(\sigma_W\) ≲ 0.2λ에서만 믿을 수 있다.</div>
+    </div>
+    <p>렌즈 데이터시트의 MTF는 이렇게 계산한 설계값이고, 완성된 모듈의 MTF를 실제 영상에서 재는 방법(슬랜티드 에지)은 <a href="iq.html">20장</a>에서 다룬다. 픽셀 크기가 파장에 가까워져 마이크로렌즈 자체의 회절을 봐야 하는 경우는 <a href="nanophotonics.html">18장</a>의 주제다.</p>
+  </section>
+
   <!-- =============================================================== 7 -->
   <section id="cra">
     <h2>주광선각(CRA)과 마이크로렌즈 시프트</h2>
@@ -512,7 +688,7 @@
           <circle cx="110" cy="150" r="8" fill="var(--warn)" opacity="0.6"/>
         </g>
       </svg>
-      <figcaption><b>그림 5-7.</b> 이미지 높이가 커질수록 CRA가 커진다. 가장자리 픽셀의 마이크로렌즈를 광학 중심 쪽으로 옮겨(Microlens Shift) 빛 스폿이 포토다이오드 중앙에 떨어지게 만든다.</figcaption>
+      <figcaption><b>그림 5-9.</b> 이미지 높이가 커질수록 CRA가 커진다. 가장자리 픽셀의 마이크로렌즈를 광학 중심 쪽으로 옮겨(Microlens Shift) 빛 스폿이 포토다이오드 중앙에 떨어지게 만든다.</figcaption>
     </figure>
 
     <p>비스듬히 들어온 빛은 마이크로렌즈에서 굴절된 뒤 적층 두께 \(t\)(마이크로렌즈 꼭대기 ~ 실리콘 표면)를 지나는 동안 옆으로 이동한다. 적층 매질의 굴절률을 \(n\)이라 하면 스폿 이동량과, 이를 상쇄하는 마이크로렌즈 시프트는</p>
@@ -614,8 +790,70 @@
         <rect x="300" y="160" width="350" height="36" fill="var(--bad)" opacity="0.08"/>
         <text x="475" y="184" class="t-dim" text-anchor="middle">차단: 보이지 않는 NIR (650~1100 nm)</text>
       </svg>
-      <figcaption><b>그림 5-8.</b> IR 컷 필터(실선)는 약 400~650 nm만 통과시킨다. 점선은 실리콘 포토다이오드의 개략적인 상대 감도로, 필터가 없으면 넓은 NIR 대역이 신호에 섞인다.</figcaption>
+      <figcaption><b>그림 5-10.</b> IR 컷 필터(실선)는 약 400~650 nm만 통과시킨다. 점선은 실리콘 포토다이오드의 개략적인 상대 감도로, 필터가 없으면 넓은 NIR 대역이 신호에 섞인다.</figcaption>
     </figure>
+
+    <h3>간섭형 IR 컷 필터의 각도 의존성과 적색 고스트</h3>
+    <p>반사형 IR 컷 필터는 TiO₂(n ≈ 2.3)와 SiO₂(n ≈ 1.46)를 1/4 파장 두께로 수십 층 번갈아 쌓은 <span class="term">단파장 통과 엣지 필터</span><span class="en">(Short-Pass Edge Filter)</span>다. 1/4 파장 스택은 기준 파장 \(\lambda_r\) 둘레에 폭 \(\Delta g = (4/\pi)\arcsin[(n_H-n_L)/(n_H+n_L)] \approx 0.27\)(\(g = \lambda_r/\lambda\))의 반사 대역을 만들므로, 기준 파장이 다른 스택 두 개를 이어 붙여 약 660~1100 nm를 막는다. 층 안에서의 위상 두께는 \(n_j d_j\cos\theta_j\)라서 빛이 비스듬히 들어오면 모든 층이 '얇아진' 것처럼 행동하고, 차단 엣지가 짧은 파장 쪽으로 움직인다. 계산 방법은 <a href="nanophotonics.html#tmm">18장의 전달 행렬법</a>과 같고, 여기서는 그 결과가 색에 미치는 영향을 본다.</p>
+    <div class="formula">$$\lambda_{\text{edge}}(\theta) \approx \lambda_{\text{edge}}(0)\,\sqrt{1 - \frac{\sin^2\theta}{n_{\text{eff}}^2}}$$
+      <div class="where">\(\theta\): 필터 입사각(센서 앞 필터에서는 거의 CRA와 같다), \(n_{\text{eff}}\): 스택의 유효 굴절률(TiO₂/SiO₂ 엣지에서 약 1.7~1.9). s·p 편광의 엣지가 서로 다르게 움직여 엣지가 완만해지는 효과도 있다.</div>
+    </div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 230" role="img" aria-label="간섭형 IR 컷 필터의 각도에 따른 엣지 이동과 센서–필터 사이 이중 반사 고스트">
+        <rect x="30" y="40" width="250" height="16" fill="#4a7dff" opacity="0.25" stroke="#4a7dff"/>
+        <g opacity="0.75"><rect x="30" y="56" width="250" height="3" class="f-acc-soft"/><rect x="30" y="59" width="250" height="3" fill="var(--text-dim)" opacity="0.5"/><rect x="30" y="62" width="250" height="3" class="f-acc-soft"/><rect x="30" y="65" width="250" height="3" fill="var(--text-dim)" opacity="0.5"/><rect x="30" y="68" width="250" height="3" class="f-acc-soft"/></g>
+        <text x="288" y="52" class="t-dim">유리 0.21 mm</text><text x="288" y="70" class="t-dim">TiO₂/SiO₂ 스택</text>
+        <rect x="30" y="170" width="250" height="18" class="f-surface" stroke="var(--border)"/><text x="155" y="206" class="t-dim" text-anchor="middle">센서 (표면 반사 ≈ 5 %)</text>
+        <line x1="70" y1="10" x2="96" y2="40" stroke="var(--warn)" stroke-width="2.2"/>
+        <line x1="96" y1="40" x2="104" y2="71" stroke="var(--warn)" stroke-width="2.2"/>
+        <line x1="104" y1="71" x2="190" y2="170" stroke="var(--warn)" stroke-width="2.2"/>
+        <line x1="190" y1="170" x2="276" y2="71" stroke="var(--warn)" stroke-width="1.6" stroke-dasharray="5 3"/>
+        <line x1="276" y1="71" x2="300" y2="98" stroke="var(--warn)" stroke-width="1.2" stroke-dasharray="5 3" opacity="0.7"/>
+        <text x="74" y="120" class="t">θ ≈ CRA</text>
+        <circle cx="190" cy="170" r="4" fill="var(--warn)"/><text x="160" y="160" class="t-mono">상</text>
+        <text x="248" y="116" class="t-dim">반사 → 고스트</text>
+        <g transform="translate(360,20)">
+          <line x1="20" y1="170" x2="300" y2="170" class="s-axis"/><line x1="20" y1="10" x2="20" y2="170" class="s-axis"/>
+          <path d="M20 26 L175 26 C188 26 194 160 206 168 L300 168" fill="none" stroke="var(--text-dim)" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <path d="M20 26 L150 26 C163 26 169 160 181 168 L300 168" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="2.2"/>
+          <path d="M196 96 L170 96" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#op-ar)"/>
+          <text x="210" y="92" class="t-acc">각도 ↑ → 엣지 ←</text>
+          <rect x="128" y="10" width="52" height="160" fill="var(--bad)" opacity="0.1"/>
+          <text x="154" y="186" class="t-mono" text-anchor="middle">R 채널</text>
+          <text x="40" y="20" class="t-dim">0° (점선) · 30° (실선)</text>
+          <text x="300" y="186" class="t-mono" text-anchor="end">λ</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 5-11.</b> 왼쪽: 필터를 지나 센서에 맺힌 빛의 일부가 센서 표면에서 반사되고, 엣지 근처(빨강~근적외)를 강하게 반사하는 간섭 스택에서 다시 반사되어 옆자리에 붉은 고스트를 만든다. 오른쪽: 입사각이 커지면 차단 엣지가 짧은 파장 쪽으로 이동하여 R 채널 대역의 긴 쪽을 깎는다. 화면 가장자리(큰 CRA)만 붉은 기가 빠지는 컬러 쉐이딩의 원인이다.</figcaption>
+    </figure>
+
+    <div class="callout tip">
+      <strong>계산 예: CRA 30°에서 엣지가 얼마나 움직이나</strong>
+      <p>0°에서 T50 = 653 nm인 간섭 필터의 \(n_{\text{eff}}\)를 1.77로 두면 30°에서 \(653\sqrt{1 - 0.25/1.77^2} = 653 \times 0.959 \approx 626\) nm, 곧 27 nm 이동한다. 아래 시뮬레이터의 전달 행렬 계산도 626 nm다. R 채널의 유효 대역이 대략 580~650 nm로 70 nm 남짓이므로, 이 정도 이동이면 가장자리 R 신호가 1/3가량 줄어든다(R/G −33 %). 그래서 모바일 모듈은 Cu²⁺가 든 <b>블루 글라스</b>(흡수형, 엣지가 거의 움직이지 않음)로 600~700 nm 경사를 만들고 간섭 스택은 그보다 긴 쪽으로 물려 NIR 차단만 맡기는 <b>하이브리드</b> 구성을 쓴다. 남은 각도 의존성은 ISP의 컬러 쉐이딩 보정(LSC 채널별 게인)이 맡는다.</p>
+    </div>
+
+    <div class="sim" id="sim-ircf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>IR 컷 필터: 전달 행렬로 본 엣지 이동, 컬러 쉐이딩, 적색 고스트</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-ir"></canvas><canvas id="cv-ir2"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>입사각 (CRA) <output id="ir-th-out"></output></span><input type="range" id="ir-th" min="0" max="40" value="30" step="1"></label>
+          <label class="ctrl"><span>스택당 주기 수 m <output id="ir-m-out"></output></span><input type="range" id="ir-m" min="6" max="14" value="10" step="1"></label>
+          <div class="ctrl"><span>필터 구성</span><div class="seg" id="ir-type"><button data-value="int" class="on">간섭형</button><button data-value="hyb">하이브리드 (블루 글라스)</button></div></div>
+          <div class="ctrl"><span>광원</span><div class="seg" id="ir-ill"><button data-value="d" class="on">주광</button><button data-value="a">텅스텐 2856 K</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">T50 (0°)</span><span class="v" id="o-ir-t0">—</span></div>
+        <div class="stat"><span class="k">T50 (입사각)</span><span class="v" id="o-ir-t1">—</span></div>
+        <div class="stat"><span class="k">R/G 변화 (중심 대비)</span><span class="v" id="o-ir-rg">—</span></div>
+        <div class="stat"><span class="k">R 신호 중 700 nm 이상</span><span class="v" id="o-ir-nir">—</span></div>
+        <div class="stat"><span class="k">적색 고스트 / 직접광</span><span class="v" id="o-ir-gh">—</span></div>
+      </div>
+      <div class="sim-note">위: 필터 투과율(0° 점선, 선택한 입사각 실선)과 반사율(점선), 그 아래 칠한 곡선은 필터를 지난 뒤의 R·G·B 채널 분광 응답(CF × 실리콘 QE × 투과율). 아래: 중심(0°)에서 화이트 밸런스를 맞춘 뒤 입사각에 따른 R/G·B/G 변화. 필터는 공기 / (0.5L H 0.5L)<sup>m</sup> 두 묶음 / 유리(n = 1.52)이고 s·p 편광 평균, 고스트는 센서 반사 5 %를 가정한 '투과 × 필터 반사 × 0.05'를 직접광과 비교한 값이다. 해볼 것: ① 기본값(간섭형, 30°)은 T50이 653 → 626 nm로 27 nm 움직이고 R/G가 −32.9 %. ② '하이브리드'로 바꾸면 R/G가 −15.2 %로 반쯤 줄고, 적색 고스트도 1.04 → 0.55 %로 준다. 대신 0°의 가시광 투과가 블루 글라스 흡수로 낮아진다(감도 손실). ③ 간섭형, 텅스텐 광원, 40°: 반사 대역의 긴 쪽 끝도 함께 짧아져 1000~1100 nm가 새고, R 신호의 27 %가 700 nm 이상의 근적외다. 하이브리드는 0.6 %. ④ m을 6으로 줄이면 0°에서도 차단이 얕아져 R 신호 중 근적외가 4.5 %(주광)다.</div>
+    </div>
+
 
     <p><span class="term">커버 글라스</span><span class="en">(Cover Glass)</span>는 센서 다이를 먼지와 습기로부터 보호하는 투명 창이다. 모바일 모듈에서는 IR 필터가 커버 글라스 역할을 겸하기도 하고, 칩 스케일 패키지(CSP)에서는 유리를 웨이퍼에 직접 접합한다. 유리판은 평행평판이라도 초점 위치를 \(\Delta \approx t_g(1-1/n)\)만큼 뒤로 밀기 때문에(0.21 mm 두께, n=1.52이면 약 72 µm), 렌즈 설계에 반드시 포함해야 한다. 유리 표면의 먼지는 센서에 가까울수록 선명한 그림자로 찍히고, 유리 면 사이 반사는 고스트·플레어의 원인이 된다.</p>
 
@@ -687,7 +925,7 @@
           <text x="368" y="520" class="t-dim">수동 소자, 드라이버 IC, EEPROM(캘리브레이션)</text>
         </g>
       </svg>
-      <figcaption><b>그림 5-9.</b> 스마트폰 카메라 모듈 분해도(개략). 위에서부터 렌즈 배럴(비구면 렌즈 스택과 조리개), 이를 움직이는 VCM(AF/OIS), IR 컷 필터, 홀더, 센서 다이와 기판. 모듈 공정에서는 렌즈 광축과 센서의 기울기(Tilt)를 수 µm·수 분(′) 수준으로 능동 정렬(Active Alignment)한다. 액추에이터와 조립 공정은 <a href="module.html">14장</a>에서 다룬다.</figcaption>
+      <figcaption><b>그림 5-12.</b> 스마트폰 카메라 모듈 분해도(개략). 위에서부터 렌즈 배럴(비구면 렌즈 스택과 조리개), 이를 움직이는 VCM(AF/OIS), IR 컷 필터, 홀더, 센서 다이와 기판. 모듈 공정에서는 렌즈 광축과 센서의 기울기(Tilt)를 수 µm·수 분(′) 수준으로 능동 정렬(Active Alignment)한다. 액추에이터와 조립 공정은 <a href="module.html">14장</a>에서 다룬다.</figcaption>
     </figure>
 
     <div class="table-wrap"><table>
@@ -716,6 +954,9 @@
       <li>에어리 디스크 지름 \(2.44\lambda N\)이 픽셀 피치보다 커지면 회절 한계. 시스템 MTF = 렌즈 × 픽셀 개구(sinc) ×…, 나이퀴스트 \(1/(2p)\)에서의 값이 중요하다.</li>
       <li>모바일 렌즈는 CRA가 가장자리에서 30°를 넘으므로 마이크로렌즈를 광학 중심 쪽으로 시프트한다. 렌즈–센서 CRA 미스매치는 주변 감도 저하·컬러 쉐이딩·크로스토크를 부른다.</li>
       <li>렌즈 쉐이딩은 cos⁴ + 기계적 비네팅 + 픽셀 각도 응답. LSC 게인은 밝기만 회복하고 SNR은 회복하지 못한다.</li>
+      <li>실제 렌즈 성능은 순차 광선 추적(면마다 교점 → 법선 → 벡터 스넬)으로 구한다. 같은 렌즈라도 굽힘·조리개 위치가 구면수차·코마·비점수차를 바꾸지만, 상면 만곡의 바탕인 페츠발 합 \(\sum\phi_i/n_i\)는 바꾸지 못한다. 평탄화에는 떨어진 양·음 렌즈(쿠크 트리플릿)가 필요하다.</li>
+      <li>스폿이 에어리 크기까지 줄면 파동광학: PSF = |FFT{동공 함수}|², MTF = |FFT{PSF}|. 스트렐 비 ≈ \(\exp[-(2\pi\sigma_W/\lambda)^2]\), \(\sigma_W \le \lambda/14\)(S ≥ 0.8)이 회절 한계 기준이다. 구면수차는 디포커스로 상당 부분 상쇄된다.</li>
+      <li>간섭형 IR 컷 필터의 엣지는 \(\lambda(\theta) \approx \lambda_0\sqrt{1-\sin^2\theta/n_{\text{eff}}^2}\)로 짧아져(30°에서 약 27 nm) 가장자리 R 신호를 깎고, 엣지 부근 반사는 적색 고스트를 만든다. 블루 글라스 하이브리드가 둘 다 줄인다.</li>
       <li>카메라 모듈 = 비구면 렌즈 스택 + VCM(AF/OIS) + IR 컷 필터 + 센서/기판. 센서 사양(포맷, CRA)은 모듈과 함께 정해진다.</li>
     </ol>
   </section>
@@ -752,6 +993,25 @@
         <button class="opt" data-correct>화면 중심의 해상도 저하</button>
         <button class="opt">LSC 보정 게인 증가로 인한 코너 노이즈 증가</button>
       </div><div class="quiz-exp">중심에서는 CRA ≈ 0°라 시프트와 무관하다. 미스매치는 이미지 높이가 큰 곳에서만 스폿을 PD 밖으로 밀어내 감도 저하, 크로스토크, 색 틀어짐을 만든다.</div></div>
+
+      <div class="quiz-q"><p>Q6. BK7 평볼록 단렌즈(f = 100 mm, F/5)로 평행광을 모을 때 구면수차가 더 작은 배치는?</p><div class="opts">
+        <button class="opt" data-correct>볼록면을 물체(평행광) 쪽으로 둔다</button><button class="opt">평면을 물체 쪽으로 둔다</button><button class="opt">두 배치는 초점거리가 같으므로 수차도 같다</button><button class="opt">렌즈를 두껍게 만드는 것만이 유일한 방법이다</button>
+      </div><div class="quiz-exp">굴절을 두 면에 나눠 맡기면 각 면의 입사각이 작아져 3차 구면수차가 준다. 광선 추적 결과 최적 초점 RMS가 평면 앞 75 µm, 볼록면 앞 19 µm이고, 최소는 굽힘 인자 q ≈ +0.74 부근(17.3 µm)이다. 초점거리가 같아도 굽힘에 따라 수차는 크게 다르다.</div></div>
+
+      <div class="quiz-q"><p>Q7. 렌즈의 RMS 파면 오차가 λ/14일 때 마레샬 근사로 구한 스트렐 비와 그 의미는?</p><div class="opts">
+        <button class="opt">약 0.5, 반치폭이 두 배가 된다</button><button class="opt">약 0.95, 수차가 거의 없다</button><button class="opt" data-correct>약 0.8, 흔히 쓰는 '회절 한계' 기준이다</button><button class="opt">약 0.2, 기하광학 스폿으로 평가해야 한다</button>
+      </div><div class="quiz-exp">\(S \approx \exp[-(2\pi/14)^2] = \exp(-0.201) = 0.82\). 마레샬 기준(S ≥ 0.8)이며, 디포커스만 있을 때 레일리의 λ/4(P-V) 기준과 거의 같은 수준이다.</div></div>
+
+      <div class="quiz-q"><p>Q8. 비점수차를 0으로 만든 단렌즈의 상면이 여전히 휘어 있다. 이를 평평하게 하는 데 효과가 있는 방법은?</p><div class="opts">
+        <button class="opt">조리개를 렌즈 앞쪽으로 더 옮긴다</button><button class="opt">렌즈의 굽힘 인자를 바꾼다</button><button class="opt">F-넘버를 키운다</button><button class="opt" data-correct>굴절력이 음인 렌즈를 떨어뜨려 넣어 페츠발 합을 줄인다</button>
+      </div><div class="quiz-exp">페츠발 합 \(\sum\phi_i/n_i\)는 굽힘이나 조리개 위치와 무관하다. 굴절력 양·음 렌즈를 떨어뜨려 두면 전체 굴절력은 유지하면서 페츠발 합을 줄일 수 있다(쿠크 트리플릿). F-넘버를 키우면 초점 심도가 깊어져 덜 보일 뿐 상면 자체는 그대로다.</div></div>
+
+      <div class="quiz-q"><p>Q9. 간섭형 IR 컷 필터만 쓴 모바일 모듈에서 화면 가장자리가 중심보다 청록색으로 보인다. 가장 그럴듯한 원인은?</p><div class="opts">
+        <button class="opt">가장자리에서 cos⁴ 법칙으로 G 채널만 밝아진다</button>
+        <button class="opt" data-correct>큰 CRA에서 차단 엣지가 짧은 파장으로 이동해 R 채널 신호가 줄었다</button>
+        <button class="opt">가장자리에서 근적외선이 더 많이 들어와 R이 커졌다</button>
+        <button class="opt">블루 글라스의 흡수가 각도에 따라 크게 변한다</button>
+      </div><div class="quiz-exp">간섭 필터의 엣지는 \(\lambda_0\sqrt{1-\sin^2\theta/n_{\text{eff}}^2}\)로 이동한다(30°에서 약 27 nm). R 채널 대역의 긴 쪽이 깎여 R/G가 30 % 넘게 떨어지면 가장자리가 청록으로 물든다. 흡수형 블루 글라스는 경로 길이만 조금 바뀌어 각도 의존성이 작다.</div></div>
     </div>
   </section>
 </main>
@@ -1429,6 +1689,511 @@
     }
     const cv1 = SB.canvas($("cv-shade"), drawMap, { aspect: 0.5, minHeight: 200, maxHeight: 320 });
     const cv2 = SB.canvas($("cv-shadep"), drawProf, { aspect: 0.4, minHeight: 190, maxHeight: 260 });
+  })();
+
+  /* =================================================== Sim: sequential ray tracer */
+  (function () {
+    const GL = { // nF, nd, nC
+      AIR: [1, 1, 1], BK7: [1.52238, 1.51680, 1.51432], F2: [1.63208, 1.62004, 1.61503], SK16: [1.62756, 1.62041, 1.61727],
+    };
+    const WLI = { F: 0, d: 1, C: 2 };
+    // lens: {surf:[{c,k,t,g}], stopZ (absolute z of stop plane, may be before first surface), stopIdx (or -1)}
+    function nOf(g, wi) { return GL[g][wi]; }
+    function paraxial(lens, wi) {
+      // returns efl, bfl, z of surfaces
+      const S = lens.surf; let n = 1, y = 1, u = 0; const z = [0];
+      for (let i = 1; i < S.length; i++) z.push(z[i - 1] + S[i - 1].t);
+      for (let i = 0; i < S.length; i++) {
+        const n2 = nOf(S[i].g, wi);
+        u = (n * u - y * S[i].c * (n2 - n)) / n2; n = n2;
+        if (i < S.length - 1) y += S[i].t * u;
+      }
+      return { efl: -1 / u, bfl: -y / u, z };
+    }
+    function parTrace(lens, wi, y0, u0, zStop) {
+      // paraxial height at plane zStop for ray with height y0 at first surface, angle u0
+      const S = lens.surf, z = paraxial(lens, wi).z; let n = 1, y = y0, u = u0;
+      if (zStop <= 0) return y0 + u0 * zStop;
+      for (let i = 0; i < S.length; i++) {
+        const n2 = nOf(S[i].g, wi);
+        u = (n * u - y * S[i].c * (n2 - n)) / n2; n = n2;
+        const zn = i < S.length - 1 ? z[i + 1] : 1e9;
+        if (zStop <= zn + 1e-12) return y + (zStop - z[i]) * u;
+        y += S[i].t * u;
+      }
+      return y;
+    }
+    function entrancePupil(lens) {
+      const ha = parTrace(lens, 1, 0, 1, lens.stopZ), hb = parTrace(lens, 1, 1, 0, lens.stopZ);
+      const y1 = -ha / hb; // height at first surface of chief ray with u=1
+      return -y1; // z of entrance pupil (relative to first vertex)
+    }
+    // trace a real ray; returns array of points [[x,y,z],...] and final dir, or null
+    function trace(lens, wi, P, d, zs, keepPath) {
+      const S = lens.surf; let n = 1; let px = P[0], py = P[1], pz = P[2], dx = d[0], dy = d[1], dz = d[2];
+      const path = keepPath ? [[px, py, pz]] : null;
+      for (let i = 0; i < S.length; i++) {
+        const s = S[i], c = s.c, k = s.k || 0;
+        // propagate to vertex plane
+        let t0 = (zs[i] - pz) / dz; px += t0 * dx; py += t0 * dy; pz = zs[i];
+        const A = c * (dx * dx + dy * dy + (1 + k) * dz * dz), B = 2 * c * (px * dx + py * dy) - 2 * dz, C = c * (px * px + py * py);
+        const disc = B * B - 4 * A * C; if (disc < 0) return null;
+        const ss = 2 * C / (-B + Math.sqrt(disc)); px += ss * dx; py += ss * dy; pz += ss * dz;
+        const lz = pz - zs[i];
+        let nx = -c * px, ny = -c * py, nz = 1 - c * (1 + k) * lz; const nl = Math.hypot(nx, ny, nz); nx /= nl; ny /= nl; nz /= nl;
+        const n2 = nOf(s.g, wi), mu = n / n2, ci = nx * dx + ny * dy + nz * dz, k2 = 1 - mu * mu * (1 - ci * ci);
+        if (k2 < 0) return null;
+        const ct = Math.sqrt(k2), g = ct - mu * ci;
+        dx = mu * dx + g * nx; dy = mu * dy + g * ny; dz = mu * dz + g * nz; n = n2;
+        if (path) path.push([px, py, pz]);
+      }
+      return { p: [px, py, pz], d: [dx, dy, dz], path };
+    }
+    function makeSinglet(q, f, t, glass, stopD) {
+      const n = GL[glass][1]; let K = 1 / ((n - 1) * f), sc = 1;
+      for (let it = 0; it < 30; it++) {
+        const L = { surf: [{ c: K * sc * (q + 1) / 2, g: glass, t }, { c: K * sc * (q - 1) / 2, g: "AIR", t: 0 }] };
+        const e = paraxial(L, 1).efl; sc *= e / f;
+      }
+      return { surf: [{ c: K * sc * (q + 1) / 2, g: glass, t }, { c: K * sc * (q - 1) / 2, g: "AIR", t: 0 }], stopZ: -stopD };
+    }
+    function makeAsph(f, t, stopD) {
+      const n = GL.BK7[1];
+      return { surf: [{ c: 0, g: "BK7", t }, { c: -1 / ((n - 1) * f), k: -n * n, g: "AIR", t: 0 }], stopZ: -stopD };
+    }
+    function scaleLens(L, f) { const e = paraxial(L, 1).efl, s = f / e; L.surf.forEach((S) => { S.c /= s; S.t *= s; }); L.stopZ *= s; return L; }
+    function makeDoublet() {
+      return scaleLens({ surf: [{ c: 1 / 49.91, g: "BK7", t: 6 }, { c: -1 / 40.47, g: "F2", t: 2.5 }, { c: -1 / 279.99, g: "AIR", t: 0 }], stopZ: 0 }, 100);
+    }
+    function makeCooke() {
+      const R = [22.01359, -435.7604, -22.21328, 20.29192, 79.68281, -18.39533], T = [3.258956, 6.007551, 0.9999746, 4.750409, 2.952076, 0], G = ["SK16", "AIR", "F2", "AIR", "SK16", "AIR"];
+      const L = { surf: R.map((r, i) => ({ c: 1 / r, g: G[i], t: T[i] })) };
+      L.stopZ = T[0] + T[1] + T[2]; // stop at surface 4
+      return L;
+    }
+    // analyse: returns spots per field, rms, best focus, distortion, T/S
+    function analyse(lens, opt) {
+      const { N, thMax, wls, dz } = opt;
+      const par = paraxial(lens, 1), zs = par.z, zLast = zs[zs.length - 1], zImg0 = zLast + par.bfl, zImg = zImg0 + dz;
+      const zEP = entrancePupil(lens), R = par.efl / N / 2;
+      const fields = [0, 0.7, 1].map((f) => f * thMax);
+      const NG = opt.grid || 21, pts = [];
+      for (let i = 0; i < NG; i++) for (let j = 0; j < NG; j++) { const x = -1 + 2 * (i + 0.5) / NG, y = -1 + 2 * (j + 0.5) / NG; if (x * x + y * y <= 1) pts.push([x, y]); }
+      const z0 = Math.min(zEP, 0) - 5;
+      function launch(th, wi, px, py) {
+        const d = [0, Math.sin(th * Math.PI / 180), Math.cos(th * Math.PI / 180)];
+        const s = (z0 - zEP) / d[2];
+        return trace(lens, wi, [px * R + s * d[0], py * R + s * d[1], zEP + s * d[2]], d, zs, false);
+      }
+      const spots = fields.map((th) => {
+        const rays = [];
+        wls.forEach((wi) => pts.forEach(([x, y]) => { const r = launch(th, wi, x, y); if (r) rays.push({ x0: r.p[0] + (zImg - r.p[2]) * r.d[0] / r.d[2], y0: r.p[1] + (zImg - r.p[2]) * r.d[1] / r.d[2], sx: r.d[0] / r.d[2], sy: r.d[1] / r.d[2], wi }); }));
+        // rms at zImg and quadratic coefficients
+        const M = rays.length; let mx = 0, my = 0, msx = 0, msy = 0;
+        rays.forEach((r) => { mx += r.x0; my += r.y0; msx += r.sx; msy += r.sy; }); mx /= M; my /= M; msx /= M; msy /= M;
+        let va = 0, cab = 0, vb = 0;
+        rays.forEach((r) => { const ax = r.x0 - mx, ay = r.y0 - my, bx = r.sx - msx, by = r.sy - msy; va += ax * ax + ay * ay; cab += ax * bx + ay * by; vb += bx * bx + by * by; });
+        va /= M; cab /= M; vb /= M;
+        return { th, rays, cx: mx, cy: my, rms: Math.sqrt(Math.max(0, va)), best: vb > 0 ? -cab / vb : 0, bestRms: vb > 0 ? Math.sqrt(Math.max(0, va - cab * cab / vb)) : Math.sqrt(va) };
+      });
+      // chief ray of max field + distortion
+      let dist = 0, fcT = 0, fcS = 0;
+      if (thMax > 0) {
+        const th = thMax, ch = launch(th, 1, 0, 0);
+        if (ch) {
+          const yc = ch.p[1] + (zImg0 - ch.p[2]) * ch.d[1] / ch.d[2], yp = par.efl * Math.tan(th * Math.PI / 180);
+          dist = (yc - yp) / yp;
+          const e = 0.02;
+          const tp = launch(th, 1, 0, e), tm = launch(th, 1, 0, -e), sp = launch(th, 1, e, 0), sm = launch(th, 1, -e, 0);
+          const at = (r, z) => [r.p[0] + (z - r.p[2]) * r.d[0] / r.d[2], r.p[1] + (z - r.p[2]) * r.d[1] / r.d[2]];
+          if (tp && tm && sp && sm) {
+            const a = at(tp, zImg0), b = at(tm, zImg0);
+            fcT = -(a[1] - b[1]) / (tp.d[1] / tp.d[2] - tm.d[1] / tm.d[2]);
+            const c = at(sp, zImg0), d = at(sm, zImg0);
+            fcS = -(c[0] - d[0]) / (sp.d[0] / sp.d[2] - sm.d[0] / sm.d[2]);
+          }
+        }
+      }
+      return { efl: par.efl, bfl: par.bfl, zs, zImg0, zImg, zEP, R, spots, dist, fcT, fcS, launch };
+    }
+    const PRE = { sph: { th: 5, N: 5 }, asph: { th: 3, N: 5 }, dbl: { th: 5, N: 5 }, cooke: { th: 20, N: 5 } };
+    let A = null, L = null;
+    const gPre = SB.seg("rt-pre", (v) => { gTh.set(PRE[v].th); gN.set(PRE[v].N); gDz.set(0); upd(); });
+    const single = () => gPre() === "sph" || gPre() === "asph";
+    const gQ = SB.range("rt-q", (v) => (gPre() === "sph" ? (v >= 0 ? "+" : "") + v.toFixed(2) : "구면 단렌즈 전용"), upd);
+    const gSt = SB.range("rt-stop", (v) => (single() ? v + " mm" : "고정"), upd);
+    const gTh = SB.range("rt-th", (v) => v.toFixed(1) + "°", upd);
+    const gN = SB.range("rt-n", (v) => "f/" + v.toFixed(1), upd);
+    const gDz = SB.range("rt-dz", (v) => (v >= 0 ? "+" : "") + v.toFixed(2) + " mm", upd);
+    const gWl = SB.seg("rt-wl", upd);
+    $("rt-best").addEventListener("click", () => { if (!A) return; const v = Math.max(-5, Math.min(5, gDz() + A.spots[0].best)); gDz.set(Math.round(v * 100) / 100); });
+    function build() {
+      const p = gPre();
+      if (p === "sph") return makeSinglet(gQ(), 100, 5, "BK7", gSt());
+      if (p === "asph") return makeAsph(100, 5, gSt());
+      if (p === "dbl") return makeDoublet();
+      return makeCooke();
+    }
+    function upd() {
+      $("rt-q-out").textContent = gPre() === "sph" ? (gQ() >= 0 ? "+" : "") + gQ().toFixed(2) : "구면 단렌즈 전용";
+      $("rt-stop-out").textContent = single() ? gSt() + " mm" : "고정";
+      L = build();
+      A = analyse(L, { N: gN(), thMax: gTh(), wls: gWl() === "fdc" ? [0, 1, 2] : [1], dz: gDz(), grid: 21 });
+      const um = (mm) => (mm * 1000 >= 100 ? (mm * 1000).toFixed(0) : (mm * 1000).toFixed(1)) + "<small>µm</small>";
+      SB.stat("o-rt-efl", A.efl.toFixed(1) + "<small>mm</small>");
+      SB.stat("o-rt-r0", um(A.spots[0].rms));
+      SB.stat("o-rt-r1", gTh() > 0 ? um(A.spots[2].rms) : "—");
+      SB.stat("o-rt-airy", (2.44 * 0.5876 * gN()).toFixed(1) + "<small>µm</small>");
+      SB.stat("o-rt-dist", gTh() > 0 ? (A.dist * 100).toFixed(2) + "<small>%</small>" : "—");
+      SB.stat("o-rt-fc", gTh() > 0 ? A.fcT.toFixed(2) + " / " + A.fcS.toFixed(2) + "<small>mm</small>" : "—");
+      cv1.redraw(); cv2.redraw();
+    }
+    const sag = (c, k, r) => { const q = 1 - (1 + (k || 0)) * c * c * r * r; return q <= 0 ? NaN : c * r * r / (1 + Math.sqrt(q)); };
+    let VT = null;
+    function drawFan(ctx, w, h) {
+      if (!A) return;
+      const P = SB.palette(), zs = A.zs, zI0 = A.zImg0;
+      const zMin = Math.min(A.zEP, L.stopZ, 0) - 0.06 * zI0, zMax = zI0 + 6;
+      const fan = [], cols = [P.blue, P.green, P.warn];
+      let ymax = A.R * 1.15;
+      A.spots.forEach((s, fi) => {
+        if (fi > 0 && gTh() === 0) return;
+        for (let k = 0; k < 9; k++) {
+          const py = -1 + 2 * k / 8, d = [0, Math.sin(s.th * D2R), Math.cos(s.th * D2R)];
+          const sS = (zMin - A.zEP) / d[2];
+          const r = trace(L, 1, [0, py * A.R + sS * d[1], zMin], d, zs, true);
+          if (!r) continue;
+          const zE = zMax, end = [0, r.p[1] + (zE - r.p[2]) * r.d[1] / r.d[2], zE];
+          const pts = r.path.concat([end]); fan.push({ pts, col: cols[fi] });
+          pts.forEach((q, qi) => { if (qi < pts.length - 1 && Math.abs(q[1]) > ymax) ymax = Math.abs(q[1]); });
+        }
+      });
+      const yImg = A.efl * Math.tan(gTh() * D2R); ymax = Math.max(ymax, yImg) * 1.12;
+      const pad = { l: 14, r: 14, t: 22, b: 22 };
+      const X = (z) => pad.l + (z - zMin) / (zMax - zMin) * (w - pad.l - pad.r), Y = (y) => h / 2 - y / ymax * (h / 2 - pad.t);
+      VT = { zMin, zMax, X, pad, w };
+      ctx.strokeStyle = P.axis; ctx.setLineDash([6, 4]); ctx.beginPath(); ctx.moveTo(pad.l, h / 2); ctx.lineTo(w - pad.r, h / 2); ctx.stroke(); ctx.setLineDash([]);
+      // surface semi-diameters from fan heights
+      const sd = zs.map(() => A.R * 1.02);
+      fan.forEach((f) => f.pts.forEach((q, qi) => { if (qi >= 1 && qi <= zs.length) sd[qi - 1] = Math.max(sd[qi - 1], Math.abs(q[1]) * 1.06); }));
+      // lens elements
+      L.surf.forEach((S, i) => {
+        if (S.g === "AIR" || i + 1 >= L.surf.length) return;
+        const a = Math.max(sd[i], sd[i + 1]), S2 = L.surf[i + 1];
+        ctx.beginPath();
+        for (let t = 0; t <= 40; t++) { const r = -a + 2 * a * t / 40, z = zs[i] + (sag(S.c, S.k, r) || 0); t ? ctx.lineTo(X(z), Y(r)) : ctx.moveTo(X(z), Y(r)); }
+        for (let t = 40; t >= 0; t--) { const r = -a + 2 * a * t / 40, z = zs[i + 1] + (sag(S2.c, S2.k, r) || 0); ctx.lineTo(X(z), Y(r)); }
+        ctx.closePath(); ctx.fillStyle = S.g === "BK7" || S.g === "SK16" ? P.accent + "33" : P.accent2 + "33"; ctx.fill();
+        ctx.strokeStyle = S.g === "BK7" || S.g === "SK16" ? P.accent : P.accent2; ctx.lineWidth = 1.6; ctx.stroke();
+      });
+      // stop
+      const hb = parTrace(L, 1, 1, 0, L.stopZ), sa = Math.abs(hb) * A.R;
+      ctx.strokeStyle = P.text; ctx.lineWidth = 3;
+      [[sa, ymax * 0.98], [-sa, -ymax * 0.98]].forEach(([y0, y1]) => { ctx.beginPath(); ctx.moveTo(X(L.stopZ), Y(y0 * 1.02)); ctx.lineTo(X(L.stopZ), Y(y1)); ctx.stroke(); });
+      // rays
+      ctx.lineWidth = 1.1;
+      fan.forEach((f) => { ctx.strokeStyle = f.col; ctx.globalAlpha = 0.85; ctx.beginPath(); f.pts.forEach((q, qi) => (qi ? ctx.lineTo(X(q[2]), Y(q[1])) : ctx.moveTo(X(q[2]), Y(q[1])))); ctx.stroke(); });
+      ctx.globalAlpha = 1;
+      // image planes
+      ctx.strokeStyle = P.faint; ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(zI0), pad.t - 8); ctx.lineTo(X(zI0), h - pad.b + 8); ctx.stroke(); ctx.setLineDash([]);
+      ctx.strokeStyle = P.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(A.zImg), pad.t - 8); ctx.lineTo(X(A.zImg), h - pad.b + 8); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textBaseline = "top"; ctx.textAlign = "right";
+      ctx.fillText("상면 Δz " + (gDz() >= 0 ? "+" : "") + gDz().toFixed(2) + " mm", X(A.zImg) - 4, 4);
+      ctx.textAlign = "left"; ctx.fillText(gPre() === "cooke" ? "쿠크 트리플릿 f = 50 mm" : gPre() === "dbl" ? "BK7 + F2 더블릿 f = 100 mm" : "BK7 단렌즈 f = 100 mm", pad.l, 4);
+      ctx.textBaseline = "bottom"; ctx.fillStyle = P.faint;
+      ctx.fillText("세로 ×" + ((zMax - zMin) / (w - pad.l - pad.r) / (ymax / (h / 2 - pad.t))).toFixed(1) + " 확대 · 상면을 좌우로 끌기", pad.l, h - 3);
+    }
+    function drawSpots(ctx, w, h) {
+      if (!A) return;
+      const P = SB.palette(), fdc = gWl() === "fdc", nf = gTh() > 0 ? 3 : 1;
+      const airyR = 1.22 * 0.5876e-3 * gN();
+      let S = airyR * 1.6;
+      A.spots.slice(0, nf).forEach((s) => s.rays.forEach((r) => { S = Math.max(S, Math.abs(r.x0 - s.cx), Math.abs(r.y0 - s.cy)); }));
+      S *= 1.08;
+      const pw = w / 3, sz = Math.min(pw - 14, h - (w / 3 < 170 ? 52 : 44)), wc = [SB.wl2rgb(486), SB.wl2rgb(588), SB.wl2rgb(656)];
+      A.spots.slice(0, nf).forEach((s, fi) => {
+        const cx = pw * fi + pw / 2, cy = 20 + sz / 2, k = sz / 2 / S;
+        ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(cx - sz / 2, cy - sz / 2, sz, sz);
+        ctx.strokeStyle = P.dim; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(cx, cy, airyR * k, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+        s.rays.forEach((r) => { ctx.fillStyle = fdc ? wc[r.wi] : P.accent; ctx.fillRect(cx + (r.x0 - s.cx) * k - 1, cy - (r.y0 - s.cy) * k - 1, 2, 2); });
+        ctx.fillStyle = P.text; ctx.font = font(11, true); ctx.textAlign = "center"; ctx.textBaseline = "top";
+        const lab = "RMS " + (s.rms * 1000).toFixed(s.rms < 0.1 ? 1 : 0) + " µm";
+        if (pw < 170) { ctx.font = font(10, true); ctx.fillText(s.th.toFixed(1) + "°", cx, cy + sz / 2 + 3); ctx.fillText(lab, cx, cy + sz / 2 + 15); }
+        else ctx.fillText(s.th.toFixed(1) + "° · " + lab, cx, cy + sz / 2 + 5);
+      });
+      ctx.fillStyle = P.faint; ctx.font = font(10, true); ctx.textAlign = "center"; ctx.textBaseline = "top";
+      ctx.fillText((w < 520 ? "칸 폭 " : "스폿 다이어그램 · 칸 폭 ") + (2 * S * 1000).toFixed(0) + " µm · 점선 원 = 에어리" + (w < 520 ? "" : " 디스크"), w / 2, 3);
+    }
+    const cv1 = SB.canvas($("cv-rt"), drawFan, { aspect: 0.46, minHeight: 230, maxHeight: 360 });
+    const cv2 = SB.canvas($("cv-rts"), drawSpots, { aspect: 0.36, minHeight: 150, maxHeight: 230 });
+    const el = $("cv-rt"); let drag = false;
+    const setZ = (e) => { if (!VT) return; const rc = el.getBoundingClientRect(); const z = VT.zMin + (e.clientX - rc.left - VT.pad.l) / (rc.width - VT.pad.l - VT.pad.r) * (VT.zMax - VT.zMin); gDz.set(Math.round(Math.max(-5, Math.min(5, z - A.zImg0)) * 100) / 100); };
+    el.addEventListener("pointerdown", (e) => { drag = true; el.setPointerCapture(e.pointerId); setZ(e); });
+    el.addEventListener("pointermove", (e) => { if (drag) setZ(e); });
+    el.addEventListener("pointerup", () => { drag = false; });
+    el.addEventListener("pointercancel", () => { drag = false; });
+    upd();
+  })();
+
+  /* =================================================== Sim: pupil -> PSF -> MTF */
+  (function () {
+    const NF = 128, DP = 32;
+    function fft1(re, im, n, off, stride, inv) {
+      // in-place radix-2 on strided data
+      for (let i = 1, j = 0; i < n; i++) {
+        let bit = n >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit;
+        if (i < j) { const a = off + i * stride, b = off + j * stride; let t = re[a]; re[a] = re[b]; re[b] = t; t = im[a]; im[a] = im[b]; im[b] = t; }
+      }
+      for (let len = 2; len <= n; len <<= 1) {
+        const ang = (inv ? 2 : -2) * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+        for (let i = 0; i < n; i += len) {
+          let cr = 1, ci = 0;
+          for (let k = 0; k < len / 2; k++) {
+            const a = off + (i + k) * stride, b = off + (i + k + len / 2) * stride;
+            const xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+            re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+            const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+          }
+        }
+      }
+    }
+    function fft2(re, im, n, inv) { for (let r = 0; r < n; r++) fft1(re, im, n, r * n, 1, inv); for (let c = 0; c < n; c++) fft1(re, im, n, c, n, inv); }
+    // W coefficients in waves: {w020,w040,w131,w222}
+    function psfCalc(W) {
+      const re = new Float64Array(NF * NF), im = new Float64Array(NF * NF), wmap = new Float64Array(DP * DP).fill(NaN);
+      const c0 = NF / 2, r = DP / 2; let m = 0, sw = 0, sx = 0, sy = 0, sxx = 0, syy = 0, swx = 0, swy = 0, sww = 0;
+      const samples = [];
+      for (let j = 0; j < DP; j++) for (let i = 0; i < DP; i++) {
+        const x = (i + 0.5 - r) / r, y = (j + 0.5 - r) / r, p2 = x * x + y * y; if (p2 > 1) continue;
+        // y = meridional (theta from y axis): rho cos(theta) = y
+        const w = W.w020 * p2 + W.w040 * p2 * p2 + W.w131 * p2 * y + W.w222 * y * y;
+        wmap[j * DP + i] = w; samples.push([x, y, w]);
+        const idx = (c0 - r + j) * NF + (c0 - r + i); re[idx] = Math.cos(2 * Math.PI * w); im[idx] = Math.sin(2 * Math.PI * w);
+        m++; sw += w; sx += x; sy += y; sxx += x * x; syy += y * y; swx += w * x; swy += w * y; sww += w * w;
+      }
+      // remove piston & tilt (symmetric grid: sx=sy=0, sxy=0)
+      const a = sw / m, bx = swx / sxx, by = swy / syy;
+      let s2 = 0; samples.forEach(([x, y, w]) => { const d = w - a - bx * x - by * y; s2 += d * d; });
+      const rms = Math.sqrt(s2 / m);
+      fft2(re, im, NF, false);
+      const psf = new Float64Array(NF * NF); let pk = 0, tot = 0;
+      for (let k = 0; k < NF * NF; k++) { const v = re[k] * re[k] + im[k] * im[k]; psf[k] = v; tot += v; if (v > pk) pk = v; }
+      // OTF
+      const ore = new Float64Array(psf), oim = new Float64Array(NF * NF);
+      fft2(ore, oim, NF, false);
+      const o0 = Math.hypot(ore[0], oim[0]);
+      const T = [], S = [];
+      for (let k = 0; k <= DP; k++) { T.push(Math.hypot(ore[k * NF], oim[k * NF]) / o0); S.push(Math.hypot(ore[k], oim[k]) / o0); }
+      // shift psf so centre at (c0,c0): fft output index 0 = centre
+      const sh = new Float64Array(NF * NF); let pki = 0;
+      for (let j = 0; j < NF; j++) for (let i = 0; i < NF; i++) { const v = psf[((j + c0) % NF) * NF + ((i + c0) % NF)]; sh[j * NF + i] = v; if (v === pk) pki = j * NF + i; }
+      return { psf: sh, pk, m, rms, wmap, T, S, pkx: (pki % NF) - c0, pky: Math.floor(pki / NF) - c0 };
+    }
+    const PK0 = psfCalc({ w020: 0, w040: 0, w131: 0, w222: 0 }).pk;
+    let R = null;
+    const fw = (v) => (v > 0 ? "+" : "") + v.toFixed(2) + " λ";
+    const g020 = SB.range("pf-w020", fw, upd), g040 = SB.range("pf-w040", fw, upd), g131 = SB.range("pf-w131", fw, upd), g222 = SB.range("pf-w222", fw, upd);
+    const gN = SB.range("pf-n", (v) => "f/" + v.toFixed(1), upd), gL = SB.range("pf-wl", (v) => v + " nm", upd), gP = SB.range("pf-p", (v) => v.toFixed(2) + " µm", upd);
+    $("pf-log").addEventListener("change", () => cv1.redraw());
+    $("pf-zero").addEventListener("click", () => { [g020, g040, g131, g222].forEach((g) => g.set(0)); });
+    const nyq = (arr, f) => { if (f >= 1) return 0; const k = f * DP, i = Math.floor(k), u = k - i; return arr[i] * (1 - u) + (i + 1 <= DP ? arr[i + 1] : 0) * u; };
+    function upd() {
+      R = psfCalc({ w020: g020(), w040: g040(), w131: g131(), w222: g222() });
+      const lam = gL() * 1e-3, N = gN(), f = lam * N / (2 * gP());
+      SB.stat("o-pf-s", (R.pk / PK0).toFixed(3));
+      SB.stat("o-pf-m", Math.exp(-Math.pow(2 * Math.PI * R.rms, 2)).toFixed(3));
+      SB.stat("o-pf-rms", R.rms.toFixed(3) + "<small>λ</small>");
+      SB.stat("o-pf-dz", (8 * N * N * g020() * lam).toFixed(2) + "<small>µm</small>");
+      SB.stat("o-pf-ny", nyq(R.T, f).toFixed(2) + " / " + nyq(R.S, f).toFixed(2));
+      cv1.redraw(); cv2.redraw();
+    }
+    const offP = document.createElement("canvas"); offP.width = offP.height = 64;
+    const offW = document.createElement("canvas"); offW.width = offW.height = DP;
+    function drawMaps(ctx, w, h) {
+      if (!R) return;
+      const P = SB.palette(), lam = gL() * 1e-3, N = gN(), px = lam * N / 4, gam = $("pf-log").checked;
+      const sz = Math.min(h - 30, w / 2 - 20), x0 = w / 4 - sz / 2, x1 = 3 * w / 4 - sz / 2, y0 = 6;
+      // PSF crop 64x64 around centre
+      const o = offP.getContext("2d"), img = o.createImageData(64, 64), c0 = NF / 2;
+      for (let j = 0; j < 64; j++) for (let i = 0; i < 64; i++) {
+        let v = R.psf[(c0 - 32 + j) * NF + (c0 - 32 + i)] / R.pk; if (gam) v = Math.pow(v, 0.35);
+        const c = cmap(v), k = ((63 - j) * 64 + i) * 4; img.data[k] = c[0]; img.data[k + 1] = c[1]; img.data[k + 2] = c[2]; img.data[k + 3] = 255;
+      }
+      o.putImageData(img, 0, 0); ctx.imageSmoothingEnabled = false; ctx.drawImage(offP, x0, y0, sz, sz);
+      // pixel grid + airy ring
+      const k = sz / 64, pp = gP() / px * k, cx = x0 + sz / 2, cy = y0 + sz / 2;
+      ctx.save(); ctx.beginPath(); ctx.rect(x0, y0, sz, sz); ctx.clip();
+      ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 1;
+      for (let t = -Math.ceil(32 * k / pp); t <= Math.ceil(32 * k / pp); t++) { const q = (t + 0.5) * pp; ctx.beginPath(); ctx.moveTo(cx + q, y0); ctx.lineTo(cx + q, y0 + sz); ctx.moveTo(x0, cy + q); ctx.lineTo(x0 + sz, cy + q); ctx.stroke(); }
+      ctx.strokeStyle = "#fff"; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(cx, cy, 1.22 * lam * N / px * k, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+      ctx.restore();
+      // wavefront map (diverging blue-white-red, data colormap)
+      const ow = offW.getContext("2d"), wi = ow.createImageData(DP, DP); let mx = 1e-6;
+      R.wmap.forEach((v) => { if (isFinite(v)) mx = Math.max(mx, Math.abs(v)); });
+      for (let j = 0; j < DP; j++) for (let i = 0; i < DP; i++) {
+        const v = R.wmap[j * DP + i], q = ((DP - 1 - j) * DP + i) * 4;
+        if (!isFinite(v)) { wi.data[q + 3] = 0; continue; }
+        const t = v / mx, a = Math.abs(t), base = SB.isDark() ? 40 : 250;
+        const c = t >= 0 ? [base + (214 - base) * a, base + (60 - base) * a, base + (50 - base) * a] : [base + (40 - base) * a, base + (110 - base) * a, base + (220 - base) * a];
+        wi.data[q] = c[0]; wi.data[q + 1] = c[1]; wi.data[q + 2] = c[2]; wi.data[q + 3] = 255;
+      }
+      ow.putImageData(wi, 0, 0); ctx.imageSmoothingEnabled = true; ctx.drawImage(offW, x1, y0, sz, sz);
+      ctx.strokeStyle = P.border; ctx.beginPath(); ctx.arc(x1 + sz / 2, y0 + sz / 2, sz / 2, 0, 7); ctx.stroke(); ctx.strokeRect(x0, y0, sz, sz);
+      ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textAlign = "center"; ctx.textBaseline = "top";
+      ctx.fillText("PSF " + (64 * px).toFixed(1) + " µm 창 · 꼭짓값 이동 " + (Math.hypot(R.pkx, R.pky) * px).toFixed(2) + " µm", x0 + sz / 2, y0 + sz + 6);
+      ctx.fillText("파면 W (±" + mx.toFixed(2) + " λ)", x1 + sz / 2, y0 + sz + 6);
+    }
+    function drawMTF(ctx, w, h) {
+      if (!R) return;
+      const P = SB.palette(), lam = gL() * 1e-3, N = gN(), nc = 1000 / (lam * N), ny = 1000 / (2 * gP());
+      const toS = (arr) => arr.map((v, k) => [k / DP * nc, v]);
+      const dl = []; for (let k = 0; k <= 60; k++) { const x = k / 60; dl.push([x * nc, 2 / Math.PI * (Math.acos(x) - x * Math.sqrt(1 - x * x))]); }
+      SB.chart(ctx, null, { x: [0, nc], y: [0, 1.02], xLabel: "공간 주파수 (lp/mm)", yLabel: "MTF",
+        series: [{ data: dl, color: P.dim, width: 1.4, dash: [5, 4] }, { data: toS(R.T), color: P.accent, width: 2.4 }, { data: toS(R.S), color: P.accent2, width: 2, dash: [7, 3] }],
+        vlines: ny < nc ? [{ x: ny, color: P.warn, label: "나이퀴스트" }] : [] });
+      ctx.font = font(11); ctx.textAlign = "right"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.accent; ctx.fillText("T (자오)", w - 22, 20); ctx.fillStyle = P.accent2; ctx.fillText("S (구결)", w - 22, 36); ctx.fillStyle = P.dim; ctx.fillText("회절 한계", w - 22, 52);
+    }
+    const cv1 = SB.canvas($("cv-pf"), drawMaps, { aspect: 0.5, minHeight: 200, maxHeight: 330 });
+    const cv2 = SB.canvas($("cv-pfm"), drawMTF, { aspect: 0.42, minHeight: 200, maxHeight: 280 });
+    upd();
+  })();
+
+  /* =================================================== Sim: interference IR-cut filter */
+  (function () {
+    const IR = (function () {
+      const NS = 1.52, NL = 1.46;
+      const nH = (l) => 2.21 + 0.10 * (500 / l) * (500 / l);
+      const L0 = 380, L1 = 1100, DL = 5, NLm = Math.round((L1 - L0) / DL) + 1;
+      const LAM = []; for (let i = 0; i < NLm; i++) LAM.push(L0 + i * DL);
+      function stack(m, edge) {
+        // short-pass: two (0.5L H 0.5L)^m stacks; quarter-wave refs set from the 0-deg T50 target "edge"
+        const refs = [edge * 1.16, edge * 1.50], layers = [];
+        refs.forEach((lr) => {
+          // physical thickness quarter wave at lr (H uses dispersion at lr)
+          const dH = lr / (4 * nH(lr)), dL = lr / (4 * NL);
+          layers.push(["L", dL / 2]);
+          for (let k = 0; k < m; k++) { layers.push(["H", dH]); layers.push(["L", k === m - 1 ? dL / 2 : dL]); }
+        });
+        // merge adjacent L
+        const out = []; layers.forEach((L) => { const p = out[out.length - 1]; if (p && p[0] === L[0]) p[1] += L[1]; else out.push(L.slice()); });
+        return out;
+      }
+      function tmmT(layers, lam, s2, pol) {
+        // returns [T, R]; incidence from air, exit into substrate NS (lossless)
+        let a = 1, b = 0, c = 0, d = 1;
+        const eta = (n) => { const nc = Math.sqrt(n * n - s2); return pol ? n * n / nc : nc; };
+        for (let j = 0; j < layers.length; j++) {
+          const n = layers[j][0] === "H" ? nH(lam) : NL, nc = Math.sqrt(n * n - s2), e = pol ? n * n / nc : nc;
+          const dl = 2 * Math.PI * nc * layers[j][1] / lam, cs = Math.cos(dl), sn = Math.sin(dl);
+          // M = [[cs, i sn/e],[i e sn, cs]]
+          const a2 = a * cs - b * e * sn, b2 = a * sn / e + b * cs, c2 = c * cs + d * e * sn, d2 = -c * sn / e + d * cs;
+          a = a2; b = b2; c = c2; d = d2;
+        }
+        const e0 = eta(1), es = eta(NS);
+        // B = a + i b es, C = i c + d es
+        const Br = a, Bi = b * es, Cr = d * es, Ci = c;
+        const nr = e0 * Br + Cr, ni = e0 * Bi + Ci, mr = e0 * Br - Cr, mi = e0 * Bi - Ci;
+        const den = nr * nr + ni * ni;
+        return [4 * e0 * es / den, (mr * mr + mi * mi) / den];
+      }
+      const bgAbs = (l) => 2.92 * Math.exp(-Math.pow((l - 880) / 200, 2));
+      function filterT(cfg, th) {
+        const s2 = Math.pow(Math.sin(th * Math.PI / 180), 2), layers = stack(cfg.m, cfg.hybrid ? 690 : 650);
+        const cg = Math.sqrt(1 - s2 / (NS * NS));
+        const T = new Float64Array(NLm), R = new Float64Array(NLm);
+        for (let i = 0; i < NLm; i++) {
+          const l = LAM[i], ts = tmmT(layers, l, s2, 0), tp = tmmT(layers, l, s2, 1);
+          let t = 0.5 * (ts[0] + tp[0]); const r = 0.5 * (ts[1] + tp[1]);
+          if (cfg.hybrid) t *= Math.exp(-bgAbs(l) / cg);
+          T[i] = t; R[i] = r;
+        }
+        return { T, R };
+      }
+      const lg = (x) => 1 / (1 + Math.exp(-x));
+      const gs = (l, c, w) => Math.exp(-Math.pow((l - c) / w, 2));
+      const SI = (l) => l >= 1100 ? 0 : 0.9 * (1 - Math.exp(-(1100 - l) / 220)) * lg((l - 390) / 18);
+      const CF = [(l) => 0.92 * lg((l - 578) / 14), (l) => 0.88 * gs(l, 535, 44) + 0.85 * lg((l - 790) / 22), (l) => 0.88 * gs(l, 455, 38) + 0.85 * lg((l - 805) / 22)];
+      function illum(l, kind) {
+        if (kind === "a") { const T = 2856, x = 1.4388e7 / (l * T); return Math.pow(560 / l, 5) * (Math.exp(1.4388e7 / (560 * T)) - 1) / (Math.exp(x) - 1); }
+        return 1 - 0.35 * lg((l - 760) / 60); // daylight-ish: flat visible, lower NIR
+      }
+      // channel signals for a transmission spectrum
+      function rgb(T, kind) {
+        const out = [0, 0, 0], nir = [0, 0, 0];
+        for (let i = 0; i < NLm; i++) { const l = LAM[i], e = illum(l, kind) * SI(l) * T[i]; for (let c = 0; c < 3; c++) { const v = e * CF[c](l); out[c] += v; if (l > 700) nir[c] += v; } }
+        return { s: out, nir };
+      }
+      function t50(T) { // first falling crossing of 0.5 above 560 nm
+        for (let i = 1; i < NLm; i++) if (LAM[i] > 560 && T[i - 1] >= 0.5 && T[i] < 0.5) return LAM[i - 1] + DL * (T[i - 1] - 0.5) / (T[i - 1] - T[i]);
+        return NaN;
+      }
+      return { LAM, NLm, filterT, rgb, t50, SI, CF, illum };
+    })();
+    const gTh = SB.range("ir-th", (v) => v + "°", upd), gM = SB.range("ir-m", (v) => v + " 주기", () => { curves = null; upd(); });
+    const gF = SB.seg("ir-type", upd), gI = SB.seg("ir-ill", () => { curves = null; upd(); });
+    let st = null, curves = null;
+    function calc(cfg, th, il) {
+      const f0 = IR.filterT(cfg, 0), f = IR.filterT(cfg, th), g0 = IR.rgb(f0.T, il), g = IR.rgb(f.T, il);
+      const gh = IR.rgb(Array.from(f.R).map((r, i) => r * f.T[i]), il);
+      return { f0, f, rg: (g.s[0] / g.s[1]) / (g0.s[0] / g0.s[1]) - 1, bg: (g.s[2] / g.s[1]) / (g0.s[2] / g0.s[1]) - 1, nir: g.nir[0] / g.s[0], ghost: 0.05 * gh.s[0] / g.s[0], t0: IR.t50(f0.T), t1: IR.t50(f.T) };
+    }
+    function upd() {
+      const cfg = { m: gM(), hybrid: gF() === "hyb" }, il = gI();
+      st = calc(cfg, gTh(), il);
+      if (!curves) {
+        curves = {};
+        ["int", "hyb"].forEach((k) => {
+          const c = { m: gM(), hybrid: k === "hyb" }, f0 = IR.rgb(IR.filterT(c, 0).T, il), rg = [], bg = [];
+          for (let a = 0; a <= 40; a += 2.5) { const g = IR.rgb(IR.filterT(c, a).T, il); rg.push([a, 100 * ((g.s[0] / g.s[1]) / (f0.s[0] / f0.s[1]) - 1)]); bg.push([a, 100 * ((g.s[2] / g.s[1]) / (f0.s[2] / f0.s[1]) - 1)]); }
+          curves[k] = { rg, bg };
+        });
+      }
+      const nm = (v) => (isFinite(v) ? v.toFixed(0) + "<small>nm</small>" : "—");
+      SB.stat("o-ir-t0", nm(st.t0));
+      SB.stat("o-ir-t1", nm(st.t1) + (isFinite(st.t0) && isFinite(st.t1) ? " <small>(" + (st.t1 - st.t0).toFixed(0) + ")</small>" : ""));
+      SB.stat("o-ir-rg", (st.rg * 100).toFixed(1) + "<small>%</small>");
+      SB.stat("o-ir-nir", (st.nir * 100).toFixed(1) + "<small>%</small>");
+      SB.stat("o-ir-gh", (st.ghost * 100).toFixed(2) + "<small>%</small>");
+      cv1.redraw(); cv2.redraw();
+    }
+    function drawT(ctx, w, h) {
+      if (!st) return;
+      const P = SB.palette(), L = IR.LAM;
+      const ser = (arr) => L.map((l, i) => [l, arr[i]]);
+      const chans = [0, 1, 2].map((c) => { let mx = 0; const d = L.map((l, i) => { const v = IR.SI(l) * IR.CF[c](l) * st.f.T[i]; mx = Math.max(mx, v); return [l, v]; }); return d; });
+      const cc = ["rgba(220,60,50,0.18)", "rgba(40,160,80,0.18)", "rgba(50,100,230,0.18)"], cl = ["rgb(220,60,50)", "rgb(40,160,80)", "rgb(50,100,230)"];
+      const series = chans.map((d, c) => ({ data: d, color: cl[c], width: 1, fill: cc[c] }));
+      series.push({ data: ser(st.f0.T), color: P.dim, width: 1.4, dash: [5, 4] });
+      series.push({ data: ser(st.f.R), color: P.warn, width: 1.2, dash: [2, 3] });
+      series.push({ data: ser(st.f.T), color: P.accent, width: 2.4 });
+      const C = SB.chart(ctx, null, { x: [380, 1100], y: [0, 1.02], xLabel: "파장 (nm)", yLabel: "투과율 / 신호",
+        series, bands: [{ x0: 700, x1: 1100, color: P.bad + "10" }],
+        vlines: isFinite(st.t1) ? [{ x: st.t1, color: P.accent, label: "T50 " + st.t1.toFixed(0) }] : [] });
+      ctx.font = font(11); ctx.textAlign = "right"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.accent; ctx.fillText(gTh() + "° 투과", C.box.x + C.box.w - 6, C.box.y + 16);
+      ctx.fillStyle = P.dim; ctx.fillText("0° 투과", C.box.x + C.box.w - 6, C.box.y + 32);
+      ctx.fillStyle = P.warn; ctx.fillText(gTh() + "° 반사", C.box.x + C.box.w - 6, C.box.y + 48);
+    }
+    function drawShade(ctx, w, h) {
+      if (!curves) return;
+      const P = SB.palette(), k = gF();
+      let lo = -10; ["int", "hyb"].forEach((q) => curves[q].rg.concat(curves[q].bg).forEach(([, v]) => { lo = Math.min(lo, v); }));
+      let hi = 5; ["int", "hyb"].forEach((q) => curves[q].bg.forEach(([, v]) => { hi = Math.max(hi, v); }));
+      const C = SB.chart(ctx, null, { x: [0, 40], y: [Math.floor(lo / 10) * 10, Math.ceil(hi / 5) * 5], xLabel: "입사각 = CRA (°)", yLabel: "채널비 변화 (%)",
+        series: [
+          { data: curves.int.rg, color: k === "int" ? P.bad : P.faint, width: k === "int" ? 2.4 : 1.4 },
+          { data: curves.hyb.rg, color: k === "hyb" ? P.bad : P.faint, width: k === "hyb" ? 2.4 : 1.4, dash: [6, 3] },
+          { data: curves[k].bg, color: P.blue, width: 1.6 }],
+        hlines: [{ y: 0, color: P.axis, dash: [] }], vlines: [{ x: gTh(), color: P.accent }],
+        points: [{ x: gTh(), y: st.rg * 100, color: P.bad }] });
+      ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      ctx.fillStyle = P.bad; ctx.fillText("R/G — 실선 간섭형, 점선 하이브리드", C.box.x + 6, C.box.y + C.box.h - 6);
+      ctx.fillStyle = P.blue; ctx.fillText("B/G (선택한 필터)", C.box.x + 6, C.box.y + C.box.h - 22);
+    }
+    const cv1 = SB.canvas($("cv-ir"), drawT, { aspect: 0.48, minHeight: 230, maxHeight: 340 });
+    const cv2 = SB.canvas($("cv-ir2"), drawShade, { aspect: 0.36, minHeight: 190, maxHeight: 250 });
+    upd();
   })();
 })();
 </script>

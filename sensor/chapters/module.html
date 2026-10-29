@@ -7,7 +7,7 @@
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png">
 <title>카메라 모듈: AF·OIS·줌 · SensorBook</title>
-<meta name="description" content="카메라 모듈의 두께 제약과 TTL, VCM 액추에이터의 2차계 응답과 클로즈드 루프 제어, AF 행정, 자이로 기반 OIS와 EIS, 폴디드 망원과 멀티 카메라, 액티브 얼라인과 모듈 캘리브레이션을 시뮬레이터로 배운다.">
+<meta name="description" content="카메라 모듈의 두께 제약과 TTL, VCM 액추에이터의 2차계 응답과 클로즈드 루프 제어, AF 행정, 자이로 기반 OIS와 EIS, 폴디드 망원과 멀티 카메라, OIS 서보의 보드 선도와 위상 여유, AF 알고리즘 몬테카를로, 줌 전환의 SNR·해상도, 열 초점 드리프트, 액티브 얼라인과 모듈 캘리브레이션을 시뮬레이터로 배운다.">
 <link rel="stylesheet" href="../css/style.css">
 <script src="../js/common.js"></script>
 <style>
@@ -35,6 +35,7 @@
       <li>센서 포맷이 커지면 모듈이 두꺼워지는 이유를 TTL로 설명하고, 근접 거리에서 필요한 AF 행정을 계산한다.</li>
       <li>VCM을 스프링-질량-감쇠 2차계로 모델링해 링잉과 정착 시간을 구하고, 입력 정형과 클로즈드 루프가 이를 줄이는 원리를 이해한다.</li>
       <li>자이로에서 렌즈 시프트까지 OIS 보정 루프를 따라가고, 보정 각에 필요한 시프트량과 억제비를 계산한다.</li>
+      <li>OIS 서보를 보드 선도·위상 여유·감도 함수로 설계하고, AF 알고리즘과 줌 전환, 열 초점 드리프트를 잡음과 물리 모형 위에서 정량 비교한다.</li>
       <li>렌즈 시프트·센서 시프트·모듈 틸트와 EIS의 차이, 폴디드 망원이 두께를 줄이는 원리를 설명한다.</li>
       <li>액티브 얼라인이 틸트를 잡는 과정과, 모듈마다 저장되는 캘리브레이션 데이터의 종류를 안다.</li>
     </ul>
@@ -332,6 +333,35 @@
       <strong>초점을 옮기면 화각도 변한다</strong>
       <p>렌즈 전체를 앞으로 내밀면 상 거리가 \(f\)에서 \(f + \Delta\)로 늘어나므로 배율이 그만큼 커진다. 6.8 mm 렌즈를 0.5 mm 내밀면 상이 약 7 % 커진다. 이를 포커스 브리딩이라 한다. 동영상에서 AF가 움직일 때 화면이 숨 쉬듯 커졌다 작아지는 원인이며, 여러 초점 위치의 영상을 합성하는 알고리즘은 이 배율 차이를 먼저 맞춰야 한다.</p>
     </div>
+
+    <h3>알고리즘을 몬테카를로로 비교하기</h3>
+    <p>표의 '이동 횟수'는 평균일 뿐이다. 실제 AF의 품질은 <b>분포</b>, 특히 실패의 꼬리로 결정된다. 초점값 \(FV\)(영상의 고주파 에너지)는 초점 근처에서만 봉우리를 이루고 멀어지면 평평해지며, 모든 측정에는 잡음이 섞인다. 위상차 측정도 마찬가지다. 두 알고리즘을 같은 잡음 모형 위에서 수백 번 돌려 보면 '빠르다'와 '정확하다'가 어떻게 갈리는지 보인다.</p>
+    <div class="formula">$$FV(z) = C\,e^{-(z-z_0)^2/2w^2} + b + n_{FV},\quad \sigma_{FV} \propto \frac{1}{\sqrt{E}},\qquad \hat d = (z_0 - z) + n_{PD},\quad \sigma_{PD} \propto \frac{1}{C\sqrt{E}}$$
+      <div class="where">\(z\): 렌즈 위치, \(z_0\): 초점 위치, \(C\): 피사체 콘트라스트, \(w\): 봉우리 폭(여기서는 20 µm), \(E\): 조도. 콘트라스트 AF는 거친 스텝으로 봉우리를 넘을 때까지 오른 뒤 세 점에 포물선(로그 FV)을 맞춘다. 위상차 AF는 \(\hat d\)만큼 한두 번 뛰고, 잡음이 초점 심도보다 크면 ±12 µm 세 점으로 미세 조정한다. 신뢰도가 낮으면(어둡거나 무늬가 없으면) 콘트라스트 AF로 넘어간다.</div>
+    </div>
+
+    <div class="sim" id="sim-afmc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>AF 알고리즘 몬테카를로: 언덕 오르기 대 위상차 + 미세 탐색</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-af"></canvas><canvas id="cv-af2"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>조도 <output id="af-lux-out"></output></span><input type="range" id="af-lux" min="0" max="3" value="2" step="0.5"></label>
+          <label class="ctrl"><span>피사체 콘트라스트 C <output id="af-c-out"></output></span><input type="range" id="af-c" min="0.05" max="1" value="0.5" step="0.05"></label>
+          <label class="ctrl"><span>콘트라스트 AF 거친 스텝 <output id="af-step-out"></output></span><input type="range" id="af-step" min="10" max="60" value="30" step="5"></label>
+          <div class="ctrl"><span>위상차 픽셀</span><div class="seg" id="af-pd"><button data-value="sparse" class="on">차폐형 (드문 배치)</button><button data-value="dual">전 화소 2PD</button></div></div>
+          <button class="btn" id="af-run">다른 난수로 400회</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">콘트라스트 AF 프레임</span><span class="v" id="o-af-cf">—</span></div>
+        <div class="stat"><span class="k">콘트라스트 AF 성공률</span><span class="v" id="o-af-cok">—</span></div>
+        <div class="stat"><span class="k">위상차 AF 프레임</span><span class="v" id="o-af-pf">—</span></div>
+        <div class="stat"><span class="k">위상차 AF 성공률</span><span class="v" id="o-af-pok">—</span></div>
+        <div class="stat"><span class="k">평균 AF 시간 (CAF / PD)</span><span class="v" id="o-af-t">—</span></div>
+        <div class="stat"><span class="k">콘트라스트로 넘어간 비율</span><span class="v" id="o-af-fb">—</span></div>
+      </div>
+      <div class="sim-note">위: 한 번의 시행(초점 \(z_0\) = 170 µm, 시작은 무한대 끝 0). 점선은 참 FV 곡선, 파란 점과 번호는 콘트라스트 AF가 측정한 순서, 아래쪽 보라 선은 위상차 AF의 점프, 삼각형은 각 알고리즘의 최종 위치, 초록 띠는 초점 심도 ±3.6 µm(F/1.8, c = 2 µm). 아래: \(z_0\)를 40~260 µm에서 무작위로 고른 400회 시행의 최종 오차 분포. 성공 = 오차가 초점 심도 안. 시간은 프레임당 33 ms + 정착 8 ms로 셈했다. 해볼 것: ① 기본값(100 lux, C = 0.5)에서 콘트라스트 AF는 평균 12.5프레임(516 ms)에 100 % 성공, 위상차(차폐형)는 6.0프레임(248 ms)에 85 %. ② '전 화소 2PD'로 바꾸면 같은 6프레임에 100 %가 된다. ③ 조도를 10 lux로 내리면 위상차 신뢰도가 낮아 모든 시행이 콘트라스트 AF로 넘어가 13.6프레임이 걸린다. 1 lux에서는 두 방식 모두 성공률이 45 % 아래로 떨어진다. ④ 거친 스텝을 60 µm로 키우면 콘트라스트 AF가 9.6프레임으로 빨라지지만 봉우리(폭 20 µm)를 건너뛰어 성공률이 20 %로 무너진다. 10 µm면 99 %지만 22프레임이다.</div>
+    </div>
   </section>
 
   <!-- =============================================================== 6 -->
@@ -399,6 +429,69 @@
       </div>
       <div class="sim-note">위: 노출 시간 동안 점광원의 상이 센서 위에 그리는 궤적(빨강 = 보정 없음, 초록 = OIS 잔류). 격자 한 칸의 크기는 왼쪽 위에 표시된다. 아래: 한 축의 떨림 각(빨강), OIS가 따라간 각(보라 점선), 남은 오차(초록)와 노출 구간(회색 띠). 가정: 픽셀 1 µm, 세 주파수 성분을 섞은 떨림, 보정 각 한계 ±1°, 서보는 1차 지연으로 근사. 해볼 것: ① 기본값에서 OIS를 끄고 켜며 블러 길이를 비교한다. ② 서보 대역을 10 Hz로 낮추면 위상이 밀려 잔류가 커진다. ③ 진폭을 2°로 올리면 보정 각 한계(±1°)에 걸려 궤적이 다시 길어진다. 1.5° 근처에서는 '다시 찍기'에 따라 걸릴 때도 있고 안 걸릴 때도 있다. ④ 망원으로 바꾸면 같은 떨림에서 블러와 필요한 시프트가 모두 약 2.4배가 된다. ⑤ 노출을 1/1000 s로 줄이면 OIS 없이도 블러가 1픽셀 안팎 이하로 내려간다. 대신 광자가 그만큼 줄어든다.</div>
     </div>
+
+    <h3>서보 루프를 주파수로 보기: 루프 이득, 감도 함수, 위상 여유</h3>
+    <p>위 시뮬레이터는 서보를 '대역 몇 Hz짜리 1차 지연'으로 뭉뚱그렸다. 실제 드라이버 IC 안에서는 홀 센서 값을 수 kHz~수십 kHz로 읽어 디지털 제어기 \(C\)가 코일 전류를 정하고, 가동부(질량–스프링–감쇠, 플랜트 \(P\))가 움직인다. 계산과 ZOH 때문에 생기는 시간 지연 \(T_d \approx 1.5/f_s\)도 루프에 들어 있다. 이 셋을 곱한 것이 <span class="term">루프 이득</span><span class="en">(Loop Gain)</span> \(L\)이고, 되먹임이 외란과 오차를 얼마나 줄이는지는 <span class="term">감도 함수</span><span class="en">(Sensitivity Function)</span> \(S\)가 말해 준다.</p>
+    <div class="formula">$$L(s) = C(s)\,P(s)\,e^{-sT_d},\qquad S = \frac{1}{1+L},\qquad T = \frac{L}{1+L},\qquad P(s) = \frac{\omega_0^2}{s^2 + 2\zeta\omega_0 s + \omega_0^2}$$
+      <div class="where">\(T\): 상보 감도(명령을 얼마나 따라가는가), \(S + T = 1\). 손떨림 각 \(\theta\)에 대한 상의 잔류 흔들림은 \(\theta\,(1 - T H_g)\)이다(\(H_g\): 자이로 고역 통과와 게인 오차). 잔류 RMS는 손떨림 스펙트럼 \(\Phi_\theta(f)\)에 \(|1 - TH_g|^2\)을 곱해 적분한 값의 제곱근이다.</div>
+    </div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 230" role="img" aria-label="OIS 서보 루프 블록도와 감도 함수의 모양">
+        <defs><marker id="mo-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--text-dim)"/></marker></defs>
+        <text x="16" y="62" class="t-dim">목표</text><text x="16" y="80" class="t-mono">f·θ</text>
+        <line x1="58" y1="70" x2="88" y2="70" class="s-line" marker-end="url(#mo-ar)"/>
+        <circle cx="98" cy="70" r="10" fill="none" stroke="var(--text-dim)" stroke-width="1.5"/><text x="98" y="75" class="t-mono" text-anchor="middle">Σ</text>
+        <line x1="108" y1="70" x2="134" y2="70" class="s-line" marker-end="url(#mo-ar)"/>
+        <rect x="136" y="46" width="96" height="48" rx="6" class="f-acc-soft" stroke="var(--accent)"/><text x="184" y="68" class="t" text-anchor="middle">C(z)</text><text x="184" y="86" class="t-mono" text-anchor="middle">앞섬 + PI²</text>
+        <line x1="232" y1="70" x2="258" y2="70" class="s-line" marker-end="url(#mo-ar)"/>
+        <rect x="260" y="46" width="78" height="48" rx="6" class="f-surface" stroke="var(--border)"/><text x="299" y="68" class="t" text-anchor="middle">e^−sTd</text><text x="299" y="86" class="t-mono" text-anchor="middle">1.5/fs</text>
+        <line x1="338" y1="70" x2="364" y2="70" class="s-line" marker-end="url(#mo-ar)"/>
+        <rect x="366" y="46" width="96" height="48" rx="6" class="f-acc2-soft" stroke="var(--accent-2)"/><text x="414" y="68" class="t" text-anchor="middle">P(s)</text><text x="414" y="86" class="t-mono" text-anchor="middle">질량–스프링</text>
+        <line x1="462" y1="70" x2="500" y2="70" class="s-line" marker-end="url(#mo-ar)"/><text x="482" y="60" class="t-mono" text-anchor="middle">x</text>
+        <polyline points="480,70 480,126 98,126 98,82" fill="none" stroke="var(--text-dim)" stroke-width="1.5" marker-end="url(#mo-ar)"/>
+        <text x="290" y="144" class="t-dim" text-anchor="middle">홀 센서 (위치 되먹임)</text><text x="84" y="100" class="t-mono">−</text>
+        <g transform="translate(510,20)">
+          <line x1="0" y1="96" x2="160" y2="96" class="s-axis"/><line x1="0" y1="10" x2="0" y2="190" class="s-axis"/>
+          <path d="M0 22 L70 70 L100 96 L160 150" fill="none" stroke="var(--accent)" stroke-width="2"/>
+          <path d="M0 180 L70 118 Q98 80 110 92 L160 96" fill="none" stroke="var(--bad)" stroke-width="2"/>
+          <text x="6" y="20" class="t-acc">|L|</text><text x="6" y="174" class="t-mono" style="fill:var(--bad)">|S|</text>
+          <text x="112" y="84" class="t-mono">피크</text><text x="100" y="112" class="t-mono" text-anchor="middle">fc</text>
+          <text x="80" y="208" class="t-dim" text-anchor="middle">log f →</text><text x="164" y="100" class="t-mono">0 dB</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 14-7.</b> 왼쪽: 디지털 OIS 서보. 목표 위치 \(f\theta\)와 홀 센서 값의 차이를 제어기 \(C\)가 전류로 바꾸고, 지연을 거쳐 가동부 \(P\)가 움직인다. 오른쪽: 루프 이득이 큰 저주파에서는 \(|S| \ll 1\)이라 떨림이 지워지고, 크로스오버 \(f_c\) 근처에서는 \(|S|\)가 1을 넘는 피크를 만든다. 위상 여유가 작을수록 피크가 높다(워터베드 효과).</figcaption>
+    </figure>
+
+    <p>설계의 줄다리기는 단순하다. 손떨림 대역(1~12 Hz)에서 \(|S|\)를 −30 dB 아래로 누르려면 \(|L|\)이 그 대역에서 30 dB 이상이어야 하고, 그러려면 크로스오버 \(f_c\)를 공진(50~100 Hz)보다 충분히 위에 두고 저주파에 적분기를 쌓아야 한다. 그런데 공진 위에서 플랜트의 위상은 이미 −180°에 붙어 있고, 적분기와 지연이 위상을 더 깎는다. 이것을 되돌리는 것이 <span class="term">위상 앞섬 보상</span><span class="en">(Lead Compensation)</span>이다. 영점과 극점의 비가 \(\alpha\)인 앞섬 보상기는 두 주파수의 기하평균에서 \(\phi_m = \arcsin\frac{\alpha-1}{\alpha+1}\)만큼 위상을 올려 준다.</p>
+    <div class="callout tip">
+      <strong>계산 예: 위상 여유 셈하기</strong>
+      <p>공진 80 Hz(\(\zeta\) = 0.05) 가동부를 \(f_c\) = 200 Hz로 닫는다. 공진보다 2.5배 위이므로 플랜트 위상은 \(-180° + \arctan\frac{2\zeta (f_c/f_0)}{(f_c/f_0)^2-1}\) = −177.3°다. 적분 영점 두 개(\(f_c/4\), \(f_c/12\))가 −14.0°와 −4.8°, 서보 주기 10 kHz의 지연 \(1.5/f_s\) = 150 µs가 \(-360° \times 200 \times 150\,\mu\text{s}\) = −10.8°를 더한다. 합은 −206.9°라 이대로는 불안정하다. \(\alpha\) = 12인 앞섬(\(\phi_m\) = 57.8°)을 넣으면 −149.1°, 곧 위상 여유는 <b>31°</b>다. 같은 제어기를 서보 주기 2 kHz로 돌리면 지연만 54°가 되어 위상 여유가 −12°로 뒤집힌다. OIS 드라이버가 빠른 ADC와 짧은 계산 지연을 자랑하는 이유다.</p>
+    </div>
+
+    <div class="sim" id="sim-ol">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>OIS 서보 설계: 보드 선도, 감도 함수, 스텝 응답, 잔류 떨림</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-ol"></canvas><canvas id="cv-ol2"></canvas><canvas id="cv-ol3"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>가동부 공진 f₀ <output id="ol-f0-out"></output></span><input type="range" id="ol-f0" min="40" max="150" value="80" step="5"></label>
+          <label class="ctrl"><span>크로스오버 fc <output id="ol-fc-out"></output></span><input type="range" id="ol-fc" min="100" max="400" value="200" step="10"></label>
+          <label class="ctrl"><span>앞섬 비 α <output id="ol-al-out"></output></span><input type="range" id="ol-al" min="1" max="20" value="12" step="1"></label>
+          <label class="ctrl"><span>서보 주기 fs <output id="ol-fs-out"></output></span><input type="range" id="ol-fs" min="1" max="20" value="10" step="1"></label>
+          <label class="ctrl"><span>자이로 게인 오차 <output id="ol-ge-out"></output></span><input type="range" id="ol-ge" min="-5" max="5" value="0" step="0.5"></label>
+          <div class="ctrl"><span>1 kHz 구조 공진 (2차 모드)</span><div class="seg" id="ol-m2"><button data-value="off" class="on">없음</button><button data-value="on">있음</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">위상 여유</span><span class="v" id="o-ol-pm">—</span></div>
+        <div class="stat"><span class="k">이득 여유</span><span class="v" id="o-ol-gm">—</span></div>
+        <div class="stat"><span class="k">스텝 오버슈트</span><span class="v" id="o-ol-os">—</span></div>
+        <div class="stat"><span class="k">정착 (±2 %)</span><span class="v" id="o-ol-ts">—</span></div>
+        <div class="stat"><span class="k">억제비 (손떨림 스펙트럼)</span><span class="v" id="o-ol-sr">—</span></div>
+        <div class="stat"><span class="k">잔류 떨림 RMS</span><span class="v" id="o-ol-res">—</span></div>
+      </div>
+      <div class="sim-note">위: 루프 이득 \(|L|\), 감도 \(|S|\), 자이로 경로까지 포함한 잔류 전달 \(|E| = |1-TH_g|\)(초록 점선), 그 아래 \(\angle L\)과 위상 여유 점. 가운데: 위치 명령 스텝에 대한 응답(디지털 제어기를 \(f_s\)로 이산화하고 한 샘플 계산 지연을 넣은 시간 영역 시뮬레이션, 초록 점선은 ±2 %). 아래: 손떨림 스펙트럼(5 Hz 중심 대역 통과, RMS 0.1°)과 OIS 뒤의 잔류. 잔류 떨림은 \(f\) = 6.8 mm, 픽셀 1 µm 기준이고 OIS를 끄면 11.87 px다. 자이로 고역 통과는 0.05 Hz. 해볼 것: ① 기본값은 위상 여유 31°, 오버슈트 36 %, 억제비 20.6 dB(잔류 1.10 px). ② \(f_c\)를 300 Hz로 올리면 억제비 31.5 dB가 되지만 위상 여유가 24°로 줄고 오버슈트가 60 %로 커진다. ③ α를 1(앞섬 없음)로 두면 불안정해 발산한다. α = 3이면 위상 여유 3°에서 간신히 버틴다. ④ 서보 주기를 2 kHz로 내리면 지연 때문에 발산하고, 4 kHz에서도 위상 여유가 15°로 오버슈트 66 %다. ⑤ '구조 공진 있음'에서 \(f_c\) = 400 Hz면 이득 여유가 1.7 dB까지 떨어져 오버슈트가 150 %다. ⑥ 자이로 게인 오차 +3 %는 억제비를 20.6 → 19.8 dB로 깎는다. 억제비가 높을수록(본문의 30 dB 한계) 이 오차가 더 크게 보인다.</div>
+    </div>
   </section>
 
   <!-- =============================================================== 7 -->
@@ -438,7 +531,7 @@
         <text x="565" y="226" class="t-dim" text-anchor="middle">렌즈와 센서를 함께 회전</text>
         <text x="565" y="248" class="t-dim" text-anchor="middle">넓은 보정 각</text>
       </svg>
-      <figcaption><b>그림 14-7.</b> OIS의 세 방식. 폴디드 망원에서는 여기에 더해 프리즘을 기울여 광로 자체를 꺾는 방식이 쓰인다.</figcaption>
+      <figcaption><b>그림 14-8.</b> OIS의 세 방식. 폴디드 망원에서는 여기에 더해 프리즘을 기울여 광로 자체를 꺾는 방식이 쓰인다.</figcaption>
     </figure>
 
     <div class="table-wrap"><table>
@@ -518,7 +611,7 @@
         <line x1="170" y1="74" x2="534" y2="74" class="s-line"/><line x1="170" y1="68" x2="170" y2="80" class="s-line"/><line x1="534" y1="68" x2="534" y2="80" class="s-line"/>
         <text x="352" y="66" class="t" text-anchor="middle">광로 길이는 폰의 넓은 방향으로</text>
       </svg>
-      <figcaption><b>그림 14-8.</b> <span class="term">폴디드</span>(잠망경) 망원. 뒷면으로 들어온 빛을 45° 프리즘이 90° 꺾어 폰의 넓은 방향으로 보낸다. 긴 초점거리가 두께가 아니라 길이로 들어간다.</figcaption>
+      <figcaption><b>그림 14-9.</b> <span class="term">폴디드</span>(잠망경) 망원. 뒷면으로 들어온 빛을 45° 프리즘이 90° 꺾어 폰의 넓은 방향으로 보낸다. 긴 초점거리가 두께가 아니라 길이로 들어간다.</figcaption>
     </figure>
 
     <p><span class="term">폴디드 광학계</span><span class="en">(Folded Optics, Periscope)</span>에서 두께를 정하는 것은 초점거리가 아니다. 프리즘과 렌즈의 <b>유효 지름</b>, 그리고 세워 놓은 센서의 짧은 변이다. 초점거리 16.6 mm, F/3.0이면 조리개 지름은 5.5 mm이고, 하우징을 더해도 7 mm 안팎이다. 직립형이었다면 16 mm가 넘었을 높이다.</p>
@@ -553,6 +646,34 @@
       <div class="where">\(B\): 두 카메라의 광축 사이 거리(기선), \(Z\): 물체 거리, \(p\): 픽셀 피치. 예: \(f\) = 6.8 mm, \(B\) = 12 mm, \(p\) = 1 µm이면 \(Z\) = 1 m에서 약 82픽셀, 30 cm에서 약 272픽셀이다. 무한대에서는 0이다.</div>
     </div>
     <p>전환 순간에 화면이 옆으로 튀지 않게 하려면 거리에 따라 영상을 옮겨 붙여야 한다. 거리는 화면 안에서도 물체마다 다르므로 완벽한 정합은 없고, 대개 초점이 맞은 피사체를 기준으로 맞춘다. 여기에 두 카메라의 색과 밝기도 맞아야 한다. 센서의 분광 감도, 렌즈 코팅, 쉐이딩, F-넘버가 모두 다르기 때문이다. 그래서 멀티 카메라 모듈은 카메라 사이의 상대 위치·기울기와 색 응답 차이를 공장에서 재어 저장해 두고, 전환 구간에서는 두 카메라를 동시에 켜서 화이트 밸런스와 노출을 미리 수렴시킨 뒤 넘긴다. 여러 카메라의 영상을 합쳐 한 장을 만드는 기법은 <a href="computational.html">11장</a>의 주제다.</p>
+
+    <h3>언제 망원으로 넘길까: 크롭의 해상도와 망원의 광량</h3>
+    <p>배율 \(Z\)에서 메인(광각) 카메라를 잘라 쓰면 화면의 픽셀 수가 \(1/Z^2\)로 줄어 해상도가 떨어진다. 망원은 해상도를 지키지만 센서가 작고 F-넘버가 어둡다. 어느 쪽이 나은지는 '픽셀 하나'가 아니라 <b>물체 쪽 같은 각도 영역에 들어오는 광자 수</b>로 따져야 한다. 피사체의 한 점에서 오는 빛 중 카메라가 받는 몫은 입사동 넓이에 비례하므로</p>
+    <div class="formula">$$N_e(\Omega) \propto \frac{\pi D^2}{4}\,\eta\,t\,L\,\Omega,\qquad D = \frac{f}{N}$$
+      <div class="where">\(\Omega\): 물체 쪽 입체각, \(D\): 입사동 지름, \(\eta\): QE와 필터 투과, \(t\): 노출, \(L\): 휘도. 광각 \(f\) = 6.8 mm·F/1.75의 \(D\)는 3.9 mm, 5배 폴디드 \(f\) = 20 mm·F/3.0의 \(D\)는 6.7 mm이므로 같은 물체 영역에서 망원이 광자를 \((6.7/3.9)^2 \approx 2.9\)배 더 모은다. 3배 망원 \(f\) = 8.8 mm·F/2.4는 \(D\) = 3.7 mm로 오히려 광각보다 적다.</div>
+    </div>
+    <p>광자를 더 모아도 그 광자가 훨씬 많은 작은 픽셀로 나뉘면 픽셀마다 읽기 잡음이 붙는다. 그래서 밝을 때는 망원이 해상도와 '같은 해상도로 맞춘 SNR' 모두에서 이기고, 아주 어두우면 읽기 잡음이 망원의 광량 이점을 갉아먹어 광각 크롭과 비슷해진다. 3배 망원처럼 입사동이 작은 경우는 저조도에서 크롭이 오히려 낫다. 실제 카메라 앱이 어두운 곳에서 망원 대신 메인 카메라의 디지털 줌을 쓰고, 가까운 물체(망원의 최단 촬영 거리 안쪽)에서도 메인으로 돌아가는 이유다.</p>
+
+    <div class="sim" id="sim-zoom">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>줌 전환: 광각 크롭 대 망원, 지멘스 스타로 잰 해상도와 SNR</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-zm"></canvas><canvas id="cv-zm2"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>줌 배율 <output id="zm-z-out"></output></span><input type="range" id="zm-z" min="1" max="10" value="5" step="0.1"></label>
+          <label class="ctrl"><span>조도 <output id="zm-lux-out"></output></span><input type="range" id="zm-lux" min="0" max="3" value="2" step="0.1"></label>
+          <div class="ctrl"><span>망원 카메라</span><div class="seg" id="zm-tele"><button data-value="t5" class="on">5× 폴디드</button><button data-value="t3">3× 직립</button></div></div>
+          <button class="btn" id="zm-new">다시 찍기 (잡음 새로)</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">광각 크롭 SNR</span><span class="v" id="o-zm-ws">—</span></div>
+        <div class="stat"><span class="k">망원 SNR (출력 픽셀)</span><span class="v" id="o-zm-ts">—</span></div>
+        <div class="stat"><span class="k">망원 SNR (광각 해상도로 맞춤)</span><span class="v" id="o-zm-te">—</span></div>
+        <div class="stat"><span class="k">한계 해상도 광각 / 망원</span><span class="v" id="o-zm-r">—</span></div>
+        <div class="stat"><span class="k">더 나은 쪽 (SNR 기준)</span><span class="v" id="o-zm-pick">—</span></div>
+      </div>
+      <div class="sim-note">위: 같은 장면(왼쪽 지멘스 스타, 오른쪽 18 % 회색 패치)을 두 카메라로 찍어 출력 96 × 96 창으로 만든 결과. 출력 픽셀은 12 MP 기준(광각 50 MP 픽셀 1.2 µm의 2배)을 배율로 나눈 각도다. 카메라 픽셀마다 회절+잔여 수차 블러, 광자 잡음, 읽기 잡음(1.6 / 1.2 e⁻)을 넣고, 출력 해상도보다 거칠면 쌍선형으로 키우고 고우면 면적 평균으로 줄였다. 노출 1/30 s. 아래: 스타의 반지름별 변조도(스포크 20개의 기본 주파수 성분)를 바깥 반지름 기준으로 정규화한 것이고, 25 %로 떨어지는 주파수를 한계 해상도(출력 나이퀴스트 대비 %)로 읽는다. SNR은 회색 패치에서 카메라 픽셀 그대로 잰 값(줄였으면 면적 평균 이득 포함)이다. 해볼 것: ① 기본값(5×, 100 lux)에서 광각 크롭은 SNR 9.5, 한계 해상도 31 %다. 망원은 해상도 57 %이고 출력 픽셀 SNR은 6.1로 낮아 보이지만, 광각 해상도로 맞추면 15.5로 크롭보다 1.6배 높다. ② 배율을 4.9로 내리면 망원의 화각이 창을 덮지 못해 크롭만 남는다. ③ 조도를 5 lux로 내리면 맞춤 SNR이 2.0 대 1.6으로 차이가 줄고, 망원 해상도도 잡음에 묻혀 32 %로 떨어진다. ④ '3× 직립'·배율 3에서는 해상도가 51 대 44 %로 조금 앞설 뿐 맞춤 SNR은 9.2 대 9.6으로 크롭이 낫다(5 lux에서 1.5 대 1.7). 입사동이 광각보다 작기 때문이다. ⑤ 배율 1에서는 광각 픽셀 2 × 2를 평균해 SNR 18.9, 해상도 69 %다.</div>
+    </div>
   </section>
 
   <!-- =============================================================== 9 -->
@@ -596,7 +717,7 @@
         <text x="580" y="256" class="t-mono" text-anchor="middle">상 높이 h</text>
         <text x="520" y="280" class="t-dim" text-anchor="middle">한쪽은 앞 초점, 반대쪽은 뒤 초점</text>
       </svg>
-      <figcaption><b>그림 14-9.</b> 왼쪽: 액티브 얼라인 장비는 굳지 않은 접착제 위에서 렌즈를 여러 축으로 움직인다. 오른쪽: 상면이 센서에 대해 기울면 중심은 초점이 맞아도 양쪽 가장자리가 서로 반대 방향으로 어긋난다(각도는 과장).</figcaption>
+      <figcaption><b>그림 14-10.</b> 왼쪽: 액티브 얼라인 장비는 굳지 않은 접착제 위에서 렌즈를 여러 축으로 움직인다. 오른쪽: 상면이 센서에 대해 기울면 중심은 초점이 맞아도 양쪽 가장자리가 서로 반대 방향으로 어긋난다(각도는 과장).</figcaption>
     </figure>
 
     <div class="formula">$$\delta(h) = h\tan\theta_t,\qquad \delta_{\text{DoF}} = \pm N c$$
@@ -666,6 +787,59 @@
       <div class="where">예: \(n\) = 1.53, \(dn/dT\) = −1 × 10⁻⁴ /K, \(\Delta T\) = 40 K, \(f\) = 6.8 mm이면 \(\Delta f\) ≈ 51 µm. 실제 렌즈는 볼록·오목 렌즈가 섞여 일부 상쇄되고 배럴의 열팽창이 더해지지만, 수십 µm 수준이라는 크기는 달라지지 않는다. 초점 심도의 열 배다.</div>
     </div>
     <p>AF가 있는 카메라는 이 드리프트를 AF가 흡수하므로 사용자는 모른다. 대신 행정에 그만큼의 여유가 있어야 하고, 무한대 코드가 온도에 따라 달라지므로 거리와 코드의 대응이 흔들린다. 드라이버 IC나 센서의 온도 센서 값을 읽어 코드를 보정하는 이유다. 초점이 고정된 카메라는 사정이 다르다. <a href="automotive.html">15장</a>의 차량용 카메라는 −40~105 °C에서 AF 없이 초점을 유지해야 하므로, 유리 렌즈를 섞고 배럴과 홀더의 열팽창이 초점 이동을 상쇄하도록 재료를 고르는 무열화 설계를 한다.</p>
+
+    <p>드리프트를 실제로 계산하려면 렌즈만이 아니라 렌즈와 센서 사이 거리를 정하는 배럴·홀더의 열팽창, 그리고 오픈 루프 VCM이라면 자석의 온도 계수까지 함께 봐야 한다. 무한대 물체에서 상면이 센서 뒤로 밀리는 양(디포커스)을 \(\varepsilon\)이라 하면</p>
+    <div class="formula">$$\varepsilon(T) \approx f\,(\beta_L - \alpha_b)\,\Delta T + x_{\text{AF}}\,\kappa_B\,\Delta T,\qquad \beta_L = \alpha_L - \frac{1}{n-1}\frac{dn}{dT}$$
+      <div class="where">\(\beta_L\): 렌즈 군 초점거리의 열 계수(단일 플라스틱 렌즈는 \(\alpha_L\) ≈ 70 ppm/K를 더해 약 280 ppm/K, 볼록·오목 플라스틱을 섞은 스택은 수십~100 ppm/K, 유리 렌즈를 섞으면 수십 ppm/K 아래), \(\alpha_b\): 렌즈–센서 사이 기구(배럴·홀더)의 열팽창 계수, \(x_{\text{AF}}\): 오픈 루프 VCM이 렌즈를 띄워 놓은 높이, \(\kappa_B\) ≈ 0.11 %/K: NdFeB 자석의 자속 온도 계수(뜨거워지면 같은 전류에서 덜 민다). \(\beta_L = \alpha_b\)이면 렌즈 항이 사라진다. 이것이 <span class="term">무열화</span><span class="en">(Athermalization)</span> 조건이다.</div>
+    </div>
+
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 220" role="img" aria-label="온도 상승에 따른 렌즈 초점거리 증가와 배럴 팽창의 상쇄">
+        <rect x="40" y="30" width="16" height="150" class="f-surface" stroke="var(--border)"/><rect x="224" y="30" width="16" height="150" class="f-surface" stroke="var(--border)"/>
+        <ellipse cx="140" cy="54" rx="70" ry="10" class="mo-lens"/>
+        <rect x="56" y="176" width="168" height="10" class="mo-sensor"/><text x="140" y="206" class="t-dim" text-anchor="middle">센서</text>
+        <line x1="90" y1="54" x2="140" y2="166" stroke="var(--warn)" stroke-width="1.6"/><line x1="190" y1="54" x2="140" y2="166" stroke="var(--warn)" stroke-width="1.6"/>
+        <line x1="90" y1="54" x2="140" y2="188" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="5 3"/><line x1="190" y1="54" x2="140" y2="188" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="5 3"/>
+        <text x="146" y="164" class="t-mono">25 °C 초점</text>
+        <text x="270" y="40" class="t">온도가 오르면</text>
+        <text x="270" y="68" class="t-dim">① 플라스틱 n ↓ (dn/dT ≈ −1×10⁻⁴/K)</text>
+        <text x="270" y="92" class="t-dim">   → f ↑ → 초점이 센서 뒤로 (빨간 점선)</text>
+        <text x="270" y="122" class="t-dim">② 배럴·홀더 팽창 α_b·f·ΔT</text>
+        <text x="270" y="146" class="t-dim">   → 렌즈가 센서에서 멀어져 ①을 일부 상쇄</text>
+        <text x="270" y="176" class="t-dim">③ 오픈 루프 VCM: 자석 약화 → 렌즈가 내려옴</text>
+        <text x="270" y="200" class="t-mono">ε = f(β_L − α_b)ΔT + x·κ_B·ΔT</text>
+        <path d="M30 60 L30 170" class="s-line" marker-end="url(#mo-ar)"/><text x="10" y="120" class="t-mono">α_b</text>
+      </svg>
+      <figcaption><b>그림 14-11.</b> 열에 의한 초점 이동의 세 성분. 렌즈 군의 초점거리가 길어지는 양과 렌즈–센서 거리가 늘어나는 양이 같으면(\(\beta_L = \alpha_b\)) 초점은 움직이지 않는다. AF가 없는 차량용 카메라가 노리는 조건이다.</figcaption>
+    </figure>
+
+    <div class="callout tip">
+      <strong>계산 예: 50 °C 차이를 견디려면</strong>
+      <p>\(f\) = 6.8 mm, F/1.8의 초점 심도는 ±3.6 µm다. 플라스틱 스택(\(\beta_L\) = 90 ppm/K)을 LCP 홀더(\(\alpha_b\) = 40 ppm/K)에 넣으면 기울기는 \(6.8\text{ mm} \times 50\text{ ppm/K}\) = 0.34 µm/K라 ±10.6 K만 벗어나도 심도를 넘는다. 25 °C에서 맞춘 고정 초점 모듈이라면 약 15~36 °C에서만 선명하다는 뜻이다. 유리를 섞어 \(\beta_L\)을 25 ppm/K로 낮추면 기울기가 −0.10 µm/K로 바뀌어 −10~60 °C를 견딘다. 오픈 루프 VCM으로 10 cm 물체를 찍고 있었다면 렌즈를 약 530 µm 띄워 놓은 상태라 자석 항이 \(530 \times 0.0011\) = 0.58 µm/K를 더한다. 클로즈드 루프 VCM은 홀 센서로 위치를 잡으므로 이 항이 없고, 재 AF는 렌즈와 기구 항까지 모두 흡수한다.</p>
+    </div>
+
+    <div class="sim" id="sim-thermal">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>열 초점 드리프트: 성분 분해와 스루포커스 MTF</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-th"></canvas><canvas id="cv-th2"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>모듈 온도 <output id="th-t-out"></output></span><input type="range" id="th-t" min="-20" max="80" value="60" step="1"></label>
+          <label class="ctrl"><span>배럴·홀더 팽창 αb <output id="th-ab-out"></output></span><input type="range" id="th-ab" min="0" max="100" value="40" step="5"></label>
+          <label class="ctrl"><span>F-넘버 <output id="th-n-out"></output></span><input type="range" id="th-n" min="1.6" max="2.8" value="1.8" step="0.1"></label>
+          <div class="ctrl"><span>렌즈 군</span><div class="seg" id="th-lens"><button data-value="pl">플라스틱 1매</button><button data-value="st" class="on">플라스틱 스택</button><button data-value="hy">유리 + 플라스틱</button></div></div>
+          <div class="ctrl"><span>초점 유지 방식</span><div class="seg" id="th-mode"><button data-value="open">오픈 루프 코드 유지</button><button data-value="cl" class="on">클로즈드 루프 · 고정 초점</button><button data-value="reaf">재 AF</button></div></div>
+          <div class="ctrl"><span>물체 거리</span><div class="seg" id="th-obj"><button data-value="inf" class="on">무한대</button><button data-value="50">50 cm</button><button data-value="10">10 cm</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">드리프트 기울기</span><span class="v" id="o-th-k">—</span></div>
+        <div class="stat"><span class="k">현재 디포커스</span><span class="v" id="o-th-e">—</span></div>
+        <div class="stat"><span class="k">MTF @ 250 lp/mm</span><span class="v" id="o-th-m">—</span></div>
+        <div class="stat"><span class="k">초점 심도 안 온도 범위</span><span class="v" id="o-th-w">—</span></div>
+        <div class="stat"><span class="k">무열화에 필요한 α<sub>b</sub></span><span class="v" id="o-th-ab">—</span></div>
+      </div>
+      <div class="sim-note">위: 25 °C에서 초점을 맞춘 뒤 온도에 따른 디포커스 성분(주황 렌즈, 파랑 배럴·홀더, 보라 오픈 루프 VCM 자석)과 합계(빨강), 초록 점선은 초점 심도 \(\pm Nc\)(c = 2 µm). 아래: F-넘버와 λ = 550 nm에서 원형 동공의 디포커스 OTF를 정확히 적분한 250 lp/mm(픽셀 1 µm의 나이퀴스트 절반) 스루포커스 MTF(설계 잔여 수차 0.85배 포함). \(f\) = 6.8 mm, 렌즈 군 \(\beta_L\): 플라스틱 1매 278, 스택 90, 유리 + 플라스틱 25 ppm/K. 해볼 것: ① 기본값(60 °C, 플라스틱 스택, \(\alpha_b\) = 40 ppm/K)은 +0.34 µm/K로 +11.9 µm가 밀려 MTF가 0.59 → 0.00이 되고, 심도 안에 드는 범위는 15~36 °C뿐이다. ② '플라스틱 1매'는 +1.62 µm/K, 23~27 °C. ③ '유리 + 플라스틱'은 −0.10 µm/K로 60 °C에서도 −3.6 µm(MTF 0.49), −10~60 °C를 견딘다. ④ 스택에서 \(\alpha_b\)를 90 ppm/K로 맞추면 기울기가 0이 된다(무열화). ⑤ '오픈 루프 코드 유지'·10 cm에서는 자석 항이 더해져 +0.92 µm/K, 22~29 °C로 좁아진다. '재 AF'는 모두 0으로 만든다. ⑥ F/2.8로 조이면 심도가 넓어져 9~41 °C가 되지만 25 °C의 MTF가 회절로 0.44까지 내려간다.</div>
+    </div>
     <h3>전력과 열</h3>
     <p>스프링 지지형 VCM은 렌즈를 한 위치에 붙들어 두는 것만으로 전류를 쓴다. 스프링을 누르고 있어야 하기 때문이다. 근접 쪽 끝에서는 수십 mA가 계속 흐른다. OIS는 촬영 화면이 켜져 있는 내내 두 축을 구동하며, 자이로와 서보 연산도 쉬지 않는다. 모듈 전체로 수십에서 수백 mW 수준이다. 이 전력은 대부분 코일의 열이 되고, 코일은 렌즈와 센서 바로 옆에 있다. 렌즈가 데워지면 초점이 밀리고, 센서가 데워지면 암전류가 늘어난다(<a href="noise.html">7장</a>). 센서 시프트 OIS에서는 센서가 스프링이나 볼 위에 떠 있어 열이 빠져나갈 길이 좁다는 점이 추가 과제다.</p>
     <div class="table-wrap"><table>
@@ -694,6 +868,10 @@
       <li>렌즈·센서의 평행 이동은 화면 가장자리에 잔류를 남기고, 모듈 틸트는 남기지 않는다. EIS는 노출 중 블러를 줄이지 못하지만 프레임 사이 흔들림과 행 단위 롤링 셔터 왜곡을 다룬다. 둘은 분업한다.</li>
       <li>폴디드 망원은 프리즘으로 광로를 꺾어 초점거리를 폰의 넓은 방향에 눕힌다. 두께는 조리개 지름과 센서 짧은 변이 정하므로 F-넘버가 어둡고 센서가 작다.</li>
       <li>액티브 얼라인은 센서를 켠 채 스루포커스 MTF를 보며 5~6축을 맞추고 UV로 굳힌다. 틸트에 의한 디포커스는 \(h\tan\theta_t\)이고, 0.1°만으로 모서리가 초점 심도를 벗어난다.</li>
+      <li>OIS 서보는 \(L = CPe^{-sT_d}\)로 본다. 손떨림 대역의 억제는 \(|S| = 1/|1+L|\)이 정하고, 공진 위에서 크로스오버를 올리려면 앞섬 보상(\(\phi_m = \arcsin\frac{\alpha-1}{\alpha+1}\))과 짧은 지연(빠른 서보 주기)이 필요하다. 위상 여유가 줄면 오버슈트와 \(|S|\) 피크가 커진다.</li>
+      <li>AF는 분포로 평가한다. 콘트라스트 AF는 느리지만 밝으면 확실하고, 거친 스텝이 봉우리 폭보다 크면 실패한다. 위상차 AF는 이동 횟수를 절반 이하로 줄이지만 저조도·저콘트라스트에서 신뢰도가 떨어져 콘트라스트로 넘어간다.</li>
+      <li>줌 전환은 같은 물체 각도당 광자 수(입사동 넓이 \(D^2\))와 해상도로 판단한다. 밝으면 망원이 둘 다 이기지만, 어두우면 작은 픽셀의 읽기 잡음 때문에 광각 크롭과 비슷해지거나 진다.</li>
+      <li>열 초점 드리프트는 \(\varepsilon \approx f(\beta_L - \alpha_b)\Delta T\) (+ 오픈 루프 VCM의 자석 항). 플라스틱 렌즈의 \(\beta_L\)은 수백 ppm/K로 초점 심도를 쉽게 넘으므로 AF가 흡수하거나, \(\beta_L = \alpha_b\)가 되도록 무열화 설계를 한다.</li>
       <li>쉐이딩, AF 코드, 위상차 변환 계수, OIS 게인, 카메라 간 정합 값은 모듈마다 재어 EEPROM/OTP에 저장한다. 낙하, 자기 간섭, 온도 드리프트, 전력이 남은 과제다.</li>
     </ol>
   </section>
@@ -734,6 +912,21 @@
         <button class="opt" data-correct>조리개(프리즘) 지름과 세워진 센서의 짧은 변</button>
         <button class="opt">렌즈 매수</button>
       </div><div class="quiz-exp">광로가 프리즘에서 90° 꺾여 폰의 넓은 방향으로 놓이므로 초점거리와 AF 행정은 길이 방향에 들어간다. 두께 방향에는 빛이 들어오는 구멍의 지름과 센서의 짧은 변이 남는다. 그래서 폴디드 망원은 조리개를 키우기 어렵고 F-넘버가 어둡다.</div></div>
+
+      <div class="quiz-q"><p>Q7. OIS 서보의 크로스오버를 200 Hz에서 300 Hz로 올렸다(다른 조건 동일). 일반적으로 나타나는 변화가 아닌 것은?</p><div class="opts">
+        <button class="opt">손떨림 대역의 억제비가 커진다</button><button class="opt">지연에 의한 위상 손실이 커져 위상 여유가 준다</button><button class="opt" data-correct>스텝 응답의 오버슈트가 줄어든다</button><button class="opt">구조 공진이 있으면 이득 여유가 줄어든다</button>
+      </div><div class="quiz-exp">크로스오버를 올리면 저주파 루프 이득이 커져 \(|S|\)가 내려가지만, 같은 지연 \(T_d\)가 \(360° f_c T_d\)만큼 더 큰 위상을 깎아 위상 여유가 줄고 오버슈트는 오히려 커진다(시뮬레이터: 31° → 24°, 36 % → 60 %). 높은 주파수의 구조 공진에 가까워져 이득 여유도 준다.</div></div>
+
+      <div class="quiz-q"><p>Q8. 어두운 실내(약 5 lux)에서 5배 줌을 쓰는데, 망원보다 메인 카메라 크롭이 더 나을 수 있는 가장 큰 이유는?</p><div class="opts">
+        <button class="opt" data-correct>망원의 작은 픽셀 각각에 읽기 잡음이 붙어, 같은 해상도로 모으면 망원의 광량 이점이 줄어든다</button>
+        <button class="opt">망원은 입사동이 항상 광각보다 작아 광자를 덜 모은다</button>
+        <button class="opt">크롭하면 광각 픽셀이 커져 광자를 더 받는다</button>
+        <button class="opt">어두우면 망원의 회절이 커진다</button>
+      </div><div class="quiz-exp">5배 폴디드(20 mm, F/3)의 입사동은 6.7 mm로 광각(3.9 mm)보다 크므로 같은 물체 영역에서 광자는 오히려 약 2.9배 많다. 그러나 그 광자가 25배 많은 픽셀로 나뉘고 픽셀마다 읽기 잡음이 더해져, 저조도에서는 같은 해상도로 맞춘 SNR이 크롭과 비슷해진다. 입사동이 작은 3배 망원은 저조도에서 크롭보다 못하다.</div></div>
+
+      <div class="quiz-q"><p>Q9. AF가 없는 차량용 카메라에서 플라스틱 렌즈 군의 초점거리 열 계수가 \(\beta_L\) = 90 ppm/K이다. 온도가 변해도 초점이 움직이지 않게 하려면 렌즈–센서 사이 기구의 열팽창 계수는?</p><div class="opts">
+        <button class="opt">0에 가까울수록 좋다 (인바 같은 저팽창 금속)</button><button class="opt">−90 ppm/K (온도가 오르면 줄어드는 재료)</button><button class="opt" data-correct>약 90 ppm/K (렌즈가 길어지는 만큼 기구도 늘어나야 한다)</button><button class="opt">렌즈와 무관하게 알루미늄(23 ppm/K)이면 된다</button>
+      </div><div class="quiz-exp">\(\varepsilon \approx f(\beta_L - \alpha_b)\Delta T\)이므로 \(\alpha_b = \beta_L\)이 무열화 조건이다. 초점거리가 늘어나는 만큼 렌즈를 센서에서 같은 비율로 멀어지게 해야 한다. 저팽창 기구는 오히려 렌즈 항을 그대로 남긴다. 실제로는 유리 렌즈를 섞어 \(\beta_L\)을 줄이고 기구 재료로 나머지를 맞춘다.</div></div>
     </div>
   </section>
 </main>
@@ -1060,6 +1253,501 @@
       const r = (a) => (Math.random() * 2 - 1) * a;
       gTx.set(r(0.25)); gTy.set(r(0.25)); gZ.set(r(25));
     });
+  })();
+
+  /* =================================================== Sim 4: OIS servo loop design */
+  (function () {
+    const OL = (function () {
+      const TAU = 2 * Math.PI;
+      // complex helpers [re, im]
+      const cm = (a, b) => [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
+      const cd = (a, b) => { const d = b[0] * b[0] + b[1] * b[1]; return [(a[0] * b[0] + a[1] * b[1]) / d, (a[1] * b[0] - a[0] * b[1]) / d]; };
+      const cabs = (a) => Math.hypot(a[0], a[1]);
+      function design(p) {
+        // p: f0, z0, fc, alpha, fs, mode2 (bool), gerr (fraction)
+        const w0 = TAU * p.f0, wc = TAU * p.fc, sa = Math.sqrt(p.alpha);
+        const wz = wc / sa, wp = wc * sa, wi = wc / 4, wi2 = wc / 12, wr = TAU * 1000, zr = 0.03, Td = 1.5 / p.fs, wh = TAU * 0.05;
+        const P = (w) => { let v = cd([w0 * w0, 0], [w0 * w0 - w * w, 2 * p.z0 * w0 * w]); if (p.mode2) v = cm(v, cd([wr * wr, 0], [wr * wr - w * w, 2 * zr * wr * w])); return v; };
+        const zn = 0.03, zd = 0.5;
+        const Nt = (w) => cd([wr * wr - w * w, 2 * zn * wr * w], [wr * wr - w * w, 2 * zd * wr * w]);
+        const Cn = (w) => { let v = cm(cm(cd([1, w / wz], [1, w / wp]), [1, -wi / w]), [1, -wi2 / w]); if (p.notch) v = cm(v, Nt(w)); return v; }; // lead * (1 + wi/s)(1 + wi2/s) [* notch]
+        const D = (w) => [Math.cos(-w * Td), Math.sin(-w * Td)];
+        const L0 = (w) => cm(cm(P(w), Cn(w)), D(w));
+        const K = 1 / cabs(L0(wc));
+        const ph = (w) => { // unwrapped phase of L (deg)
+          let a = -Math.atan2(2 * p.z0 * w0 * w, w0 * w0 - w * w);
+          if (p.mode2) a += -Math.atan2(2 * zr * wr * w, wr * wr - w * w);
+          a += Math.atan(w / wz) - Math.atan(w / wp) + Math.atan2(-wi / w, 1) + Math.atan2(-wi2 / w, 1) - w * Td;
+          if (p.notch) a += Math.atan2(2 * zn * wr * w, wr * wr - w * w) - Math.atan2(2 * zd * wr * w, wr * wr - w * w);
+          return a * 180 / Math.PI;
+        };
+        const L = (w) => { const v = L0(w); return [K * v[0], K * v[1]]; };
+        const Hg = (w) => cm(cd([0, w], [wh, w]), [1 + p.gerr, 0]);
+        return { P, Cn, D, L, K, ph, Hg, wz, wp, wi, wi2, wr, zn, zd, zr, Td, w0 };
+      }
+      function analyse(p) {
+        const d = design(p), F = [], NFq = 320;
+        for (let i = 0; i < NFq; i++) F.push(Math.pow(10, -0.5 + 4.2 * i / (NFq - 1))); // 0.3 Hz .. 5 kHz
+        const rows = F.map((f) => {
+          const w = TAU * f, L = d.L(w), one = [1 + L[0], L[1]], S = cd([1, 0], one), T = cd(L, one), E = [1 - cm(T, d.Hg(w))[0], -cm(T, d.Hg(w))[1]];
+          return { f, mL: cabs(L), pL: d.ph(w), mS: cabs(S), mT: cabs(T), mE: cabs(E) };
+        });
+        // gain crossover (last downward crossing of |L|=1), phase crossover (first -180)
+        let pm = NaN, fgc = NaN, gm = Infinity, fpc = NaN;
+        for (let i = 1; i < rows.length; i++) {
+          const a = rows[i - 1], b = rows[i];
+          if (a.mL >= 1 && b.mL < 1) { const u = Math.log(a.mL) / (Math.log(a.mL) - Math.log(b.mL)), f = a.f * Math.pow(b.f / a.f, u); if (!isFinite(fgc) || Math.abs(Math.log(f / p.fc)) < Math.abs(Math.log(fgc / p.fc))) { fgc = f; pm = 180 + a.pL + (b.pL - a.pL) * u; } }
+        }
+        for (let i = 1; i < rows.length; i++) {
+          const a = rows[i - 1], b = rows[i];
+          if (a.pL > -180 && b.pL <= -180 && b.f > fgc) { const u = (a.pL + 180) / (a.pL - b.pL); fpc = a.f * Math.pow(b.f / a.f, u); const m = a.mL * Math.pow(b.mL / a.mL, u); const g = -20 * Math.log10(m); if (g < gm) gm = g; }
+        }
+        // -3 dB closed-loop bandwidth
+        let fbw = NaN; for (let i = 1; i < rows.length; i++) if (rows[i - 1].mT >= 0.7071 && rows[i].mT < 0.7071 && rows[i].f > 1) { fbw = rows[i].f; break; }
+        // hand shake PSD (deg^2/Hz), band-pass around 5 Hz, total rms sig deg
+        const sig = p.shake || 0.1, psd = (f) => f * f / (Math.pow(f * f - 25, 2) + Math.pow(6 * f, 2));
+        let n0 = 0, n1 = 0;
+        for (let i = 1; i < rows.length; i++) { const f = rows[i].f, df = f - rows[i - 1].f; if (f < 0.5 || f > 60) continue; const q = psd(f) * df; n0 += q; n1 += q * rows[i].mE * rows[i].mE; }
+        const stp = step(p, d, 0.15), stable = !stp.blown && stp.tail < 0.5 && isFinite(pm);
+        const rOff = sig, rOn = stable ? sig * Math.sqrt(n1 / n0) : NaN;
+        return { d, rows, pm, fgc, gm, fpc, fbw, rOff, rOn, stable, psd, stp };
+      }
+      // discrete-time step response: controller (Tustin) at fs, plant integrated finely, 1-sample compute delay + ZOH
+      function step(p, d, Tend) {
+        const Ts = 1 / p.fs, sub = 20, h = Ts / sub, w0 = d.w0, z0 = p.z0;
+        // Tustin lead: y = K (1+s/wz)/(1+s/wp) u ; PI: v = y + wi * int(y)
+        const c = 2 / Ts, b0 = (1 + c / d.wz), b1 = (1 - c / d.wz), a0 = (1 + c / d.wp), a1 = (1 - c / d.wp);
+        let x = 0, v = 0, x2 = 0, v2 = 0, uPrev = 0, yPrev = 0, i1 = 0, i2 = 0, eP = 0, uOut = 0, uNext = 0;
+        let nx1 = 0, nx2 = 0, ny1 = 0, ny2 = 0; const wr = d.wr, Kw = wr / Math.tan(wr * Ts / 2), K2 = Kw * Kw, w2 = wr * wr;
+        const a0n = K2 + 2 * d.zd * wr * Kw + w2, nb = [(K2 + 2 * d.zn * wr * Kw + w2) / a0n, 2 * (w2 - K2) / a0n, (K2 - 2 * d.zn * wr * Kw + w2) / a0n], na = [1, 2 * (w2 - K2) / a0n, (K2 - 2 * d.zd * wr * Kw + w2) / a0n];
+        const N = Math.ceil(Tend / Ts), out = []; let peak = 0, ts = 0, blown = false;
+        for (let k = 0; k < N; k++) {
+          const meas = p.mode2 ? x2 : x, e = 1 - meas; // unit step reference
+          let y = (b0 * e + b1 * eP - a1 * yPrev) / a0; eP = e; yPrev = y;
+          if (p.notch) { const q = nb[0] * y + nb[1] * nx1 + nb[2] * nx2 - na[1] * ny1 - na[2] * ny2; nx2 = nx1; nx1 = y; ny2 = ny1; ny1 = q; y = q; }
+          const i1o = i1; i1 += Ts * 0.5 * (y + uPrev); uPrev = y; i2 += Ts * 0.5 * (i1 + i1o);
+          uOut = uNext; uNext = d.K * (y + (d.wi + d.wi2) * i1 + d.wi * d.wi2 * i2);
+          for (let j = 0; j < sub; j++) {
+            // plant 1: x'' = w0^2 (u - x) - 2 z0 w0 x'
+            const acc = w0 * w0 * (uOut - x) - 2 * z0 * w0 * v; v += acc * h; x += v * h;
+            if (p.mode2) { const a2 = d.wr * d.wr * (x - x2) - 2 * d.zr * d.wr * v2; v2 += a2 * h; x2 += v2 * h; }
+          }
+          const yv = p.mode2 ? x2 : x;
+          if (!isFinite(yv) || Math.abs(yv) > 50) { blown = true; break; }
+          out.push([(k + 1) * Ts * 1000, yv]); peak = Math.max(peak, yv);
+          if (Math.abs(yv - 1) > 0.02) ts = (k + 1) * Ts;
+        }
+        let tail = 0; const n0 = Math.floor(out.length * 0.75); for (let i = n0; i < out.length; i++) tail = Math.max(tail, Math.abs(out[i][1] - 1));
+        if (blown) tail = Infinity;
+        return { out, os: Math.max(0, peak - 1), ts, blown, tail };
+      }
+      return { analyse, step };
+    })();
+    const gF0 = SB.range("ol-f0", (v) => v + " Hz", upd), gFc = SB.range("ol-fc", (v) => v + " Hz", upd);
+    const gAl = SB.range("ol-al", (v) => "×" + v + " (최대 " + (Math.asin((v - 1) / (v + 1)) * 180 / Math.PI).toFixed(0) + "°)", upd);
+    const gFs = SB.range("ol-fs", (v) => v + " kHz", upd), gGe = SB.range("ol-ge", (v) => (v > 0 ? "+" : "") + v + " %", upd);
+    const gM2 = SB.seg("ol-m2", upd);
+    let A = null, pend = 0;
+    function upd() { if (!pend) pend = requestAnimationFrame(run); }
+    function run() {
+      pend = 0;
+      const p = { f0: gF0(), z0: 0.05, fc: gFc(), alpha: gAl(), fs: gFs() * 1000, mode2: gM2() === "on", gerr: gGe() / 100, shake: 0.1 };
+      A = OL.analyse(p); A.p = p;
+      const px = (deg) => 6.8 * Math.tan(deg * Math.PI / 180) * 1000;
+      SB.stat("o-ol-pm", A.stable ? A.pm.toFixed(0) + "<small>°</small>" : "<small>불안정</small>");
+      SB.stat("o-ol-gm", A.stable && isFinite(A.gm) ? A.gm.toFixed(1) + "<small>dB</small>" : "—");
+      SB.stat("o-ol-os", A.stable ? (A.stp.os * 100).toFixed(0) + "<small>%</small>" : "발산");
+      SB.stat("o-ol-ts", A.stable ? (A.stp.ts >= 0.149 ? "&gt; 150" : (A.stp.ts * 1000).toFixed(1)) + "<small>ms</small>" : "—");
+      SB.stat("o-ol-sr", A.stable ? (20 * Math.log10(A.rOff / A.rOn)).toFixed(1) + "<small>dB</small>" : "—");
+      SB.stat("o-ol-res", A.stable ? px(A.rOn).toFixed(2) + "<small>px</small>" : "—");
+      cv1.redraw(); cv2.redraw(); cv3.redraw();
+    }
+    const db = (m) => 20 * Math.log10(Math.max(m, 1e-6));
+    function drawBode(ctx, w, h) {
+      if (!A) return;
+      const P = SB.palette(), hb = (h - 58) / 2;
+      const b1 = { x: 54, y: 10, w: w - 54 - 14, h: hb }, b2 = { x: 54, y: 10 + hb + 12, w: w - 54 - 14, h: hb };
+      const xf = (v) => (v >= 1000 ? v / 1000 + "k" : String(v));
+      SB.chart(ctx, b1, { x: [0.3, 5000], y: [-60, 80], logX: true, yLabel: "dB", xFmt: () => "", yTicks: [-40, 0, 40, 80],
+        series: [{ data: A.rows.map((r) => [r.f, db(r.mL)]), color: P.accent, width: 2.2 }, { data: A.rows.map((r) => [r.f, db(r.mS)]), color: P.bad, width: 1.8 }, { data: A.rows.map((r) => [r.f, db(r.mE)]), color: P.ok, width: 1.4, dash: [5, 3] }],
+        hlines: [{ y: 0, color: P.axis, dash: [] }], vlines: isFinite(A.fgc) ? [{ x: A.fgc, color: P.faint }] : [], bands: [{ x0: 1, x1: 12, color: P.warn + "18" }] });
+      ctx.font = font(11); ctx.textAlign = "right"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.accent; ctx.fillText("|L| 루프 이득", b1.x + b1.w - 4, b1.y + 4);
+      ctx.fillStyle = P.bad; ctx.fillText("|S| 감도", b1.x + b1.w - 4, b1.y + 19);
+      ctx.fillStyle = P.ok; ctx.fillText("|E| 잔류(자이로 포함)", b1.x + b1.w - 4, b1.y + 34);
+      ctx.textAlign = "left"; ctx.fillStyle = P.warn; ctx.fillText("손떨림 대역", b1.x + 30, b1.y + b1.h - 16);
+      const ph = A.rows.map((r) => [r.f, Math.max(-540, r.pL)]);
+      SB.chart(ctx, b2, { x: [0.3, 5000], y: [-450, 0], logX: true, xLabel: "주파수 (Hz)", yLabel: "∠L (°)", xFmt: xf, yTicks: [-360, -270, -180, -90, 0],
+        series: [{ data: ph, color: P.accent, width: 2 }], hlines: [{ y: -180, color: P.bad, label: "−180°" }],
+        points: isFinite(A.fgc) && A.stable ? [{ x: A.fgc, y: A.pm - 180, color: P.accent, r: 4, label: "PM " + A.pm.toFixed(0) + "°" }] : [] });
+    }
+    function drawStep(ctx, w, h) {
+      if (!A) return;
+      const P = SB.palette(), d = A.stp.out.filter((q) => q[0] <= 40);
+      SB.chart(ctx, null, { x: [0, 40], y: [0, 2], xLabel: "시간 (ms)", yLabel: "위치 / 명령",
+        series: [{ data: [[0, 1], [40, 1]], color: P.dim, width: 1.2, dash: [5, 4] }, { data: d.map((q) => [q[0], Math.max(-0.2, Math.min(2.2, q[1]))]), color: A.stable ? P.accent : P.bad, width: 2.2 }],
+        bands: [{ x0: 0, x1: 40, color: "transparent" }], hlines: [{ y: 1.02, color: P.ok, dash: [2, 3] }, { y: 0.98, color: P.ok, dash: [2, 3] }] });
+    }
+    function drawSpec(ctx, w, h) {
+      if (!A) return;
+      const P = SB.palette(), r = A.rows.filter((q) => q.f >= 0.5 && q.f <= 60);
+      let mx = 0; r.forEach((q) => { mx = Math.max(mx, A.psd(q.f)); });
+      const off = r.map((q) => [q.f, Math.sqrt(A.psd(q.f) / mx)]), on = r.map((q) => [q.f, Math.sqrt(A.psd(q.f) / mx) * (A.stable ? q.mE : NaN)]);
+      SB.chart(ctx, null, { x: [0.5, 60], y: [1e-3, 1.5], logX: true, logY: true, xLabel: "주파수 (Hz)", yLabel: "떨림 진폭 (상대)",
+        series: [{ data: off, color: P.bad, width: 2, fill: P.bad + "22" }, { data: on, color: P.ok, width: 2.2, fill: P.ok + "22" }] });
+      ctx.font = font(11); ctx.textAlign = "right"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.bad; ctx.fillText("OIS 끔", w - 22, 18); ctx.fillStyle = P.ok; ctx.fillText("OIS 켬", w - 22, 34);
+    }
+    const cv1 = SB.canvas($("cv-ol"), drawBode, { aspect: 0.5, minHeight: 280, maxHeight: 400 });
+    const cv2 = SB.canvas($("cv-ol2"), drawStep, { aspect: 0.34, minHeight: 170, maxHeight: 230 });
+    const cv3 = SB.canvas($("cv-ol3"), drawSpec, { aspect: 0.34, minHeight: 170, maxHeight: 230 });
+    run();
+  })();
+
+  /* =================================================== Sim 5: AF algorithms Monte Carlo */
+  (function () {
+    const AF = (function () {
+      const ZMAX = 300, W = 20, DOF = 3.6, BASE = 0.05;
+      function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+      function gauss(r) { let u = 0; while (u < 1e-12) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+      // noise model: FV noise sigma (relative units) and PD noise (um) from light level (lux) and contrast C
+      function noise(p) {
+        const snr = Math.sqrt(p.lux / 100);             // relative image SNR scale
+        return { sFV: 0.012 / snr, sPD: (p.pd === "dual" ? 1.2 : 4.0) / (p.C * snr) };
+      }
+      const fvTrue = (z, z0, C) => C * Math.exp(-0.5 * Math.pow((z - z0) / W, 2)) + BASE;
+      // contrast AF: coarse hill climb then parabola fit on 3 best points + one fine move
+      function caf(p, z0, zStart, r, n, log) {
+        const meas = (z) => { const v = fvTrue(z, z0, p.C) + n.sFV * gauss(r); if (log) log.push([z, v]); return v; };
+        let z = zStart, fr = 0, step = p.step;
+        let f0 = meas(z); fr++;
+        let z1 = Math.min(ZMAX, Math.max(0, z + step)), f1 = meas(z1); fr++;
+        let dir = 1;
+        if (f1 < f0) { dir = -1; } else { z = z1; f0 = f1; }
+        const pts = [[z, f0]]; let best = [z, f0], drops = 0, rev = false;
+        while (fr < 40) {
+          const zn = z + dir * step;
+          if (zn < 0 || zn > ZMAX) { if (!rev && best[1] - BASE <= 5 * n.sFV) { rev = true; dir = -dir; continue; } break; }
+          const fn = meas(zn); fr++; pts.push([zn, fn]); z = zn;
+          if (fn > best[1]) { best = [zn, fn]; drops = 0; } else if (best[1] - BASE > 5 * n.sFV && fn < best[1] - 2 * n.sFV && ++drops >= 2) break;
+        }
+        // fine: parabola through best and neighbours (measure if missing)
+        const zb = best[0], zl = zb - step, zr = zb + step;
+        const lg = (v) => Math.log(Math.max(v, 1e-3));
+        const fl = zl >= 0 ? lg(meas(zl)) : NaN, fm = lg(meas(zb)), frr = zr <= ZMAX ? lg(meas(zr)) : NaN; fr += 3;
+        let zf = zb;
+        const den = fl - 2 * fm + frr;
+        if (isFinite(den) && den < 0) zf = zb + 0.5 * step * (fl - frr) / den;
+        zf = Math.max(Math.min(zf, zb + step), zb - step);
+        return { z: zf, frames: fr + 1, moves: fr };
+      }
+      function fine(p, z0, zc, r, n, log, step) {
+        const lg = (z) => { const v = fvTrue(z, z0, p.C) + n.sFV * gauss(r); if (log) log.push([z, v]); return Math.log(Math.max(v, 1e-3)); };
+        const zl = Math.max(0, zc - step), zr = Math.min(ZMAX, zc + step), fl = lg(zl), fm = lg(zc), fr = lg(zr), den = fl - 2 * fm + fr;
+        let z = zc; if (den < 0 && zr - zl > step) z = zc + 0.5 * step * (fl - fr) / den;
+        return Math.max(zl, Math.min(zr, z));
+      }
+      function pdaf(p, z0, zStart, r, n, log) {
+        const conf = p.C * Math.sqrt(p.lux / 100) * (p.pd === "dual" ? 3 : 1);
+        if (conf < 0.2) { const c = caf(p, z0, zStart, r, n, log); return { z: c.z, frames: c.frames + 1, fallback: true }; }
+        let z = zStart, fr = 0;
+        for (let k = 0; k < 2; k++) {
+          const d = z0 - z, range = 150, est = Math.max(-range, Math.min(range, d)) + n.sPD * gauss(r) * (1 + Math.abs(d) / 100);
+          fr++; if (log) log.push([z, NaN]);
+          z = Math.max(0, Math.min(ZMAX, z + est));
+          if (Math.abs(est) < 2 * n.sPD) break;
+        }
+        let fineUsed = false;
+        if (n.sPD > DOF / 2) { z = fine(p, z0, z, r, n, log, 12); fr += 3; fineUsed = true; }
+        fr++; // settle/confirm frame
+        return { z, frames: fr, fallback: false, fineUsed };
+      }
+      function run(p, seed, trials) {
+        const r = rng(seed), n = noise(p), res = { caf: [], pd: [] }, fb = { n: 0 };
+        for (let t = 0; t < trials; t++) {
+          const z0 = 40 + 220 * r(), zs = 0;
+          const a = caf(p, z0, zs, r, n, null), b = pdaf(p, z0, zs, r, n, null);
+          res.caf.push({ e: a.z - z0, f: a.frames }); res.pd.push({ e: b.z - z0, f: b.frames }); if (b.fallback) fb.n++;
+        }
+        const sum = (arr) => { let ok = 0, fs = 0, e2 = 0; arr.forEach((q) => { if (Math.abs(q.e) <= DOF) ok++; fs += q.f; e2 += q.e * q.e; }); return { ok: ok / arr.length, frames: fs / arr.length, rms: Math.sqrt(e2 / arr.length) }; };
+        // example trial with logs
+        const r2 = rng(seed ^ 0x5bd1e995), z0 = p.z0 != null ? p.z0 : 170, la = [], lb = [];
+        const ea = caf(p, z0, 0, r2, n, la), eb = pdaf(p, z0, 0, r2, n, lb);
+        return { res, sc: sum(res.caf), sp: sum(res.pd), fb: fb.n / trials, ex: { z0, la, lb, za: ea.z, zb: eb.z, fa: ea.frames, fbF: eb.frames }, n };
+      }
+      return { run, fvTrue, ZMAX, DOF, W };
+    })();
+    let seed = 20261029, R = null, pend = 0;
+    const gL = SB.range("af-lux", (v) => Math.round(Math.pow(10, v)) + " lux", upd), gC = SB.range("af-c", (v) => v.toFixed(2), upd);
+    const gS = SB.range("af-step", (v) => v + " µm", upd), gPd = SB.seg("af-pd", upd);
+    $("af-run").addEventListener("click", () => { seed = (seed * 1103515245 + 12345) >>> 0; upd(); });
+    function upd() { if (!pend) pend = requestAnimationFrame(run); }
+    const msOf = (fr) => fr * 33.3 + fr * 8;
+    function run() {
+      pend = 0;
+      R = AF.run({ lux: Math.pow(10, gL()), C: gC(), step: gS(), pd: gPd(), z0: 170 }, seed, 400);
+      SB.stat("o-af-cf", R.sc.frames.toFixed(1) + "<small>프레임</small>");
+      SB.stat("o-af-cok", (R.sc.ok * 100).toFixed(0) + "<small>%</small>");
+      SB.stat("o-af-pf", R.sp.frames.toFixed(1) + "<small>프레임</small>");
+      SB.stat("o-af-pok", (R.sp.ok * 100).toFixed(0) + "<small>%</small>");
+      SB.stat("o-af-t", msOf(R.sc.frames).toFixed(0) + " / " + msOf(R.sp.frames).toFixed(0) + "<small>ms</small>");
+      SB.stat("o-af-fb", (R.fb * 100).toFixed(0) + "<small>%</small>");
+      cv1.redraw(); cv2.redraw();
+    }
+    function drawEx(ctx, w, h) {
+      if (!R) return;
+      const P = SB.palette(), ex = R.ex, C = gC(), curve = [];
+      for (let z = 0; z <= AF.ZMAX; z += 2) curve.push([z, AF.fvTrue(z, ex.z0, C)]);
+      const ymax = C + 0.05 + 4 * R.n.sFV + 0.05;
+      const ch = SB.chart(ctx, null, { x: [0, AF.ZMAX], y: [0, ymax], xLabel: "렌즈 위치 (µm, 0 = 무한대 끝)", yLabel: "초점값 FV",
+        series: [{ data: curve, color: P.dim, width: 1.4, dash: [5, 4] }], bands: [{ x0: ex.z0 - AF.DOF, x1: ex.z0 + AF.DOF, color: P.ok + "30" }] });
+      ctx.font = font(10, true); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      ex.la.forEach(([z, v], i) => { const x = ch.X(z), y = ch.Y(Math.max(0, Math.min(ymax, v))); ctx.fillStyle = P.accent; ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 7); ctx.fill(); if (ex.la.length <= 24) { ctx.fillStyle = P.dim; ctx.fillText(String(i + 1), x, y - 4); } });
+      // PDAF jumps drawn along the bottom
+      const yb = ch.box.y + ch.box.h - 12; let zp = 0; ctx.strokeStyle = P.accent2; ctx.lineWidth = 2;
+      ex.lb.forEach(([z, v]) => { if (!isNaN(v)) return; ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.arc(ch.X(z), yb, 3.5, 0, 7); ctx.fill(); zp = z; });
+      const pdz = ex.lb.filter((q) => isNaN(q[1])).map((q) => q[0]).concat([ex.zb]);
+      ctx.beginPath(); pdz.forEach((z, i) => (i ? ctx.lineTo(ch.X(z), yb) : ctx.moveTo(ch.X(z), yb))); ctx.stroke();
+      ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.moveTo(ch.X(ex.zb), yb - 6); ctx.lineTo(ch.X(ex.zb) - 5, yb - 14); ctx.lineTo(ch.X(ex.zb) + 5, yb - 14); ctx.fill();
+      ctx.fillStyle = P.accent; ctx.beginPath(); ctx.moveTo(ch.X(ex.za), ch.box.y + 2); ctx.lineTo(ch.X(ex.za) - 5, ch.box.y - 6); ctx.lineTo(ch.X(ex.za) + 5, ch.box.y - 6); ctx.fill();
+      ctx.font = font(11); ctx.textAlign = "right"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.accent; ctx.fillText("콘트라스트 AF: " + ex.fa + "프레임, 오차 " + (ex.za - ex.z0).toFixed(1) + " µm", ch.box.x + ch.box.w - 4, ch.box.y + 4);
+      ctx.fillStyle = P.accent2; ctx.fillText("위상차 AF: " + ex.fbF + "프레임, 오차 " + (ex.zb - ex.z0).toFixed(1) + " µm", ch.box.x + ch.box.w - 4, ch.box.y + 19);
+    }
+    function drawHist(ctx, w, h) {
+      if (!R) return;
+      const P = SB.palette(), bins = 24, lim = 30, hc = new Array(bins).fill(0), hp = new Array(bins).fill(0);
+      const put = (arr, e) => { const k = Math.max(0, Math.min(bins - 1, Math.floor((e + lim) / (2 * lim) * bins))); arr[k]++; };
+      R.res.caf.forEach((q) => put(hc, q.e)); R.res.pd.forEach((q) => put(hp, q.e));
+      const mx = Math.max(...hc, ...hp, 1) * 1.1, bw = 2 * lim / bins;
+      const ch = SB.chart(ctx, null, { x: [-lim, lim], y: [0, mx], xLabel: "최종 초점 오차 (µm, 양 끝 칸 = 범위 밖)", yLabel: "시행 수", bands: [{ x0: -AF.DOF, x1: AF.DOF, color: P.ok + "30" }] });
+      for (let k = 0; k < bins; k++) {
+        const x0 = ch.X(-lim + k * bw), x1 = ch.X(-lim + (k + 1) * bw), wd = (x1 - x0) / 2 - 1;
+        ctx.fillStyle = P.accent; ctx.fillRect(x0 + 0.5, ch.Y(hc[k]), wd, ch.Y(0) - ch.Y(hc[k]));
+        ctx.fillStyle = P.accent2; ctx.fillRect(x0 + wd + 1.5, ch.Y(hp[k]), wd, ch.Y(0) - ch.Y(hp[k]));
+      }
+      ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.accent; ctx.fillText("■ 콘트라스트", ch.box.x + 6, ch.box.y + 4); ctx.fillStyle = P.accent2; ctx.fillText("■ 위상차(+미세)", ch.box.x + 6, ch.box.y + 19);
+    }
+    const cv1 = SB.canvas($("cv-af"), drawEx, { aspect: 0.46, minHeight: 230, maxHeight: 340 });
+    const cv2 = SB.canvas($("cv-af2"), drawHist, { aspect: 0.34, minHeight: 180, maxHeight: 240 });
+    run();
+  })();
+
+  /* =================================================== Sim 6: thermal focus drift */
+  (function () {
+    const BETA = { pl: 278e-6, st: 90e-6, hy: 25e-6 }, MAG = 0.0011, XB = 30;
+    const gT = SB.range("th-t", (v) => v + " °C", upd), gAb = SB.range("th-ab", (v) => v + " ppm/K", upd), gN = SB.range("th-n", (v) => "F/" + v.toFixed(1), upd);
+    const gLens = SB.seg("th-lens", upd), gMode = SB.seg("th-mode", upd), gObj = SB.seg("th-obj", upd);
+    let S = null;
+    // exact defocus OTF of a circular pupil: s = nu/nu_c, W in waves (W020)
+    function otfDef(s, W) {
+      if (s >= 1) return 0;
+      const n = 48, L = 1 - s; let a = 0;
+      for (let k = 0; k < n; k++) { const x = (k + 0.5) / n * L; a += Math.sqrt(Math.max(0, 1 - (x + s) * (x + s))) * Math.cos(8 * Math.PI * W * s * x); }
+      return (4 / Math.PI) * a * L / n;
+    }
+    function parts(T) {
+      const f = 6.8, dT = T - 25, obj = gObj(), sd = obj === "inf" ? Infinity : obj === "50" ? 500 : 100;
+      const x = XB + (isFinite(sd) ? 1000 * f * f / (sd - f) : 0), mode = gMode();
+      const lens = 1000 * f * BETA[gLens()] * dT, bar = -1000 * f * gAb() * 1e-6 * dT, mag = mode === "open" ? x * MAG * dT : 0;
+      let tot = lens + bar + mag;
+      if (mode === "reaf") tot = 0;
+      return { lens, bar, mag, tot };
+    }
+    function upd() {
+      const N = gN(), dof = N * 2, nu = 250, s = nu * 0.55e-3 * N, P0 = parts(gT());
+      const mtf = (eps) => 0.85 * Math.abs(otfDef(s, eps / (8 * N * N * 0.55)));
+      // temperature window inside DOF
+      let lo = NaN, hi = NaN;
+      for (let T = 25; T >= -40; T -= 0.5) { if (Math.abs(parts(T).tot) > dof) break; lo = T; }
+      for (let T = 25; T <= 105; T += 0.5) { if (Math.abs(parts(T).tot) > dof) break; hi = T; }
+      const p1 = parts(26), slope = p1.tot - parts(25).tot;
+      S = { N, dof, s, P0, mtf, lo, hi };
+      SB.stat("o-th-k", (slope >= 0 ? "+" : "") + slope.toFixed(2) + "<small>µm/K</small>");
+      SB.stat("o-th-e", (P0.tot >= 0 ? "+" : "") + P0.tot.toFixed(1) + "<small>µm</small>");
+      SB.stat("o-th-m", mtf(P0.tot).toFixed(2) + " <small>(25 °C " + mtf(0).toFixed(2) + ")</small>");
+      SB.stat("o-th-w", (lo <= -40 ? "≤ −40" : lo.toFixed(0)) + " ~ " + (hi >= 105 ? "≥ 105" : hi.toFixed(0)) + "<small>°C</small>");
+      const need = 1e6 * (BETA[gLens()] + (gMode() === "open" ? (parts(26).mag - parts(25).mag) / 6800 : 0));
+      SB.stat("o-th-ab", need.toFixed(0) + "<small>ppm/K</small>");
+      if (cv1) { cv1.redraw(); cv2.redraw(); }
+    }
+    function drawT(ctx, w, h) {
+      if (!S) return;
+      const P = SB.palette(), L = [], B = [], M = [], T = [];
+      let mn = -S.dof * 2, mx = S.dof * 2;
+      for (let t = -20; t <= 80; t += 1) { const q = parts(t); L.push([t, q.lens]); B.push([t, q.bar]); M.push([t, q.mag]); T.push([t, q.tot]); mn = Math.min(mn, q.lens, q.bar, q.tot, q.mag); mx = Math.max(mx, q.lens, q.bar, q.tot, q.mag); }
+      const pad = (mx - mn) * 0.08;
+      const ch = SB.chart(ctx, null, { x: [-20, 80], y: [mn - pad, mx + pad], xLabel: "온도 (°C)", yLabel: "디포커스 (µm)",
+        series: [{ data: L, color: P.warn, width: 1.6, dash: [6, 3] }, { data: B, color: P.blue, width: 1.6, dash: [6, 3] }, { data: M, color: P.accent2, width: 1.6, dash: [2, 3] }, { data: T, color: P.bad, width: 2.6 }],
+        bands: [], hlines: [{ y: S.dof, color: P.ok, dash: [3, 3] }, { y: -S.dof, color: P.ok, dash: [3, 3], label: "초점 심도 ±" + S.dof.toFixed(1) + " µm" }],
+        vlines: [{ x: gT(), color: P.accent }], points: [{ x: gT(), y: S.P0.tot, color: P.bad }] });
+      ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      [["렌즈 Δf", P.warn], ["배럴·홀더 팽창", P.blue], ["VCM 자석 (오픈 루프)", P.accent2], ["합계", P.bad]].forEach(([t, c], i) => { ctx.fillStyle = c; ctx.fillText(t, ch.box.x + 6, ch.box.y + 4 + 15 * i); });
+    }
+    function drawTF(ctx, w, h) {
+      if (!S) return;
+      const P = SB.palette(), d = [];
+      for (let e = -40; e <= 40; e += 0.5) d.push([e, S.mtf(e)]);
+      const eps = Math.max(-40, Math.min(40, S.P0.tot));
+      SB.chart(ctx, null, { x: [-40, 40], y: [0, 0.8], xLabel: "디포커스 (µm)", yLabel: "MTF @ 250 lp/mm",
+        series: [{ data: d, color: P.accent, width: 2.2 }], bands: [{ x0: -S.dof, x1: S.dof, color: P.ok + "28" }],
+        points: [{ x: 0, y: S.mtf(0), color: P.dim, label: "25 °C" }, { x: eps, y: S.mtf(eps), color: P.bad, r: 5, label: gT() + " °C" }] });
+    }
+    let cv1 = null, cv2 = null;
+    upd();
+    cv1 = SB.canvas($("cv-th"), drawT, { aspect: 0.46, minHeight: 230, maxHeight: 340 });
+    cv2 = SB.canvas($("cv-th2"), drawTF, { aspect: 0.32, minHeight: 170, maxHeight: 230 });
+  })();
+
+  /* =================================================== Sim 7: zoom hand-over */
+  (function () {
+    const ZM = (function () {
+      const OUT = 96, KS = 20;                 // output window (px), star spokes
+      const CAMS = {
+        w: { f: 6.8, N: 1.75, p: 1.2, rn: 1.6, eq: 1 },
+        t3: { f: 8.8, N: 2.4, p: 1.0, rn: 1.3, eq: 3 },
+        t5: { f: 20, N: 3.0, p: 0.7, rn: 1.2, eq: 5 },
+      };
+      // output pixel angle: 12 MP-equivalent wide (2x wide pixel) divided by zoom
+      const aW = CAMS.w.p / CAMS.w.f;
+      const aOut = (Z) => 2 * aW / Z;
+      function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+      function gauss(r) { let u = 0; while (u < 1e-12) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+      const SC = { cx: 38, cy: 48, R: 36 };     // star in output px
+      function scene(u, v) {
+        // reflectance; star left, grey patch right (u > 82)
+        if (u >= 78) return 0.18;
+        const dx = u - SC.cx, dy = v - SC.cy, r = Math.hypot(dx, dy);
+        if (r > SC.R) return 0.3;
+        return Math.sin(KS * Math.atan2(dy, dx)) >= 0 ? 0.6 : 0.06;
+      }
+      // electrons per pixel for reflectance 0.18 at lux, exposure t
+      const elec = (cam, lux, t) => 4.1e3 * lux * 0.18 * 0.9 / (4 * cam.N * cam.N) * cam.p * cam.p * 0.35 * t;
+      function blur1(a, n, sig) {
+        if (sig < 0.25) return a;
+        const R = Math.ceil(3 * sig), k = []; let s = 0;
+        for (let i = -R; i <= R; i++) { const v = Math.exp(-0.5 * i * i / (sig * sig)); k.push(v); s += v; }
+        k.forEach((v, i) => (k[i] = v / s));
+        const o = new Float64Array(n * n);
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { let acc = 0; for (let i = -R; i <= R; i++) { const xx = Math.min(n - 1, Math.max(0, x + i)); acc += a[y * n + xx] * k[i + R]; } o[y * n + x] = acc; }
+        const o2 = new Float64Array(n * n);
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { let acc = 0; for (let i = -R; i <= R; i++) { const yy = Math.min(n - 1, Math.max(0, y + i)); acc += o[yy * n + x] * k[i + R]; } o2[y * n + x] = acc; }
+        return o2;
+      }
+      // render one camera into OUTxOUT output image (normalised so 0.18 -> 0.18)
+      function render(cam, Z, lux, t, seed) {
+        const r = rng(seed), s = aOut(Z) / (cam.p / cam.f);       // camera px per output px
+        const n = Math.max(4, Math.round(OUT * s)), ss = s < 1 ? Math.max(3, Math.ceil(3 / s)) : s < 1.5 ? 2 : 1, m = n * ss, step = OUT / m;
+        let img = new Float64Array(m * m);
+        for (let j = 0; j < m; j++) for (let i = 0; i < m; i++) img[j * m + i] = scene((i + 0.5) * step, (j + 0.5) * step);
+        const sigPx = 0.45 * 0.55 * cam.N / cam.p + 0.25;          // diffraction + residual aberration, camera px
+        img = blur1(img, m, sigPx * ss);
+        const e18 = elec(cam, lux, t), cimg = new Float64Array(n * n);
+        for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+          let a = 0; for (let b = 0; b < ss; b++) for (let c = 0; c < ss; c++) a += img[(j * ss + b) * m + i * ss + c];
+          const e = a / (ss * ss) / 0.18 * e18;
+          cimg[j * n + i] = (e + Math.sqrt(Math.max(e, 0)) * gauss(r) + cam.rn * gauss(r)) / e18 * 0.18;
+        }
+        // to output grid: box-average if n > OUT, bilinear if n <= OUT
+        const out = new Float64Array(OUT * OUT);
+        if (n > OUT) {
+          const q = n / OUT;
+          for (let j = 0; j < OUT; j++) for (let i = 0; i < OUT; i++) {
+            let a = 0, w = 0; const x0 = i * q, x1 = (i + 1) * q, y0 = j * q, y1 = (j + 1) * q;
+            for (let y = Math.floor(y0); y < Math.ceil(y1); y++) for (let x = Math.floor(x0); x < Math.ceil(x1); x++) {
+              const wx = Math.min(x + 1, x1) - Math.max(x, x0), wy = Math.min(y + 1, y1) - Math.max(y, y0); if (wx <= 0 || wy <= 0) continue;
+              a += cimg[Math.min(n - 1, y) * n + Math.min(n - 1, x)] * wx * wy; w += wx * wy;
+            }
+            out[j * OUT + i] = a / w;
+          }
+        } else {
+          for (let j = 0; j < OUT; j++) for (let i = 0; i < OUT; i++) {
+            const x = (i + 0.5) * s - 0.5, y = (j + 0.5) * s - 0.5, xi = Math.max(0, Math.min(n - 2, Math.floor(x))), yi = Math.max(0, Math.min(n - 2, Math.floor(y)));
+            const u = Math.max(0, Math.min(1, x - xi)), v = Math.max(0, Math.min(1, y - yi));
+            out[j * OUT + i] = cimg[yi * n + xi] * (1 - u) * (1 - v) + cimg[yi * n + xi + 1] * u * (1 - v) + cimg[(yi + 1) * n + xi] * (1 - u) * v + cimg[(yi + 1) * n + xi + 1] * u * v;
+          }
+        }
+        // native-pixel SNR on the grey patch
+        let pm = 0, pm2 = 0, c = 0;
+        for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+          const u = (i + 0.5) / s, v = (j + 0.5) / s; if (u < 81 || u > OUT - 2 || v < 4 || v > OUT - 4) continue;
+          const q = cimg[j * n + i]; pm += q; pm2 += q * q; c++;
+        }
+        pm /= c; const snrN = pm / Math.sqrt(Math.max(1e-12, pm2 / c - pm * pm));
+        return { out, n, s, e18, snrN, snrOut: snrN * (n > OUT ? n / OUT : 1), cnt: c };
+      }
+      // measurements on an output image
+      function measure(out, snr) {
+        const at = (x, y) => { const xi = Math.max(0, Math.min(OUT - 2, Math.floor(x))), yi = Math.max(0, Math.min(OUT - 2, Math.floor(y))), u = x - xi, v = y - yi; return out[yi * OUT + xi] * (1 - u) * (1 - v) + out[yi * OUT + xi + 1] * u * (1 - v) + out[(yi + 1) * OUT + xi] * (1 - u) * v + out[(yi + 1) * OUT + xi + 1] * u * v; };
+        const mods = [];
+        for (let rr = SC.R - 3; rr >= 3; rr -= 0.5) {
+          let re = 0, im = 0, s0 = 0; const NA = 192;
+          for (let k = 0; k < NA; k++) { const a = 2 * Math.PI * k / NA, v = at(SC.cx + rr * Math.cos(a), SC.cy + rr * Math.sin(a)); re += v * Math.cos(KS * a); im += v * Math.sin(KS * a); s0 += v; }
+          const neff = Math.min(NA, 2 * Math.PI * rr), floor = isFinite(snr) && snr > 0 ? 3 * 2 / (snr * Math.sqrt(neff)) * 0.18 / (s0 / NA) : 0;
+      mods.push([KS / (2 * Math.PI * rr), 2 * Math.hypot(re, im) / s0, floor]);
+        }
+        const ref = mods[0][1]; let flim = mods[mods.length - 1][0];
+        for (let i = 0; i < mods.length; i++) if (mods[i][1] < Math.max(0.25 * ref, mods[i][2])) { flim = i ? mods[i - 1][0] + (mods[i][0] - mods[i - 1][0]) * (mods[i - 1][1] - 0.25 * ref) / (mods[i - 1][1] - mods[i][1]) : mods[0][0]; break; }
+        return { flim: Math.min(0.5, flim), mods };
+      }
+      return { CAMS, OUT, render, measure, scene, elec, aOut };
+    })();
+    let seed = 11, R = null, pend = 0;
+    const gZ = SB.range("zm-z", (v) => "×" + v.toFixed(1), upd), gL = SB.range("zm-lux", (v) => Math.round(Math.pow(10, v)) + " lux", upd);
+    const gT = SB.seg("zm-tele", upd);
+    $("zm-new").addEventListener("click", () => { seed = (seed * 69069 + 1) >>> 0; upd(); });
+    function upd() { if (!pend) pend = requestAnimationFrame(run); }
+    const offs = [document.createElement("canvas"), document.createElement("canvas")];
+    offs.forEach((c) => { c.width = c.height = ZM.OUT; });
+    function run() {
+      pend = 0;
+      const Z = gZ(), lux = Math.pow(10, gL()), tc = ZM.CAMS[gT()], t = 1 / 30;
+      const w = ZM.render(ZM.CAMS.w, Z, lux, t, seed), mw = ZM.measure(w.out, w.snrN);
+      let tl = null, mt = null;
+      if (Z >= tc.eq) { tl = ZM.render(tc, Z, lux, t, seed + 7); mt = ZM.measure(tl.out, tl.snrN); }
+      const eq = tl ? tl.snrN * tl.n / w.n : NaN;
+      R = { w, mw, tl, mt, eq, Z, tc };
+      [w, tl].forEach((im, k) => {
+        const o = offs[k].getContext("2d"), d = o.createImageData(ZM.OUT, ZM.OUT);
+        for (let i = 0; i < ZM.OUT * ZM.OUT; i++) { const v = im ? Math.max(0, Math.min(255, 255 * Math.pow(Math.max(0, im.out[i]) / 0.6, 1 / 2.2))) : 0; d.data[4 * i] = d.data[4 * i + 1] = d.data[4 * i + 2] = v; d.data[4 * i + 3] = 255; }
+        o.putImageData(d, 0, 0);
+      });
+      SB.stat("o-zm-ws", w.snrOut.toFixed(1));
+      SB.stat("o-zm-ts", tl ? tl.snrOut.toFixed(1) : "<small>화각 밖</small>");
+      SB.stat("o-zm-te", tl ? eq.toFixed(1) : "—");
+      SB.stat("o-zm-r", (mw.flim / 0.5 * 100).toFixed(0) + " / " + (mt ? (mt.flim / 0.5 * 100).toFixed(0) : "—") + "<small>%</small>");
+      const pick = tl && eq >= w.snrOut ? "망원" : "광각 크롭";
+      SB.stat("o-zm-pick", pick);
+      cv1.redraw(); cv2.redraw();
+    }
+    function drawImg(ctx, w, h) {
+      if (!R) return;
+      const P = SB.palette(), sz = Math.min(h - 40, (w - 30) / 2), y0 = 6;
+      const xs = [w / 2 - sz - 6, w / 2 + 6];
+      ctx.imageSmoothingEnabled = false;
+      [0, 1].forEach((k) => {
+        ctx.drawImage(offs[k], xs[k], y0, sz, sz); ctx.strokeStyle = P.border; ctx.strokeRect(xs[k], y0, sz, sz);
+        ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textAlign = "center"; ctx.textBaseline = "top";
+        const cam = k ? R.tc : ZM.CAMS.w, im = k ? R.tl : R.w;
+        const lab = k ? (R.tl ? R.tc.eq + "× 망원 · 픽셀 " + R.tl.n + "² → " + ZM.OUT + "²" : R.tc.eq + "× 망원: 배율 " + R.tc.eq + " 미만은 화각 밖") : "광각 크롭 · 픽셀 " + R.w.n + "² → " + ZM.OUT + "²";
+        ctx.fillText(lab, xs[k] + sz / 2, y0 + sz + 5);
+        ctx.fillStyle = P.faint; ctx.fillText("f " + cam.f + " mm · F/" + cam.N + " · " + cam.p + " µm", xs[k] + sz / 2, y0 + sz + 20);
+      });
+    }
+    function drawMod(ctx, w, h) {
+      if (!R) return;
+      const P = SB.palette(), norm = (m) => { const r0 = m.mods[0][1]; return m.mods.map(([f, v]) => [f, v / r0]); };
+      const ser = [{ data: norm(R.mw), color: P.accent, width: 2.2 }];
+      if (R.mt) ser.push({ data: norm(R.mt), color: P.accent2, width: 2.2 });
+      SB.chart(ctx, null, { x: [0, 0.5], y: [0, 1.15], xLabel: "공간 주파수 (출력 픽셀당 사이클, 0.5 = 나이퀴스트)", yLabel: "변조도 (상대)", series: ser,
+        hlines: [{ y: 0.25, color: P.faint, label: "판정 25 %" }], vlines: [{ x: R.mw.flim, color: P.accent }].concat(R.mt ? [{ x: R.mt.flim, color: P.accent2 }] : []) });
+      ctx.font = font(11); ctx.textAlign = "right"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.accent; ctx.fillText("광각 크롭", w - 22, 18); if (R.mt) { ctx.fillStyle = P.accent2; ctx.fillText("망원", w - 22, 34); }
+    }
+    const cv1 = SB.canvas($("cv-zm"), drawImg, { aspect: 0.5, minHeight: 210, maxHeight: 330 });
+    const cv2 = SB.canvas($("cv-zm2"), drawMod, { aspect: 0.32, minHeight: 170, maxHeight: 230 });
+    run();
   })();
 })();
 </script>
