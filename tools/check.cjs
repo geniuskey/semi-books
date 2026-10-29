@@ -62,6 +62,10 @@ function checkPage(rel, opts = {}) {
     const quiz = (html.match(/class="quiz-q"/g) || []).length;
     if (rel.startsWith("infra/") && opts.chapter !== "glossary" && (sims < 6 || figs < 6 || quiz < 6)) warn.push(`${rel}: sims ${sims}, figures ${figs}, quiz ${quiz} (기준 6/6/6)`);
     if (rel.startsWith("cmp/") && opts.chapter !== "glossary" && (sims < 7 || figs < 7 || quiz < 6)) warn.push(`${rel}: sims ${sims}, figures ${figs}, quiz ${quiz} (기준 7/7/6)`);
+    if (rel.startsWith("sensor/") && opts.chapter !== "glossary") {
+      const [s, f, q] = opts.chapter === "design" ? [6, 6, 8] : [8, 9, 8];
+      if (sims < s || figs < f || quiz < q) warn.push(`${rel}: sims ${sims}, figures ${figs}, quiz ${quiz} (기준 ${s}/${f}/${q})`);
+    }
     if (!html.includes(`data-chapter="${opts.chapter}"`)) fail(`${rel}: body data-chapter should be "${opts.chapter}"`);
   }
   for (const m of markup.matchAll(/\b(?:href|src)=["']([^"']+)["']/g)) {

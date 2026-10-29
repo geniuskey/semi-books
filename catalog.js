@@ -496,11 +496,11 @@ window.SEMI_BOOKS = [
   "title": "SensorBook",
   "subtitle": "이미지 센서 교과서",
   "headline": "광자 하나에서 사진 한 장까지",
-  "description": "빛의 물리부터 포토다이오드, 마이크로렌즈, 픽셀 회로, 노이즈, ISP까지 — 1 µm도 안 되는 픽셀 안에서 일어나는 일을 시뮬레이터와 3D로 따라갑니다.",
+  "description": "빛의 물리부터 포토다이오드, 마이크로렌즈, 픽셀 회로, 노이즈, ISP, 파동 광학 픽셀, MIPI 인터페이스, 화질 평가까지 — 1 µm도 안 되는 픽셀 안에서 일어나는 일을 수치 시뮬레이터와 3D로 따라갑니다.",
   "stage": "device",
   "status": "published",
-  "chapters": 19,
-  "simulators": 80,
+  "chapters": 22,
+  "simulators": 183,
   "color": "#0a84c6",
   "colorDark": "#38b6f5",
   "topics": [
@@ -508,7 +508,10 @@ window.SEMI_BOOKS = [
    "BSI·DTI 픽셀",
    "노이즈·PTC",
    "ISP 파이프라인",
-   "적층 센서·SPAD"
+   "적층 센서·SPAD",
+   "FDTD·나노포토닉스",
+   "MIPI·타이밍",
+   "화질 평가"
   ],
   "motif": "pixel",
   "slug": "sensor",

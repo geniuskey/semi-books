@@ -29,7 +29,7 @@
     { slug: "interface",  num: "19", title: "센서 인터페이스와 타이밍",  desc: "MIPI D-PHY·C-PHY, CSI-2 패킷, 라인·프레임 타이밍, 레지스터 제어, 다중 카메라 동기.", tags: ["시스템", "sim"] },
     { slug: "iq",         num: "20", title: "화질 평가: 사진을 숫자로",  desc: "슬랜티드 에지 MTF, 색 정확도 ΔE, 텍스처 손실, 시각 노이즈, 플레어와 왜곡 측정.", tags: ["측정", "sim"] },
     { slug: "design",     num: "21", title: "센서 설계 플레이그라운드", desc: "픽셀 크기·해상도·광학 포맷을 정하고 성능을 한눈에 비교해 보자.", tags: ["종합", "sim"] },
-    { slug: "glossary",   num: "22", title: "용어집 & 종합 퀴즈",       desc: "핵심 용어 190여 개를 검색하고, 실력을 점검하자.", tags: ["정리"] },
+    { slug: "glossary",   num: "22", title: "용어집 & 종합 퀴즈",       desc: "핵심 용어 420여 개를 검색하고, 실력을 점검하자.", tags: ["정리"] },
   ];
 
   const SB = (window.SB = {});
