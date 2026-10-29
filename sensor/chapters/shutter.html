@@ -32,6 +32,7 @@
       <li>글로벌 셔터 픽셀의 구조와 PLS·노이즈 트레이드오프를 이해한다.</li>
       <li>50/60 Hz 조명 플리커의 원인과 노출 시간 n/(2f) 해법을 안다.</li>
       <li>다중 노출, DOL, DCG, 분할 픽셀, LOFIC HDR을 비교하고 HDR 합성·톤 매핑·고스트 문제를 이해한다.</li>
+      <li>프로펠러 조각·스트로보, GS 저장 오차, DOL 라인 버퍼, 단일 노출 HDR의 SNR 딥, 로컬 톤 매핑 헤일로를 수치 시뮬레이션으로 정량화한다.</li>
     </ul>
   </header>
 
@@ -144,6 +145,37 @@
       </div>
       <div class="sim-note">왼쪽: 실제 장면(슬로 모션)과 셔터 위치 — 초록선은 리셋, 빨간선은 읽기, 그 사이 음영이 지금 노출 중인 행들. 오른쪽: 센서가 읽어 낸 영상이 한 행씩 쌓인다. 아래: 행–시간 타이밍 차트. 해볼 것: 롤링에서 행 시간을 40 µs로 늘려 프로펠러가 어떻게 휘는지 보고, 글로벌로 바꿔 같은 조건에서 비교하자. 노출 시간을 늘리면 두 방식 모두 모션 블러가 생긴다.</div>
     </div>
+
+    <h3>프로펠러: 행 샘플링이 만드는 기하와 스트로보</h3>
+    <p>위 시뮬레이터가 "어떻게 쌓이는지"를 보여 줬다면, 이제 결과 영상의 기하를 정량적으로 따져 보자. 행 \(y\)(위 = −1, 아래 = +1)는 시각 \(t(y) = \tfrac{y+1}{2}T_{\text{ro}}\)에 샘플링되므로, 각속도 \(\omega\)로 도는 \(n_b\)개 날개 중 하나가 각도 \(\theta\)에 있는 점 \((r\cos\theta, r\sin\theta)\)는 다음 조건을 만족할 때만 영상에 찍힌다.</p>
+    <div class="formula">$$\theta - \theta_0 - \omega\,t\!\left(r\sin\theta\right) \equiv 0 \pmod{2\pi/n_b},\qquad \Delta\theta_{\text{ro}} = \omega\,T_{\text{ro}},\qquad \Delta\theta_{\text{app}} = \operatorname{wrap}_{2\pi/n_b}\!\left(\frac{\omega}{f_{\text{fps}}}\right)$$
+      <div class="where">첫 식은 날개 하나가 화면에서 행마다 다른 각도로 "잘려" 찍히는 조건이다. \(\Delta\theta_{\text{ro}}\)가 날개 간격 \(2\pi/n_b\)보다 크면 같은 날개가 화면 위아래에서 여러 번 찍혀 떨어진 조각이 된다. 셋째 식은 프레임 사이의 겉보기 회전(마차 바퀴 효과)으로, 날개 대칭 때문에 \(2\pi/n_b\) 주기로 접힌다.</div>
+    </div>
+    <p><b>계산 예.</b> 3날개 프로펠러가 3000 rpm(50 rev/s)으로 돌고 판독 시간이 30 ms라면 \(\Delta\theta_{\text{ro}} = 360° \times 50 \times 0.03 = 540°\)로, 날개 간격(120°)의 4.5배다. 화면에는 실제 3개보다 많은 조각(아래 시뮬레이터에서 6개)이 보인다. 한편 30 fps 영상에서 프레임당 회전은 \(360° \times 50/30 = 600° = 5 \times 120°\)이므로 날개가 정확히 같은 자리로 돌아와 <b>멈춰 보인다</b>. 3100 rpm이면 프레임당 20°씩 앞서 겉보기 100 rpm으로 천천히 돌고, 2900 rpm이면 거꾸로 돈다. 글로벌 셔터는 첫 효과(조각)를 없애지만 둘째 효과(스트로보)는 없애지 못한다 — 둘째는 셔터가 아니라 <b>시간 샘플링</b>의 에일리어싱이기 때문이다.</p>
+
+    <div class="sim" id="sim-prop">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>프로펠러 캡처 — 행별 샘플링, 날개 조각 수(연결 성분), 스트로보 겉보기 회전</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-prop"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>셔터</span><div class="seg" id="pp-mode"><button data-value="rs" class="on">롤링</button><button data-value="gs">글로벌</button></div></div>
+          <label class="ctrl"><span>회전 속도 <output id="pp-rpm-out"></output></span><input type="range" id="pp-rpm" min="0" max="6000" value="3000" step="50"></label>
+          <div class="ctrl"><span>날개 수</span><div class="seg" id="pp-nb"><button data-value="2">2</button><button data-value="3" class="on">3</button><button data-value="4">4</button><button data-value="5">5</button></div></div>
+          <label class="ctrl"><span><span>판독 시간 T<sub>ro</sub></span> <output id="pp-tro-out"></output></span><input type="range" id="pp-tro" min="1" max="40" value="30" step="1"></label>
+          <label class="ctrl"><span>노출 시간 <output id="pp-exp-out"></output></span><input type="range" id="pp-exp" min="0.05" max="3" value="0.5" step="0.05"></label>
+          <div class="ctrl"><span>영상 프레임률</span><div class="seg" id="pp-fps"><button data-value="24">24</button><button data-value="30" class="on">30</button><button data-value="60">60</button><button data-value="120">120</button></div></div>
+          <label class="check"><input type="checkbox" id="pp-true"> 첫 행 시각의 실제 날개 윤곽 겹쳐 보기</label>
+          <label class="check"><input type="checkbox" id="pp-play"> 연속 프레임 재생 (프레임마다 ω/fps만큼 회전)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">판독 중 회전 ωT<sub>ro</sub></span><span class="v" id="o-pp-rot">—</span></div>
+        <div class="stat"><span class="k">보이는 날개 조각 (연결 성분)</span><span class="v" id="o-pp-fr">—</span></div>
+        <div class="stat"><span class="k">노출 중 날개 끝 블러</span><span class="v" id="o-pp-bl">—</span></div>
+        <div class="stat"><span class="k">겉보기 회전 (스트로보)</span><span class="v" id="o-pp-app">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽 영상은 160×160 화소를 행마다 \(t(y)\)에서, 노출 동안 6번 샘플링해 만든다. 조각 수는 허브 바깥의 4-연결 성분(면적 12화소 이상)을 실제로 세어 얻는다. 오른쪽: 실제 rpm에 대한 겉보기 rpm(톱니파). 해볼 것: ① 기본값(3000 rpm, 3날개, 30 ms)에서 회전 540°, 조각 6개. 글로벌로 바꾸면 3개. ② 롤링에서 판독 시간을 10 ms로 줄이면 3개로 돌아온다(180°). ③ 6000 rpm이면 조각 10개, 5날개면 9개. ④ "연속 프레임 재생"을 켜면 3000 rpm·30 fps에서 날개가 멈추고, 3100 rpm에서 천천히(겉보기 +100 rpm), 2900 rpm에서 거꾸로 돈다.</div>
+    </div>
   </section>
 
   <!-- =============================================================== 3 -->
@@ -208,6 +240,69 @@
     <div class="callout deep">
       <strong>적층 픽셀 병렬 ADC</strong>
       <p>픽셀 층과 로직 층을 Cu–Cu 하이브리드 본딩으로 픽셀 단위 연결하면, 픽셀(또는 작은 픽셀 블록)마다 ADC를 두어 모든 픽셀을 동시에 디지털화할 수 있다. 메모리 노드에서 오래 기다릴 필요가 없어 PLS 문제가 줄고, 매우 빠른 GS가 가능하다.</p>
+    </div>
+
+    <h3>저장 중 오차: 행 번호에 비례한다</h3>
+    <p>GS의 오차는 모두 <b>저장 시간</b>에 비례해 쌓인다. 모든 행이 같은 순간 노출을 끝내도 \(i\)번째 행은 \(t_w(i) = (i/N_{\text{row}})\,T_{\text{ro}}\)만큼 기다렸다가 읽히므로, 첫 행은 깨끗하고 마지막 행이 가장 나쁘다. 오차 원인은 저장 방식에 따라 다르다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 270" role="img" aria-label="전하 영역과 전압 영역 글로벌 셔터 픽셀의 저장 구조와 오차 원인">
+        <g transform="translate(16,24)">
+          <text x="0" y="0" class="t-acc">① 전하 영역 (charge domain)</text>
+          <rect x="0" y="40" width="70" height="60" rx="6" class="f-acc-soft" stroke="var(--accent)"/><text x="35" y="76" class="t" text-anchor="middle">PD</text>
+          <rect x="110" y="40" width="80" height="60" rx="6" class="f-elev" stroke="var(--text-dim)"/><text x="150" y="76" class="t" text-anchor="middle">MN</text>
+          <rect x="100" y="22" width="100" height="10" fill="var(--text-dim)"/><text x="150" y="16" class="t-dim" text-anchor="middle">차광막</text>
+          <rect x="230" y="40" width="60" height="60" rx="6" class="f-elev" stroke="var(--text-dim)"/><text x="260" y="76" class="t" text-anchor="middle">FD</text>
+          <line x1="70" y1="70" x2="110" y2="70" class="s-line" stroke-width="2"/><text x="90" y="62" class="t-mono" text-anchor="middle">TX1</text>
+          <line x1="190" y1="70" x2="230" y2="70" class="s-line" stroke-width="2"/><text x="210" y="62" class="t-mono" text-anchor="middle">TX2</text>
+          <path d="M218,0 L182,36" stroke="var(--warn)" stroke-width="2.5" fill="none" stroke-dasharray="5 3"/><text x="224" y="4" class="t" fill="var(--warn)">새는 빛 (PLS)</text>
+          <text x="112" y="124" class="t-dim">MN 암전류 ∝ 2^((T−25)/6)</text>
+          <text x="0" y="158" class="t">✔ FD 리셋 → TX2 → CDS 가능: kTC 상쇄</text>
+          <text x="0" y="184" class="t">✘ MN이 Si 안의 PN 접합: PLS·암전류 큼</text>
+          <text x="0" y="210" class="t-dim">대표: −80~−100 dB PLS, 읽기 노이즈 1~2 e⁻</text>
+        </g>
+        <g transform="translate(420,24)">
+          <text x="0" y="0" class="t-acc">② 전압 영역 (voltage domain)</text>
+          <rect x="0" y="40" width="60" height="60" rx="6" class="f-acc-soft" stroke="var(--accent)"/><text x="30" y="76" class="t" text-anchor="middle">PD/FD</text>
+          <polygon points="80,45 80,95 118,70" class="f-elev" stroke="var(--text-dim)"/><text x="88" y="118" class="t-mono">SF</text>
+          <line x1="60" y1="70" x2="80" y2="70" class="s-line" stroke-width="2"/><line x1="118" y1="70" x2="150" y2="70" class="s-line" stroke-width="2"/>
+          <line x1="150" y1="50" x2="150" y2="90" class="s-line" stroke-width="2"/>
+          <line x1="150" y1="50" x2="200" y2="50" class="s-line" stroke-width="2"/><line x1="150" y1="90" x2="200" y2="90" class="s-line" stroke-width="2"/>
+          <line x1="200" y1="38" x2="200" y2="62" class="s-acc" stroke-width="3"/><line x1="210" y1="38" x2="210" y2="62" class="s-acc" stroke-width="3"/><text x="222" y="55" class="t-mono">C_R (리셋)</text>
+          <line x1="200" y1="78" x2="200" y2="102" class="s-acc" stroke-width="3"/><line x1="210" y1="78" x2="210" y2="102" class="s-acc" stroke-width="3"/><text x="222" y="95" class="t-mono">C_S (신호)</text>
+          <text x="0" y="158" class="t">✔ 금속–절연체 커패시터: PLS 매우 작음</text>
+          <text x="0" y="184" class="t">✘ 두 샘플의 kTC: √(2kT/C_s) — CDS로 못 지움</text>
+          <text x="0" y="210" class="t-dim">✘ 누설로 전압 강하, C_s 키우면 면적 ↑</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 9-4.</b> 글로벌 셔터의 두 저장 방식. 전하 영역은 CDS로 kTC를 지울 수 있지만 메모리 노드가 실리콘 접합이라 PLS와 암전류에 약하다. 전압 영역은 PLS에 강하지만 저장 커패시터의 kTC 노이즈와 누설을 떠안는다.</figcaption>
+    </figure>
+    <div class="formula">$$\Delta Q_{\text{PLS}}(i) = \mathrm{PLS}\cdot\frac{S}{t_{\exp}}\,t_w(i),\qquad \Delta Q_{\text{leak}}(i) = I_{\text{MN}}(T)\,t_w(i),\qquad \sigma_{\text{kTC}} = \frac{1}{G}\sqrt{\frac{2kT}{C_s}}$$
+      <div class="where">\(S/t_{\exp}\): 노출 중 신호율. 저장 중에도 같은 빛(또는 움직인 물체의 빛)이 PLS 비율로 새어 든다. \(G\): 저장 노드 기준 변환 이득(여기서는 SF 포함 90 µV/e⁻). 전압 영역의 누설은 \(\Delta V = I_{\text{leak}}t_w/C_s\)를 \(G\)로 나눈 전자 수로 환산한다.</div>
+    </div>
+    <p><b>계산 예.</b> PLS −80 dB(\(10^{-4}\)), 1 ms 노출 동안 8000 e⁻를 받은 밝은 물체, 판독 30 ms인 전하 영역 GS를 생각하자. 마지막 행의 PLS 오차는 \(10^{-4} \times 8000 \times 30 = 24\) e⁻다. 신호의 0.3%에 불과하지만, 판독 동안 물체가 옮겨 가면 이 24 e⁻가 <b>어두운 배경 위의 유령</b>(40 e⁻ 배경의 60%)이 된다. 같은 조건의 전압 영역 GS에서 \(C_s = 25\) fF라면 60 °C에서 \(\sqrt{2kT/C_s} \approx 606\) µV를 \(G\) = 90 µV/e⁻로 나눈 \(\sigma_{\text{kTC}} \approx 6.7\) e⁻로, 롤링 셔터 픽셀 읽기 노이즈의 몇 배가 된다. 노출 시간을 짧게 할수록(고속 머신 비전) 같은 PLS의 상대 피해는 커진다.</p>
+
+    <div class="sim" id="sim-gsn">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>GS 저장 오차 에뮬레이터 — PLS 유령, 저장 누설, kTC (전하 vs 전압 영역)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-gsn"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>저장 방식</span><div class="seg" id="gs-dom"><button data-value="q" class="on">전하 영역</button><button data-value="v">전압 영역</button></div></div>
+          <label class="ctrl"><span><span>판독 시간 T<sub>ro</sub></span> <output id="gs-tro-out"></output></span><input type="range" id="gs-tro" min="2" max="60" value="30" step="1"></label>
+          <label class="ctrl"><span>노출 시간 <output id="gs-exp-out"></output></span><input type="range" id="gs-exp" min="0.1" max="10" value="1" step="0.1"></label>
+          <label class="ctrl"><span>PLS <output id="gs-pls-out"></output></span><input type="range" id="gs-pls" min="-120" max="-60" value="-80" step="1"></label>
+          <label class="ctrl"><span>온도 <output id="gs-t-out"></output></span><input type="range" id="gs-t" min="25" max="105" value="60" step="1"></label>
+          <label class="ctrl"><span><span>저장 커패시터 C<sub>s</sub> (전압 영역)</span> <output id="gs-cs-out"></output></span><input type="range" id="gs-cs" min="5" max="60" value="25" step="1"></label>
+          <label class="check"><input type="checkbox" id="gs-err"> 오차만 보기 (측정 − 이상값)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">PLS 오차 (마지막 행, 밝은 물체)</span><span class="v" id="o-gs-pls">—</span></div>
+        <div class="stat"><span class="k">저장 누설 (마지막 행)</span><span class="v" id="o-gs-leak">—</span></div>
+        <div class="stat"><span class="k">kTC 노이즈</span><span class="v" id="o-gs-ktc">—</span></div>
+        <div class="stat"><span class="k">노이즈 바닥 (마지막 행)</span><span class="v" id="o-gs-fl">—</span></div>
+        <div class="stat"><span class="k">마지막 행 DR (풀웰 10k e⁻)</span><span class="v" id="o-gs-dr">—</span></div>
+      </div>
+      <div class="sim-note">장면: 40 e⁻ 배경 위 밝은 막대(8000 e⁻). 노출이 끝난 뒤 판독 동안 막대가 오른쪽으로 옮겨 간다고 가정해, 저장 중 PLS는 <em>옮겨 간 자리</em>에 쌓인다. 픽셀마다 포아송 샷 노이즈와 읽기·kTC 노이즈를 실제로 뽑는다. 모델: MN 암전류 8 e⁻/s(25 °C, 6 °C마다 2배), 전압 영역 저장 커패시터 누설 차이분 0.2 fA(25 °C, 8 °C마다 2배). 해볼 것: ① 기본값(전하 영역, 30 ms, −80 dB, 60 °C)에서 PLS 24.0 e⁻, 누설 13.7 e⁻, 노이즈 바닥 3.99 e⁻, DR 68.0 dB. "오차만 보기"로 아래로 갈수록 진해지는 유령을 보자. ② 85 °C로 올리면 누설이 246 e⁻로 폭증해 DR 56.1 dB. ③ 전압 영역으로 바꾸면 kTC 6.7 e⁻ 때문에 DR이 63.1 dB로 떨어지고, C<sub>s</sub>를 60 fF로 키우면 kTC 4.4 e⁻·DR 66.4 dB로 회복한다(면적 대가). ④ 판독을 5 ms로 줄이면 PLS 4.0 e⁻ — 적층 병렬 ADC가 GS를 바꾸는 이유다.</div>
     </div>
   </section>
 
@@ -288,7 +383,7 @@
         <text x="120" y="205" class="t-dim" text-anchor="middle">노이즈에 묻힘</text>
         <text x="610" y="205" class="t-dim" text-anchor="middle">포화</text>
       </svg>
-      <figcaption><b>그림 9-4.</b> 장면 휘도 범위(보라)와 센서 한 번 노출이 담는 범위(파랑). 노출을 조절하면 파란 창을 좌우로 옮길 수 있을 뿐 넓힐 수는 없다.</figcaption>
+      <figcaption><b>그림 9-5.</b> 장면 휘도 범위(보라)와 센서 한 번 노출이 담는 범위(파랑). 노출을 조절하면 파란 창을 좌우로 옮길 수 있을 뿐 넓힐 수는 없다.</figcaption>
     </figure>
   </section>
 
@@ -328,8 +423,38 @@
           <text x="214" y="216" class="t-dim" text-anchor="middle">간격 ≈ 수 행 ~ 수 ms</text>
         </g>
       </svg>
-      <figcaption><b>그림 9-5.</b> 순차 프레임 HDR(왼쪽)은 Long·Short 사이 시간 차가 한 프레임이지만, DOL(오른쪽)은 Long 읽기 선 바로 뒤를 Short 읽기 선이 따라가며 한 행 단위로 번갈아 출력한다.</figcaption>
+      <figcaption><b>그림 9-6.</b> 순차 프레임 HDR(왼쪽)은 Long·Short 사이 시간 차가 한 프레임이지만, DOL(오른쪽)은 Long 읽기 선 바로 뒤를 Short 읽기 선이 따라가며 한 행 단위로 번갈아 출력한다.</figcaption>
     </figure>
+
+    <h3>스태거드 DOL의 타이밍 설계: 라인 버퍼와 노출 간격</h3>
+    <p>DOL에서 행 \(i\)의 긴 노출(L)은 \(t_{RL}(i) = t_L + i\,t_{\text{row}}\)에 읽히고, 같은 PD가 곧바로 짧은 노출(S)을 시작해 \(t_S\) 뒤에 읽힌다. 센서는 한 행 시간마다 L 한 행과 S 한 행을 번갈아 내보내므로, 어떤 순간에 출력되는 S 행은 L 행보다 \(t_S/t_{\text{row}}\)행 위에 있다. ISP가 같은 행의 L과 S를 짝지어 합성하려면 그만큼의 L 행을 <span class="term">라인 버퍼</span><span class="en">(line buffer)</span>에 들고 있어야 한다.</p>
+    <div class="formula">$$N_{\text{buf}} = \left\lceil \frac{t_S}{t_{\text{row}}}\right\rceil,\qquad \Delta t_c = \frac{t_L + t_S}{2},\qquad \Delta x = v\,\Delta t_c,\qquad T_{\text{frame}} \ge \max\!\left(N_{\text{row}}t_{\text{row}},\;t_L\right) + t_S$$
+      <div class="where">\(\Delta t_c\): 두 노출 <em>중심</em> 사이 간격 — 움직이는 물체가 두 노출에서 어긋나는 양을 정한다(판독 간격 \(t_S\)보다 훨씬 크다). 3중 노출(L/S/VS)이면 버퍼는 \(\lceil (t_S+t_{VS})/t_{\text{row}}\rceil\)행, 두 노출 분량이 필요하다.</div>
+    </div>
+    <p><b>계산 예.</b> 4K(3840×2160), \(t_{\text{row}} = 7.4\) µs, \(t_L = 16\) ms, 노출비 16(\(t_S = 1\) ms)이라면 \(N_{\text{buf}} = \lceil 1000/7.4\rceil = 136\)행, 12비트로 \(136 \times 3840 \times 1.5\) B ≈ 765 KB의 SRAM이 필요하다. 노출 중심 간격은 8.5 ms라서 2 px/ms(2000 px/s)로 움직이는 물체는 L과 S에서 17 px 어긋난다. 위 콜아웃의 "DOL 2 ms 간격"은 판독 시작 간격을 말한 것이고, 고스트 크기는 노출 길이까지 포함한 중심 간격이 정한다는 점에 주의하자. 짧은 노출이 LED 신호등·전광판의 PWM 꺼짐 구간에 걸려 깜박이는 LED 플리커 문제와 그 대책은 <a href="automotive.html#lfm">15장</a>에서 다룬다.</p>
+
+    <div class="sim" id="sim-dol">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>스태거드 DOL 타이밍 다이어그램 — 라인 버퍼, 노출 간격, 모션 어긋남</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-dol"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>노출 수</span><div class="seg" id="dl-n"><button data-value="2" class="on">2 (L/S)</button><button data-value="3">3 (L/S/VS)</button></div></div>
+          <div class="ctrl"><span>해상도 (행)</span><div class="seg" id="dl-rows"><button data-value="1080">1080</button><button data-value="2160" class="on">2160</button><button data-value="3000">3000</button></div></div>
+          <label class="ctrl"><span><span>행 시간 t<sub>row</sub></span> <output id="dl-trow-out"></output></span><input type="range" id="dl-trow" min="2" max="20" value="7.4" step="0.2"></label>
+          <label class="ctrl"><span><span>긴 노출 t<sub>L</sub></span> <output id="dl-tl-out"></output></span><input type="range" id="dl-tl" min="1" max="33" value="16" step="0.5"></label>
+          <label class="ctrl"><span>노출비 <output id="dl-r-out"></output></span><input type="range" id="dl-r" min="1" max="6" value="4" step="1"></label>
+          <label class="ctrl"><span>물체 속도 (상면) <output id="dl-v-out"></output></span><input type="range" id="dl-v" min="0" max="10" value="2" step="0.1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">짧은 노출 t<sub>S</sub></span><span class="v" id="o-dl-ts">—</span></div>
+        <div class="stat"><span class="k">라인 버퍼 (12-bit)</span><span class="v" id="o-dl-buf">—</span></div>
+        <div class="stat"><span class="k">노출 중심 간격 Δt<sub>c</sub></span><span class="v" id="o-dl-gap">—</span></div>
+        <div class="stat"><span class="k">어긋남 예측 / 측정</span><span class="v" id="o-dl-mv">—</span></div>
+        <div class="stat"><span class="k">최대 프레임률</span><span class="v" id="o-dl-fps">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 행–시간 다이어그램. 각 띠는 한 노출 스트림(리셋 → 읽기 선 사이가 노출), 옅은 띠는 다음 프레임. 흰 점선은 같은 순간 판독 중인 L 행과 S 행 — 그 행 차이가 라인 버퍼다. 오른쪽: 움직이는 밝은 막대를 L(4배 노출, 막대에서 포화)과 S로 찍은 1-D 단면과 임계값 합성 결과. 세로선은 두 노출에서 측정한 막대 무게중심. 해볼 것: ① 기본값에서 버퍼 136행 · 765 KB, Δt<sub>c</sub> 8.50 ms, 어긋남 17.0 / 16.9 px, 58.8 fps. ② 노출비를 64로 올리면 버퍼는 34행으로 줄지만 Δt<sub>c</sub>는 8.13 ms로 거의 그대로다. ③ t<sub>L</sub>을 4 ms로 줄이면 Δt<sub>c</sub> 2.13 ms, 어긋남 4.3 px — 고스트를 줄이는 가장 확실한 손잡이는 긴 노출 자체다. ④ 3중 노출로 바꾸면 버퍼 144행이지만 두 스트림 분량이라 1.6 MB.</div>
+    </div>
 
     <h3>공간·회로 분할: 한 번의 노출로 두 감도</h3>
     <ul>
@@ -380,7 +505,7 @@
           <text x="100" y="232" class="t-dim" text-anchor="middle">커패시터에 적분 → 120 dB+</text>
         </g>
       </svg>
-      <figcaption><b>그림 9-6.</b> 단일 노출 HDR 픽셀. DCG는 FD 용량을, 분할 픽셀은 감도를, LOFIC은 전하 저장 용량을 두 갈래로 나눈다.</figcaption>
+      <figcaption><b>그림 9-7.</b> 단일 노출 HDR 픽셀. DCG는 FD 용량을, 분할 픽셀은 감도를, LOFIC은 전하 저장 용량을 두 갈래로 나눈다.</figcaption>
     </figure>
 
     <div class="table-wrap"><table>
@@ -393,6 +518,36 @@
         <tr><td>LOFIC</td><td>오버플로 커패시터</td><td>매우 큼 (120 dB+)</td><td>없음</td><td>커패시터 면적, 암전류·kTC</td></tr>
       </tbody>
     </table></div>
+
+    <h3>단일 노출 HDR의 SNR 곡선과 전환점</h3>
+    <p>단일 노출 방식은 고스트가 없지만, 두 경로를 이어 붙이는 <b>전환점</b>에서 SNR이 꺾인다. 그 깊이는 두 경로가 같은 전하를 읽느냐(DCG·LOFIC), 서로 다른 PD를 읽느냐(분할 픽셀)에 따라 근본적으로 다르다. DCG 픽셀 자체의 FD 전달 곡선·노이즈·풀웰은 <a href="readout.html#dcg">6장 DCG 절</a>에서 다뤘으니, 여기서는 두 출력을 합치는 문제에 집중하자. 고이득 경로 가중치를 \(w\)라 하면 합성 출력의 분산은</p>
+    <div class="formula">$$\underbrace{\sigma^2 = N + w^2\sigma_H^2 + (1-w)^2\sigma_L^2}_{\text{DCG·LOFIC: 같은 전하, 샷 노이즈 공통}}\qquad \underbrace{\sigma^2 = w^2\,(N+\sigma_H^2) + (1-w)^2\,k^2\!\left(\tfrac{N}{k}+\sigma_s^2\right)}_{\text{분할 픽셀: 감도 비 }k\text{, 독립 PD}}$$
+      <div class="where">같은 전하를 두 번 읽으면 샷 노이즈는 그대로이고 바뀌는 것은 읽기 노이즈뿐이라, 딥은 \(\sigma_L\)이 \(\sqrt N\)에 견줄 만할 때만 보인다. 분할 픽셀은 작은 PD가 광자를 \(1/k\)만 받으므로 샷 노이즈 한계에서도 딥이 \(10\log_{10}k\) dB다.</div>
+    </div>
+    <p><b>계산 예.</b> 전환점이 고이득 포화의 80%인 4800 e⁻라 하자. LOFIC 경로 읽기 노이즈가 60 e⁻라면 전환 직전 SNR은 \(4800/\sqrt{4801} = 69.3\)(36.8 dB), 직후는 \(4800/\sqrt{4800+3600} = 52.4\)(34.4 dB)로 딥은 2.4 dB다. 감도 비 30인 분할 픽셀은 작은 PD가 160 e⁻만 받아 SNR이 \(\approx\sqrt{160}\)으로 떨어지므로 딥이 14.8 dB나 된다. 반면 DCG(LCG 4 e⁻)는 같은 전하를 읽어 딥이 0.1 dB 미만이다. 대신 DCG의 DR 확장은 PD 풀웰에 묶인다(여기서 81.6 dB).</p>
+
+    <div class="sim" id="sim-sehdr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>단일 노출 HDR — DCG · LOFIC · 분할 픽셀의 SNR 곡선과 램프 차트 몬테카를로</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-sehdr"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>픽셀 구조</span><div class="seg" id="se-arch"><button data-value="dcg">DCG</button><button data-value="lofic" class="on">LOFIC</button><button data-value="split">분할 픽셀</button></div></div>
+          <label class="ctrl"><span>저이득 경로 읽기 노이즈 <output id="se-rn-out"></output></span><input type="range" id="se-rn" min="-0.3" max="2.4" value="1.778" step="0.02"></label>
+          <label class="ctrl"><span>확장 비 (용량 비 / 감도 비) <output id="se-ext-out"></output></span><input type="range" id="se-ext" min="0.3" max="2.5" value="1.699" step="0.02"></label>
+          <label class="ctrl"><span>전환점 (고이득 포화 대비) <output id="se-thr-out"></output></span><input type="range" id="se-thr" min="0.3" max="0.95" value="0.8" step="0.01"></label>
+          <div class="ctrl"><span>합성</span><div class="seg" id="se-mode"><button data-value="hard" class="on">임계값 전환</button><button data-value="w">선형 블렌딩</button></div></div>
+          <label class="ctrl"><span>저이득 경로 이득 보정 오차 ε <output id="se-eps-out"></output></span><input type="range" id="se-eps" min="0" max="5" value="0" step="0.1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">DR (고이득 노이즈 1 e⁻ 기준)</span><span class="v" id="o-se-dr">—</span></div>
+        <div class="stat"><span class="k">전환점 SNR 딥 (이론)</span><span class="v" id="o-se-dip">—</span></div>
+        <div class="stat"><span class="k">전환 부근 최악 SNR − √N</span><span class="v" id="o-se-worst">—</span></div>
+        <div class="stat"><span class="k">측정 딥 (몬테카를로)</span><span class="v" id="o-se-mc">—</span></div>
+        <div class="stat"><span class="k">전환점 단차 (측정 평균)</span><span class="v" id="o-se-step">—</span></div>
+      </div>
+      <div class="sim-note">위: 합성 출력 SNR(실선), 각 경로(점선), 샷 노이즈 한계(옅은 점선), 점 = 열마다 64개 표본을 포아송·가우시안 노이즈로 실제 뽑아 평균/표준편차로 잰 SNR. 아래: 같은 표본으로 만든 로그 램프 영상. 구조를 바꾸면 그 구조의 대표 노이즈·확장 비로 초기화된다(DCG: HCG 포화 2000 e⁻, LCG 4 e⁻, ×6 / LOFIC: PD 6000 e⁻, 60 e⁻, ×50 / 분할: 작은 PD 1.5 e⁻, 감도 비 30). 해볼 것: ① 이론 딥 DCG 0.0, LOFIC 2.4, 분할 14.8 dB와 DR 81.6 / 109.5 / 105.1 dB를 비교하자(측정 딥은 전환점 양쪽 500개 표본으로 재며 ±0.5 dB가량 흔들린다). ② LOFIC 노이즈를 200 e⁻로 올리면 딥이 9.7 dB로 커진다. ③ ε을 3%로 두면 램프 영상에 밝기 단차가 생기고 측정 단차가 약 +3%로 나온다. 블렌딩으로 바꾸면 단차가 경사로 퍼지지만, 최악 SNR은 줄지 않는다 — 블렌딩은 윤곽을 숨길 뿐 딥을 메우지 못한다.</div>
+    </div>
   </section>
 
   <!-- =============================================================== 7 -->
@@ -430,6 +585,64 @@
       </div>
       <div class="sim-note">센서 가정: 풀웰 10,000 e⁻, 읽기 노이즈 3 e⁻(단일 노출 DR 70.5 dB). 위 네 패널: 긴 노출(창밖 포화), 짧은 노출(그늘 노이즈), 합성 방사 휘도(로그 의사색), 톤 매핑 결과. 가운데 그래프: 장면 휘도에 대한 두 노출의 전자 수(전달 곡선). 아래 그래프: 톤 곡선. 해볼 것: R=1이면 합성해도 창밖이 살아나지 않는다. R을 키울수록 창밖이 살아나지만 전환점의 SNR 딥이 깊어진다. '임계값 전환'은 전환 경계에 노이즈 차이로 된 윤곽이 생긴다.</div>
     </div>
+
+    <h3>톤 매핑 연산자: 전역 곡선 vs 로컬 기저/디테일</h3>
+    <p>전역 연산자는 모든 픽셀에 같은 곡선 \(L_d = f(L)\)을 쓴다. 로그 \(f = \ln(1+kL)/\ln(1+kL_{\max})\), Reinhard \(L/(1+L)\), 영화 산업에서 온 <span class="term">필믹</span><span class="en">(filmic)</span> 곡선(여기서는 ACES 근사 \(x(2.51x+0.03)/(x(2.43x+0.59)+0.14)\))이 대표적이다. 문제는 20 stop이 넘는 장면을 8 stop 남짓한 화면에 한 곡선으로 넣으면, 기울기가 작은 하이라이트 구간의 <b>국소 대비</b>가 거의 사라진다는 점이다. 로컬 연산자는 로그 휘도를 느리게 변하는 <b>기저</b>와 빠르게 변하는 <b>디테일</b>로 나눠 기저만 압축한다(Durand–Dorsey 방식).</p>
+    <div class="formula">$$\log L = B + D,\qquad B = \mathcal{F}_\sigma(\log L),\qquad \log L_d = c\,(B - B_{\max}) + d\,D,\qquad c = \frac{\Delta_{\text{target}}}{B_{\max}-B_{\min}}$$
+      <div class="where">\(\mathcal F_\sigma\): 저역 필터. 가우시안이면 밝은 창의 기저가 옆 벽으로 번져, 벽의 기저가 실제보다 높게 추정되고 압축 후 창 둘레가 어두워지는 <span class="term">헤일로</span><span class="en">(halo)</span>가 생긴다. 에지 보존 필터(양방향·가이디드)는 에지에서 기저가 끊겨 헤일로를 막는다. \(d\): 디테일 배율.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="로그 휘도 단면의 기저와 디테일 분해, 가우시안 기저의 헤일로와 에지 보존 기저 비교">
+        <g transform="translate(20,20)">
+          <text x="0" y="0" class="t-acc">① 입력 log L 단면</text>
+          <line x1="0" y1="180" x2="220" y2="180" class="s-axis"/>
+          <path d="M0,150 L10,146 L20,152 L30,146 L40,152 L50,146 L60,152 L70,146 L80,152 L90,146 L100,150 L100,40 L110,36 L120,42 L130,36 L140,42 L150,36 L160,42 L170,36 L180,42 L190,36 L200,42 L210,36 L220,40" fill="none" class="s-line" stroke-width="2"/>
+          <text x="4" y="172" class="t-dim">벽 (어두움)</text><text x="130" y="62" class="t-dim">창 (밝음)</text>
+          <text x="0" y="206" class="t-dim">질감 = 디테일 D, 계단 = 기저 B</text>
+        </g>
+        <g transform="translate(290,20)">
+          <text x="0" y="0" class="t-acc">② 가우시안 기저 → 헤일로</text>
+          <line x1="0" y1="180" x2="220" y2="180" class="s-axis"/>
+          <path d="M0,149 C50,149 70,140 100,95 C130,48 150,40 220,39" fill="none" class="s-acc" stroke-width="2.5"/>
+          <path d="M0,150 L100,150 L100,39 L220,39" fill="none" class="s-line" stroke-width="1" stroke-dasharray="4 3"/>
+          <path d="M60,150 C80,168 95,172 100,170 L100,60 C108,70 125,58 160,52" fill="none" stroke="var(--warn)" stroke-width="2.5"/>
+          <text x="8" y="196" class="t" fill="var(--warn)">출력: 에지 옆이 어두워짐</text>
+          <text x="8" y="216" class="t-dim">(기저가 에지를 넘어 번진 만큼)</text>
+        </g>
+        <g transform="translate(560,20)">
+          <text x="0" y="0" class="t-acc">③ 에지 보존 기저</text>
+          <line x1="0" y1="180" x2="220" y2="180" class="s-axis"/>
+          <path d="M0,149 L98,149 L102,40 L220,40" fill="none" class="s-acc" stroke-width="2.5"/>
+          <path d="M0,128 L10,124 L20,130 L30,124 L40,130 L50,124 L60,130 L70,124 L80,130 L90,124 L100,128 L100,84 L110,80 L120,86 L130,80 L140,86 L150,80 L160,86 L170,80 L180,86 L190,80 L200,86 L210,80 L220,84" fill="none" stroke="var(--ok)" stroke-width="2.5"/>
+          <text x="8" y="196" class="t" fill="var(--ok)">출력: 계단만 줄고 질감 유지</text>
+          <text x="8" y="216" class="t-dim">(가이디드·양방향 필터)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 9-8.</b> 로컬 톤 매핑의 기저/디테일 분해. 가우시안 기저는 밝은 창의 값을 벽 쪽으로 번지게 해 압축 후 에지 둘레에 어두운 테(헤일로)를 남긴다. 에지 보존 기저는 계단 자체를 기저로 가져가 헤일로 없이 큰 대비만 줄인다.</figcaption>
+    </figure>
+    <p><b>계산 예.</b> 아래 시뮬레이터의 합성 장면은 어두운 구석(0.05)에서 태양(2×10⁵)까지 22.4 stop(약 6.6 decade)이다. 기저를 1.6 decade(약 5.3 stop)로 압축하려면 \(c \approx 1.6/6.6 \approx 0.24\)로, 기저 대비를 1/4로 줄이면서 디테일은 \(d = 1\)로 그대로 둔다. 같은 일을 전역 곡선으로 하면 창 안의 질감이 기울기 약 0.2~0.3배로 눌려, 로그 영역 국소 대비가 수 분의 일로 줄어든다.</p>
+
+    <div class="sim" id="sim-tmo">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>톤 매핑 연산자 비교 — 전역 곡선, 로컬 가우시안 vs 가이디드 필터, 헤일로 측정</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-tmo"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>연산자</span><div class="seg" id="tm-op"><button data-value="lin">선형 클리핑</button><button data-value="log">로그</button><button data-value="rh">Reinhard</button><button data-value="film">필믹</button><button data-value="locg">로컬·가우시안</button><button data-value="locb" class="on">로컬·가이디드</button></div></div>
+          <label class="ctrl"><span>키 a (전역 연산자) <output id="tm-key-out"></output></span><input type="range" id="tm-key" min="0.05" max="0.5" value="0.18" step="0.01"></label>
+          <label class="ctrl"><span>기저 필터 반경 σ (로컬) <output id="tm-sig-out"></output></span><input type="range" id="tm-sig" min="2" max="30" value="12" step="1"></label>
+          <label class="ctrl"><span>기저 목표 범위 (로컬) <output id="tm-range-out"></output></span><input type="range" id="tm-range" min="0.8" max="2.6" value="1.6" step="0.1"></label>
+          <label class="ctrl"><span>디테일 배율 d (로컬) <output id="tm-det-out"></output></span><input type="range" id="tm-det" min="0.5" max="2" value="1" step="0.05"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">장면 DR</span><span class="v" id="o-tm-dr">—</span></div>
+        <div class="stat"><span class="k">클리핑 화소</span><span class="v" id="o-tm-clip">—</span></div>
+        <div class="stat"><span class="k">벽·구석 국소 대비 (log)</span><span class="v" id="o-tm-lc">—</span></div>
+        <div class="stat"><span class="k">창 안 국소 대비 (log)</span><span class="v" id="o-tm-lw">—</span></div>
+        <div class="stat"><span class="k">헤일로 지수 (창 옆 벽 어두워짐)</span><span class="v" id="o-tm-halo">—</span></div>
+      </div>
+      <div class="sim-note">국소 대비 = 영역 내부(경계 4 px 제외)에서 표시값 log의 |값 − 7×7 평균|. 헤일로 지수 = 창에서 25~35 px 떨어진 벽과 2~8 px 떨어진 벽의 표시 밝기 비(stop). 위 오른쪽: 픽셀별 (입력, 출력) 산점도, 아래: 빨간 점선 행의 단면. 해볼 것: ① 선형·필믹은 창이 14.5% 포화되어 창 안 대비가 0.000. 로그 0.010, Reinhard 0.001. ② 로컬·가우시안은 창 대비 0.015를 살리지만 헤일로 1.34 stop과 12.8% 클리핑이 생긴다. ③ 로컬·가이디드는 헤일로 0.04 stop, 클리핑 0.3%에 창 대비 0.020. ④ 가우시안에서 σ를 4 px로 줄이면 헤일로가 0.62 stop으로 줄지만 넓은 영역의 압축이 약해진다 — 에지 보존 필터가 필요한 이유다.</div>
+    </div>
   </section>
 
   <!-- =============================================================== 8 -->
@@ -463,7 +676,7 @@
         <text x="455" y="100" class="t" text-anchor="middle">→</text>
         <text x="340" y="212" class="t-dim" text-anchor="middle">창(포화) 영역에서는 Short를, 실내에서는 Long을 쓰므로 물체가 두 위치에 나타난다</text>
       </svg>
-      <figcaption><b>그림 9-7.</b> 고스트의 원리. 포화 여부로 노출을 고르는 합성은 움직이는 물체에서 두 시각의 영상을 이어 붙인다.</figcaption>
+      <figcaption><b>그림 9-9.</b> 고스트의 원리. 포화 여부로 노출을 고르는 합성은 움직이는 물체에서 두 시각의 영상을 이어 붙인다.</figcaption>
     </figure>
 
     <p>대책은 센서 단과 알고리즘 단 양쪽에 있다.</p>
@@ -490,6 +703,10 @@
       <li>HDR: 순차·DOL 다중 노출(노출비 R로 +20 log R dB), DCG, 분할 픽셀, LOFIC(단일 노출, 모션 아티팩트 없음).</li>
       <li>합성은 노출 시간으로 정규화한 추정치를 포화 제외·역분산 가중으로 평균하고, 톤 매핑(예: Reinhard)으로 표시 범위에 압축한다. 전환점에는 \(\sqrt R\)배 SNR 딥이 생긴다.</li>
       <li>다중 노출의 시간 차는 고스트를 만든다. 간격 단축(DOL), 단일 노출 HDR 픽셀, 디고스팅 알고리즘으로 대응한다.</li>
+      <li>롤링 셔터 프로펠러는 판독 중 회전 \(\omega T_{\text{ro}}\)가 날개 간격 \(2\pi/n_b\)를 넘으면 조각으로 갈라진다. 글로벌 셔터는 이를 없애지만, 프레임률에 따른 스트로보(겉보기 회전 \(\operatorname{wrap}(\omega/f)\))는 시간 샘플링 문제라 남는다.</li>
+      <li>GS 오차(PLS, 저장 노드 암전류·누설)는 대기 시간, 즉 행 번호에 비례한다. 전하 영역은 CDS로 kTC를 지우지만 PLS·암전류에 약하고, 전압 영역은 PLS에 강하지만 \(\sqrt{2kT/C_s}\) kTC 노이즈를 떠안는다.</li>
+      <li>DOL은 \(\lceil t_S/t_{\text{row}}\rceil\)행의 라인 버퍼가 필요하고, 고스트 크기는 노출 중심 간격 \((t_L+t_S)/2\)가 정한다. 단일 노출 HDR의 전환점 딥은 같은 전하를 읽는 DCG·LOFIC에서 작고, 감도 비 \(k\)인 분할 픽셀에서 \(10\log_{10}k\) dB다.</li>
+      <li>로컬 톤 매핑은 로그 휘도의 기저만 압축해 하이라이트 국소 대비를 살린다. 가우시안 기저는 헤일로를, 에지 보존(가이디드·양방향) 기저는 이를 막는다.</li>
     </ol>
   </section>
 
@@ -525,6 +742,30 @@
         <button class="opt" data-correct>DCG / LOFIC 같은 단일 노출 HDR</button>
         <button class="opt">노출비를 크게 한 순차 HDR</button>
       </div><div class="quiz-exp">DCG와 LOFIC은 같은 노출 시간에 모인 같은 전하를 두 가지 이득(또는 용량)으로 읽으므로 두 신호 사이 시간 차가 없다. DOL은 간격이 짧을 뿐 0은 아니다.</div></div>
+      <div class="quiz-q"><p>Q6. 3날개 프로펠러가 3000 rpm으로 돈다. 노출이 매우 짧은 글로벌 셔터로 30 fps 영상을 찍으면 날개는 어떻게 보이는가?</p><div class="opts">
+        <button class="opt">휘어지고 여러 조각으로 갈라져 보인다</button>
+        <button class="opt">실제 속도대로 빠르게 돈다</button>
+        <button class="opt">천천히 거꾸로 돈다</button>
+        <button class="opt" data-correct>멈춰 보인다</button>
+      </div><div class="quiz-exp">프레임당 회전은 360° × 50/30 = 600° = 5 × 120°로, 날개 간격(120°)의 정수배다. 매 프레임 날개가 같은 자리에 와서 멈춘 것처럼 보인다(스트로보·마차 바퀴 효과). 글로벌 셔터라 휘어짐·조각은 없지만, 시간 샘플링의 에일리어싱은 셔터 방식과 무관하다.</div></div>
+      <div class="quiz-q"><p>Q7. 행 시간 7.4 µs인 4K(3840폭) 센서로 \(t_L\) = 16 ms, 노출비 16의 2중 DOL HDR을 만든다. ISP가 L과 S를 같은 행끼리 맞추는 데 필요한 라인 버퍼는 대략?</p><div class="opts">
+        <button class="opt">약 2행 (L·S를 번갈아 내보내므로)</button>
+        <button class="opt">약 2160행 (프레임 전체)</button>
+        <button class="opt" data-correct>약 136행 (\(\lceil t_S/t_{\text{row}}\rceil\), 12비트로 약 0.75 MB)</button>
+        <button class="opt">t<sub>L</sub>/t<sub>row</sub> ≈ 2162행</button>
+      </div><div class="quiz-exp">\(t_S = 16/16 = 1\) ms이고, 같은 순간에 출력되는 S 행은 L 행보다 \(1\,\text{ms}/7.4\,\mu\text{s} \approx 136\)행 앞(위)에 있다. 그동안 L 행 136개를 보관해야 하므로 136 × 3840 × 1.5 B ≈ 765 KB의 메모리가 든다.</div></div>
+      <div class="quiz-q"><p>Q8. 전환점에서 SNR 딥이 가장 깊게 생기는 단일 노출 HDR 구조와 그 이유는?</p><div class="opts">
+        <button class="opt" data-correct>분할 픽셀 — 작은 PD가 광자를 1/k만 받아 샷 노이즈 한계 SNR 자체가 √k배 낮기 때문</button>
+        <button class="opt">DCG — 같은 전하를 두 번 읽으면서 샷 노이즈가 두 배가 되기 때문</button>
+        <button class="opt">LOFIC — 커패시터가 광자를 흡수하기 때문</button>
+        <button class="opt">세 구조 모두 같은 깊이의 딥이 생긴다</button>
+      </div><div class="quiz-exp">DCG·LOFIC은 같은 전하를 다른 이득으로 읽을 뿐이라 샷 노이즈가 그대로이고, 딥은 저이득 경로 읽기 노이즈가 \(\sqrt N\)에 견줄 때만 보인다. 분할 픽셀은 독립된 작은 PD가 \(N/k\)개 광자만 받으므로 딥이 약 \(10\log_{10}k\) dB(k = 30이면 14.8 dB)다.</div></div>
+      <div class="quiz-q"><p>Q9. 가우시안 블러로 기저층을 구한 로컬 톤 매핑에서 밝은 창 둘레의 벽이 어둡게 테를 두르는 원인과 대책은?</p><div class="opts">
+        <button class="opt">디테일 배율이 너무 작아서 — 디테일을 키운다</button>
+        <button class="opt" data-correct>기저가 에지를 넘어 번져 벽의 기저가 과대 추정되고, 압축 후 그만큼 어두워지는 헤일로 — 가이디드·양방향 같은 에지 보존 필터로 기저를 구한다</button>
+        <button class="opt">센서의 블루밍 현상 — 노출을 줄인다</button>
+        <button class="opt">감마 보정 오류 — sRGB 곡선을 다시 적용한다</button>
+      </div><div class="quiz-exp">\(\log L_d = c(B-B_{\max}) + dD\)에서 \(B\)가 창의 밝기를 끌어와 높아지면, 같은 벽이라도 창 근처에서 더 많이 눌린다. 에지에서 기저가 끊기도록 에지 보존 필터를 쓰면 헤일로가 사라진다(시뮬레이터에서 1.34 → 0.04 stop).</div></div>
     </div>
   </section>
 </main>
@@ -1002,6 +1243,492 @@
     const cvC = SB.canvas($("cv-hdrc"), drawCurves, { aspect: 0.45, minHeight: 210, maxHeight: 290 });
     const cvT = SB.canvas($("cv-hdrt"), drawTone, { aspect: 0.36, minHeight: 190, maxHeight: 240 });
     compute();
+  })();
+})();
+</script>
+<script>
+/* ===== 9장 심화 엔진: 프로펠러 · GS 저장 오차 · 단일 노출 HDR · DOL · 톤 매핑 ===== */
+var SH = (function () {
+  var TAU = 2 * Math.PI;
+  function wrap(a, p) { a = a % p; return a < 0 ? a + p : a; }
+  /* ---------- A. 프로펠러: 행별 샘플링 + 노출 적분 ---------- */
+  /** p = {rpm, nb, tro(s), texp(s), gs, ph0}; 반환 Float32Array N×N 피복률(0..1) */
+  function propImage(N, p, K) {
+    K = K || 6;
+    var img = new Float32Array(N * N), w = TAU * p.rpm / 60, per = TAU / p.nb;
+    for (var j = 0; j < N; j++) {
+      var y = (j + 0.5) / N * 2 - 1, tj = p.gs ? 0 : (j / N) * p.tro;
+      for (var i = 0; i < N; i++) {
+        var x = (i + 0.5) / N * 2 - 1, r = Math.sqrt(x * x + y * y);
+        if (r < 0.1) { img[j * N + i] = 1; continue; }
+        if (r > 0.95) continue;
+        var a = Math.atan2(y, x), hw = 0.30 * (1 - 0.55 * r) + 0.02, c = 0;
+        for (var k = 0; k < K; k++) {
+          var t = tj + (k + 0.5) / K * p.texp, ph = wrap(a - p.ph0 - w * t, per);
+          if (ph < hw || per - ph < hw) c++;
+        }
+        img[j * N + i] = c / K;
+      }
+    }
+    return img;
+  }
+  /** 허브(r<0.16) 바깥에서 4-연결 성분 수(면적 ≥ minA) */
+  function fragments(img, N, minA) {
+    var lab = new Int32Array(N * N), n = 0, st = [];
+    for (var s = 0; s < N * N; s++) {
+      if (lab[s] || img[s] < 0.5) continue;
+      var sx = s % N, sy = (s / N) | 0, rx = (sx + 0.5) / N * 2 - 1, ry = (sy + 0.5) / N * 2 - 1;
+      if (rx * rx + ry * ry < 0.0256) continue;
+      n++; var area = 0; st.length = 0; st.push(s); lab[s] = n;
+      while (st.length) {
+        var q = st.pop(); area++; var qx = q % N, qy = (q / N) | 0;
+        var nb = [qx > 0 ? q - 1 : -1, qx < N - 1 ? q + 1 : -1, qy > 0 ? q - N : -1, qy < N - 1 ? q + N : -1];
+        for (var m = 0; m < 4; m++) { var u = nb[m]; if (u < 0 || lab[u] || img[u] < 0.5) continue; var ux = (u % N + 0.5) / N * 2 - 1, uy = (((u / N) | 0) + 0.5) / N * 2 - 1; if (ux * ux + uy * uy < 0.0256) continue; lab[u] = n; st.push(u); }
+      }
+      if (area < minA) n--;   // 작은 조각은 버림(라벨은 남지만 개수에서 제외)
+    }
+    return n;
+  }
+  /** 스트로보(마차 바퀴) 효과: 프레임당 겉보기 회전 → 겉보기 rpm */
+  function apparentRpm(rpm, nb, fps) { var per = 360 / nb, d = rpm / 60 * 360 / fps, a = wrap(d + per / 2, per) - per / 2; return a * fps / 360 * 60; }
+
+  /* ---------- B. 글로벌 셔터 저장 오차 ---------- */
+  /** p = {dom:'q'|'v', tro(ms), texp(ms), pls(dB), T(°C), cs(fF)}; 행 비율 f(0..1)에서 오차 성분(e⁻) */
+  var CGV = 90e-6;           // 저장 노드 기준 변환 이득 (V/e⁻, SF 이득 포함)
+  function gsRow(p, f, S) {
+    var tw = f * p.tro * 1e-3, pls = Math.pow(10, p.pls / 20), o = {};
+    o.pls = pls * S * tw / (p.texp * 1e-3);                                  // 저장 중에도 들어오는 빛 × PLS
+    if (p.dom === "q") { o.leak = 8 * Math.pow(2, (p.T - 25) / 6) * tw; o.ktc = 0; o.rn = 1.5; }      // MN 암전류 8 e⁻/s @25°C
+    else {
+      var il = 0.2e-15 * Math.pow(2, (p.T - 25) / 8);                         // 저장 커패시터 누설 0.2 fA @25°C (리셋·신호 커패시터 차이분)
+      o.leak = il * tw / (p.cs * 1e-15) / CGV;
+      o.ktc = Math.sqrt(2 * 1.380649e-23 * (p.T + 273.15) / (p.cs * 1e-15)) / CGV;   // 두 샘플(리셋·신호)의 kTC
+      o.rn = 2.0;
+    }
+    o.noise = Math.sqrt(o.rn * o.rn + o.ktc * o.ktc + o.pls + (p.dom === "q" ? o.leak : 0) + S);
+    o.floor = Math.sqrt(o.rn * o.rn + o.ktc * o.ktc + (p.dom === "q" ? o.leak : 0));
+    return o;
+  }
+
+  /* ---------- C. 단일 노출 HDR ---------- */
+  /** arch: 'dcg' | 'lofic' | 'split'. 반환 경로 정의 */
+  /** q = {rnH, rnL, ext}: ext = 저이득 경로가 담는 최대 신호 / HCG 포화 (분할 픽셀은 감도 비) */
+  function sePaths(arch, q) {
+    if (arch === "dcg") return { shared: true, hi: { rn: q.rnH, sat: 2000, g: 1 }, lo: { rn: q.rnL, sat: 2000 * q.ext, g: 1 }, top: 2000 * q.ext };
+    if (arch === "lofic") return { shared: true, hi: { rn: q.rnH, sat: 6000, g: 1 }, lo: { rn: q.rnL, sat: 6000 * q.ext, g: 1 }, top: 6000 * q.ext };
+    return { shared: false, hi: { rn: q.rnH, sat: 6000, g: 1 }, lo: { rn: q.rnL, sat: 6000, g: 1 / q.ext }, top: 6000 * q.ext };
+  }
+  var SE_DEF = { dcg: { rnL: 4, ext: 6 }, lofic: { rnL: 60, ext: 50 }, split: { rnL: 1.5, ext: 30 } };
+  /** 장면 노출 N(큰 PD 기준 광전자)에서 합성 출력의 분산과 가중치 */
+  function seBlend(P, N, thr, mode) {
+    var Nh = N * P.hi.g, Nt = thr * P.hi.sat, w;                       // 전환점: HCG 포화의 thr 배
+    if (mode === "hard") w = Nh < Nt ? 1 : 0;
+    else { var a = 0.5 * Nt; w = Nh <= a ? 1 : (Nh >= Nt ? 0 : 1 - (Nh - a) / (Nt - a)); }
+    if (Nh >= P.hi.sat) w = 0;
+    var vh = P.hi.rn * P.hi.rn, Nl = N * P.lo.g, vl = P.lo.rn * P.lo.rn / (P.lo.g * P.lo.g), v;
+    if (P.shared) v = N + w * w * vh + (1 - w) * (1 - w) * vl;                       // 같은 전하: 샷 노이즈 공통
+    else v = w * w * (N + vh) + (1 - w) * (1 - w) * (Nl + P.lo.rn * P.lo.rn) / (P.lo.g * P.lo.g);
+    if (Nl >= P.lo.sat) v = Infinity;
+    return { w: w, v: v, snr: v === Infinity ? 0 : N / Math.sqrt(v) };
+  }
+  /** 몬테카를로: 열마다 N, 행 nr개 표본 → 측정 SNR. eps: 저이득 경로 이득 오차 */
+  function seMC(P, Ns, thr, mode, eps, nr, rnd) {
+    var out = [];
+    for (var c = 0; c < Ns.length; c++) {
+      var N = Ns[c], s = 0, s2 = 0, vals = [];
+      for (var r = 0; r < nr; r++) {
+        var e = SB.poisson(N), h = e * P.hi.g + P.hi.rn * SB.randn(), l;
+        if (P.shared) l = e + P.lo.rn * SB.randn();
+        else { var el = SB.poisson(N * P.lo.g); l = (el + P.lo.rn * SB.randn()) / P.lo.g; }
+        l *= 1 + eps; h = Math.min(h, P.hi.sat);
+        var b = seBlend(P, N, thr, mode), y = b.w * h + (1 - b.w) * l; vals.push(y); s += y; s2 += y * y;
+      }
+      var m = s / nr, sd = Math.sqrt(Math.max(1e-9, s2 / nr - m * m)); out.push({ N: N, mean: m, sd: sd, snr: m / sd, vals: vals });
+    }
+    return out;
+  }
+
+  /* ---------- D. DOL 타이밍 ---------- */
+  /** p = {rows, trow(µs), tl(ms), R, n(2|3), v(px/ms), width} */
+  function dol(p) {
+    var tr = p.trow * 1e-3, ts = p.tl / p.R, tvs = ts / p.R, o = { ts: ts, tvs: tvs };
+    o.roL = p.rows * tr;                                    // 한 스트림 판독 시간 (ms)
+    o.offS = Math.ceil(ts / tr); o.offVS = p.n === 3 ? Math.ceil((ts + tvs) / tr) : 0;
+    o.buf = Math.max(o.offS, o.offVS);                      // 정렬에 필요한 라인 버퍼 행 수
+    o.kb = o.buf * p.width * (p.n - 1) * 12 / 8 / 1024;     // 12비트, 긴·중간 노출 행 보관
+    o.gap = (p.tl + ts) / 2;                                // 노출 중심 간격 (ms)
+    o.gapVS = p.n === 3 ? o.gap + (ts + tvs) / 2 : 0;
+    var tex = ts + (p.n === 3 ? tvs : 0);
+    o.frame = Math.max(o.roL + tex, p.tl + tex);           // 최소 프레임 주기: 모든 스트림 판독 완료 & 한 행의 노출들이 한 주기에 들어감
+    o.fps = 1000 / o.frame;
+    o.shift = p.v * o.gap;
+    return o;
+  }
+  /** 움직이는 밝은 막대의 1-D 프로필: L(포화), S, 임계값 합성 → 측정 어긋남 */
+  function dolProfile(p, o, NX) {
+    var L = new Float32Array(NX), S = new Float32Array(NX), M = new Float32Array(NX), K = 24, x0 = NX * 0.3, wbar = NX * 0.12;
+    function bar(x, t) { var c = x0 + p.v * t; return (x > c && x < c + wbar) ? 1 : 0.04; }
+    for (var x = 0; x < NX; x++) {
+      var sl = 0, ss = 0;
+      for (var k = 0; k < K; k++) { sl += bar(x, (k + 0.5) / K * p.tl); ss += bar(x, p.tl + (k + 0.5) / K * o.ts); }
+      L[x] = Math.min(1, sl / K * 4); S[x] = ss / K * 4 / p.R;          // L은 4배 노출해 막대에서 포화
+      M[x] = L[x] < 0.9 ? L[x] : S[x] * p.R;
+    }
+    function cen(fn) { var s = 0, sx = 0; for (var x = 0; x < NX; x++) { var v = Math.max(0, fn(x) - 0.04); s += v; sx += v * x; } return s > 0 ? sx / s : 0; }
+    var cL = cen(function (x) { var a = 0; for (var k = 0; k < K; k++) a += bar(x, (k + 0.5) / K * p.tl); return a / K; });
+    var cS = cen(function (x) { return S[x] * p.R / 4; });
+    return { L: L, S: S, M: M, cL: cL, cS: cS };
+  }
+
+  /* ---------- E. 톤 매핑 ---------- */
+  function boxBlur(src, W, H, r) {      // 분리형 박스 필터 (적분 누적합)
+    var tmp = new Float32Array(W * H), out = new Float32Array(W * H);
+    for (var y = 0; y < H; y++) { var acc = 0, o = y * W; for (var x = -r; x <= r; x++) acc += src[o + Math.min(W - 1, Math.max(0, x))];
+      for (var x2 = 0; x2 < W; x2++) { tmp[o + x2] = acc / (2 * r + 1); acc += src[o + Math.min(W - 1, x2 + r + 1)] - src[o + Math.max(0, x2 - r)]; } }
+    for (var x3 = 0; x3 < W; x3++) { var ac = 0; for (var y2 = -r; y2 <= r; y2++) ac += tmp[Math.min(H - 1, Math.max(0, y2)) * W + x3];
+      for (var y3 = 0; y3 < H; y3++) { out[y3 * W + x3] = ac / (2 * r + 1); ac += tmp[Math.min(H - 1, y3 + r + 1) * W + x3] - tmp[Math.max(0, y3 - r) * W + x3]; } }
+    return out;
+  }
+  function gauss(src, W, H, s) { var r = Math.max(1, Math.round(s * 0.87)), a = boxBlur(src, W, H, r); a = boxBlur(a, W, H, r); return boxBlur(a, W, H, r); }
+  function guided(I, W, H, r, eps) {    // He et al. 가이디드 필터 (자기 자신을 가이드로)
+    var n = W * H, I2 = new Float32Array(n); for (var i = 0; i < n; i++) I2[i] = I[i] * I[i];
+    var mI = boxBlur(I, W, H, r), mII = boxBlur(I2, W, H, r), a = new Float32Array(n), b = new Float32Array(n);
+    for (var j = 0; j < n; j++) { var v = mII[j] - mI[j] * mI[j]; a[j] = v / (v + eps); b[j] = mI[j] - a[j] * mI[j]; }
+    var ma = boxBlur(a, W, H, r), mb = boxBlur(b, W, H, r), q = new Float32Array(n);
+    for (var k = 0; k < n; k++) q[k] = ma[k] * I[k] + mb[k];
+    return q;
+  }
+  /** 합성 HDR 장면: 어두운 실내 + 창(하늘·태양) + 창 앞 인물 실루엣 + 벽 질감. 반환 {L (휘도, cd/m² 상대), C (색 비율 rgb), W, H, mask} */
+  function hdrScene(W, H) {
+    var L = new Float32Array(W * H), C = new Float32Array(W * H * 3), reg = new Uint8Array(W * H);
+    for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
+      var u = x / W, v = y / H, i = y * W + x, l, c = [1, 0.9, 0.78], g = 0;
+      var tex = 1 + 0.18 * Math.sin(x * 0.9) * Math.sin(y * 0.7) + 0.1 * Math.sin((x + 2 * y) * 0.31);
+      l = 2.0 * tex * (0.6 + 0.6 * (1 - Math.abs(u - 0.55))) ; g = 1;            // 실내 벽
+      if (v > 0.78) { l = 0.6 * tex * (0.7 + 0.3 * u); c = [0.75, 0.55, 0.4]; g = 2; }  // 바닥
+      if (u < 0.14 && v < 0.85) { l = 0.05 * tex; g = 3; }                        // 어두운 구석
+      var inWin = u > 0.42 && u < 0.86 && v > 0.12 && v < 0.62;
+      if (inWin) { l = 800 * (1.4 - v) * (1 + 0.3 * Math.sin(x * 0.8) * Math.sin(y * 0.6)) * (v > 0.45 ? 0.35 : 1); c = [0.62, 0.78, 1]; g = 4;
+        var du = u - 0.74, dv = v - 0.24, rr = Math.sqrt(du * du * 2.4 + dv * dv); if (rr < 0.035) { l = 2e5; c = [1, 0.97, 0.9]; g = 5; } else if (rr < 0.1) l += 1.2e4 * Math.exp(-rr * 40); }
+      if (inWin && Math.abs(u - 0.64) < 0.035 && v > 0.12) { l = 1.2 * tex; c = [0.9, 0.75, 0.65]; g = 6; }   // 창틀 기둥
+      var hx = (u - 0.56) / 0.06, hy = (v - 0.36) / 0.09;
+      if (hx * hx + hy * hy < 1 || (Math.abs(u - 0.56) < 0.095 && v > 0.44 && v < 0.78)) { l = 1.5 * tex; c = [0.85, 0.65, 0.55]; g = 7; }   // 인물
+      L[i] = l; reg[i] = g; var s = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722; C[i * 3] = c[0] / s; C[i * 3 + 1] = c[1] / s; C[i * 3 + 2] = c[2] / s;
+    }
+    return { L: L, C: C, reg: reg, W: W, H: H };
+  }
+  /** 연산자 적용 → 표시 휘도 Ld(0..1) */
+  function tonemap(sc, op, q) {
+    var W = sc.W, H = sc.H, n = W * H, L = sc.L, Ld = new Float32Array(n), ls = 0, mx = 0;
+    for (var i = 0; i < n; i++) { ls += Math.log(1e-4 + L[i]); mx = Math.max(mx, L[i]); }
+    var Lav = Math.exp(ls / n), k = q.key / Lav;
+    if (op === "lin") for (var a = 0; a < n; a++) Ld[a] = Math.min(1, L[a] * k);
+    else if (op === "log") { var den = Math.log(1 + mx * k * 8); for (var b = 0; b < n; b++) Ld[b] = Math.log(1 + L[b] * k * 8) / den; }
+    else if (op === "rh") { var lw = mx * k, lw2 = lw * lw; for (var c = 0; c < n; c++) { var m = L[c] * k; Ld[c] = m * (1 + m / lw2) / (1 + m); } }
+    else if (op === "film") { for (var d = 0; d < n; d++) { var xx = L[d] * k * 0.6; Ld[d] = Math.min(1, (xx * (2.51 * xx + 0.03)) / (xx * (2.43 * xx + 0.59) + 0.14)); } }
+    else {   // 로컬: 로그 휘도 = 기저 + 디테일
+      var lg = new Float32Array(n); for (var e = 0; e < n; e++) lg[e] = Math.log10(1e-4 + L[e]);
+      var base = op === "locg" ? gauss(lg, W, H, q.sig) : guided(lg, W, H, Math.round(q.sig), 0.04);
+      var bmx = -1e9, bmn = 1e9; for (var f = 0; f < n; f++) { bmx = Math.max(bmx, base[f]); bmn = Math.min(bmn, base[f]); }
+      var cf = q.range / Math.max(1e-6, bmx - bmn);   // 기저 대비를 q.range decade로 압축
+      for (var g = 0; g < n; g++) { var o = cf * (base[g] - bmx) + q.detail * (lg[g] - base[g]); Ld[g] = Math.min(1, Math.pow(10, o) * 1.0); }
+    }
+    return Ld;
+  }
+  /** 평가 지표: 클리핑 비율, 그늘 국소 대비, 헤일로 지수 */
+  function tmStats(sc, Ld) {
+    var n = sc.W * sc.H, W = sc.W, H = sc.H, clip = 0, i;
+    for (i = 0; i < n; i++) if (Ld[i] >= 0.995) clip++;
+    var lgd = new Float32Array(n); for (i = 0; i < n; i++) lgd[i] = Math.log10(1e-4 + Ld[i]);
+    if (!sc.inner) { var ind = new Float32Array(n), inw = new Float32Array(n); for (i = 0; i < n; i++) { ind[i] = (sc.reg[i] === 1 || sc.reg[i] === 3) ? 1 : 0; inw[i] = sc.reg[i] === 4 ? 1 : 0; } sc.inner = boxBlur(ind, W, H, 4); sc.innerW = boxBlur(inw, W, H, 4); }
+    var bl = boxBlur(lgd, W, H, 3), lc = 0, nc = 0, lw = 0, nw = 0;
+    for (i = 0; i < n; i++) { if (sc.inner[i] > 0.999) { lc += Math.abs(lgd[i] - bl[i]); nc++; } if (sc.innerW[i] > 0.999) { lw += Math.abs(lgd[i] - bl[i]); nw++; } }
+    // 헤일로: 창 바로 바깥(벽, 창 경계에서 2~8 px) 평균 vs 창에서 먼 벽(25 px 이상) 평균 (표시 밝기 비, 절대 log)
+    var x0 = Math.round(0.42 * W), y0 = Math.round(0.12 * H), y1 = Math.round(0.62 * H), near = 0, nn = 0, far = 0, nf = 0;
+    for (var y = y0; y < y1; y++) { for (var dx = 2; dx <= 8; dx++) { var j = y * W + x0 - dx; if (sc.reg[j] === 1) { near += Ld[j]; nn++; } }
+      for (var dx2 = 25; dx2 <= 35; dx2++) { var j2 = y * W + x0 - dx2; if (sc.reg[j2] === 1) { far += Ld[j2]; nf++; } } }
+    var halo = nn && nf ? Math.log2((far / nf) / (near / nn)) : 0;
+    return { clip: clip / n, lc: lc / Math.max(1, nc), lw: lw / Math.max(1, nw), halo: halo };
+  }
+  return { SE_DEF: SE_DEF, wrap: wrap, propImage: propImage, fragments: fragments, apparentRpm: apparentRpm, gsRow: gsRow, sePaths: sePaths, seBlend: seBlend, seMC: seMC, dol: dol, dolProfile: dolProfile,
+    boxBlur: boxBlur, gauss: gauss, guided: guided, hdrScene: hdrScene, tonemap: tonemap, tmStats: tmStats };
+})();
+
+/* ===== 심화 시뮬레이터 UI ===== */
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var F = function (sz, w) { return (w ? w + " " : "") + sz + "px " + SB.color("font"); };
+  function wideOf(id, min) { return $(id).parentElement.clientWidth >= (min || 560); }
+  function lin2s(v) { if (!(v > 0)) return 0; if (v >= 1) return 255; return Math.round(255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055)); }
+  function dB(x) { return 20 * Math.log10(x); }
+
+  /* ---------------- A. 프로펠러 ---------------- */
+  (function () {
+    var N = 160, gMode = SB.seg("pp-mode", upd), gNb = SB.seg("pp-nb", upd), gFps = SB.seg("pp-fps", upd);
+    var gRpm = SB.range("pp-rpm", function (v) { return v + " rpm"; }, upd);
+    var gTro = SB.range("pp-tro", function (v) { return v + " ms"; }, upd);
+    var gExp = SB.range("pp-exp", function (v) { return (+v).toFixed(2) + " ms"; }, upd);
+    $("pp-true").addEventListener("change", function () { cv.redraw(); });
+    var ph0 = 0.3, img = null, imgTrue = null, st = {}, off = document.createElement("canvas"); off.width = N; off.height = N;
+    function par(ph) { return { rpm: gRpm(), nb: +gNb(), tro: gTro() * 1e-3, texp: gExp() * 1e-3, gs: gMode() === "gs", ph0: ph }; }
+    function upd() {
+      var p = par(ph0); img = SH.propImage(N, p, 6);
+      imgTrue = SH.propImage(N, { rpm: p.rpm, nb: p.nb, tro: 0, texp: 1e-6, gs: true, ph0: ph0 }, 1);
+      var rot = p.rpm / 60 * 360 * (p.gs ? 0 : p.tro), fr = SH.fragments(img, N, 12), app = SH.apparentRpm(p.rpm, p.nb, +gFps());
+      var blur = p.rpm / 60 * 2 * Math.PI * p.texp * 0.95 * N / 2;
+      st = { rot: rot, fr: fr, app: app };
+      SB.stat("o-pp-rot", rot.toFixed(0) + "<small>°</small>");
+      SB.stat("o-pp-fr", fr + " <small>(실제 " + p.nb + ")</small>");
+      SB.stat("o-pp-bl", blur.toFixed(1) + "<small>px</small>");
+      SB.stat("o-pp-app", app.toFixed(0) + "<small>rpm</small>");
+      var d = off.getContext("2d"), im = d.createImageData(N, N);
+      for (var j = 0; j < N; j++) for (var i = 0; i < N; i++) {
+        var k = j * N + i, c = img[k], y = j / N, r0 = 120 + 70 * y, g0 = 170 + 50 * y, b0 = 235;
+        im.data[k * 4] = r0 * (1 - c) + 40 * c; im.data[k * 4 + 1] = g0 * (1 - c) + 44 * c; im.data[k * 4 + 2] = b0 * (1 - c) + 52 * c; im.data[k * 4 + 3] = 255;
+      }
+      d.putImageData(im, 0, 0); cv.redraw();
+    }
+    var cv = SB.canvas($("cv-prop"), function (ctx, w, h) {
+      if (!img) return;
+      var P = SB.palette(), wd = w >= 560, s = wd ? Math.min(h - 20, w * 0.42) : Math.min(w - 20, h * 0.55 - 10);
+      var x0 = wd ? 10 : (w - s) / 2, y0 = 10;
+      ctx.imageSmoothingEnabled = false; ctx.drawImage(off, x0, y0, s, s); ctx.imageSmoothingEnabled = true;
+      if ($("pp-true").checked) {
+        ctx.strokeStyle = "rgba(255,80,60,0.9)"; ctx.lineWidth = 1;
+        for (var j = 1; j < N - 1; j += 1) for (var i = 1; i < N - 1; i++) { var k = j * N + i; if (imgTrue[k] > 0.5 && (imgTrue[k - 1] < 0.5 || imgTrue[k + 1] < 0.5 || imgTrue[k - N] < 0.5 || imgTrue[k + N] < 0.5)) { ctx.fillStyle = "rgba(255,70,50,0.95)"; ctx.fillRect(x0 + i * s / N, y0 + j * s / N, Math.max(1, s / N), Math.max(1, s / N)); } }
+      }
+      ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(x0 + 4, y0 + 4, 150, 20); ctx.fillStyle = "#fff"; ctx.font = F(12, 600); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      ctx.fillText((gMode() === "gs" ? "글로벌 셔터" : "롤링 셔터") + " 캡처", x0 + 10, y0 + 14);
+      var b = wd ? { x: x0 + s + 58, y: 14, w: w - (x0 + s + 58) - 14, h: h - 60 } : { x: 52, y: y0 + s + 22, w: w - 66, h: h - (y0 + s + 22) - 46 };
+      var nb = +gNb(), fps = +gFps(), dat = [];
+      for (var r = 0; r <= 6000; r += 10) dat.push([r, SH.apparentRpm(r, nb, fps)]);
+      var lim = 60 * fps / (2 * nb) * 1.08, fr = [];
+      for (var q = 1; q * 60 * fps / nb <= 6000; q++) fr.push({ x: q * 60 * fps / nb, color: P.faint, dash: [3, 4] });
+      SB.chart(ctx, b, { x: [0, 6000], y: [-lim, lim], xLabel: "실제 회전 속도 (rpm)", series: [{ data: dat, color: P.accent2, width: 1.8 }, { data: [[0, 0], [6000, 6000]], color: P.faint, width: 1, dash: [5, 4] }], vlines: fr, points: [{ x: gRpm(), y: st.app, color: P.accent, r: 6 }] });
+      ctx.fillStyle = P.dim; ctx.font = F(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("겉보기 rpm · " + fps + " fps · 점선 = 멈춤", b.x + 4, b.y + 2);
+    }, { get aspect() { return wideOf("cv-prop") ? 0.46 : 1.55; } });
+    var acc = 0, loop = SB.loop($("cv-prop"), function (dt) {
+      if (!$("pp-play").checked) return;
+      acc += dt; if (acc < 0.35) return; acc = 0;
+      ph0 = SH.wrap(ph0 + 2 * Math.PI * gRpm() / 60 / +gFps(), 2 * Math.PI); upd();
+    });
+    loop.start(); upd();
+  })();
+
+  /* ---------------- B. GS 저장 오차 ---------------- */
+  (function () {
+    var IW = 160, IH = 120, gDom = SB.seg("gs-dom", upd);
+    var gTro = SB.range("gs-tro", function (v) { return v + " ms"; }, upd);
+    var gExp = SB.range("gs-exp", function (v) { return (+v).toFixed(1) + " ms"; }, upd);
+    var gPls = SB.range("gs-pls", function (v) { return v + " dB"; }, upd);
+    var gT = SB.range("gs-t", function (v) { return v + " °C"; }, upd);
+    var gCs = SB.range("gs-cs", function (v) { return v + " fF"; }, upd);
+    $("gs-err").addEventListener("change", upd);
+    var off = document.createElement("canvas"); off.width = IW; off.height = IH;
+    var S_HI = 8000, S_BG = 40, FWC = 10000, cur = null;
+    function sceneVal(x, y, shift) { var cx = 0.3 + shift, inBar = Math.abs(x / IW - cx) < 0.07 && y / IH > 0.08 && y / IH < 0.92; return inBar ? S_HI : S_BG * (1 + 0.5 * Math.sin(x * 0.2) * Math.sin(y * 0.15)); }
+    function upd() {
+      var p = { dom: gDom(), tro: gTro(), texp: gExp(), pls: gPls(), T: gT(), cs: gCs() };
+      var errView = $("gs-err").checked, d = off.getContext("2d"), im = d.createImageData(IW, IH);
+      for (var y = 0; y < IH; y++) {
+        var f = y / (IH - 1), o0 = SH.gsRow(p, f, 0);
+        for (var x = 0; x < IW; x++) {
+          var S = sceneVal(x, y, 0), Sst = sceneVal(x, y, 0.3);            // 노출 중 장면, 저장 중 장면(물체가 오른쪽으로 이동)
+          var e = SH.gsRow(p, f, Sst), err = e.pls + e.leak;
+          var shot = SB.poisson(S + e.pls + (p.dom === "q" ? e.leak : 0));
+          var val = shot + (p.dom === "v" ? e.leak : 0) + Math.sqrt(o0.rn * o0.rn + o0.ktc * o0.ktc) * SB.randn();
+          var k = (y * IW + x) * 4, g;
+          if (errView) g = lin2s(Math.max(0, (val - S) / 200));
+          else g = lin2s(Math.min(1, Math.max(0, val / FWC)) * 1.0);
+          var gg = Math.round(g); im.data[k] = gg; im.data[k + 1] = gg; im.data[k + 2] = errView ? Math.min(255, gg + 20) : gg; im.data[k + 3] = 255;
+        }
+      }
+      d.putImageData(im, 0, 0);
+      var last = SH.gsRow(p, 1, S_HI), lastBg = SH.gsRow(p, 1, 0), dark = Math.sqrt(lastBg.floor * lastBg.floor + S_BG);
+      cur = { p: p };
+      SB.stat("o-gs-pls", last.pls.toFixed(1) + "<small>e⁻</small>");
+      SB.stat("o-gs-leak", last.leak.toFixed(1) + "<small>e⁻</small>");
+      SB.stat("o-gs-ktc", (p.dom === "v" ? last.ktc.toFixed(1) : "0 (CDS)") + "<small>e⁻</small>");
+      SB.stat("o-gs-fl", lastBg.floor.toFixed(1) + "<small>e⁻</small>");
+      SB.stat("o-gs-dr", dB(FWC / lastBg.floor).toFixed(1) + "<small>dB</small>");
+      cv.redraw();
+    }
+    var cv = SB.canvas($("cv-gsn"), function (ctx, w, h) {
+      if (!cur) return;
+      var P = SB.palette(), wd = w >= 560, iw = wd ? Math.min(w * 0.44, (h - 20) * IW / IH) : w - 20, ih = iw * IH / IW, x0 = 10, y0 = 10;
+      ctx.imageSmoothingEnabled = false; ctx.drawImage(off, x0, y0, iw, ih); ctx.imageSmoothingEnabled = true;
+      ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(x0 + 4, y0 + 4, 196, 20); ctx.fillStyle = "#fff"; ctx.font = F(12, 600); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      ctx.fillText($("gs-err").checked ? "오차 = 측정 − 이상값 (0~200 e⁻)" : "GS 프레임 (선형, 풀웰 = 흰색)", x0 + 10, y0 + 14);
+      ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.font = F(11); ctx.fillText("↑ 첫 행 (대기 0)", x0 + iw - 104, y0 + 14); ctx.fillText("↓ 마지막 행 (" + cur.p.tro + " ms)", x0 + iw - 120, y0 + ih - 12);
+      var b = wd ? { x: x0 + iw + 62, y: 14, w: w - (x0 + iw + 62) - 14, h: h - 60 } : { x: 52, y: y0 + ih + 20, w: w - 66, h: h - (y0 + ih + 20) - 46 };
+      var p = cur.p, sPls = [], sLeak = [], sFl = [], sK = [];
+      for (var i = 0; i <= 50; i++) { var f = i / 50, o = SH.gsRow(p, f, S_HI), ob = SH.gsRow(p, f, 0), r = f * 1080;
+        sPls.push([r, Math.max(1e-2, o.pls)]); sLeak.push([r, Math.max(1e-2, o.leak)]); sFl.push([r, Math.max(1e-2, ob.floor)]); if (p.dom === "v") sK.push([r, o.ktc]); }
+      SB.chart(ctx, b, { x: [0, 1080], y: [0.01, 1e4], logY: true, xLabel: "행 번호 (대기 시간 ∝ 행) · 세로축 e⁻", series: [
+        { data: sPls, color: P.warn, width: 2.2 }, { data: sLeak, color: P.accent2, width: 2.2 }, { data: sFl, color: P.accent, width: 2, dash: [5, 4] }, { data: sK, color: P.dim, width: 1.5, dash: [2, 3] }],
+        hlines: [{ y: S_HI, color: P.faint, label: "밝은 물체 신호 8000 e⁻" }] });
+      ctx.font = F(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      [["PLS 오차(밝은 물체)", P.warn], ["저장 누설", P.accent2], ["노이즈 바닥(어두운 곳)", P.accent]].concat(p.dom === "v" ? [["kTC", P.dim]] : []).forEach(function (l, i) { ctx.fillStyle = l[1]; ctx.fillRect(b.x + 6, b.y + 6 + i * 15, 10, 3); ctx.fillStyle = P.dim; ctx.fillText(l[0], b.x + 20, b.y + i * 15 + 1); });
+    }, { get aspect() { return wideOf("cv-gsn") ? 0.42 : 1.45; } });
+    upd();
+  })();
+
+  /* ---------------- C. 단일 노출 HDR ---------------- */
+  (function () {
+    var gArch = SB.seg("se-arch", function (v) { var d = SH.SE_DEF[v]; gRn.set(Math.log10(d.rnL)); gExt.set(Math.log10(d.ext)); upd(); });
+    var gRn = SB.range("se-rn", function (v) { return Math.pow(10, v).toFixed(Math.pow(10, v) < 10 ? 1 : 0) + " e⁻"; }, upd);
+    var gExt = SB.range("se-ext", function (v) { return "×" + Math.pow(10, v).toFixed(0); }, upd);
+    var gThr = SB.range("se-thr", function (v) { return (100 * v).toFixed(0) + "%"; }, upd);
+    var gEps = SB.range("se-eps", function (v) { return (+v).toFixed(1) + "%"; }, upd);
+    var gMode = SB.seg("se-mode", upd);
+    var NC = 72, NR = 64, cur = null, off = document.createElement("canvas"); off.width = NC; off.height = 24;
+    function upd() {
+      var arch = gArch(), P = SH.sePaths(arch, { rnH: 1, rnL: Math.pow(10, gRn()), ext: Math.pow(10, gExt()) }), thr = gThr(), mode = gMode(), eps = gEps() / 100;
+      var Ns = []; for (var c = 0; c < NC; c++) Ns.push(Math.pow(10, -0.3 + c / (NC - 1) * (Math.log10(P.top * 0.98) + 0.3)));
+      var mc = SH.seMC(P, Ns, thr, mode, eps, NR);
+      var Nt = thr * P.hi.sat / P.hi.g, bef = SH.seBlend(P, Nt * 0.999, thr, mode), aft = SH.seBlend(P, Nt * 1.001, thr, mode);
+      var worst = 0; for (var k = 0; k <= 200; k++) { var N = Nt * Math.pow(10, -0.6 + k / 200 * 0.8); var b = SH.seBlend(P, N, thr, mode); if (b.snr > 0) worst = Math.min(worst, dB(b.snr / Math.sqrt(N))); }
+      var pair = SH.seMC(P, [Nt * 0.99, Nt * 1.01], thr, mode, eps, 500);      // 전환점 양쪽 표본 500개씩
+      var mcDip = dB(pair[0].snr) - dB(pair[1].snr), mcStep = 100 * (pair[1].mean / pair[1].N - pair[0].mean / pair[0].N);
+      cur = { P: P, mc: mc, Ns: Ns, thr: thr, mode: mode, Nt: Nt };
+      SB.stat("o-se-dr", dB(P.top / P.hi.rn).toFixed(1) + "<small>dB</small>");
+      SB.stat("o-se-dip", (dB(bef.snr) - dB(aft.snr)).toFixed(1) + "<small>dB</small>");
+      SB.stat("o-se-worst", worst.toFixed(1) + "<small>dB</small>");
+      SB.stat("o-se-mc", mcDip.toFixed(1) + "<small>dB</small>");
+      SB.stat("o-se-step", (mcStep >= 0 ? "+" : "") + mcStep.toFixed(1) + "<small>%</small>");
+      var d = off.getContext("2d"), im = d.createImageData(NC, 24), lmax = Math.log10(P.top);
+      for (var y = 0; y < 24; y++) for (var x = 0; x < NC; x++) { var v = mc[x].vals[y], t = Math.max(0, Math.log10(Math.max(0.3, v)) + 0.5) / (lmax + 0.5), g = Math.round(255 * Math.min(1, t)), kk = (y * NC + x) * 4; im.data[kk] = g; im.data[kk + 1] = g; im.data[kk + 2] = g; im.data[kk + 3] = 255; }
+      d.putImageData(im, 0, 0); cv.redraw();
+    }
+    var cv = SB.canvas($("cv-sehdr"), function (ctx, w, h) {
+      if (!cur) return;
+      var P = SB.palette(), small = w < 480, sh = Math.max(36, h * 0.13);
+      var b = { x: small ? 46 : 58, y: 12, w: w - (small ? 46 : 58) - 14, h: h - sh - 88 };
+      var Pp = cur.P, top = Pp.top * 1.2, Ns = [];
+      for (var k = 0; k <= 240; k++) Ns.push(Math.pow(10, -0.3 + k / 240 * (Math.log10(top) + 0.3)));
+      var comb = [], hi = [], lo = [], shot = [];
+      Ns.forEach(function (N) {
+        var bl = SH.seBlend(Pp, N, cur.thr, cur.mode); comb.push([N, bl.snr > 0 ? dB(bl.snr) : NaN]);
+        hi.push([N, N * Pp.hi.g < Pp.hi.sat ? dB(N / Math.sqrt(N + Pp.hi.rn * Pp.hi.rn)) : NaN]);
+        var Nl = N * Pp.lo.g; lo.push([N, Nl < Pp.lo.sat ? dB(Pp.shared ? N / Math.sqrt(N + Pp.lo.rn * Pp.lo.rn) : Nl / Math.sqrt(Nl + Pp.lo.rn * Pp.lo.rn)) : NaN]);
+        shot.push([N, dB(Math.sqrt(N))]);
+      });
+      var pts = cur.mc.filter(function (m) { return m.snr > 0 && isFinite(m.snr); }).map(function (m) { return { x: m.N, y: dB(m.snr), color: P.text, r: 2.2 }; });
+      SB.chart(ctx, b, { x: [0.5, top], y: [-10, 60], logX: true, xLabel: "노출 (큰 PD 기준 광전자 수, e⁻)", yLabel: "SNR (dB)", series: [
+        { data: shot, color: P.faint, width: 1, dash: [3, 3] }, { data: hi, color: P.accent2, width: 1.4, dash: [6, 4] }, { data: lo, color: P.warn, width: 1.4, dash: [6, 4] }, { data: comb, color: P.accent, width: 2.4 }],
+        vlines: [{ x: cur.Nt, color: P.dim, label: "전환점" }], points: pts });
+      ctx.font = F(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      [["합성 출력(이론)", P.accent], ["고이득/큰 PD 경로", P.accent2], ["저이득/작은 PD 경로", P.warn], ["• 몬테카를로 측정", P.text]].forEach(function (l, i) { ctx.fillStyle = l[1]; ctx.fillText(l[0], b.x + 8, b.y + 4 + i * 14); });
+      var iy = b.y + b.h + 64; ctx.imageSmoothingEnabled = false; ctx.drawImage(off, b.x, iy, b.w, sh); ctx.imageSmoothingEnabled = true;
+      ctx.fillStyle = P.dim; ctx.textBaseline = "bottom"; ctx.fillText((small ? "램프 차트 합성 (로그)" : "램프 차트 RAW 합성 결과(로그 표시) — 전환점의 노이즈 질감·단차"), b.x, iy - 2);
+      var xt = b.x + (Math.log10(cur.Nt) + 0.3) / (Math.log10(Pp.top * 0.98) + 0.3) * b.w; ctx.strokeStyle = P.accent; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(xt, iy); ctx.lineTo(xt, iy + sh); ctx.stroke(); ctx.setLineDash([]);
+    }, { get aspect() { return wideOf("cv-sehdr", 480) ? 0.62 : 1.2; } });
+    upd();
+  })();
+
+  /* ---------------- D. DOL 타이밍 ---------------- */
+  (function () {
+    var gN = SB.seg("dl-n", upd), gRows = SB.seg("dl-rows", upd);
+    var gTrow = SB.range("dl-trow", function (v) { return (+v).toFixed(1) + " µs"; }, upd);
+    var gTl = SB.range("dl-tl", function (v) { return (+v).toFixed(1) + " ms"; }, upd);
+    var gR = SB.range("dl-r", function (v) { return "R = " + Math.pow(2, v); }, upd);
+    var gV = SB.range("dl-v", function (v) { return (+v).toFixed(1) + " px/ms"; }, upd);
+    var WID = { 1080: 1920, 2160: 3840, 3000: 4000 }, cur = null;
+    function upd() {
+      var rows = +gRows(), p = { rows: rows, trow: gTrow(), tl: gTl(), R: Math.pow(2, gR()), n: +gN(), v: gV(), width: WID[rows] };
+      var o = SH.dol(p), pr = SH.dolProfile(p, o, 360);
+      cur = { p: p, o: o, pr: pr };
+      SB.stat("o-dl-ts", o.ts.toFixed(o.ts < 1 ? 3 : 2) + "<small>ms</small>");
+      SB.stat("o-dl-buf", o.buf + "<small>행</small> · " + (o.kb >= 1024 ? (o.kb / 1024).toFixed(2) + "<small>MB</small>" : o.kb.toFixed(0) + "<small>KB</small>"));
+      SB.stat("o-dl-gap", o.gap.toFixed(2) + "<small>ms</small>");
+      SB.stat("o-dl-mv", o.shift.toFixed(1) + " / " + (pr.cS - pr.cL).toFixed(1) + "<small>px</small>");
+      SB.stat("o-dl-fps", o.fps.toFixed(1) + "<small>fps</small>");
+      cv.redraw();
+    }
+    var cv = SB.canvas($("cv-dol"), function (ctx, w, h) {
+      if (!cur) return;
+      var P = SB.palette(), wd = w >= 560, p = cur.p, o = cur.o;
+      var b = wd ? { x: 52, y: 14, w: w * 0.56 - 60, h: h - 60 } : { x: 48, y: 14, w: w - 60, h: h * 0.56 - 56 };
+      var T = o.frame * 1.6, tr = p.trow * 1e-3;
+      SB.chart(ctx, b, { x: [0, T], y: [0, p.rows], yFmt: function (v) { return String(Math.round(p.rows - v)); }, xLabel: "시간 (ms)", yLabel: "행 (위 = 0)", series: [] });
+      var X = function (t) { return b.x + t / T * b.w; }, Y = function (r) { return b.y + r / p.rows * b.h; };
+      var streams = [{ t0: 0, te: p.tl, col: P.accent, nm: "L" }, { t0: p.tl, te: o.ts, col: P.warn, nm: "S" }];
+      if (p.n === 3) streams.push({ t0: p.tl + o.ts, te: o.tvs, col: P.accent2, nm: "VS" });
+      ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip();
+      [0, o.frame].forEach(function (f0, fi) {
+        streams.forEach(function (s) {
+          var a = f0 + s.t0, r0 = 0, r1 = p.rows;
+          ctx.fillStyle = s.col; ctx.globalAlpha = fi ? 0.12 : 0.28;
+          ctx.beginPath(); ctx.moveTo(X(a), Y(r0)); ctx.lineTo(X(a + s.te), Y(r0)); ctx.lineTo(X(a + s.te + o.roL), Y(r1)); ctx.lineTo(X(a + o.roL), Y(r1)); ctx.closePath(); ctx.fill();
+          ctx.globalAlpha = fi ? 0.4 : 1; ctx.strokeStyle = s.col; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(a + s.te), Y(r0)); ctx.lineTo(X(a + s.te + o.roL), Y(r1)); ctx.stroke();
+        });
+      });
+      ctx.globalAlpha = 1;
+      // 기준 행: L 판독 시각과 같은 시각에 판독 중인 S 행 → 라인 버퍼
+      var rr = Math.round(p.rows * 0.55), tL = p.tl + rr * tr, rS = Math.max(0, rr - o.offS);
+      ctx.strokeStyle = P.text; ctx.lineWidth = 1.2; ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(X(tL), Y(rr)); ctx.lineTo(X(tL), Y(rS)); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = P.text; ctx.beginPath(); ctx.arc(X(tL), Y(rr), 4, 0, 7); ctx.fill(); ctx.beginPath(); ctx.arc(X(tL), Y(rS), 4, 0, 7); ctx.fill();
+      ctx.font = F(11); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.textAlign = "right"; ctx.fillText("L 행 " + rr + " · S 행 " + rS, X(tL) - 8, Y(rr) + 2); ctx.fillText("→ 버퍼 " + o.buf + "행", X(tL) - 8, Y(rr) + 16); ctx.textAlign = "left";
+      ctx.restore();
+      ctx.font = F(11); ctx.textBaseline = "top";
+      streams.forEach(function (s, i) { ctx.fillStyle = s.col; ctx.fillRect(b.x + 8 + i * 40, b.y + b.h - 18, 10, 10); ctx.fillStyle = P.dim; ctx.fillText(s.nm, b.x + 22 + i * 40, b.y + b.h - 19); });
+      // 프로필
+      var b2 = wd ? { x: b.x + b.w + 46, y: 14, w: w - (b.x + b.w + 46) - 12, h: h - 60 } : { x: 48, y: b.y + b.h + 50, w: w - 60, h: h - (b.y + b.h + 50) - 46 };
+      var pr = cur.pr, NX = pr.L.length, dL = [], dS = [], dM = [];
+      for (var x = 0; x < NX; x++) { dL.push([x, pr.L[x]]); dS.push([x, pr.S[x] * p.R / 4]); dM.push([x, pr.M[x] / 4 + 0.0]); }
+      SB.chart(ctx, b2, { x: [0, NX], y: [0, 1.15], xLabel: "위치 (px)", series: [{ data: dL, color: P.accent, width: 2 }, { data: dS, color: P.warn, width: 2 }, { data: dM, color: P.text, width: 1.6, dash: [5, 3] }],
+        vlines: [{ x: pr.cL, color: P.accent }, { x: pr.cS, color: P.warn }] });
+      ctx.fillStyle = P.dim; ctx.font = F(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("움직이는 밝은 막대: L(포화) · S×R · 합성(점선)", b2.x + 4, b2.y + 2);
+    }, { get aspect() { return wideOf("cv-dol") ? 0.48 : 1.5; } });
+    upd();
+  })();
+
+  /* ---------------- E. 톤 매핑 연산자 ---------------- */
+  (function () {
+    var W = 240, H = 150, sc = SH.hdrScene(W, H), gOp = SB.seg("tm-op", upd);
+    var gKey = SB.range("tm-key", function (v) { return (+v).toFixed(2); }, upd);
+    var gSig = SB.range("tm-sig", function (v) { return v + " px"; }, upd);
+    var gRange = SB.range("tm-range", function (v) { return (+v).toFixed(1) + " decade"; }, upd);
+    var gDet = SB.range("tm-det", function (v) { return "×" + (+v).toFixed(2); }, upd);
+    var off = document.createElement("canvas"); off.width = W; off.height = H;
+    var mx = 0, mn = 1e9; for (var i = 0; i < W * H; i++) { mx = Math.max(mx, sc.L[i]); mn = Math.min(mn, sc.L[i]); }
+    var cur = null, PROW = Math.round(0.3 * H);
+    function upd() {
+      var op = gOp(), q = { key: gKey(), sig: gSig(), range: gRange(), detail: gDet() }, Ld = SH.tonemap(sc, op, q), st = SH.tmStats(sc, Ld);
+      var d = off.getContext("2d"), im = d.createImageData(W, H);
+      for (var k = 0; k < W * H; k++) for (var c = 0; c < 3; c++) im.data[k * 4 + c] = lin2s(Math.min(1, Ld[k] * Math.min(1.6, sc.C[k * 3 + c]))), im.data[k * 4 + 3] = 255;
+      d.putImageData(im, 0, 0);
+      cur = { Ld: Ld, op: op };
+      SB.stat("o-tm-dr", Math.log2(mx / mn).toFixed(1) + "<small>stop</small>");
+      SB.stat("o-tm-clip", (100 * st.clip).toFixed(1) + "<small>%</small>");
+      SB.stat("o-tm-lc", st.lc.toFixed(3));
+      SB.stat("o-tm-lw", st.lw.toFixed(3));
+      SB.stat("o-tm-halo", st.halo.toFixed(2) + "<small>stop</small>");
+      cv.redraw();
+    }
+    var cv = SB.canvas($("cv-tmo"), function (ctx, w, h) {
+      if (!cur) return;
+      var P = SB.palette(), wd = w >= 560, iw = wd ? Math.min(w * 0.5, (h - 20) * W / H) : w - 20, ih = iw * H / W, x0 = 10, y0 = 10;
+      ctx.drawImage(off, x0, y0, iw, ih);
+      ctx.strokeStyle = "rgba(255,80,60,0.8)"; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(x0, y0 + (PROW + 0.5) * ih / H); ctx.lineTo(x0 + iw, y0 + (PROW + 0.5) * ih / H); ctx.stroke(); ctx.setLineDash([]);
+      var bx = wd ? x0 + iw + 54 : 50, bw = wd ? w - bx - 12 : w - 62;
+      var b1 = wd ? { x: bx, y: 14, w: bw, h: (h - 110) / 2 } : { x: bx, y: y0 + ih + 16, w: bw, h: (h - (y0 + ih + 16) - 110) / 2 };
+      var b2 = { x: bx, y: b1.y + b1.h + 50, w: bw, h: b1.h };
+      var pts = [], Ld = cur.Ld;
+      for (var k = 0; k < W * H; k += 23) pts.push({ x: Math.log10(sc.L[k]), y: Ld[k], color: P.accent, r: 1.4 });
+      SB.chart(ctx, b1, { x: [-2, 6], y: [0, 1.02], xLabel: "장면 휘도 log₁₀ L", series: [], points: pts });
+      ctx.fillStyle = P.dim; ctx.font = F(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("픽셀별 (입력, 출력)", b1.x + 4, b1.y + 2);
+      var prof = [], inp = [];
+      for (var x = 0; x < W; x++) { prof.push([x, Ld[PROW * W + x]]); inp.push([x, (Math.log10(sc.L[PROW * W + x]) + 2) / 8]); }
+      SB.chart(ctx, b2, { x: [0, W], y: [0, 1.02], xLabel: "가로 위치 (px, 영상의 빨간 점선)", series: [{ data: inp, color: P.faint, width: 1.2 }, { data: prof, color: P.accent2, width: 1.8 }] });
+      ctx.fillStyle = P.dim; ctx.fillText("출력 단면(진한 선) vs 입력 log L(옅은 선)", b2.x + 4, b2.y + 2);
+    }, { get aspect() { return wideOf("cv-tmo") ? 0.52 : 1.75; } });
+    upd();
   })();
 })();
 </script>

@@ -7,7 +7,7 @@
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png">
 <title>컬러 필터와 디모자이킹 · SensorBook</title>
-<meta name="description" content="흑백 광자 카운터인 센서가 어떻게 색을 얻는가: 베이어 CFA, 분광 감도와 IR 컷, 다양한 CFA, 디모자이킹 알고리즘과 아티팩트, 광학 저역 필터, 감도–색재현 트레이드오프.">
+<meta name="description" content="흑백 광자 카운터인 센서가 어떻게 색을 얻는가: 베이어 CFA, 분광 감도와 IR 컷, 다양한 CFA, 디모자이킹 알고리즘과 아티팩트, 광학 저역 필터, 감도–색재현 트레이드오프, CIE xy 색도와 메타메리즘, CCM 노이즈 최적화.">
 <link rel="stylesheet" href="../css/style.css">
 <script src="../js/common.js"></script>
 <style>
@@ -34,6 +34,7 @@
       <li>RGBW, RYYB, 쿼드 베이어, X-Trans, 노나셀 등 여러 CFA의 장단점을 비교한다.</li>
       <li>최근접·쌍선형·에지 인지(Hamilton–Adams)·Malvar–He–Cutler 디모자이킹을 구현 수준에서 이해하고 아티팩트를 직접 관찰한다.</li>
       <li>색 에일리어싱(모아레)과 광학 저역 필터(OLPF)의 역할, 그리고 감도와 색재현 사이의 트레이드오프를 정량적으로 따진다.</li>
+      <li>CIE xy 색도와 가상 원색, Vora–Trussell 품질 계수, 메타메리즘, 필터 폭에 따른 CCM 노이즈 이득을 최소자승 계산으로 평가한다.</li>
     </ul>
   </header>
 
@@ -345,11 +346,12 @@
       </div>
       <div class="sim-readout">
         <div class="stat"><span class="k">PSNR (전체)</span><span class="v" id="o-dm-psnr">—</span></div>
+        <div class="stat"><span class="k">채널별 PSNR R / G / B</span><span class="v" id="o-dm-ch">—</span></div>
         <div class="stat"><span class="k">PSNR (돋보기 영역)</span><span class="v" id="o-dm-roi">—</span></div>
         <div class="stat"><span class="k">위색 지수 (회색 영역)</span><span class="v" id="o-dm-fc">—</span></div>
         <div class="stat"><span class="k">연산 시간</span><span class="v" id="o-dm-ms">—</span></div>
       </div>
-      <div class="sim-note">위색 지수 = 원래 무채색인 존 플레이트·스타·줄무늬 영역에서 출력의 평균 채도(max−min, 8-bit). 원본은 0이다. 해볼 것: 쌍선형 → HA → MHC 순서로 존 플레이트 바깥쪽 고주파 링의 무지개색 모아레, "SENSOR" 글자 가장자리의 지퍼 무늬를 비교하자. 이어서 OLPF를 켜 보면 위색은 줄지만 PSNR(선명도)은 어떻게 되는가?</div>
+      <div class="sim-note">PSNR(전체)은 세 채널의 오차를 함께 평균한 컬러 PSNR(CPSNR)이고, 채널별 PSNR은 G가 R·B보다 얼마나 잘 복원되는지(샘플 밀도 2배)를 보여 준다. 위색 지수 = 원래 무채색인 존 플레이트·스타·줄무늬 영역에서 출력의 평균 채도(max−min, 8-bit). 원본은 0이다. 해볼 것: 쌍선형 → HA → MHC 순서로 존 플레이트 바깥쪽 고주파 링의 무지개색 모아레, "SENSOR" 글자 가장자리의 지퍼 무늬를 비교하자. 이어서 OLPF를 켜 보면 위색은 줄지만 PSNR(선명도)은 어떻게 되는가?</div>
     </div>
     <div class="callout warn">
       <strong>PSNR만 보면 안 되는 이유</strong>
@@ -465,6 +467,194 @@
     </div>
   </section>
 
+  <!-- ============================================================ 10 -->
+  <section id="ccm-opt">
+    <h2>필터 겹침 최적화: 광자 수 대 CCM 노이즈 이득</h2>
+    <p>앞 절의 결론을 한 단계 더 일반화해 봅시다. CFA 설계자가 실제로 고를 수 있는 것은 필터 곡선의 <strong>중심 파장</strong>과 <strong>폭</strong>입니다. 폭을 넓히면 채널마다 더 많은 광자를 모으지만(신호 ↑), 채널끼리 많이 겹쳐 서로 닮아 가므로 이들을 다시 R·G·B로 떼어 내는 CCM의 비대각 계수가 커집니다(노이즈 이득 ↑). 폭을 좁히면 CCM은 대각에 가까워지지만 광자가 줄고, 날카로운 필터는 넓게 겹친 CIE 함수와 모양이 달라 루터–아이브스 잔차도 커집니다. 따라서 <span class="term">색 SNR</span>은 필터 폭에 대해 <strong>최댓값을 갖는 곡선</strong>이 됩니다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="좁은 필터와 넓은 필터의 광자 수와 CCM 계수 비교, 그리고 필터 폭에 따른 색 SNR 곡선">
+        <g transform="translate(20,20)">
+          <text x="0" y="0" class="t-acc">① 좁은 필터</text>
+          <line x1="0" y1="150" x2="220" y2="150" class="s-axis"/>
+          <path d="M20,150 C45,150 50,40 60,40 C70,40 75,150 100,150" fill="#2f6fe0" fill-opacity="0.25" stroke="#2f6fe0" stroke-width="2"/>
+          <path d="M70,150 C95,150 100,40 110,40 C120,40 125,150 150,150" fill="#2f9e4a" fill-opacity="0.25" stroke="#2f9e4a" stroke-width="2"/>
+          <path d="M120,150 C145,150 150,40 160,40 C170,40 175,150 200,150" fill="#e0443e" fill-opacity="0.25" stroke="#e0443e" stroke-width="2"/>
+          <text x="0" y="175" class="t-dim">광자 적음 · 겹침 작음</text>
+          <text x="0" y="197" class="t-mono">M ≈ diag, |M|행 ≈ 1.6</text>
+          <text x="0" y="219" class="t-dim">CMF 모양과 달라 잔차 큼</text>
+        </g>
+        <g transform="translate(275,20)">
+          <text x="0" y="0" class="t-acc">② 넓은 필터</text>
+          <line x1="0" y1="150" x2="220" y2="150" class="s-axis"/>
+          <path d="M0,150 C30,150 40,35 70,35 C100,35 110,150 140,150" fill="#2f6fe0" fill-opacity="0.2" stroke="#2f6fe0" stroke-width="2"/>
+          <path d="M40,150 C70,150 80,30 110,30 C140,30 150,150 180,150" fill="#2f9e4a" fill-opacity="0.2" stroke="#2f9e4a" stroke-width="2"/>
+          <path d="M80,150 C110,150 120,35 150,35 C180,35 190,150 220,150" fill="#e0443e" fill-opacity="0.2" stroke="#e0443e" stroke-width="2"/>
+          <text x="0" y="175" class="t-dim">광자 많음 · 채널이 서로 닮음</text>
+          <text x="0" y="197" class="t-mono">M 비대각 −2~−5, |M|행 ≫ 1</text>
+          <text x="0" y="219" class="t-dim">뺄셈이 노이즈를 증폭</text>
+        </g>
+        <g transform="translate(540,20)">
+          <text x="0" y="0" class="t-acc">③ 색 SNR vs 필터 폭 σ</text>
+          <line x1="20" y1="150" x2="240" y2="150" class="s-axis"/><line x1="20" y1="150" x2="20" y2="20" class="s-axis"/>
+          <path d="M28,110 C50,60 70,38 95,36 C130,34 170,70 235,140" fill="none" class="s-acc" stroke-width="3"/>
+          <line x1="95" y1="36" x2="95" y2="150" class="s-line" stroke-dasharray="4 3"/>
+          <circle cx="95" cy="36" r="5" class="f-acc"/>
+          <text x="104" y="32" class="t">최적 σ</text>
+          <text x="24" y="170" class="t-dim">좁음</text><text x="200" y="170" class="t-dim">넓음</text>
+          <text x="20" y="197" class="t-dim">왼쪽: 광자 부족이 지배</text>
+          <text x="20" y="219" class="t-dim">오른쪽: CCM 이득이 지배</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 4-7.</b> 필터 폭의 절충. 좁은 필터는 광자를 버리고, 넓은 필터는 채널을 서로 닮게 만들어 CCM이 큰 뺄셈을 하게 한다. 샷 노이즈가 지배하는 조건에서 CCM 후 색 SNR은 중간 폭에서 최대가 된다(개념도, 수치는 아래 시뮬레이터 기준).</figcaption>
+    </figure>
+    <p>CCM \( M \)의 \( i \)번째 행이 채널 신호 \( c_j \)(백색에서 1이 되도록 정규화, 전자 수 \( N_j \))를 섞는다고 하면, 채널 노이즈가 서로 독립일 때 출력의 분산과 SNR은</p>
+    <div class="formula">$$\sigma_{\mathrm{out},i}^2=\sum_j M_{ij}^2\,\frac{1}{N_j},\qquad \mathrm{SNR}_i=\Bigl(\sum_j \frac{M_{ij}^2}{N_j}\Bigr)^{-1/2},\qquad g_i=\sqrt{\textstyle\sum_j M_{ij}^2}\;\;(\text{노이즈 이득, }\textstyle\sum_j M_{ij}=1)$$
+      <div class="where">백색 보존 조건(행 합 = 1) 때문에 \( g_i \ge 1/\sqrt{k} \)이고, 비대각에 음수가 생길수록 \( g_i \)가 1보다 커진다. \( N_j \)는 필터 폭에 비례해 늘어나므로 \( \mathrm{SNR}_i \)는 두 효과의 곱으로 정해진다.</div>
+    </div>
+    <p><b>계산 예.</b> 이 장의 안료 필터 모델(IR 컷 포함)로 D65 18% 회색을 찍어, 평탄 QE=1 픽셀이라면 1000 e⁻를 받을 노출에서 채널 전자 수가 \( N_{R,G,B}=(104,\,202,\,126) \)이고, 선형 sRGB로의 백색 보존 최소자승 CCM의 R 행이 \( (1.52,\,-0.46,\,-0.06) \)이라고 하자. 노이즈 이득은 \( g_R=\sqrt{1.52^2+0.46^2+0.06^2}=1.59 \), 출력 SNR은 \( (1.52^2/104+0.46^2/202+0.06^2/126)^{-1/2}=6.5 \)(16.3 dB)다. CCM 전 R 채널의 SNR \( \sqrt{104}=10.2 \)(20.2 dB)보다 약 3.9 dB 나쁘다. 같은 계산을 G(19.4 dB)와 B(17.9 dB)에도 하면 평균 색 SNR은 17.9 dB가 된다. 아래 시뮬레이터는 가우시안 필터 가족에서 이 계산을 폭 \( \sigma \)마다 반복해 절충 곡선을 그린다. 실제 ISP에서 CCM이 어디에 들어가고 노이즈 저감과 어떤 순서로 적용되는지는 <a href="isp.html#ccm">17장 CCM 절</a>에서 다룬다.</p>
+
+    <div class="sim" id="sim-ccmn">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>필터 폭 스윕 — 최소자승 CCM, 노이즈 이득, 색 SNR 파레토</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-ccmn"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>필터 폭 σ <output id="cn-sig-out"></output></span><input type="range" id="cn-sig" min="10" max="90" value="35" step="1"></label>
+          <label class="ctrl"><span>중심 간격 (540 nm ± ) <output id="cn-sp-out"></output></span><input type="range" id="cn-sp" min="50" max="100" value="70" step="2"></label>
+          <label class="ctrl"><span>노출 (평탄 QE=1 기준 전자 수) <output id="cn-n-out"></output></span><input type="range" id="cn-n" min="2" max="4" value="3" step="0.05"></label>
+          <div class="ctrl"><span>최소자승 CCM (행: R,G,B 출력, 행 합 = 1)</span><div class="ccm-box" id="cn-ccm">—</div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">R–G 겹침 / G 신호</span><span class="v" id="o-cn-ov">—</span></div>
+        <div class="stat"><span class="k">루터–아이브스 잔차</span><span class="v" id="o-cn-res">—</span></div>
+        <div class="stat"><span class="k">노이즈 이득 max g<sub>i</sub></span><span class="v" id="o-cn-ng">—</span></div>
+        <div class="stat"><span class="k">색 SNR (CCM 후 평균)</span><span class="v" id="o-cn-snr">—</span></div>
+        <div class="stat"><span class="k">이 간격의 최적 σ</span><span class="v" id="o-cn-best">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 정규화한 채널 감도(실선)와 목표인 선형 sRGB 색 대응 함수(회색, 음수 로브 포함), CCM으로 맞춘 결과(점선). 오른쪽: σ = 10~90 nm 스윕의 (잔차, 색 SNR) 궤적과 현재 점, 그리고 이 장의 안료 모델 Bayer·RYYB·RGBW 점(같은 노출). 해볼 것: ① 간격 70 nm에서 σ를 12 → 24 → 70 nm로 바꾸면 색 SNR이 약 16.6 → 18.3 → 8.8 dB로 정점을 지나 떨어지고, 노이즈 이득은 1.6 → 7.2로 커진다. ② 간격을 90 nm로 벌리면 최적 σ가 30 nm로 넓어진다. ③ 노출을 10배 올려도 곡선 모양은 그대로이고 전체가 10 dB 위로 이동한다 — 샷 노이즈 한계에서는 최적 필터가 조도와 무관하다.</div>
+    </div>
+    <p>스윕에서 보듯 잔차가 가장 작은 폭(σ ≈ 50 nm)과 색 SNR이 가장 큰 폭(σ ≈ 24 nm)은 일치하지 않습니다. 설계자는 파레토 곡선 위에서 제품 성격에 따라 한 점을 고릅니다. 저조도 사진이 중요한 스마트폰은 겹침이 큰 쪽(신호)으로, 색 측정용 카메라나 의료 영상은 잔차가 작은 쪽으로 갑니다. 안료 모델의 세 점은 모두 가우시안 곡선의 위쪽 가지보다 아래에 있고, 그중 RGBW는 노이즈 이득이 4.0으로 가장 큽니다. W 채널은 광자는 많지만 색 정보가 없어 3×4 CCM이 큰 뺄셈을 하기 때문입니다 — W는 휘도 경로에서만 쓰고 색은 RGB에서 얻는 실제 처리 방식의 이유입니다.</p>
+  </section>
+
+  <!-- ============================================================ 11 -->
+  <section id="gamut">
+    <h2>색도 다이어그램과 센서의 "원색"</h2>
+    <p>XYZ 3차원 공간에서 밝기를 빼고 색의 "종류"만 보려면 합이 1이 되도록 정규화한 <span class="term">색도 좌표</span><span class="en">(chromaticity coordinates)</span>를 씁니다. 단색광의 색도를 380~700 nm로 이으면 말굽 모양의 <span class="term">스펙트럼 궤적</span><span class="en">(spectral locus)</span>이 되고, 실재하는 모든 색은 그 안쪽에 있습니다. 디스플레이 표준의 <span class="term">색역</span><span class="en">(gamut)</span>은 세 원색이 만드는 삼각형입니다.</p>
+    <div class="formula">$$x=\frac{X}{X+Y+Z},\quad y=\frac{Y}{X+Y+Z},\qquad \nu=\frac{1}{3}\,\mathrm{tr}\!\left(P_{X}\,P_{S}\right)\in[0,1]$$
+      <div class="where">\( P_X, P_S \): D65로 가중한 CIE 함수 3개와 카메라 감도들이 각각 펼치는 부분공간으로의 정사영. \( \nu \)는 Vora–Trussell 품질 계수로, 루터–아이브스 조건을 정확히 만족하면 1이다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 330" role="img" aria-label="CIE 1931 xy 색도 다이어그램: 스펙트럼 궤적, sRGB, Display P3, Rec.2020 삼각형, D65, 카메라 원색 삼각형">
+        <g transform="translate(20,0) scale(0.78)">
+          <line x1="40" y1="380" x2="370" y2="380" class="s-axis"/><line x1="40" y1="380" x2="40" y2="20" class="s-axis"/>
+          <polygon points="116.6,375.8 114.6,376.8 110.5,377.3 107.0,377.6 105.4,377.5 106.2,377.2 107.9,376.4 106.4,375.3 103.7,373.8 100.2,371.8 96.0,368.9 92.1,364.5 88.6,357.3 84.5,345.6 78.3,327.1 69.2,299.1 57.9,260.4 47.2,212.7 41.5,162.1 42.8,116.9 49.8,82.9 60.3,61.9 72.5,52.1 85.6,50.9 99.7,55.8 114.7,65.0 130.0,76.5 145.4,89.4 160.8,103.3 176.0,117.5 191.0,131.9 205.5,146.0 219.3,159.6 232.6,172.8 245.3,185.4 257.4,197.5 268.9,209.0 279.7,219.7 289.9,229.9 298.9,238.9 306.6,246.6 313.0,253.0 318.2,258.2 322.3,262.3 325.4,265.4 327.5,267.5 328.7,268.7 329.0,269.0" class="f-surface" stroke="var(--text)" stroke-width="2"/>
+          <polygon points="323.2,263.2 108.0,61.2 92.4,361.6" fill="none" stroke="#7c4dff" stroke-width="2"/>
+          <polygon points="312.0,252.0 146.0,104.0 100.0,356.0" fill="none" stroke="#e08a00" stroke-width="2"/>
+          <polygon points="296.0,248.0 160.0,140.0 100.0,356.0" fill="none" class="s-acc" stroke-width="2.5"/>
+          <polygon points="342.0,271.2 148.4,18.8 77.6,420.8" fill="none" stroke="var(--text-dim)" stroke-width="2" stroke-dasharray="7 5"/>
+          <circle cx="165.1" cy="248.4" r="5" fill="var(--text)"/><text x="174" y="246" class="t">D65</text>
+          <text x="20" y="166" class="t-dim">500</text><text x="58" y="44" class="t-dim">520</text><text x="196" y="128" class="t-dim">560</text><text x="297" y="225" class="t-dim">600</text><text x="104" y="398" class="t-dim">450 nm</text>
+          <text x="160" y="16" class="t-dim">카메라 G 원색 (궤적 밖)</text><text x="88" y="424" class="t-dim">카메라 B 원색 (y &lt; 0)</text>
+          <text x="355" y="398" class="t-dim">x</text><text x="24" y="30" class="t-dim">y</text>
+        </g>
+        <g transform="translate(345,30)">
+          <rect x="0" y="0" width="18" height="4" class="f-acc"/><text x="28" y="6" class="t">sRGB / Rec.709 — 웹·일반 디스플레이</text>
+          <rect x="0" y="26" width="18" height="4" fill="#e08a00"/><text x="28" y="32" class="t">Display P3 — 스마트폰·노트북 패널</text>
+          <rect x="0" y="52" width="18" height="4" fill="#7c4dff"/><text x="28" y="58" class="t">Rec.2020 — UHD/HDR 방송 목표 색역</text>
+          <line x1="0" y1="80" x2="18" y2="80" stroke="var(--text-dim)" stroke-width="2" stroke-dasharray="5 3"/><text x="28" y="84" class="t">카메라 원색 = CCM 열벡터의 색도</text>
+          <text x="0" y="122" class="t-dim">· 카메라 채널 하나만 1인 입력 (1,0,0)을 CCM에 넣은 결과가</text>
+          <text x="0" y="144" class="t-dim">  그 채널의 "원색"이다. 실재하는 빛이 아니어서 궤적 밖,</text>
+          <text x="0" y="166" class="t-dim">  심지어 y &lt; 0에 놓일 수 있다(가상 원색).</text>
+          <text x="0" y="198" class="t-dim">· 카메라는 디스플레이와 달리 삼각형 안의 색만 담는 장치가</text>
+          <text x="0" y="220" class="t-dim">  아니다. 문제는 색역이 아니라 단색광 궤적을 얼마나 정확히</text>
+          <text x="0" y="242" class="t-dim">  재현하느냐(루터–아이브스 오차)다.</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 4-8.</b> CIE 1931 xy 색도 다이어그램(이 장의 근사 CMF로 계산). 디스플레이 색역은 원색 삼각형이지만, 카메라의 CCM 열벡터가 가리키는 "원색"은 대개 궤적 밖의 가상 원색이다.</figcaption>
+    </figure>
+    <p>여기서 흔한 오해 하나를 짚고 가겠습니다. "이 센서는 색역이 Rec.2020을 덮는다"는 말은 엄밀하지 않습니다. 카메라는 세 원색을 <em>섞어 내보내는</em> 장치가 아니라 스펙트럼을 <em>측정</em>하는 장치이므로, 원칙적으로 궤적 안의 모든 색을 기록할 수 있습니다. 대신 감도가 CMF의 선형 결합이 아니면 서로 다른 단색광들이 틀린 색도로 찍힙니다. 아래 시뮬레이터는 각 단색광을 센서 → 최소자승 CCM(카메라 → XYZ) → xy로 보내 <strong>카메라가 보는 스펙트럼 궤적</strong>을 그립니다. 출력 영상을 sRGB나 P3로 저장할 때 삼각형 밖으로 나간 색은 클리핑되거나 색역 매핑으로 압축됩니다.</p>
+
+    <div class="sim" id="sim-gamut">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>CIE xy 다이어그램 — 카메라 궤적, 가상 원색, 루터–아이브스 품질</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-gamut"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>CFA</span><div class="seg" id="gm-cfa"><button data-value="rgb" class="on">RGB</button><button data-value="ryyb">RYYB</button></div></div>
+          <label class="ctrl"><span>R 경계 파장 <output id="gm-r-out"></output></span><input type="range" id="gm-r" min="570" max="630" value="595" step="1"></label>
+          <label class="ctrl"><span>G(Y) 정점 파장 <output id="gm-g-out"></output></span><input type="range" id="gm-g" min="505" max="565" value="535" step="1"></label>
+          <label class="ctrl"><span>B 정점 파장 <output id="gm-b-out"></output></span><input type="range" id="gm-b" min="425" max="485" value="455" step="1"></label>
+          <label class="ctrl"><span>대역폭 배율 <output id="gm-s-out"></output></span><input type="range" id="gm-s" min="0.5" max="1.8" value="1" step="0.05"></label>
+          <label class="check"><input type="checkbox" id="gm-ir" checked> IR 컷 필터 사용</label>
+          <label class="check"><input type="checkbox" id="gm-tri" checked> sRGB · P3 · Rec.2020 색역 표시</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Vora–Trussell ν</span><span class="v" id="o-gm-nu">—</span></div>
+        <div class="stat"><span class="k">루터–아이브스 잔차 (XYZ)</span><span class="v" id="o-gm-res">—</span></div>
+        <div class="stat"><span class="k">단색광 궤적 오차 평균 Δu′v′</span><span class="v" id="o-gm-duv">—</span></div>
+        <div class="stat"><span class="k">궤적 밖 카메라 원색</span><span class="v" id="o-gm-out">—</span></div>
+        <div class="stat"><span class="k">CCM 최대 |계수|</span><span class="v" id="o-gm-mx">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 색을 칠한 말굽 = 실제 스펙트럼 궤적(410~700 nm), 흰 점선 = 카메라가 기록한 단색광 궤적(420~660 nm, 20 nm마다 점), 점선 삼각형 = 카메라 원색. 오른쪽: 목표 CMF(실선)와 CCM으로 맞춘 카메라 감도(점선). 해볼 것: ① 기본값에서 ν = 0.894, 잔차 29.8%이고 B 원색이 y &lt; 0으로 나간다. ② 대역폭 배율을 0.5로 줄이면 ν가 0.829로 떨어지고 궤적 오차가 커진다 — 좁은 필터는 CMF를 흉내 내지 못한다. ③ IR 컷을 끄면 ν = 0.732, 잔차 45.0%로 급락하고 R 원색이 x &gt; 1까지 튄다. ④ RYYB로 바꾸면 ν는 비슷하지만 원색 삼각형이 크게 비틀린다(큰 CCM 계수).</div>
+    </div>
+    <p><b>계산 예.</b> 어떤 색의 XYZ가 (41.2, 21.3, 1.9)라면 합이 64.4이므로 \( x=0.640,\ y=0.331 \) — sRGB의 빨강 원색 바로 그 점입니다. 반면 위 시뮬레이터 기본값의 카메라 CCM에서 B 열은 XYZ = (0.28, −0.31, 3.03)이고 색도는 \( (0.094,\,-0.102) \)로, 음의 휘도를 가진 가상 원색입니다. 이것이 잘못이 아니라는 점이 중요합니다. 실제 장면의 파란빛은 B만이 아니라 G에도 일부 신호를 만들고, CCM은 그 G 신호의 기여와 합쳐서 올바른 \( Y > 0 \)을 돌려줍니다.</p>
+  </section>
+
+  <!-- ============================================================ 12 -->
+  <section id="metamerism">
+    <h2>메타메리즘: 같은 색, 다른 스펙트럼</h2>
+    <p>2절에서 본 대로 색은 3차원이고 반사율 스펙트럼은 수십 차원입니다. 그래서 D65 아래에서 XYZ가 똑같은 두 반사율 \( r_1, r_2 \)를 얼마든지 만들 수 있는데, 차이 \( b=r_2-r_1 \)이 조명 가중 CMF 세 개와 모두 직교하기만 하면 됩니다. 이런 \( b \)를 <span class="term">메타머 블랙</span><span class="en">(metameric black)</span>이라고 부릅니다.</p>
+    <div class="formula">$$A=\mathrm{diag}(E_{\mathrm{D65}})\,[\bar x\;\bar y\;\bar z],\qquad b=\bigl(I-A(A^\top A)^{-1}A^\top\bigr)\,p\;\;\Rightarrow\;\;A^\top b=0$$
+      <div class="where">\( p \): 아무 매끈한 섭동. 정사영으로 CMF 공간 성분을 지우면 D65 아래 사람 눈에는 보이지 않는 스펙트럼 변화가 남는다. 조명을 바꾸거나(\( E_A \)), 관찰자를 카메라로 바꾸면(\( \bar x\bar y\bar z \to S \)) 직교성이 깨져 두 색이 갈라진다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="메타머 쌍의 반사율 곡선과 조명 및 관찰자에 따른 색 차이">
+        <g transform="translate(10,10)">
+          <line x1="30" y1="210" x2="330" y2="210" class="s-axis"/><line x1="30" y1="210" x2="30" y2="20" class="s-axis"/>
+          <polyline points="30.0,138.0 330.0,138.0" fill="none" stroke="var(--text-dim)" stroke-width="2.5"/>
+          <polyline points="30.0,117.6 37.5,97.7 45.0,91.6 52.5,102.7 60.0,125.0 67.5,149.3 75.0,165.2 82.5,165.8 90.0,149.2 97.5,122.3 105.0,93.3 112.5,73.4 120.0,70.4 127.5,88.2 135.0,120.9 142.5,156.3 150.0,182.5 157.5,188.9 165.0,174.1 172.5,144.5 180.0,112.4 187.5,90.7 195.0,89.3 202.5,108.4 210.0,140.8 217.5,174.2 225.0,196.1 232.5,197.4 240.0,177.8 247.5,144.7 255.0,110.9 262.5,89.3 270.0,87.6 277.5,105.0 285.0,133.1 292.5,159.9 300.0,175.1 307.5,174.3 315.0,160.3 322.5,141.1 330.0,125.2" fill="none" class="s-acc" stroke-width="2.5"/>
+          <text x="36" y="34" class="t">반사율</text><text x="300" y="232" class="t-dim">780 nm</text><text x="24" y="232" class="t-dim">380</text>
+          <text x="236" y="132" class="t-dim">r₁ = 회색 40%</text><text x="120" y="60" class="t-acc">r₂ = r₁ + b</text>
+        </g>
+        <g transform="translate(380,30)" font-size="13">
+          <text x="0" y="0" class="t-acc">왼쪽 = r₁, 오른쪽 = r₂ (이 장 모델로 계산)</text>
+          <rect x="0" y="16" width="44" height="44" fill="rgb(170,170,170)"/><rect x="44" y="16" width="44" height="44" fill="rgb(170,170,170)"/><text x="100" y="36" class="t">눈 · D65</text><text x="100" y="54" class="t-dim">ΔE00 = 0 (정의상 같음)</text>
+          <rect x="0" y="70" width="44" height="44" fill="rgb(170,170,170)"/><rect x="44" y="70" width="44" height="44" fill="rgb(173,167,177)"/><text x="100" y="90" class="t">눈 · 백열등 A</text><text x="100" y="108" class="t-dim">ΔE00 = 5.1 — 조명 메타메리즘</text>
+          <rect x="0" y="124" width="44" height="44" fill="rgb(170,170,170)"/><rect x="44" y="124" width="44" height="44" fill="rgb(160,175,180)"/><text x="100" y="144" class="t">카메라 · D65</text><text x="100" y="162" class="t-dim">ΔE00 = 6.3 — 관찰자(센서) 메타메리즘</text>
+          <rect x="0" y="178" width="44" height="44" fill="rgb(170,170,170)"/><rect x="44" y="178" width="44" height="44" fill="rgb(152,169,186)"/><text x="100" y="198" class="t">카메라 · A (WB 후)</text><text x="100" y="216" class="t-dim">ΔE00 = 8.9 — 두 효과가 겹침</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 4-9.</b> 메타머 쌍. 평탄한 회색 \( r_1 \)과 물결치는 \( r_2 \)는 D65 아래 사람 눈에 똑같지만, 백열등 아래에서나 루터–아이브스 조건을 만족하지 않는 카메라에서는 다른 색이 된다(색 견본은 이 장의 분광 모델로 계산한 sRGB 값, 물리색).</figcaption>
+    </figure>
+    <p>메타메리즘에는 두 종류가 있습니다. 조명을 바꿨을 때 갈라지는 <span class="term">조명 메타메리즘</span><span class="en">(illuminant metamerism)</span>은 사람 눈에서도 일어나는 물리 현상입니다(가게에서 같아 보이던 양복과 바지가 집 조명에서 달라 보이는 경우). 카메라 쪽에서 문제가 되는 것은 <span class="term">관찰자(센서) 메타메리즘</span><span class="en">(observer / camera metamerism)</span>입니다. 사람에게 같은 두 물체를 카메라가 다르게 찍거나, 거꾸로 사람에게 다른 두 물체를 같게 찍습니다. 감도가 CMF의 선형 결합이 아닌 한 어떤 3×3 CCM으로도 이를 없앨 수 없으므로, 이 오차는 <strong>센서 하드웨어의 성질</strong>입니다. ISO 17321-1은 이를 메타머 쌍 집합에 대한 평균 색차로 정량화한 감도 메트릭(SM, sensitivity metamerism index)을 정의합니다. 시뮬레이터의 "센서 메타메리즘 지수"는 같은 아이디어를 무작위 메타머 쌍 몬테카를로로 구현한 것입니다(표준의 정확한 절차와는 다른 교육용 버전). 실제 컬러 차트로 ΔE00을 측정해 카메라 색 정확도를 평가하는 방법은 <a href="iq.html#color">20장 색 정확도 절</a>을 참고하세요.</p>
+
+    <div class="sim" id="sim-meta">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>메타머 쌍 생성기 — 조명·센서 메타메리즘과 몬테카를로 지수</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-meta"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>기준 반사율 r₁</span><div class="seg" id="mt-base"><button data-value="gray" class="on">회색</button><button data-value="skin">피부</button><button data-value="leaf">잎</button><button data-value="blue">하늘색</button></div></div>
+          <label class="ctrl"><span>섭동 주기 <output id="mt-per-out"></output></span><input type="range" id="mt-per" min="40" max="200" value="100" step="2"></label>
+          <label class="ctrl"><span>섭동 위상 <output id="mt-ph-out"></output></span><input type="range" id="mt-ph" min="0" max="360" value="30" step="5"></label>
+          <label class="ctrl"><span>진폭 (허용 최대 대비) <output id="mt-amp-out"></output></span><input type="range" id="mt-amp" min="0" max="100" value="90" step="1"></label>
+          <div class="ctrl"><span>카메라 필터</span><div class="seg" id="mt-cam"><button data-value="book" class="on">책 모델</button><button data-value="narrow">좁은 대역</button><button data-value="wide">넓은 대역</button><button data-value="ryyb">RYYB</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">ΔE00 눈 · D65</span><span class="v" id="o-mt-ed">—</span></div>
+        <div class="stat"><span class="k">ΔE00 눈 · 조명 A</span><span class="v" id="o-mt-ea">—</span></div>
+        <div class="stat"><span class="k">ΔE00 카메라 · D65</span><span class="v" id="o-mt-cd">—</span></div>
+        <div class="stat"><span class="k">ΔE00 카메라 · A (WB)</span><span class="v" id="o-mt-ca">—</span></div>
+        <div class="stat"><span class="k">센서 메타메리즘 지수 (250쌍 평균)</span><span class="v" id="o-mt-mi">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: r₁(회색 실선), r₂(강조색), 메타머 블랙 b(점선, 0 기준), 조명 A의 상대 분광(옅은 선). 오른쪽 위: 네 조건의 색 견본(각 칸 왼쪽 r₁, 오른쪽 r₂). 오른쪽 아래: 무작위 메타머 250쌍(4종 기준 반사율, 무작위 주기·위상·진폭)의 카메라·D65 ΔE00 분포(막대)와 눈·A 분포(선). 해볼 것: ① 회색, 주기 100 nm, 위상 30°, 진폭 90%에서 눈·D65는 0.00이지만 눈·A 5.09, 카메라·D65 6.29, 카메라·A 8.93. ② 주기를 200 nm로 늘리면 눈·A는 5.16으로 그대로인데 카메라·D65는 1.36으로 줄어든다 — 느리게 변하는 섭동은 이 카메라도 거의 구분하지 못한다. 60 nm로 줄이면 반대로 눈·A가 1.48로 작아진다. ③ 카메라 필터를 바꿔 지수를 비교하자: 책 모델 2.61(ν 0.894)이 가장 작고, 좁은 대역 3.01, 넓은 대역 3.02, RYYB 3.07이다. 눈·A 지수(2.38)는 카메라와 무관하다.</div>
+    </div>
+    <div class="callout deep">
+      <strong>왜 CCM을 "컬러 차트에 맞춰" 최적화하는가</strong>
+      <p>이 장의 시뮬레이터들은 CCM을 분광 감도 곡선에 직접 최소자승으로 맞췄다. 이는 모든 단색광을 똑같이 중요하게 여기는 셈이다. 실제 장면의 반사율은 매끈하고 몇 개의 주성분으로 잘 표현되므로, ISP 튜닝에서는 대표 반사율 집합(컬러 차트, 피부색 데이터베이스)을 실제 조명으로 찍은 값에 대해 ΔE를 최소화하는 CCM을 구한다. 메타머 블랙처럼 실제로는 드문 고주파 스펙트럼 성분에 가중치를 덜 주는 효과가 있어 평균 색 오차가 작아지지만, 학습 집합 밖의 스펙트럼(LED 조명, 형광 염료)에서는 오차가 커질 수 있다.</p>
+    </div>
+  </section>
+
   <!-- ============================================================ summary -->
   <section class="keypoints" id="summary">
     <h2>핵심 정리</h2>
@@ -476,6 +666,9 @@
       <li>쌍선형 보간은 지퍼·위색을 만들고, Hamilton–Adams(에지 방향 + 색차 보간)와 MHC(라플라시안 보정 5×5 선형 필터)는 채널 간 상관을 이용해 이를 크게 줄인다.</li>
       <li>OLPF는 샘플링 전에 고주파를 줄여 모아레를 막는다. MTF는 \( |\cos(\pi f d)| \)이며, 모아레 억제와 선명도는 맞바꾸는 관계다.</li>
       <li>RGBW·RYYB 같은 고감도 CFA는 휘도 SNR을 얻는 대신 CCM 계수가 커져 색 노이즈와 색재현에서 손해를 본다.</li>
+      <li>CCM 후 색 SNR은 \( (\sum_j M_{ij}^2/N_j)^{-1/2} \)이다. 필터 폭을 넓히면 광자 수 \( N_j \)는 늘지만 노이즈 이득 \( \sqrt{\sum_j M_{ij}^2} \)도 커지므로 색 SNR을 최대로 하는 중간 폭이 존재하고, 그 폭은 루터–아이브스 잔차를 최소로 하는 폭과 다르다.</li>
+      <li>xy 색도 다이어그램에서 디스플레이 색역은 원색 삼각형이지만, 카메라 CCM의 열벡터가 가리키는 원색은 궤적 밖의 가상 원색일 수 있다. 카메라 색 품질은 Vora–Trussell 계수 \( \nu \)와 단색광 궤적 오차로 본다.</li>
+      <li>메타머 블랙은 조명 가중 CMF와 직교하는 스펙트럼 성분이다. 조명이 바뀌면 조명 메타메리즘이, 관찰자가 카메라로 바뀌면 센서 메타메리즘이 생기며, 후자는 3×3 CCM으로 없앨 수 없는 하드웨어 성질이다.</li>
     </ol>
   </section>
 
@@ -517,6 +710,24 @@
         <button class="opt" data-correct>Y(≈R+G) 필터가 더 많은 광자를 받아 휘도 SNR은 오르지만, G를 얻으려면 Y−R 같은 차이 연산이 필요해 CCM 계수가 커지기 때문</button>
         <button class="opt">RYYB는 디모자이킹이 필요 없기 때문</button>
       </div><div class="quiz-exp">노이즈는 \( \sigma_{out}^2=\sum_j M_{ij}^2\sigma_j^2 \)로 전파된다. 차이 연산은 큰 양·음 계수를 뜻하므로 채널 노이즈가 증폭된다. 감도(휘도)와 색재현(색 노이즈)은 트레이드오프 관계다.</div></div>
+      <div class="quiz-q"><p>샷 노이즈가 지배하는 조건에서 가우시안 CFA 필터의 폭을 아주 좁은 값에서 점점 넓힐 때, CCM 적용 후 색 SNR은 대체로 어떻게 변하는가?</p><div class="opts">
+        <button class="opt">광자가 늘어나므로 계속 좋아진다</button>
+        <button class="opt">채널이 겹칠수록 CCM이 대각에 가까워져 계속 좋아진다</button>
+        <button class="opt" data-correct>처음에는 광자 증가로 좋아지다가, 채널이 서로 닮아 CCM 비대각 계수(노이즈 이득)가 커지면서 다시 나빠진다</button>
+        <button class="opt">필터 폭과 무관하다</button>
+      </div><div class="quiz-exp">\( \mathrm{SNR}_i=(\sum_j M_{ij}^2/N_j)^{-1/2} \)에서 \( N_j \)는 폭에 따라 늘지만 \( M_{ij} \)의 크기도 겹침에 따라 커진다. 이 장의 가우시안 모델(간격 ±70 nm)에서는 σ ≈ 24 nm에서 최대이고, σ = 70 nm에서는 노이즈 이득이 7을 넘어 색 SNR이 약 10 dB 떨어진다.</div></div>
+      <div class="quiz-q"><p>카메라 CCM의 B 열벡터를 XYZ로 바꿨더니 색도가 \( (x,y)=(0.09,\,-0.10) \)으로 나왔다. 올바른 해석은?</p><div class="opts">
+        <button class="opt" data-correct>B 채널만 1인 입력은 실제 빛으로 만들 수 없는 가상 원색에 해당하며, 실제 파란빛은 G 신호도 함께 만들어 합쳐진 결과는 Y &gt; 0이 된다</button>
+        <button class="opt">센서가 파란색을 전혀 기록할 수 없다는 뜻이다</button>
+        <button class="opt">CCM 계산에 오류가 있으므로 B 열을 0으로 잘라야 한다</button>
+        <button class="opt">카메라 색역이 Rec.2020보다 작다는 뜻이다</button>
+      </div><div class="quiz-exp">카메라 채널 감도는 서로 겹치므로 한 채널만 반응하는 빛은 없다. CCM 열벡터는 이런 가상 입력의 색도이며, 궤적 밖(음의 휘도 포함)에 있는 것이 정상이다. 카메라 색 품질은 원색 위치가 아니라 루터–아이브스 근사의 정확도로 평가한다.</div></div>
+      <div class="quiz-q"><p>두 물체가 D65 아래 사람 눈에는 같은 색인데, 같은 D65 조명에서 카메라로 찍으면 다른 색으로 나온다. 이 현상과 대응책으로 가장 알맞은 것은?</p><div class="opts">
+        <button class="opt">조명 메타메리즘 — 화이트 밸런스를 다시 맞추면 해결된다</button>
+        <button class="opt">디모자이킹 위색 — OLPF를 넣으면 해결된다</button>
+        <button class="opt">노이즈 — 노출을 늘리면 해결된다</button>
+        <button class="opt" data-correct>센서(관찰자) 메타메리즘 — 감도가 CMF의 선형 결합이 아니라서 생기며, 3×3 CCM으로는 없앨 수 없고 필터 분광 설계(루터–아이브스 근사 향상)로 줄여야 한다</button>
+      </div><div class="quiz-exp">조명이 같으므로 조명 메타메리즘이 아니다. 두 반사율의 차이(메타머 블랙)는 CMF와 직교하지만 카메라 감도와는 직교하지 않는다. 어떤 선형 변환도 이미 섞여 버린 정보를 되돌릴 수 없으므로 하드웨어 수준의 문제다(ISO 17321-1의 감도 메타메리즘 지수).</div></div>
     </div>
   </section>
 </main>
@@ -982,6 +1193,8 @@ function fitCCM(chs, ir) {
     for (var i = 0; i < err.length; i++) { var e = Math.abs(linToSrgb(dmOut[i]) - linToSrgb(scene.rgb[i])) * 4; err[i] = e >= 1 ? 1 : (e <= 0.04045 ? e / 12.92 : Math.pow((e + 0.055) / 1.055, 2.4)); }
     dmImgs = { out: toImageData(dmOut, W, H), orig: IMG_SCENE, err: toImageData(err, W, H) };
     SB.stat("o-dm-psnr", psnr(scene.rgb, dmOut, W, H).toFixed(2) + "<small>dB</small>");
+    var chP = [0, 1, 2].map(function (c) { var se = 0, n = 0; for (var y = 4; y < H - 4; y++) for (var x = 4; x < W - 4; x++) { var i = (y * W + x) * 3 + c, d = linToSrgb(dmOut[i]) - linToSrgb(scene.rgb[i]); se += d * d; n++; } return 10 * Math.log10(1 / Math.max(1e-12, se / n)); });
+    SB.stat("o-dm-ch", chP.map(function (v) { return v.toFixed(1); }).join(" / ") + "<small>dB</small>");
     SB.stat("o-dm-fc", fcGray(dmOut).toFixed(1));
     SB.stat("o-dm-ms", ms.toFixed(1) + "<small>ms</small>");
     showDm(); roiPsnr();
@@ -1101,6 +1314,364 @@ function fitCCM(chs, ir) {
   }, { get aspect() { var w = $("cv-snr").parentElement.clientWidth; return w >= 540 ? 0.56 : 1.25; } });
 })();
 
+</script>
+<script>
+/* ===== 색 과학 엔진: CIE xy, 루터–아이브스, 메타메리즘, CCM 노이즈 (앞 스크립트의 cieX/Y/Z, siQE, irCut, sig, matInv, FILT 사용) ===== */
+var CS = (function () {
+  var D65T = [49.98, 54.65, 82.75, 91.49, 93.43, 86.68, 104.86, 117.01, 117.81, 114.86, 115.92, 108.81, 109.35, 107.80, 104.79, 107.69, 104.41, 104.05, 100.00, 96.33, 95.79, 88.69, 90.01, 89.60, 87.70, 83.29, 83.70, 80.03, 80.21, 82.28, 78.28, 69.72, 71.61, 74.35, 61.60, 69.89, 75.09, 63.59, 46.42, 66.81, 63.38];
+  function d65(l) { if (l <= 380) return D65T[0]; if (l >= 780) return D65T[40]; var t = (l - 380) / 10, i = Math.floor(t), f = t - i; return D65T[i] * (1 - f) + D65T[i + 1] * f; }
+  function planck(l, T) { var x = l * 1e-9; return 1 / (Math.pow(x, 5) * (Math.exp(1.4388e-2 / (x * T)) - 1)); }
+  var A560 = planck(560, 2856);
+  function illA(l) { return 100 * planck(l, 2856) / A560; }
+  var LV = []; for (var l = 380; l <= 780; l += 5) LV.push(l);           // 가시광 격자 (81점)
+  var LF = []; for (var l2 = 380; l2 <= 1000; l2 += 5) LF.push(l2);      // 센서 격자 (125점)
+  var XYZ2RGB = [[3.2406, -1.5372, -0.4986], [-0.9689, 1.8758, 0.0415], [0.0557, -0.2040, 1.0570]];
+  function cmf(l) { return [cieX(l), cieY(l), cieZ(l)]; }
+  function mv(M, v) { return M.map(function (r) { var s = 0; for (var j = 0; j < v.length; j++) s += r[j] * v[j]; return s; }); }
+  function mm(A, B) { return A.map(function (r) { return B[0].map(function (_, j) { var s = 0; for (var k = 0; k < B.length; k++) s += r[k] * B[k][j]; return s; }); }); }
+  /** 최소자승 M (3×k): T ≈ M S, S: k×N, T: 3×N. 반환 {M, resid(상대 RMS)} */
+  function lsFit(S, T) {
+    var k = S.length, N = S[0].length, SS = [], TS = [];
+    for (var a = 0; a < k; a++) { SS.push([]); for (var b = 0; b < k; b++) { var s = 0; for (var n = 0; n < N; n++) s += S[a][n] * S[b][n]; SS[a].push(s); } }
+    for (var i = 0; i < 3; i++) { TS.push([]); for (var a2 = 0; a2 < k; a2++) { var s2 = 0; for (var n2 = 0; n2 < N; n2++) s2 += T[i][n2] * S[a2][n2]; TS[i].push(s2); } }
+    for (var d = 0; d < k; d++) SS[d][d] *= 1 + 1e-9;
+    var M = mm(TS, matInv(SS)), er = 0, tn = 0;
+    for (var i3 = 0; i3 < 3; i3++) for (var n3 = 0; n3 < N; n3++) { var p = 0; for (var a3 = 0; a3 < k; a3++) p += M[i3][a3] * S[a3][n3]; er += (p - T[i3][n3]) * (p - T[i3][n3]); tn += T[i3][n3] * T[i3][n3]; }
+    return { M: M, resid: Math.sqrt(er / tn) };
+  }
+  /** 행 벡터들의 정규 직교 기저 (Gram–Schmidt) */
+  function orth(V) { var Q = []; V.forEach(function (v) { var u = v.slice(); Q.forEach(function (q) { var d = 0; for (var n = 0; n < u.length; n++) d += u[n] * q[n]; for (var n2 = 0; n2 < u.length; n2++) u[n2] -= d * q[n2]; }); var nn = 0; for (var n3 = 0; n3 < u.length; n3++) nn += u[n3] * u[n3]; nn = Math.sqrt(nn); if (nn > 1e-12) Q.push(u.map(function (x) { return x / nn; })); }); return Q; }
+  /** Vora–Trussell 품질 계수 ν = tr(P_X P_S)/3 (D65 가중, 0~1) */
+  function vora(S, X) { var Qs = orth(S), Qx = orth(X), s = 0; Qx.forEach(function (qx) { Qs.forEach(function (qs) { var d = 0; for (var n = 0; n < qx.length; n++) d += qx[n] * qs[n]; s += d * d; }); }); return s / 3; }
+  function xy(v) { var s = v[0] + v[1] + v[2]; return s > 1e-12 ? [v[0] / s, v[1] / s] : [0.3127, 0.329]; }
+  function uv(p) { var d = -2 * p[0] + 12 * p[1] + 3; return [4 * p[0] / d, 9 * p[1] / d]; }
+  /* ---- 필터 모델 ---- */
+  /** 책 모델 기반 가변 필터: p = {r: R 경계, g: G 정점, b: B 정점, s: 대역폭 배율, y: G 대신 Y(RYYB)} */
+  function filtBook(ch, l, p) {
+    if (ch === 0) return 0.03 + 0.90 * sig((l - p.r) / (11 * p.s));
+    if (ch === 1) return p.y ? 0.04 + 0.90 * sig((l - (p.g - 43)) / (11 * p.s)) : 0.04 + 0.88 * Math.exp(-Math.pow((l - p.g) / (55 * p.s), 2)) + 0.86 * sig((l - 790) / 18);
+    return 0.03 + 0.86 * Math.exp(-Math.pow((l - p.b) / (40 * p.s), 2)) + 0.84 * sig((l - 805) / 18);
+  }
+  /** 가우시안 필터 가족: 중심 540±sp, 폭 σ */
+  function filtGauss(ch, l, p) { var mu = ch === 0 ? 540 + p.sp : (ch === 1 ? 540 : 540 - p.sp); var t = (l - mu) / p.sig; return 0.02 + 0.93 * Math.exp(-0.5 * t * t); }
+  /** 채널 감도 행렬 (k×N): 필터 × Si QE × IR 컷 × (선택) 조명 */
+  function sens(fn, k, p, grid, ill, ir) { var S = []; for (var c = 0; c < k; c++) S.push(grid.map(function (l) { return fn(c, l, p) * siQE(l) * (ir ? irCut(l, 650) : 1) * (ill ? ill(l) / 100 : 1); })); return S; }
+  function cmfM(grid, ill) { var X = [[], [], []]; grid.forEach(function (l) { var c = cmf(l), e = ill ? ill(l) / 100 : 1; for (var i = 0; i < 3; i++) X[i].push(c[i] * e); }); return X; }
+  /* ---- CIELAB / ΔE00 ---- */
+  function lab(X, Wt) { function f(t) { return t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116; } var fx = f(X[0] / Wt[0]), fy = f(X[1] / Wt[1]), fz = f(X[2] / Wt[2]); return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)]; }
+  function de00(a, b) {
+    var L1 = a[0], a1 = a[1], b1 = a[2], L2 = b[0], a2 = b[1], b2 = b[2], rad = Math.PI / 180;
+    var C1 = Math.hypot(a1, b1), C2 = Math.hypot(a2, b2), Cm = (C1 + C2) / 2, G = 0.5 * (1 - Math.sqrt(Math.pow(Cm, 7) / (Math.pow(Cm, 7) + Math.pow(25, 7))));
+    var a1p = (1 + G) * a1, a2p = (1 + G) * a2, C1p = Math.hypot(a1p, b1), C2p = Math.hypot(a2p, b2);
+    function hp(bb, ap) { if (bb === 0 && ap === 0) return 0; var h = Math.atan2(bb, ap) / rad; return h < 0 ? h + 360 : h; }
+    var h1p = hp(b1, a1p), h2p = hp(b2, a2p), dL = L2 - L1, dC = C2p - C1p, dh = 0;
+    if (C1p * C2p !== 0) { dh = h2p - h1p; if (dh > 180) dh -= 360; else if (dh < -180) dh += 360; }
+    var dH = 2 * Math.sqrt(C1p * C2p) * Math.sin(dh * rad / 2), Lm = (L1 + L2) / 2, Cpm = (C1p + C2p) / 2, hm = h1p + h2p;
+    if (C1p * C2p !== 0) { if (Math.abs(h1p - h2p) > 180) hm += (hm < 360 ? 360 : -360); hm /= 2; }
+    var T = 1 - 0.17 * Math.cos((hm - 30) * rad) + 0.24 * Math.cos(2 * hm * rad) + 0.32 * Math.cos((3 * hm + 6) * rad) - 0.20 * Math.cos((4 * hm - 63) * rad);
+    var dTh = 30 * Math.exp(-Math.pow((hm - 275) / 25, 2)), RC = 2 * Math.sqrt(Math.pow(Cpm, 7) / (Math.pow(Cpm, 7) + Math.pow(25, 7)));
+    var SL = 1 + 0.015 * (Lm - 50) * (Lm - 50) / Math.sqrt(20 + (Lm - 50) * (Lm - 50)), SC = 1 + 0.045 * Cpm, SH = 1 + 0.015 * Cpm * T, RT = -Math.sin(2 * dTh * rad) * RC;
+    return Math.sqrt(Math.pow(dL / SL, 2) + Math.pow(dC / SC, 2) + Math.pow(dH / SH, 2) + RT * (dC / SC) * (dH / SH));
+  }
+  /* ---- Bradford 색순응 (src 백색 → D65) ---- */
+  var BF = [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]], BFi = matInv(BF);
+  function adaptTo(Xs, Wsrc, Wdst) { var a = mv(BF, Wsrc), b = mv(BF, Wdst), c = mv(BF, Xs); return mv(BFi, [c[0] * b[0] / a[0], c[1] * b[1] / a[1], c[2] * b[2] / a[2]]); }
+  function xyz2srgb8(X, Yw) { var r = mv(XYZ2RGB, X.map(function (v) { return v / Yw; })); return r.map(function (v) { return Math.round(255 * linToSrgb(v)); }); }
+  function integ(rows, vec) { return rows.map(function (r) { var s = 0; for (var n = 0; n < r.length; n++) s += r[n] * vec[n]; return s; }); }
+  return { d65: d65, illA: illA, LV: LV, LF: LF, XYZ2RGB: XYZ2RGB, cmf: cmf, mv: mv, mm: mm, lsFit: lsFit, vora: vora, xy: xy, uv: uv,
+    filtBook: filtBook, filtGauss: filtGauss, sens: sens, cmfM: cmfM, lab: lab, de00: de00, adaptTo: adaptTo, xyz2srgb8: xyz2srgb8, integ: integ, orth: orth };
+})();
+
+/** 메타메리즘 모델: 기준 반사율, D65 하에서 XYZ가 같은 메타머 블랙 */
+var META = (function () {
+  var LV = CS.LV;
+  var BASES = {
+    gray: function (l) { return 0.40; },
+    skin: function (l) { return 0.18 + 0.38 * sig((l - 585) / 22) - 0.05 * Math.exp(-Math.pow((l - 545) / 20, 2)) - 0.03 * Math.exp(-Math.pow((l - 575) / 12, 2)); },
+    leaf: function (l) { return 0.05 + 0.09 * Math.exp(-Math.pow((l - 552) / 32, 2)) + 0.45 * sig((l - 708) / 12); },
+    blue: function (l) { return 0.08 + 0.42 * Math.exp(-Math.pow((l - 470) / 45, 2)) + 0.03 * sig((l - 700) / 15); }
+  };
+  var Xd = CS.cmfM(LV, CS.d65);               // 3×N, D65 가중 CMF
+  var Qx = CS.orth(Xd);
+  function black(period, phase) {               // 매끈한 섭동에서 D65-CMF 공간 성분을 뺀다 → XYZ(D65) 불변
+    var p = LV.map(function (l) { return Math.sin(2 * Math.PI * (l - 380) / period + phase) * Math.exp(-Math.pow((l - 560) / 230, 4)); });
+    Qx.forEach(function (q) { var d = 0; for (var n = 0; n < p.length; n++) d += p[n] * q[n]; for (var n2 = 0; n2 < p.length; n2++) p[n2] -= d * q[n2]; });
+    var mx = 0; p.forEach(function (v) { mx = Math.max(mx, Math.abs(v)); }); return p.map(function (v) { return v / (mx || 1); });
+  }
+  function amax(r1, b) { var a = 1e9; for (var n = 0; n < r1.length; n++) { if (b[n] > 1e-9) a = Math.min(a, (0.98 - r1[n]) / b[n]); else if (b[n] < -1e-9) a = Math.min(a, (r1[n] - 0.02) / -b[n]); } return Math.max(0, a); }
+  /** 카메라 모델 준비: 감도(가시광 격자, 조명 미포함)와 D65에서 맞춘 카메라→XYZ 행렬 */
+  function camera(fn, k, p) {
+    var S = CS.sens(fn, k, p, LV, null, true), Sd = CS.sens(fn, k, p, LV, CS.d65, true), fit = CS.lsFit(Sd, Xd);
+    var e1 = LV.map(function () { return 1; });
+    var wD = CS.integ(Sd, e1), XW = CS.integ(Xd, e1), cw = CS.mv(fit.M, wD);
+    var M = fit.M.map(function (r, i) { return r.map(function (v) { return v * XW[i] / cw[i]; }); });   // 백색 보존 스케일
+    var SA = CS.sens(fn, k, p, LV, CS.illA, true), wA = CS.integ(SA, e1);
+    return { S: S, Sd: Sd, SA: SA, M: M, wD: wD, wA: wA, XW: XW, resid: fit.resid };
+  }
+  var XA = CS.cmfM(LV, CS.illA), e1 = LV.map(function () { return 1; }), XWA = CS.integ(XA, e1), XWD = CS.integ(Xd, e1);
+  /** 한 쌍 평가 → {eyeD, eyeA, camD, camA, swatches} */
+  function evalPair(r1, r2, cam) {
+    var o = {};
+    var x1 = CS.integ(Xd, r1), x2 = CS.integ(Xd, r2), a1 = CS.integ(XA, r1), a2 = CS.integ(XA, r2);
+    o.eyeD = CS.de00(CS.lab(x1, XWD), CS.lab(x2, XWD));
+    o.eyeA = CS.de00(CS.lab(a1, XWA), CS.lab(a2, XWA));
+    var c1 = CS.mv(cam.M, CS.integ(cam.Sd, r1)), c2 = CS.mv(cam.M, CS.integ(cam.Sd, r2));
+    o.camD = CS.de00(CS.lab(c1, XWD), CS.lab(c2, XWD));
+    // 조명 A에서 카메라: 백색 게인(A→D65 백색) 후 D65 CCM → XYZ
+    var g = cam.wD.map(function (v, i) { return v / cam.wA[i]; });
+    function camA(r) { var c = CS.integ(cam.SA, r).map(function (v, i) { return v * g[i]; }); return CS.mv(cam.M, c); }
+    var q1 = camA(r1), q2 = camA(r2), t1 = CS.adaptTo(a1, XWA, XWD), t2 = CS.adaptTo(a2, XWA, XWD);
+    o.camA = CS.de00(CS.lab(q1, XWD), CS.lab(q2, XWD));
+    var Yw = XWD[1];
+    o.sw = { eyeD: [x1, x2], eyeA: [t1, t2], camD: [c1, c2], camA: [q1, q2] };
+    o.Yw = Yw;
+    return o;
+  }
+  /** 몬테카를로: n개 무작위 메타머 쌍 → 분포 */
+  function monteCarlo(cam, n, seed) {
+    var rnd = mulberry32(seed), keys = Object.keys(BASES), out = { eyeA: [], camD: [], camA: [] };
+    for (var t = 0; t < n; t++) {
+      var bf = BASES[keys[Math.floor(rnd() * keys.length)]], sc = 0.6 + 0.8 * rnd(), off = (rnd() - 0.5) * 0.1;
+      var r1 = LV.map(function (l) { return Math.min(0.95, Math.max(0.03, bf(l) * sc + off)); });
+      var b = black(40 + 160 * rnd(), 2 * Math.PI * rnd()), am = amax(r1, b), a = am * (0.3 + 0.7 * rnd());
+      var r2 = r1.map(function (v, i) { return v + a * b[i]; });
+      var e = evalPair(r1, r2, cam); out.eyeA.push(e.eyeA); out.camD.push(e.camD); out.camA.push(e.camA);
+    }
+    return out;
+  }
+  return { BASES: BASES, black: black, amax: amax, camera: camera, evalPair: evalPair, monteCarlo: monteCarlo, Xd: Xd };
+})();
+
+/** 필터 집합 → 선형 sRGB CCM, 노이즈 이득, 18% 회색 색 SNR. fn(c,l,p), k 채널 */
+function ccmNoise(fn, k, p, ir, N0) {
+  var LF = CS.LF, Sd = CS.sens(fn, k, p, LF, CS.d65, ir), Xd = CS.cmfM(LF, CS.d65);
+  var Td = Xd[0].map(function (_, n) { return CS.mv(CS.XYZ2RGB, [Xd[0][n], Xd[1][n], Xd[2][n]]); });
+  var T = [0, 1, 2].map(function (i) { return Td.map(function (v) { return v[i]; }); });
+  var e1 = LF.map(function () { return 1; }), sw = CS.integ(Sd, e1), tw = CS.integ(T, e1);
+  var Sn = Sd.map(function (r, j) { return r.map(function (v) { return v / sw[j]; }); }), Tn = T.map(function (r, i) { return r.map(function (v) { return v / tw[i]; }); });
+  var fit = CS.lsFit(Sn, Tn), M = fit.M.map(function (r) { var s = r.reduce(function (a, b) { return a + b; }, 0); return r.map(function (v) { return v / s; }); });
+  // 광자 수: 평탄 QE=1 픽셀이 N0 e⁻를 받는 조건에서 채널 j 전자 수 = N0 · ∫S_j D65 / ∫D65
+  var dsum = 0; CS.LV.forEach(function (l) { dsum += CS.d65(l) / 100; });
+  var Ne = sw.map(function (v) { return N0 * v / dsum; });
+  var ng = 0, snr = 0, rows = [];
+  M.forEach(function (r) { var q = 0, v = 0; r.forEach(function (m, j) { q += m * m; v += m * m / Ne[j]; }); rows.push(Math.sqrt(q)); ng = Math.max(ng, Math.sqrt(q)); snr += 20 * Math.log10(1 / Math.sqrt(v)); });
+  var ov = 0, gg = 0; if (k >= 2) for (var n = 0; n < LF.length; n++) { ov += Math.min(Sd[0][n], Sd[1][n]); gg += Sd[1][n]; }
+  return { M: M, resid: fit.resid, ng: ng, rows: rows, snr: snr / 3, Ne: Ne, ov: ov / gg, Sn: Sn, Tn: Tn };
+}
+
+/* ===== 10~12절 시뮬레이터: CCM 노이즈 스윕 · CIE xy · 메타메리즘 ===== */
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var CHC = ["#e0443e", "#2da44e", "#2f6fe0", "#9a9a9a"];
+  function wide(id, min) { return $(id).parentElement.clientWidth >= (min || 560); }
+  function ccmText(M, names) {
+    return "      " + names.map(function (c) { return ("      " + c).slice(-6); }).join("") + "\n" +
+      ["R", "G", "B"].map(function (o, i) { return o + " ← " + M[i].map(function (v) { var s = (v >= 0 ? " " : "") + v.toFixed(2); return ("      " + s).slice(-6); }).join(""); }).join("\n");
+  }
+
+  /* ---------------- 10. 필터 폭 스윕 ---------------- */
+  var cnSig = SB.range("cn-sig", function (v) { return v + " nm"; }, function () { updCn(); });
+  var cnSp = SB.range("cn-sp", function (v) { return "±" + v + " nm"; }, function () { updCn(); });
+  var cnN = SB.range("cn-n", function (v) { return Math.round(Math.pow(10, v)) + " e⁻"; }, function () { updCn(); });
+  var SWEEP = {}, CFAPTS = null;
+  function sweep(sp) {
+    if (SWEEP[sp]) return SWEEP[sp];
+    var arr = []; for (var s = 10; s <= 90; s += 2) { var q = ccmNoise(CS.filtGauss, 3, { sp: sp, sig: s }, true, 1000); arr.push({ s: s, res: q.resid, snr: q.snr, ng: q.ng }); }
+    return (SWEEP[sp] = arr);
+  }
+  function cfaPts() {
+    if (CFAPTS) return CFAPTS;
+    function f(chs) { return function (c, l) { return FILT[chs[c]](l); }; }
+    CFAPTS = [["Bayer", ["R", "G", "B"]], ["RYYB", ["R", "Y", "B"]], ["RGBW", ["R", "G", "B", "W"]]].map(function (d) { var q = ccmNoise(f(d[1]), d[1].length, {}, true, 1000); return { name: d[0], res: q.resid, snr: q.snr, ng: q.ng }; });
+    return CFAPTS;
+  }
+  var cnCur = null;
+  function updCn() {
+    var sp = cnSp(), sg = cnSig(), off = 10 * (cnN() - 3);
+    cnCur = ccmNoise(CS.filtGauss, 3, { sp: sp, sig: sg }, true, 1000);
+    var sw = sweep(sp), best = sw[0]; sw.forEach(function (p) { if (p.snr > best.snr) best = p; });
+    SB.stat("o-cn-ov", (100 * cnCur.ov).toFixed(0) + "<small>%</small>");
+    SB.stat("o-cn-res", (100 * cnCur.resid).toFixed(1) + "<small>%</small>");
+    SB.stat("o-cn-ng", cnCur.ng.toFixed(2));
+    SB.stat("o-cn-snr", (cnCur.snr + off).toFixed(1) + "<small>dB</small>");
+    SB.stat("o-cn-best", best.s + "<small>nm</small> (" + (best.snr + off).toFixed(1) + " dB)");
+    $("cn-ccm").textContent = ccmText(cnCur.M, ["R", "G", "B"]);
+    cvCn.redraw();
+  }
+  var cvCn = SB.canvas($("cv-ccmn"), function (ctx, w, h) {
+    if (!cnCur) return;
+    var P = SB.palette(), wd = w >= 560, off = 10 * (cnN() - 3);
+    var b1 = wd ? { x: 44, y: 14, w: w * 0.5 - 60, h: h - 60 } : { x: 44, y: 14, w: w - 58, h: h * 0.5 - 58 };
+    var b2 = wd ? { x: w * 0.5 + 40, y: 14, w: w * 0.5 - 54, h: h - 60 } : { x: 44, y: h * 0.5 + 14, w: w - 58, h: h * 0.5 - 60 };
+    var LF = CS.LF, ser = [], vis = function (n) { return LF[n] <= 760; };
+    var mx = 0; cnCur.Tn.forEach(function (r) { r.forEach(function (v) { mx = Math.max(mx, Math.abs(v)); }); });
+    cnCur.Sn.forEach(function (r) { r.forEach(function (v) { mx = Math.max(mx, v); }); });
+    for (var i = 0; i < 3; i++) {
+      var t = [], s = [], f = [];
+      for (var n = 0; n < LF.length; n++) { if (!vis(n)) continue; var l = LF[n], fv = 0; for (var j = 0; j < 3; j++) fv += cnCur.M[i][j] * cnCur.Sn[j][n]; t.push([l, cnCur.Tn[i][n] / mx]); s.push([l, cnCur.Sn[i][n] / mx]); f.push([l, fv / mx]); }
+      ser.push({ data: t, color: P.faint, width: 1.5 }, { data: s, color: CHC[i], width: 2 }, { data: f, color: CHC[i], width: 1.6, dash: [5, 4] });
+    }
+    SB.chart(ctx, b1, { x: [380, 760], y: [-0.4, 1.05], xLabel: "파장 (nm)", yLabel: "정규화 감도", series: ser, hlines: [{ y: 0, color: P.axis, dash: [] }] });
+    var sw = sweep(cnSp()), pts = cfaPts(), ymin = 1e9, ymax = -1e9, xmax = 0;
+    sw.forEach(function (p) { ymin = Math.min(ymin, p.snr + off); ymax = Math.max(ymax, p.snr + off); xmax = Math.max(xmax, p.res * 100); });
+    pts.forEach(function (p) { ymin = Math.min(ymin, p.snr + off); ymax = Math.max(ymax, p.snr + off); xmax = Math.max(xmax, p.res * 100); });
+    ymax = Math.ceil(ymax + 2); ymin = Math.max(Math.floor(ymin - 1), ymax - 12); xmax = Math.min(100, Math.ceil(xmax / 10) * 10 + 5);
+    var ch = SB.chart(ctx, b2, { x: [20, xmax], y: [ymin, ymax], xLabel: "루터–아이브스 잔차 (%)", series: [{ data: sw.map(function (p) { return [p.res * 100, p.snr + off]; }), color: P.accent2, width: 2 }] });
+    function mark(k, px, py, r) { ctx.beginPath(); if (k === 0) ctx.rect(px - r, py - r, 2 * r, 2 * r); else if (k === 1) { ctx.moveTo(px, py - r * 1.2); ctx.lineTo(px + r * 1.1, py + r * 0.8); ctx.lineTo(px - r * 1.1, py + r * 0.8); ctx.closePath(); } else { ctx.moveTo(px, py - r * 1.3); ctx.lineTo(px + r * 1.1, py); ctx.lineTo(px, py + r * 1.3); ctx.lineTo(px - r * 1.1, py); ctx.closePath(); } ctx.fill(); ctx.stroke(); }
+    ctx.lineWidth = 1; ctx.strokeStyle = P.bg; ctx.fillStyle = P.dim;
+    pts.forEach(function (p, k) { mark(k, ch.X(p.res * 100), ch.Y(p.snr + off), 4.5); });
+    ctx.fillStyle = P.accent; ctx.beginPath(); ctx.arc(ch.X(cnCur.resid * 100), ch.Y(cnCur.snr + off), 6, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = P.dim; ctx.font = "11px " + SB.color("font"); ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillText("색 SNR (dB) — 위·왼쪽이 좋음", b2.x + 4, b2.y + 2);
+    var lx = b2.x + 6, ly = b2.y + b2.h - 16;
+    ["Bayer", "RYYB", "RGBW"].forEach(function (nm, k) { ctx.fillStyle = P.dim; mark(k, lx + 4, ly + 6, 4); ctx.fillText(nm, lx + 12, ly); lx += ctx.measureText(nm).width + 24; });
+    ctx.fillStyle = P.accent; ctx.beginPath(); ctx.arc(lx + 4, ly + 6, 4.5, 0, 7); ctx.fill(); ctx.fillStyle = P.dim; ctx.fillText("현재 σ", lx + 12, ly);
+    [10, 30, 50, 90].forEach(function (s) { var p = sw[(s - 10) / 2]; if (!p) return; var px = ch.X(p.res * 100), py = ch.Y(p.snr + off); ctx.fillStyle = P.accent2; ctx.beginPath(); ctx.arc(px, py, 2.5, 0, 7); ctx.fill(); ctx.fillStyle = P.dim; ctx.fillText(s + "", px + 4, py + 2); });
+  }, { get aspect() { return wide("cv-ccmn") ? 0.5 : 1.35; } });
+  updCn();
+
+  /* ---------------- 11. CIE xy ---------------- */
+  var gmR = SB.range("gm-r", function (v) { return v + " nm"; }, function () { updGm(); });
+  var gmG = SB.range("gm-g", function (v) { return v + " nm"; }, function () { updGm(); });
+  var gmB = SB.range("gm-b", function (v) { return v + " nm"; }, function () { updGm(); });
+  var gmS = SB.range("gm-s", function (v) { return "×" + (+v).toFixed(2); }, function () { updGm(); });
+  var gmCfa = SB.seg("gm-cfa", function () { updGm(); });
+  ["gm-ir", "gm-tri"].forEach(function (id) { $(id).addEventListener("change", function () { updGm(); }); });
+  var LOC = []; for (var l0 = 410; l0 <= 700; l0 += 5) LOC.push(CS.xy(CS.cmf(l0)));
+  function inLocus(p) { var c = false; for (var i = 0, j = LOC.length - 1; i < LOC.length; j = i++) { var a = LOC[i], b = LOC[j]; if (((a[1] > p[1]) !== (b[1] > p[1])) && (p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0])) c = !c; } return c; }
+  var GAM = { srgb: [[0.64, 0.33], [0.30, 0.60], [0.15, 0.06]], p3: [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060]], r2020: [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046]] };
+  var horse = null, horseKey = "";
+  function horseshoe(pw, ph) {           // 말굽 안을 색으로 칠한 오프스크린 캔버스 (x 0..0.8, y 0..0.9)
+    var key = pw + "x" + ph; if (horse && horseKey === key) return horse;
+    var c = document.createElement("canvas"); c.width = pw; c.height = ph;
+    var g = c.getContext("2d"), im = g.createImageData(pw, ph);
+    for (var py = 0; py < ph; py++) for (var px = 0; px < pw; px++) {
+      var x = (px + 0.5) / pw * 0.8, y = 0.9 - (py + 0.5) / ph * 0.9, k = (py * pw + px) * 4;
+      if (!inLocus([x, y])) continue;
+      var rgb = CS.mv(CS.XYZ2RGB, [x / y, 1, (1 - x - y) / y]), m = 0;
+      for (var q = 0; q < 3; q++) { rgb[q] = Math.max(0, rgb[q]); m = Math.max(m, rgb[q]); }
+      for (var q2 = 0; q2 < 3; q2++) im.data[k + q2] = Math.round(255 * linToSrgb(rgb[q2] / m));
+      im.data[k + 3] = 200;
+    }
+    g.putImageData(im, 0, 0); horse = c; horseKey = key; return c;
+  }
+  var gm = null;
+  function updGm() {
+    var p = { r: gmR(), g: gmG(), b: gmB(), s: gmS(), y: gmCfa() === "ryyb" ? 1 : 0 }, ir = $("gm-ir").checked, LF = CS.LF;
+    var Sd = CS.sens(CS.filtBook, 3, p, LF, CS.d65, ir), Xd = CS.cmfM(LF, CS.d65), fit = CS.lsFit(Sd, Xd);
+    var cam = [], du = 0, nd = 0;
+    for (var l = 420; l <= 660; l += 5) {
+      var c = [0, 1, 2].map(function (k) { return CS.filtBook(k, l, p) * siQE(l) * (ir ? irCut(l, 650) : 1); });
+      var a = CS.xy(CS.mv(fit.M, c)), t = CS.xy(CS.cmf(l)), ua = CS.uv(a), ut = CS.uv(t);
+      du += Math.hypot(ua[0] - ut[0], ua[1] - ut[1]); nd++; cam.push({ l: l, p: a, t: t });
+    }
+    var prim = [0, 1, 2].map(function (k) { return CS.xy([fit.M[0][k], fit.M[1][k], fit.M[2][k]]); });
+    var nout = prim.filter(function (q) { return !inLocus(q); }).length, mx = 0;
+    fit.M.forEach(function (r) { r.forEach(function (v) { mx = Math.max(mx, Math.abs(v)); }); });
+    gm = { p: p, ir: ir, fit: fit, cam: cam, prim: prim, Sd: Sd, Xd: Xd };
+    SB.stat("o-gm-nu", CS.vora(Sd, Xd).toFixed(3));
+    SB.stat("o-gm-res", (100 * fit.resid).toFixed(1) + "<small>%</small>");
+    SB.stat("o-gm-duv", (du / nd).toFixed(3));
+    SB.stat("o-gm-out", nout + " / 3");
+    SB.stat("o-gm-mx", mx.toFixed(2));
+    cvGm.redraw();
+  }
+  var cvGm = SB.canvas($("cv-gamut"), function (ctx, w, h) {
+    if (!gm) return;
+    var P = SB.palette(), wd = w >= 560;
+    var side = wd ? w * 0.52 - 44 : w - 50, hmax = wd ? h - 40 : h * 0.58 - 34;
+    var bx = { x: 38, y: 10, w: Math.min(side, hmax / 1.125) }; bx.h = bx.w * 1.125;
+    var X = function (x) { return bx.x + x / 0.8 * bx.w; }, Y = function (y) { return bx.y + (0.9 - y) / 0.9 * bx.h; };
+    SB.chart(ctx, bx, { x: [0, 0.8], y: [0, 0.9], xTicks: [0, 0.2, 0.4, 0.6, 0.8], yTicks: [0, 0.2, 0.4, 0.6, 0.8], series: [] });
+    ctx.save(); ctx.beginPath(); ctx.rect(bx.x, bx.y, bx.w, bx.h); ctx.clip();
+    ctx.drawImage(horseshoe(Math.max(40, Math.round(bx.w / 2)), Math.max(45, Math.round(bx.h / 2))), bx.x, bx.y, bx.w, bx.h);
+    ctx.strokeStyle = P.text; ctx.lineWidth = 1.5; ctx.beginPath(); LOC.forEach(function (q, i) { i ? ctx.lineTo(X(q[0]), Y(q[1])) : ctx.moveTo(X(q[0]), Y(q[1])); }); ctx.closePath(); ctx.stroke();
+    function tri(t, col, dash, lw) { ctx.strokeStyle = col; ctx.lineWidth = lw || 1.6; ctx.setLineDash(dash || []); ctx.beginPath(); t.forEach(function (q, i) { i ? ctx.lineTo(X(q[0]), Y(q[1])) : ctx.moveTo(X(q[0]), Y(q[1])); }); ctx.closePath(); ctx.stroke(); ctx.setLineDash([]); }
+    if ($("gm-tri").checked) { tri(GAM.r2020, "#7c4dff"); tri(GAM.p3, "#e08a00"); tri(GAM.srgb, P.accent, null, 2); }
+    // 카메라 단색광 궤적
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 3.5; ctx.setLineDash([]); ctx.beginPath(); gm.cam.forEach(function (c, i) { i ? ctx.lineTo(X(c.p[0]), Y(c.p[1])) : ctx.moveTo(X(c.p[0]), Y(c.p[1])); }); ctx.stroke();
+    ctx.strokeStyle = "#111"; ctx.lineWidth = 1.6; ctx.setLineDash([5, 3]); ctx.stroke(); ctx.setLineDash([]);
+    gm.cam.forEach(function (c) { if ((c.l - 420) % 20) return; ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(c.t[0]), Y(c.t[1])); ctx.lineTo(X(c.p[0]), Y(c.p[1])); ctx.stroke(); ctx.fillStyle = SB.wl2rgb(c.l, 1); ctx.strokeStyle = "#111"; ctx.beginPath(); ctx.arc(X(c.p[0]), Y(c.p[1]), 3.5, 0, 7); ctx.fill(); ctx.stroke(); });
+    tri(gm.prim, P.text, [6, 4], 1.6);
+    ctx.restore();
+    ctx.font = "600 11px " + SB.color("font"); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+    gm.prim.forEach(function (q, k) { var px = SB.clamp(X(q[0]), bx.x + 4, bx.x + bx.w - 16), py = SB.clamp(Y(q[1]), bx.y + 8, bx.y + bx.h - 8); ctx.fillStyle = CHC[k]; ctx.beginPath(); ctx.arc(px, py, 5, 0, 7); ctx.fill(); ctx.fillStyle = P.text; ctx.fillText(["R", gm.p.y ? "Y" : "G", "B"][k] + (inLocus(q) ? "" : "*"), px + 7, py); });
+    ctx.fillStyle = P.dim; ctx.font = "11px " + SB.color("font"); ctx.textAlign = "right"; ctx.fillText("* 궤적 밖(가상 원색)", bx.x + bx.w - 4, bx.y + bx.h - 26); ctx.fillText("선분 끝 점 = 카메라가 본 단색광", bx.x + bx.w - 4, bx.y + bx.h - 10);
+    ctx.textAlign = "center"; ctx.fillText("x", bx.x + bx.w / 2, bx.y + bx.h + 22); ctx.textAlign = "left"; ctx.fillText("y", 4, bx.y + 10);
+    // 오른쪽: CMF vs 맞춘 감도
+    var b2 = wd ? { x: bx.x + bx.w + 56, y: 14, w: w - (bx.x + bx.w + 56) - 12, h: h - 60 } : { x: 44, y: bx.y + bx.h + 44, w: w - 56, h: h - (bx.y + bx.h + 44) - 46 };
+    var LF = CS.LF, ser = [], mxv = 0; gm.Xd.forEach(function (r) { r.forEach(function (v) { mxv = Math.max(mxv, v); }); });
+    var XC = ["#e0443e", "#2da44e", "#2f6fe0"];
+    for (var i = 0; i < 3; i++) {
+      var t = [], f = [];
+      for (var n = 0; n < LF.length; n++) { var l = LF[n]; if (l > 780) break; var fv = 0; for (var j = 0; j < 3; j++) fv += gm.fit.M[i][j] * gm.Sd[j][n]; t.push([l, gm.Xd[i][n] / mxv]); f.push([l, fv / mxv]); }
+      ser.push({ data: t, color: XC[i], width: 2 }, { data: f, color: XC[i], width: 1.6, dash: [5, 4] });
+    }
+    SB.chart(ctx, b2, { x: [380, 780], y: [-0.2, 1.05], xLabel: "파장 (nm)", series: ser, hlines: [{ y: 0, color: P.axis, dash: [] }] });
+    ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText("x̄ ȳ z̄ × D65 (실선) vs M·S (점선)", b2.x + 4, b2.y + 2);
+  }, { get aspect() { return wide("cv-gamut") ? 0.56 : 1.55; } });
+  updGm();
+
+  /* ---------------- 12. 메타메리즘 ---------------- */
+  var CAMS = { book: { r: 595, g: 535, b: 455, s: 1, y: 0 }, narrow: { r: 595, g: 535, b: 455, s: 0.6, y: 0 }, wide: { r: 595, g: 535, b: 455, s: 1.5, y: 0 }, ryyb: { r: 595, g: 535, b: 455, s: 1, y: 1 } };
+  var camCache = {}, mcCache = {};
+  function getCam(k) { return camCache[k] || (camCache[k] = META.camera(CS.filtBook, 3, CAMS[k])); }
+  function getMC(k) { return mcCache[k] || (mcCache[k] = META.monteCarlo(getCam(k), 250, 20261029)); }
+  var mtPer = SB.range("mt-per", function (v) { return v + " nm"; }, function () { updMt(); });
+  var mtPh = SB.range("mt-ph", function (v) { return v + "°"; }, function () { updMt(); });
+  var mtAmp = SB.range("mt-amp", function (v) { return v + "%"; }, function () { updMt(); });
+  var mtBase = SB.seg("mt-base", function () { updMt(); });
+  var mtCam = SB.seg("mt-cam", function () { updMt(); });
+  var mt = null;
+  function mean(a) { var s = 0; a.forEach(function (v) { s += v; }); return a.length ? s / a.length : 0; }
+  function updMt() {
+    var LV = CS.LV, bf = META.BASES[mtBase()], r1 = LV.map(function (l) { return bf(l); });
+    var b = META.black(mtPer(), mtPh() * Math.PI / 180), am = META.amax(r1, b), a = am * mtAmp() / 100;
+    var r2 = r1.map(function (v, i) { return v + a * b[i]; }), cam = getCam(mtCam()), e = META.evalPair(r1, r2, cam), mc = getMC(mtCam());
+    mt = { r1: r1, r2: r2, b: b.map(function (v) { return v * a; }), e: e, mc: mc };
+    SB.stat("o-mt-ed", Math.abs(e.eyeD).toFixed(2));
+    SB.stat("o-mt-ea", e.eyeA.toFixed(2));
+    SB.stat("o-mt-cd", e.camD.toFixed(2));
+    SB.stat("o-mt-ca", e.camA.toFixed(2));
+    SB.stat("o-mt-mi", mean(mc.camD).toFixed(2) + " <small>(눈·A " + mean(mc.eyeA).toFixed(2) + ")</small>");
+    cvMt.redraw();
+  }
+  var cvMt = SB.canvas($("cv-meta"), function (ctx, w, h) {
+    if (!mt) return;
+    var P = SB.palette(), wd = w >= 560, LV = CS.LV;
+    var b1 = wd ? { x: 44, y: 14, w: w * 0.5 - 56, h: h - 60 } : { x: 44, y: 14, w: w - 56, h: h * 0.36 - 54 };
+    var aMax = 0; LV.forEach(function (l) { aMax = Math.max(aMax, CS.illA(l)); });
+    SB.chart(ctx, b1, { x: [380, 780], y: [-0.5, 1], xLabel: "파장 (nm)", yLabel: "반사율", hlines: [{ y: 0, color: P.axis, dash: [] }], series: [
+      { data: LV.map(function (l) { return [l, CS.illA(l) / aMax]; }), color: P.faint, width: 1.2 },
+      { data: LV.map(function (l, i) { return [l, mt.b[i]]; }), color: P.dim, width: 1.4, dash: [4, 4] },
+      { data: LV.map(function (l, i) { return [l, mt.r1[i]]; }), color: P.text, width: 2.2 },
+      { data: LV.map(function (l, i) { return [l, mt.r2[i]]; }), color: P.accent, width: 2.2 }] });
+    // 견본
+    var x0 = wd ? w * 0.5 + 16 : 12, y0 = wd ? 10 : b1.y + b1.h + 46, ww = wd ? w * 0.5 - 28 : w - 24;
+    var rows = [["eyeD", "눈 · D65", mt.e.eyeD], ["eyeA", "눈 · A", mt.e.eyeA], ["camD", "카메라 · D65", mt.e.camD], ["camA", "카메라 · A", mt.e.camA]];
+    var sz = Math.min(34, (wd ? h * 0.5 : h * 0.3) / 4 - 6);
+    ctx.font = "12px " + SB.color("font"); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+    rows.forEach(function (r, i) {
+      var yy = y0 + i * (sz + 6), sw = mt.e.sw[r[0]];
+      [0, 1].forEach(function (k) { var c = CS.xyz2srgb8(sw[k], mt.e.Yw); ctx.fillStyle = "rgb(" + c.join(",") + ")"; ctx.fillRect(x0 + k * sz * 1.4, yy, sz * 1.4, sz); });
+      ctx.fillStyle = P.text; ctx.fillText(r[1], x0 + sz * 2.8 + 10, yy + sz * 0.32);
+      ctx.fillStyle = r[2] > 2 ? P.warn : P.dim; ctx.fillText("ΔE00 = " + Math.abs(r[2]).toFixed(2), x0 + sz * 2.8 + 10, yy + sz * 0.74);
+    });
+    // 히스토그램
+    var hy = y0 + 4 * (sz + 6) + 10, b3 = { x: x0 + 30, y: hy, w: ww - 36, h: h - hy - 40 };
+    if (b3.h < 40) return;
+    var NB = 16, mxE = 16, hc = new Array(NB).fill(0), ha = new Array(NB).fill(0);
+    mt.mc.camD.forEach(function (v) { hc[Math.min(NB - 1, Math.floor(v / mxE * NB))]++; });
+    mt.mc.eyeA.forEach(function (v) { ha[Math.min(NB - 1, Math.floor(v / mxE * NB))]++; });
+    var top = 0; hc.concat(ha).forEach(function (v) { top = Math.max(top, v); });
+    var ch = SB.chart(ctx, b3, { x: [0, mxE], y: [0, top * 1.1], xLabel: "ΔE00 (250쌍)", yTicks: [0, Math.round(top / 2), top], series: [{ data: ha.map(function (v, i) { return [(i + 0.5) * mxE / NB, v]; }), color: P.accent2, width: 2 }] });
+    ctx.fillStyle = P.accent; ctx.globalAlpha = 0.55;
+    hc.forEach(function (v, i) { var xa = ch.X(i * mxE / NB) + 1, xb = ch.X((i + 1) * mxE / NB) - 1; ctx.fillRect(xa, ch.Y(v), xb - xa, ch.Y(0) - ch.Y(v)); });
+    ctx.globalAlpha = 1; ctx.fillStyle = P.dim; ctx.font = "11px " + SB.color("font"); ctx.textAlign = "right"; ctx.textBaseline = "top";
+    ctx.fillText("막대: 카메라·D65 · 선: 눈·A", b3.x + b3.w - 2, b3.y + 2);
+  }, { get aspect() { return wide("cv-meta") ? 0.56 : 1.75; } });
+  updMt();
+})();
 </script>
 </body>
 </html>
