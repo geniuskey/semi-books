@@ -42,6 +42,8 @@
       <li>위상차 AF(PDAF)가 좌·우 서브픽셀 신호의 시차로 초점 방향과 거리를 한 번에 알아내는 원리를 이해한다.</li>
       <li>테트라셀·노나셀의 비닝과 리모자이크가 해상도와 SNR 사이에서 어떻게 절충하는지 수치로 비교한다.</li>
       <li>SPAD 기반 dToF의 히스토그램 측정과 iToF의 위상 측정 원리, 배경광의 영향을 안다.</li>
+      <li>iToF 4위상 복조의 깊이 노이즈, 이중 주파수 언래핑, 다중 경로 편향을 계산하고, SPAD TCSPC의 파일업을 코츠 보정으로 되돌린다.</li>
+      <li>QIS의 1비트 jot 합산과 최대우도 복원, 인센서 처리의 데이터율·전력 절감과 판정 오류의 거래를 정량적으로 다룬다.</li>
       <li>이벤트 기반 센서, SWIR 센서, 메타렌즈·컬러 라우터 같은 새로운 방향을 개괄한다.</li>
     </ul>
   </header>
@@ -432,6 +434,37 @@
       <div class="sim-note">TDC 빈 폭 0.5 ns(7.5 cm), 시스템 지터 0.3 ns rms, 측정 창 220 ns(33 m). 각 펄스 주기마다 SPAD는 <em>처음 검출한 광자 하나</em>만 기록한다(데드 타임 모형). 해볼 것: ① 배경광을 100 klux(한낮 햇빛)로 올리면 히스토그램 앞쪽이 부풀고 뒤로 갈수록 지수적으로 줄어드는 파일업 모양이 된다. 이 상태에서 거리를 25 m로 늘려 보자. ② 반사율 10%, 10 m에서 펄스 수를 1,000에서 10,000으로 늘리면 봉우리가 배경 위로 드러난다. 20 m에서는 10,000번으로도 신호 광자가 열 개 안팎이라 배경광을 거의 꺼야 겨우 보인다.</div>
     </div>
     <p>스마트폰의 LiDAR 스캐너, 자동차 LiDAR, 근접 센서가 SPAD dToF를 쓴다. 최근에는 SPAD 어레이 아래에 TDC·히스토그램 회로를 하이브리드 본딩으로 붙인 적층형 SPAD 센서가 표준이 되었다. SPAD 픽셀 피치는 수 µm~10 µm 수준이며, 흡수 효율을 높이기 위해 3장의 DTI와 표면 텍스처 기술을 그대로 활용한다.</p>
+
+    <h3>파일업 보정과 SPAD의 비이상성</h3>
+    <p>위 시뮬레이터의 히스토그램은 "그 시각에 광자가 올 확률"이 아니라 "그 시각까지 SPAD가 살아 있었고 <em>그때</em> 광자가 왔을 확률"이다. 앞쪽 빈에서 이미 검출된 주기는 뒤쪽 빈을 볼 수 없으므로 히스토그램은 배경광이 셀수록 지수적으로 줄어든다. 빈 \(i\)의 참 광자율(주기당 평균 광자 수) \(\lambda_i\)와 관측 계수 \(h_i\)의 관계를 거꾸로 풀면 <span class="term">코츠 보정</span><span class="en">(Coates Correction)</span>이 된다.</p>
+    <div class="formula">$$\hat{\lambda}_i = -\ln\!\left(1 - \frac{h_i}{M - \sum_{j=i-D}^{i-1} h_j}\right),\qquad D = \frac{\tau_d}{\Delta t_\text{bin}}$$
+      <div class="where">\(M\): 레이저 주기 수, 분모: 빈 \(i\)에서 SPAD가 무장 상태였던 주기 수. 데드 타임 \(\tau_d\)가 측정 창보다 길면(주기당 한 번만 검출) 합은 처음부터 \(i-1\)까지이고 원래의 코츠 식이 된다. 데드 타임 창 안에서는 검출이 많아야 한 번이므로 이 분모는 정확하다. 단, 분모가 작은 늦은 빈일수록 추정의 분산이 커진다.</div>
+    </div>
+    <p>보정이 되돌리지 못하는 비이상성도 있다. <span class="term">암계수율</span><span class="en">(Dark Count Rate, DCR)</span>은 빛 없이 열·터널링으로 생긴 애벌랜치로, 배경광처럼 시간에 고르게 더해진다(소자와 온도에 따라 SPAD 하나에 수십~수천 cps). <span class="term">애프터펄싱</span><span class="en">(Afterpulsing)</span>은 애벌랜치 때 결함에 붙잡힌 캐리어가 재충전 직후 풀려나 가짜 검출을 만드는 현상이다. 이전 검출에 시간적으로 묶여 있어 봉우리 뒤에 꼬리를 만들고, 독립 광자를 가정한 코츠 식으로는 지워지지 않는다. 데드 타임을 늘리면 애프터펄싱은 줄지만 고광량에서 파일업이 심해진다.</p>
+    <p><b>계산 예.</b> \(M\) = 20,000주기, 빈 \(i\) 이전 누적 검출이 13,000회, \(h_i\) = 140이면 무장 주기는 7,000회이고 \(\hat{\lambda}_i = -\ln(1-0.02)\) = 0.0202다. 원 히스토그램 \(h_i/M\) = 0.0070은 2.9배 작게 본다. 주기당 배경광이 2광자(100 ns 창)이면 80 ns 지점에서 무장 확률은 \(e^{-1.6}\) = 0.20밖에 안 된다. 보정은 편향을 없애지만 그 빈의 정보는 1/5로 줄어든다.</p>
+
+    <div class="sim" id="sim-coa">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>TCSPC 파일업: 코츠 보정, 데드 타임, DCR, 애프터펄스</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-coa"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>배경광 (100 ns 창) <output id="coa-b-out"></output></span><input type="range" id="coa-b" min="-2" max="0.7" step="0.1" value="0.3"></label>
+          <label class="ctrl"><span>신호 광자 <output id="coa-s-out"></output></span><input type="range" id="coa-s" min="-2" max="0.5" step="0.1" value="-1.3"></label>
+          <label class="ctrl"><span>데드 타임 τ_d <output id="coa-tau-out"></output></span><input type="range" id="coa-tau" min="5" max="200" step="5" value="200"></label>
+          <label class="ctrl"><span>암계수율 DCR <output id="coa-dcr-out"></output></span><input type="range" id="coa-dcr" min="0" max="1000" step="50" value="100"></label>
+          <label class="ctrl"><span>애프터펄스 확률 <output id="coa-ap-out"></output></span><input type="range" id="coa-ap" min="0" max="0.2" step="0.01" value="0"></label>
+          <label class="ctrl"><span>목표 거리 <output id="coa-d-out"></output></span><input type="range" id="coa-d" min="1" max="14" step="0.5" value="12"></label>
+          <button class="btn primary" id="coa-run">다시 측정</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">주기당 검출 수</span><span class="v" id="coa-o-det">—</span></div>
+        <div class="stat"><span class="k">거리 오차 (원 히스토그램)</span><span class="v" id="coa-o-raw">—</span></div>
+        <div class="stat"><span class="k">거리 오차 (코츠 보정)</span><span class="v" id="coa-o-cor">—</span></div>
+        <div class="stat"><span class="k">후반 25 % 광자율 과잉</span><span class="v" id="coa-o-tail">—</span></div>
+      </div>
+      <div class="sim-note">위: 0.25 ns 빈 400개(100 ns 창)의 원 히스토그램(주기당 빈당 검출 확률), 코츠 보정한 광자율, 참 광자율(로그 축). 아래: 봉우리 주변 확대. 모델: 주기마다 배경광·DCR 광자(균일)와 신호 광자(지터 0.2 ns)를 푸아송으로 뽑고, SPAD는 검출 후 τ_d 동안 꺼진다. 애프터펄스는 재충전 뒤 평균 5 ns 지연의 가짜 사건이다. 20,000주기. 거리는 봉우리 주변 배경 제거 무게중심(보정값은 무장 주기 수로 가중한 탐색)으로 구한다. 해볼 것: ① 기본값(배경 2광자/주기, 신호 0.05, 12 m)에서 주기의 87 %가 검출로 끝나고 원 히스토그램의 최댓값은 창 맨 앞에 있어 거리 오차가 −11.6 m다. 코츠 보정은 −0.8 cm다. ② 배경광을 0.05로 내리면 두 값이 모두 −0.1 cm로 같아진다. 파일업은 고광량 문제다. ③ 배경광 0.05에서 신호를 3.2광자로 올리면 이번에는 신호 자체가 파일업을 일으켜 원 히스토그램의 봉우리가 앞으로 쏠린다(−2.4 cm, 보정 약 0 cm). ④ 데드 타임을 20 ns로 줄이면 한 주기에 여러 번 검출되어(1.49회) 파일업이 거의 사라진다. 여기에 애프터펄스 10 %를 주면 후반 광자율이 +9 %, 20 %에서는 +20 % 부풀어 코츠 식으로 지워지지 않는다.</div>
+    </div>
   </section>
 
   <!-- ============================================================ 8 -->
@@ -465,6 +498,109 @@
         <tr><td>주 용도</td><td>LiDAR, AR 공간 인식</td><td>얼굴 인식, 제스처, 실내 3D</td></tr>
       </tbody>
     </table></div>
+    <h3>4위상 복조의 노이즈, 이중 주파수 언래핑, 다중 경로</h3>
+    <p>네 탭의 전하는 신호 \(S\)(네 탭 합), 배경광 \(B\), 탭당 읽기 노이즈 \(\sigma_r\)을 가진 푸아송 변수다. 차분 \(I = Q_0 - Q_{180}\), \(Q = Q_{90} - Q_{270}\)의 진폭은 \(c_d S/2\)이고(\(c_d\): 복조 대비), 각 차분의 분산은 두 탭 값의 합이다. 여기서 위상 노이즈와 깊이 노이즈가 나온다.</p>
+    <div class="formula">$$\sigma_\varphi \approx \frac{\sqrt{2}\,\sqrt{S + B + 4\sigma_r^2}}{c_d\,S},\qquad \sigma_d = \frac{d_\text{max}}{2\pi}\,\sigma_\varphi = \frac{c}{4\pi f_\text{mod}}\,\sigma_\varphi$$
+      <div class="where">\(c_d\)는 PD의 확산 꼬리와 탭 전송 속도가 정하는 복조 대비로, 변조 주파수가 높을수록 떨어진다(<a href="photodiode.html#speed">2장 응답 속도</a>). 배경광은 차분에서 평균은 상쇄되지만 분산 \(B\)는 남는다. 같은 신호에서 \(f_\text{mod}\)를 높이면 \(\sigma_d\)가 \(1/f\)로 줄지만 \(d_\text{max}\)도 함께 줄어든다.</div>
+    </div>
+    <p><b>계산 예.</b> \(f_\text{mod}\) = 100 MHz(\(d_\text{max}\) = 1.5 m), 2 m 거리에서 \(S\) = 5,000 e⁻, \(B\) = 20,000 e⁻, \(c_d\) = 0.8, \(\sigma_r\) = 5 e⁻이면 \(\sigma_\varphi = \sqrt{2}\times\sqrt{25{,}100}/(0.8\times5{,}000)\) = 0.056 rad이고 \(\sigma_d = 1.5/(2\pi)\times0.056\) = 13.4 mm다. 그런데 2 m는 1.5 m보다 머니 측정값은 0.5 m로 감긴다. 80 MHz(\(d_\text{max}\) = 1.875 m)를 한 번 더 재면 두 감긴 값이 동시에 맞는 거리는 두 주파수의 최대공약수 20 MHz의 \(d_\text{max}\) = 7.5 m 안에서 하나뿐이다. 두 추정을 분산의 역수로 가중 평균하면 \(\sigma_d\) = 10.5 mm가 된다.</p>
+    <p><span class="term">다중 경로 간섭</span><span class="en">(Multipath Interference)</span>은 iToF의 가장 까다로운 오차다. 벽 모서리나 바닥에서 한 번 더 튄 빛이 늦게 들어오면 픽셀은 두 위상자의 합을 재므로 위상이 직접 반사와 간접 반사 사이로 끌려간다. 간접 경로의 상대 세기 \(\alpha\), 추가 왕복 경로 \(\Delta L\)이면 위상 오차는 \(\delta\varphi = \operatorname{atan}\bigl[\alpha\sin\Delta\phi/(1+\alpha\cos\Delta\phi)\bigr]\), \(\Delta\phi = 2\pi f_\text{mod}\Delta L/c\)다. \(\alpha\) = 0.3, \(\Delta L\) = 1 m에서 100 MHz는 \(\Delta\phi\) = 2.09 rad, \(\delta\varphi\) = 0.30 rad, 깊이 오차 71 mm이고, 20 MHz는 114 mm다. 이 오차는 평균해도 줄지 않는 편향이며 주파수마다 다르므로, 여러 주파수의 불일치로 다중 경로를 검출하거나 보정하는 방법이 연구된다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 720 250" role="img" aria-label="iToF 위상자 합과 이중 주파수 언래핑">
+        <text x="150" y="22" text-anchor="middle" class="lbl-b">다중 경로: 위상자의 합</text>
+        <circle cx="150" cy="140" r="90" fill="none" stroke="var(--grid)"/>
+        <path d="M50 140H250M150 40V240" class="s-axis" opacity=".5"/>
+        <path d="M150 140 L214 76" stroke="var(--accent)" stroke-width="2.5"/><text x="218" y="72" class="t-mono" style="fill:var(--accent)">직접</text>
+        <path d="M214 76 L196 52" stroke="var(--warn)" stroke-width="2.5"/><text x="168" y="46" class="t-mono" style="fill:var(--warn)">α·간접</text>
+        <path d="M150 140 L196 52" stroke="var(--bad)" stroke-width="2.5" stroke-dasharray="5 3"/><text x="92" y="84" class="t-mono" style="fill:var(--bad)">측정 = 합</text>
+        <path d="M178 112 A38 38 0 0 0 170 104" stroke="var(--text-dim)" fill="none"/><text x="182" y="128" class="t-mono">δφ</text>
+        <text x="30" y="246" class="lbl-dim">늦게 온 빛이 위상을 끌어당겨 거리가 길게 나온다</text>
+        <text x="520" y="22" text-anchor="middle" class="lbl-b">이중 주파수 언래핑 (100 · 80 MHz)</text>
+        <path d="M340 90H700M340 170H700" class="s-axis"/>
+        <text x="340" y="70" class="t-mono">f₁: d₁ + n·1.5 m</text><text x="340" y="150" class="t-mono">f₂: d₂ + n·1.875 m</text>
+        <g fill="var(--accent)"><circle cx="370" cy="90" r="5"/><circle cx="442" cy="90" r="5"/><circle cx="514" cy="90" r="5"/><circle cx="586" cy="90" r="5"/><circle cx="658" cy="90" r="5"/></g>
+        <g fill="var(--accent-2)"><circle cx="388" cy="170" r="5"/><circle cx="478" cy="170" r="5"/><circle cx="568" cy="170" r="5"/><circle cx="658" cy="170" r="5"/></g>
+        <path d="M658 70V196" stroke="var(--ok)" stroke-width="2" stroke-dasharray="4 3"/><text x="658" y="214" text-anchor="middle" class="t-mono" style="fill:var(--ok)">두 후보가 겹치는 거리</text>
+        <text x="340" y="240" class="lbl-dim">가장 가까운 오답 쌍의 간격은 0.375 m. 두 측정 차이의 노이즈가 그 절반에 가까워지면 언래핑이 틀린다.</text>
+      </svg>
+      <figcaption><b>그림 12-9.</b> 왼쪽: 직접 반사와 다중 경로 반사의 위상자가 더해져 측정 위상이 \(\delta\varphi\)만큼 어긋난다. 오른쪽: 두 주파수의 감긴 거리 후보 가운데 서로 일치하는 것을 고르면 비모호 거리가 7.5 m로 늘어난다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-itf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>iToF 4위상 복조: 노이즈, 언래핑, 다중 경로</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-itf"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>주파수 모드</span><div class="seg" id="itf-mode"><button data-value="single">단일</button><button data-value="dual" class="on">이중 (f, 0.8 f)</button></div></div>
+          <label class="ctrl"><span>변조 주파수 f <output id="itf-f-out"></output></span><input type="range" id="itf-f" min="20" max="200" step="10" value="100"></label>
+          <label class="ctrl"><span>신호 (1 m, 네 탭 합) <output id="itf-s-out"></output></span><input type="range" id="itf-s" min="3.3" max="5.3" step="0.1" value="4.3"></label>
+          <label class="ctrl"><span>배경광 전자 B <output id="itf-b-out"></output></span><input type="range" id="itf-b" min="0" max="100000" step="5000" value="20000"></label>
+          <label class="ctrl"><span>다중 경로 α (ΔL = 1 m) <output id="itf-a-out"></output></span><input type="range" id="itf-a" min="0" max="0.5" step="0.05" value="0"></label>
+          <label class="ctrl"><span>장면 최대 거리 <output id="itf-dmax-out"></output></span><input type="range" id="itf-dmax" min="1" max="7.5" step="0.1" value="6"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">비모호 거리</span><span class="v" id="itf-o-r">—</span></div>
+        <div class="stat"><span class="k">σ_d @ 2 m (MC / 이론)</span><span class="v" id="itf-o-sd">—</span></div>
+        <div class="stat"><span class="k">엉뚱한 거리 (|오차| > R₁/4)</span><span class="v" id="itf-o-fail">—</span></div>
+        <div class="stat"><span class="k">편향 @ 2 m</span><span class="v" id="itf-o-bias">—</span></div>
+      </div>
+      <div class="sim-note">위: 0.3 m에서 최대 거리까지 경사진 장면의 픽셀 160개를 한 프레임 측정한 깊이(빨간 점 = 엉뚱한 거리). 아래 왼쪽: 픽셀마다 16프레임 몬테카를로로 잰 깊이 노이즈와 이론 식. 아래 오른쪽(넓은 화면): 2 m 픽셀의 위상자와 노이즈 구름. 모델: 탭당 푸아송 + 읽기 노이즈 5 e⁻, 복조 대비 0.8, 신호는 거리 제곱에 반비례, 다중 경로는 같은 픽셀에 추가 왕복 1 m로 늦게 도착하는 두 번째 반사. 해볼 것: ① 기본값(이중 100·80 MHz)은 비모호 거리 7.49 m, 2 m의 σ_d 9.4 mm(이론 10.5 mm)다. 먼 픽셀의 약한 신호에서 5.2 %가 언래핑에 실패한다. ② 단일 주파수로 바꾸면 1.50 m마다 깊이가 감겨 78.8 %가 엉뚱한 거리가 된다. 장면 최대 거리를 1.4 m로 줄이면 0 %다. ③ 단일 20 MHz는 7.49 m까지 감기지 않지만 σ_d가 66 mm로 5배 넘게 커진다. ④ 이중 모드에서 신호를 10^3.6(약 4,000 e⁻)으로 낮추면 실패율이 39.5 %로 뛴다. 노이즈가 오답 후보 간격에 다가갔기 때문이다. ⑤ α를 0.3으로 올리면 노이즈는 그대로인데 2 m에서 +78 mm의 편향이 생긴다(단일 20 MHz에서는 +118 mm). 프레임을 아무리 평균해도 사라지지 않는다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8b -->
+  <section id="qis">
+    <h2>양자 영상 센서(QIS): 광자를 비트로 세기</h2>
+    <p>SPAD가 광자의 <em>시각</em>을 잰다면, <span class="term">양자 영상 센서</span><span class="en">(Quanta Image Sensor, QIS)</span>는 광자의 <em>유무</em>를 아주 작은 화소에서 아주 빠르게 반복해서 잰다. 이 화소를 <span class="term">jot</span>이라 부른다. jot 하나는 서브 µm 크기에 풀웰이 수 e⁻ 정도이고, 읽기 노이즈를 0.2 e⁻ rms 안팎까지 낮춘 핀드 PD 구조(또는 SPAD)로 "광전자 0개 대 1개 이상"을 판정해 1비트를 낸다. 한 장의 출력 영상은 수십~수백 장의 <b>비트 평면</b><span class="en">(Bit Plane)</span>을 시간·공간으로 합해 만든다. 읽기 노이즈가 1 e⁻ 아래로 내려가면 전자 하나하나가 구별되는 이유와 광자 수 히스토그램은 <a href="noise.html#photoncount">7장 광자 계수</a>에서 보았다.</p>
+    <div class="formula">$$P_1(H) = \sum_{n\ge0} \frac{H^n e^{-H}}{n!}\,\Phi\!\left(\frac{n - q + \tfrac12}{\sigma_r}\right)\ \xrightarrow{\ q=1,\ \sigma_r\to0\ }\ 1 - e^{-H},\qquad \hat{H} = -\ln\!\left(1 - \frac{K}{n}\right)$$
+      <div class="where">\(H\): jot·비트 평면당 평균 광전자 수(노출), \(q\): 판정 문턱(광전자 \(q\)개 이상이면 1), \(\sigma_r\): jot 읽기 노이즈, \(\Phi\): 표준 정규 누적 분포, \(K\): \(n = k^2 T\)회 판정(공간 \(k\times k\) jot, 시간 \(T\)장) 가운데 1의 개수, \(\hat{H}\): 최대우도 추정(\(q\)=1, \(\sigma_r\to0\)인 경우).</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 720 230" role="img" aria-label="QIS 비트 평면 합산과 로그형 응답">
+        <defs><marker id="adv-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text-dim)"/></marker></defs>
+        <text x="160" y="22" text-anchor="middle" class="lbl-b">비트 평면을 쌓아 센다</text>
+        <g stroke="var(--border)">
+          <rect x="40" y="50" width="90" height="90" class="si" opacity=".5"/><rect x="50" y="60" width="90" height="90" class="si" opacity=".75"/><rect x="60" y="70" width="90" height="90" class="si"/>
+        </g>
+        <g fill="var(--text)"><rect x="66" y="76" width="12" height="12"/><rect x="102" y="94" width="12" height="12"/><rect x="84" y="130" width="12" height="12"/><rect x="120" y="112" width="12" height="12"/><rect x="66" y="142" width="12" height="12"/></g>
+        <text x="105" y="184" text-anchor="middle" class="t-mono">T장 × k² jot, 각 1비트</text>
+        <path d="M160 115 H214" class="s-line" marker-end="url(#adv-arr)"/><text x="187" y="106" text-anchor="middle" class="t-mono">Σ</text>
+        <rect x="220" y="90" width="90" height="50" rx="6" class="logic"/><text x="265" y="112" text-anchor="middle" class="t-mono">K / n</text><text x="265" y="130" text-anchor="middle" class="lbl-dim">밀도</text>
+        <text x="160" y="214" text-anchor="middle" class="lbl-dim">밝을수록 1이 많아지지만 1을 넘을 수는 없다</text>
+        <text x="540" y="22" text-anchor="middle" class="lbl-b">응답: 1 − e^(−H) 대 선형 포화</text>
+        <path d="M380 190H700M380 40V190" class="s-axis"/>
+        <path d="M380 189.5 384 189.4 388 189.4 391 189.3 395 189.3 399 189.2 402 189.1 406 189.0 410 188.9 414 188.8 418 188.6 421 188.5 425 188.3 429 188.1 432 188.0 436 187.7 440 187.5 444 187.2 448 186.9 451 186.6 455 186.3 459 185.9 462 185.4 466 184.9 470 184.4 474 183.8 478 183.1 481 182.4 485 181.6 489 180.7 492 179.7 496 178.6 500 177.4 504 176.1 508 174.6 511 173.0 515 171.2 519 169.2 522 167.0 526 164.6 530 161.9 534 158.9 538 155.6 541 152.0 545 147.9 549 143.5 552 138.5 556 133.1 560 127.1 564 120.4 568 113.0 571 104.8 575 95.8 579 85.8 582 74.8 586 62.6 590 49.1 594 40.0 598 40.0 601 40.0 605 40.0 609 40.0 612 40.0 616 40.0 620 40.0 624 40.0 628 40.0 631 40.0 635 40.0 639 40.0 642 40.0 646 40.0 650 40.0 654 40.0 658 40.0 661 40.0 665 40.0 669 40.0 672 40.0 676 40.0 680 40.0" fill="none" stroke="var(--warn)" stroke-width="2" stroke-dasharray="6 4"/>
+        <path d="M380 188.5 384 188.4 388 188.2 391 188.0 395 187.8 399 187.5 402 187.3 406 187.0 410 186.7 414 186.3 418 185.9 421 185.5 425 185.1 429 184.5 432 184.0 436 183.4 440 182.7 444 181.9 448 181.1 451 180.2 455 179.2 459 178.1 462 176.9 466 175.5 470 174.1 474 172.5 478 170.8 481 168.9 485 166.8 489 164.6 492 162.2 496 159.5 500 156.7 504 153.6 508 150.3 511 146.8 515 143.0 519 139.0 522 134.7 526 130.2 530 125.5 534 120.5 538 115.4 541 110.1 545 104.7 549 99.1 552 93.6 556 88.1 560 82.6 564 77.3 568 72.2 571 67.3 575 62.8 579 58.7 582 55.0 586 51.7 590 49.0 594 46.6 598 44.8 601 43.3 605 42.2 609 41.4 612 40.9 616 40.5 620 40.3 624 40.1 628 40.1 631 40.0 635 40.0 639 40.0 642 40.0 646 40.0 650 40.0 654 40.0 658 40.0 661 40.0 665 40.0 669 40.0 672 40.0 676 40.0 680 40.0" fill="none" stroke="var(--accent)" stroke-width="2.6"/>
+        <text x="380" y="206" class="t-mono">0.01</text><text x="466" y="206" class="t-mono">0.1</text><text x="551" y="206" class="t-mono">1</text><text x="637" y="206" class="t-mono">10</text>
+        <text x="700" y="224" text-anchor="end" class="lbl-dim">노출 H (광전자/jot/장, 로그)</text>
+        <text x="470" y="62" class="t-mono" style="fill:var(--warn)">일반 픽셀: 풀웰에서 잘림</text>
+        <text x="590" y="110" class="t-mono" style="fill:var(--accent)">QIS: 천천히 포화</text>
+      </svg>
+      <figcaption><b>그림 12-10.</b> QIS의 동작. 1비트 jot 판정을 시간·공간으로 합한 1의 비율은 \(1-e^{-H}\)를 따라 로그 축에서 S자로 포화한다. 일반 픽셀처럼 갑자기 잘리지 않아 과노출 여유가 넓고, 최대우도 역변환으로 노출을 되찾는다.</figcaption>
+    </figure>
+    <p><b>계산 예.</b> \(q\) = 1, \(\sigma_r \to 0\)에서 \(n\)회 판정의 피셔 정보로 구한 SNR은 \(\mathrm{SNR}(H) = H\sqrt{n}/\sqrt{e^{H}-1}\)이다. \(n\) = 256(2×2 jot × 64장), \(H\) = 1이면 \(16/\sqrt{1.718}\) = 12.2다. 같은 면적·시간에 들어온 256광전자를 일반 픽셀로 세면 샷 노이즈 한계 SNR이 16이므로, 1비트로 줄여 잃은 몫은 크지 않다. \(H\) = 3에서는 일반 픽셀이 27.7, QIS는 11.0으로 벌어지지만 \(H\)가 더 커져도 QIS는 0으로 떨어지지 않고 천천히 줄어든다. 대가는 데이터다. 10억 jot을 30 fps × 64장으로 읽으면 1.9 Tb/s가 나오므로, 합산은 센서 안에서 해야 한다. 읽기 노이즈가 0.5 e⁻로 커지면 광자 없는 jot이 1로 읽힐 확률이 \(\Phi(-1)\) = 16 %가 되어 어두운 쪽 동적 범위가 무너진다.</p>
+
+    <div class="sim" id="sim-qis">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>QIS 비트 평면: 합산, 최대우도 복원, 동적 범위</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-qis"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>노출 (밝기 1 기준) <output id="qis-h-out"></output></span><input type="range" id="qis-h" min="-2" max="1" step="0.1" value="-0.5"></label>
+          <label class="ctrl"><span>비트 평면 수 T <output id="qis-t-out"></output></span><input type="range" id="qis-t" min="0" max="8" step="1" value="6"></label>
+          <label class="ctrl"><span>공간 합산 k <output id="qis-k-out"></output></span><input type="range" id="qis-k" min="1" max="4" step="1" value="2"></label>
+          <label class="ctrl"><span>jot 읽기 노이즈 σ_r <output id="qis-rn-out"></output></span><input type="range" id="qis-rn" min="0.05" max="0.6" step="0.05" value="0.2"></label>
+          <div class="ctrl"><span>판정 문턱 q</span><div class="seg" id="qis-q"><button data-value="1" class="on">1 e⁻</button><button data-value="2">2 e⁻</button><button data-value="3">3 e⁻</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">평균 1 밀도</span><span class="v" id="qis-o-den">—</span></div>
+        <div class="stat"><span class="k">복원 오차 (중간 띠, rms)</span><span class="v" id="qis-o-err">—</span></div>
+        <div class="stat"><span class="k">SNR ≥ 1 범위 (QIS / 일반)</span><span class="v" id="qis-o-dr">—</span></div>
+        <div class="stat"><span class="k">데이터율 (10억 jot, 30 fps)</span><span class="v" id="qis-o-rate">—</span></div>
+      </div>
+      <div class="sim-note">위: jot 해상도의 비트 평면 한 장, 합산 밀도 K/n, 최대우도로 되찾은 노출(로그 표시). 장면은 3.5 decade 로그 쐐기(맨 위), 50배 경사, 밝은 램프, 바둑판이다. 아래: 현재 문턱·읽기 노이즈의 응답 곡선(점선 = 1 − e^(−H))과 SNR. 일반 픽셀은 같은 면적·시간의 광전자를 풀웰 6,000 e⁻, 읽기 노이즈 1.5 e⁻로 센다고 가정했다. 해볼 것: ① 기본값(n = 256회 판정)에서 평균 밀도는 0.13, SNR ≥ 1 범위는 QIS 10.2 EV, 일반 픽셀 11.3 EV다. ② T를 1장으로 줄이면 비트 평면이 그대로 보이고 범위가 3.6 EV로 줄어든다. T = 256장이면 11.6 EV로 일반 픽셀을 넘는다. k = 4까지 올리면 13.0 대 10.2 EV다. ③ 노출을 10^0.7로 올려 램프를 과노출시켜도 QIS 복원은 포화하지 않고(밀도 0.56) 램프의 모양이 남는다. ④ 읽기 노이즈를 0.5 e⁻로 올리면 빛이 없어도 1이 섞여 밀도가 0.25로 뜨고 범위가 8.0 EV로 줄어든다. 문턱을 2 e⁻로 올리면 이 가짜 1은 억제되지만 약한 빛의 감도도 함께 잃는다.</div>
+    </div>
   </section>
 
   <!-- ============================================================ 9 -->
@@ -514,7 +650,7 @@
         <text x="20" y="146" class="lbl">InGaAs</text><rect x="357" y="132" width="333" height="20" rx="4" fill="var(--warn)" opacity=".45" stroke="var(--warn)"/>
         <text x="20" y="182" class="lbl">양자점 (PbS)</text><rect x="120" y="168" width="570" height="20" rx="4" fill="var(--ok)" opacity=".3" stroke="var(--ok)"/>
       </svg>
-      <figcaption><b>그림 12-9.</b> 광검출 재료별 대략적 감도 범위. InGaAs 센서는 InGaAs 광흡수층 웨이퍼를 실리콘 읽기 회로(ROIC)에 Cu–Cu 본딩이나 범프로 붙이고, 양자점 센서는 콜로이드 PbS 양자점 박막을 ROIC 위에 코팅해 만든다. 양자점은 크기로 흡수 파장을 조절할 수 있어 저가 SWIR의 유력 후보다.</figcaption>
+      <figcaption><b>그림 12-11.</b> 광검출 재료별 대략적 감도 범위. InGaAs 센서는 InGaAs 광흡수층 웨이퍼를 실리콘 읽기 회로(ROIC)에 Cu–Cu 본딩이나 범프로 붙이고, 양자점 센서는 콜로이드 PbS 양자점 박막을 ROIC 위에 코팅해 만든다. 양자점은 크기로 흡수 파장을 조절할 수 있어 저가 SWIR의 유력 후보다.</figcaption>
     </figure>
 
     <h3>메타렌즈와 나노포토닉 컬러 라우터</h3>
@@ -546,8 +682,56 @@
         <text x="460" y="186" text-anchor="middle" class="t-mono">R</text><text x="540" y="186" text-anchor="middle" class="t-mono">G</text><text x="620" y="186" text-anchor="middle" class="t-mono">B</text>
         <text x="540" y="222" text-anchor="middle" class="lbl-dim">나노 기둥 배열이 파장별로 빛의 방향을 나눔</text>
       </svg>
-      <figcaption><b>그림 12-10.</b> 흡수형 컬러 필터 대 컬러 라우터. 라우터는 한 픽셀 위에 떨어진 빛 중 다른 색 성분을 이웃 픽셀로 보내 준다. 같은 원리로 평면 나노 구조로 렌즈 기능을 구현한 <strong>메타렌즈</strong>(metalens)는 마이크로렌즈 대체, 초박형 카메라 모듈, 편광·분광 카메라 등에 연구되고 있다.</figcaption>
+      <figcaption><b>그림 12-12.</b> 흡수형 컬러 필터 대 컬러 라우터. 라우터는 한 픽셀 위에 떨어진 빛 중 다른 색 성분을 이웃 픽셀로 보내 준다. 같은 원리로 평면 나노 구조로 렌즈 기능을 구현한 <strong>메타렌즈</strong>(metalens)는 마이크로렌즈 대체, 초박형 카메라 모듈, 편광·분광 카메라 등에 연구되고 있다.</figcaption>
     </figure>
+    <p>컬러 라우터와 메타렌즈의 설계 원리(유효 매질, 위상 지도, 회절 효율)와 FDTD 시뮬레이션은 <a href="nanophotonics.html">18장 나노포토닉스</a>에서 자세히 다룬다.</p>
+  </section>
+
+  <!-- ============================================================ 10b -->
+  <section id="insensor">
+    <h2>인센서 처리: 보낼 데이터를 줄이는 센서</h2>
+    <p>적층형 센서의 로직 웨이퍼(1절)는 ADC와 타이밍만 담기에는 넓다. 이 공간에 영상 처리나 신경망 가속기를 넣으면 센서가 영상 대신 <b>판단 결과</b>를 내보낼 수 있다. 이득의 핵심은 데이터 이동이다. 1200만 화소 10비트 영상을 30 fps로 보내면 3.6 Gb/s이고, 이 비트들은 직렬 링크(<a href="interface.html">19장</a>)를 지나 응용 프로세서(AP)의 ISP와 DRAM을 한 번 이상 오간다. 항상 켜져 있어야 하는 감시·얼굴 인식·제스처 기기에서는 장면 대부분이 "아무 일도 없음"이므로, 센서가 먼저 거르면 뒤의 에너지를 대부분 아낄 수 있다.</p>
+    <div class="formula">$$P = f_\text{fps}\Bigl[N_\text{read}E_\text{px} + N_\text{op}E_\text{op} + b_\text{tx}E_\text{bit} + N_\text{AP}E_\text{AP}\Bigr]$$
+      <div class="where">\(N_\text{read}\): 프레임당 읽은(변환한) 화소 수, \(E_\text{px}\): 화소당 읽기·ADC 에너지, \(N_\text{op}E_\text{op}\): 센서 안 연산 에너지, \(b_\text{tx}\): 링크로 보낸 비트, \(E_\text{bit}\): 비트당 링크 에너지, \(N_\text{AP}E_\text{AP}\): AP 쪽 ISP·DRAM 처리. 감시 모드에서는 4×4 비닝으로 읽는 화소 수 자체를 1/16로 줄이고, 사건이 감지된 프레임만 전체 해상도로 읽는다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 720 200" role="img" aria-label="인센서 처리의 데이터 흐름">
+        <rect x="20" y="40" width="120" height="44" rx="6" class="pd"/><text x="80" y="67" text-anchor="middle" class="lbl">픽셀 어레이</text>
+        <rect x="20" y="100" width="120" height="44" rx="6" class="logic"/><text x="80" y="121" text-anchor="middle" class="lbl">ADC</text><text x="80" y="138" text-anchor="middle" class="lbl-dim">전체 또는 비닝</text>
+        <path d="M80 84V100" class="s-line"/>
+        <rect x="170" y="70" width="170" height="74" rx="6" class="logic"/><text x="255" y="94" text-anchor="middle" class="lbl-b">센서 로직층</text><text x="255" y="114" text-anchor="middle" class="lbl-dim">움직임 검출 · NN · ROI</text><text x="255" y="132" text-anchor="middle" class="lbl-dim">트리거 판정</text>
+        <path d="M140 122H170" class="s-line" marker-end="url(#adv-arr)"/>
+        <path d="M340 92H470" stroke="var(--bad)" stroke-width="5"/><text x="405" y="84" text-anchor="middle" class="t-mono" style="fill:var(--bad)">항상: 3.6 Gb/s</text>
+        <path d="M340 124H470" stroke="var(--ok)" stroke-width="1.5"/><text x="405" y="142" text-anchor="middle" class="t-mono" style="fill:var(--ok)">대기: 메타데이터 수 kb/s</text>
+        <rect x="474" y="70" width="110" height="74" rx="6" class="si"/><text x="529" y="102" text-anchor="middle" class="lbl">AP ISP</text><text x="529" y="122" text-anchor="middle" class="lbl-dim">+ DRAM</text>
+        <path d="M584 107H620" class="s-line" marker-end="url(#adv-arr)"/><rect x="624" y="84" width="80" height="46" rx="6" class="si"/><text x="664" y="112" text-anchor="middle" class="lbl">앱</text>
+        <text x="20" y="182" class="lbl-dim">센서 밖으로 나가는 비트를 줄이면 링크와 AP·DRAM의 에너지가 함께 줄어든다. 판정이 틀리면 놓친 사건이나 쓸데없는 깨움으로 돌아온다.</text>
+      </svg>
+      <figcaption><b>그림 12-13.</b> 인센서 처리. 센서 로직층이 비닝 영상으로 장면을 감시하다가 사건이 있을 때만 전체 해상도 데이터를 보낸다. 신경망까지 넣으면 평소에는 검출 결과(메타데이터)만 내보낸다.</figcaption>
+    </figure>
+    <p><b>계산 예.</b> 아래 시뮬레이터의 가정값은 화소당 읽기·ADC 0.6 nJ, AP 처리 1.0 nJ, 링크 10 pJ/bit다. 실제 값은 공정·인터페이스·ISP 설계에 따라 몇 배씩 다르므로 자릿수를 보기 위한 숫자로 쓰자. 항상 스트리밍이면 \(30\times12\text{M}\times(0.6+1.0)\) nJ = 576 mW에 링크 \(3.6\ \text{Gb/s}\times10\ \text{pJ}\) = 36 mW가 더해져 612 mW다. 비닝 감시 모드의 대기 전력은 \(30\times0.75\text{M}\times0.6\) nJ = 13.5 mW에 움직임 검출 연산 0.45 mW를 더한 약 14 mW다. 결국 평균 전력은 "사건이 있는 시간의 비율"과 "검출기가 얼마나 자주 잘못 깨는가"가 정한다. 검출기는 노이즈와 싸우는 판정 문제이므로, 어두울수록(노이즈가 클수록) 거짓 트리거가 늘어 절감이 사라진다.</p>
+
+    <div class="sim" id="sim-isc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>인센서 처리: 움직임 게이트 읽기와 전력</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-isc"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>동작 방식</span><div class="seg" id="isc-mode"><button data-value="stream">항상 스트리밍</button><button data-value="gate" class="on">움직임 게이트</button><button data-value="nn">NN + ROI</button></div></div>
+          <label class="ctrl"><span>화소 노이즈 (어두울수록 큼) <output id="isc-n-out"></output></span><input type="range" id="isc-n" min="0.02" max="0.4" step="0.02" value="0.1"></label>
+          <label class="ctrl"><span>검출 문턱 <output id="isc-th-out"></output></span><input type="range" id="isc-th" min="0.02" max="0.3" step="0.01" value="0.08"></label>
+          <label class="ctrl"><span>트리거 유지 <output id="isc-hold-out"></output></span><input type="range" id="isc-hold" min="0" max="60" step="5" value="15"></label>
+          <label class="ctrl"><span>링크 에너지 <output id="isc-link-out"></output></span><input type="range" id="isc-link" min="2" max="30" step="1" value="10"></label>
+          <button class="btn" id="isc-new">새 시나리오</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">평균 전력</span><span class="v" id="isc-o-p">—</span></div>
+        <div class="stat"><span class="k">평균 데이터율</span><span class="v" id="isc-o-rate">—</span></div>
+        <div class="stat"><span class="k">놓친 사건 · 거짓 트리거 프레임</span><span class="v" id="isc-o-miss">—</span></div>
+        <div class="stat"><span class="k">평균 검출 지연</span><span class="v" id="isc-o-lat">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 20초(600프레임) 시나리오를 재생하는 모니터 영상(빨간 테두리 = 전체 해상도 읽기 중). 오른쪽: 시간에 따른 블록별 전력(누적)과 항상 스트리밍 전력(점선), 회색 띠는 사람이 지나가는 실제 사건이다. 검출기는 8×8 비닝 셀의 프레임 간 차이 최댓값이 문턱을 넘으면 트리거하고, 지정한 프레임 수만큼 유지한다. NN + ROI는 대기 중에도 프레임당 0.5 G연산(1 pJ/연산 가정)을 돌리고 메타데이터 8 kb만 보내며, 트리거 때는 관심 영역(1/8 프레임)만 전송한다. 해볼 것: ① 기본값(움직임 게이트)은 612 mW 대신 157 mW(3.9배 절감)로 세 사건을 모두 111 ms 지연으로 잡는다. NN + ROI는 89 mW(6.9배)다. ② 노이즈를 0.2로 올리면 노이즈만으로 문턱을 넘어 거짓 트리거가 437프레임이 되고 전력이 609 mW로 스트리밍과 같아진다. 문턱을 0.15로 올리면 다시 140 mW로 돌아오면서 사건도 모두 잡는다. ③ 노이즈 0.1에서 문턱을 0.2로 올리면 77 mW지만 사건 하나를 놓치고, 0.3이면 모두 놓쳐 대기 전력 14 mW만 남는다. ④ 트리거 유지를 60프레임으로 늘리면 사건 뒤까지 오래 읽어 291 mW가 된다.</div>
+    </div>
   </section>
 
   <!-- ============================================================ 11 -->
@@ -578,6 +762,10 @@
       <li>PDAF는 좌·우 동공 영상의 시차 \(\Delta x ≈ 0.42\,\delta/N\)로 초점 방향과 거리를 한 번에 추정한다. 듀얼 픽셀과 쿼드 PD는 모든 픽셀을 AF에 쓴다.</li>
       <li>테트라·노나셀은 같은 색 \(k\times k\) 블록으로 비닝 시 SNR을 \(k\)배(샷 노이즈 한계) 높이고, 리모자이크로 풀 해상도도 얻는다.</li>
       <li>SPAD는 가이거 모드로 광자 하나를 검출하고, dToF는 도착 시각 히스토그램의 봉우리로 거리 \(d=c\Delta t/2\)를 구한다. 강한 배경광은 파일업을 일으킨다. iToF는 변조광의 위상으로 거리를 잰다.</li>
+      <li>iToF의 깊이 노이즈는 \(\sigma_d = (c/4\pi f)\sqrt{2}\sqrt{S+B+4\sigma_r^2}/(c_d S)\)다. 높은 주파수는 정밀하지만 \(d_\text{max}=c/2f\)가 짧아 두 주파수로 언래핑하며, 다중 경로는 평균해도 남는 편향을 만든다.</li>
+      <li>TCSPC 히스토그램의 파일업은 무장 주기 수로 나누는 코츠 보정 \(\hat\lambda_i = -\ln(1 - h_i/N_{\text{armed},i})\)으로 되돌린다. DCR은 평평한 바닥을, 애프터펄싱은 보정되지 않는 꼬리를 만든다.</li>
+      <li>QIS는 서브 e⁻ 읽기 노이즈의 jot이 낸 1비트를 시간·공간으로 합하고 \(\hat H = -\ln(1-K/n)\)으로 노출을 되찾는다. 응답이 천천히 포화해 과노출 여유가 넓지만 데이터율이 매우 크다.</li>
+      <li>인센서 처리는 센서 밖으로 나가는 비트를 줄여 링크·AP·DRAM 에너지를 아낀다. 절감은 사건의 비율과 검출기의 거짓 트리거·놓침이 정한다.</li>
       <li>이벤트 센서는 로그 밝기 변화가 임계값을 넘을 때만 비동기 이벤트를 내보내 µs 시간 해상도와 넓은 DR을 얻는다.</li>
       <li>SWIR은 InGaAs·양자점 등 실리콘 밖 재료로, 컬러 라우터·메타렌즈는 나노 구조로 픽셀의 한계를 넓힌다.</li>
     </ol>
@@ -621,6 +809,33 @@
         <button class="opt">밝은 픽셀은 ON, 어두운 픽셀은 OFF 이벤트를 계속 낸다</button>
         <button class="opt">일반 카메라처럼 전체 영상을 출력한다</button>
       </div><div class="quiz-exp">각 픽셀은 로그 밝기의 <em>변화</em>가 임계값을 넘을 때만 이벤트를 낸다. 정지 장면에서는 변화가 없으므로 데이터가 거의 없고, 이것이 이벤트 센서의 저전력·저대역폭 특성의 근원이다.</div></div>
+      <div class="quiz-q"><p>6. 100 MHz 단일 주파수 iToF 카메라로 4 m 떨어진 벽을 재면 측정값은 어떻게 나오며, 이를 해결하는 일반적인 방법은?</p><div class="opts">
+        <button class="opt">4 m가 정확히 나오며 해결할 문제가 없다.</button>
+        <button class="opt">0 m로 나오므로 배경광을 줄여야 한다.</button>
+        <button class="opt">8 m로 나오므로 측정값을 2로 나눈다.</button>
+        <button class="opt" data-correct>비모호 거리 1.5 m로 감겨 약 1.0 m로 나오며, 두 번째 주파수를 함께 재서 언래핑한다.</button>
+      </div><div class="quiz-exp">\(d_\text{max} = c/2f\) = 1.5 m이므로 4 m는 \(4 - 2\times1.5\) = 1.0 m로 읽힌다. 80 MHz를 함께 재면 두 후보 집합이 겹치는 거리가 7.5 m 안에 하나뿐이어서 감긴 횟수를 정할 수 있다. 다만 노이즈가 크면 잘못된 짝을 골라 큰 오차가 난다.</div></div>
+
+      <div class="quiz-q"><p>7. 한낮 햇빛 아래 SPAD dToF의 원 히스토그램이 창 앞쪽에서 가장 높고 뒤로 갈수록 지수적으로 줄어든다. 코츠 보정이 하는 일은?</p><div class="opts">
+        <button class="opt" data-correct>각 빈의 계수를 그 시각까지 SPAD가 살아 있던 주기 수로 나누고 \(-\ln(1-p)\)로 바꿔 참 광자율을 되찾는다.</button>
+        <button class="opt">배경광 광자를 물리적으로 차단해 검출 확률을 높인다.</button>
+        <button class="opt">레이저 펄스 폭을 줄여 봉우리를 뾰족하게 만든다.</button>
+        <button class="opt">늦은 빈의 노이즈를 줄여 준다.</button>
+      </div><div class="quiz-exp">파일업은 앞쪽 검출 때문에 뒤쪽을 볼 기회가 줄어서 생긴다. 무장 주기 수로 나누면 편향이 사라진다. 그러나 뒤쪽 빈은 무장 주기가 적어 추정 분산이 오히려 커지고, 애프터펄싱처럼 이전 검출에 묶인 사건은 보정되지 않는다.</div></div>
+
+      <div class="quiz-q"><p>8. 1비트 QIS jot을 \(n\)번 판정한 1의 비율이 0.632였다(\(q\)=1, 읽기 노이즈 무시). jot·비트 평면당 평균 광전자 수의 최대우도 추정값은?</p><div class="opts">
+        <button class="opt">0.632</button>
+        <button class="opt">0.368</button>
+        <button class="opt" data-correct>1.0</button>
+        <button class="opt">0.632 × n</button>
+      </div><div class="quiz-exp">\(P_1 = 1 - e^{-H}\)이므로 \(\hat{H} = -\ln(1 - 0.632) = -\ln 0.368 \approx 1.0\)이다. 1의 비율을 그대로 노출로 읽으면 밝은 곳을 과소평가한다. 응답이 로그 축에서 천천히 포화하는 이유가 바로 이 지수 관계다.</div></div>
+
+      <div class="quiz-q"><p>9. 항상 켜진 감시 카메라에 움직임 게이트 인센서 처리를 넣었는데, 어두운 밤에는 전력 절감이 거의 사라졌다. 가장 그럴듯한 원인은?</p><div class="opts">
+        <button class="opt" data-correct>노이즈가 커져 프레임 간 차이가 문턱을 자주 넘고, 거짓 트리거마다 전체 해상도로 읽고 보내기 때문이다.</button>
+        <button class="opt">밤에는 비닝을 할 수 없기 때문이다.</button>
+        <button class="opt">링크의 비트당 에너지가 밤에 커지기 때문이다.</button>
+        <button class="opt">어두우면 적층 로직의 클록이 멈추기 때문이다.</button>
+      </div><div class="quiz-exp">검출은 노이즈와 신호를 가르는 판정 문제다. 문턱을 그대로 두면 거짓 트리거가 늘어 스트리밍과 다를 바 없어지고, 문턱을 올리면 이번에는 실제 사건을 놓친다. 조도에 맞춰 문턱을 바꾸거나 노이즈에 강한 검출기를 쓰는 이유다.</div></div>
     </div>
   </section>
 </main>
@@ -1196,6 +1411,489 @@
       }
       cv.redraw();
     });
+  })();
+
+  /* ---------- shared numerics for the new sims ---------- */
+  function rng(seed) { var a = seed >>> 0; return function () { a = (a + 0x6d2b79f5) >>> 0; var t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  function gauss(r) { var u = r(); while (u < 1e-12) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+  function poisson(r, lam) { if (lam <= 0) return 0; if (lam > 30) return Math.max(0, Math.round(lam + Math.sqrt(lam) * gauss(r))); var L = Math.exp(-lam), k = 0, p = 1; do { k++; p *= r(); } while (p > L); return k - 1; }
+  var CMNS = 0.299792458; // m/ns
+
+  /* ---------- iToF 4-phase demodulation ---------- */
+  var ITOF = (function () {
+    var NPX = 160, CD = 0.8, RN = 5;
+    // returns phase and amplitude for one frequency at one pixel (Monte Carlo taps)
+    function taps(r, f, rets, B) {
+      var I = 0, Q = 0, sum = 0;
+      var q = [0, 0, 0, 0];
+      for (var k = 0; k < 4; k++) {
+        var th = k * Math.PI / 2, m = B / 4;
+        for (var j = 0; j < rets.length; j++) { var ph = 4 * Math.PI * f * rets[j].d / CMNS * 1e-3; m += rets[j].S / 4 * (1 + CD * Math.cos(ph - th)); }
+        q[k] = m + Math.sqrt(m) * gauss(r) + RN * gauss(r); sum += q[k];
+      }
+      I = q[0] - q[2]; Q = q[1] - q[3];
+      var phi = Math.atan2(Q, I); if (phi < 0) phi += 2 * Math.PI;
+      return { phi: phi, amp: Math.hypot(I, Q), sum: sum };
+    }
+    // f in MHz; distance in m; 4*pi*f*d/c with f[MHz]*1e6, c[m/ns]*1e9 -> factor 1e-3
+    function range(f) { return CMNS * 1e3 / (2 * f); }
+    function sigmaTheory(f, S, B) { return range(f) / (2 * Math.PI) * Math.SQRT2 * Math.sqrt(S + B + 4 * RN * RN) / (CD * S); }
+    function returns(d, S0, alpha, dL) { var S = S0 / (d * d), out = [{ d: d, S: S }]; if (alpha > 0) out.push({ d: d + dL / 2, S: alpha * S }); return out; }
+    // dual-frequency unwrapping (f2 = 0.8 f1 -> unambiguous range 5 R1)
+    function unwrap(d1, d2, R1, R2) {
+      var best = 1e9, bd = d1;
+      for (var n1 = 0; n1 < 5; n1++) for (var n2 = 0; n2 < 4; n2++) { var a = d1 + n1 * R1, b = d2 + n2 * R2, e = Math.abs(a - b); if (e < best) { best = e; bd = (a * 16 + b * 9) / 25; } }
+      return bd;   // weights ~ 1/sigma^2, sigma proportional to 1/f (f2 = 0.8 f1 -> 0.64)
+    }
+    function measure(r, p, d) {
+      var rets = returns(d, p.S0, p.alpha, p.dL), R1 = range(p.f), t1 = taps(r, p.f, rets, p.B), d1 = t1.phi / (2 * Math.PI) * R1;
+      if (!p.dual) return { d: d1, d1: d1 };
+      var f2 = 0.8 * p.f, R2 = range(f2), t2 = taps(r, f2, rets, p.B), d2 = t2.phi / (2 * Math.PI) * R2;
+      return { d: unwrap(d1, d2, R1, R2), d1: d1, d2: d2 };
+    }
+    function scene(dmax) { var a = new Float64Array(NPX); for (var i = 0; i < NPX; i++) a[i] = 0.3 + (dmax - 0.3) * i / (NPX - 1); return a; }
+    function run(p, seed, frames) {
+      var r = rng(seed), D = scene(p.dmax), one = new Float64Array(NPX), sd = new Float64Array(NPX), bias = new Float64Array(NPX), fail = 0, tot = 0;
+      var R = p.dual ? 5 * range(p.f) : range(p.f);
+      for (var i = 0; i < NPX; i++) {
+        var s = 0, s2 = 0, n = 0;
+        for (var k = 0; k < frames; k++) {
+          var m = measure(r, p, D[i]), e = m.d - D[i];
+          if (!k) one[i] = m.d;
+          // wrap-aware error relative to nearest alias for the noise statistic; gross errors counted separately
+          var R1 = range(p.f), ew = e - R1 * Math.round(e / R1);
+          if (Math.abs(e) > 0.25 * range(p.f)) fail++;
+          tot++; s += ew; s2 += ew * ew; n++;
+        }
+        bias[i] = s / n; sd[i] = Math.sqrt(Math.max(0, s2 / n - bias[i] * bias[i]));
+      }
+      return { D: D, one: one, sd: sd, bias: bias, failRate: fail / tot, R: R };
+    }
+    return { NPX: NPX, CD: CD, RN: RN, range: range, sigmaTheory: sigmaTheory, measure: measure, returns: returns, run: run };
+  })();
+
+  /* ---------- TCSPC pile-up, Coates correction, dead time, DCR, afterpulsing ---------- */
+  var COATES = (function () {
+    var T = 100, BW = 0.25, NB = 400, JIT = 0.2, TAP = 5;
+    function simulate(p, seed) {
+      var r = rng(seed), h = new Float64Array(NB), ev = [], t0 = 2 * p.d / CMNS;
+      var lamB = p.Nb / T + p.dcr * 1e-6;   // per ns (dcr in kcps -> 1e3/s = 1e-6 /ns)
+      var det = 0;
+      for (var c = 0; c < p.M; c++) {
+        ev.length = 0;
+        var nb = poisson(r, lamB * T), ns = poisson(r, p.Ns);
+        for (var i = 0; i < nb; i++) ev.push(r() * T);
+        for (i = 0; i < ns; i++) ev.push(t0 + JIT * gauss(r));
+        ev.sort(function (a, b) { return a - b; });
+        var armed = 0, k = 0;
+        while (k < ev.length) {
+          var t = ev[k++];
+          if (t < armed || t < 0 || t >= T) continue;
+          h[Math.floor(t / BW)]++; det++;
+          armed = t + p.tau;
+          if (p.ap > 0 && r() < p.ap) {   // trapped carrier released after recharge -> extra candidate event
+            var ta = armed + (-Math.log(1 - r())) * TAP, j = k;
+            while (j < ev.length && ev[j] < ta) j++;
+            ev.splice(j, 0, ta);
+          }
+        }
+      }
+      return { h: h, det: det, t0: t0, lamB: lamB };
+    }
+    // generalized Coates: P(armed at bin i) = 1 - (detections in the preceding dead-time window)/M
+    function coates(h, M, tau) {
+      var D = Math.max(1, Math.round(tau / BW)), lam = new Float64Array(NB), arm = new Float64Array(NB), run = 0;
+      for (var i = 0; i < NB; i++) {
+        var armed = M - run; arm[i] = armed; var pi = armed > 0 ? Math.min(h[i] / armed, 1 - 0.5 / armed) : 0;
+        lam[i] = -Math.log(1 - pi);
+        run += h[i]; if (i - D + 1 >= 0) run -= h[i - D + 1];
+      }
+      lam.armed = arm;
+      return lam;
+    }
+    // peak position: centroid of background-subtracted values within +-1.5 ns of the maximum of a 3-bin smooth
+    // (for Coates estimates the search score is weighted by sqrt(armed cycles), i.e. by the estimate's inverse standard deviation)
+    function peak(a, arm) {
+      var srt = Array.prototype.slice.call(a).sort(function (x, y) { return x - y; }), med = srt[NB >> 1], best = -Infinity, bi = 0;
+      for (var i = 1; i < NB - 1; i++) { var s = (a[i - 1] + a[i] + a[i + 1] - 3 * med) * (arm ? Math.sqrt(arm[i]) : 1); if (s > best) { best = s; bi = i; } }
+      var bg = 0, nb = 0;
+      for (i = 0; i < NB; i++) if (Math.abs(i - bi) > 16 && Math.abs(i - bi) < 60) { bg += a[i]; nb++; }
+      bg = nb ? bg / nb : 0;
+      var sw = 0, st = 0;
+      for (i = Math.max(0, bi - 6); i <= Math.min(NB - 1, bi + 6); i++) { var w = Math.max(0, a[i] - bg); sw += w; st += w * (i + 0.5) * BW; }
+      return sw > 0 ? st / sw : (bi + 0.5) * BW;
+    }
+    function truth(p) {
+      var t0 = 2 * p.d / CMNS, lamB = p.Nb / T + p.dcr * 1e-6, a = new Float64Array(NB);
+      for (var i = 0; i < NB; i++) { var t = (i + 0.5) * BW, z = (t - t0) / JIT; a[i] = lamB * BW + p.Ns * BW / (JIT * Math.sqrt(2 * Math.PI)) * Math.exp(-0.5 * z * z); }
+      return a;
+    }
+    return { T: T, BW: BW, NB: NB, simulate: simulate, coates: coates, peak: peak, truth: truth };
+  })();
+
+  /* ---------- quanta image sensor (binary jots) ---------- */
+  var QIS = (function () {
+    var W = 96, H = 72;
+    var rad = new Float64Array(W * H);
+    for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
+      var v = 0.02 + 0.98 * Math.pow(x / (W - 1), 3);            // 50x horizontal ramp
+      if (y < 18) v = Math.pow(10, -2.5 + 3.5 * x / (W - 1));       // log wedge 10^-2.5 .. 10^1
+      if (y > 50) v = ((Math.floor(x / 6) + Math.floor(y / 6)) % 2) ? 0.08 : 0.4;
+      var dl = Math.hypot(x - 78, y - 36); if (dl < 7) v = 8 * (1 - dl / 9);
+      rad[y * W + x] = v;
+    }
+    // probability a jot reads 1: Poisson(H) photoelectrons, Gaussian read noise, threshold q - 0.5
+    function pOne(Hm, q, sr) {
+      var p = 0, pn = Math.exp(-Hm), n = 0, cum = 0;
+      for (n = 0; n < 200; n++) {
+        if (n) pn *= Hm / n;
+        var z = (n - (q - 0.5)) / Math.max(1e-3, sr), phi = 0.5 * (1 + erf(z / Math.SQRT2));
+        p += pn * phi; cum += pn;
+        if (n > Hm + 12 * Math.sqrt(Hm + 1) + q + 2) break;
+      }
+      return p + (1 - cum);
+    }
+    function erf(x) { var s = x < 0 ? -1 : 1; x = Math.abs(x); var t = 1 / (1 + 0.3275911 * x); var y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x); return s * y; }
+    // lookup table log10 H in [-3, 2]
+    var LN = 251;
+    function table(q, sr) { var a = new Float64Array(LN); for (var i = 0; i < LN; i++) a[i] = pOne(Math.pow(10, -3 + 5 * i / (LN - 1)), q, sr); return a; }
+    function invert(tab, p) {   // monotone p(H) -> H
+      if (p <= tab[0]) return Math.pow(10, -3);
+      if (p >= tab[LN - 1]) return 100;
+      var lo = 0, hi = LN - 1; while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (tab[mid] < p) lo = mid; else hi = mid; }
+      var f = (p - tab[lo]) / (tab[hi] - tab[lo] + 1e-15); return Math.pow(10, -3 + 5 * (lo + f) / (LN - 1));
+    }
+    function binom(r, n, p) {
+      if (n * p * (1 - p) > 12) return Math.min(n, Math.max(0, Math.round(n * p + Math.sqrt(n * p * (1 - p)) * gauss(r))));
+      if (p < 0.5) { var k = 0; if (n * p < 15) { k = poisson(r, n * p); return Math.min(n, k); } }
+      var c = 0; for (var i = 0; i < n; i++) if (r() < p) c++; return c;
+    }
+    // Fisher-information SNR of the MLE from n binary trials
+    function snr(Hm, q, sr, n) {
+      var dH = Hm * 1e-3, p = pOne(Hm, q, sr), dp = (pOne(Hm + dH, q, sr) - pOne(Hm - dH, q, sr)) / (2 * dH);
+      if (p <= 0 || p >= 1 || dp <= 0) return 0;
+      return Hm * Math.abs(dp) * Math.sqrt(n / (p * (1 - p)));
+    }
+    return { W: W, H: H, rad: rad, pOne: pOne, table: table, invert: invert, binom: binom, snr: snr };
+  })();
+
+  /* ---------- in-sensor processing: motion-gated readout and energy ---------- */
+  var ISC = (function () {
+    var W = 64, H = 48, NF = 600, FPS = 30, BS = 8;   // binned motion map: 8x6 cells of 8x8 px
+    var MP = 12e6, BITS = 10;
+    function timeline(seed) {
+      var r = rng(seed), ev = [], t = 40 + Math.floor(r() * 60);
+      while (t < NF - 30) { var len = 30 + Math.floor(r() * 60); ev.push({ a: t, b: Math.min(NF - 1, t + len), y: 14 + r() * 20, dir: r() < 0.5 ? 1 : -1, sz: 4 + r() * 3 }); t += len + 60 + Math.floor(r() * 120); }
+      return ev;
+    }
+    function bgv(x, y) { return 0.3 + 0.25 * Math.sin(x * 0.21) * Math.cos(y * 0.17) + (y > 36 ? 0.15 : 0); }
+    // simulate the low-resolution monitor stream and motion detector; returns per-frame flags
+    var CX = W / BS, CY = H / BS, bgCell = new Float64Array(CX * CY);
+    for (var yy = 0; yy < H; yy++) for (var xx = 0; xx < W; xx++) bgCell[((yy / BS) | 0) * CX + ((xx / BS) | 0)] += bgv(xx, yy) / (BS * BS);
+    function objAt(ev, f) {
+      for (var e = 0; e < ev.length; e++) if (f >= ev[e].a && f <= ev[e].b) { var u = (f - ev[e].a) / (ev[e].b - ev[e].a); return { x: ev[e].dir > 0 ? -8 + u * (W + 16) : W + 8 - u * (W + 16), y: ev[e].y, s: ev[e].sz }; }
+      return null;
+    }
+    // simulate the binned monitor stream (8x8 cells; per-pixel noise sigma -> sigma/8 per cell) and the frame-difference detector
+    function run(p, seed) {
+      var r = rng(seed), ev = timeline(seed + 1), sig = p.noise / BS, prev = new Float64Array(CX * CY), cell = new Float64Array(CX * CY);
+      var active = new Uint8Array(NF), trig = new Uint8Array(NF), score = new Float64Array(NF), hold = 0, falseF = 0, since = 1e9;
+      for (var f = 0; f < NF; f++) {
+        var obj = objAt(ev, f), drift = 1 + 0.02 * Math.sin(f * 0.05);
+        if (obj) { active[f] = 1; since = 0; } else since++;
+        for (var c = 0; c < CX * CY; c++) cell[c] = bgCell[c] * drift + sig * gauss(r);
+        if (obj) {   // object rectangle (0.85 grey) replaces background: add coverage-weighted difference per cell
+          var x0 = obj.x - obj.s * 0.6, x1 = obj.x + obj.s * 0.6, y0 = obj.y - obj.s * 1.6, y1 = obj.y + obj.s * 1.6;
+          for (var cy = 0; cy < CY; cy++) for (var cx = 0; cx < CX; cx++) {
+            var ox = Math.max(0, Math.min(x1, (cx + 1) * BS) - Math.max(x0, cx * BS)), oy = Math.max(0, Math.min(y1, (cy + 1) * BS) - Math.max(y0, cy * BS));
+            if (ox > 0 && oy > 0) cell[cy * CX + cx] += ox * oy / (BS * BS) * (0.85 - bgCell[cy * CX + cx]);
+          }
+        }
+        var sc = 0;
+        if (f) for (c = 0; c < CX * CY; c++) sc = Math.max(sc, Math.abs(cell[c] - prev[c]));
+        prev.set(cell); score[f] = sc;
+        var on = false;
+        if (sc > p.th) { on = true; hold = p.hold; } else if (hold > 0) { on = true; hold--; }
+        if (on) { trig[f] = 1; if (since > p.hold) falseF++; }
+      }
+      var missed = 0, lat = 0, nlat = 0;
+      for (var e = 0; e < ev.length; e++) { var got = -1; for (f = ev[e].a; f <= ev[e].b; f++) if (trig[f]) { got = f; break; } if (got < 0) missed++; else { lat += got - ev[e].a; nlat++; } }
+      var nt = 0; for (f = 0; f < NF; f++) nt += trig[f];
+      return { ev: ev, active: active, trig: trig, score: score, missed: missed, nEv: ev.length, lat: nlat ? lat / nlat : 0, falseF: falseF, nTrig: nt };
+    }
+    // per-frame energy (mJ) for each block under a mode; assumptions are parameters
+    function energy(mode, full, A) {
+      var px = MP, bin = MP / 16, e = { read: 0, logic: 0, link: 0, ap: 0, bits: 0 };
+      if (mode === "stream" || full) { e.read = px * A.eRead; e.bits = px * BITS; e.ap = px * A.eAP; }
+      else { e.read = bin * A.eRead; }
+      if (mode === "gate") e.logic = bin * A.eMot;
+      if (mode === "nn") { e.logic = bin * A.eMot + A.opsNN * A.eOp; if (full) { e.bits = px * BITS / 8; e.ap = px * A.eAP / 8; } else e.bits = 8 * 1024; }
+      e.link = e.bits * A.eBit;
+      for (var k in e) if (k !== "bits") e[k] *= 1e3;   // J -> mJ
+      return e;
+    }
+    return { W: W, H: H, NF: NF, FPS: FPS, MP: MP, BITS: BITS, BS: BS, bgv: bgv, objAt: objAt, timeline: timeline, run: run, energy: energy };
+  })();
+
+
+  /* ---------- helpers for the new sims ---------- */
+  var cssv = function (n) { return getComputedStyle(document.body).getPropertyValue(n); };
+  var font = function (sz, w) { return (w ? w + " " : "") + sz + "px " + cssv("--font"); };
+  var mkCanvas = function (w, h) { var c = document.createElement("canvas"); c.width = w; c.height = h; return c; };
+  function nextFrame(fn) { var pend = false; return function () { if (pend) return; pend = true; requestAnimationFrame(function () { pend = false; fn(); }); }; }
+  function legend(ctx, P, items, x, y, maxX) {
+    ctx.font = font(11); ctx.textBaseline = "middle"; ctx.textAlign = "left"; var x0 = x;
+    items.forEach(function (it) { var w = ctx.measureText(it[0]).width; if (maxX && x + 30 + w > maxX) { x = x0; y += 15; } ctx.strokeStyle = it[1]; ctx.lineWidth = 2; ctx.setLineDash(it[2] || []); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 16, y); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = P.dim; ctx.fillText(it[0], x + 20, y); x += 36 + w; });
+  }
+  function title(ctx, P, s, x, y) { ctx.fillStyle = P.dim; ctx.font = font(11, 600); ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText(s, x, y); }
+
+  /* ================================================================
+     6) iToF 4-phase demodulation, dual-frequency unwrapping, multipath
+     ================================================================ */
+  (function initItof() {
+    var cv = null, res = null, key = "";
+    var redraw = nextFrame(function () { cv && cv.redraw(); });
+    var gF = SB.range("itf-f", function (v) { return v + " MHz"; }, redraw);
+    var gS = SB.range("itf-s", function (v) { return Math.round(Math.pow(10, v)).toLocaleString("en-US") + " e⁻"; }, redraw);
+    var gB = SB.range("itf-b", function (v) { return (v / 1000).toFixed(0) + "k e⁻"; }, redraw);
+    var gA = SB.range("itf-a", function (v) { return (v * 100).toFixed(0) + "%"; }, redraw);
+    var gD = SB.range("itf-dmax", function (v) { return v.toFixed(1) + " m"; }, redraw);
+    var gM = SB.seg("itf-mode", redraw);
+    function params() { return { f: gF(), S0: Math.pow(10, gS()), B: gB(), alpha: gA(), dL: 1.0, dual: gM() === "dual", dmax: gD() }; }
+    function compute() {
+      var p = params(), k = JSON.stringify(p);
+      if (k !== key) {
+        key = k; var R = ITOF.run(p, 11, 16), s = 0, b = 0, n = 0;
+        for (var i = 0; i < ITOF.NPX; i++) if (Math.abs(R.D[i] - 2) < 0.15) { s += R.sd[i] * R.sd[i]; b += R.bias[i]; n++; }
+        var S2 = p.S0 / 4, th1 = ITOF.sigmaTheory(p.f, S2, p.B), th = th1;
+        if (p.dual) { var th2 = ITOF.sigmaTheory(0.8 * p.f, S2, p.B); th = 1 / Math.sqrt(1 / (th1 * th1) + 1 / (th2 * th2)); }
+        // phasor cloud at the 2 m probe
+        var r = rng(5), cloud = [], rets = ITOF.returns(2, p.S0, p.alpha, p.dL);
+        for (i = 0; i < 60; i++) { var m = ITOF.measure(r, { f: p.f, S0: p.S0, B: p.B, alpha: p.alpha, dL: p.dL, dual: false }, 2); cloud.push(m.d1 / ITOF.range(p.f) * 2 * Math.PI); }
+        res = { p: p, R: R, sd2: n ? Math.sqrt(s / n) : NaN, bias2: n ? b / n : NaN, th: th, rets: rets, cloud: cloud };
+      }
+      return res;
+    }
+    function draw(ctx, w, h) {
+      var P = SB.palette(), X = compute(), p = X.p, R = X.R, wide = w >= 560;
+      var top = { x: 52, y: 22, w: w - 62, h: Math.max(110, h * 0.46) };
+      var by = top.y + top.h + 58, bh = h - by - 38;
+      var b1 = wide ? { x: 52, y: by, w: w * 0.56 - 60, h: bh } : { x: 52, y: by, w: w - 62, h: bh };
+      // depth profile
+      title(ctx, P, "측정 깊이 대 참 깊이 (한 프레임, 픽셀 " + ITOF.NPX + "개)", top.x - 40, top.y - 6);
+      var pts = []; for (var i = 0; i < ITOF.NPX; i++) pts.push([R.D[i], R.one[i]]);
+      SB.chart(ctx, top, { x: [0, p.dmax], y: [0, Math.max(p.dmax, 1.6)], xLabel: "", series: [{ data: [[0, 0], [p.dmax, p.dmax]], color: P.faint, width: 1.5, dash: [5, 4] }], points: pts.map(function (q) { return { x: q[0], y: Math.min(Math.max(p.dmax, 1.6), Math.max(0, q[1])), r: 2, color: Math.abs(q[1] - q[0]) > 0.25 * ITOF.range(p.f) ? P.bad : P.accent }; }), vlines: R.R < p.dmax ? [{ x: R.R, color: P.warn, label: "비모호 한계 " + R.R.toFixed(2) + " m" }] : [] });
+      // sigma vs distance
+      var mc = [], thc = [];
+      for (i = 2; i < ITOF.NPX - 2; i += 2) { var sv = 0; for (var j = -2; j <= 2; j++) sv += R.sd[i + j] * R.sd[i + j]; mc.push([R.D[i], Math.max(1e-4, Math.sqrt(sv / 5)) * 1000]); }
+      for (i = 0; i <= 40; i++) { var d = 0.3 + (p.dmax - 0.3) * i / 40, S2 = p.S0 / (d * d), t1 = ITOF.sigmaTheory(p.f, S2, p.B), tt = t1; if (p.dual) { var t2 = ITOF.sigmaTheory(0.8 * p.f, S2, p.B); tt = 1 / Math.sqrt(1 / (t1 * t1) + 1 / (t2 * t2)); } thc.push([d, tt * 1000]); }
+      title(ctx, P, "깊이 노이즈 σ_d (mm)", b1.x - 40, b1.y - 6);
+      if (b1.h > 40) SB.chart(ctx, b1, { x: [0, p.dmax], y: [0.1, 1000], logY: true, xLabel: "참 거리 (m)", series: [{ data: thc, color: P.dim, width: 1.5, dash: [5, 4] }, { data: mc, color: P.ok, width: 2 }], yFmt: function (v) { return v >= 1 ? v.toFixed(0) : v.toFixed(1); } });
+      if (b1.h > 40) legend(ctx, P, [["몬테카를로 (16프레임)", P.ok], ["이론 식", P.dim, [5, 4]]], b1.x + 8, b1.y + 10, b1.x + b1.w);
+      // phasor diagram for the 2 m probe
+      if (wide) {
+        var cx = w * 0.79, cy = by + bh / 2 - 6, rad = Math.min(bh * 0.45, w * 0.18);
+        title(ctx, P, "2 m 픽셀의 위상자 (f = " + p.f + " MHz)", cx - rad - 10, by - 6);
+        ctx.strokeStyle = P.grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 2 * Math.PI); ctx.moveTo(cx - rad - 6, cy); ctx.lineTo(cx + rad + 6, cy); ctx.moveTo(cx, cy - rad - 6); ctx.lineTo(cx, cy + rad + 6); ctx.stroke();
+        var tot = [0, 0], scale = rad / (X.rets[0].S * (1 + p.alpha));
+        var arrow = function (x0, y0, x1, y1, col, wd) { ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = wd; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke(); var a = Math.atan2(y1 - y0, x1 - x0); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - 8 * Math.cos(a - 0.4), y1 - 8 * Math.sin(a - 0.4)); ctx.lineTo(x1 - 8 * Math.cos(a + 0.4), y1 - 8 * Math.sin(a + 0.4)); ctx.fill(); };
+        X.rets.forEach(function (rr, k) { var ph = 4 * Math.PI * p.f * rr.d / CMNS * 1e-3, vx = rr.S * Math.cos(ph) * scale, vy = rr.S * Math.sin(ph) * scale; arrow(cx + tot[0], cy - tot[1], cx + tot[0] + vx, cy - tot[1] - vy, k ? P.warn : P.accent, 2); tot[0] += vx; tot[1] += vy; });
+        if (X.rets.length > 1) arrow(cx, cy, cx + tot[0], cy - tot[1], P.bad, 2.5);
+        ctx.fillStyle = P.text; X.cloud.forEach(function (ph) { var m = Math.hypot(tot[0], tot[1]); ctx.globalAlpha = 0.45; ctx.beginPath(); ctx.arc(cx + m * Math.cos(ph), cy - m * Math.sin(ph), 1.8, 0, 7); ctx.fill(); }); ctx.globalAlpha = 1;
+        ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillStyle = P.dim; ctx.fillText("파랑: 직접 반사 · 주황: 다중 경로 · 빨강: 합", cx - rad - 10, cy + rad + 10);
+      }
+      SB.stat("itf-o-r", R.R.toFixed(2) + "<small> m</small>");
+      SB.stat("itf-o-sd", isFinite(X.sd2) ? (X.sd2 * 1000).toFixed(1) + " / " + (X.th * 1000).toFixed(1) + "<small> mm</small>" : "—");
+      SB.stat("itf-o-fail", (R.failRate * 100).toFixed(1) + "<small>%</small>");
+      SB.stat("itf-o-bias", isFinite(X.bias2) ? (X.bias2 * 1000).toFixed(0) + "<small> mm</small>" : "—");
+    }
+    cv = SB.canvas(document.getElementById("cv-itf"), draw, { aspect: 0.66, minHeight: 440, maxHeight: 520 });
+  })();
+
+  /* ================================================================
+     7) TCSPC pile-up and Coates correction
+     ================================================================ */
+  (function initCoates() {
+    var cv = null, res = null, key = "", seed = 1;
+    var redraw = nextFrame(function () { cv && cv.redraw(); });
+    var gB = SB.range("coa-b", function (v) { return Math.pow(10, v).toFixed(v < -1 ? 3 : 2) + " /주기"; }, redraw);
+    var gS = SB.range("coa-s", function (v) { return Math.pow(10, v).toFixed(v < -1 ? 3 : 2) + " /주기"; }, redraw);
+    var gT = SB.range("coa-tau", function (v) { return v >= 100 ? v + " ns (≥ 창)" : v + " ns"; }, redraw);
+    var gC = SB.range("coa-dcr", function (v) { return v + " kcps"; }, redraw);
+    var gP = SB.range("coa-ap", function (v) { return (v * 100).toFixed(0) + "%"; }, redraw);
+    var gD = SB.range("coa-d", function (v) { return v.toFixed(1) + " m"; }, redraw);
+    document.getElementById("coa-run").addEventListener("click", function () { seed++; redraw(); });
+    var CMcm = CMNS / 2 * 100;
+    function compute() {
+      var p = { d: gD(), Nb: Math.pow(10, gB()), Ns: Math.pow(10, gS()), tau: gT(), dcr: gC(), ap: gP(), M: 20000 }, k = JSON.stringify(p) + seed;
+      if (k !== key) {
+        key = k;
+        var S = COATES.simulate(p, seed), lam = COATES.coates(S.h, p.M, p.tau), tr = COATES.truth(p), raw = new Float64Array(COATES.NB);
+        for (var i = 0; i < COATES.NB; i++) raw[i] = S.h[i] / p.M;
+        var a = 0, b = 0; for (i = 300; i < COATES.NB; i++) { a += lam[i]; b += tr[i]; }
+        res = { p: p, S: S, lam: lam, tr: tr, raw: raw, eRaw: (COATES.peak(raw) - S.t0) * CMcm, eCor: (COATES.peak(lam, lam.armed) - S.t0) * CMcm, tail: a / b - 1 };
+      }
+      return res;
+    }
+    function draw(ctx, w, h) {
+      var P = SB.palette(), X = compute(), BW = COATES.BW, t0 = X.S.t0;
+      var top = { x: 54, y: 22, w: w - 64, h: h * 0.5 - 40 }, bot = { x: 54, y: h * 0.5 + 34, w: w - 64, h: h * 0.5 - 76 };
+      var ser = function (a, lo, hi) { var o = []; for (var i = lo; i < hi; i++) o.push([(i + 0.5) * BW, Math.max(1e-7, a[i])]); return o; };
+      title(ctx, P, "주기당 빈당 검출 확률 / 추정 광자율 (로그)", top.x - 44, top.y - 6);
+      SB.chart(ctx, top, { x: [0, COATES.T], y: [1e-6, 1], logY: true, xLabel: "", series: [{ data: ser(X.tr, 0, COATES.NB), color: P.dim, width: 1.4, dash: [5, 4] }, { data: ser(X.raw, 0, COATES.NB), color: P.warn, width: 1.4 }, { data: ser(X.lam, 0, COATES.NB), color: P.accent, width: 1.6 }], vlines: [{ x: t0, color: P.faint }], yFmt: function (v) { return "1e" + Math.round(Math.log10(v)); } });
+      legend(ctx, P, [["원 히스토그램", P.warn], ["코츠 보정", P.accent], ["참 광자율", P.dim, [5, 4]]], top.x + 8, top.y + top.h - 12, top.x + top.w);
+      var lo = Math.max(0, Math.floor((t0 - 4) / BW)), hi = Math.min(COATES.NB, Math.ceil((t0 + 4) / BW)), ymax = 0;
+      for (var i = lo; i < hi; i++) ymax = Math.max(ymax, X.raw[i], X.lam[i], X.tr[i]);
+      title(ctx, P, "봉우리 확대 (선형, ±4 ns)", bot.x - 44, bot.y - 6);
+      if (bot.h > 40) SB.chart(ctx, bot, { x: [Math.max(0, t0 - 4), Math.min(COATES.T, t0 + 4)], y: [0, ymax * 1.1 + 1e-9], xLabel: "도착 시각 (ns)", series: [{ data: ser(X.tr, lo, hi), color: P.dim, width: 1.4, dash: [5, 4] }, { data: ser(X.raw, lo, hi), color: P.warn, width: 1.6 }, { data: ser(X.lam, lo, hi), color: P.accent, width: 2 }], vlines: [{ x: t0, color: P.faint }], yFmt: function (v) { return v.toPrecision(2); } });
+      SB.stat("coa-o-det", (X.S.det / X.p.M).toFixed(2));
+      SB.stat("coa-o-raw", X.eRaw.toFixed(1) + "<small> cm</small>");
+      SB.stat("coa-o-cor", X.eCor.toFixed(1) + "<small> cm</small>");
+      SB.stat("coa-o-tail", (X.tail >= 0 ? "+" : "") + (X.tail * 100).toFixed(0) + "<small>%</small>");
+    }
+    cv = SB.canvas(document.getElementById("cv-coa"), draw, { aspect: 0.62, minHeight: 420, maxHeight: 500 });
+  })();
+
+  /* ================================================================
+     8) Quanta image sensor: binary jots, summation, MLE
+     ================================================================ */
+  (function initQis() {
+    var W = QIS.W, H = QIS.H, cv = null, key = "", res = null, seed = 3;
+    var imgs = [null, new ImageData(W, H), new ImageData(W, H)], offs = [null, mkCanvas(W, H), mkCanvas(W, H)];
+    var redraw = nextFrame(function () { cv && cv.redraw(); });
+    var gH = SB.range("qis-h", function (v) { return Math.pow(10, v).toFixed(v < -1 ? 3 : 2) + " 광자/jot"; }, redraw);
+    var gT = SB.range("qis-t", function (v) { return Math.round(Math.pow(2, v)) + "장"; }, redraw);
+    var gK = SB.range("qis-k", function (v) { return v + "×" + v; }, redraw);
+    var gR = SB.range("qis-rn", function (v) { return v.toFixed(2) + " e⁻"; }, redraw);
+    var gQ = SB.seg("qis-q", redraw);
+    function pTab(tab, Hm) { var x = (Math.log10(Math.max(1e-3, Math.min(100, Hm))) + 3) / 5 * 250, i = Math.min(249, Math.floor(x)), f = x - i; return tab[i] * (1 - f) + tab[i + 1] * f; }
+    function compute() {
+      var Hs = Math.pow(10, gH()), T = Math.round(Math.pow(2, gT())), k = gK(), sr = gR(), q = +gQ(), kk = [Hs, T, k, sr, q].join();
+      if (kk !== key) {
+        key = kk;
+        var r = rng(seed), tab = QIS.table(q, sr), n = k * k * T, dens = new Float64Array(W * H), est = new Float64Array(W * H), JW = W * k, JH = H * k, bits = new Uint8Array(JW * JH);
+        var md = 0, le = 0, ln = 0;
+        for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
+          var qq = y * W + x, Hm = Hs * QIS.rad[qq], p = pTab(tab, Hm), K = QIS.binom(r, n, p);
+          dens[qq] = K / n; md += K / n;
+          est[qq] = QIS.invert(tab, Math.min(1 - 0.5 / n, Math.max(0.5 / n, K / n)));
+          if (y >= 18 && y <= 50) { var e = Math.log2(est[qq] / Hm); le += e * e; ln++; }
+          for (var b = 0; b < k; b++) for (var a = 0; a < k; a++) bits[(y * k + b) * JW + x * k + a] = r() < p ? 1 : 0;
+        }
+        if (!imgs[0] || imgs[0].width !== JW) { imgs[0] = new ImageData(JW, JH); offs[0] = mkCanvas(JW, JH); }
+        var d0 = imgs[0].data; for (var j = 0; j < JW * JH; j++) { var g = bits[j] ? 235 : 20; d0[j * 4] = g; d0[j * 4 + 1] = g; d0[j * 4 + 2] = g; d0[j * 4 + 3] = 255; }
+        var d1 = imgs[1].data, d2 = imgs[2].data;
+        for (j = 0; j < W * H; j++) { var g1 = 255 * dens[j], g2 = 255 * SB.clamp((Math.log10(est[j]) + 3) / 5, 0, 1); d1[j * 4] = d1[j * 4 + 1] = d1[j * 4 + 2] = g1; d2[j * 4] = d2[j * 4 + 1] = d2[j * 4 + 2] = g2; d1[j * 4 + 3] = d2[j * 4 + 3] = 255; }
+        for (j = 0; j < 3; j++) offs[j].getContext("2d").putImageData(imgs[j], 0, 0);
+        // response and SNR curves
+        var resp = [], sq = [], sc = [], FWC = 6000, RNc = 1.5, dr = [Infinity, -Infinity], drc = [Infinity, -Infinity];
+        for (j = 0; j <= 60; j++) {
+          var lh = -3 + 5 * j / 60, Hm2 = Math.pow(10, lh), s1 = QIS.snr(Hm2, q, sr, n), N = Hm2 * n, s2 = N <= FWC ? N / Math.sqrt(N + RNc * RNc) : 0;
+          resp.push([Hm2, QIS.pOne(Hm2, q, sr)]); sq.push([Hm2, Math.max(0.01, s1)]); sc.push([Hm2, Math.max(0.01, s2)]);
+          if (s1 >= 1) { dr[0] = Math.min(dr[0], lh); dr[1] = Math.max(dr[1], lh); }
+          if (s2 >= 1) { drc[0] = Math.min(drc[0], lh); drc[1] = Math.max(drc[1], lh); }
+        }
+        res = { Hs: Hs, T: T, k: k, n: n, md: md / (W * H), lerr: Math.sqrt(le / Math.max(1, ln)), resp: resp, sq: sq, sc: sc, dr: (dr[1] - dr[0]) * Math.log2(10), drc: (drc[1] - drc[0]) * Math.log2(10) };
+      }
+      return res;
+    }
+    function draw(ctx, w, h) {
+      var P = SB.palette(), X = compute(), gap = 8, lab = 16, cols = 3;
+      var pw = (w - 2 * gap) / cols, ph = pw * H / W; if (ph > h * 0.4) { ph = h * 0.4; pw = ph * W / H; }
+      var x0 = (w - 3 * pw - 2 * gap) / 2, names = ["비트 평면 1장 (jot " + X.k + "×" + X.k + ")", X.T + "장 × " + X.k * X.k + " jot 합 (밀도)", "최대우도 복원 (로그 표시)"];
+      ctx.imageSmoothingEnabled = false;
+      for (var i = 0; i < 3; i++) { var x = x0 + i * (pw + gap); ctx.drawImage(offs[i], x, lab, pw, ph); ctx.strokeStyle = i === 2 ? P.accent : P.border; ctx.lineWidth = i === 2 ? 2 : 1; ctx.strokeRect(x, lab, pw, ph); ctx.fillStyle = i === 2 ? P.accent : P.dim; ctx.font = font(w < 500 ? 10 : 12, 600); ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText(names[i], x, lab - 3); }
+      var by = lab + ph + 40, bh = h - by - 38, half = w >= 560;
+      var b1 = half ? { x: 46, y: by, w: w / 2 - 60, h: bh } : { x: 46, y: by, w: w - 56, h: bh / 2 - 30 };
+      var b2 = half ? { x: w / 2 + 40, y: by, w: w / 2 - 50, h: bh } : { x: 46, y: by + bh / 2 + 22, w: w - 56, h: bh / 2 - 22 };
+      var xr = [1e-3, 100], vl = [{ x: X.Hs, color: P.faint }];
+      title(ctx, P, "응답: 1의 비율 대 노출 (광자/jot)", b1.x - 36, b1.y - 6);
+      if (b1.h > 30) SB.chart(ctx, b1, { x: xr, logX: true, y: [0, 1], xLabel: half ? "노출 H" : "", series: [{ data: X.resp, color: P.accent, width: 2 }, { data: X.resp.map(function (p) { return [p[0], 1 - Math.exp(-p[0])]; }), color: P.dim, width: 1.2, dash: [4, 4] }], vlines: vl, xFmt: function (v) { return "1e" + Math.round(Math.log10(v)); } });
+      title(ctx, P, "SNR: QIS " + X.n + "회 판정 대 같은 면적·시간의 일반 픽셀", b2.x - 36, b2.y - 6);
+      if (b2.h > 30) {
+        SB.chart(ctx, b2, { x: xr, logX: true, y: [0.1, 300], logY: true, xLabel: "노출 H (광자/jot/장)", series: [{ data: X.sc, color: P.warn, width: 1.6 }, { data: X.sq, color: P.ok, width: 2 }], vlines: vl, hlines: [{ y: 1, color: P.faint }], xFmt: function (v) { return "1e" + Math.round(Math.log10(v)); }, yFmt: function (v) { return v >= 1 ? v.toFixed(0) : v.toFixed(1); } });
+        legend(ctx, P, [["QIS", P.ok], ["일반 (FWC 6000 e⁻)", P.warn]], b2.x + 8, b2.y + 10, b2.x + b2.w);
+      }
+      SB.stat("qis-o-den", X.md.toFixed(2));
+      SB.stat("qis-o-err", X.lerr.toFixed(2) + "<small> stop</small>");
+      SB.stat("qis-o-dr", (isFinite(X.dr) ? X.dr.toFixed(1) : "0") + " / " + (isFinite(X.drc) ? X.drc.toFixed(1) : "0") + "<small> EV</small>");
+      SB.stat("qis-o-rate", SB.si(1e9 * 30 * X.T, "b/s"));
+    }
+    cv = SB.canvas(document.getElementById("cv-qis"), draw, { aspect: 0.66, minHeight: 470, maxHeight: 540 });
+  })();
+
+  /* ================================================================
+     9) In-sensor processing: motion-gated readout, data rate and power
+     ================================================================ */
+  (function initIsc() {
+    var cv = null, key = "", res = null, seed = 5, frame = 0, acc = 0;
+    var img = new ImageData(ISC.W, ISC.H), off = mkCanvas(ISC.W, ISC.H);
+    var redraw = nextFrame(function () { cv && cv.redraw(); });
+    var gM = SB.seg("isc-mode", redraw);
+    var gN = SB.range("isc-n", function (v) { return (v * 100).toFixed(0) + "%"; }, redraw);
+    var gT = SB.range("isc-th", function (v) { return v.toFixed(2); }, redraw);
+    var gH = SB.range("isc-hold", function (v) { return v + "프레임"; }, redraw);
+    var gL = SB.range("isc-link", function (v) { return v + " pJ/bit"; }, redraw);
+    document.getElementById("isc-new").addEventListener("click", function () { seed++; redraw(); });
+    var A = { eRead: 0.6e-9, eAP: 1.0e-9, eMot: 0.02e-9, opsNN: 0.5e9, eOp: 1e-12, eBit: 10e-12 };
+    function compute() {
+      var mode = gM(), p = { noise: gN(), th: gT(), hold: gH() }, kk = [mode, p.noise, p.th, p.hold, gL(), seed].join();
+      if (kk !== key) {
+        key = kk; A.eBit = gL() * 1e-12;
+        var R = mode === "stream" ? null : ISC.run(p, seed), ev = R ? R.ev : ISC.timeline(seed + 1);
+        var tr = { read: [], logic: [], link: [], ap: [] }, Es = 0, Em = 0, bits = 0;
+        for (var f = 0; f < ISC.NF; f++) {
+          var e = ISC.energy(mode, mode === "stream" || (R && R.trig[f]), A), es = ISC.energy("stream", true, A);
+          Es += es.read + es.logic + es.link + es.ap; Em += e.read + e.logic + e.link + e.ap; bits += e.bits;
+          var t = f / ISC.FPS, c = 0;
+          ["read", "logic", "link", "ap"].forEach(function (k) { c += e[k] * ISC.FPS; tr[k].push([t, c]); });
+        }
+        res = { mode: mode, R: R, ev: ev, tr: tr, Ps: Es / ISC.NF * ISC.FPS, Pm: Em / ISC.NF * ISC.FPS, rate: bits / ISC.NF * ISC.FPS };
+      }
+      return res;
+    }
+    var loop = SB.loop(document.getElementById("sim-isc"), function (dt) { acc += dt; var step = Math.floor(acc * ISC.FPS); if (step > 0) { acc -= step / ISC.FPS; frame = (frame + step) % ISC.NF; cv && cv.redraw(); } });
+    loop.start();
+    function draw(ctx, w, h) {
+      var P = SB.palette(), X = compute(), R = X.R, f = frame;
+      // current monitor frame (noise drawn at pixel level for display)
+      var obj = ISC.objAt(X.ev, f), d = img.data, r = rng(f + 1), sig = gN();
+      for (var y = 0; y < ISC.H; y++) for (var x = 0; x < ISC.W; x++) {
+        var v = ISC.bgv(x, y) * (1 + 0.02 * Math.sin(f * 0.05)); if (obj && Math.abs(x - obj.x) < obj.s * 0.6 && Math.abs(y - obj.y) < obj.s * 1.6) v = 0.85;
+        v += sig * gauss(r); var g = 255 * SB.clamp(v, 0, 1), o = (y * ISC.W + x) * 4; d[o] = g; d[o + 1] = g; d[o + 2] = g; d[o + 3] = 255;
+      }
+      off.getContext("2d").putImageData(img, 0, 0);
+      var wide = w >= 560, tw = wide ? Math.min(w * 0.3, 240) : Math.min(w * 0.5, 200), th = tw * ISC.H / ISC.W;
+      ctx.imageSmoothingEnabled = false; ctx.drawImage(off, 0, 18, tw, th);
+      var on = X.mode === "stream" || (R && R.trig[f]);
+      ctx.strokeStyle = on ? P.bad : P.border; ctx.lineWidth = on ? 3 : 1; ctx.strokeRect(0, 18, tw, th);
+      title(ctx, P, "모니터 영상 t = " + (f / ISC.FPS).toFixed(1) + " s", 0, 15);
+      ctx.font = font(12, 600); ctx.fillStyle = on ? P.bad : P.dim; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      var txt = X.mode === "stream" ? "항상 12 MP 전송" : on ? (X.mode === "nn" ? "트리거: 12 MP 읽기, ROI만 전송" : "트리거: 12 MP 읽기·전송") : (X.mode === "nn" ? "대기: 0.75 MP + NN, 메타데이터만" : "대기: 0.75 MP 비닝 감시");
+      if (wide) ctx.fillText(txt, 0, 24 + th); else ctx.fillText(txt, tw + 10, 24);
+      var box = wide ? { x: tw + 70, y: 22, w: w - tw - 80, h: h - 70 } : { x: 50, y: 18 + th + 40, w: w - 60, h: h - (18 + th + 40) - 44 };
+      var ymax = X.Ps * 1.15, bands = X.ev.map(function (e) { return { x0: e.a / ISC.FPS, x1: e.b / ISC.FPS, color: "rgba(128,128,128,0.15)" }; });
+      var cols = { read: P.accent, logic: P.ok, link: P.warn, ap: P.bad };
+      var order = ["read", "logic", "link", "ap"], ser = order.map(function (k) { return { data: X.tr[k], color: cols[k], width: 1.4 }; });
+      title(ctx, P, "전력 (mW, 누적) · 회색 띠 = 실제 사건", box.x - 44, box.y - 6);
+      if (box.h > 40) {
+        var C = SB.chart(ctx, box, { x: [0, ISC.NF / ISC.FPS], y: [0, ymax], xLabel: "시간 (s)", bands: bands, series: ser, hlines: [{ y: X.Ps, color: P.dim, label: "항상 스트리밍 " + X.Ps.toFixed(0) + " mW" }], vlines: [{ x: f / ISC.FPS, color: P.faint }] });
+        ctx.save(); ctx.globalAlpha = 0.3;
+        order.forEach(function (k, n) {
+          var up = X.tr[k], lo = n ? X.tr[order[n - 1]] : null; ctx.fillStyle = cols[k]; ctx.beginPath();
+          up.forEach(function (q, i) { i ? ctx.lineTo(C.X(q[0]), C.Y(q[1])) : ctx.moveTo(C.X(q[0]), C.Y(q[1])); });
+          for (var i = up.length - 1; i >= 0; i--) ctx.lineTo(C.X(up[i][0]), C.Y(lo ? lo[i][1] : 0));
+          ctx.closePath(); ctx.fill();
+        });
+        ctx.restore();
+        legend(ctx, P, [["읽기·ADC", cols.read], ["센서 로직", cols.logic], ["링크", cols.link], ["AP ISP·DRAM", cols.ap]], box.x + 8, box.y + 12, box.x + box.w);
+      }
+      SB.stat("isc-o-p", X.Pm.toFixed(0) + "<small> mW (×" + (X.Ps / X.Pm).toFixed(1) + " 절감)</small>");
+      SB.stat("isc-o-rate", SB.si(X.rate, "b/s"));
+      SB.stat("isc-o-miss", R ? R.missed + "/" + R.nEv + " · " + R.falseF : "0 · 0");
+      SB.stat("isc-o-lat", R && R.nEv > R.missed ? (R.lat / ISC.FPS * 1000).toFixed(0) + "<small> ms</small>" : "—");
+    }
+    cv = SB.canvas(document.getElementById("cv-isc"), draw, { aspect: 0.42, minHeight: 330, maxHeight: 380 });
   })();
 })();
 </script>

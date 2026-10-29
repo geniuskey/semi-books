@@ -7,7 +7,7 @@
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png">
 <title>컴퓨테이셔널 포토그래피 · SensorBook</title>
-<meta name="description" content="작은 센서의 광량 한계를 여러 장의 프레임으로 넘는 방법: ZSL 버스트, 타일 정렬, 강건 병합과 고스트, 야간 모드의 모션 미터링, 멀티프레임 초해상도, 합성 심도(인물 모드), 학습 기반 처리의 한계를 시뮬레이터로 배운다.">
+<meta name="description" content="작은 센서의 광량 한계를 여러 장의 프레임으로 넘는 방법: ZSL 버스트, 타일 정렬, 강건 병합과 고스트, 야간 모드의 모션 미터링, 멀티프레임 초해상도, 합성 심도(인물 모드), 서브픽셀 정렬, 주파수 영역 병합, 노출 융합, 자이로 PSF 디컨볼루션, 학습 기반 처리의 한계를 시뮬레이터로 배운다.">
 <link rel="stylesheet" href="../css/style.css">
 <script src="../js/common.js"></script>
 <style>
@@ -32,6 +32,8 @@
       <li>강건 병합이 움직이는 영역의 가중치를 낮춰 고스트를 막는 방식과 그 대가를 이해한다.</li>
       <li>서브픽셀 시프트로 에일리어싱을 푸는 멀티프레임 초해상도의 원리와 광학적 한계를 설명한다.</li>
       <li>시차에서 깊이를, 깊이에서 착란원을 계산하는 합성 심도의 흐름과 가장자리 아티팩트의 원인을 안다.</li>
+      <li>위상 상관과 루카스–카나데로 서브픽셀 변위를 구하고, 노이즈·반복 무늬·개구 문제에서 각 방법이 실패하는 방식을 비교한다.</li>
+      <li>노출 융합의 피라미드 혼합과 자이로 PSF 기반 디컨볼루션(위너, 리처드슨–루시)의 노이즈 증폭과 정규화를 정량적으로 다룬다.</li>
     </ul>
   </header>
 
@@ -208,6 +210,59 @@
       <strong>정렬이 실패하는 곳</strong>
       <p>블록 매칭은 타일 안에 무늬가 있어야 동작한다. 맑은 하늘이나 흰 벽처럼 무늬가 없는 타일에서는 모든 후보의 비용이 비슷해 노이즈가 결과를 정한다. 수평선이나 전깃줄처럼 한 방향의 가장자리만 있는 타일은 그 방향을 따라 미끄러져도 비용이 변하지 않는다(개구 문제, Aperture Problem). 반복 무늬는 한 주기 어긋난 곳에서도 잘 맞는다. 어두울수록 노이즈가 무늬를 덮어 실패가 늘어난다. 정렬은 틀릴 수 있다는 전제에서, 틀린 결과를 걸러 내는 일을 다음 단계인 병합이 맡는다.</p>
     </div>
+
+    <h3>서브픽셀 정렬: 위상 상관과 루카스–카나데</h3>
+    <p>블록 매칭에 포물선을 맞추는 방법은 빠르지만, 비용 함수가 정확히 포물선 모양이라는 가정에 기대므로 0.1픽셀 안쪽의 정밀도를 얻기 어렵다. 초해상도처럼 서브픽셀 변위가 결과를 좌우하는 곳에서는 두 가지 방법을 더 쓴다.</p>
+    <p><span class="term">위상 상관</span><span class="en">(Phase Correlation)</span>은 푸리에 변환의 이동 정리를 이용한다. 영상이 \(\mathbf{s}\)만큼 옮겨지면 스펙트럼의 크기는 그대로이고 위상만 \(e^{-i2\pi\mathbf{k}\cdot\mathbf{s}}\)만큼 돈다. 두 스펙트럼을 곱해 크기로 나누면 위상 차이만 남고, 이것을 역변환하면 변위 위치에 뾰족한 피크가 선다.</p>
+    <div class="formula">$$R(\mathbf{k}) = \frac{F_b(\mathbf{k})\,F_a^{*}(\mathbf{k})}{\bigl|F_b(\mathbf{k})\,F_a^{*}(\mathbf{k})\bigr| + \epsilon} \approx e^{-i2\pi\mathbf{k}\cdot\mathbf{s}},\qquad r(\mathbf{x}) = \mathcal{F}^{-1}\{R\}(\mathbf{x}) \approx \delta(\mathbf{x}-\mathbf{s})$$
+      <div class="where">\(F_a, F_b\): 창 함수를 곱한 두 타일의 2차원 DFT, \(\epsilon\): 신호가 없는 주파수 성분이 노이즈 위상만으로 피크를 흐리지 않게 하는 작은 상수. 피크 위치의 정수 부분은 \(r\)의 최댓값에서, 소수 부분은 피크 주변에서 \(R\)의 역DFT를 촘촘한 격자로 다시 계산해(행렬 DFT 업샘플링) 얻는다. 두 번째로 큰 피크와 첫 번째 피크의 비는 정렬을 얼마나 믿을지 알려 주는 신뢰도 지표다.</div>
+    </div>
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 210" role="img" aria-label="위상 상관 정렬의 처리 흐름">
+        <rect x="10" y="20" width="92" height="56" rx="6" class="f-surface" stroke="var(--border)"/><text x="56" y="44" class="t" text-anchor="middle">기준 타일</text><text x="56" y="64" class="t-mono" text-anchor="middle">a(x)</text>
+        <rect x="10" y="120" width="92" height="56" rx="6" class="f-surface" stroke="var(--border)"/><text x="56" y="144" class="t" text-anchor="middle">맞출 타일</text><text x="56" y="164" class="t-mono" text-anchor="middle">b(x)=a(x−s)</text>
+        <line x1="104" y1="48" x2="150" y2="48" class="s-line" marker-end="url(#cp-arr)"/><line x1="104" y1="148" x2="150" y2="148" class="s-line" marker-end="url(#cp-arr)"/>
+        <text x="127" y="40" class="t-mono" text-anchor="middle">창·FFT</text><text x="127" y="140" class="t-mono" text-anchor="middle">창·FFT</text>
+        <rect x="154" y="20" width="96" height="56" rx="6" class="f-elev" stroke="var(--border)"/><text x="202" y="44" class="t-mono" text-anchor="middle">F_a(k)</text><text x="202" y="64" class="t-dim" text-anchor="middle">크기 |F|, 위상 φ</text>
+        <rect x="154" y="120" width="96" height="56" rx="6" class="f-elev" stroke="var(--border)"/><text x="202" y="144" class="t-mono" text-anchor="middle">F_b(k)</text><text x="202" y="164" class="t-dim" text-anchor="middle">위상 φ − 2πk·s</text>
+        <path d="M252 48 C280 48 280 98 300 98 M252 148 C280 148 280 98 300 98" class="s-line" fill="none"/>
+        <rect x="302" y="70" width="150" height="56" rx="6" class="f-acc-soft" stroke="var(--accent)"/><text x="377" y="94" class="t-mono" text-anchor="middle">F_b·F_a* / |…|</text><text x="377" y="114" class="t-dim" text-anchor="middle">크기를 지우고 위상만</text>
+        <line x1="454" y1="98" x2="500" y2="98" class="s-acc" marker-end="url(#cp-arr)"/><text x="477" y="90" class="t-mono" text-anchor="middle" style="fill:var(--accent)">IFFT</text>
+        <rect x="504" y="30" width="160" height="136" rx="6" class="f-surface" stroke="var(--border)"/>
+        <g class="s-line" opacity="0.45"><path d="M504 98H664M584 30V166"/></g>
+        <circle cx="584" cy="98" r="3" class="f-acc" opacity="0.6"/>
+        <path d="M612 120 l6 -34 l6 34 z" class="f-acc"/><text x="626" y="80" class="t-mono">피크 = s</text>
+        <circle cx="560" cy="64" r="2.5" class="f-acc" opacity="0.5"/><circle cx="640" cy="146" r="2.5" class="f-acc" opacity="0.5"/>
+        <text x="584" y="186" class="t-dim" text-anchor="middle">상관 곡면 r(x)</text>
+        <text x="10" y="204" class="t-dim">이동은 위상에만 기록된다. 크기로 나누면 밝기·대비 차이에 둔감해지지만, 신호 없는 고주파도 같은 무게를 얻어 노이즈에는 약해진다.</text>
+      </svg>
+      <figcaption><b>그림 11-4.</b> 위상 상관. 두 타일의 스펙트럼에서 위상 차이만 남겨 역변환하면 변위 \(\mathbf{s}\) 위치에 피크가 선다. 반복 무늬에서는 한 주기 떨어진 곳에도 거의 같은 높이의 피크가 생긴다.</figcaption>
+    </figure>
+    <p><span class="term">루카스–카나데</span><span class="en">(Lucas–Kanade)</span> 방법은 탐색 대신 미분을 쓴다. 변위 \(\mathbf{d}\)가 작다고 보고 \(I_b(\mathbf{x}+\mathbf{d}) \approx I_b(\mathbf{x}) + \nabla I\cdot\mathbf{d}\)로 선형화한 뒤, 타일 안의 제곱 오차를 최소로 하는 \(\mathbf{d}\)를 최소제곱으로 푼다. 한 번에 맞지 않으면 옮긴 영상으로 다시 풀고(가우스–뉴턴 반복), 큰 변위는 피라미드의 거친 레벨에서 시작한다.</p>
+    <div class="formula">$$\underbrace{\begin{bmatrix}\sum I_x^2 & \sum I_xI_y\\ \sum I_xI_y & \sum I_y^2\end{bmatrix}}_{\mathbf{G}\ (\text{구조 텐서})}\mathbf{d} = -\begin{bmatrix}\sum I_x\,e\\ \sum I_y\,e\end{bmatrix},\qquad \sigma_d \approx \frac{\sqrt{2}\,\sigma_n}{\sqrt{\sum I_x^2}}$$
+      <div class="where">\(I_x, I_y\): 기준 타일의 기울기, \(e = I_b(\mathbf{x}+\mathbf{d}) - I_a(\mathbf{x})\): 현재 추정에서의 잔차, \(\sigma_n\): 프레임당 노이즈(두 프레임 모두 노이즈가 있으므로 \(\sqrt{2}\)). \(\mathbf{G}\)의 작은 고윳값이 0에 가까우면 그 방향의 변위는 정해지지 않는다. 이것이 앞에서 말한 개구 문제의 수학적 모습이다.</div>
+    </div>
+    <p><b>계산 예.</b> 64×64 타일의 기울기 rms가 최대 밝기의 4.5 %이면 \(\sum I_x^2 \approx 4096\times 0.045^2 \approx 8.3\)이다. 노이즈 \(\sigma_n\) = 5 %에서 한 축의 정렬 오차는 \(\sqrt{2}\times0.05/\sqrt{8.3}\approx\) 0.025픽셀, 두 축을 합하면 약 0.035픽셀이다. 아래 시뮬레이터의 자연 질감 장면이 바로 이 기울기 통계를 가진다. 타일이 반으로 작아지면 \(\sum I_x^2\)이 1/4이 되어 오차가 2배가 된다. 정렬 정밀도와 타일 크기(곧 국소 움직임에 대한 분해능)는 맞바꾸는 관계다.</p>
+
+    <div class="sim" id="sim-rg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>서브픽셀 정렬: 위상 상관 · 블록 매칭 · 루카스–카나데</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-rg"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>장면</span><div class="seg" id="rg-scene"><button data-value="nat" class="on">자연 질감</button><button data-value="rep">반복 무늬</button><button data-value="edge">한 방향 가장자리</button></div></div>
+          <label class="ctrl"><span>참 변위 x <output id="rg-sx-out"></output></span><input type="range" id="rg-sx" min="-6" max="6" value="2.3" step="0.05"></label>
+          <label class="ctrl"><span>참 변위 y <output id="rg-sy-out"></output></span><input type="range" id="rg-sy" min="-6" max="6" value="-1.7" step="0.05"></label>
+          <label class="ctrl"><span>노이즈 σ <output id="rg-sig-out"></output></span><input type="range" id="rg-sig" min="0" max="0.2" value="0.05" step="0.005"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">위상 상관</span><span class="v" id="o-rg-pc">—</span></div>
+        <div class="stat"><span class="k">블록 매칭 + 포물선</span><span class="v" id="o-rg-bm">—</span></div>
+        <div class="stat"><span class="k">LK 피라미드 (3단)</span><span class="v" id="o-rg-lk">—</span></div>
+        <div class="stat"><span class="k">2등/1등 피크 비</span><span class="v" id="o-rg-ratio">—</span></div>
+      </div>
+      <div class="sim-note">위: 64×64 기준 타일, 서브픽셀만큼 옮기고 노이즈를 더한 타일, 위상 상관 곡면(가운데가 변위 0, 흰 원 = 참값, 초록 십자 = 추정). 아래: 같은 변위에서 노이즈 σ를 바꾸며 세 방법의 rms 오차를 몬테카를로(수준마다 4회)로 잰 곡선. 장면은 대역 제한된 주기 신호로 만들어 서브픽셀 이동을 위상 회전으로 정확히 적용했다. 노이즈는 최대 밝기 대비 비율이다. 해볼 것: ① 기본값(자연 질감, σ 5 %)에서 세 방법 모두 0.1픽셀 안쪽이다(위상 상관 0.050, 블록 매칭 0.077, LK 0.040픽셀). ② σ를 12 %로 올리면 위상 상관이 먼저 무너진다(0.42픽셀). 크기로 나누어 노이즈뿐인 고주파에도 같은 무게를 주기 때문이다. LK는 0.07픽셀을 유지한다. ③ 반복 무늬로 바꾸면 노이즈가 없어도 피크 비가 0.91로 모호해지고, LK 피라미드는 거친 레벨에서 8픽셀 주기가 에일리어싱되어 엉뚱한 값(오차 8.5픽셀)으로 간다. σ 5 %에서는 블록 매칭도 한 주기 어긋난다(오차 8.06픽셀). ④ 한 방향 가장자리(세로 줄무늬)에서는 y 변위가 정해지지 않는다. 노이즈 없이도 위상 상관의 y 추정이 0.00에 머물러 오차가 정확히 |y| = 1.70픽셀이다.</div>
+    </div>
   </section>
 
   <!-- =============================================================== 4 -->
@@ -237,7 +292,7 @@
         <text x="370" y="208" class="t-dim">고스트는 없지만 노이즈도 그대로</text>
         <text x="370" y="250" class="t-dim">곡선은 c = 2일 때</text>
       </svg>
-      <figcaption><b>그림 11-4.</b> 병합 계수 \(A\). 차이가 작으면 믿고 섞고, 크면 기준 프레임으로 되돌린다. 문턱을 정하는 것은 센서의 노이즈 모델이다.</figcaption>
+      <figcaption><b>그림 11-5.</b> 병합 계수 \(A\). 차이가 작으면 믿고 섞고, 크면 기준 프레임으로 되돌린다. 문턱을 정하는 것은 센서의 노이즈 모델이다.</figcaption>
     </figure>
 
     <p>이 식의 요점은 \(\sigma^2\)을 <b>센서의 노이즈 모델에서 가져온다</b>는 것이다. 전자 단위로 \(\sigma^2 = x + \sigma_r^2\), 곧 샷 노이즈와 읽기 노이즈의 합이다(<a href="noise.html#snr">7장</a>). 밝은 영역은 샷 노이즈가 크므로 문턱이 높고, 어두운 영역은 문턱이 낮다. 감마나 톤 매핑을 거친 영상에서는 이 관계가 깨지므로 병합은 선형 RAW에서 한다. 센서의 변환 이득과 읽기 노이즈를 미리 정확히 재 두어야 하는 이유이기도 하다(<a href="characterization.html">8장</a>).</p>
@@ -269,9 +324,34 @@
       <div class="sim-note">왼쪽 위: 기준 프레임 한 장. 오른쪽 위: 병합 결과. 왼쪽 아래: 마지막 프레임과 타일별로 추정한 변위(노란 선). 오른쪽 아래: 화소별 유효 프레임 수(빨강 = 1장, 초록 = N장 전부). 모델: 프레임마다 ±4픽셀의 무작위 손떨림, 16×16 타일, ±5픽셀 블록 매칭, 노이즈는 밝기와 무관한 가우시안(최대 밝기 대비 %), 강건 병합의 차이 d는 3×3 이웃 평균을 쓰고 c = 2, 오차는 노이즈 없는 기준 장면과의 rms 차이. 해볼 것: ① 정렬과 강건 병합을 모두 끄면 배경이 흐려지고 원이 여러 개로 번진다. ② 정렬만 켜면 배경은 선명해지지만 원이 지나간 자리에 고스트가 남는다. ③ 강건 병합까지 켜면 고스트가 사라지고, 유효 프레임 수 지도에서 원이 지나간 길이 빨갛게 드러난다. 그 자리는 노이즈가 줄지 않았다. ④ 정렬을 끄고 강건 병합만 켜면 가장자리마다 거절되어 선명하지만 노이즈가 많이 남는다. ⑤ 노이즈를 20 % 이상으로 올리면 움직임과 노이즈를 구별하기 어려워져 고스트가 다시 샌다.</div>
     </div>
 
-    <div class="callout deep">
-      <strong>주파수 영역에서 타일 단위로</strong>
-      <p>위 식은 화소 하나에 대해 썼지만, 실제 구현은 타일을 2차원 푸리에 변환한 뒤 <b>공간 주파수 성분마다</b> 같은 식을 적용하는 경우가 많다. 정렬이 조금 어긋나면 높은 주파수 성분만 크게 달라지고 낮은 주파수 성분은 비슷하다. 주파수별로 판단하면 어긋난 프레임에서도 낮은 주파수의 노이즈 저감은 건질 수 있다. 타일은 절반씩 겹치게 놓고 부드러운 창 함수를 곱해 더하므로 타일 경계가 보이지 않는다.</p>
+    <h3>주파수 영역에서 타일 단위로</h3>
+    <p>위 식은 화소 하나에 대해 썼지만, 실제 구현은 타일을 2차원 푸리에 변환한 뒤 <b>공간 주파수 성분마다</b> 같은 식을 적용하는 경우가 많다(HDR+ 방식의 병합). 정렬이 조금 어긋나면 높은 주파수 성분만 크게 달라지고 낮은 주파수 성분은 비슷하다. 주파수별로 판단하면 어긋난 프레임에서도 낮은 주파수의 노이즈 저감은 건질 수 있다. 타일은 절반씩 겹치게 놓고 부드러운 창 함수를 곱해 더하므로 타일 경계가 보이지 않는다.</p>
+    <div class="formula">$$\hat{T}(\boldsymbol{\omega}) = \frac{1}{N}\sum_{i=0}^{N-1}\Bigl[T_i(\boldsymbol{\omega}) + A_i(\boldsymbol{\omega})\bigl(T_0(\boldsymbol{\omega}) - T_i(\boldsymbol{\omega})\bigr)\Bigr],\qquad A_i(\boldsymbol{\omega}) = \frac{|D_i(\boldsymbol{\omega})|^{2}}{|D_i(\boldsymbol{\omega})|^{2} + c\,\sigma_D^{2}}$$
+      <div class="where">\(T_i(\boldsymbol{\omega})\): \(i\)번째 프레임 타일(창 함수 \(w\)를 곱한 16×16)의 DFT 계수, \(D_i = T_0 - T_i\), \(\sigma_D^2 = 2\sigma^2\sum w^2\): 정지 장면에서 차이 계수가 노이즈만으로 갖는 분산. 화소 영역 식과 같은 꼴이지만 판단 단위가 "화소"에서 "타일의 주파수 성분"으로 바뀌었다.</div>
+    </div>
+    <p><b>계산 예.</b> 잔여 정렬 오차 \(\delta\) = 0.5픽셀이면 공간 주파수 \(f\)의 성분은 위상이 \(2\pi f\delta\)만큼 어긋나고, 차이의 크기는 원 성분의 \(2|\sin(\pi f\delta)|\)배다. \(f\) = 0.05 사이클/픽셀에서는 0.16배여서 노이즈 문턱 아래에 들어 평균에 쓰이고, \(f\) = 0.4에서는 1.18배여서 거절된다. 화소 영역 병합은 이 둘을 구별하지 못하고 가장자리 화소 전체를 거절하므로, 어긋남이 있을 때는 주파수 영역 쪽이 노이즈를 더 줄인다. 반대로 정렬이 완벽하면 주파수별 판단의 통계적 흔들림 때문에 오히려 조금 손해다.</p>
+
+    <div class="sim" id="sim-fm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>강건 병합 비교: 단순 평균 · 화소 영역 · 주파수 영역</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-fm"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>프레임 수 N <output id="fm-n-out"></output></span><input type="range" id="fm-n" min="2" max="16" value="8" step="1"></label>
+          <label class="ctrl"><span>노이즈 σ <output id="fm-sig-out"></output></span><input type="range" id="fm-sig" min="0.02" max="0.2" value="0.08" step="0.01"></label>
+          <label class="ctrl"><span>물체 속도 <output id="fm-v-out"></output></span><input type="range" id="fm-v" min="0" max="4" value="3" step="0.5"></label>
+          <label class="ctrl"><span>잔여 정렬 오차 <output id="fm-jit-out"></output></span><input type="range" id="fm-jit" min="0" max="1.5" value="0.5" step="0.05"></label>
+          <label class="ctrl"><span>문턱 상수 c <output id="fm-c-out"></output></span><input type="range" id="fm-c" min="-1" max="4" value="2" step="0.5"></label>
+          <div class="ctrl"><span>가운데 그림</span><div class="seg" id="fm-view"><button data-value="mean">평균</button><button data-value="pix">화소</button><button data-value="freq" class="on">주파수</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">단순 평균 (정지 / 움직임)</span><span class="v" id="o-fm-mean">—</span></div>
+        <div class="stat"><span class="k">화소 영역 강건</span><span class="v" id="o-fm-pix">—</span></div>
+        <div class="stat"><span class="k">주파수 영역 강건</span><span class="v" id="o-fm-freq">—</span></div>
+        <div class="stat"><span class="k">이상적 σ/√N</span><span class="v" id="o-fm-ideal">—</span></div>
+        <div class="stat"><span class="k">평균 A (주파수)</span><span class="v" id="o-fm-a">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 기준 프레임. 가운데: 고른 방법의 병합 결과. 오른쪽: 노이즈 없는 장면과의 차이(5배 확대, 회색 점 = 물체가 지나간 영역). 모델: 128×96 장면(격자 벽, 줄무늬 간판, 움직이는 공), 프레임마다 ±정렬 오차 범위의 균일 분포 잔여 이동(정렬 단계가 남긴 오차), 가우시안 노이즈. 주파수 병합은 16×16 타일, 8픽셀 간격, 올림 코사인 창. 화소 병합은 3×3 평균 차이를 쓴 4절의 식. 수치는 rms 오차(최대 밝기 대비 %). 해볼 것: ① 기본값에서 단순 평균은 정지 5.5 %지만 움직임 영역이 27.8 %로 고스트가 뚜렷하다. 화소 병합은 4.9 / 6.4 %, 주파수 병합은 4.4 / 6.4 %다. ② 정렬 오차를 0으로 내리면 순서가 뒤집혀 평균 2.8, 화소 3.2, 주파수 3.7 %가 된다. ③ 정렬 오차를 1픽셀로 올리면 평균은 9.8 %로 흐려지고 화소 병합은 7.0 %, 주파수 병합은 5.1 %로 차이가 가장 커진다. ④ 그 상태에서 c를 16으로 올리면 정지 영역은 5.8 %로 비슷하지만 움직임 영역이 8.6 %로 나빠진다. 문턱이 높으면 고스트가 새어 든다.</div>
     </div>
   </section>
 
@@ -293,7 +373,7 @@
         <text x="20" y="172" class="t-dim">손에 들고, 장면은 정지 → 중간 노출, OIS가 허용하는 만큼</text>
         <text x="20" y="200" class="t-dim">삼각대 감지 → 긴 노출, 적은 프레임 (읽기 노이즈 페널티 최소)</text>
       </svg>
-      <figcaption><b>그림 11-5.</b> 모션 미터링. 셔터를 누르기 전 프리뷰 프레임 사이의 화소 이동(광류)과 자이로 신호로 상의 속도를 재고, 허용할 블러에서 프레임 노출을 거꾸로 계산한다.</figcaption>
+      <figcaption><b>그림 11-6.</b> 모션 미터링. 셔터를 누르기 전 프리뷰 프레임 사이의 화소 이동(광류)과 자이로 신호로 상의 속도를 재고, 허용할 블러에서 프레임 노출을 거꾸로 계산한다.</figcaption>
     </figure>
 
     <p>상이 센서 위에서 흐르는 속도를 \(v\)(픽셀/초), 허용할 블러를 \(b_{\max}\)(픽셀)라 하면 프레임 노출의 상한은 다음과 같다.</p>
@@ -356,7 +436,7 @@
         </g>
         <g><circle cx="60" cy="278" r="5" fill="var(--accent)"/><text x="72" y="283" class="t-mono">프레임 1</text><circle cx="180" cy="278" r="5" fill="var(--warn)"/><text x="192" y="283" class="t-mono">2</text><circle cx="240" cy="278" r="5" fill="var(--ok)"/><text x="252" y="283" class="t-mono">3</text><circle cx="300" cy="278" r="5" fill="var(--bad)"/><text x="312" y="283" class="t-mono">4</text></g>
       </svg>
-      <figcaption><b>그림 11-6.</b> 멀티프레임 초해상도. 네 프레임의 표본을 기준 프레임 좌표로 옮기면 한 픽셀 안에 표본이 여러 개 놓인다. 출력 격자의 각 점은 가까운 표본들의 가중 평균으로 정한다.</figcaption>
+      <figcaption><b>그림 11-7.</b> 멀티프레임 초해상도. 네 프레임의 표본을 기준 프레임 좌표로 옮기면 한 픽셀 안에 표본이 여러 개 놓인다. 출력 격자의 각 점은 가까운 표본들의 가중 평균으로 정한다.</figcaption>
     </figure>
 
     <p>이 방식은 디모자이킹과도 연결된다. 각 프레임의 R, G, B 표본을 색별로 따로 출력 격자에 쌓으면, 프레임이 충분할 때 모든 출력 화소 근처에 <b>실제로 측정한</b> R, G, B 표본이 놓인다. 이웃 색에서 추정할 필요가 없어진다. 디모자이킹을 병합이 대신하는 셈이고, <a href="color.html#demosaic">4장</a>에서 본 지퍼나 위색 아티팩트가 원리적으로 줄어든다. 표본을 쌓을 때는 4절과 같은 강건성 가중치를 써서 움직인 영역의 표본을 뺀다. 그런 영역은 기준 프레임 한 장의 디모자이킹 결과로 되돌아간다.</p>
@@ -434,7 +514,7 @@
         <text x="470" y="226" class="t-mono" text-anchor="middle">D = f/F</text>
         <text x="490" y="296" class="t-dim" text-anchor="middle">초점면에서 멀수록 착란원 c가 커진다</text>
       </svg>
-      <figcaption><b>그림 11-7.</b> 왼쪽: 떨어진 두 시점에서 본 같은 점은 영상 안의 위치가 다르다. 이 차이(시차)가 깊이를 알려 준다. 오른쪽: 초점면보다 먼 점의 빛은 센서 앞에서 모였다가 다시 퍼져 지름 \(c\)의 원이 된다.</figcaption>
+      <figcaption><b>그림 11-8.</b> 왼쪽: 떨어진 두 시점에서 본 같은 점은 영상 안의 위치가 다르다. 이 차이(시차)가 깊이를 알려 준다. 오른쪽: 초점면보다 먼 점의 빛은 센서 앞에서 모였다가 다시 퍼져 지름 \(c\)의 원이 된다.</figcaption>
     </figure>
 
     <p><b>깊이 재기.</b> 스마트폰이 쓰는 시점 차이는 두 가지다. 하나는 나란히 놓인 두 카메라이고, 다른 하나는 <a href="advanced.html#pdaf">12장</a>의 듀얼 픽셀이다. 듀얼 픽셀의 왼쪽·오른쪽 포토다이오드는 렌즈 조리개의 왼쪽 절반과 오른쪽 절반을 통해 장면을 본다. 초점을 맞추는 데 쓰던 그 위상차가 곧 화소별 깊이 정보다. 두 시점 사이의 거리인 <span class="term">기선</span><span class="en">(Baseline)</span>을 \(B\)라 하면 <span class="term">시차</span><span class="en">(Disparity)</span>는 다음과 같다.</p>
@@ -481,6 +561,114 @@
     <div class="callout warn">
       <strong>합성 심도가 틀리는 곳</strong>
       <p>아티팩트는 거의 전부 깊이 맵의 가장자리에서 나온다. 머리카락, 안경테, 손가락 사이, 자전거 바큇살처럼 깊이 맵의 해상도보다 가는 구조는 배경으로 분류되어 함께 흐려진다. 유리잔과 같은 투명체나 거울 반사는 한 화소에 깊이가 둘이어서 깊이 맵 하나로 표현할 수 없다. 전경과 배경의 색이 비슷하면 시차 자체가 잘 재지지 않는다. 그리고 진짜 큰 렌즈는 조리개의 가장자리를 통해 전경 물체의 뒤쪽을 조금 돌아서 본다. 한 시점에서 찍은 영상에는 그 가려진 배경이 없으므로 주변 화소로 지어내 채울 수밖에 없다.</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== 8a -->
+  <section id="fusion">
+    <h2>노출 융합: 톤 매핑을 거치지 않는 HDR</h2>
+    <p>9장(<a href="shutter.html#hdr-synth">HDR 합성</a>)의 방식은 노출이 다른 프레임을 선형 복사휘도로 합친 뒤 톤 매핑으로 다시 화면 범위에 넣는다. 정확하지만 노출비와 응답 곡선을 알아야 하고, 톤 매핑 곡선을 따로 설계해야 한다. <span class="term">노출 융합</span><span class="en">(Exposure Fusion, Mertens 2007)</span>은 이 두 단계를 건너뛰고 <b>이미 화면용으로 인코딩된 영상들</b>을 화소마다 "잘 찍힌 정도"에 따라 직접 섞는다. 스마트폰의 역광 장면이나 브래킷 촬영의 빠른 미리보기에 자주 쓰인다.</p>
+    <div class="formula">$$W_k(\mathbf{x}) = C_k(\mathbf{x})^{\omega_c}\, S_k(\mathbf{x})^{\omega_s}\, E_k(\mathbf{x})^{\omega_e},\qquad E_k = \exp\!\left(-\frac{(I_k - 0.5)^2}{2\sigma_E^2}\right),\qquad \hat{W}_k = \frac{W_k}{\sum_j W_j}$$
+      <div class="where">\(C_k\): 라플라시안 필터 응답의 절댓값(대비), \(S_k\): R·G·B의 표준편차(채도), \(E_k\): 값이 0.5에 가까울수록 큰 "잘 노출됨" 가중치, \(\sigma_E\): 그 폭(원 논문은 0.2). 흑백인 아래 시뮬레이터에서는 \(S\)를 빼고 \(\omega_c = \omega_e = 1\)로 둔다.</div>
+    </div>
+    <p>가중치를 화소마다 곱해 바로 더하면 문제가 생긴다. 가중치 지도는 노출 경계에서 급하게 바뀌는데, 그 경계를 따라 서로 다른 밝기의 영상이 이어 붙어 이음매와 얼룩이 생긴다. 가중치를 흐리면 이음매는 사라지지만 밝은 창 주변에 후광이 번진다. 해법은 <span class="term">라플라시안 피라미드</span><span class="en">(Laplacian Pyramid)</span> 혼합이다. 각 입력을 주파수 대역별 층으로 나누고, 가중치는 가우시안 피라미드로 층마다 알맞게 흐려서 섞은 뒤 다시 합친다.</p>
+    <div class="formula">$$\mathcal{L}\{R\}_l = \sum_k \mathcal{G}\{\hat{W}_k\}_l\;\mathcal{L}\{I_k\}_l,\qquad R = \text{collapse}\bigl(\mathcal{L}\{R\}_0,\dots,\mathcal{L}\{R\}_{L-1}\bigr)$$
+      <div class="where">\(\mathcal{L}\{\cdot\}_l\): 라플라시안 피라미드의 \(l\)번째 층(가우시안 층과 한 단 위 층을 확대한 것의 차), \(\mathcal{G}\{\cdot\}_l\): 가우시안 피라미드의 \(l\)번째 층. 미세한 디테일은 날카로운 가중치로, 넓은 밝기 변화는 넓게 흐린 가중치로 섞이므로 경계가 드러나지 않는다.</div>
+    </div>
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 230" role="img" aria-label="라플라시안 피라미드를 이용한 노출 융합">
+        <text x="70" y="20" class="t" text-anchor="middle">입력 I_k (3장)</text>
+        <rect x="20" y="30" width="100" height="40" class="f-surface" stroke="var(--border)" opacity="0.5"/><rect x="26" y="36" width="100" height="40" class="f-surface" stroke="var(--border)" opacity="0.75"/><rect x="32" y="42" width="100" height="40" class="f-elev" stroke="var(--border)"/>
+        <text x="70" y="130" class="t" text-anchor="middle">가중치 Ŵ_k</text>
+        <rect x="32" y="140" width="100" height="40" class="f-acc-soft" stroke="var(--accent)"/>
+        <line x1="136" y1="62" x2="176" y2="62" class="s-line" marker-end="url(#cp-arr)"/><text x="156" y="54" class="t-mono" text-anchor="middle">𝓛</text>
+        <line x1="136" y1="160" x2="176" y2="160" class="s-line" marker-end="url(#cp-arr)"/><text x="156" y="152" class="t-mono" text-anchor="middle">𝓖</text>
+        <g><rect x="182" y="42" width="88" height="40" class="f-elev" stroke="var(--border)"/><text x="226" y="67" class="t-mono" text-anchor="middle">층 0 (미세)</text>
+          <rect x="280" y="50" width="56" height="26" class="f-elev" stroke="var(--border)"/><text x="308" y="68" class="t-mono" text-anchor="middle">층 1</text>
+          <rect x="346" y="54" width="36" height="18" class="f-elev" stroke="var(--border)"/><text x="364" y="98" class="t-dim" text-anchor="middle">… 층 L−1</text></g>
+        <g><rect x="182" y="140" width="88" height="40" class="f-acc-soft" stroke="var(--accent)"/><text x="226" y="165" class="t-mono" text-anchor="middle">날카롭게</text>
+          <rect x="280" y="147" width="56" height="26" class="f-acc-soft" stroke="var(--accent)" opacity="0.8"/>
+          <rect x="346" y="151" width="36" height="18" class="f-acc-soft" stroke="var(--accent)" opacity="0.6"/><text x="364" y="196" class="t-dim" text-anchor="middle">넓게 흐린 가중치</text></g>
+        <text x="420" y="116" class="t" text-anchor="middle">×  층마다 곱해 Σ_k</text>
+        <path d="M226 86 V136 M308 80 V143 M364 76 V147" class="s-line" stroke-dasharray="3 3" fill="none"/>
+        <line x1="388" y1="122" x2="470" y2="122" class="s-acc" marker-end="url(#cp-arr)"/>
+        <rect x="476" y="92" width="88" height="60" class="f-acc-soft" stroke="var(--accent)"/><text x="520" y="118" class="t-mono" text-anchor="middle">𝓛{R}_l</text><text x="520" y="138" class="t-dim" text-anchor="middle">층별 합</text>
+        <line x1="566" y1="122" x2="600" y2="122" class="s-acc" marker-end="url(#cp-arr)"/><text x="584" y="112" class="t-mono" text-anchor="middle" style="fill:var(--accent)">합치기</text>
+        <rect x="604" y="98" width="66" height="48" class="f-elev" stroke="var(--accent)"/><text x="637" y="127" class="t" text-anchor="middle">R</text>
+        <text x="20" y="222" class="t-dim">화소별 가중 평균은 층 하나(L = 1)로 섞는 특수한 경우다. 층이 많을수록 넓은 밝기 변화가 넓은 가중치로 섞인다.</text>
+      </svg>
+      <figcaption><b>그림 11-9.</b> 라플라시안 피라미드 노출 융합. 입력은 대역별 층으로, 가중치는 같은 크기의 가우시안 층으로 나누어 층마다 섞고 마지막에 다시 합친다.</figcaption>
+    </figure>
+    <p><b>계산 예.</b> 어떤 화소의 세 노출 값이 0.05, 0.3, 0.8이고 \(\sigma_E\) = 0.2이면 \(E\) = \(e^{-2.53}\), \(e^{-0.5}\), \(e^{-1.125}\) = 0.080, 0.607, 0.325다(대비 항은 같다고 보자). 정규화하면 0.079, 0.600, 0.321이고 섞은 값은 \(0.079\times0.05 + 0.600\times0.3 + 0.321\times0.8\approx\) 0.44다. 결과가 감마 인코딩된 값의 가중 평균이라는 점에 주의하자. 물리적 복사휘도를 복원한 것이 아니므로 측광이나 이후의 선형 처리에는 쓸 수 없고, 9장의 선형 HDR 합성과는 용도가 다르다.</p>
+
+    <div class="sim" id="sim-ef">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>노출 융합: 화소별 가중 평균 대 라플라시안 피라미드</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-ef"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>브래킷 간격 <output id="ef-ev-out"></output></span><input type="range" id="ef-ev" min="1" max="3" value="2" step="0.5"></label>
+          <label class="ctrl"><span>잘 노출됨 폭 σ_E <output id="ef-se-out"></output></span><input type="range" id="ef-se" min="0.1" max="0.4" value="0.2" step="0.02"></label>
+          <label class="ctrl"><span>피라미드 단수 <output id="ef-lv-out"></output></span><input type="range" id="ef-lv" min="1" max="6" value="5" step="1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">암부 디테일 (피라미드)</span><span class="v" id="o-ef-sh">—</span></div>
+        <div class="stat"><span class="k">창밖 디테일 (피라미드)</span><span class="v" id="o-ef-win">—</span></div>
+        <div class="stat"><span class="k">벽 얼룩 (화소별 → 피라미드)</span><span class="v" id="o-ef-halo">—</span></div>
+        <div class="stat"><span class="k">평균 가중치 − / 0 / +</span><span class="v" id="o-ef-w">—</span></div>
+      </div>
+      <div class="sim-note">위: 어두운 방과 그보다 약 50배(5~6 EV) 밝은 창밖의 나무, 그리고 훨씬 더 밝은 전등이 있는 역광 장면을 세 노출로 찍은 8비트 감마 영상. 아래: 가중치 지도(파랑 = 짧은 노출, 초록 = 중간, 빨강 = 긴 노출), 화소별 가중 평균, 피라미드 융합. 수치는 영역별 3×3 고역 성분의 rms(디테일)와 매끈한 벽에서 생긴 거짓 저주파 구조의 rms(얼룩), 모두 최대값 대비 %. 해볼 것: ① 기본값에서 피라미드 융합은 암부 5.06 %, 창밖 7.95 %로 중간 노출 한 장(4.34, 6.73 %)보다 두 영역 모두 디테일이 많다. ② 피라미드 단수를 1로 내리면 암부 디테일이 3.82 %로 오히려 한 장보다 줄어든다. 날카로운 가중치 경계에서 섞인 값이 무늬를 평평하게 만든다. ③ 브래킷 간격을 3 EV로 올리면 화소별 평균의 벽 얼룩이 0.68 %, 피라미드는 0.43 %다. 창밖 디테일도 화소별 4.27 % 대 피라미드 6.55 %로 벌어진다. 3단 이상이면 단수를 더 늘려도 거의 같다. ④ σ_E를 0.4로 넓히면 화소별 평균의 얼룩이 0.78 %로 커진다. 가중치가 덜 뾰족해져 여러 노출이 넓게 섞이기 때문이다.</div>
+    </div>
+  </section>
+
+  <!-- =============================================================== 8b -->
+  <section id="deblur">
+    <h2>흔들림 블러 되돌리기: 자이로 PSF와 디컨볼루션</h2>
+    <p>5절의 모션 미터링은 블러를 <b>피하는</b> 방법이었다. 이미 찍힌 블러를 <b>되돌리는</b> 방법도 있다. 노출 동안 상이 그린 궤적 \(\mathbf{p}(t)\)를 알면 블러는 그 궤적을 따라 머문 시간을 무게로 하는 커널, 곧 <span class="term">흔들림 PSF</span>다. 스마트폰은 자이로의 각속도 \(\boldsymbol{\omega}(t)\)를 적분해 이 궤적을 직접 얻는다: \(\mathbf{p}(t) = (f/p)\int_0^t \boldsymbol{\omega}\,dt'\). 관측은 \(y = k * x + n\)이고, 이것을 \(x\)에 대해 푸는 것이 <span class="term">디컨볼루션</span><span class="en">(Deconvolution)</span>이다.</p>
+    <p>주파수 영역에서는 \(Y = HX + N\)이므로 \(X = Y/H\)라고 쓰고 싶지만, 블러의 전달 함수 \(H\)는 여러 주파수에서 0에 가깝다. 거기서 \(1/H\)는 노이즈를 끝없이 키운다. <span class="term">위너 디컨볼루션</span><span class="en">(Wiener Deconvolution)</span>은 신호 대 노이즈 비를 반영해 이득을 묶는다.</p>
+    <div class="formula">$$\hat{X}(\mathbf{f}) = \frac{H^{*}(\mathbf{f})}{|H(\mathbf{f})|^{2} + K}\,Y(\mathbf{f}),\qquad K \approx \frac{\sigma_n^{2}}{S_x(\mathbf{f})},\qquad g_n = \sqrt{\bigl\langle |G(\mathbf{f})|^{2} \bigr\rangle}$$
+      <div class="where">\(K\): 노이즈 대 신호 전력비(여기서는 상수로 둔 정규화 항), \(G = H^*/(|H|^2+K)\): 복원 필터, \(g_n\): 백색 노이즈의 rms가 복원 후 몇 배가 되는지 나타내는 노이즈 증폭률. \(K\to0\)이면 역필터 \(1/H\), \(K\)가 크면 아무것도 하지 않는 쪽으로 간다.</div>
+    </div>
+    <figure class="diagram fig-lg">
+      <svg viewBox="0 0 680 262" role="img" aria-label="길이 10픽셀 상자 블러의 전달 함수와 역필터, 위너 필터의 이득">
+        <rect x="70" y="24" width="580" height="196" class="f-surface" stroke="var(--border)"/>
+        <g class="s-axis" opacity="0.35"><path d="M70 73H650M70 122H650M70 171H650M186 24V220M302 24V220M418 24V220M534 24V220"/></g>
+        <text x="62" y="28" class="t-mono" text-anchor="end">100</text><text x="62" y="77" class="t-mono" text-anchor="end">10</text><text x="62" y="126" class="t-mono" text-anchor="end">1</text><text x="62" y="175" class="t-mono" text-anchor="end">0.1</text><text x="62" y="224" class="t-mono" text-anchor="end">0.01</text>
+        <text x="70" y="238" class="t-mono" text-anchor="middle">0</text><text x="186" y="238" class="t-mono" text-anchor="middle">0.1</text><text x="302" y="238" class="t-mono" text-anchor="middle">0.2</text><text x="418" y="238" class="t-mono" text-anchor="middle">0.3</text><text x="534" y="238" class="t-mono" text-anchor="middle">0.4</text><text x="650" y="238" class="t-mono" text-anchor="middle">0.5</text>
+        <text x="360" y="256" class="t-dim" text-anchor="middle">공간 주파수 f (사이클/픽셀)</text>
+        <path d="M70 122.0 74 122.0 78 122.2 82 122.4 85 122.6 89 123.0 93 123.4 97 123.9 101 124.6 105 125.2 109 126.0 113 126.9 116 127.9 120 129.0 124 130.3 128 131.6 132 133.1 136 134.7 140 136.6 143 138.6 147 140.8 151 143.3 155 146.1 159 149.3 163 152.9 167 157.2 171 162.5 174 169.1 178 178.3 182 193.7 186 220.0 190 195.1 194 181.2 198 173.4 201 168.2 205 164.4 209 161.5 213 159.4 217 157.7 221 156.5 225 155.5 229 154.9 232 154.6 236 154.5 240 154.6 244 155.0 248 155.6 252 156.4 256 157.4 259 158.7 263 160.3 267 162.2 271 164.4 275 167.0 279 170.2 283 174.0 287 178.8 290 185.0 294 193.8 298 208.8 302 220.0 306 209.5 310 195.2 314 187.1 317 181.6 321 177.6 325 174.4 329 172.0 333 170.1 337 168.6 341 167.5 345 166.6 348 166.1 352 165.8 356 165.7 360 165.9 364 166.3 368 166.9 372 167.8 375 168.9 379 170.3 383 172.0 387 174.1 391 176.6 395 179.6 399 183.3 403 187.9 406 194.0 410 202.7 414 217.6 418 220.0 422 218.0 426 203.6 430 195.4 433 189.8 437 185.6 441 182.4 445 179.9 449 177.9 453 176.3 457 175.0 461 174.1 464 173.5 468 173.1 472 172.9 476 173.0 480 173.3 484 173.9 488 174.7 491 175.7 495 177.1 499 178.7 503 180.7 507 183.1 511 186.1 515 189.7 519 194.3 522 200.3 526 208.9 530 220.0 534 220.0 538 220.0 542 209.6 546 201.4 549 195.7 553 191.5 557 188.2 561 185.6 565 183.6 569 181.9 573 180.6 577 179.7 580 179.0 584 178.5 588 178.3 592 178.4 596 178.6 600 179.2 604 179.9 607 180.9 611 182.2 615 183.8 619 185.8 623 188.1 627 191.0 631 194.6 635 199.2 638 205.2 642 213.7 646 220.0 650 220.0" fill="none" stroke="var(--text-dim)" stroke-width="2"/>
+        <path d="M70 122.0 74 122.0 78 121.8 82 121.6 85 121.4 89 121.0 93 120.6 97 120.1 101 119.4 105 118.8 109 118.0 113 117.1 116 116.1 120 115.0 124 113.7 128 112.4 132 110.9 136 109.3 140 107.4 143 105.4 147 103.2 151 100.7 155 97.9 159 94.7 163 91.1 167 86.8 171 81.5 174 74.9 178 65.7 182 50.3 186 24.0 190 48.9 194 62.8 198 70.6 201 75.8 205 79.6 209 82.5 213 84.6 217 86.3 221 87.5 225 88.5 229 89.1 232 89.4 236 89.5 240 89.4 244 89.0 248 88.4 252 87.6 256 86.6 259 85.3 263 83.7 267 81.8 271 79.6 275 77.0 279 73.8 283 70.0 287 65.2 290 59.0 294 50.2 298 35.2 302 24.0 306 34.5 310 48.8 314 56.9 317 62.4 321 66.4 325 69.6 329 72.0 333 73.9 337 75.4 341 76.5 345 77.4 348 77.9 352 78.2 356 78.3 360 78.1 364 77.7 368 77.1 372 76.2 375 75.1 379 73.7 383 72.0 387 69.9 391 67.4 395 64.4 399 60.7 403 56.1 406 50.0 410 41.3 414 26.4 418 24.0 422 26.0 426 40.4 430 48.6 433 54.2 437 58.4 441 61.6 445 64.1 449 66.1 453 67.7 457 69.0 461 69.9 464 70.5 468 70.9 472 71.1 476 71.0 480 70.7 484 70.1 488 69.3 491 68.3 495 66.9 499 65.3 503 63.3 507 60.9 511 57.9 515 54.3 519 49.7 522 43.7 526 35.1 530 24.0 534 24.0 538 24.0 542 34.4 546 42.6 549 48.3 553 52.5 557 55.8 561 58.4 565 60.4 569 62.1 573 63.4 577 64.3 580 65.0 584 65.5 588 65.7 592 65.6 596 65.4 600 64.8 604 64.1 607 63.1 611 61.8 615 60.2 619 58.2 623 55.9 627 53.0 631 49.4 635 44.8 638 38.8 642 30.3 646 24.0 650 24.0" fill="none" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="5 4"/>
+        <path d="M70 122.2 74 122.2 78 122.1 82 121.9 85 121.6 89 121.3 93 120.8 97 120.3 101 119.7 105 119.0 109 118.3 113 117.4 116 116.4 120 115.4 124 114.2 128 112.9 132 111.5 136 109.9 140 108.3 143 106.4 147 104.4 151 102.2 155 99.9 159 97.3 163 94.7 167 91.9 171 89.4 174 87.8 178 89.0 182 98.1 186 220.0 190 99.2 194 90.1 198 87.9 201 87.9 205 88.8 209 89.8 213 90.8 217 91.7 221 92.4 225 92.9 229 93.3 232 93.5 236 93.6 240 93.5 244 93.3 248 92.9 252 92.4 256 91.8 259 91.1 263 90.3 267 89.5 271 88.8 275 88.1 279 87.8 283 88.0 287 89.1 290 92.1 294 98.2 298 111.4 302 220.0 306 112.1 310 99.3 314 93.4 317 90.3 321 88.7 325 88.0 329 87.8 333 87.8 337 87.9 341 88.0 345 88.2 348 88.3 352 88.4 356 88.4 360 88.4 364 88.3 368 88.1 372 88.0 375 87.9 379 87.8 383 87.8 387 88.0 391 88.5 395 89.4 399 91.1 403 93.9 406 98.3 410 105.7 414 119.8 418 220.0 422 120.3 426 106.6 430 99.5 433 95.2 437 92.4 441 90.7 445 89.6 449 88.8 453 88.4 457 88.1 461 88.0 464 87.9 468 87.9 472 87.8 476 87.8 480 87.9 484 87.9 488 88.1 491 88.3 495 88.6 499 89.1 503 89.9 507 91.0 511 92.7 515 95.1 519 98.5 522 103.6 526 111.5 530 125.9 534 220.0 538 126.2 542 112.2 546 104.6 549 99.7 553 96.4 557 94.1 561 92.4 565 91.3 569 90.4 573 89.9 577 89.5 580 89.2 584 89.1 588 89.0 592 89.0 596 89.1 600 89.3 604 89.6 607 90.0 611 90.6 615 91.4 619 92.5 623 94.0 627 96.1 631 98.8 635 102.6 638 108.0 642 116.1 646 130.6 650 220.0" fill="none" stroke="var(--accent)" stroke-width="2.4"/>
+        <text x="600" y="210" class="t-dim" text-anchor="end">|H| (블러)</text>
+        <text x="200" y="44" class="t-mono" style="fill:var(--bad)">1/|H| (역필터): 0에서 발산</text>
+        <text x="430" y="96" class="t-mono" style="fill:var(--accent)">위너 |G|, K = 0.01: 최대 5배</text>
+      </svg>
+      <figcaption><b>그림 11-10.</b> 길이 10픽셀 수평 상자 블러의 전달 함수 \(|H| = |\mathrm{sinc}(\pi f L)|\)(로그 축). \(f\) = 0.1, 0.2, …에서 0이 되는 주파수의 정보는 사라졌다. 역필터는 그 근처에서 발산하고, 위너 필터는 \(1/(2\sqrt{K})\) = 5배에서 이득을 멈추며 0 근처에서는 오히려 이득을 0으로 내린다.</figcaption>
+    </figure>
+    <p><span class="term">리처드슨–루시</span><span class="en">(Richardson–Lucy)</span> 반복은 광자 수의 푸아송 통계에서 최대 우도를 구하는 방법이다. \(x^{(t+1)} = x^{(t)}\cdot\bigl[\tilde{k} * \bigl(y / (k * x^{(t)})\bigr)\bigr]\)를 반복한다(\(\tilde{k}\): 뒤집은 커널). 곱셈 갱신이라 값이 음수가 되지 않고, 반복 횟수가 곧 정규화 역할을 한다. 처음 몇십 회는 선명해지다가 더 돌리면 노이즈와 링잉이 자라는 <b>반수렴</b><span class="en">(Semi-convergence)</span>을 보이므로 적당히 멈춰야 한다.</p>
+    <p><b>계산 예.</b> 그림 11-10의 \(f\) = 0.25에서 \(|H| = |\sin(2.5\pi)/(2.5\pi)|\) = 0.127이다. 역필터의 이득은 7.9배, \(K\) = 0.01인 위너 필터는 \(0.127/(0.016+0.01)\) = 4.9배다. 노이즈 1 %인 영상이라면 그 주파수에서 노이즈가 7.9 %가 아니라 4.9 %로 커지는 대신 신호는 62 %만 되살아난다. 자이로 궤적이 정확해도 이 거래는 피할 수 없다. 그래서 실제 시스템은 블러를 되돌리기보다 OIS와 짧은 노출로 처음부터 작게 만들고, 남은 1~2픽셀만 디컨볼루션이나 학습 기반 복원으로 다듬는다. 복원 결과의 선명도·노이즈 측정은 <a href="iq.html#sharpen">20장</a>의 방법을 쓴다.</p>
+
+    <div class="sim" id="sim-db">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>자이로 PSF 디컨볼루션: 위너 대 리처드슨–루시</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-db"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>복원 방법</span><div class="seg" id="db-m"><button data-value="wiener" class="on">위너</button><button data-value="rl">리처드슨–루시</button></div></div>
+          <label class="ctrl"><span>궤적 길이 <output id="db-len-out"></output></span><input type="range" id="db-len" min="2" max="40" value="15" step="1"></label>
+          <label class="ctrl"><span>노이즈 σ <output id="db-sig-out"></output></span><input type="range" id="db-sig" min="-3" max="-1.3" value="-2" step="0.1"></label>
+          <label class="ctrl"><span>위너 K <output id="db-k-out"></output></span><input type="range" id="db-k" min="-5" max="-0.5" value="-4" step="0.1"></label>
+          <label class="ctrl"><span>RL 반복 <output id="db-it-out"></output></span><input type="range" id="db-it" min="0" max="60" value="30" step="1"></label>
+          <label class="ctrl"><span>자이로 오차 (배율·회전) <output id="db-err-out"></output></span><input type="range" id="db-err" min="0" max="0.3" value="0" step="0.01"></label>
+          <button class="btn" id="db-new">새 손떨림</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">관측 PSNR</span><span class="v" id="o-db-blur">—</span></div>
+        <div class="stat"><span class="k">복원 PSNR</span><span class="v" id="o-db-out">—</span></div>
+        <div class="stat"><span class="k">노이즈 증폭 g_n</span><span class="v" id="o-db-gain">—</span></div>
+        <div class="stat"><span class="k">위너 최적</span><span class="v" id="o-db-best">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 자이로 궤적으로 만든 PSF(노란 상자, 33×33 확대)로 흐리고 노이즈를 더한 128×128 시험 영상. 가운데: 복원 결과. 그래프: 위너는 K에 따른 PSNR(10단계 스윕, 주황 점 = 현재 K), 리처드슨–루시는 반복에 따른 PSNR(화면에 보일 때 한 프레임에 3회씩 진행). 손떨림은 각속도의 오른스타인–울렌벡 과정을 적분한 궤적이고, 자이로 오차는 복원에 쓰는 PSF의 배율과 회전을 틀리게 한다. 해볼 것: ① 기본값(15픽셀, 1 %, K = 1e−4)에서 관측 13.2 dB가 19.0 dB로 오르지만 노이즈가 11.8배 증폭되어 거칠다. K를 1e−2.5로 올리면 21.2 dB로 최적이다. ② 노이즈를 0.1 %(−3)로 내리면 최적 K가 1e−5로 내려가 37 dB까지 오른다. 최적 K는 노이즈 전력을 따라간다. ③ 리처드슨–루시로 바꾸면 1 %에서 30회 19.2 dB, 60회 20.4 dB로 천천히 오른다. 노이즈를 3 %(−1.5)로 올리면 30회 17.3 dB에서 정점을 찍고 60회에는 16.8 dB로 내려간다(반수렴). ④ 자이로 오차를 15 %로 주면 위너 최적이 17.0 dB, 30 %에서는 14.4 dB로 떨어진다. PSF를 정확히 아는 것이 알고리즘보다 중요하다.</div>
     </div>
   </section>
 
@@ -551,6 +739,10 @@
       <li>야간 모드는 모션 미터링으로 프레임 노출 \(t = b_{\max}/v\)를 정한다. 삼각대가 감지되면 프레임 노출을 늘려 읽기 노이즈 페널티를 줄인다.</li>
       <li>멀티프레임 초해상도는 손떨림이 만든 서브픽셀 시프트로 에일리어싱을 풀고 디모자이킹을 대신한다. 픽셀 개구와 렌즈 MTF가 이미 지운 주파수는 되살릴 수 없고, 시프트가 없으면 노이즈만 줄어든다.</li>
       <li>합성 심도는 시차로 깊이를 재고(\(d \propto fB/p\)), 착란원 \(c = fD\,|1/z_f - 1/z|\)에 맞춰 원판 커널로 층별로 흐린다. 아티팩트는 깊이 맵의 가장자리 오류에서 나온다.</li>
+      <li>서브픽셀 정렬은 위상 상관(위상 차만 남겨 역변환)과 루카스–카나데(구조 텐서로 최소제곱)로 한다. 정밀도는 \(\sigma_d\approx\sqrt{2}\sigma_n/\sqrt{\sum I_x^2}\)이고, 반복 무늬와 한 방향 가장자리에서는 피크 비나 구조 텐서의 작은 고윳값으로 실패를 감지한다.</li>
+      <li>주파수 영역 강건 병합은 타일의 주파수 성분마다 \(A = |D|^2/(|D|^2+c\sigma_D^2)\)를 적용해, 작은 정렬 오차가 있어도 낮은 주파수의 노이즈 저감을 건진다.</li>
+      <li>노출 융합은 대비와 잘 노출됨으로 가중치를 정하고 라플라시안 피라미드에서 섞어 이음매 없이 HDR 장면을 한 장에 담는다. 결과는 선형 복사휘도가 아니다.</li>
+      <li>자이로 궤적으로 흔들림 PSF를 알면 디컨볼루션할 수 있지만, \(|H|\)가 작은 주파수에서 노이즈가 증폭된다. 위너의 \(K\)와 리처드슨–루시의 반복 횟수가 정규화이며, PSF 오차가 복원 품질의 상한을 정한다.</li>
       <li>학습 기반 처리는 측정하지 못한 정보를 사전 지식으로 채운다. 보기에는 좋지만 환각의 위험이 있고, 화소값을 측정으로 다루는 용도에는 맞지 않는다.</li>
       <li>비용은 메모리·시간·전력이며, 움직이는 피사체와 동영상에서는 여러 장을 쓰는 이득이 크게 줄어든다. 동영상은 순환 필터로 \(N_{\text{eff}} = (2-\alpha)/\alpha\)의 저감을 얻는다.</li>
     </ol>
@@ -592,6 +784,30 @@
       <div class="quiz-q"><p>Q6. 동영상의 순환 시간축 필터 \(y_t = \alpha x_t + (1-\alpha)\tilde{y}_{t-1}\)에서 \(\alpha\) = 0.25로 두었다. 정지한 영역의 노이즈 저감은 프레임 몇 장을 평균한 것과 같은가?</p><div class="opts">
         <button class="opt">4장</button><button class="opt" data-correct>7장</button><button class="opt">16장</button><button class="opt">2장</button>
       </div><div class="quiz-exp">\(N_{\text{eff}} = (2-\alpha)/\alpha = 1.75/0.25 = 7\). 노이즈 분산은 1/7, 표준편차는 약 0.38배(8.5 dB 개선)다. \(\alpha\)를 줄이면 더 깨끗해지지만 움직이는 물체의 잔상이 길어진다.</div></div>
+      <div class="quiz-q"><p>Q7. 울타리처럼 8픽셀마다 같은 무늬가 반복되는 타일을 위상 상관으로 정렬했더니, 두 번째로 높은 피크가 첫 번째 피크의 0.9배였다. 이것이 뜻하는 바는?</p><div class="opts">
+        <button class="opt">피크가 두 개라서 서브픽셀 정밀도가 두 배로 좋아졌다.</button>
+        <button class="opt" data-correct>한 주기 어긋난 위치도 거의 똑같이 잘 맞아, 노이즈가 조금만 있어도 정수 픽셀 단위로 틀린 변위를 고를 수 있다.</button>
+        <button class="opt">영상에 노이즈가 전혀 없다는 뜻이므로 결과를 그대로 믿어도 된다.</button>
+        <button class="opt">타일이 너무 커서 생긴 현상이므로 타일을 키우면 사라진다.</button>
+      </div><div class="quiz-exp">위상 상관 곡면의 피크는 반복 주기마다 생긴다. 두 피크의 높이가 비슷하면 어느 쪽이 참인지 노이즈가 결정하므로, 피크 비는 정렬 신뢰도 지표로 쓰인다. 이런 타일은 강건 병합에서 거절되거나 이웃 타일의 변위로 대체된다. 피라미드의 거친 레벨에서는 주기가 짧아져 에일리어싱까지 겹친다.</div></div>
+      <div class="quiz-q"><p>Q8. 위너 디컨볼루션 \(G = H^*/(|H|^2+K)\)에서 \(K\)를 0에 가깝게 줄이면 어떤 일이 생기는가?</p><div class="opts">
+        <button class="opt">모든 주파수의 이득이 1로 수렴해 블러가 그대로 남는다.</button>
+        <button class="opt">PSF를 몰라도 복원할 수 있게 된다.</button>
+        <button class="opt" data-correct>역필터 \(1/H\)에 가까워져, \(|H|\)가 작은 주파수에서 노이즈가 크게 증폭된다.</button>
+        <button class="opt">노이즈 증폭률이 1보다 작아져 노이즈 저감 효과가 생긴다.</button>
+      </div><div class="quiz-exp">\(K\to 0\)이면 \(G \to 1/H\)이다. 흔들림 블러의 \(|H|\)는 여러 주파수에서 0에 가까우므로 그곳의 노이즈가 수십 배로 커진다. 최적의 \(K\)는 노이즈 대 신호 전력비이며, 노이즈가 클수록 크게 잡아야 한다.</div></div>
+      <div class="quiz-q"><p>Q9. 노출 융합에서 가중치를 화소마다 곱해 바로 더하지 않고 라플라시안 피라미드에서 섞는 이유로 가장 알맞은 것은?</p><div class="opts">
+        <button class="opt" data-correct>가중치가 급하게 바뀌는 노출 경계에서 생기는 이음매와 얼룩을 막으면서, 미세한 디테일은 날카로운 가중치로 보존하기 위해서다.</button>
+        <button class="opt">피라미드를 쓰면 입력 영상을 선형 복사휘도로 되돌릴 수 있기 때문이다.</button>
+        <button class="opt">계산량이 화소별 혼합보다 적기 때문이다.</button>
+        <button class="opt">노출비를 정확히 알아야 하는 단점을 없애기 위해서다.</button>
+      </div><div class="quiz-exp">화소별 혼합은 서로 다른 밝기의 영상을 가중치 경계에서 이어 붙여 얼룩을 만든다. 피라미드는 넓은 밝기 변화는 넓게 흐린 가중치로, 디테일은 날카로운 가중치로 섞는다. 노출비가 필요 없는 것은 노출 융합 자체의 성질이며 피라미드와는 무관하다. 결과는 여전히 감마 인코딩 값의 혼합이다.</div></div>
+      <div class="quiz-q"><p>Q10. 정렬 뒤에도 프레임마다 ±0.5~1픽셀의 잔여 어긋남이 남는 버스트에서, 주파수 영역 강건 병합이 화소 영역 강건 병합보다 노이즈를 더 줄이는 이유는?</p><div class="opts">
+        <button class="opt">주파수 영역에서는 노이즈 분산이 \(1/N^2\)로 줄어들기 때문이다.</button>
+        <button class="opt">푸리에 변환이 정렬 오차를 자동으로 0으로 만들기 때문이다.</button>
+        <button class="opt">움직이는 물체를 주파수 영역에서는 볼 수 없기 때문이다.</button>
+        <button class="opt" data-correct>작은 어긋남은 높은 주파수 성분만 크게 바꾸므로, 낮은 주파수 성분은 계속 평균에 넣고 높은 주파수만 거절할 수 있기 때문이다.</button>
+      </div><div class="quiz-exp">이동 \(\delta\)는 주파수 \(f\) 성분의 위상을 \(2\pi f\delta\)만큼 돌린다. 낮은 주파수의 차이는 노이즈 문턱 아래에 있어 평균되고, 높은 주파수만 기준 프레임으로 대체된다. 화소 영역 병합은 가장자리 화소 전체를 거절하므로 그 자리의 노이즈가 줄지 않는다. 정렬이 완벽하면 오히려 화소 영역이 약간 낫다.</div></div>
     </div>
   </section>
 </main>
@@ -1018,6 +1234,600 @@
       SB.stat("o-bk-err", (e * 100).toFixed(2) + "<small>%</small>");
     }
     cv = SB.canvas($("cv-bk"), draw, { aspect: 0.667, maxHeight: 400 });
+  })();
+
+  /* ---------- shared numerics for sims 4-7 ---------- */
+  function rng(seed) { let a = seed >>> 0; return function () { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  function gauss(r) { let u = r(); while (u < 1e-12) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+  const twCache = {};
+  function fft1(re, im, off, stride, n, inv) {
+    let tw = twCache[n];
+    if (!tw) { tw = twCache[n] = { c: new Float64Array(n / 2), s: new Float64Array(n / 2), rev: new Uint32Array(n) }; for (let k = 0; k < n / 2; k++) { tw.c[k] = Math.cos(2 * Math.PI * k / n); tw.s[k] = Math.sin(2 * Math.PI * k / n); } const lg = Math.round(Math.log2(n)); for (let i = 0; i < n; i++) { let r = 0; for (let b = 0; b < lg; b++) r |= ((i >> b) & 1) << (lg - 1 - b); tw.rev[i] = r; } }
+    for (let i = 0; i < n; i++) { const j = tw.rev[i]; if (j > i) { const a = off + i * stride, b = off + j * stride; let t = re[a]; re[a] = re[b]; re[b] = t; t = im[a]; im[a] = im[b]; im[b] = t; } }
+    const sg = inv ? 1 : -1;
+    for (let len = 2; len <= n; len <<= 1) {
+      const h = len >> 1, st = n / len;
+      for (let i = 0; i < n; i += len) for (let k = 0; k < h; k++) {
+        const wr = tw.c[k * st], wi = sg * tw.s[k * st], a = off + (i + k) * stride, b = a + h * stride;
+        const xr = re[b] * wr - im[b] * wi, xi = re[b] * wi + im[b] * wr;
+        re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+      }
+    }
+    if (inv) for (let i = 0; i < n; i++) { re[off + i * stride] /= n; im[off + i * stride] /= n; }
+  }
+  function fft2(re, im, w, h, inv) { for (let y = 0; y < h; y++) fft1(re, im, y * w, 1, w, inv); for (let x = 0; x < w; x++) fft1(re, im, x, w, h, inv); }
+
+  /* ---------- Sim 4: sub-pixel registration ---------- */
+  const REG = (function () {
+    const B = 128, N = 64, C0 = (B - N) / 2; let PCEPS = 0.03;
+    // band-limited periodic base scene defined by its spectrum; exact sub-pixel shift = phase ramp
+    function spectrum(kind, seed) {
+      const r = rng(seed), re = new Float64Array(B * B), im = new Float64Array(B * B);
+      for (let v = 0; v < B; v++) for (let u = 0; u < B; u++) {
+        const fu = (u <= B / 2 ? u : u - B) / B, fv = (v <= B / 2 ? v : v - B) / B, f = Math.hypot(fu, fv);
+        let a = 0;
+        if (kind === "rep") {
+          // fence-like period-8 pattern (fundamental + 3rd harmonic) over a weak natural background
+          const au = Math.abs(fu) * 8, av = Math.abs(fv) * 8;
+          if ((au === 1 || au === 3) && fv === 0) a = au === 1 ? 6 : 2; else if ((av === 1 || av === 3) && fu === 0) a = av === 1 ? 6 : 2;
+          else if (f > 0 && f < 0.3) a = 0.12 * Math.pow(f * B, -1.1);
+        }
+        else if (kind === "edge") { if (fv === 0 && f > 0 && f < 0.3) a = Math.pow(f * B, -0.9); }
+        else if (f > 0 && f < 0.3) a = Math.pow(f * B, -1.1);
+        if (a) { const ph = 2 * Math.PI * r(), g = 0.5 + r(); re[v * B + u] = a * g * Math.cos(ph); im[v * B + u] = a * g * Math.sin(ph); }
+      }
+      return { re, im };
+    }
+    // image(x) = f(x - s): content moved by +s
+    function render(S, sx, sy) {
+      const re = new Float64Array(B * B), im = new Float64Array(B * B);
+      for (let v = 0; v < B; v++) for (let u = 0; u < B; u++) {
+        const fu = (u <= B / 2 ? u : u - B) / B, fv = (v <= B / 2 ? v : v - B) / B, ph = -2 * Math.PI * (fu * sx + fv * sy), c = Math.cos(ph), s = Math.sin(ph), q = v * B + u;
+        re[q] = S.re[q] * c - S.im[q] * s; im[q] = S.re[q] * s + S.im[q] * c;
+      }
+      fft2(re, im, B, B, true);
+      const out = new Float64Array(N * N);
+      let mn = Infinity, mx = -Infinity;
+      for (let q = 0; q < B * B; q++) { mn = Math.min(mn, re[q]); mx = Math.max(mx, re[q]); }
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) out[y * N + x] = (re[(y + C0) * B + x + C0] - mn) / (mx - mn);
+      return out;
+    }
+    const han = new Float64Array(N);
+    for (let i = 0; i < N; i++) han[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * (i + 0.5) / N);
+    const cr = new Float64Array(N * N), ci = new Float64Array(N * N), colR = new Float64Array(N * 13), colI = new Float64Array(N * 13), pr = new Float64Array(N * N), pi = new Float64Array(N * N), qr = new Float64Array(N * N), qi = new Float64Array(N * N), surf = new Float64Array(N * N);
+    function phaseCorr(a, b) {
+      let ma = 0, mb = 0; for (let q = 0; q < N * N; q++) { ma += a[q]; mb += b[q]; } ma /= N * N; mb /= N * N;
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const q = y * N + x, w = han[x] * han[y]; pr[q] = (a[q] - ma) * w; pi[q] = 0; qr[q] = (b[q] - mb) * w; qi[q] = 0; }
+      fft2(pr, pi, N, N, false); fft2(qr, qi, N, N, false);
+      let mx = 0; for (let q = 0; q < N * N; q++) { const xr = qr[q] * pr[q] + qi[q] * pi[q], xi = qi[q] * pr[q] - qr[q] * pi[q]; pr[q] = xr; pi[q] = xi; mx = Math.max(mx, Math.hypot(xr, xi)); }
+      const eps = PCEPS * mx + 1e-12; for (let q = 0; q < N * N; q++) { const m = Math.hypot(pr[q], pi[q]) + eps; pr[q] /= m; pi[q] /= m; }
+      for (let q = 0; q < N * N; q++) { cr[q] = pr[q]; ci[q] = pi[q]; }
+      fft2(pr, pi, N, N, true);
+      let bq = 0, bv = -Infinity;
+      for (let q = 0; q < N * N; q++) { surf[q] = pr[q]; if (pr[q] > bv) { bv = pr[q]; bq = q; } }
+      const px = bq % N, py = (bq / N) | 0, at = (x, y) => surf[((y + N) % N) * N + ((x + N) % N)];
+      // second-highest peak outside a 3-px neighbourhood -> ambiguity ratio
+      let sv = -Infinity;
+      for (let q = 0; q < N * N; q++) { const x = q % N, y = (q / N) | 0, dx = Math.min(Math.abs(x - px), N - Math.abs(x - px)), dy = Math.min(Math.abs(y - py), N - Math.abs(y - py)); if (Math.max(dx, dy) > 2 && surf[q] > sv) sv = surf[q]; }
+      // Foroosh et al. (2002): sinc-shaped peak -> delta = r1/(r1 +- r0) using the larger neighbour
+      // sub-pixel: evaluate the inverse DFT of the cross-power spectrum on a fine grid (matrix-DFT upsampling)
+      const wrap = (k) => (k > N / 2 ? k - N : k);
+      let cx = wrap(px), cy = wrap(py);
+      for (const [half, M] of [[0.6, 13], [0.06, 13]]) {
+        const st = 2 * half / (M - 1); let best = -Infinity, bx = cx, by = cy;
+        for (let i = 0; i < M; i++) { const sx = cx - half + i * st;
+          for (let v = 0; v < N; v++) { let ar = 0, ai = 0; for (let u = 0; u < N; u++) { const k = (u <= N / 2 ? u : u - N), q = v * N + u, ph = 2 * Math.PI * k * sx / N, c = Math.cos(ph), s = Math.sin(ph); ar += cr[q] * c - ci[q] * s; ai += cr[q] * s + ci[q] * c; } colR[v * M + i] = ar; colI[v * M + i] = ai; }
+        }
+        for (let j = 0; j < M; j++) { const sy = cy - half + j * st;
+          for (let i = 0; i < M; i++) { let acc = 0; for (let v = 0; v < N; v++) { const k = (v <= N / 2 ? v : v - N), ph = 2 * Math.PI * k * sy / N; acc += colR[v * M + i] * Math.cos(ph) - colI[v * M + i] * Math.sin(ph); } if (acc > best) { best = acc; bx = cx - half + i * st; by = sy; } }
+        }
+        cx = bx; cy = by;
+      }
+      return { x: cx, y: cy, ratio: sv / bv, px, py };
+    }
+    const SBc = (x, a, b) => (x < a ? a : x > b ? b : x);
+    function blockMatch(a, b, R) {
+      const M = R + 1, cost = new Float64Array((2 * R + 1) * (2 * R + 1));
+      let best = Infinity, bu = 0, bv = 0;
+      for (let v = -R; v <= R; v++) for (let u = -R; u <= R; u++) {
+        let s = 0;
+        for (let y = M; y < N - M; y++) { const ro = y * N, rb = (y + v) * N + u; for (let x = M; x < N - M; x++) s += Math.abs(a[ro + x] - b[rb + x]); }
+        cost[(v + R) * (2 * R + 1) + u + R] = s; if (s < best) { best = s; bu = u; bv = v; }
+      }
+      const at = (u, v) => cost[(SBc(v, -R, R) + R) * (2 * R + 1) + SBc(u, -R, R) + R];
+      const sub = (m, c, p) => { const d = m - 2 * c + p; return Math.abs(d) < 1e-12 ? 0 : SBc(0.5 * (m - p) / d, -0.5, 0.5); };
+      return { x: bu + sub(at(bu - 1, bv), best, at(bu + 1, bv)), y: bv + sub(at(bu, bv - 1), best, at(bu, bv + 1)) };
+    }
+    function down(a, n) { const m = n / 2, o = new Float64Array(m * m); for (let y = 0; y < m; y++) for (let x = 0; x < m; x++) o[y * m + x] = 0.25 * (a[2 * y * n + 2 * x] + a[2 * y * n + 2 * x + 1] + a[(2 * y + 1) * n + 2 * x] + a[(2 * y + 1) * n + 2 * x + 1]); return o; }
+    function lkLevel(a, b, n, d, iters) {
+      const gx = new Float64Array(n * n), gy = new Float64Array(n * n);
+      for (let y = 1; y < n - 1; y++) for (let x = 1; x < n - 1; x++) { const q = y * n + x; gx[q] = 0.5 * (a[q + 1] - a[q - 1]); gy[q] = 0.5 * (a[q + n] - a[q - n]); }
+      let sxx = 0, sxy = 0, syy = 0; const mg = 2;
+      for (let y = mg; y < n - mg; y++) for (let x = mg; x < n - mg; x++) { const q = y * n + x; sxx += gx[q] * gx[q]; sxy += gx[q] * gy[q]; syy += gy[q] * gy[q]; }
+      const lam = 1e-3 * (sxx + syy) + 1e-9; sxx += lam; syy += lam;
+      const det = sxx * syy - sxy * sxy;
+      for (let it = 0; it < iters; it++) {
+        let bx = 0, by = 0;
+        for (let y = mg; y < n - mg; y++) for (let x = mg; x < n - mg; x++) {
+          const X = x + d.x, Y = y + d.y; if (X < 0 || Y < 0 || X > n - 1.001 || Y > n - 1.001) continue;
+          const x0 = Math.floor(X), y0 = Math.floor(Y), fx = X - x0, fy = Y - y0, o = y0 * n + x0;
+          const wv = (1 - fy) * ((1 - fx) * b[o] + fx * b[o + 1]) + fy * ((1 - fx) * b[o + n] + fx * b[o + n + 1]);
+          const e = wv - a[y * n + x], q = y * n + x; bx += gx[q] * e; by += gy[q] * e;
+        }
+        const ux = -(syy * bx - sxy * by) / det, uy = -(-sxy * bx + sxx * by) / det;
+        d.x += SBc(ux, -2, 2); d.y += SBc(uy, -2, 2);
+        if (Math.abs(ux) + Math.abs(uy) < 1e-3) break;
+      }
+      return d;
+    }
+    function lucasKanade(a, b, levels) {
+      const pa = [a], pb = [b]; let n = N;
+      for (let l = 1; l < levels; l++) { pa.push(down(pa[l - 1], n)); pb.push(down(pb[l - 1], n)); n /= 2; }
+      let d = { x: 0, y: 0 };
+      for (let l = levels - 1; l >= 0; l--) { d = lkLevel(pa[l], pb[l], N >> l, d, 10); const lim = 8 >> l; d.x = SBc(d.x, -lim, lim); d.y = SBc(d.y, -lim, lim); if (l) { d.x *= 2; d.y *= 2; } }
+      return d;
+    }
+    function addNoise(src, sig, r) { const o = new Float64Array(N * N); for (let q = 0; q < N * N; q++) o[q] = src[q] + sig * gauss(r); return o; }
+    return { N, setEps: (e) => { PCEPS = e; }, spectrum, render, phaseCorr, blockMatch, lucasKanade, addNoise, surf };
+  })();
+
+  /* ---------- Sim 5: frequency-domain robust merge (HDR+-style) ---------- */
+  const FMERGE = (function () {
+    const W = 128, H = 96, T = 16, S = 8, PW = W + 2 * S, PH = H + 2 * S;
+    const win = new Float64Array(T);
+    for (let i = 0; i < T; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * (i + 0.5) / T);
+    let w2 = 0; for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) w2 += win[x] * win[x] * win[y] * win[y];
+    const hh = (i) => { const x = Math.sin(i * 12.9898 + 1.7) * 43758.5453; return x - Math.floor(x); };
+    function bg(x, y) {
+      if (x > 74 && x < 118 && y > 10 && y < 34) return (Math.floor((x - 74) / 2) % 2) ? 0.82 : 0.2;
+      const fx = x / 10 - Math.floor(x / 10), fy = y / 10 - Math.floor(y / 10);
+      if (fx < 0.12 || fy < 0.12) return 0.12;
+      return 0.3 + 0.4 * hh(Math.floor(x / 10) * 31 + Math.floor(y / 10) * 57 + 3);
+    }
+    const OY = 64, R = 9;
+    function scene(x, y, ox) { const d = Math.hypot(x - ox, y - OY); if (d < R) return d < 3.5 ? 0.08 : 0.92; return bg(x, y); }
+    // background pre-filtered once (4x4 box supersampling) on a grid with a 3-px margin; frames sample it bilinearly
+    const MG = 3, BW = PW + 2 * MG, BH = PH + 2 * MG, bgBox = new Float64Array(BW * BH);
+    for (let y = 0; y < BH; y++) for (let x = 0; x < BW; x++) { let s = 0; for (let b = 0; b < 4; b++) for (let a = 0; a < 4; a++) s += bg(x - MG - S + (a + 0.5) / 4, y - MG - S + (b + 0.5) / 4); bgBox[y * BW + x] = s / 16; }
+    function bgAt(X, Y) { const x = X + MG + S, y = Y + MG + S, x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, o = y0 * BW + x0; return (1 - fy) * ((1 - fx) * bgBox[o] + fx * bgBox[o + 1]) + fy * ((1 - fx) * bgBox[o + BW] + fx * bgBox[o + BW + 1]); }
+    // frames on padded grid; frame 0 is the reference. obj moves v px/frame; residual misalignment jit px
+    function frames(n, sig, v, jit, seed) {
+      const r = rng(seed), out = [], truth = new Float64Array(PW * PH), mask = new Uint8Array(W * H);
+      const ox0 = 34;
+      for (let k = 0; k < n; k++) {
+        const f = new Float64Array(PW * PH), jx = k ? jit * (2 * r() - 1) : 0, jy = k ? jit * (2 * r() - 1) : 0, ox = ox0 + v * k;
+        for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) {
+          const X = x - S + jx, Y = y - S + jy;
+          let val;
+          if (Math.abs(X + 0.5 - ox) < R + 1.5 && Math.abs(Y + 0.5 - OY) < R + 1.5) { let sm = 0; for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) sm += scene(X + (a + 0.5) / 3, Y + (b + 0.5) / 3, ox); val = sm / 9; }
+          else val = bgAt(X, Y);
+          f[y * PW + x] = val + sig * gauss(r);
+          if (!k) truth[y * PW + x] = val;
+        }
+        out.push(f);
+        if (k) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (Math.hypot(x + 0.5 - ox, y + 0.5 - OY) < R + 1.5) mask[y * W + x] = 1;
+      }
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (Math.hypot(x + 0.5 - ox0, y + 0.5 - OY) < R + 1.5) mask[y * W + x] = 1;
+      return { f: out, truth, mask };
+    }
+    const tr = new Float64Array(T * T), ti = new Float64Array(T * T), rr = new Float64Array(T * T), ri = new Float64Array(T * T), ar = new Float64Array(T * T), ai = new Float64Array(T * T);
+    // freq merge: per tile, per frame, per frequency Wiener shrinkage toward reference
+    function mergeFreq(F, sig, c) {
+      const out = new Float64Array(PW * PH), n = F.length, s2 = c * 2 * sig * sig * w2;
+      let aSum = 0, aCnt = 0;
+      for (let ty = 0; ty + T <= PH; ty += S) for (let tx = 0; tx + T <= PW; tx += S) {
+        for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) { rr[y * T + x] = F[0][(ty + y) * PW + tx + x] * win[x] * win[y]; ri[y * T + x] = 0; }
+        fft2(rr, ri, T, T, false);
+        for (let q = 0; q < T * T; q++) { ar[q] = rr[q]; ai[q] = ri[q]; }
+        for (let k = 1; k < n; k++) {
+          for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) { tr[y * T + x] = F[k][(ty + y) * PW + tx + x] * win[x] * win[y]; ti[y * T + x] = 0; }
+          fft2(tr, ti, T, T, false);
+          for (let q = 0; q < T * T; q++) {
+            const dr = rr[q] - tr[q], di = ri[q] - ti[q], d2 = dr * dr + di * di, A = d2 / (d2 + s2);
+            ar[q] += tr[q] + A * dr; ai[q] += ti[q] + A * di; aSum += A; aCnt++;
+          }
+        }
+        for (let q = 0; q < T * T; q++) { ar[q] /= n; ai[q] /= n; }
+        fft2(ar, ai, T, T, true);
+        for (let y = 0; y < T; y++) for (let x = 0; x < T; x++) out[(ty + y) * PW + tx + x] += ar[y * T + x];
+      }
+      return { img: out, meanA: aCnt ? aSum / aCnt : 0 };
+    }
+    function mergeMean(F) { const out = new Float64Array(PW * PH); for (const f of F) for (let q = 0; q < PW * PH; q++) out[q] += f[q] / F.length; return out; }
+    // pixel-domain robust merge (section 4 formula, 3x3 box-averaged difference)
+    function mergePix(F, sig, c) {
+      const out = new Float64Array(PW * PH), n = F.length, s2 = c * sig * sig / 9 * 2;
+      for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) out[y * PW + x] = F[0][y * PW + x];
+      for (let k = 1; k < n; k++) for (let y = 1; y < PH - 1; y++) for (let x = 1; x < PW - 1; x++) {
+        let d = 0; for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) { const q = (y + b) * PW + x + a; d += F[0][q] - F[k][q]; }
+        d /= 9; const A = d * d / (d * d + s2), q = y * PW + x;
+        out[q] += F[k][q] + A * (F[0][q] - F[k][q]);
+      }
+      for (let q = 0; q < PW * PH; q++) out[q] /= n;
+      return out;
+    }
+    function score(img, truth, mask) {
+      let es = 0, ns = 0, em = 0, nm = 0;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const q = (y + S) * PW + x + S, e = img[q] - truth[q]; if (mask[y * W + x]) { em += e * e; nm++; } else { es += e * e; ns++; } }
+      return { st: Math.sqrt(es / ns), mv: Math.sqrt(em / Math.max(1, nm)) };
+    }
+    return { W, H, S, PW, PH, frames, mergeFreq, mergeMean, mergePix, score };
+  })();
+
+  /* ---------- Sim 6: exposure fusion (Mertens) ---------- */
+  const FUSE = (function () {
+    const W = 128, H = 96;
+    const hh = (i) => { const x = Math.sin(i * 78.233 + 4.1) * 43758.5453; return x - Math.floor(x); };
+    // scene radiance (relative): dark room, bright window with a tree, lamp, smooth wall gradient
+    const rad = new Float64Array(W * H), region = new Uint8Array(W * H); // 1 shadow-texture, 2 window, 3 smooth wall
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      let L, g = 0;
+      const inWin = x >= 70 && x < 118 && y >= 12 && y < 60;
+      if (inWin) {
+        const sky = 0.6 * (1 + 0.6 * Math.sin(x * 0.35) * Math.sin(y * 0.3));
+        const trunk = Math.abs(x - 92 - 3 * Math.sin(y * 0.2)) < 2.2 && y > 34;
+        const leaf = Math.hypot(x - 90, y - 30) < 11 && hh(Math.floor(x / 2) * 17 + Math.floor(y / 2) * 29) > 0.45;
+        L = trunk ? 0.05 : leaf ? 0.12 + 0.14 * hh(x * 3 + y * 7) : sky; g = 2;
+      } else if ((x >= 66 && x < 122 && y >= 8 && y < 64)) { L = 0.05; }
+      else if (y >= 70) { L = 0.02 * (1 + 0.8 * (((x >> 2) + (y >> 2)) & 1)) * (0.6 + 0.4 * hh(x * 13 + y * 7)); g = 1; }
+      else if (x < 50) { L = 0.06 + 0.9 * Math.exp(-((x - 22) * (x - 22) + (y - 24) * (y - 24)) / 600); g = 3; if (Math.hypot(x - 22, y - 24) < 4) { L = 200; g = 0; } }
+      else { L = 0.08 + 0.04 * Math.sin(x * 0.9) * Math.sin(y * 0.9); g = 1; }
+      rad[y * W + x] = L; region[y * W + x] = g;
+    }
+    function exposures(evStep, seed) {
+      const r = rng(seed), out = [];
+      for (let k = 0; k < 3; k++) {
+        const gain = 4 * Math.pow(2, (k - 1) * evStep), I = new Float64Array(W * H);
+        for (let q = 0; q < W * H; q++) { const v = Math.min(1, rad[q] * gain * (1 + 0.01 * gauss(r))); I[q] = Math.round(Math.pow(Math.max(0, v), 1 / 2.2) * 255) / 255; }
+        out.push(I);
+      }
+      return out;
+    }
+    function weights(I, sigE) {
+      const n = I.length, Wt = I.map(() => new Float64Array(W * H));
+      for (let k = 0; k < n; k++) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const q = y * W + x, xl = x ? q - 1 : q, xr = x < W - 1 ? q + 1 : q, yu = y ? q - W : q, yd = y < H - 1 ? q + W : q;
+        const C = Math.abs(I[k][xl] + I[k][xr] + I[k][yu] + I[k][yd] - 4 * I[k][q]) + 1e-3;
+        const E = Math.exp(-(I[k][q] - 0.5) * (I[k][q] - 0.5) / (2 * sigE * sigE));
+        Wt[k][q] = C * E + 1e-12;
+      }
+      for (let q = 0; q < W * H; q++) { let s = 0; for (let k = 0; k < n; k++) s += Wt[k][q]; for (let k = 0; k < n; k++) Wt[k][q] /= s; }
+      return Wt;
+    }
+    const K5 = [1 / 16, 4 / 16, 6 / 16, 4 / 16, 1 / 16];
+    function blur(a, w, h) {
+      const t = new Float64Array(w * h), o = new Float64Array(w * h);
+      const cl = (i, n) => (i < 0 ? -i : i >= n ? 2 * n - 2 - i : i);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let s = 0; for (let k = -2; k <= 2; k++) s += K5[k + 2] * a[y * w + cl(x + k, w)]; t[y * w + x] = s; }
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let s = 0; for (let k = -2; k <= 2; k++) s += K5[k + 2] * t[cl(y + k, h) * w + x]; o[y * w + x] = s; }
+      return o;
+    }
+    function down(a, w, h) { const b = blur(a, w, h), w2 = w >> 1, h2 = h >> 1, o = new Float64Array(w2 * h2); for (let y = 0; y < h2; y++) for (let x = 0; x < w2; x++) o[y * w2 + x] = b[2 * y * w + 2 * x]; return o; }
+    function up(a, w2, h2, w, h) { const z = new Float64Array(w * h); for (let y = 0; y < h2; y++) for (let x = 0; x < w2; x++) z[2 * y * w + 2 * x] = 4 * a[y * w2 + x]; return blur(z, w, h); }
+    function fuse(I, Wt, levels) {
+      const n = I.length;
+      if (levels <= 1) { const o = new Float64Array(W * H); for (let k = 0; k < n; k++) for (let q = 0; q < W * H; q++) o[q] += Wt[k][q] * I[k][q]; return o; }
+      const dims = [[W, H]]; for (let l = 1; l < levels; l++) dims.push([dims[l - 1][0] >> 1, dims[l - 1][1] >> 1]);
+      const acc = dims.map((d) => new Float64Array(d[0] * d[1]));
+      for (let k = 0; k < n; k++) {
+        let g = I[k], gw = Wt[k];
+        for (let l = 0; l < levels; l++) {
+          const [w, h] = dims[l];
+          if (l < levels - 1) {
+            const [w2, h2] = dims[l + 1], gn = down(g, w, h), wn = down(gw, w, h), ex = up(gn, w2, h2, w, h);
+            for (let q = 0; q < w * h; q++) acc[l][q] += gw[q] * (g[q] - ex[q]);
+            g = gn; gw = wn;
+          } else for (let q = 0; q < w * h; q++) acc[l][q] += gw[q] * g[q];
+        }
+      }
+      let img = acc[levels - 1];
+      for (let l = levels - 2; l >= 0; l--) { const [w, h] = dims[l], [w2, h2] = dims[l + 1], ex = up(img, w2, h2, w, h); for (let q = 0; q < w * h; q++) ex[q] += acc[l][q]; img = ex; }
+      return img;
+    }
+    // metrics: local detail (rms of 3x3 high-pass) per region, and false-structure in smooth wall
+    function metrics(o) {
+      const hp = new Float64Array(3), cnt = new Float64Array(3);
+      let wall = 0, wn = 0;
+      const b = blur(o, W, H), bb = blur(b, W, H);
+      for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) {
+        const q = y * W + x, g = region[q];
+        if (g === 1 || g === 2) { const d = o[q] - b[q]; hp[g] += d * d; cnt[g]++; }
+        if (g === 3 && Math.hypot(x - 22, y - 24) > 7) { const d = b[q] - bb[q]; wall += d * d; wn++; }
+      }
+      return { shadow: Math.sqrt(hp[1] / cnt[1]), window: Math.sqrt(hp[2] / cnt[2]), wall: Math.sqrt(wall / wn) };
+    }
+    return { W, H, rad, region, exposures, weights, fuse, metrics };
+  })();
+
+  /* ---------- Sim 7: gyro-PSF deblurring ---------- */
+  const DEBLUR = (function () {
+    const N = 128;
+    const hh = (i) => { const x = Math.sin(i * 39.17 + 2.3) * 43758.5453; return x - Math.floor(x); };
+    const sharp = new Float64Array(N * N);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      let v = 0.35;
+      if (y < 40) { const per = x < 43 ? 6 : x < 86 ? 4 : 3; v = Math.floor(x / (per / 2)) % 2 ? 0.85 : 0.15; }
+      else if (y < 84) { const bx = Math.floor(x / 8), by = Math.floor((y - 40) / 11), lx = x % 8, ly = (y - 40) % 11; v = 0.85; if (lx > 0 && lx < 7 && ly > 1 && ly < 10 && hh(bx * 7 + by * 13) > 0.3) { const cx = lx - 1, cy = ly - 2; const st = hh(bx * 31 + by * 17); v = ((st < 0.5 ? (cx < 2 || cy < 2 || cy > 5) : (cx > 3 || cy === 0 || cy === 7)) ? 0.12 : 0.85); } }
+      else { const d = Math.hypot(x - 32, y - 106); v = d < 16 ? (Math.floor(Math.atan2(y - 106, x - 32) / (Math.PI / 8) + 8) % 2 ? 0.8 : 0.2) : (x > 64 ? 0.15 + 0.7 * ((x - 64) / 64) : 0.5); }
+      sharp[y * N + x] = v;
+    }
+    // gyro: angular-rate random walk (Ornstein-Uhlenbeck), integrated -> image-plane trajectory in px
+    function trajectory(len, seed, steps) {
+      const r = rng(seed), pts = []; let wx = 0, wy = 0, x = 0, y = 0;
+      const th = 2 * Math.PI * r(); wx = Math.cos(th); wy = Math.sin(th);
+      for (let i = 0; i < steps; i++) { wx += -0.08 * wx + 0.35 * gauss(r); wy += -0.08 * wy + 0.35 * gauss(r); x += wx; y += wy; pts.push([x, y]); }
+      let L = 0; for (let i = 1; i < steps; i++) L += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      let mx = 0, my = 0; pts.forEach((p) => { mx += p[0]; my += p[1]; }); mx /= steps; my /= steps;
+      const s = L > 0 ? len / L : 0;
+      return pts.map((p) => [(p[0] - mx) * s, (p[1] - my) * s]);
+    }
+    function psfFrom(pts, err) {
+      const k = new Float64Array(N * N);
+      // gyro error: scale error + rotation error (as fraction)
+      const c = Math.cos(err), s = Math.sin(err), sc = 1 + err;
+      for (const p of pts) {
+        const X = sc * (c * p[0] - s * p[1]), Y = sc * (s * p[0] + c * p[1]), x0 = Math.floor(X), y0 = Math.floor(Y), fx = X - x0, fy = Y - y0;
+        const add = (x, y, w) => { k[((y % N) + N) % N * N + ((x % N) + N) % N] += w; };
+        add(x0, y0, (1 - fx) * (1 - fy)); add(x0 + 1, y0, fx * (1 - fy)); add(x0, y0 + 1, (1 - fx) * fy); add(x0 + 1, y0 + 1, fx * fy);
+      }
+      let t = 0; for (let q = 0; q < N * N; q++) t += k[q]; for (let q = 0; q < N * N; q++) k[q] /= t;
+      return k;
+    }
+    function otf(k) { const re = Float64Array.from(k), im = new Float64Array(N * N); fft2(re, im, N, N, false); return { re, im }; }
+    function conv(img, H, conj) {
+      const re = Float64Array.from(img), im = new Float64Array(N * N); fft2(re, im, N, N, false);
+      for (let q = 0; q < N * N; q++) { const hr = H.re[q], hi = conj ? -H.im[q] : H.im[q], a = re[q], b = im[q]; re[q] = a * hr - b * hi; im[q] = a * hi + b * hr; }
+      fft2(re, im, N, N, true); return re;
+    }
+    function observe(Htrue, sig, seed) { const r = rng(seed), b = conv(sharp, Htrue, false); for (let q = 0; q < N * N; q++) b[q] += sig * gauss(r); return b; }
+    function wiener(y, H, K) {
+      const re = Float64Array.from(y), im = new Float64Array(N * N); fft2(re, im, N, N, false);
+      let g2 = 0;
+      for (let q = 0; q < N * N; q++) { const hr = H.re[q], hi = H.im[q], d = hr * hr + hi * hi + K, gr = hr / d, gi = -hi / d, a = re[q], b = im[q]; re[q] = a * gr - b * gi; im[q] = a * gi + b * gr; g2 += gr * gr + gi * gi; }
+      fft2(re, im, N, N, true); return { img: re, noiseGain: Math.sqrt(g2 / (N * N)) };
+    }
+    function rlStep(u, y, H) {
+      const Hu = conv(u, H, false), ratio = new Float64Array(N * N);
+      for (let q = 0; q < N * N; q++) ratio[q] = Math.max(0, y[q]) / Math.max(1e-3, Hu[q]);
+      const c = conv(ratio, H, true);
+      for (let q = 0; q < N * N; q++) u[q] = Math.max(0, u[q] * c[q]);
+    }
+    function psnr(a) { let e = 0; for (let q = 0; q < N * N; q++) { const d = Math.min(1, Math.max(0, a[q])) - sharp[q]; e += d * d; } return 10 * Math.log10(1 / (e / (N * N))); }
+    return { N, sharp, trajectory, psfFrom, otf, observe, wiener, rlStep, psnr };
+  })();
+
+
+  /* ---------- small shared helpers for sims 4-7 ---------- */
+  const nextFrame = (fn) => { let pend = false; return () => { if (pend) return; pend = true; requestAnimationFrame(() => { pend = false; fn(); }); }; };
+  function grayInto(img, arr, n, stride, off, lo, hi, gam) {
+    const d = img.data;
+    for (let q = 0; q < n; q++) { const v = SB.clamp((arr[off(q)] - lo) / (hi - lo), 0, 1), g = (gam ? Math.pow(v, 1 / 2.2) : v) * 255, o = q * 4; d[o] = g; d[o + 1] = g; d[o + 2] = g; d[o + 3] = 255; }
+  }
+  function panel(ctx, P, c, x, y, pw, ph, label, hi) {
+    ctx.imageSmoothingEnabled = false; ctx.drawImage(c, x, y, pw, ph);
+    ctx.strokeStyle = hi ? P.accent : P.border; ctx.lineWidth = hi ? 2 : 1; ctx.strokeRect(x, y, pw, ph);
+    ctx.fillStyle = hi ? P.accent : P.dim; ctx.font = font(12, false, 600); ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText(label, x, y - 3);
+  }
+  function legend(ctx, P, items, x, y, maxX) {
+    ctx.font = font(11); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+    const x0 = x;
+    items.forEach(([lab, col, dash]) => { if (maxX && x + 30 + ctx.measureText(lab).width > maxX) { x = x0; y += 15; } ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash(dash || []); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 16, y); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = P.dim; ctx.fillText(lab, x + 20, y); x += 26 + ctx.measureText(lab).width + 10; });
+  }
+
+  /* =================================================== Sim 4: sub-pixel registration */
+  (function () {
+    const N = REG.N, img3 = [0, 1, 2].map(() => new ImageData(N, N)), off3 = [0, 1, 2].map(() => mkCanvas(N, N));
+    let cv = null, specKind = "", spec = null, refImg = null, curve = null, gen = 0;
+    const SIGS = [0, 0.02, 0.04, 0.06, 0.08, 0.11, 0.14, 0.17, 0.2];
+    const redraw = nextFrame(() => cv && cv.redraw());
+    const restart = () => { gen++; curve = null; redraw(); };
+    const gK = SB.seg("rg-scene", restart);
+    const gX = SB.range("rg-sx", (v) => v.toFixed(2) + " px", restart);
+    const gY = SB.range("rg-sy", (v) => v.toFixed(2) + " px", restart);
+    const gS = SB.range("rg-sig", (v) => (v * 100).toFixed(1) + " %", redraw);
+    function ensure() { const k = gK(); if (k !== specKind) { specKind = k; spec = REG.spectrum(k, 7); refImg = REG.render(spec, 0, 0); } }
+    function runCurve() {
+      ensure();
+      const my = gen, sx = gX(), sy = gY(), b = REG.render(spec, sx, sy), res = { pc: [], bm: [], lk: [] };
+      let i = 0;
+      const step = () => {
+        if (my !== gen) return;
+        const sig = SIGS[i], r = rng(100 + i), E = { pc: 0, bm: 0, lk: 0 }, M = 4;
+        for (let t = 0; t < M; t++) {
+          const A = REG.addNoise(refImg, sig, r), B = REG.addNoise(b, sig, r), p = REG.phaseCorr(A, B), m = REG.blockMatch(A, B, 8), l = REG.lucasKanade(A, B, 3);
+          E.pc += (p.x - sx) ** 2 + (p.y - sy) ** 2; E.bm += (m.x - sx) ** 2 + (m.y - sy) ** 2; E.lk += (l.x - sx) ** 2 + (l.y - sy) ** 2;
+        }
+        for (const k in E) res[k].push([sig * 100, Math.max(0.005, Math.sqrt(E[k] / M))]);
+        i++; curve = res; redraw();
+        if (i < SIGS.length) setTimeout(step, 0);
+      };
+      setTimeout(step, 0);
+    }
+    function draw(ctx, w, h) {
+      ensure();
+      const P = SB.palette(), sx = gX(), sy = gY(), sig = gS(), r = rng(9);
+      const b = REG.render(spec, sx, sy), A = REG.addNoise(refImg, sig, r), B = REG.addNoise(b, sig, r);
+      const p = REG.phaseCorr(A, B), m = REG.blockMatch(A, B, 8), l = REG.lucasKanade(A, B, 3);
+      const S = REG.surf; let smn = Infinity, smx = -Infinity; for (let q = 0; q < N * N; q++) { smn = Math.min(smn, S[q]); smx = Math.max(smx, S[q]); }
+      grayInto(img3[0], A, N * N, N, (q) => q, -0.1, 1.1, true);
+      grayInto(img3[1], B, N * N, N, (q) => q, -0.1, 1.1, true);
+      // fftshifted correlation surface, heat colours
+      const d = img3[2].data;
+      for (let q = 0; q < N * N; q++) { const x = (q % N + N / 2) % N, y = ((q / N | 0) + N / 2) % N, t = SB.clamp((S[y * N + x] - smn) / (smx - smn + 1e-12), 0, 1), o = q * 4; d[o] = 255 * Math.min(1, 1.6 * t); d[o + 1] = 255 * Math.max(0, Math.min(1, 1.6 * t - 0.45)); d[o + 2] = 255 * Math.max(0, 1.4 * t - 0.6) + 60 * (1 - t); d[o + 3] = 255; }
+      for (let k = 0; k < 3; k++) off3[k].getContext("2d").putImageData(img3[k], 0, 0);
+      const gap = 10, lab = 16, side = Math.min((w - 2 * gap) / 3, h * 0.42), y0 = lab;
+      const x0 = (w - (3 * side + 2 * gap)) / 2;
+      panel(ctx, P, off3[0], x0, y0, side, side, "기준 프레임");
+      panel(ctx, P, off3[1], x0 + side + gap, y0, side, side, "이동 + 노이즈");
+      panel(ctx, P, off3[2], x0 + 2 * (side + gap), y0, side, side, "위상 상관 곡면", true);
+      // markers on PC surface: true shift (ring), estimate (cross); centre = 0
+      const s = side / N, cx = x0 + 2 * (side + gap) + side / 2, cy = y0 + side / 2;
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(cx + sx * s, cy + sy * s, 5, 0, 7); ctx.stroke();
+      ctx.strokeStyle = "#33d17a"; ctx.beginPath(); ctx.moveTo(cx + p.x * s - 5, cy + p.y * s); ctx.lineTo(cx + p.x * s + 5, cy + p.y * s); ctx.moveTo(cx + p.x * s, cy + p.y * s - 5); ctx.lineTo(cx + p.x * s, cy + p.y * s + 5); ctx.stroke();
+      // error-vs-noise curve
+      if (!curve) runCurve();
+      const box = { x: 58, y: y0 + side + 30, w: w - 58 - 14, h: h - (y0 + side + 30) - 46 };
+      const cols = [P.accent, P.warn, P.ok];
+      if (box.h > 40) {
+        const ser = curve ? [["pc", 0], ["bm", 1], ["lk", 2]].map(([k, i]) => ({ data: curve[k], color: cols[i], width: 2 })) : [];
+        SB.chart(ctx, box, { x: [0, 20], y: [0.005, 20], logY: true, xLabel: "노이즈 σ (%)", yLabel: "rms 오차 (px)", series: ser, vlines: [{ x: sig * 100, color: P.dim }], hlines: [{ y: 0.1, color: P.faint, label: "0.1 px" }], yFmt: (v) => (v >= 1 ? v.toFixed(0) : v >= 0.1 ? v.toFixed(1) : v.toFixed(2)) });
+        legend(ctx, P, [["위상 상관", cols[0]], ["블록 매칭+포물선", cols[1]], ["LK 피라미드", cols[2]]], box.x + 8, box.y + 10, box.x + box.w);
+      }
+      const e = (o) => Math.hypot(o.x - sx, o.y - sy), f2 = (o) => "(" + o.x.toFixed(2) + ", " + o.y.toFixed(2) + ")";
+      SB.stat("o-rg-pc", f2(p) + " <small>오차 " + e(p).toFixed(3) + " px</small>");
+      SB.stat("o-rg-bm", f2(m) + " <small>오차 " + e(m).toFixed(3) + " px</small>");
+      SB.stat("o-rg-lk", f2(l) + " <small>오차 " + e(l).toFixed(3) + " px</small>");
+      SB.stat("o-rg-ratio", p.ratio.toFixed(2) + (p.ratio > 0.7 ? " <small>모호</small>" : " <small>뚜렷</small>"));
+    }
+    cv = SB.canvas($("cv-rg"), draw, { aspect: 0.72, minHeight: 400, maxHeight: 560 });
+  })();
+
+  /* =================================================== Sim 5: frequency-domain robust merge */
+  (function () {
+    const { W, H, S, PW } = FMERGE, imgs = [0, 1, 2].map(() => new ImageData(W, H)), offs = [0, 1, 2].map(() => mkCanvas(W, H));
+    let cv = null, key = "", fr = null, res = null, rkey = "";
+    const redraw = nextFrame(() => cv && cv.redraw());
+    const gN = SB.range("fm-n", (v) => v + "장", redraw);
+    const gS = SB.range("fm-sig", (v) => (v * 100).toFixed(0) + " %", redraw);
+    const gV = SB.range("fm-v", (v) => v.toFixed(1) + " px/프레임", redraw);
+    const gJ = SB.range("fm-jit", (v) => "±" + v.toFixed(2) + " px", redraw);
+    const gC = SB.range("fm-c", (v) => Math.pow(2, v).toFixed(v < 0 ? 2 : 1), redraw);
+    const gM = SB.seg("fm-view", redraw);
+    function compute() {
+      const n = gN(), sig = gS(), v = gV(), jit = gJ(), c = Math.pow(2, gC()), k1 = [n, sig, v, jit].join(), k2 = k1 + "|" + c;
+      if (k1 !== key) { key = k1; fr = FMERGE.frames(n, sig, v, jit, 5); rkey = ""; }
+      if (k2 !== rkey) {
+        rkey = k2;
+        const mean = FMERGE.mergeMean(fr.f), pix = FMERGE.mergePix(fr.f, sig, c), fq = FMERGE.mergeFreq(fr.f, sig, c);
+        res = { n, sig, img: { mean, pix, freq: fq.img }, sc: { ref: FMERGE.score(fr.f[0], fr.truth, fr.mask), mean: FMERGE.score(mean, fr.truth, fr.mask), pix: FMERGE.score(pix, fr.truth, fr.mask), freq: FMERGE.score(fq.img, fr.truth, fr.mask) }, A: fq.meanA };
+      }
+      return res;
+    }
+    function draw(ctx, w, h) {
+      const P = SB.palette(), R = compute(), mode = gM(), out = R.img[mode], at = (q) => ((q / W | 0) + S) * PW + (q % W) + S;
+      grayInto(imgs[0], fr.f[0], W * H, W, at, 0, 1, true);
+      grayInto(imgs[1], out, W * H, W, at, 0, 1, true);
+      const d = imgs[2].data;
+      for (let q = 0; q < W * H; q++) { const e = Math.min(1, Math.abs(out[at(q)] - fr.truth[at(q)]) * 5), o = q * 4; d[o] = 30 + 225 * e; d[o + 1] = 30 + 150 * e * e; d[o + 2] = 40; d[o + 3] = 255; if (fr.mask[q] && ((q % W) + (q / W | 0)) % 6 === 0) { d[o] = d[o + 1] = d[o + 2] = 150; } }
+      for (let k = 0; k < 3; k++) offs[k].getContext("2d").putImageData(imgs[k], 0, 0);
+      const names = { mean: "단순 평균", pix: "화소 영역 강건 병합", freq: "주파수 영역 강건 병합" };
+      const gap = 10, lab = 16;
+      if (w >= 560) {
+        let pw = (w - 2 * gap) / 3, ph = pw * H / W; if (ph > h - lab - 4) { ph = h - lab - 4; pw = ph * W / H; }
+        const x0 = (w - 3 * pw - 2 * gap) / 2, y0 = lab + (h - lab - ph) / 2;
+        panel(ctx, P, offs[0], x0, y0, pw, ph, "기준 프레임 1장");
+        panel(ctx, P, offs[1], x0 + pw + gap, y0, pw, ph, names[mode], true);
+        panel(ctx, P, offs[2], x0 + 2 * (pw + gap), y0, pw, ph, "|오차| ×5 (점: 움직임 영역)");
+      } else {
+        let pw = (w - gap) / 2, ph = pw * H / W; const pw2 = pw;
+        panel(ctx, P, offs[0], 0, lab, pw, ph, "기준 1장");
+        panel(ctx, P, offs[1], pw + gap, lab, pw, ph, names[mode].replace(" 강건 병합", ""), true);
+        const ph2 = pw2 * H / W; panel(ctx, P, offs[2], (w - pw2) / 2, 2 * lab + ph + gap, pw2, ph2, "|오차| ×5");
+      }
+      const f = (s) => (s.st * 100).toFixed(1) + " / " + (s.mv * 100).toFixed(1) + "<small>%</small>";
+      SB.stat("o-fm-mean", f(R.sc.mean)); SB.stat("o-fm-pix", f(R.sc.pix)); SB.stat("o-fm-freq", f(R.sc.freq));
+      SB.stat("o-fm-ideal", (R.sig / Math.sqrt(R.n) * 100).toFixed(1) + "<small>% (1장 " + (R.sc.ref.st * 100).toFixed(1) + ")</small>");
+      SB.stat("o-fm-a", R.n > 1 ? R.A.toFixed(2) : "—");
+    }
+    cv = SB.canvas($("cv-fm"), draw, { aspect: 0.3, minHeight: 300, maxHeight: 330 });
+  })();
+
+  /* =================================================== Sim 6: exposure fusion */
+  (function () {
+    const { W, H } = FUSE, imgs = [0, 1, 2, 3, 4, 5].map(() => new ImageData(W, H)), offs = imgs.map(() => mkCanvas(W, H));
+    let cv = null;
+    const redraw = nextFrame(() => cv && cv.redraw());
+    const gE = SB.range("ef-ev", (v) => "±" + v.toFixed(1) + " EV", redraw);
+    const gS = SB.range("ef-se", (v) => v.toFixed(2), redraw);
+    const gL = SB.range("ef-lv", (v) => v + (v === 1 ? " (피라미드 없음)" : "단"), redraw);
+    function draw(ctx, w, h) {
+      const P = SB.palette(), I = FUSE.exposures(gE(), 1), Wt = FUSE.weights(I, gS()), L = gL();
+      const naive = FUSE.fuse(I, Wt, 1), pyr = FUSE.fuse(I, Wt, L), mN = FUSE.metrics(naive), mP = FUSE.metrics(pyr), mM = FUSE.metrics(I[1]);
+      for (let k = 0; k < 3; k++) grayInto(imgs[k], I[k], W * H, W, (q) => q, 0, 1, false);
+      const d = imgs[3].data; for (let q = 0; q < W * H; q++) { const o = q * 4; d[o] = 255 * Wt[2][q]; d[o + 1] = 255 * Wt[1][q]; d[o + 2] = 255 * Wt[0][q]; d[o + 3] = 255; }
+      grayInto(imgs[4], naive, W * H, W, (q) => q, 0, 1, false);
+      grayInto(imgs[5], pyr, W * H, W, (q) => q, 0, 1, false);
+      for (let k = 0; k < 6; k++) offs[k].getContext("2d").putImageData(imgs[k], 0, 0);
+      const ev = gE(), names = ["−" + ev.toFixed(1) + " EV", "0 EV", "+" + ev.toFixed(1) + " EV", "가중치 (B=−, G=0, R=+)", "화소별 가중 평균", L > 1 ? "라플라시안 " + L + "단 융합" : "피라미드 없음 (=왼쪽)"];
+      const cols = w >= 560 ? 3 : 2, rows = Math.ceil(6 / cols), gap = 8, lab = 16;
+      let pw = (w - (cols - 1) * gap) / cols, ph = pw * H / W; const maxPh = (h - rows * lab - (rows - 1) * gap) / rows; if (ph > maxPh) { ph = maxPh; pw = ph * W / H; }
+      const x0 = (w - cols * pw - (cols - 1) * gap) / 2;
+      const order = cols === 3 ? [0, 1, 2, 3, 4, 5] : [0, 2, 1, 3, 4, 5];
+      order.forEach((k, i) => panel(ctx, P, offs[k], x0 + (i % cols) * (pw + gap), lab + Math.floor(i / cols) * (ph + lab + gap), pw, ph, names[k], k === 5));
+      const pc = (v) => (v * 100).toFixed(2);
+      SB.stat("o-ef-sh", pc(mP.shadow) + "<small>% (0 EV " + pc(mM.shadow) + ")</small>");
+      SB.stat("o-ef-win", pc(mP.window) + "<small>% (0 EV " + pc(mM.window) + ")</small>");
+      SB.stat("o-ef-halo", pc(mN.wall) + " → " + pc(mP.wall) + "<small>%</small>");
+      const mw = [0, 0, 0]; for (let q = 0; q < W * H; q++) for (let k = 0; k < 3; k++) mw[k] += Wt[k][q] / (W * H);
+      SB.stat("o-ef-w", mw.map((v) => (v * 100).toFixed(0)).join(" / ") + "<small>%</small>");
+    }
+    cv = SB.canvas($("cv-ef"), draw, { aspect: 0.5, minHeight: 330, maxHeight: 430 });
+  })();
+
+  /* =================================================== Sim 7: gyro-PSF deconvolution */
+  (function () {
+    const N = DEBLUR.N, PS = 33, imgs = [new ImageData(N, N), new ImageData(N, N), new ImageData(PS, PS)], offs = [mkCanvas(N, N), mkCanvas(N, N), mkCanvas(PS, PS)];
+    const KS = [-5, -4.5, -4, -3.5, -3, -2.5, -2, -1.5, -1, -0.5];
+    let cv = null, seed = 4, key = "", st = null, rl = null, rlHist = [];
+    const redraw = nextFrame(() => cv && cv.redraw());
+    const gL = SB.range("db-len", (v) => v + " px", redraw);
+    const gS = SB.range("db-sig", (v) => SB.fmt(Math.pow(10, v) * 100, 2) + " %", redraw);
+    const gK = SB.range("db-k", (v) => "10^" + v.toFixed(1), redraw);
+    const gIt = SB.range("db-it", (v) => v + "회", redraw);
+    const gE = SB.range("db-err", (v) => (v * 100).toFixed(0) + " %", redraw);
+    const gM = SB.seg("db-m", redraw);
+    $("db-new").addEventListener("click", () => { seed++; redraw(); });
+    function prep() {
+      const len = gL(), sig = Math.pow(10, gS()), err = gE(), k = [len, sig, err, seed].join();
+      if (k !== key) {
+        key = k;
+        const pts = DEBLUR.trajectory(len, seed, 240), Ht = DEBLUR.otf(DEBLUR.psfFrom(pts, 0)), He = err ? DEBLUR.otf(DEBLUR.psfFrom(pts, err)) : Ht;
+        const y = DEBLUR.observe(Ht, sig, 2 + seed);
+        const sweep = KS.map((lk) => [Math.pow(10, lk), DEBLUR.psnr(DEBLUR.wiener(y, He, Math.pow(10, lk)).img)]);
+        st = { pts, Ht, He, y, sig, sweep, blurP: DEBLUR.psnr(y) };
+        rl = null; rlHist = [];
+      }
+      return st;
+    }
+    // Richardson-Lucy iterations advance a few per frame (each 128^2 iteration = 4 FFTs)
+    const loop = SB.loop($("sim-db"), () => {
+      if (!st || gM() !== "rl") return;
+      const target = gIt();
+      if (!rl || rl.it > target) { rl = { u: Float64Array.from(st.y, (v) => Math.max(0.02, v)), it: 0 }; rlHist = [[0, DEBLUR.psnr(rl.u)]]; }
+      if (rl.it >= target) return;
+      for (let s = 0; s < 3 && rl.it < target; s++) { DEBLUR.rlStep(rl.u, st.y, st.He); rl.it++; rlHist.push([rl.it, DEBLUR.psnr(rl.u)]); }
+      cv && cv.redraw();
+    });
+    loop.start();
+    function draw(ctx, w, h) {
+      const P = SB.palette(), S = prep(), mode = gM(), K = Math.pow(10, gK());
+      let outImg, outP, gain = null;
+      if (mode === "wiener") { const r = DEBLUR.wiener(S.y, S.He, K); outImg = r.img; outP = DEBLUR.psnr(r.img); gain = r.noiseGain; }
+      else { if (rl) { outImg = rl.u; outP = DEBLUR.psnr(rl.u); } else { outImg = S.y; outP = S.blurP; } }
+      grayInto(imgs[0], S.y, N * N, N, (q) => q, 0, 1, true);
+      grayInto(imgs[1], outImg, N * N, N, (q) => q, 0, 1, true);
+      // PSF crop (centred, contrast-stretched)
+      const k = DEBLUR.psfFrom(S.pts, 0); let km = 0; for (let q = 0; q < N * N; q++) km = Math.max(km, k[q]);
+      const dp = imgs[2].data; for (let y = 0; y < PS; y++) for (let x = 0; x < PS; x++) { const v = Math.sqrt(k[((y - 16 + N) % N) * N + (x - 16 + N) % N] / km), o = (y * PS + x) * 4; dp[o] = 255 * v; dp[o + 1] = 230 * v; dp[o + 2] = 120 * v; dp[o + 3] = 255; }
+      for (let i = 0; i < 3; i++) offs[i].getContext("2d").putImageData(imgs[i], 0, 0);
+      const gap = 10, lab = 16, wide = w >= 760;
+      const side = wide ? Math.min((w - 2 * gap) * 0.34, h - lab - 4) : Math.min((w - gap) / 2, h * 0.5);
+      panel(ctx, P, offs[0], 0, lab, side, side, "관측 (흔들림 + 노이즈)");
+      panel(ctx, P, offs[1], side + gap, lab, side, side, mode === "wiener" ? "위너 복원" : "리처드슨–루시 " + (rl ? rl.it : 0) + "회", true);
+      const ps = Math.min(side * 0.34, 74); ctx.imageSmoothingEnabled = false; ctx.drawImage(offs[2], side - ps - 3, lab + 3, ps, ps); ctx.strokeStyle = "#ffcc33"; ctx.lineWidth = 1; ctx.strokeRect(side - ps - 3, lab + 3, ps, ps);
+      const box = wide ? { x: 2 * side + 2 * gap + 34, y: lab + 4, w: w - (2 * side + 2 * gap + 34) - 8, h: side - 30 } : { x: 34, y: lab + side + 22, w: w - 42, h: h - (lab + side + 22) - 30 };
+      if (box.h > 40 && box.w > 60) {
+        ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText(mode === "wiener" ? "PSNR (dB) 대 정규화 상수 K" : "PSNR (dB) 대 반복 횟수", box.x - 30, box.y - 2);
+        if (mode === "wiener") SB.chart(ctx, box, { x: [1e-5, 0.32], logX: true, y: [5, 35], series: [{ data: S.sweep, color: P.accent, width: 2 }], hlines: [{ y: S.blurP, color: P.dim, label: "관측" }], points: [{ x: K, y: outP, color: P.warn }], xFmt: (v) => "1e" + Math.round(Math.log10(v)) });
+        else SB.chart(ctx, box, { x: [0, Math.max(10, gIt())], y: [5, 35], series: [{ data: rlHist, color: P.ok, width: 2 }], hlines: [{ y: S.blurP, color: P.dim, label: "관측" }] });
+      }
+      let best = S.sweep[0]; S.sweep.forEach((p) => { if (p[1] > best[1]) best = p; });
+      SB.stat("o-db-blur", S.blurP.toFixed(1) + "<small> dB</small>");
+      SB.stat("o-db-out", outP.toFixed(1) + "<small> dB</small>");
+      SB.stat("o-db-gain", gain === null ? "—" : gain.toFixed(1) + "<small>×</small>");
+      SB.stat("o-db-best", best[1].toFixed(1) + "<small> dB @ K=1e" + Math.log10(best[0]).toFixed(1) + "</small>");
+    }
+    cv = SB.canvas($("cv-db"), draw, { aspect: 0.7, minHeight: 420, maxHeight: 460 });
   })();
 })();
 </script>
