@@ -43,6 +43,21 @@
     .spec td:nth-child(3) { grid-column: 1 / -1; padding-top: 0; font-size: 14.5px; color: var(--text-dim); }
   }
   .apps td:first-child { font-weight: 700; white-space: nowrap; }
+  .pw-off { opacity: .45; }
+  .pg-presets .seg button { font-size: 13px; }
+  .ms-why { padding: 10px 18px; font-size: 14px; color: var(--text-dim); border-bottom: 1px solid var(--border); }
+  .ms-table { margin: 0; border-radius: 0; border-left: 0; border-right: 0; }
+  .ms-table td, .ms-table th { padding: 6px 9px; font-size: 14px; vertical-align: top; }
+  .ms-table td.val { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+  .ms-table tr.ok td:first-child { color: var(--ok); font-weight: 700; }
+  .ms-table tr.ng td:first-child, .ms-table tr.ng td:nth-child(3) { color: var(--bad); font-weight: 700; }
+  .ms-table td:nth-child(5) { color: var(--text-dim); }
+  @media (max-width: 640px) {
+    .ms-table thead { display: none; }
+    .ms-table tr { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto; border-bottom: 1px solid var(--border); }
+    .ms-table td { border-bottom: 0; }
+    .ms-table td:nth-child(5) { grid-column: 2 / -1; padding-top: 0; font-size: 13px; }
+  }
 </style>
 <!-- Cloudflare Web Analytics -->
 <!-- End Cloudflare Web Analytics -->
@@ -61,6 +76,8 @@
       <li>FWC·읽기 노이즈·ADC 비트·변환 이득이 다이내믹 레인지를 어떻게 제한하는지 안다.</li>
       <li>회절 한계, 나이퀴스트 주파수, 데이터율로 “픽셀을 무작정 작게/많게” 할 수 없는 이유를 말할 수 있다.</li>
       <li>다이 크기와 웨이퍼당 다이 수(DPW)로 원가를 대략 가늠하고, 응용 분야별 요구사항을 비교할 수 있다.</li>
+      <li>블록별 전력(ADC FoM, MIPI pJ/bit, ISP)을 더해 센서 전력을 추정하고, 자기 발열이 접합 온도와 암전류를 어떻게 바꾸는지 계산할 수 있다.</li>
+      <li>광학 포맷·화각에서 렌즈 TTL, 모듈 높이, CRA를 구하고, 요구사항 미션을 통과하는 설계를 탐색·민감도 분석으로 찾을 수 있다.</li>
     </ul>
   </header>
 
@@ -286,7 +303,230 @@
     </div>
   </section>
 
-  <!-- ============================================================ 5. 응용 분야 -->
+  <!-- ============================================================ 5. 전력 · 열 -->
+  <section id="power">
+    <h2>전력 예산과 자기 발열</h2>
+    <p>스펙시트에서 가장 늦게 확인하지만 가장 자주 설계를 뒤집는 숫자가 <span class="term">소비 전력</span><span class="en">(power consumption)</span>이다. 50 MP 모바일 센서는 풀해상도 30 fps에서 수백 mW를 쓰고, 이 열은 손톱만 한 모듈 안에 갇힌다. 온도가 오르면 암전류와 디지털 누설 전류가 늘고, 늘어난 누설이 다시 열을 만든다. 이 절에서는 플레이그라운드의 계산 모델이 내놓는 화소 수 \(n_x\times n_y\), 출력 데이터율, 출력 화소 수를 그대로 받아 블록별 전력을 더하고, 그 전력이 만드는 온도와 암전류까지 한 번에 계산한다.</p>
+
+    <h3>블록별 전력 모델</h3>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 270" role="img" aria-label="3층 적층 센서의 블록과 전력 항목">
+        <g class="t-mono" style="font-size:13px">
+          <rect x="20" y="16" width="420" height="62" rx="8" class="f-acc-soft"/>
+          <text x="34" y="40" class="t-acc" style="font-size:15px">① 픽셀 웨이퍼</text>
+          <text x="34" y="62" class="t-dim">픽셀 배열 · 행 드라이버 · 컬럼 SF 바이어스 (N_col × I_b × V_DD)</text>
+          <rect x="20" y="92" width="420" height="52" rx="8" class="f-acc2-soft"/>
+          <text x="34" y="114" class="t" style="font-size:15px">② DRAM 웨이퍼 (선택)</text>
+          <text x="34" y="134" class="t-dim">프레임 버퍼: 쓰기+읽기 2 × N·b·fps × E_DRAM</text>
+          <rect x="20" y="158" width="420" height="96" rx="8" class="f-surface" style="stroke:var(--border)"/>
+          <text x="34" y="180" class="t" style="font-size:15px">③ 로직 웨이퍼</text>
+          <rect x="34" y="192" width="120" height="48" rx="6" class="f-acc-soft"/><text x="94" y="212" text-anchor="middle" class="t">컬럼 ADC</text><text x="94" y="231" text-anchor="middle" class="t-dim">FoM·2^b·f_conv</text>
+          <rect x="162" y="192" width="84" height="48" rx="6" class="f-elev" style="stroke:var(--border)"/><text x="204" y="212" text-anchor="middle" class="t">램프·PLL</text><text x="204" y="231" text-anchor="middle" class="t-dim">고정</text>
+          <rect x="254" y="192" width="80" height="48" rx="6" class="f-elev" style="stroke:var(--border)"/><text x="294" y="212" text-anchor="middle" class="t">ISP</text><text x="294" y="231" text-anchor="middle" class="t-dim">nJ/화소</text>
+          <rect x="342" y="192" width="86" height="48" rx="6" class="f-acc2-soft"/><text x="385" y="212" text-anchor="middle" class="t">MIPI PHY</text><text x="385" y="231" text-anchor="middle" class="t-dim">pJ/bit</text>
+          <path d="M440 216 H500" class="s-acc" stroke-width="2" marker-end="url(#pw-ar)"/>
+          <text x="506" y="212" class="t">AP (SoC)</text><text x="506" y="232" class="t-dim">R = N_out·b·fps</text>
+          <path d="M600 40 H740" class="s-axis"/>
+          <text x="600" y="30" class="t" style="font-size:14px">전형적 비중 (50 MP, 30 fps)</text>
+          <rect x="600" y="52" width="70" height="16" class="f-acc-soft"/><text x="676" y="65" class="t-dim">ADC 50~60 %</text>
+          <rect x="600" y="76" width="27" height="16" class="f-acc2-soft"/><text x="633" y="89" class="t-dim">픽셀 ~20 %</text>
+          <rect x="600" y="100" width="12" height="16" class="f-elev" style="stroke:var(--border)"/><text x="618" y="113" class="t-dim">PLL·램프 ~10 %</text>
+          <rect x="600" y="124" width="8" height="16" class="f-acc2-soft"/><text x="614" y="137" class="t-dim">MIPI 5~15 %</text>
+          <rect x="600" y="148" width="8" height="16" class="f-elev" style="stroke:var(--border)"/><text x="614" y="161" class="t-dim">ISP·누설 나머지</text>
+        </g>
+        <defs><marker id="pw-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--accent)"/></marker></defs>
+      </svg>
+      <figcaption><b>그림 21-2.</b> 3층 적층 센서의 전력 항목. 픽셀 웨이퍼는 컬럼마다 흐르는 소스 팔로워 바이어스 전류가 대부분이고, 로직 웨이퍼에서는 컬럼 ADC가 가장 큰 몫을 차지한다. 오른쪽 비중은 아래 시뮬레이터의 “플래그십 폰 메인” 기본값으로 계산한 대략적인 값이다.</figcaption>
+    </figure>
+    <p>각 블록은 “무엇을 몇 번 하느냐 × 한 번에 드는 에너지”로 적을 수 있다. 컬럼 ADC는 초당 변환 수 \(f_{\text{conv}} = n_x n_y\cdot\text{fps}\)에, 변환 한 번의 에너지를 곱한다. ADC 에너지 효율은 두 가지 <span class="term">성능 지수</span><span class="en">(figure of merit, FoM)</span>로 비교한다.</p>
+    <div class="formula">$$\begin{gathered}P_{\text{ADC}}^{\text{Walden}} = \text{FoM}_W\cdot 2^{\,b}\cdot f_{\text{conv}},\qquad P_{\text{ADC}}^{\text{Schreier}} = \frac{f_{\text{conv}}}{2}\,10^{(\text{SNDR}-\text{FoM}_S)/10},\quad \text{SNDR}=6.02b+1.76\\[4pt] P = N_{\text{col}} I_b V_{DD} + P_{\text{ADC}} + P_{\text{ramp,PLL}} + E_{\text{bit}}R + E_{\text{px}}N_{\text{out}}\text{fps} + P_{\text{DRAM}} + P_{\text{leak}}(T)\end{gathered}$$
+      <div class="where">\(\text{FoM}_W\)(fJ/conversion-step)는 작을수록, \(\text{FoM}_S\)(dB)는 클수록 좋다. \(b\)는 ENOB 대신 명목 비트 수로 근사했다. \(V_{DD}=2.8\) V, \(P_{\text{ramp,PLL}}=30\) mW 고정, \(R\)은 플레이그라운드 모델의 데이터율, \(P_{\text{leak}}(T)=8\,\text{mW}\cdot 2^{(T-25)/20}\)(교육용 가정).</div></div>
+    <p>두 지수의 차이는 비트 수에 대한 기울기다. Walden 식은 비트당 전력이 2배(카운터 클록 수가 \(2^b\)인 single-slope ADC의 직관과 맞는다)이고, Schreier 식은 비트당 4배다. 열잡음이 분해능을 정하는 영역에서는 노이즈 전력을 1/4로 줄이려면 커패시터를 4배로 키워야 하므로 Schreier 쪽이 물리에 가깝다. 고분해능으로 갈수록 두 지수의 예측이 크게 갈라진다.</p>
+    <div class="callout"><strong>계산 예: 50 MP 폰 센서의 전력</strong>
+      <p>“플래그십 폰 메인” 프리셋(8165 × 6124, 12-bit, 30 fps, 2×2 비닝 출력 12.5 MP)에서: 컬럼 바이어스 8165 × 3 µA × 2.8 V ≈ <b>68.6 mW</b>(행 구동은 0.1 mW 미만), ADC \(f_{\text{conv}}=1.50\times10^9\)/s × 4096 × 30 fJ ≈ <b>184 mW</b>, MIPI 4.5 Gbps × 4 pJ/bit = <b>18 mW</b>, 리모자이크 ISP 12.5 MP × 30 × 0.05 nJ ≈ <b>18.8 mW</b>, 고정 30 mW, 누설 약 18 mW → 합계 약 <b>338 mW</b>, 화소당 0.23 nJ. 같은 FoM에서 10-bit로 내리면 ADC는 Walden 기준 46 mW(1/4)지만, Schreier(172 dB) 기준으로는 119 → 7.4 mW(1/16)로 줄어든다. 화소 수와 비트 수가 전력 예산의 손잡이라는 뜻이다. MIPI 쪽 대역폭 계산은 <a href="../chapters/interface.html#path">19장 데이터 경로와 대역폭</a>을 보자.</p>
+    </div>
+
+    <h3>자기 발열과 열 폭주</h3>
+    <p>모듈의 <span class="term">열저항</span><span class="en">(thermal resistance)</span> \(\theta\)(°C/W)는 전력 1 W가 접합 온도를 몇 도 올리는지를 말한다. 폰 카메라 모듈은 수십 °C/W다. 누설 전력이 온도에 따라 지수적으로 늘기 때문에 접합 온도는 자기 자신을 포함한 고정점 방정식이 된다.</p>
+    <div class="formula">$$T_j = T_a + \theta\,P(T_j),\qquad C_{th}\frac{dT_j}{dt} = P(T_j) - \frac{T_j-T_a}{\theta},\qquad G = \theta\left.\frac{dP}{dT}\right|_{T_j}$$
+      <div class="where">\(C_{th}\): 열용량(J/K), \(\tau=\theta C_{th}\)는 열 시상수(여기서 25 s). 루프 이득 \(G\lt 1\)이면 고정점이 안정하고, 곡선 \(T_a+\theta P(T)\)가 직선 \(T\)와 만나지 않으면 <span class="term">열 폭주</span><span class="en">(thermal runaway)</span>다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="전력과 온도의 되먹임 루프, 그리고 고정점 그래프">
+        <g style="font-size:14px">
+          <rect x="20" y="30" width="120" height="44" rx="8" class="f-acc-soft"/><text x="80" y="57" text-anchor="middle" class="t">전력 P</text>
+          <rect x="220" y="30" width="130" height="44" rx="8" class="f-acc2-soft"/><text x="285" y="57" text-anchor="middle" class="t">접합 온도 T_j</text>
+          <rect x="220" y="150" width="130" height="44" rx="8" class="f-surface" style="stroke:var(--border)"/><text x="285" y="177" text-anchor="middle" class="t">누설 P_leak ↑</text>
+          <rect x="20" y="150" width="140" height="44" rx="8" class="f-surface" style="stroke:var(--border)"/><text x="90" y="177" text-anchor="middle" class="t">암전류 I_d ↑</text>
+          <path d="M140 52 H216" class="s-acc" stroke-width="2" marker-end="url(#th-ar)"/><text x="178" y="44" text-anchor="middle" class="t-dim">× θ</text>
+          <path d="M285 74 V146" class="s-acc" stroke-width="2" marker-end="url(#th-ar)"/>
+          <path d="M220 172 H170" class="s-line" stroke-width="1.5"/>
+          <path d="M240 150 C170 120 110 110 80 78" class="s-acc" stroke-width="2" fill="none" marker-end="url(#th-ar)"/>
+          <path d="M250 74 C200 110 130 120 100 146" class="s-line" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#th-ar2)"/>
+          <text x="20" y="226" class="t-dim">I_d: E_a ≈ 0.6~1.1 eV → 6~12 °C마다 2배</text>
+          <text x="20" y="20" class="t-dim">G = θ·dP/dT 가 1에 가까우면 폭주</text>
+        </g>
+        <g transform="translate(420,16)" style="font-size:13px">
+          <path d="M40 200 H320 M40 200 V10" class="s-axis"/>
+          <text x="320" y="222" text-anchor="end" class="t-dim">T</text><text x="30" y="16" text-anchor="end" class="t-dim">T</text>
+          <path d="M40 200 L230 10" class="s-line" stroke-dasharray="5 4"/><text x="236" y="20" class="t-dim">y = T</text>
+          <path d="M40 150 C120 140 190 120 240 60 S300 0 310 -4" class="s-acc" stroke-width="2.2" fill="none"/>
+          <text x="250" y="96" class="t-acc">T_a + θP(T)</text>
+          <circle cx="95" cy="145" r="5" class="f-acc"/><text x="104" y="166" class="t">안정 고정점</text>
+          <path d="M40 120 C120 96 170 60 220 -4" class="s-line" stroke-width="1.8" fill="none" style="stroke:var(--bad)"/>
+          <text x="150" y="40" class="t" style="fill:var(--bad)">θ 또는 T_a ↑: 교점 없음</text>
+        </g>
+        <defs>
+          <marker id="th-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--accent)"/></marker>
+          <marker id="th-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+      </svg>
+      <figcaption><b>그림 21-3.</b> 전열(electro-thermal) 되먹임. 전력이 온도를 올리고, 온도가 누설 전력을 키워 다시 전력이 는다(실선 루프). 암전류는 전력에는 거의 기여하지 않지만 화질을 깎는다(점선). 오른쪽: 접합 온도는 직선 \(y=T\)와 곡선 \(T_a+\theta P(T)\)의 교점이다. 열저항이나 주변 온도가 커지면 교점이 사라진다.</figcaption>
+    </figure>
+    <p>암전류는 <a href="../chapters/characterization.html#darkdist">8장 아레니우스 시험</a>에서 본 것처럼 활성화 에너지 \(E_a\)로 온도에 따라 늘어난다. 스펙시트의 60 °C 값을 기준 \(T_0\)로 쓴다.</p>
+    <div class="formula">$$I_d(T) = I_d(T_0)\exp\!\left[-\frac{E_a}{k}\left(\frac{1}{T}-\frac{1}{T_0}\right)\right],\qquad \Delta T_{2\times} \approx \frac{kT^2\ln 2}{E_a}$$</div>
+
+    <div class="sim" id="sim-power">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>전력 예산 · 자기 발열 · 암전류 되먹임</h3></div>
+      <div class="pg-presets">
+        <span class="lbl">설계</span>
+        <div class="seg" id="pw-src"><button data-value="phone" class="on">폰 메인</button><button data-value="uw">초광각</button><button data-value="ff">풀프레임</button><button data-value="adas">ADAS</button><button data-value="cctv">CCTV</button><button data-value="sci">sCMOS</button></div>
+        <button class="btn" id="pw-fromA">플레이그라운드 A</button>
+      </div>
+      <div class="pg-views">
+        <div><span class="cap">블록별 전력 (냉간 vs 정상 상태)</span><canvas id="cv-pw-bar"></canvas></div>
+        <div><span class="cap">접합 온도 과도 응답</span><canvas id="cv-pw-t"></canvas></div>
+      </div>
+      <div class="sim-controls">
+        <label class="ctrl"><span>프레임률 <output id="pw-fps-out"></output></span><input type="range" id="pw-fps" min="1" max="240" step="1" value="30"></label>
+        <label class="ctrl"><span>컬럼 바이어스 I_b <output id="pw-ibias-out"></output></span><input type="range" id="pw-ibias" min="0.5" max="10" step="0.1" value="3"></label>
+        <div class="ctrl"><span>ADC 지수</span><div class="seg" id="pw-fomtype"><button data-value="walden" class="on">Walden</button><button data-value="schreier">Schreier</button></div></div>
+        <label class="ctrl" id="pw-fomw-wrap"><span>FoM_W <output id="pw-fomw-out"></output></span><input type="range" id="pw-fomw" min="5" max="300" step="1" value="30"></label>
+        <label class="ctrl pw-off" id="pw-foms-wrap"><span>FoM_S <output id="pw-foms-out"></output></span><input type="range" id="pw-foms" min="150" max="185" step="1" value="172"></label>
+        <label class="ctrl"><span>MIPI 에너지 <output id="pw-mipi-out"></output></span><input type="range" id="pw-mipi" min="1" max="10" step="0.5" value="4"></label>
+        <div class="ctrl"><span>온칩 ISP</span><div class="seg" id="pw-isp"><button data-value="none">없음</button><button data-value="remosaic" class="on">리모자이크</button><button data-value="full">풀 ISP</button></div></div>
+        <label class="check"><input type="checkbox" id="pw-dram"> DRAM 층 (3층 적층, 2 pJ/bit)</label>
+        <label class="ctrl"><span>열저항 θ <output id="pw-theta-out"></output></span><input type="range" id="pw-theta" min="10" max="120" step="1" value="40"></label>
+        <label class="ctrl"><span>주변 온도 T_a <output id="pw-tamb-out"></output></span><input type="range" id="pw-tamb" min="-20" max="105" step="1" value="35"></label>
+        <label class="ctrl"><span>암전류 E_a <output id="pw-ea-out"></output></span><input type="range" id="pw-ea" min="0.4" max="1.2" step="0.01" value="0.63"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">총 전력 (정상 상태)</span><span class="v" id="o-pw-tot">—</span></div>
+        <div class="stat"><span class="k">화소당 에너지</span><span class="v" id="o-pw-npx">—</span></div>
+        <div class="stat"><span class="k">ADC 비중</span><span class="v" id="o-pw-adc">—</span></div>
+        <div class="stat"><span class="k">접합 온도 T_j</span><span class="v" id="o-pw-tj">—</span></div>
+        <div class="stat"><span class="k">루프 이득 G</span><span class="v" id="o-pw-loop">—</span></div>
+        <div class="stat"><span class="k">암전류 @ T_j</span><span class="v" id="o-pw-dark">—</span></div>
+        <div class="stat"><span class="k">암전류 2배 온도</span><span class="v" id="o-pw-dbl">—</span></div>
+        <div class="stat"><span class="k">DR @ T_j</span><span class="v" id="o-pw-dr">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(폰 메인)은 약 338 mW, T_j 48.5 °C, ADC 비중 55 %다. ADC 지수를 Schreier로 바꾸면 12-bit에서는 오히려 적게(약 271 mW) 나온다. 두 지수가 같은 회로를 서로 다르게 외삽한다는 뜻이다. ② 프레임률을 120 fps로 올리면 변환 수·데이터율에 비례하는 항목이 4배가 되어 약 1.03 W, T_j 76 °C가 된다. ③ “ADAS”에서 주변 온도 85 °C, 열저항 120 °C/W로 두면 아직 수렴하지만(T_j 약 111 °C, G ≈ 0.66), 같은 조건의 “폰 메인”은 교점이 사라져 열 폭주한다. ④ “sCMOS”(16-bit)는 화소 수가 적어도 ADC가 전력의 대부분이다. ⑤ E_a를 1.1 eV로 올리면 암전류 2배 온도가 약 6 °C로 줄어든다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6. 모듈 -->
+  <section id="module">
+    <h2>광학 포맷과 모듈 높이</h2>
+    <p>앞에서 “모듈 높이가 광학 포맷을 사실상 정한다”고 했다. 이제 그 말을 숫자로 옮긴다. 화각(FOV)을 고정하면 초점 거리는 센서 대각에 비례하고, 렌즈의 <span class="term">전장</span><span class="en">(total track length, TTL)</span>은 초점 거리의 일정 배율이다. 폰 두께에서 디스플레이 쪽 두께를 뺀 높이를 넘는 부분은 <span class="term">카메라 범프</span><span class="en">(camera bump)</span>로 튀어나온다.</p>
+    <div class="formula">$$f = \frac{D/2}{\tan(\text{FOV}/2)},\qquad f_{35} = f\,\frac{43.3}{D},\qquad H_{\text{mod}} \approx \text{TTL} + 1.6\ \text{mm},\qquad \text{bump} = \max\bigl(0,\ H_{\text{mod}} - (t_{\text{phone}} - 1.0)\bigr)$$
+      <div class="where">\(D\): 센서 대각, FOV: 대각 화각, 1.6 mm: 센서·기판(1.0)과 경통 윗면(0.6) 여유, 1.0 mm: 디스플레이 쪽 두께. 모두 교육용 근사다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 260" role="img" aria-label="폰 단면에서 카메라 모듈의 높이, TTL, 범프">
+        <g style="font-size:14px">
+          <rect x="20" y="90" width="720" height="150" class="f-surface" style="stroke:var(--border)"/>
+          <rect x="20" y="214" width="720" height="26" class="f-elev" style="stroke:var(--border)"/>
+          <text x="30" y="232" class="t-dim">디스플레이 쪽 (~1.0 mm)</text>
+          <text x="30" y="108" class="t-dim">폰 뒷면</text>
+          <rect x="300" y="30" width="170" height="60" rx="6" style="fill:color-mix(in srgb, var(--bad) 14%, transparent);stroke:var(--bad)"/>
+          <text x="480" y="52" class="t" style="fill:var(--bad)">카메라 범프</text>
+          <rect x="300" y="30" width="170" height="174" rx="6" fill="none" class="s-line" stroke-dasharray="5 4"/>
+          <path d="M318 44 H452 M326 112 H444" class="s-acc" stroke-width="3"/>
+          <text x="458" y="118" class="t-acc">L2</text><text x="458" y="40" class="t-acc">L1 (조리개)</text>
+          <rect x="330" y="186" width="110" height="8" class="f-acc"/>
+          <rect x="316" y="194" width="138" height="12" class="f-elev" style="stroke:var(--border)"/>
+          <text x="470" y="200" class="t-dim">센서 + 기판</text>
+          <path d="M385 44 L338 112 L330 186" class="s-line" style="stroke:var(--warn)" stroke-width="2" fill="none"/>
+          <path d="M385 44 L432 112 L440 186" class="s-line" style="stroke:var(--warn)" stroke-width="2" fill="none"/>
+          <text x="372" y="180" text-anchor="end" class="t" style="fill:var(--warn);font-size:13px">CRA</text>
+          <path d="M250 44 V186" class="s-axis" marker-start="url(#md-ar)" marker-end="url(#md-ar)"/><text x="244" y="120" text-anchor="end" class="t">TTL</text>
+          <path d="M200 30 V206" class="s-axis" marker-start="url(#md-ar)" marker-end="url(#md-ar)"/><text x="194" y="160" text-anchor="end" class="t">H_mod</text>
+          <path d="M620 90 V214" class="s-axis" marker-start="url(#md-ar)" marker-end="url(#md-ar)"/><text x="630" y="156" class="t">t_phone − 1.0</text>
+          <text x="560" y="72" class="t-dim">범프 = H_mod − (t_phone − 1.0)</text>
+        </g>
+        <defs><marker id="md-ar" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--text-dim)"/></marker></defs>
+      </svg>
+      <figcaption><b>그림 21-4.</b> 폰 단면에서 본 카메라 모듈. 렌즈 전장(TTL)에 센서·기판과 경통 여유를 더한 모듈 높이가 폰 안쪽 높이를 넘으면 범프가 된다. 가장자리 화소로 들어가는 주광선의 기울기가 CRA다.</figcaption>
+    </figure>
+    <h3>두 렌즈 근축 모델: TTL을 줄이면 CRA가 커진다</h3>
+    <p>실제 폰 렌즈는 비구면 5~8매지만, 1차 동작은 <b>박막 렌즈 두 장</b>으로 설명된다. 앞 렌즈 L1(조리개 위치, 초점 거리 \(f_1\))과 뒤 렌즈 L2(\(f_2\))가 간격 \(d\)로 놓이고, L2에서 센서까지가 후초점 거리 \(b\)다. 전체 초점 거리 \(f\)와 \(\text{TTL}=d+b\)를 정하면 두 렌즈의 파워가 결정되고, 근축 광선 추적으로 주광선 기울기(CRA)를 구할 수 있다.</p>
+    <div class="formula">$$\frac{1}{f} = \frac{1}{f_1}+\frac{1}{f_2}-\frac{d}{f_1f_2},\qquad b = f\left(1-\frac{d}{f_1}\right),\qquad y_2 = d\,u,\quad u' = u - \frac{y_2}{f_2},\quad \text{CRA} = \arctan u'$$
+      <div class="where">\(u=\tan(\text{FOV}/2)\): 조리개 중심을 지나는 주광선의 기울기. \(d=0.55\,\text{TTL}\)로 고정하면 \(f_1 = fd/(f-b)\), \(f_2 = f(f_1-d)/(f_1-f)\). 시뮬레이터는 같은 행렬 계산으로 축상 주변 광선도 추적해 상이 센서 면에 맺히는지(높이 0) 확인한다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 210" role="img" aria-label="TTL/f 비율에 따른 두 렌즈 구성과 CRA">
+        <g style="font-size:14px">
+          <g transform="translate(20,0)">
+            <text x="110" y="20" text-anchor="middle" class="t">TTL/f &lt; 1 (망원형)</text>
+            <path d="M40 50 H180 M60 120 H160" class="s-acc" stroke-width="3"/><text x="186" y="54" class="t-acc">+</text><text x="166" y="124" class="t" style="fill:var(--bad)">−</text>
+            <path d="M40 180 H180" class="s-axis" stroke-width="3"/>
+            <path d="M110 50 L80 120 L36 180" fill="none" stroke-width="2" style="stroke:var(--warn)"/>
+            <text x="110" y="202" text-anchor="middle" class="t" style="fill:var(--bad)">CRA &gt; 반화각</text>
+          </g>
+          <g transform="translate(270,0)">
+            <text x="110" y="20" text-anchor="middle" class="t">TTL/f = 1 (단일 렌즈)</text>
+            <path d="M40 50 H180" class="s-acc" stroke-width="3"/><text x="186" y="54" class="t-acc">+</text>
+            <path d="M60 120 H160" class="s-line" stroke-dasharray="4 4"/>
+            <path d="M40 180 H180" class="s-axis" stroke-width="3"/>
+            <path d="M110 50 L58 180" fill="none" stroke-width="2" style="stroke:var(--warn)"/>
+            <text x="110" y="202" text-anchor="middle" class="t">CRA = 반화각</text>
+          </g>
+          <g transform="translate(520,0)">
+            <text x="110" y="20" text-anchor="middle" class="t">TTL/f &gt; 1 (L2 양의 파워)</text>
+            <path d="M40 40 H180 M60 120 H160" class="s-acc" stroke-width="3"/><text x="186" y="44" class="t-acc">+</text><text x="166" y="124" class="t-acc">+</text>
+            <path d="M40 180 H180" class="s-axis" stroke-width="3"/>
+            <path d="M110 40 L74 120 L64 180" fill="none" stroke-width="2" style="stroke:var(--warn)"/>
+            <text x="110" y="202" text-anchor="middle" class="t" style="fill:var(--ok)">CRA &lt; 반화각</text>
+          </g>
+        </g>
+      </svg>
+      <figcaption><b>그림 21-5.</b> 같은 초점 거리라도 TTL/f에 따라 뒤 렌즈의 역할이 바뀐다. 모듈을 얇게(TTL/f &lt; 1) 하려면 뒤 렌즈가 음의 파워를 가져야 하고, 주광선이 바깥으로 꺾여 CRA가 반화각보다 커진다. 실제 폰 렌즈의 마지막 면이 가장자리에서 양의 파워로 휘는 “갈매기 날개” 비구면인 것은 이 CRA를 되돌리기 위해서다.</figcaption>
+    </figure>
+    <p>CRA가 크면 가장자리 픽셀에서 빛이 비스듬히 들어와 <a href="../chapters/pixel.html#angular">3장 각도 응답</a>에서 본 감도 저하와 크로스토크가 생기고, 마이크로렌즈를 그만큼 중심 쪽으로 시프트해야 한다(높이 \(h\), 굴절률 \(n\)인 스택에서 \(\Delta \approx h\tan[\arcsin(\sin\text{CRA}/n)]\)). 파장 수준 픽셀의 각도 특성은 <a href="../chapters/nanophotonics.html">18장 나노포토닉스</a>의 FDTD로 확인한다.</p>
+    <div class="callout"><strong>계산 예: 1/1.3"급 메인 카메라와 1" 센서</strong>
+      <p>“플래그십 폰 메인”(대각 12.25 mm, FOV 84°): \(f = 6.125/\tan 42° = 6.80\) mm(35 mm 환산 24 mm). TTL/f = 1.2이면 TTL = 8.16 mm, 모듈 높이 9.76 mm. 8.0 mm 두께 폰의 안쪽 높이 7.0 mm를 넘으므로 <b>범프 2.76 mm</b>. 근축 추적으로 구한 CRA는 29.5°(반화각 42°보다 작다), 가장자리 cos⁴ 상대 조도 57 %, 2 µm 스택의 마이크로렌즈 시프트 0.67 µm. 같은 화각에서 1" 센서(대각 15.9 mm)로 바꾸면 \(f\) = 8.83 mm, TTL 10.6 mm, 범프 약 5.2 mm가 된다. 그래서 1"급 폰은 TTL/f를 1 아래로 누르고, 커진 CRA를 마이크로렌즈 시프트와 비구면으로 감당한다.</p>
+    </div>
+
+    <div class="sim" id="sim-module">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>광학 포맷 → 렌즈 TTL · 모듈 높이 · CRA (근축 광선 추적)</h3></div>
+      <div class="pg-presets">
+        <span class="lbl">설계</span>
+        <div class="seg" id="md-src"><button data-value="phone" class="on">폰 메인</button><button data-value="uw">초광각</button><button data-value="ff">풀프레임</button><button data-value="adas">ADAS</button><button data-value="cctv">CCTV</button><button data-value="sci">sCMOS</button></div>
+        <button class="btn" id="md-fromA">플레이그라운드 A</button>
+      </div>
+      <div class="pg-views">
+        <div><span class="cap">단면: 두 렌즈 근축 추적</span><canvas id="cv-md-ray"></canvas></div>
+        <div><span class="cap">TTL/f 스윕</span><canvas id="cv-md-sw"></canvas></div>
+      </div>
+      <div class="sim-controls">
+        <label class="ctrl"><span>대각 화각 FOV <output id="md-fov-out"></output></span><input type="range" id="md-fov" min="20" max="130" step="1" value="84"></label>
+        <label class="ctrl"><span>TTL / f <output id="md-r-out"></output></span><input type="range" id="md-r" min="0.85" max="1.6" step="0.01" value="1.2"></label>
+        <label class="ctrl"><span>F-넘버 <output id="md-fnum-out"></output></span><input type="range" id="md-fnum" min="1.4" max="4" step="0.1" value="1.8"></label>
+        <label class="ctrl"><span>폰 두께 <output id="md-thick-out"></output></span><input type="range" id="md-thick" min="6" max="12" step="0.1" value="8"></label>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">초점 거리 f</span><span class="v" id="o-md-f">—</span></div>
+        <div class="stat"><span class="k">렌즈 전장 TTL</span><span class="v" id="o-md-ttl">—</span></div>
+        <div class="stat"><span class="k">모듈 높이</span><span class="v" id="o-md-h">—</span></div>
+        <div class="stat"><span class="k">카메라 범프</span><span class="v" id="o-md-bump">—</span></div>
+        <div class="stat"><span class="k">가장자리 CRA</span><span class="v" id="o-md-cra">—</span></div>
+        <div class="stat"><span class="k">상대 조도 (코너)</span><span class="v" id="o-md-ri">—</span></div>
+        <div class="stat"><span class="k">마이크로렌즈 시프트</span><span class="v" id="o-md-shift">—</span></div>
+        <div class="stat"><span class="k">렌즈 파워</span><span class="v" id="o-md-pw">—</span></div>
+        <div class="stat"><span class="k">L2 지름</span><span class="v" id="o-md-l2">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값에서 TTL/f를 1.00으로 내리면 L2의 파워가 0이 되고 CRA가 반화각 42°와 같아진다. 0.90으로 더 내리면 L2가 음의 렌즈가 되며 범프는 0.75 mm로 줄지만 CRA는 48.3°까지 커진다. ② “초광각”(FOV 120°)은 TTL/f 1.2에서도 범프가 0이지만, CRA가 47.5°라 35° 선을 넘는다. 1.5로 올려야 약 24°가 된다. ③ “풀프레임”을 폰 화각 84°로 두면 범프가 23 mm를 넘는다. ④ F-넘버를 1.4로 낮추면 L2 지름(렌즈 폭)이 커진다. 높이가 아니라 폭과 무게가 문제가 된다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7. 응용 분야 -->
   <section id="apps">
     <h2>응용 분야별 요구사항</h2>
     <p>“좋은 센서”란 없다. 용도에 맞는 센서가 있을 뿐이다. 같은 CMOS 이미지 센서 기술이라도 응용마다 최적점이 크게 다르다.</p>
@@ -309,6 +549,108 @@
     </div>
   </section>
 
+  <!-- ============================================================ 8. 미션 -->
+  <section id="missions">
+    <h2>설계 미션: 요구사항에서 사양으로</h2>
+    <p>실제 센서 개발은 “좋은 센서를 만들자”가 아니라 고객의 <span class="term">요구사항</span><span class="en">(requirements)</span>에서 시작한다. “밤 장면에서 노이즈가 적었으면 좋겠다”는 말을 “2 lux에서 SNR 10” 같은 검증 가능한 숫자로 옮기고, 그 숫자를 동시에 만족하는 설계 변수의 조합을 찾는다. 이 절의 미션은 지금까지 만든 계산을 모두 엮는다. 화질은 플레이그라운드의 계산 모델, 접합 온도와 암전류는 전력·열 모델, 범프와 CRA는 두 렌즈 모델, 원가는 웨이퍼 계산기의 근사식을 그대로 쓴다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 200" role="img" aria-label="요구사항에서 설계 변수, 모델, 검증, 탐색으로 이어지는 설계 루프">
+        <g style="font-size:14px">
+          <rect x="10" y="20" width="150" height="70" rx="8" class="f-acc-soft"/><text x="85" y="46" text-anchor="middle" class="t-acc">① 요구사항</text><text x="85" y="68" text-anchor="middle" class="t-dim">“밤에도 깨끗하게”</text>
+          <rect x="200" y="20" width="160" height="70" rx="8" class="f-acc2-soft"/><text x="280" y="46" text-anchor="middle" class="t">② 검증 가능한 목표</text><text x="280" y="68" text-anchor="middle" class="t-dim">SNR10 ≤ 8 lux, DR ≥ 80 dB</text>
+          <rect x="400" y="20" width="160" height="70" rx="8" class="f-surface" style="stroke:var(--border)"/><text x="480" y="46" text-anchor="middle" class="t">③ 설계 변수</text><text x="480" y="68" text-anchor="middle" class="t-dim">피치·화소·CFA·HDR·ADC·렌즈</text>
+          <rect x="600" y="20" width="150" height="70" rx="8" class="f-surface" style="stroke:var(--border)"/><text x="675" y="46" text-anchor="middle" class="t">④ 모델</text><text x="675" y="68" text-anchor="middle" class="t-dim">화질·전력/열·렌즈·원가</text>
+          <rect x="400" y="120" width="350" height="64" rx="8" class="f-acc-soft"/><text x="575" y="146" text-anchor="middle" class="t-acc">⑤ 검증: 요구사항별 통과/실패 + 점수</text><text x="575" y="168" text-anchor="middle" class="t-dim">실패 원인 → 어느 변수를 움직일지</text>
+          <rect x="10" y="120" width="350" height="64" rx="8" class="f-acc2-soft"/><text x="185" y="146" text-anchor="middle" class="t">⑥ 탐색: 격자 11만 설계 → 파레토 전선</text><text x="185" y="168" text-anchor="middle" class="t-dim">점수 vs 원가에서 지배되지 않는 설계</text>
+          <path d="M160 55 H196 M360 55 H396 M560 55 H596" class="s-acc" stroke-width="2" marker-end="url(#ms-ar)"/>
+          <path d="M675 90 V116" class="s-acc" stroke-width="2" marker-end="url(#ms-ar)"/>
+          <path d="M400 152 H364" class="s-acc" stroke-width="2" marker-end="url(#ms-ar)"/>
+          <path d="M185 120 V104 H480 V94" class="s-line" stroke-width="1.6" fill="none" stroke-dasharray="5 4" marker-end="url(#ms-ar2)"/>
+        </g>
+        <defs>
+          <marker id="ms-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--accent)"/></marker>
+          <marker id="ms-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--text-dim)"/></marker>
+        </defs>
+      </svg>
+      <figcaption><b>그림 21-6.</b> 요구사항 주도 설계 루프. 막연한 요구를 검증 가능한 목표로 바꾸고(②), 설계 변수(③)를 모델(④)에 넣어 요구사항마다 통과 여부를 판정한다(⑤). 손으로 몇 번 돌려 본 뒤에는 격자 탐색(⑥)으로 전체 설계 공간을 훑어 점수와 원가 사이의 파레토 전선을 본다.</figcaption>
+    </figure>
+    <p>미션 시뮬레이터에서 바꿀 수 있는 것은 설계자가 실제로 고르는 변수들(피치, 화소 수, CFA·비닝, HDR, ADC 비트, F-넘버, TTL/f, 글로벌 셔터)이다. 공정이 정하는 값은 하나의 “기술 노드”로 묶었다. 풀웰 밀도 5000 e⁻/µm², 기본 QE 0.8, 60 °C 암전류 3 e⁻/s, 변환 이득은 FD 스윙 1 V에 PD 풀웰이 거의 차도록 \(CG \approx 0.95\,\text{V}/\text{FWC}_{PD}\)(최대 200 µV/e⁻), 읽기 노이즈는 \(\sigma_r = 0.6 + 70/CG\) e⁻로 둔다. 큰 픽셀은 CG가 낮아져 읽기 노이즈가 커지는 실제 경향을 흉내 낸 것이다. 글로벌 셔터를 켜면 저장 노드가 면적을 먹어 풀웰 밀도 ×0.55, QE ×0.9, 전압 영역 샘플링 때문에 읽기 노이즈 +0.7 e⁻를 물린다(<a href="../chapters/shutter.html">9장 셔터</a>).</p>
+    <div class="formula">$$S = \frac{80}{n}\sum_{i=1}^{n} s_i \;+\; 20\cdot\mathbb{1}[\text{전부 통과}]\left[\tfrac12\Bigl(1-\frac{P}{P_{\max}}\Bigr)_{\!+} + \tfrac12\Bigl(1-\frac{C}{C_{\max}}\Bigr)_{\!+}\right],\qquad s_i = \begin{cases}1 & \text{통과}\\ 0.6\max(0,\,1+\mu_i) & \text{실패}\end{cases}$$
+      <div class="where">\(\mu_i\): 목표 대비 정규화 여유. 비율로 보는 항목(조도, 전력, 원가, 해상도)은 \(\log_{10}(\text{값}/\text{목표})/0.5\), dB·온도·각도 항목은 차이를 정해진 척도(20 dB, 20 °C, 10° 등)로 나눈 값이다. 모든 요구를 통과한 뒤에는 전력과 원가가 예산 대비 얼마나 남는지로 나머지 20점을 준다.</div></div>
+
+    <div class="sim" id="sim-mission">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>설계 미션 · 요구사항 검증 · 격자 탐색</h3></div>
+      <div class="pg-presets">
+        <span class="lbl">미션</span>
+        <div class="seg" id="ms-mission"><button data-value="phone" class="on">스마트폰 메인</button><button data-value="uw">초광각</button><button data-value="auto">차량 8 MP</button><button data-value="drone">드론 4K60</button><button data-value="sec">저조도 보안</button><button data-value="gs">산업용 GS</button></div>
+      </div>
+      <div class="ms-why" id="ms-why"></div>
+      <div class="table-wrap ms-table"><table>
+        <thead><tr><th></th><th>요구사항</th><th>현재 값</th><th>목표</th><th>판정 이유 · 처방</th></tr></thead>
+        <tbody id="ms-body"></tbody>
+      </table></div>
+      <div class="sim-controls">
+        <label class="ctrl"><span>픽셀 피치 <output id="ms-pitch-out"></output></span><input type="range" id="ms-pitch" min="0.6" max="4" step="0.01" value="1"></label>
+        <label class="ctrl"><span>화소 수 <output id="ms-mp-out"></output></span><input type="range" id="ms-mp" min="0" max="1000" step="1" value="738"></label>
+        <div class="ctrl"><span>CFA</span><div class="seg" id="ms-cfa"><button data-value="bayer">Bayer</button><button data-value="quad" class="on">Quad</button><button data-value="mono">Mono</button></div></div>
+        <label class="check"><input type="checkbox" id="ms-bin" checked> 2×2 비닝 출력</label>
+        <div class="ctrl"><span>HDR</span><div class="seg" id="ms-hdr"><button data-value="none" class="on">없음</button><button data-value="dcg">DCG ×4</button><button data-value="lofic">LOFIC ×32</button></div></div>
+        <div class="ctrl"><span>ADC</span><div class="seg" id="ms-bits"><button data-value="10">10-bit</button><button data-value="12" class="on">12-bit</button></div></div>
+        <label class="ctrl"><span>F-넘버 <output id="ms-fnum-out"></output></span><input type="range" id="ms-fnum" min="1.4" max="2.8" step="0.1" value="1.8"></label>
+        <label class="ctrl"><span>렌즈 TTL/f <output id="ms-r-out"></output></span><input type="range" id="ms-r" min="1" max="1.6" step="0.01" value="1.2"></label>
+        <label class="check"><input type="checkbox" id="ms-gs"> 글로벌 셔터 픽셀</label>
+        <div class="ctrl-row"><button class="btn primary" id="ms-run">자동 탐색</button><button class="btn" id="ms-apply">최고점 설계 적용</button><button class="btn" id="ms-reset">시작 설계</button></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">점수</span><span class="v" id="o-ms-score">—</span></div>
+        <div class="stat"><span class="k">통과</span><span class="v" id="o-ms-pass">—</span></div>
+        <div class="stat"><span class="k">T_j · 전력</span><span class="v" id="o-ms-tj">—</span></div>
+        <div class="stat"><span class="k">다이 원가</span><span class="v" id="o-ms-cost">—</span></div>
+        <div class="stat"><span class="k">탐색 진행</span><span class="v" id="o-ms-search">—</span></div>
+        <div class="stat"><span class="k">전부 통과한 설계</span><span class="v" id="o-ms-feas">—</span></div>
+        <div class="stat"><span class="k">탐색 최고점</span><span class="v" id="o-ms-best">—</span></div>
+      </div>
+      <div class="pg-views">
+        <div><span class="cap">설계 공간: 점수 vs 양품당 다이 원가 ($, 로그)</span><canvas id="cv-ms"></canvas></div>
+        <div><span class="cap">요구사항 레이더 (현재 vs 최고점)</span><canvas id="cv-ms-r"></canvas></div>
+      </div>
+      <div class="sim-note">해볼 것: ① “스마트폰 메인”의 시작 설계(1.0 µm, 50 MP, Quad 비닝)는 SNR=10 조도 19.6 lux와 DR 79.5 dB에서 실패한다(67.2점). 피치를 1.4 µm로 키우고 DCG, F/1.4로 바꾸면 화질은 통과하지만 범프가 4.12 mm로 실패한다(74.1점). TTL/f를 1.05로 누르면 범프 2.93 mm로 전부 통과해 85.4점이 된다. ② “자동 탐색”은 110,160개 격자(색 미션에서는 모노를 빼고 66,096개)를 프레임을 나눠 평가하고, 전부 통과한 설계(초록 점)와 파레토 전선을 그린다. ③ “차량 8 MP”의 최고점은 1.8 µm 32 MP Quad를 2×2 비닝해 8 MP로 내보내는 LOFIC 설계다. ④ “산업용 GS”는 글로벌 셔터를 켜지 않으면 다른 항목이 모두 좋아도 통과할 수 없다.</div>
+    </div>
+    <div class="callout"><strong>계산 예: 차량 8 MP 미션 풀어 보기</strong>
+      <p>시작 설계(2.1 µm, 8.3 MP Bayer, DCG, F/1.6)는 PD 풀웰 22,050 e⁻, CG 43 µV/e⁻, 읽기 노이즈 2.2 e⁻다. 85 °C 하우징에서 T_j 92.5 °C, 이때 암전류 약 21 e⁻/s. DR은 89.8 dB로 목표 110 dB에 20 dB 모자라고, 1/30 s에서 SNR=10 조도 14.5 lux도 목표 5 lux에 못 미친다. LOFIC(×32)으로 바꾸면 DR은 107.9 dB까지 오르지만 저조도는 그대로다. 광자를 늘리려면 출력 픽셀이 커져야 하는데, 3 µm 이상 Bayer는 대각 16 mm 제한과 원가가 걸린다. 탐색이 찾은 답은 <b>1.8 µm × 32 MP Quad를 2×2 비닝(출력 3.6 µm 등가 8 MP), LOFIC, F/1.4</b>다. DR 112.9 dB, SNR=10 조도 4.15 lux, T_j 97.9 °C, 대각 15.6 mm로 모두 통과한다. 실제 차량용 센서가 분할 픽셀이나 LOFIC에 서브 픽셀 합산을 쓰는 이유가 여기서 보인다. 요구사항의 현실적 출처는 <a href="../chapters/automotive.html">15장 차량용 센서</a>, 화질 지표로의 번역은 <a href="../chapters/iq.html">20장 화질 평가</a>를 보자.</p>
+    </div>
+
+    <h3>민감도 분석: 어떤 손잡이가 KPI를 움직이나</h3>
+    <p>설계 변수가 열 개가 넘으면 “무엇을 먼저 바꿀까”가 중요하다. 기준 설계에서 각 변수를 하나씩 \(\pm\delta\)만큼 흔들어 KPI 변화를 막대로 늘어놓고, 큰 것부터 정렬하면 <span class="term">토네이도 차트</span><span class="en">(tornado chart)</span>가 된다. 막대 길이를 로그 미분으로 바꾼 <span class="term">탄력성</span><span class="en">(elasticity)</span>은 “변수가 1 % 변할 때 KPI가 몇 % 변하는가”다.</p>
+    <div class="formula">$$\varepsilon_x = \frac{\partial \ln K}{\partial \ln x} \approx \frac{\ln K\bigl(x(1+\delta)\bigr)-\ln K\bigl(x(1-\delta)\bigr)}{\ln\frac{1+\delta}{1-\delta}}$$
+      <div class="where">dB로 표시하는 KPI(SNR, DR)는 진폭비로 바꿔 계산한다(\(\Delta\text{dB}/20\) → \(\log_{10}\)). 샷 노이즈 한계의 SNR은 \(\propto p\sqrt{\eta\,t\,E}/N\)이므로 피치 탄력성 1, QE·노출·조도 0.5, F-넘버 −1이 나와야 한다. 막대가 한쪽으로만 길면 기준점이 <b>동작 영역의 경계</b>(스윙 한계, 포화 등)에 있다는 신호다.</div></div>
+
+    <div class="sim" id="sim-tornado">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>토네이도 민감도 · 탄력성 · 영역 경계 스윕</h3></div>
+      <div class="pg-presets">
+        <span class="lbl">기준</span>
+        <div class="seg" id="tn-src"><button data-value="phone" class="on">폰 메인</button><button data-value="uw">초광각</button><button data-value="ff">풀프레임</button><button data-value="adas">ADAS</button><button data-value="cctv">CCTV</button><button data-value="sci">sCMOS</button></div>
+      </div>
+      <div class="pg-presets">
+        <span class="lbl">KPI</span>
+        <div class="seg" id="tn-kpi"><button data-value="snr" class="on">SNR</button><button data-value="dr">DR</button><button data-value="lux10">SNR10 조도</button><button data-value="pwr">전력</button><button data-value="cost">원가</button></div>
+        <label class="ctrl" style="min-width:200px"><span>흔드는 폭 δ <output id="tn-dl-out"></output></span><input type="range" id="tn-dl" min="5" max="50" step="1" value="20"></label>
+      </div>
+      <div class="pg-views">
+        <div><span class="cap">토네이도 (±δ)</span><canvas id="cv-tn"></canvas></div>
+        <div><span class="cap">선택 변수 스윕 (×0.25 ~ ×4)</span><canvas id="cv-tn-s"></canvas></div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">기준 KPI</span><span class="v" id="o-tn-k0">—</span></div>
+        <div class="stat"><span class="k">1위 변수 (−δ / +δ)</span><span class="v" id="o-tn-top">—</span></div>
+        <div class="stat"><span class="k">선택 변수 탄력성</span><span class="v" id="o-tn-el">—</span></div>
+        <div class="stat"><span class="k">영향 없는 변수</span><span class="v" id="o-tn-flat">—</span></div>
+        <div class="stat"><span class="k">영역 경계 (스윕)</span><span class="v" id="o-tn-bnd">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 폰 메인·SNR에서 1위는 F-넘버와 피치(탄력성 ∓1.01)이고 QE·노출·조도가 0.51로 나란하다. 읽기 노이즈는 100 lux에서 거의 무관하다. ② KPI를 DR로 바꾸면 피치(ε ≈ 1.74), 풀웰 밀도, 읽기 노이즈 순이고, ADC 비트는 −1 bit 쪽만 길다(양자화 노이즈). ③ “풀프레임”·DR에서 변환 이득을 누르면 +δ 쪽만 막대가 있다. 스윕에 “FD 스윙 한계” 경계가 ×1.17 근처에 나타난다. ④ 전력 KPI에서는 광학·노이즈 변수가 모두 0이고 ADC 비트·화소 수·프레임률만 남는다. ⑤ 원가 KPI에서 피치 탄력성은 약 2(면적 ∝ p²)다.</div>
+    </div>
+  </section>
+
   <!-- ============================================================ 요약 & 퀴즈 -->
   <section class="keypoints" id="summary">
     <h2>핵심 정리</h2>
@@ -319,6 +661,10 @@
       <li>비닝은 해상도를 SNR과 맞바꾼다(\(k\times k\) 비닝 시 SNR \(k\)배). 같은 면적이면 샷 노이즈 한계에서는 픽셀 분할이 손해가 아니다. 손해는 읽기 노이즈에서 생긴다.</li>
       <li>픽셀이 작아지면 회절 한계 F-넘버(\(2p/2.44\lambda\))가 작아져 렌즈가 해상도를 먼저 제한하고, 화소가 많아지면 데이터율·전력·인터페이스가 병목이 된다.</li>
       <li>다이 면적은 웨이퍼당 다이 수와 수율을 동시에 떨어뜨려 원가를 면적 이상으로 키운다. 응용마다(모바일·차량·의료·산업·과학·보안) 최적 설계점이 전혀 다르다.</li>
+      <li>센서 전력은 “횟수 × 회당 에너지”의 합이다. 컬럼 ADC(FoM·2^b·변환 수)가 가장 크고, 컬럼 바이어스, MIPI(pJ/bit), ISP(nJ/화소)가 뒤따른다. 비트·화소 수·fps가 전력의 손잡이다.</li>
+      <li>접합 온도는 \(T_j = T_a + \theta P(T_j)\)의 고정점이다. 루프 이득 \(\theta\,dP/dT\)가 1에 가까우면 열 폭주하고, 온도 상승은 아레니우스 법칙으로 암전류를 키운다.</li>
+      <li>화각을 고정하면 초점 거리와 TTL은 센서 대각에 비례하고, 모듈 높이가 폰 두께를 넘으면 범프가 된다. TTL/f를 낮추면 얇아지지만 CRA가 커진다.</li>
+      <li>요구사항을 검증 가능한 숫자로 바꾸고, 모든 모델을 엮어 통과/실패와 점수를 매긴 뒤, 격자 탐색의 파레토 전선과 토네이도 민감도로 어느 변수를 움직일지 정한다.</li>
     </ol>
   </section>
 
@@ -359,6 +705,34 @@
         <button class="opt" data-correct>2배보다 더 커진다 (DPW 감소 + 수율 하락 + 가장자리 손실)</button>
         <button class="opt">절반이 된다</button>
       </div><div class="quiz-exp">DPW가 약 절반 이하로 줄고(가장자리에서 버려지는 면적 증가), 수율 e^(−A·D₀)도 떨어지므로 원가는 면적보다 빠르게 증가한다.</div></div>
+
+      <div class="quiz-q"><p>6. 컬럼 ADC의 Walden FoM이 고정일 때, 같은 프레임률에서 ADC 분해능을 12-bit에서 10-bit로 낮추면 ADC 전력은?</p><div class="opts">
+        <button class="opt" data-correct>약 1/4</button>
+        <button class="opt">약 1/2</button>
+        <button class="opt">약 1/16</button>
+        <button class="opt">변하지 않는다</button>
+      </div><div class="quiz-exp">Walden 식은 P = FoM·2^b·f_conv이므로 2비트를 줄이면 2⁻² = 1/4이다. 열잡음이 분해능을 정하는 영역을 가정한 Schreier 식(비트당 4배)으로는 1/16이 나온다. 두 지수가 고분해능에서 크게 갈라지는 이유다.</div></div>
+
+      <div class="quiz-q"><p>7. 열저항 40 °C/W인 모듈에서, 동작점의 전력 기울기 dP/dT가 30 mW/°C로 측정되었다. 가장 적절한 판단은?</p><div class="opts">
+        <button class="opt">접합 온도가 1.2 °C만 오르므로 안전하다</button>
+        <button class="opt">누설은 전력의 작은 부분이라 무시해도 된다</button>
+        <button class="opt">암전류만 두 배가 되고 전력은 그대로다</button>
+        <button class="opt" data-correct>루프 이득 G = θ·dP/dT = 1.2 &gt; 1이라 고정점이 불안정하고 열 폭주 위험이 있다</button>
+      </div><div class="quiz-exp">G = 40 °C/W × 0.030 W/°C = 1.2. 온도가 1 °C 오를 때 전력 증가가 다시 1.2 °C를 더 올리므로 교란이 커진다. G &lt; 1이어야 T_j = T_a + θP(T_j)의 고정점이 안정하다.</div></div>
+
+      <div class="quiz-q"><p>8. 폰 모듈을 얇게 하려고 같은 화각·같은 센서에서 TTL/f를 1.2에서 0.9로 낮췄다. 두 렌즈 근축 모델에서 일어나는 일은?</p><div class="opts">
+        <button class="opt">초점 거리가 줄어 화각이 넓어진다</button>
+        <button class="opt" data-correct>뒤 렌즈가 음의 파워가 되어 가장자리 CRA가 반화각보다 커지고, 마이크로렌즈 시프트와 코너 감도 손실이 커진다</button>
+        <button class="opt">CRA가 줄어 코너가 밝아진다</button>
+        <button class="opt">범프가 늘어난다</button>
+      </div><div class="quiz-exp">화각과 센서가 같으면 f는 그대로다. TTL &lt; f를 만들려면 망원형(+, −) 배치가 필요하고, 음의 뒤 렌즈는 주광선을 바깥으로 꺾는다. 84° 폰 예에서 CRA가 29.5°에서 48.3°로 커진다.</div></div>
+
+      <div class="quiz-q"><p>9. 토네이도 차트에서 변환 이득을 +20 % 바꾸면 DR이 2 dB 떨어지는데, −20 %에서는 거의 변하지 않는다. 가장 그럴듯한 해석은?</p><div class="opts">
+        <button class="opt">계산 오류다. 민감도는 항상 대칭이어야 한다</button>
+        <button class="opt">변환 이득은 DR과 무관하다</button>
+        <button class="opt" data-correct>기준 설계가 PD 풀웰 한계와 FD 스윙 한계의 경계 근처에 있어, CG를 올릴 때만 유효 FWC가 V_swing/CG로 줄어든다</button>
+        <button class="opt">양자화 노이즈가 CG에 비례해 늘었다</button>
+      </div><div class="quiz-exp">FWC_eff = min(D_FW·p², V_swing/CG)라서 CG가 경계 아래일 때는 PD 쪽이 한계이고, 경계를 넘으면 스윙이 한계가 된다. 한쪽으로만 긴 막대는 동작 영역 경계를 알려 주는 신호이고, 스윕으로 경계 위치를 확인할 수 있다.</div></div>
     </div>
   </section>
 </main>
@@ -447,6 +821,200 @@
     sci: { pitch: 6.5, mp: 4.19, aspect: "1:1", cfa: "mono", bin: false, qe: 0.95, fwcd: 1000, rn: 1.0, cg: 20, bits: 16, hdr: "none", dark: 0.5, fnum: 2.0, lux: 10, texp: 1 / 50, fps: 40 },
   };
   /*MODEL-END*/
+  /*ENGINE2-START*/
+  /* ---- 전력 · 열 · 렌즈 · 원가: 위 model()의 결과(m)를 그대로 입력으로 쓴다 */
+  var KB = 8.617e-5, T_REF = 333.15; // 암전류 기준 온도 60 °C
+  var E_ISP = { none: 0, remosaic: 0.05, full: 0.25 }; // nJ/출력 픽셀
+  var PQ_DEF = { ibias: 3, fomType: "walden", fomW: 30, fomS: 172, mipi: 4, isp: "remosaic", dram: false, edram: 2, theta: 40, tamb: 35, ea: 0.63, pleak0: 8, tau: 25 };
+  function powerParts(d, m, q, T) {
+    var npx = m.nx * m.ny, conv = npx * d.fps, P = {};
+    P.pix = m.nx * q.ibias * 1e-6 * 2.8 * 1e3 + m.ny * d.fps * (m.nx * 2e-15 * 2.8 * 2.8 * 3) * 1e3;
+    if (q.fomType === "walden") P.adc = q.fomW * 1e-15 * Math.pow(2, d.bits) * conv * 1e3;
+    else P.adc = (conv / 2) * Math.pow(10, (6.02 * d.bits + 1.76 - q.fomS) / 10) * 1e3;
+    P.fix = 30;
+    P.mipi = q.mipi * 1e-12 * m.rate * 1e9 * 1e3;
+    P.isp = E_ISP[q.isp] * 1e-9 * m.outMP * 1e6 * d.fps * 1e3;
+    P.dram = q.dram ? q.edram * 1e-12 * npx * d.bits * d.fps * 2 * 1e3 + 5 : 0;
+    P.leak = q.pleak0 * Math.pow(2, (T - 25) / 20);
+    P.tot = P.pix + P.adc + P.fix + P.mipi + P.isp + P.dram + P.leak;
+    return P;
+  }
+  function thermal(d, m, q) {
+    var T = q.tamb, ok = true, it = 0;
+    for (; it < 200; it++) {
+      var Tn = q.tamb + (q.theta * powerParts(d, m, q, T).tot) / 1000;
+      if (Tn > 250) { ok = false; T = 250; break; }
+      if (Math.abs(Tn - T) < 1e-4) { T = Tn; break; }
+      T = Tn;
+    }
+    var P = powerParts(d, m, q, T);
+    var dPdT = (powerParts(d, m, q, T + 0.01).tot - P.tot) / 0.01 / 1000; // W/K
+    return { T: T, P: P, ok: ok, loop: q.theta * dPdT, it: it };
+  }
+  function darkAt(d0, ea, Tc) { return d0 * Math.exp((-ea / KB) * (1 / (Tc + 273.15) - 1 / T_REF)); }
+  function lensModel(D, fov, r, fnum, tPhone) {
+    var hf = (fov / 2) * Math.PI / 180, u0 = Math.tan(hf), f = D / 2 / u0;
+    var TTL = r * f, ds = 0.55 * TTL, b = TTL - ds;
+    var f1 = (f * ds) / (f - b), P1 = 1 / f1, P2 = (f1 - f) / (f * (f1 - ds));
+    // 주광선(조리개 = 렌즈 1)과 주변 광선 근축 추적
+    var cy2 = ds * u0, cu2 = u0 - cy2 * P2, cyi = cy2 + b * cu2;
+    var my1 = f / (2 * fnum), mu1 = -my1 * P1, my2 = my1 + ds * mu1, mu2 = mu1 - my2 * P2, myi = my2 + b * mu2;
+    var cra = Math.atan(cu2) * 180 / Math.PI, H = TTL + 1.6;
+    var tin = Math.asin(Math.sin(Math.atan(cu2)) / 1.55);
+    return {
+      f: f, TTL: TTL, ds: ds, b: b, f1: f1, P2: P2, cy2: cy2, cu2: cu2, cyi: cyi, my1: my1, my2: my2, mu1: mu1, mu2: mu2, myi: myi, u0: u0,
+      cra: cra, H: H, bump: Math.max(0, H - (tPhone - 1.0)), feq: (f * 43.27) / D, epd: f / fnum,
+      L1: 2 * my1, L2: 2 * (Math.abs(my2) + Math.abs(cy2)), ri: Math.pow(Math.cos(Math.atan(cu2)), 4), shift: 2.0 * Math.tan(tin),
+    };
+  }
+  function dieCost(m, stacked) {
+    var w = m.W + (stacked ? 0.8 : 2.4), h = m.H + (stacked ? 0.8 : 1.8), R = 147;
+    var Sa = (w + 0.1) * (h + 0.1), dpw = Math.max(0, (Math.PI * R * R) / Sa - (Math.PI * 2 * R) / Math.sqrt(2 * Sa));
+    var Y = Math.exp(-((w * h) / 100) * 0.1), good = dpw * Y;
+    return { w: w, h: h, dpw: dpw, Y: Y, cost: good >= 1 ? (3000 * (stacked ? 1.8 : 1)) / good : Infinity };
+  }
+
+  /* ---- 설계 미션 */
+  function techDesign(x, mi) {
+    var gs = !!x.gs, fwcd = x.fwcd * (gs ? 0.55 : 1);
+    var cg = Math.min(200, (0.95e6 / (fwcd * x.pitch * x.pitch)));
+    return {
+      pitch: x.pitch, mp: x.mp, aspect: mi.aspect, cfa: x.cfa, bin: x.bin, qe: 0.8 * (gs ? 0.9 : 1), fwcd: fwcd,
+      rn: 0.6 + 70 / cg + (gs ? 0.7 : 0), cg: cg, bits: x.bits, hdr: x.hdr, dark: 3, fnum: x.fnum,
+      lux: mi.lux, texp: mi.texp, fps: mi.fps,
+    };
+  }
+  function evalMission(x, mi) {
+    var d = techDesign(x, mi), m0 = model(d);
+    var q = copyQ(PQ_DEF); q.tamb = mi.tamb; q.isp = mi.isp;
+    var th = thermal(d, m0, q);
+    var dk = darkAt(3, q.ea, th.T); d.dark = dk;
+    var m = model(d), ln = lensModel(m.D, mi.fov, x.r, x.fnum, 8.0), dc = dieCost(m, true);
+    var ev = { d: d, m: m, th: th, ln: ln, dc: dc, dark: dk, x: x, mi: mi };
+    var res = mi.req.map(function (r) {
+      var v = r.v(ev), tol = r.log ? 0.005 : 0, pass = r.ge ? v >= r.t * (1 - tol) : v <= r.t * (1 + tol);
+      if (r.bool) pass = !!v;
+      var mu = r.bool ? (pass ? 0 : -1) : r.log ? (r.ge ? Math.log10(v / r.t) : Math.log10(r.t / v)) / 0.5 : (r.ge ? v - r.t : r.t - v) / r.sc;
+      if (!isFinite(mu)) mu = mu > 0 ? 1 : -1;
+      return { r: r, v: v, pass: pass, mu: mu };
+    });
+    var nPass = 0, sReq = 0;
+    res.forEach(function (o) { if (o.pass) nPass++; sReq += o.pass ? 1 : 0.6 * Math.max(0, 1 + o.mu); });
+    var score = (80 * sReq) / res.length;
+    if (nPass === res.length) score += 20 * (0.5 * SBc(1 - th.P.tot / mi.pmax, 0, 1) + 0.5 * SBc(1 - dc.cost / mi.cmax, 0, 1));
+    ev.res = res; ev.nPass = nPass; ev.score = score; ev.all = nPass === res.length;
+    return ev;
+  }
+  function SBc(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function copyQ(o) { var r = {}; for (var k in o) r[k] = o[k]; return r; }
+  var REQ = {
+    mpFull: function (t) { return { k: "풀해상도", t: t, ge: true, log: true, u: "MP", v: function (e) { return (e.m.nx * e.m.ny) / 1e6; } }; },
+    mpOut: function (t) { return { k: "출력 해상도", t: t, ge: true, log: true, u: "MP", v: function (e) { return e.m.outMP; } }; },
+    lux10: function (t) { return { k: "SNR=10 조도", t: t, ge: false, log: true, u: "lux", v: function (e) { return isFinite(e.m.lux10) ? e.m.lux10 : 1e6; } }; },
+    dr: function (t) { return { k: "DR (T_j 기준)", t: t, ge: true, sc: 20, u: "dB", v: function (e) { return e.m.DR; } }; },
+    bump: function (t) { return { k: "카메라 범프", t: t, ge: false, sc: 2, u: "mm", v: function (e) { return e.ln.bump; } }; },
+    diag: function (t) { return { k: "센서 대각", t: t, ge: false, log: true, u: "mm", v: function (e) { return e.m.D; } }; },
+    cra: function (t) { return { k: "가장자리 CRA", t: t, ge: false, sc: 10, u: "°", v: function (e) { return e.ln.cra; } }; },
+    pwr: function (t) { return { k: "센서 전력", t: t, ge: false, log: true, u: "mW", v: function (e) { return e.th.ok ? e.th.P.tot : 1e5; } }; },
+    rate: function (t) { return { k: "데이터율", t: t, ge: false, log: true, u: "Gbps", v: function (e) { return e.m.rate; } }; },
+    tj: function (t) { return { k: "접합 온도 T_j", t: t, ge: false, sc: 20, u: "°C", v: function (e) { return e.th.T; } }; },
+    mtf: function (t) { return { k: "나이퀴스트 회절 MTF", t: t, ge: true, sc: 0.3, u: "", v: function (e) { return e.m.mtfNyq; } }; },
+    snr: function (t) { return { k: "장면 SNR", t: t, ge: true, sc: 10, u: "dB", v: function (e) { return e.m.cur.db; } }; },
+    cost: function (t) { return { k: "양품당 다이 원가", t: t, ge: false, log: true, u: "$", v: function (e) { return e.dc.cost; } }; },
+    gs: function () { return { k: "글로벌 셔터", t: 1, bool: true, u: "", v: function (e) { return e.x.gs ? 1 : 0; } }; },
+  };
+  var MISSIONS = {
+    phone: { name: "스마트폰 메인", aspect: "4:3", fov: 84, lux: 100, texp: 1 / 30, fps: 30, tamb: 40, isp: "remosaic", pmax: 700, cmax: 12,
+      start: { pitch: 1.0, mp: 50, cfa: "quad", bin: true, hdr: "none", bits: 12, fnum: 1.8, gs: false, fwcd: 5000, r: 1.2 },
+      req: [REQ.mpFull(48), REQ.lux10(8), REQ.dr(80), REQ.bump(3.5), REQ.pwr(700), REQ.rate(18), REQ.cost(12)],
+      why: "48 MP 이상 고화소, 밤 장면(2 lux)에서 SNR 10, DCG급 DR, 8 mm 폰에 범프 3.5 mm 이하." },
+    uw: { name: "초광각", aspect: "4:3", fov: 120, lux: 100, texp: 1 / 30, fps: 30, tamb: 40, isp: "remosaic", pmax: 450, cmax: 8,
+      start: { pitch: 0.7, mp: 50, cfa: "quad", bin: true, hdr: "none", bits: 10, fnum: 2.2, gs: false, fwcd: 5000, r: 1.2 },
+      req: [REQ.mpOut(12), REQ.lux10(10), REQ.dr(68), REQ.cra(36), REQ.bump(1.5), REQ.pwr(450), REQ.cost(8)],
+      why: "120° 화각. 렌즈가 짧아 범프는 쉽지만 가장자리 CRA가 커진다. 원가 압박이 가장 크다." },
+    auto: { name: "차량 8 MP", aspect: "16:9", fov: 60, lux: 10, texp: 1 / 30, fps: 30, tamb: 85, isp: "none", pmax: 800, cmax: 20,
+      start: { pitch: 2.1, mp: 8.3, cfa: "bayer", bin: false, hdr: "dcg", bits: 12, fnum: 1.6, gs: false, fwcd: 5000, r: 1.2 },
+      req: [REQ.mpOut(8), REQ.dr(110), REQ.lux10(5), REQ.tj(110), REQ.mtf(0.35), REQ.rate(12), REQ.diag(16)],
+      why: "85 °C 하우징 안에서 120 dB DR(터널 출구·LED), 11 ms 노출로 3 lux에서 SNR 10, 접합 온도 110 °C 이하." },
+    drone: { name: "드론 4K60", aspect: "16:9", fov: 85, lux: 100, texp: 1 / 120, fps: 60, tamb: 45, isp: "full", pmax: 600, cmax: 10,
+      start: { pitch: 1.0, mp: 48, cfa: "quad", bin: false, hdr: "none", bits: 12, fnum: 2.8, gs: false, fwcd: 5000, r: 1.2 },
+      req: [REQ.mpOut(8.3), REQ.diag(13), REQ.dr(78), REQ.lux10(30), REQ.pwr(600), REQ.rate(12), REQ.cost(10)],
+      why: "4K(8.3 MP) 60 fps 출력, 짐벌 무게 때문에 대각 13 mm 이하, 배터리 때문에 600 mW 이하." },
+    sec: { name: "저조도 보안", aspect: "16:9", fov: 100, lux: 1, texp: 1 / 15, fps: 30, tamb: 50, isp: "full", pmax: 500, cmax: 8,
+      start: { pitch: 2.0, mp: 8.3, cfa: "bayer", bin: false, hdr: "none", bits: 12, fnum: 1.4, gs: false, fwcd: 5000, r: 1.2 },
+      req: [REQ.mpOut(4), REQ.lux10(3), REQ.dr(100), REQ.snr(10), REQ.pwr(500), REQ.cost(8)],
+      why: "0.1 lux 달빛 수준에서 SNR 10, 역광 현관을 담는 100 dB DR, 24시간 동작 전력 500 mW." },
+    gs: { name: "산업용 GS", aspect: "4:3", fov: 40, lux: 2000, texp: 0.001, fps: 120, tamb: 45, isp: "none", pmax: 1500, cmax: 25,
+      mono: true,
+      start: { pitch: 2.5, mp: 5, cfa: "mono", bin: false, hdr: "none", bits: 10, fnum: 2.8, gs: false, fwcd: 5000, r: 1.2 },
+      req: [REQ.gs(), REQ.mpOut(5), REQ.snr(36), REQ.dr(66), REQ.mtf(0.3), REQ.rate(20), REQ.pwr(1500)],
+      why: "컨베이어 위 물체를 1 ms 노출로 왜곡 없이(글로벌 셔터) 120 fps, 측정용 SNR 36 dB." },
+  };
+  var COLOR_REQ = { k: "컬러", t: 1, bool: true, u: "", v: function (e) { return e.x.cfa !== "mono" ? 1 : 0; } };
+  for (var mk in MISSIONS) if (!MISSIONS[mk].mono) MISSIONS[mk].req.push(COLOR_REQ);
+  var GRID = {
+    pitch: [0.6, 0.7, 0.8, 0.9, 1.0, 1.12, 1.25, 1.4, 1.6, 1.8, 2.0, 2.25, 2.5, 2.8, 3.2, 3.6, 4.0],
+    mp: [1, 2, 3, 4, 5, 6, 8.3, 10, 12.5, 16, 20, 25, 32, 40, 50, 64, 100, 200],
+    cfa: [["bayer", false], ["quad", false], ["quad", true], ["mono", false], ["mono", true]],
+    hdr: ["none", "dcg", "lofic"], bits: [10, 12], fnum: [1.4, 1.8, 2.4], r: [1.05, 1.2, 1.35, 1.5],
+  };
+  function gridSize() { return GRID.pitch.length * GRID.mp.length * GRID.cfa.length * GRID.hdr.length * GRID.bits.length * GRID.fnum.length * GRID.r.length; }
+  function gridPoint(i, base) {
+    var g = GRID, o = {}, n;
+    n = g.r.length; o.r = g.r[i % n]; i = (i / n) | 0;
+    n = g.fnum.length; o.fnum = g.fnum[i % n]; i = (i / n) | 0;
+    n = g.bits.length; o.bits = g.bits[i % n]; i = (i / n) | 0;
+    n = g.hdr.length; o.hdr = g.hdr[i % n]; i = (i / n) | 0;
+    n = g.cfa.length; o.cfa = g.cfa[i % n][0]; o.bin = g.cfa[i % n][1]; i = (i / n) | 0;
+    n = g.mp.length; o.mp = g.mp[i % n]; i = (i / n) | 0;
+    o.pitch = g.pitch[i]; o.gs = base.gs; o.fwcd = base.fwcd;
+    return o;
+  }
+  /* ---- 민감도 (토네이도) */
+  var TN_PARAMS = [["pitch", "픽셀 피치"], ["mp", "화소 수"], ["qe", "QE"], ["fwcd", "풀웰 밀도"], ["rn", "읽기 노이즈"], ["cg", "변환 이득"],
+    ["dark", "암전류"], ["fnum", "F-넘버"], ["texp", "노출 시간"], ["lux", "장면 조도"], ["fps", "프레임률"], ["bits", "ADC 비트 ±1"]];
+  var TN_KPI = {
+    snr: { name: "SNR @18 % 회색", u: "dB", db: true },
+    dr: { name: "다이내믹 레인지", u: "dB", db: true },
+    lux10: { name: "SNR=10 조도", u: "lux", db: false, lowGood: true },
+    pwr: { name: "센서 전력", u: "mW", db: false, lowGood: true },
+    cost: { name: "양품당 다이 원가", u: "$", db: false, lowGood: true },
+  };
+  function kpiOf(d, kpi) {
+    var m = model(d);
+    if (kpi === "snr") return m.cur.db;
+    if (kpi === "dr") return m.DR;
+    if (kpi === "lux10") return isFinite(m.lux10) ? m.lux10 : NaN;
+    if (kpi === "pwr") { var th = thermal(d, m, PQ_DEF); return th.ok ? th.P.tot : NaN; }
+    return dieCost(m, true).cost;
+  }
+  function perturb(d, key, f) {
+    var o = copyQ(d);
+    if (key === "bits") o.bits = Math.max(6, Math.min(18, d.bits + (f > 1 ? 1 : f < 1 ? -1 : 0)));
+    else if (key === "qe") o.qe = Math.min(1, d.qe * f);
+    else o[key] = d[key] * f;
+    return o;
+  }
+  function tornado(d, kpi, dl) {
+    var K0 = kpiOf(d, kpi), db = TN_KPI[kpi].db;
+    var rows = TN_PARAMS.map(function (pp) {
+      var lo = kpiOf(perturb(d, pp[0], 1 - dl), kpi), hi = kpiOf(perturb(d, pp[0], 1 + dl), kpi);
+      var dLo = db ? lo - K0 : (lo / K0 - 1) * 100, dHi = db ? hi - K0 : (hi / K0 - 1) * 100;
+      if (!isFinite(dLo)) dLo = 0; if (!isFinite(dHi)) dHi = 0;
+      var span = pp[0] === "bits" ? 2 * Math.LN2 : Math.log((1 + dl) / (1 - dl));
+      var el = db ? (hi - lo) / span * Math.LN10 / 20 : Math.log(hi / lo) / span; // dB 지표는 진폭비로 환산
+      if (!isFinite(el)) el = 0;
+      var asym = Math.abs(Math.abs(dHi) - Math.abs(dLo)) / Math.max(1e-9, Math.abs(dHi) + Math.abs(dLo));
+      return { key: pp[0], name: pp[1], dLo: dLo, dHi: dHi, el: el, asym: asym, rng: Math.abs(dHi - dLo) };
+    });
+    rows.sort(function (a, b) { return b.rng - a.rng; });
+    return { K0: K0, rows: rows };
+  }
+  function regimeOf(d) {
+    var m = model(d);
+    return (m.swingLim ? "S" : "P") + (m.cur.sat ? "x" : "o") + (isFinite(m.lux10) ? "f" : "i");
+  }
+  /*ENGINE2-END*/
 
   var PRESET_NAMES = { phone: "플래그십 폰 메인", uw: "초광각 폰", ff: "풀프레임 미러리스", adas: "자동차 ADAS", cctv: "보안 CCTV", sci: "과학용 sCMOS" };
   var AXES = ["해상력", "저조도", "DR", "속도", "소형화"];
@@ -837,6 +1405,448 @@
     ctx.fillStyle = P.accent; ctx.fillText("■ 양품", 8, 36);
   }, { aspect: 1, minHeight: 260, maxHeight: 420 });
   renderWafer();
+
+  /* ================================================================ 전력 · 자기 발열 */
+  function presetSeg(id, cb) { return SB.seg(id, function (v) { cb(copy(PRESETS[v]), v); }); }
+  var pwD = copy(PRESETS.phone);
+  var pwSrc = presetSeg("pw-src", function (d) { pwD = d; PW.fps.set(d.fps); renderPw(); });
+  var pwOn = function () { renderPw(); };
+  var PW = {
+    fps: SB.range("pw-fps", function (v) { return v + " fps"; }, pwOn),
+    ibias: SB.range("pw-ibias", function (v) { return v.toFixed(1) + " µA"; }, pwOn),
+    fomW: SB.range("pw-fomw", function (v) { return v + " fJ/step"; }, pwOn),
+    fomS: SB.range("pw-foms", function (v) { return v + " dB"; }, pwOn),
+    mipi: SB.range("pw-mipi", function (v) { return v.toFixed(1) + " pJ/bit"; }, pwOn),
+    theta: SB.range("pw-theta", function (v) { return v + " °C/W"; }, pwOn),
+    tamb: SB.range("pw-tamb", function (v) { return v + " °C"; }, pwOn),
+    ea: SB.range("pw-ea", function (v) { return v.toFixed(2) + " eV"; }, pwOn),
+  };
+  var pwType = SB.seg("pw-fomtype", pwOn), pwIsp = SB.seg("pw-isp", pwOn);
+  var pwDram = document.getElementById("pw-dram");
+  pwDram.addEventListener("change", pwOn);
+  document.getElementById("pw-fromA").addEventListener("click", function () { pwD = copy(designs.A); PW.fps.set(pwD.fps); renderPw(); });
+  var pwS = null;
+  var PW_PARTS = [["pix", "픽셀·컬럼 바이어스"], ["adc", "컬럼 ADC"], ["fix", "램프·PLL·타이밍"], ["mipi", "MIPI PHY"], ["isp", "온칩 ISP"], ["dram", "DRAM 층"], ["leak", "디지털 누설"]];
+  function pwQ() {
+    var q = copyQ(PQ_DEF);
+    q.ibias = PW.ibias(); q.fomType = pwType(); q.fomW = PW.fomW(); q.fomS = PW.fomS(); q.mipi = PW.mipi();
+    q.isp = pwIsp(); q.dram = pwDram.checked; q.theta = PW.theta(); q.tamb = PW.tamb(); q.ea = PW.ea();
+    return q;
+  }
+  function renderPw() {
+    var d = copy(pwD); d.fps = PW.fps();
+    var m = model(d), q = pwQ(), th = thermal(d, m, q), P0 = powerParts(d, m, q, q.tamb);
+    document.getElementById("pw-fomw-wrap").classList.toggle("pw-off", q.fomType !== "walden");
+    document.getElementById("pw-foms-wrap").classList.toggle("pw-off", q.fomType === "walden");
+    // 과도 응답: C dT/dt = P(T) − (T − Ta)/θ
+    var C = q.tau / q.theta, T = q.tamb, tr = [[0, T]], dt = 0.25, tEnd = 6 * q.tau, run = -1;
+    for (var t = dt; t <= tEnd + 1e-9; t += dt) {
+      T += (dt * (powerParts(d, m, q, T).tot / 1000 - (T - q.tamb) / q.theta)) / C;
+      if (T > 200) { T = 200; if (run < 0) run = t; }
+      if (Math.round(t / dt) % 4 === 0) tr.push([t, T]);
+    }
+    var Tj = th.ok ? th.T : NaN;
+    var dkJ = th.ok ? darkAt(d.dark, q.ea, Tj) : NaN, dk25 = darkAt(d.dark, q.ea, 25);
+    var dJ = copy(d), d25 = copy(d); dJ.dark = isFinite(dkJ) ? dkJ : d.dark; d25.dark = dk25;
+    var drJ = model(dJ).DR, dr25 = model(d25).DR;
+    var dbl = (KB * Math.pow(333.15, 2) * Math.LN2) / q.ea;
+    pwS = { d: d, m: m, q: q, th: th, P0: P0, tr: tr, run: run, tEnd: tEnd };
+    var Pt = th.P.tot;
+    SB.stat("o-pw-tot", th.ok ? fmt(Pt, 3) + "<small>mW</small>" : "열 폭주");
+    SB.stat("o-pw-npx", th.ok ? fmt((Pt * 1e-3) / (m.nx * m.ny * d.fps) * 1e9, 3) + "<small>nJ/화소</small>" : "—");
+    SB.stat("o-pw-adc", th.ok ? Math.round((100 * th.P.adc) / Pt) + "<small>% (" + fmt(th.P.adc, 3) + " mW)</small>" : "—");
+    SB.stat("o-pw-tj", th.ok ? Tj.toFixed(1) + "<small>°C (ΔT " + (Tj - q.tamb).toFixed(1) + ")</small>" : "> 200 °C");
+    SB.stat("o-pw-loop", th.ok ? th.loop.toFixed(3) + (th.loop > 0.5 ? "<small>위험</small>" : "<small>안정</small>") : "≥ 1");
+    SB.stat("o-pw-dark", th.ok ? fmt(dkJ, 3) + "<small>e⁻/s (25 °C: " + fmt(dk25, 2) + ")</small>" : "—");
+    SB.stat("o-pw-dbl", dbl.toFixed(1) + "<small>°C마다 2배</small>");
+    SB.stat("o-pw-dr", th.ok ? drJ.toFixed(1) + "<small>dB (25 °C: " + dr25.toFixed(1) + ")</small>" : "—");
+    cvPwBar.redraw(); cvPwT.redraw();
+  }
+  var cvPwBar = SB.canvas("#cv-pw-bar", function (ctx, w, h) {
+    if (!pwS) return;
+    var P = SB.palette(), cols = [P.accent, P.accent2, P.faint, P.warn, P.ok, P.blue, P.bad];
+    var bars = [["냉간 시작 (" + pwS.q.tamb + " °C)", pwS.P0], [pwS.th.ok ? "정상 상태 (" + pwS.th.T.toFixed(0) + " °C)" : "정상 상태: 수렴 없음", pwS.th.P]];
+    var maxP = Math.max(bars[0][1].tot, pwS.th.ok ? bars[1][1].tot : bars[0][1].tot * 2) * 1.08;
+    var x0 = 12, bw = w - 24, bh = 26;
+    ctx.font = "12px " + SB.color("mono"); ctx.textBaseline = "bottom"; ctx.textAlign = "left";
+    bars.forEach(function (b, i) {
+      var y = 50 + i * 58, x = x0;
+      ctx.fillStyle = P.dim; ctx.fillText(b[0] + " · " + (pwS.th.ok || i === 0 ? fmt(b[1].tot, 3) + " mW" : "∞"), x0, y - 3);
+      PW_PARTS.forEach(function (pp, k) {
+        var v = Math.min(b[1][pp[0]], maxP), ww = (v / maxP) * bw;
+        if (!pwS.th.ok && i === 1) ww = (b[1][pp[0]] / Math.max(1, b[1].tot)) * bw;
+        ctx.fillStyle = cols[k]; ctx.globalAlpha = 0.8; ctx.fillRect(x, y, Math.max(0, ww - 1), bh); ctx.globalAlpha = 1;
+        x += ww;
+      });
+    });
+    // 범례 + 항목 값
+    var ly = 176, colW = w > 420 ? (w - 24) / 2 : w - 24;
+    ctx.textBaseline = "middle";
+    PW_PARTS.forEach(function (pp, k) {
+      var cx = x0 + (w > 420 ? (k % 2) * colW : 0), cy = ly + (w > 420 ? Math.floor(k / 2) : k) * 19;
+      ctx.fillStyle = cols[k]; ctx.fillRect(cx, cy - 6, 12, 12);
+      ctx.fillStyle = P.text; ctx.fillText(pp[1], cx + 18, cy);
+      ctx.fillStyle = P.dim; ctx.textAlign = "right";
+      ctx.fillText(pwS.th.ok ? fmt(pwS.th.P[pp[0]], 3) + " mW" : "—", cx + colW - 6, cy);
+      ctx.textAlign = "left";
+    });
+  }, { aspect: 0.7, minHeight: 320, maxHeight: 340 });
+  var cvPwT = SB.canvas("#cv-pw-t", function (ctx, w, h) {
+    if (!pwS) return;
+    var P = SB.palette(), q = pwS.q, yMax = Math.max(q.tamb + 20, pwS.th.ok ? pwS.th.T + 10 : 210);
+    var hl = [{ y: q.tamb, color: P.faint, label: "T_a" }];
+    if (pwS.th.ok) hl.push({ y: pwS.th.T, color: P.accent, label: "T_j " + pwS.th.T.toFixed(1) + " °C" });
+    SB.chart(ctx, { x: 58, y: 30, w: w - 76, h: h - 76 }, {
+      x: [0, pwS.tEnd], y: [Math.min(q.tamb - 5, 0), yMax], xLabel: "시간 (s)", yLabel: "접합 온도 (°C)",
+      series: [{ data: pwS.tr, color: pwS.th.ok ? P.accent : P.bad, width: 2.2 }],
+      hlines: hl, vlines: [{ x: q.tau, color: P.faint, label: "τ" }].concat(pwS.run > 0 ? [{ x: pwS.run, color: P.bad, label: "200 °C 돌파" }] : []),
+    });
+  }, { aspect: 0.7, minHeight: 300, maxHeight: 330 });
+  renderPw();
+
+  /* ================================================================ 광학 포맷 · 모듈 높이 */
+  var mdD = copy(PRESETS.phone), mdS = null;
+  var MD_FOV = { phone: 84, uw: 120, ff: 63, adas: 60, cctv: 100, sci: 40 };
+  var mdOn = function () { renderMd(); };
+  var MD = {
+    fov: SB.range("md-fov", function (v) { return v + "°"; }, mdOn),
+    r: SB.range("md-r", function (v) { return v.toFixed(2); }, mdOn),
+    fnum: SB.range("md-fnum", function (v) { return "F/" + v.toFixed(1); }, mdOn),
+    thick: SB.range("md-thick", function (v) { return v.toFixed(1) + " mm"; }, mdOn),
+  };
+  presetSeg("md-src", function (d, k) { mdD = d; MD.fov.set(MD_FOV[k]); MD.fnum.set(SB.clamp(d.fnum, 1.4, 4)); renderMd(); });
+  document.getElementById("md-fromA").addEventListener("click", function () { mdD = copy(designs.A); MD.fnum.set(SB.clamp(mdD.fnum, 1.4, 4)); renderMd(); });
+  function renderMd() {
+    var m = model(mdD), L = lensModel(m.D, MD.fov(), MD.r(), MD.fnum(), MD.thick());
+    var sw = [], sb = [];
+    for (var r = 0.85; r <= 1.6001; r += 0.01) { var Ls = lensModel(m.D, MD.fov(), r, MD.fnum(), MD.thick()); sw.push([r, Ls.cra]); sb.push([r, Ls.bump]); }
+    mdS = { m: m, L: L, sw: sw, sb: sb, r: MD.r(), thick: MD.thick() };
+    SB.stat("o-md-f", L.f.toFixed(2) + "<small>mm (35 mm 환산 " + Math.round(L.feq) + ")</small>");
+    SB.stat("o-md-ttl", L.TTL.toFixed(2) + "<small>mm</small>");
+    SB.stat("o-md-h", L.H.toFixed(2) + "<small>mm</small>");
+    SB.stat("o-md-bump", L.bump.toFixed(2) + "<small>mm</small>");
+    SB.stat("o-md-cra", L.cra.toFixed(1) + "<small>° (반화각 " + (MD.fov() / 2).toFixed(0) + "°)</small>");
+    SB.stat("o-md-ri", Math.round(L.ri * 100) + "<small>% (cos⁴)</small>");
+    SB.stat("o-md-shift", L.shift.toFixed(2) + "<small>µm</small>");
+    SB.stat("o-md-pw", "f₁ " + L.f1.toFixed(1) + " / f₂ " + (Math.abs(L.P2) < 1e-4 ? "∞" : (1 / L.P2).toFixed(1)) + "<small>mm</small>");
+    SB.stat("o-md-l2", L.L2.toFixed(1) + "<small>mm (EPD " + L.epd.toFixed(1) + ")</small>");
+    cvMdRay.redraw(); cvMdSw.redraw();
+  }
+  var cvMdRay = SB.canvas("#cv-md-ray", function (ctx, w, h) {
+    if (!mdS) return;
+    var P = SB.palette(), L = mdS.L, D = mdS.m.D, av = mdS.thick - 1.0;
+    var top = Math.max(L.H, mdS.thick) + 1.2, half = Math.max(D / 2, L.L2 / 2) * 1.25 + 1;
+    var sc = Math.min((h - 30) / top, (w - 20) / (2 * half)), cx = w / 2, base = h - 14;
+    var Y = function (z) { return base - z * sc; }, X = function (x) { return cx + x * sc; };
+    var zS = 1.0, z2 = zS + L.b, z1 = z2 + L.ds; // 센서 면 z=1.0 mm(기판 위)
+    // 폰 몸체
+    ctx.fillStyle = P.surface; ctx.fillRect(0, Y(mdS.thick), w, (mdS.thick) * sc);
+    ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(0.5, Y(mdS.thick), w - 1, mdS.thick * sc);
+    ctx.fillStyle = P.faint; ctx.fillRect(0, Y(1.0), w, 1.0 * sc * 0.6);
+    ctx.font = "11px " + SB.color("mono"); ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillStyle = P.dim; ctx.fillText("디스플레이 쪽", 6, Y(1.0) + 2);
+    ctx.textBaseline = "bottom"; ctx.fillText("폰 뒷면 " + mdS.thick.toFixed(1) + " mm", 6, Y(mdS.thick) - 2);
+    // 범프
+    if (L.bump > 0) {
+      var bw = Math.max(L.L2, L.L1) / 2 + 1.0;
+      ctx.fillStyle = P.bad; ctx.globalAlpha = 0.15; ctx.fillRect(X(-bw), Y(L.H), 2 * bw * sc, (L.H - mdS.thick) * sc); ctx.globalAlpha = 1;
+      ctx.strokeStyle = P.bad; ctx.strokeRect(X(-bw), Y(L.H), 2 * bw * sc, (L.H - mdS.thick) * sc);
+      ctx.fillStyle = P.bad; ctx.textAlign = "left"; ctx.fillText("범프 " + L.bump.toFixed(2) + " mm", X(bw) + 4, Y(L.H) + 14);
+    }
+    // 센서
+    ctx.fillStyle = P.accent; ctx.fillRect(X(-D / 2), Y(zS), D * sc, 3);
+    // 렌즈 (두 박막 렌즈)
+    var lens = function (z, dia, pw, name) {
+      ctx.strokeStyle = P.text; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(X(-dia / 2), Y(z)); ctx.lineTo(X(dia / 2), Y(z)); ctx.stroke();
+      ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText(name + (Math.abs(pw) < 1e-4 ? " (0)" : pw > 0 ? " (+)" : " (−)"), X(dia / 2) + 5, Y(z));
+    };
+    lens(z1, Math.max(L.L1, 1), 1, "L1"); lens(z2, L.L2, L.P2, "L2");
+    // 광선: 축상 주변 광선 + 가장자리 주광선 (근축 추적 결과)
+    var ray = function (pts, col, wd) { ctx.strokeStyle = col; ctx.lineWidth = wd; ctx.beginPath(); pts.forEach(function (p, i) { i ? ctx.lineTo(X(p[0]), Y(p[1])) : ctx.moveTo(X(p[0]), Y(p[1])); }); ctx.stroke(); };
+    var zin = top - 0.2;
+    [-1, 1].forEach(function (s) {
+      ray([[s * L.my1, zin], [s * L.my1, z1], [s * L.my2, z2], [0, zS]], SB.wl2rgb(550, 0.9), 1.4);
+      ray([[-s * (zin - z1) * L.u0, zin], [0, z1], [s * L.cy2, z2], [s * L.cyi, zS]], P.warn, 1.6);
+    });
+    // CRA 표시
+    ctx.fillStyle = P.warn; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+    ctx.fillText("CRA " + L.cra.toFixed(1) + "°", X(L.cyi) + 4 > w - 80 ? w - 84 : X(L.cyi) + 4, Y(zS) - 4);
+    ctx.fillStyle = P.dim; ctx.textAlign = "right"; ctx.textBaseline = "top";
+    ctx.fillText("TTL " + L.TTL.toFixed(2) + " mm · 센서 대각 " + D.toFixed(1) + " mm", w - 6, 4);
+  }, { aspect: 0.62, minHeight: 260, maxHeight: 360 });
+  var cvMdSw = SB.canvas("#cv-md-sw", function (ctx, w, h) {
+    if (!mdS) return;
+    var P = SB.palette(), hh = (h - 10) / 2;
+    SB.chart(ctx, { x: 52, y: 26, w: w - 70, h: hh - 52 }, {
+      x: [0.85, 1.6], y: [0, 70], yLabel: "CRA (°)", series: [{ data: mdS.sw, color: P.warn, width: 2 }],
+      vlines: [{ x: mdS.r, color: P.accent }], hlines: [{ y: 35, color: P.faint, label: "일반 마이크로렌즈 시프트 한계 ~35°" }],
+    });
+    var bmax = Math.max(1, mdS.sb[mdS.sb.length - 1][1] * 1.1);
+    SB.chart(ctx, { x: 52, y: hh + 14, w: w - 70, h: hh - 44 }, {
+      x: [0.85, 1.6], y: [0, bmax], xLabel: "TTL / f", yLabel: "범프 (mm)", series: [{ data: mdS.sb, color: P.bad, width: 2.2 }],
+      vlines: [{ x: mdS.r, color: P.accent, label: "현재" }],
+    });
+  }, { aspect: 0.9, minHeight: 300, maxHeight: 380 });
+  renderMd();
+
+  /* ================================================================ 설계 미션 */
+  var REASON = {
+    "풀해상도": "화소 수를 늘린다(같은 포맷이면 피치를 줄여야 한다).",
+    "출력 해상도": "출력 MP = 화소 수 ÷ 비닝 배수². 비닝을 끄거나 화소를 늘린다.",
+    "SNR=10 조도": "광자가 부족하다. 픽셀(또는 비닝 후 픽셀)을 키우거나 F-넘버를 낮춘다.",
+    "DR (T_j 기준)": "FWC/노이즈 바닥 비가 작다. HDR(DCG·LOFIC)이나 큰 픽셀이 필요하다.",
+    "카메라 범프": "포맷 대각이 크거나 TTL/f가 크다. 포맷을 줄이거나 TTL/f를 낮춘다(대신 CRA ↑).",
+    "센서 대각": "렌즈·짐벌이 커진다. 피치나 화소 수를 줄인다.",
+    "가장자리 CRA": "TTL/f를 키워 뒤 렌즈에 양의 파워를 준다(대신 모듈이 두꺼워진다).",
+    "센서 전력": "ADC 변환 수 × 2^b가 대부분이다. 비트·화소 수를 줄인다.",
+    "데이터율": "출력 화소 × 비트 × fps를 줄인다(비닝 출력, 10-bit).",
+    "접합 온도 T_j": "전력 × 열저항이 크다. 전력을 줄인다.",
+    "나이퀴스트 회절 MTF": "회절이 나이퀴스트를 덮는다. F-넘버를 낮추거나 출력 픽셀을 키운다.",
+    "장면 SNR": "장면 조도에서 전자가 부족하다. 픽셀·F-넘버·비닝을 본다.",
+    "양품당 다이 원가": "다이 면적이 크다. 포맷을 줄인다.",
+    "글로벌 셔터": "롤링 셔터는 움직이는 물체를 기울게 찍는다. GS 픽셀을 켠다(FWC·QE·노이즈 손해).",
+    "컬러": "모노 센서는 색을 찍지 못한다.",
+  };
+  var msKey = "phone", msX = copy(MISSIONS.phone.start), msEv = null, msSearch = null, msBusy = false, msSync = false;
+  function msOn() { if (msSync) return; readMs(); renderMs(); }
+  var MSC = {
+    pitch: SB.range("ms-pitch", function (v) { return v.toFixed(2) + " µm"; }, msOn),
+    mp: logRange("ms-mp", 1, 200, function (v) { return fmt(v, 3) + " MP"; }, msOn),
+    fnum: SB.range("ms-fnum", function (v) { return "F/" + v.toFixed(1); }, msOn),
+    r: SB.range("ms-r", function (v) { return v.toFixed(2); }, msOn),
+  };
+  var MSS = { cfa: SB.seg("ms-cfa", msOn), hdr: SB.seg("ms-hdr", msOn), bits: SB.seg("ms-bits", msOn) };
+  var msBin = document.getElementById("ms-bin"), msGs = document.getElementById("ms-gs");
+  msBin.addEventListener("change", msOn); msGs.addEventListener("change", msOn);
+  function readMs() {
+    msX.pitch = MSC.pitch(); msX.mp = MSC.mp.get(); msX.fnum = MSC.fnum(); msX.r = MSC.r();
+    msX.cfa = MSS.cfa(); msX.hdr = MSS.hdr(); msX.bits = Number(MSS.bits()); msX.bin = msBin.checked; msX.gs = msGs.checked;
+  }
+  function syncMs() {
+    msSync = true;
+    MSC.pitch.set(msX.pitch); MSC.mp.set(msX.mp); MSC.fnum.set(msX.fnum); MSC.r.set(msX.r);
+    MSS.cfa.set(msX.cfa, false); MSS.hdr.set(msX.hdr, false); MSS.bits.set(String(msX.bits), false);
+    msBin.checked = !!msX.bin; msGs.checked = !!msX.gs;
+    msSync = false;
+  }
+  SB.seg("ms-mission", function (v) { msKey = v; msX = copy(MISSIONS[v].start); msSearch = null; syncMs(); renderMs(); });
+  document.getElementById("ms-reset").addEventListener("click", function () { msX = copy(MISSIONS[msKey].start); syncMs(); renderMs(); });
+  document.getElementById("ms-apply").addEventListener("click", function () {
+    if (!msSearch || msSearch.best < 0) return;
+    msX = gridPoint(msSearch.best, msSearch.base); syncMs(); renderMs();
+  });
+  document.getElementById("ms-run").addEventListener("click", function () {
+    if (msBusy) return;
+    var mi = MISSIONS[msKey], base = copy(msX), N = gridSize(), i = 0, key = msKey;
+    base.gs = key === "gs";
+    msSearch = { key: key, base: base, N: N, done: 0, cost: new Float32Array(N), score: new Float32Array(N), all: new Uint8Array(N), skip: new Uint8Array(N), best: -1, nAll: 0, nEval: 0 };
+    msBusy = true;
+    (function chunk() {
+      if (msKey !== key) { msBusy = false; return; }
+      var t0 = performance.now();
+      while (i < N && performance.now() - t0 < 12) {
+        var x = gridPoint(i, base);
+        if (x.cfa === "mono" && !mi.mono) { msSearch.skip[i] = 1; i++; continue; }
+        var e = evalMission(x, mi);
+        msSearch.cost[i] = e.dc.cost; msSearch.score[i] = e.score; msSearch.all[i] = e.all ? 1 : 0; msSearch.nEval++;
+        if (e.all) msSearch.nAll++;
+        if (msSearch.best < 0 || e.score > msSearch.score[msSearch.best]) msSearch.best = i;
+        i++;
+      }
+      msSearch.done = i;
+      renderMsStats(); cvMs.redraw();
+      if (i < N) setTimeout(chunk, 0); else { msBusy = false; cvMsR.redraw(); }
+    })();
+  });
+  function fmtReq(v, r) {
+    if (r.bool) return v ? "예" : "아니오";
+    if (r.u === "$") return isFinite(v) ? "$" + fmt(v, 3) : "—";
+    if (r.k === "센서 전력" && v >= 1e5) return "열 폭주";
+    if (r.k === "SNR=10 조도" && v >= 1e6) return "도달 불가";
+    return fmt(v, 3) + (r.u ? " " + r.u : "");
+  }
+  function renderMs() {
+    var mi = MISSIONS[msKey];
+    msEv = evalMission(msX, mi);
+    document.getElementById("ms-why").textContent = mi.name + ": " + mi.why + " (노출 " + (mi.texp >= 1 ? mi.texp + " s" : "1/" + Math.round(1 / mi.texp) + " s") + ", " + mi.fps + " fps, 주변 " + mi.tamb + " °C, 화각 " + mi.fov + "°)";
+    document.getElementById("ms-body").innerHTML = msEv.res.map(function (o) {
+      var r = o.r, tgt = r.bool ? "필수" : (r.ge ? "≥ " : "≤ ") + (r.u === "$" ? "$" + r.t : r.t + (r.u ? " " + r.u : ""));
+      var why = o.pass ? (r.bool ? "충족" : "여유 " + (r.log ? Math.round(Math.abs(Math.pow(10, o.mu * 0.5) - 1) * 100) + " %" : fmt(Math.abs(o.mu * r.sc), 2) + (r.u ? " " + r.u : ""))) : REASON[r.k];
+      return "<tr class='" + (o.pass ? "ok" : "ng") + "'><td>" + (o.pass ? "✓" : "✗") + "</td><td>" + r.k + "</td><td class='val'>" + fmtReq(o.v, r) + "</td><td class='val'>" + tgt + "</td><td>" + why + "</td></tr>";
+    }).join("");
+    renderMsStats(); cvMs.redraw(); cvMsR.redraw();
+  }
+  function renderMsStats() {
+    var e = msEv;
+    SB.stat("o-ms-score", e.score.toFixed(1) + "<small>/ 100</small>");
+    SB.stat("o-ms-pass", e.nPass + " / " + e.res.length);
+    SB.stat("o-ms-tj", e.th.ok ? e.th.T.toFixed(1) + "<small>°C · " + fmt(e.th.P.tot, 3) + " mW</small>" : "열 폭주");
+    SB.stat("o-ms-cost", isFinite(e.dc.cost) ? "$" + fmt(e.dc.cost, 3) + "<small>" + e.m.D.toFixed(1) + " mm 대각</small>" : "—");
+    var s = msSearch;
+    SB.stat("o-ms-search", s ? Math.round((100 * s.done) / s.N) + "<small>% · " + fmtN(s.nEval) + "개 평가</small>" : "대기");
+    SB.stat("o-ms-feas", s ? fmtN(s.nAll) + "<small>개 전부 통과</small>" : "—");
+    SB.stat("o-ms-best", s && s.best >= 0 ? s.score[s.best].toFixed(1) + "<small>점</small>" : "—");
+  }
+  var cvMs = SB.canvas("#cv-ms", function (ctx, w, h) {
+    if (!msEv) return;
+    var P = SB.palette(), s = msSearch && msSearch.key === msKey ? msSearch : null;
+    var box = { x: 50, y: 28, w: w - 66, h: h - 72 }, xr = [0.5, 100];
+    var c = SB.chart(ctx, box, { x: xr, y: [0, 100], logX: true, xLabel: "", xTicks: [0.5, 1, 2, 5, 10, 20, 50, 100], yLabel: "점수", xFmt: function (v) { return "$" + v; } });
+    var X = c.X, Yp = c.Y, cl = function (v) { return SB.clamp(v, xr[0], xr[1]); };
+    if (s) {
+      for (var i = 0; i < s.done; i += 1) {
+        if (s.skip[i]) continue;
+        ctx.fillStyle = s.all[i] ? P.ok : P.faint; ctx.globalAlpha = s.all[i] ? 0.8 : 0.18;
+        var ps = s.all[i] ? 5 : 2; ctx.fillRect(X(cl(s.cost[i])) - ps / 2, Yp(s.score[i]) - ps / 2, ps, ps);
+      }
+      ctx.globalAlpha = 1;
+      // 파레토 전선: 원가 오름차순에서 점수 최댓값의 계단
+      var idx = []; for (var j = 0; j < s.done; j++) if (!s.skip[j] && isFinite(s.cost[j])) idx.push(j);
+      idx.sort(function (a, b) { return s.cost[a] - s.cost[b]; });
+      var bestS = -1; ctx.strokeStyle = P.accent2; ctx.lineWidth = 1.8; ctx.beginPath(); var started = false;
+      idx.forEach(function (k) {
+        if (s.score[k] > bestS + 1e-6) {
+          var px = X(cl(s.cost[k])), py = Yp(s.score[k]);
+          if (!started) { ctx.moveTo(px, py); started = true; } else { ctx.lineTo(px, Yp(bestS)); ctx.lineTo(px, py); }
+          bestS = s.score[k];
+        }
+      });
+      ctx.stroke();
+      if (s.best >= 0) {
+        var bx = X(cl(s.cost[s.best])), by = Yp(s.score[s.best]);
+        ctx.fillStyle = P.accent2; ctx.beginPath();
+        for (var a = 0; a < 10; a++) { var rr = a % 2 ? 3 : 8, an = -Math.PI / 2 + (a * Math.PI) / 5; ctx[a ? "lineTo" : "moveTo"](bx + rr * Math.cos(an), by + rr * Math.sin(an)); }
+        ctx.fill();
+      }
+    } else {
+      ctx.fillStyle = P.dim; ctx.font = "12px " + SB.color("mono"); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("‘자동 탐색’: 격자 " + fmtN(gridSize()) + "개 설계를 평가", box.x + box.w / 2, box.y + box.h / 2);
+    }
+    if (isFinite(msEv.dc.cost)) {
+      ctx.strokeStyle = P.accent; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(X(cl(msEv.dc.cost)), Yp(msEv.score), 7, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.font = "11px " + SB.color("mono"); ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillStyle = P.accent; ctx.fillText("○ 현재", box.x + 6, box.y + box.h + 22);
+    ctx.fillStyle = P.accent2; ctx.fillText("★ 최고점 ─ 파레토", box.x + 56, box.y + box.h + 22);
+    ctx.fillStyle = P.ok; ctx.textAlign = "right"; ctx.fillText("■ 전부 통과", box.x + box.w, box.y + box.h + 22);
+  }, { aspect: 0.75, minHeight: 280, maxHeight: 360 });
+  var cvMsR = SB.canvas("#cv-ms-r", function (ctx, w, h) {
+    if (!msEv) return;
+    var P = SB.palette(), res = msEv.res, n = res.length, cx = w / 2, cy = h / 2 + 4, R = Math.min(w, h) / 2 - 46;
+    var ang = function (i) { return -Math.PI / 2 + (i * 2 * Math.PI) / n; };
+    var rad = function (o) { return o.r.bool ? (o.pass ? 0.75 : 0.15) : SB.clamp(0.5 + 0.25 * o.mu, 0.05, 1); };
+    ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+    [0.25, 0.5, 0.75, 1].forEach(function (f) {
+      ctx.beginPath(); for (var i = 0; i <= n; i++) { var a = ang(i % n); ctx[i ? "lineTo" : "moveTo"](cx + R * f * Math.cos(a), cy + R * f * Math.sin(a)); }
+      if (f === 0.5) { ctx.strokeStyle = P.warn; ctx.setLineDash([4, 3]); }
+      ctx.stroke(); ctx.setLineDash([]); ctx.strokeStyle = P.grid;
+    });
+    var poly = function (rs, col) {
+      ctx.beginPath(); rs.forEach(function (o, i) { var r = R * rad(o), a = ang(i); ctx[i ? "lineTo" : "moveTo"](cx + r * Math.cos(a), cy + r * Math.sin(a)); });
+      ctx.closePath(); ctx.globalAlpha = 0.18; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+    };
+    if (msSearch && msSearch.key === msKey && msSearch.best >= 0 && !msBusy) poly(evalMission(gridPoint(msSearch.best, msSearch.base), MISSIONS[msKey]).res, P.accent2);
+    poly(res, P.accent);
+    ctx.font = "11px " + SB.color("mono"); ctx.textBaseline = "middle";
+    res.forEach(function (o, i) {
+      var a = ang(i), x = cx + (R + 10) * Math.cos(a), y = cy + (R + 10) * Math.sin(a);
+      ctx.textAlign = Math.abs(Math.cos(a)) < 0.2 ? "center" : Math.cos(a) > 0 ? "left" : "right";
+      ctx.fillStyle = o.pass ? P.text : P.bad; ctx.fillText(o.r.k.replace(" (T_j 기준)", "").replace("양품당 다이 ", "").replace("나이퀴스트 회절 ", ""), x, y);
+    });
+    ctx.fillStyle = P.warn; ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText("--- 목표선 (안쪽 = 미달)", 8, h - 4);
+  }, { aspect: 0.75, minHeight: 280, maxHeight: 360 });
+  syncMs(); renderMs();
+
+  /* ================================================================ 민감도 토네이도 */
+  var tnD = copy(PRESETS.phone), tnS = null, tnPick = null;
+  presetSeg("tn-src", function (d) { tnD = d; tnPick = null; renderTn(); });
+  var tnKpi = SB.seg("tn-kpi", function () { tnPick = null; renderTn(); });
+  var tnDl = SB.range("tn-dl", function (v) { return "±" + v + " %"; }, function () { renderTn(); });
+  function sweepOf(d, key, kpi) {
+    var pts = [], bounds = [], prev = null, lo = key === "bits" ? -4 : Math.log(0.25), hi = key === "bits" ? 4 : Math.log(4), n = key === "bits" ? 8 : 80;
+    for (var i = 0; i <= n; i++) {
+      var s = lo + ((hi - lo) * i) / n, o;
+      if (key === "bits") { o = copyQ(d); o.bits = d.bits + s; if (o.bits < 6) continue; }
+      else { o = perturb(d, key, Math.exp(s)); }
+      var v = kpiOf(o, kpi), xv = key === "bits" ? o.bits : Math.exp(s), rg = regimeOf(o);
+      if (isFinite(v)) pts.push([xv, v]);
+      if (prev && rg !== prev.rg) bounds.push({ x: Math.sqrt(prev.x * xv), rg: rg, from: prev.rg });
+      prev = { rg: rg, x: xv };
+    }
+    return { pts: pts, bounds: bounds };
+  }
+  var RG = { S: "FD 스윙 한계", P: "PD 풀웰 한계", x: "포화", o: "비포화", i: "SNR 10 도달 불가", f: "SNR 10 도달" };
+  function renderTn() {
+    var kpi = tnKpi(), dl = tnDl() / 100, t = tornado(tnD, kpi, dl), K = TN_KPI[kpi];
+    var pick = tnPick || t.rows[0].key, row = t.rows.filter(function (r) { return r.key === pick; })[0];
+    var sw = sweepOf(tnD, pick, kpi);
+    tnS = { t: t, kpi: kpi, dl: dl, pick: pick, sw: sw, base: pick === "bits" ? tnD.bits : 1 };
+    var u = K.db ? " dB" : " %";
+    SB.stat("o-tn-k0", isFinite(t.K0) ? fmt(t.K0, 3) + "<small>" + K.u + "</small>" : "—");
+    var sg = function (v) { return (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(2); };
+    SB.stat("o-tn-top", t.rows[0].name + "<small>" + sg(t.rows[0].dLo) + " / " + sg(t.rows[0].dHi) + u + "</small>");
+    SB.stat("o-tn-el", row.name + "<small>ε = " + row.el.toFixed(2) + "</small>");
+    SB.stat("o-tn-flat", t.rows.filter(function (r) { return r.rng < (K.db ? 0.1 : 1); }).length + "<small>/ " + t.rows.length + " 개 무관</small>");
+    SB.stat("o-tn-bnd", sw.bounds.length ? sw.bounds.map(function (b) { return "×" + fmt(b.x, 2); }).join(", ") + "<small>" + describeB(sw.bounds[0]) + "</small>" : "없음<small>스윕 구간 안</small>");
+    cvTn.redraw(); cvTnS.redraw();
+  }
+  function describeB(b) {
+    for (var i = 0; i < 3; i++) if (b.rg[i] !== b.from[i]) return RG[b.from[i]] + " → " + RG[b.rg[i]];
+    return "";
+  }
+  var tnRowsY = [];
+  var cvTn = SB.canvas("#cv-tn", function (ctx, w, h) {
+    if (!tnS) return;
+    var P = SB.palette(), rows = tnS.t.rows, K = TN_KPI[tnS.kpi], lw = Math.min(110, w * 0.3), x0 = lw + 8, bw = w - x0 - 12;
+    var mx = 1e-9; rows.forEach(function (r) { mx = Math.max(mx, Math.abs(r.dLo), Math.abs(r.dHi)); });
+    var cx = x0 + bw / 2, sc = (bw / 2 - 4) / mx, rh = Math.min(22, (h - 64) / rows.length);
+    ctx.font = "11px " + SB.color("mono");
+    ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillText(K.name + " 변화 (" + (K.db ? "dB" : "%") + ") · 기준 " + (isFinite(tnS.t.K0) ? fmt(tnS.t.K0, 3) + " " + K.u : "—"), x0 + bw / 2, 22);
+    tnRowsY = [];
+    rows.forEach(function (r, i) {
+      var y = 40 + i * rh, on = r.key === tnS.pick;
+      tnRowsY.push([y, y + rh, r.key]);
+      if (on) { ctx.fillStyle = P.accent; ctx.globalAlpha = 0.08; ctx.fillRect(0, y, w, rh); ctx.globalAlpha = 1; }
+      ctx.fillStyle = on ? P.accent : P.text; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      ctx.fillText(r.name, lw, y + rh / 2);
+      [[r.dLo, P.accent2], [r.dHi, P.accent]].forEach(function (b) {
+        var v = b[0], x = v >= 0 ? cx : cx + v * sc;
+        ctx.fillStyle = b[1]; ctx.globalAlpha = 0.85; ctx.fillRect(x, y + 3, Math.abs(v) * sc, rh - 6); ctx.globalAlpha = 1;
+      });
+    });
+    ctx.strokeStyle = P.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cx, 36); ctx.lineTo(cx, 40 + rows.length * rh); ctx.stroke();
+    var ly = 44 + rows.length * rh;
+    ctx.textBaseline = "top"; ctx.textAlign = "left";
+    ctx.fillStyle = P.accent2; ctx.fillText("■ −" + Math.round(tnS.dl * 100) + " %", x0, ly);
+    ctx.fillStyle = P.accent; ctx.fillText("■ +" + Math.round(tnS.dl * 100) + " %", x0 + 70, ly);
+    ctx.fillStyle = P.faint; ctx.fillText("행을 누르면 스윕", x0 + 140, ly);
+  }, { aspect: 0.85, minHeight: 320, maxHeight: 360 });
+  document.getElementById("cv-tn").addEventListener("click", function (ev) {
+    var rc = ev.currentTarget.getBoundingClientRect(), y = ev.clientY - rc.top;
+    tnRowsY.forEach(function (r) { if (y >= r[0] && y < r[1]) tnPick = r[2]; });
+    renderTn();
+  });
+  var cvTnS = SB.canvas("#cv-tn-s", function (ctx, w, h) {
+    if (!tnS) return;
+    var P = SB.palette(), pts = tnS.sw.pts, K = TN_KPI[tnS.kpi], bits = tnS.pick === "bits";
+    if (pts.length < 2) { ctx.fillStyle = P.dim; ctx.fillText("유효한 값 없음", 20, 30); return; }
+    var y0 = 1e99, y1 = -1e99; pts.forEach(function (p) { y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); });
+    var logY = !K.db && y0 > 0 && y1 / y0 > 8, pad = (y1 - y0) * 0.08 || 1;
+    var yr = logY ? [y0 / 1.2, y1 * 1.2] : [y0 - pad, y1 + pad];
+    var row = tnS.t.rows.filter(function (r) { return r.key === tnS.pick; })[0];
+    var xr = bits ? [pts[0][0], pts[pts.length - 1][0]] : [0.25, 4];
+    SB.chart(ctx, { x: 58, y: 30, w: w - 76, h: h - 76 }, {
+      x: xr, y: yr, logX: !bits, logY: logY, xLabel: row.name + (bits ? " (bit)" : " (기준 대비 배율)"), yLabel: K.name + " (" + K.u + ")",
+      xFmt: bits ? function (v) { return String(Math.round(v)); } : function (v) { return "×" + v; }, xTicks: bits ? undefined : [0.25, 0.5, 1, 2, 4],
+      bands: bits ? [] : [{ x0: 1 - tnS.dl, x1: 1 + tnS.dl, color: "rgba(127,127,127,0.12)" }],
+      series: [{ data: pts, color: P.accent, width: 2.2 }],
+      vlines: tnS.sw.bounds.map(function (b) { return { x: b.x, color: P.warn, label: RG[b.rg[0]] === RG[b.from[0]] ? RG[b.rg[1]] === RG[b.from[1]] ? RG[b.rg[2]] : RG[b.rg[1]] : RG[b.rg[0]] }; }),
+      points: [{ x: tnS.base, y: tnS.t.K0, color: P.accent2, r: 5 }],
+    });
+  }, { aspect: 0.85, minHeight: 320, maxHeight: 360 });
+  renderTn();
 })();
 </script>
 </body>
