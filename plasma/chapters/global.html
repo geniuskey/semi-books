@@ -1,0 +1,927 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and PlasmaBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>전역 모델: 입자·전력 균형 · PlasmaBook</title>
+<meta name="description" content="부피 평균 전역 모델로 플라즈마를 계산한다. 입자 균형이 전자 온도를, 전력 균형이 밀도를 정하는 원리, Ar 반응 속도와 h 인자로 PL-300 ICP의 Tₑ 2.5 eV·4×10¹¹ cm⁻³ 재현, 이온당 손실 에너지 분해, 압력·전력·크기 스케일링, 전기 음성 O₂·Cl₂ 플라즈마, He/Ar 혼합과 페닝 이온화, 시간 의존 전역 모델을 시뮬레이터로 다룬다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .gl-lbl { fill: var(--text); font-family: var(--font); font-size: 14px; }
+  svg .gl-lbl-b { fill: var(--text); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .gl-sm { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .gl-box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .gl-glow { fill: color-mix(in srgb, var(--m-glow) 20%, transparent); }
+  svg .gl-arr { stroke: var(--text); stroke-width: 1.8; fill: none; }
+  svg .gl-dash { stroke: var(--text-dim); stroke-dasharray: 5 4; fill: none; stroke-width: 1.4; }
+  .gl-v.ok { color: var(--ok); } .gl-v.warn { color: var(--warn); } .gl-v.bad { color: var(--bad); }
+</style>
+</head>
+<body data-chapter="global">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 08</div>
+    <h1>전역 모델: 입자·전력 균형</h1>
+    <p class="lead">ICP 챔버에 1.5 kW를 넣으면 전자 온도와 밀도는 얼마가 될까? 플라즈마를 하나의 상자로 보고 "생성 = 손실"을 두 번 쓰면 답이 나온다. 전자-이온 쌍의 <strong>입자 균형</strong>은 압력과 크기만으로 Tₑ를 정하고, <strong>전력 균형</strong>은 그 Tₑ에서 밀도를 전력에 비례하게 정한다. 이 <span class="term">전역 모델</span><span class="en">(global model)</span>은 몇 줄짜리 계산으로 장비 손잡이와 플라즈마 변수의 관계를 놀랄 만큼 잘 맞히고, CCP·ICP·펄스 장(<a href="ccp.html">9</a>·<a href="icp.html">10</a>·<a href="pulsed.html">12장</a>)이 모두 이 결과를 가져다 쓴다.</p>
+    <ul class="objectives">
+      <li>입자 균형 \(K_{iz}(T_e)\,n_g d_{\text{eff}} = u_B(T_e)\)로 Tₑ를 구하고, Tₑ가 전력과 무관한 이유를 설명할 수 있다.</li>
+      <li>h 인자와 실효 길이 \(d_{\text{eff}}\), 실효 면적 \(A_{\text{eff}}\)를 계산할 수 있다.</li>
+      <li>이온당 손실 에너지 \(\mathcal{E}_T = \mathcal{E}_c + 2T_e + \mathcal{E}_i\)를 분해하고, 전력 균형으로 \(n_0\)를 구할 수 있다.</li>
+      <li>PL-300 IC 모듈(Ar 10 mTorr, 1.5 kW)의 Tₑ ≈ 2.5 eV, n₀ ≈ 4×10¹¹ cm⁻³를 재현할 수 있다.</li>
+      <li>압력·전력·크기·질량을 바꿀 때 Tₑ, n₀, 이온 플럭스의 변화 방향과 크기를 예측할 수 있다.</li>
+      <li>전기 음성 플라즈마의 부착·탈리·재결합 균형과 α = n₋/nₑ, 혼합 기체의 희석·페닝 효과, 전력 계단 뒤 시간 응답을 계산할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="idea">
+    <h2>전역 모델의 생각: 상자 하나, 균형 두 개</h2>
+    <p>전역 모델은 공간 변화를 지우고 플라즈마를 부피 \(V\), 벽 면적 \(A\)인 상자로 본다. 상자 안 전자 밀도는 중심값 \(n_0\), 전자 온도는 균일한 \(T_e\), EEDF는 맥스웰이다. 공간 구조의 정보는 단 하나, <strong>벽 앞 시스 경계 밀도가 중심의 몇 배인가</strong>(가장자리 비 \(h\))로만 남는다. 이온은 시스 경계에서 보옴 속도 \(u_B\)로 벽에 빠져나간다(<a href="sheath.html#bohm">7장</a>).</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 270" role="img" aria-label="전역 모델 개념도: 원통 상자 안 균일 플라즈마, 부피 이온화 생성과 벽으로의 보옴 플럭스 손실, 흡수 전력과 손실 경로">
+        <defs><marker id="g81-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-ion)"/></marker>
+        <marker id="g81-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text)"/></marker></defs>
+        <rect x="60" y="40" width="380" height="190" rx="6" class="m-metal" opacity="0.3"/>
+        <rect x="74" y="54" width="352" height="162" rx="4" class="gl-glow"/>
+        <text x="250" y="110" text-anchor="middle" class="gl-lbl-b">n₀, Tₑ (균일, 맥스웰)</text>
+        <text x="250" y="132" text-anchor="middle" class="gl-sm">부피 V = πR²L</text>
+        <text x="250" y="152" text-anchor="middle" class="gl-sm">생성: K_iz n_g n₀ V</text>
+        <g class="ms-ion" stroke-width="2.2"><line x1="250" y1="62" x2="250" y2="22" marker-end="url(#g81-a)"/><line x1="250" y1="208" x2="250" y2="250" marker-end="url(#g81-a)"/><line x1="82" y1="135" x2="30" y2="135" marker-end="url(#g81-a)"/><line x1="418" y1="135" x2="470" y2="135" marker-end="url(#g81-a)"/></g>
+        <text x="258" y="20" class="gl-sm">h_L n₀ u_B (위·아래)</text>
+        <text x="476" y="130" class="gl-sm">h_R n₀ u_B (옆)</text>
+        <text x="60" y="262" class="gl-sm">손실: n₀ u_B A_eff, A_eff = 2πR² h_L + 2πRL h_R</text>
+        <rect x="520" y="30" width="320" height="220" rx="8" class="gl-box"/>
+        <text x="540" y="54" class="gl-lbl-b">가정</text>
+        <text x="540" y="80" class="gl-sm">① 공간 평균: 프로파일은 h 인자로만</text>
+        <text x="540" y="104" class="gl-sm">② 맥스웰 EEDF → K(Tₑ) 하나의 함수</text>
+        <text x="540" y="128" class="gl-sm">③ 단일 이온종, 준중성 nᵢ = nₑ</text>
+        <text x="540" y="152" class="gl-sm">④ 바탕 기체 n_g 일정 (전리도 ≪ 1)</text>
+        <text x="540" y="176" class="gl-sm">⑤ 흡수 전력 P_abs는 입력 (소스 무관)</text>
+        <text x="540" y="200" class="gl-sm">⑥ 이온은 벽 시스에서 𝓔ᵢ ≈ 5.2 Tₑ 획득</text>
+        <text x="540" y="230" class="gl-sm">→ 미지수 2개(Tₑ, n₀), 식 2개</text>
+      </svg>
+      <figcaption><b>그림 8-1.</b> 전역 모델. 소스의 종류(ICP, CCP, 마이크로파)는 "흡수 전력 \(P_{\text{abs}}\)"로만 들어오고, 기하는 \(d_{\text{eff}}\)와 \(A_{\text{eff}}\)로만 들어온다. 그래서 같은 식이 모든 저압 소스에 쓰인다.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="particle">
+    <h2>입자 균형 → 전자 온도</h2>
+    <p>정상 상태에서 부피 이온화로 생기는 전자-이온 쌍의 수는 벽으로 빠져나가는 이온 수와 같다.</p>
+    <div class="formula">$$K_{iz}(T_e)\,n_g\,n_0\,V = n_0\,u_B\,A_{\text{eff}} \;\Rightarrow\; \frac{K_{iz}(T_e)}{u_B(T_e)} = \frac{1}{n_g\,d_{\text{eff}}},\qquad d_{\text{eff}} = \frac{V}{A_{\text{eff}}} = \frac{RL}{2(Rh_L + Lh_R)}$$<div class="where">\(n_0\)가 양변에서 지워진다. 그래서 <strong>Tₑ는 전력과 무관</strong>하고 \(n_g d_{\text{eff}}\)(압력 × 크기)만으로 정해진다. 왼쪽은 Tₑ에 대해 지수적으로 커지므로(\(K_{iz} = 2.34\times10^{-14}T_e^{0.59}e^{-17.44/T_e}\) m³/s), \(n_g d_{\text{eff}}\)가 10배 바뀌어도 Tₑ는 1 eV 남짓만 움직인다. 압력이 낮거나 챔버가 작으면 벽 손실이 상대적으로 커서, 손실을 메우려 Tₑ가 오른다.</div></div>
+
+    <p>가장자리 비는 <a href="transport.html">6장</a>의 저압 확산 해(보옴-고드 근사)를 쓴다. 이온 평균 자유 행로 \(\lambda_i = 1/(n_g\sigma_i)\), \(\sigma_i = 10^{-18}\) m²로</p>
+    <div class="formula">$$h_L = \frac{0.86}{\sqrt{3 + L/2\lambda_i}},\qquad h_R = \frac{0.8}{\sqrt{4 + R/\lambda_i}},\qquad A_{\text{eff}} = 2\pi R^2 h_L + 2\pi R L\,h_R$$<div class="where">저압(\(\lambda_i \gg L\))에서는 프로파일이 평평해 \(h_L \to 0.5\), 고압에서는 이동도 제한 확산으로 가운데가 볼록해져 \(h \propto \sqrt{\lambda_i/L}\)로 줄어든다. 7장 예비 시스 유체 해의 \(n_s/n_0\)와 같은 양이다. IC 모듈(R = 0.25 m, L = 0.10 m, 10 mTorr, \(\lambda_i\) ≈ 3.1 mm): \(h_L\) ≈ 0.20, \(h_R\) ≈ 0.087, \(d_{\text{eff}}\) ≈ 0.22 m.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="입자 균형 그래프: Kiz ng deff 곡선과 보옴 속도 곡선의 교점이 Te를 정한다, 압력이 높을수록 교점이 왼쪽">
+        <rect x="20" y="16" width="430" height="222" rx="8" class="gl-box"/>
+        <line x1="70" y1="200" x2="430" y2="200" class="s-axis"/><line x1="70" y1="200" x2="70" y2="36" class="s-axis"/>
+        <text x="250" y="226" text-anchor="middle" class="gl-sm">Tₑ (eV) →</text>
+        <text x="30" y="120" class="gl-sm" transform="rotate(-90 30 120)">속도 (로그)</text>
+        <path d="M70 120 C 200 110, 320 100, 425 92" class="ms-ion" stroke-width="2.6"/>
+        <text x="350" y="86" class="gl-sm" fill="var(--m-ion)">u_B ∝ √Tₑ (손실)</text>
+        <path d="M95 200 C 140 140, 200 90, 300 50" class="s-acc" stroke-width="2.6"/>
+        <path d="M150 200 C 190 150, 260 100, 400 60" class="s-acc" stroke-width="2.6" stroke-dasharray="6 4"/>
+        <text x="200" y="66" class="t-acc">K_iz n_g d_eff</text>
+        <text x="300" y="152" class="gl-sm">압력·크기 ↓ → 오른쪽</text>
+        <circle cx="166" cy="114" r="5" fill="var(--bad)"/><circle cx="265" cy="102" r="5" fill="var(--bad)"/>
+        <line x1="166" y1="114" x2="166" y2="200" class="gl-dash"/><line x1="265" y1="102" x2="265" y2="200" class="gl-dash"/>
+        <rect x="470" y="16" width="370" height="222" rx="8" class="gl-box"/>
+        <text x="490" y="40" class="gl-lbl-b">두 균형의 분리</text>
+        <rect x="490" y="56" width="150" height="56" rx="6" class="f-acc-soft"/>
+        <text x="565" y="80" text-anchor="middle" class="gl-lbl">입자 균형</text><text x="565" y="100" text-anchor="middle" class="gl-sm">p, R, L, 기체</text>
+        <rect x="490" y="150" width="150" height="56" rx="6" class="f-acc2-soft"/>
+        <text x="565" y="174" text-anchor="middle" class="gl-lbl">전력 균형</text><text x="565" y="194" text-anchor="middle" class="gl-sm">+ P_abs</text>
+        <line x1="640" y1="84" x2="700" y2="84" class="gl-arr"/><text x="706" y="88" class="gl-lbl-b">Tₑ, 𝓔_T</text>
+        <line x1="565" y1="112" x2="565" y2="148" class="gl-arr"/>
+        <line x1="640" y1="178" x2="700" y2="178" class="gl-arr"/><text x="706" y="182" class="gl-lbl-b">n₀ ∝ P_abs</text>
+        <text x="490" y="228" class="gl-sm">Tₑ가 먼저, n₀는 그다음 (한 방향 결합)</text>
+      </svg>
+      <figcaption><b>그림 8-2.</b> 왼쪽: 입자 균형을 그래프로 풀면 생성 곡선 \(K_{iz}n_g d_{\text{eff}}\)(Tₑ에 지수적)과 손실 곡선 \(u_B\)(√Tₑ)의 교점이 Tₑ다. 압력이나 크기를 줄이면 생성 곡선이 내려가 교점이 오른쪽(높은 Tₑ)으로 간다. 오른쪽: 단일 이온종 전기 양성 플라즈마에서는 입자 균형이 Tₑ를 정하고, 전력 균형은 그 Tₑ를 받아 밀도만 정한다.</figcaption>
+    </figure>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="원통 챔버의 가장자리 비: 저압 평평한 프로파일과 고압 볼록한 프로파일, 위아래 hL과 옆 hR">
+        <rect x="20" y="16" width="400" height="200" rx="8" class="gl-box"/>
+        <text x="40" y="38" class="gl-lbl-b">축 방향 n(z) (위·아래 벽)</text>
+        <line x1="60" y1="190" x2="400" y2="190" class="s-axis"/>
+        <path d="M70 120 C 100 72, 140 66, 230 64 C 320 66, 360 72, 390 120" class="s-acc" stroke-width="2.6"/>
+        <path d="M70 168 C 120 80, 180 64, 230 62 C 280 64, 340 80, 390 168" class="ms-ion" stroke-width="2.6" stroke-dasharray="6 4"/>
+        <text x="130" y="58" class="t-acc">저압: h_L → 0.5</text>
+        <text x="250" y="150" class="gl-sm" fill="var(--m-ion)">고압: cos 형, h_L ≪ 1</text>
+        <line x1="70" y1="40" x2="70" y2="190" class="ms-metal"/><line x1="390" y1="40" x2="390" y2="190" class="ms-metal"/>
+        <text x="40" y="208" class="gl-sm">벽 z = 0</text><text x="350" y="208" class="gl-sm">z = L</text>
+        <rect x="440" y="16" width="400" height="200" rx="8" class="gl-box"/>
+        <text x="460" y="38" class="gl-lbl-b">IC 모듈 h 인자 (Ar)</text>
+        <g class="gl-sm">
+          <text x="460" y="66">압력      λᵢ       h_L     h_R     d_eff</text>
+          <text x="460" y="90">2 mTorr   15.5 mm  0.35    0.18    0.12 m</text>
+          <text x="460" y="114">10 mTorr  3.1 mm   0.20    0.087   0.22 m</text>
+          <text x="460" y="138">30 mTorr  1.0 mm   0.12    0.051   0.36 m</text>
+          <text x="460" y="162">50 mTorr  0.62 mm  0.094   0.040   0.46 m</text>
+        </g>
+        <text x="460" y="196" class="gl-sm">압력↑ → 벽 손실↓ → d_eff↑ → Tₑ↓</text>
+      </svg>
+      <figcaption><b>그림 8-3.</b> 가장자리 비. 저압에서는 이온이 충돌 없이 벽으로 날아가 밀도 프로파일이 평평하고, 압력이 오르면 확산이 느려져 가운데가 볼록해진다. 같은 \(n_0\)에서 벽 플럭스가 줄어 \(d_{\text{eff}}\)가 커진다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-hfac">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>가장자리 비 h_L·h_R와 실효 길이 d_eff</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="hf-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>압력 <output id="hf-p-out"></output></span><input type="range" id="hf-p" min="-0.3" max="2.3" step="0.01" value="1"></label>
+          <label class="ctrl"><span>반지름 R <output id="hf-R-out"></output></span><input type="range" id="hf-R" min="0.05" max="0.5" step="0.01" value="0.25"></label>
+          <label class="ctrl"><span>높이 L <output id="hf-L-out"></output></span><input type="range" id="hf-L" min="0.02" max="0.3" step="0.005" value="0.1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">λᵢ</span><span class="v" id="hf-li">—</span></div>
+        <div class="stat"><span class="k">h_L / h_R</span><span class="v" id="hf-h">—</span></div>
+        <div class="stat"><span class="k">d_eff</span><span class="v" id="hf-d">—</span></div>
+        <div class="stat"><span class="k">A_eff / A_벽</span><span class="v" id="hf-a">—</span></div>
+        <div class="stat"><span class="k">위·아래 벽 손실 비율</span><span class="v" id="hf-ax">—</span></div>
+      </div>
+      <div class="sim-note">곡선: 압력 0.5–200 mTorr에 대한 \(h_L\)(파랑), \(h_R\)(주황), \(d_{\text{eff}}/L\)(초록 점선, 오른쪽 축). 해볼 것: ① 납작한 챔버(L ≪ R)에서는 위·아래 벽이 손실을 지배한다 — 웨이퍼로 가는 이온 플럭스가 손실의 대부분이라는 뜻이다. ② L을 0.3 m로 늘리면 옆벽 손실 비율이 커진다. ③ 압력을 200 mTorr로 올리면 \(h\)가 0.05 아래로 떨어져, 같은 밀도에서 벽 플럭스가 저압의 1/10이 된다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="power">
+    <h2>전력 균형 → 밀도, 그리고 이온 하나의 값</h2>
+    <p>흡수 전력은 결국 벽으로 빠져나가는 이온-전자 쌍이 가지고 나가는 에너지와, 그 쌍을 만드는 동안 충돌로 잃은 에너지로 모두 쓰인다. 쌍 하나가 벽으로 사라질 때 계에서 빠져나가는 총 에너지를 \(\mathcal{E}_T\)라 하면</p>
+    <div class="formula">$$P_{\text{abs}} = e\,n_0\,u_B\,A_{\text{eff}}\,\mathcal{E}_T,\qquad \mathcal{E}_T = \mathcal{E}_c + 2T_e + \mathcal{E}_i,\qquad \mathcal{E}_c = \mathcal{E}_{iz} + \frac{K_{ex}}{K_{iz}}\mathcal{E}_{ex} + \frac{K_{el}}{K_{iz}}\frac{3m}{M}T_e$$<div class="where">\(\mathcal{E}_c\): 쌍 하나를 만드는 동안 전자가 충돌로 잃는 에너지(이온화 15.76 eV + 그동안 일어난 여기·탄성 손실, <a href="collisions.html">3장</a>). \(2T_e\): 벽에 닿는 맥스웰 전자 하나가 가져가는 평균 운동 에너지. \(\mathcal{E}_i \approx T_e[\tfrac12 + \tfrac12\ln(M/2\pi m)]\): 이온이 예비 시스·시스에서 얻어 벽에 내려놓는 에너지(Ar 부유 벽 5.2 Tₑ, <a href="sheath.html#wall">7장</a>). 바이어스가 걸린 전극에서는 그 전극 몫의 \(\mathcal{E}_i\)가 시스 전압만큼 커지지만, 그 에너지는 대부분 바이어스 전원이 댄다.</div></div>
+    <p>Tₑ는 이미 입자 균형으로 정해졌으므로 \(\mathcal{E}_T\)와 \(u_B\)도 정해져 있다. 그러면 \(n_0 = P_{\text{abs}}/(e u_B A_{\text{eff}}\mathcal{E}_T)\) — <strong>밀도는 흡수 전력에 정비례</strong>한다. IC 모듈 기준(Tₑ = 2.48 eV)에서 \(\mathcal{E}_c\) ≈ 83 eV, \(2T_e\) ≈ 5 eV, \(\mathcal{E}_i\) ≈ 13 eV로 \(\mathcal{E}_T\) ≈ 100 eV. 이온 하나를 벽(웨이퍼)까지 보내는 데 약 100 eV가 들고, 그중 이온화 자체에 쓰이는 것은 16 %뿐이며 66 %는 여기 → 발광(플라즈마가 빛나는 이유)으로 나간다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 240" role="img" aria-label="흡수 전력이 이온화, 여기 발광, 탄성 가열, 전자 운동 에너지, 이온 충격 에너지로 나뉘는 흐름도">
+        <rect x="20" y="70" width="140" height="100" rx="8" class="f-acc-soft"/>
+        <text x="90" y="112" text-anchor="middle" class="gl-lbl-b">P_abs</text><text x="90" y="134" text-anchor="middle" class="gl-sm">1.5 kW (𝓔_T ≈ 100 eV)</text>
+        <path d="M160 82 C 230 82, 240 36, 320 36" stroke="var(--m-photon)" stroke-width="34" fill="none" opacity="0.55"/>
+        <path d="M160 108 C 230 108, 240 96, 320 96" stroke="var(--m-ion)" stroke-width="10" fill="none" opacity="0.55"/>
+        <path d="M160 124 C 230 124, 240 140, 320 140" stroke="var(--m-ion)" stroke-width="8" fill="none" opacity="0.8"/>
+        <path d="M160 140 C 230 140, 240 180, 320 180" stroke="var(--m-electron)" stroke-width="4" fill="none" opacity="0.7"/>
+        <path d="M160 152 C 230 152, 240 216, 320 216" stroke="var(--m-neutral)" stroke-width="2" fill="none"/>
+        <text x="330" y="40" class="gl-lbl">여기 → 발광(UV·가시)  66.5 eV · 66 %</text>
+        <text x="330" y="100" class="gl-lbl">이온화 에너지  15.8 eV · 16 %</text>
+        <text x="330" y="144" class="gl-lbl">이온 충격(시스)  𝓔ᵢ ≈ 12.8 eV · 13 %</text>
+        <text x="330" y="184" class="gl-lbl">전자 운동 에너지  2Tₑ ≈ 5.0 eV · 5 %</text>
+        <text x="330" y="220" class="gl-lbl">탄성 충돌(기체 가열)  0.3 eV</text>
+        <text x="640" y="60" class="gl-sm">𝓔_c = 15.8 + 66.5 + 0.3</text>
+        <text x="640" y="80" class="gl-sm">    ≈ 83 eV (PL-300)</text>
+        <text x="640" y="120" class="gl-sm">이온화는 벽에서 재결합해</text>
+        <text x="640" y="140" class="gl-sm">결국 벽을 데운다</text>
+      </svg>
+      <figcaption><b>그림 8-4.</b> PL-300 IC 모듈(Ar 10 mTorr, Tₑ ≈ 2.5 eV)에서 이온-전자 쌍 하나당 100 eV의 행방. Tₑ가 낮을수록 여기/이온화 비가 \(e^{4.66/T_e}\)처럼 커져 \(\mathcal{E}_c\)가 급증한다(Tₑ = 2 eV에서 127 eV). 고압 플라즈마가 전력 효율이 나쁜 이유다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ec">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>이온당 손실 에너지 𝓔_T 분해 (Ar 반응 속도 적분)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ec-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>전자 온도 Tₑ <output id="ec-Te-out"></output></span><input type="range" id="ec-Te" min="1.5" max="8" step="0.02" value="2.48"></label>
+          <label class="ctrl"><span>이온 질량 M <output id="ec-M-out"></output></span><input type="range" id="ec-M" min="4" max="131" step="1" value="40"></label>
+          <label class="ctrl"><span>추가 바이어스 시스 전압 <output id="ec-B-out"></output></span><input type="range" id="ec-B" min="0" max="200" step="5" value="0"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">𝓔_c</span><span class="v" id="ec-c">—</span></div>
+        <div class="stat"><span class="k">여기/이온화 K_ex/K_iz</span><span class="v" id="ec-r">—</span></div>
+        <div class="stat"><span class="k">𝓔ᵢ</span><span class="v" id="ec-i">—</span></div>
+        <div class="stat"><span class="k">𝓔_T</span><span class="v" id="ec-t">—</span></div>
+        <div class="stat"><span class="k">이온화에 쓰인 비율</span><span class="v" id="ec-f">—</span></div>
+      </div>
+      <div class="sim-note">쌓인 면: 아래부터 이온화(15.76 eV), 여기, 탄성, \(2T_e\), \(\mathcal{E}_i\). 오른쪽 막대는 선택한 Tₑ의 분해. 반응 속도는 PL-300 Ar 근사식, \(\mathcal{E}_i = T_e[\tfrac12+\tfrac12\ln(M/2\pi m)]\) + 추가 바이어스(벽 전체에 걸렸다고 가정한 상한). 해볼 것: ① Tₑ = 2, 3, 4, 5 eV에서 \(\mathcal{E}_c\)가 PL-300 표의 127, 62, 45, 37 eV와 맞는지 확인. ② 질량은 \(\mathcal{E}_i\)와 탄성 손실만 바꾼다 — 탄성 손실은 \(3m/M\) 때문에 거의 보이지 않는다. ③ 바이어스 100 V를 더하면 \(\mathcal{E}_T\)가 두 배 — 그 전력은 실제로는 바이어스 전원이 낸다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="calc">
+    <h2>전역 모델 계산기: PL-300 IC 모듈 재현</h2>
+    <p>계산 순서는 (1) \(n_g = p/kT_g\), \(\lambda_i\), \(h_L, h_R\), \(d_{\text{eff}}, A_{\text{eff}}\) → (2) \(K_{iz}(T_e)n_g d_{\text{eff}} = u_B(T_e)\)를 이분법으로 풀어 Tₑ → (3) \(\mathcal{E}_c(T_e), \mathcal{E}_T\) → (4) \(n_0 = P_{\text{abs}}/(eu_BA_{\text{eff}}\mathcal{E}_T)\). 웨이퍼 이온 플럭스는 \(\Gamma_i = h_L n_0 u_B\), 이온 전류 밀도는 \(e\Gamma_i\)다.</p>
+
+    <div class="sim" id="sim-gm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>전역 모델: 압력·전력·크기·질량 → Tₑ, n₀, Γᵢ</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gm-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>압력(Ar) <output id="gm-p-out"></output></span><input type="range" id="gm-p" min="0" max="2" step="0.01" value="1"></label>
+          <label class="ctrl"><span>흡수 전력 P_abs <output id="gm-P-out"></output></span><input type="range" id="gm-P" min="50" max="5000" step="10" value="1500"></label>
+          <label class="ctrl"><span>반지름 R <output id="gm-R-out"></output></span><input type="range" id="gm-R" min="0.05" max="0.5" step="0.005" value="0.25"></label>
+          <label class="ctrl"><span>높이 L <output id="gm-L-out"></output></span><input type="range" id="gm-L" min="0.02" max="0.3" step="0.005" value="0.1"></label>
+          <label class="ctrl"><span>이온 질량 M (Ar 단면적 유지) <output id="gm-M-out"></output></span><input type="range" id="gm-M" min="4" max="131" step="1" value="40"></label>
+          <button class="btn" id="gm-ref">PL-300 IC 기준값</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Tₑ</span><span class="v" id="gm-Te">—</span></div>
+        <div class="stat"><span class="k">n₀ (중심)</span><span class="v" id="gm-n">—</span></div>
+        <div class="stat"><span class="k">u_B</span><span class="v" id="gm-uB">—</span></div>
+        <div class="stat"><span class="k">𝓔_c / 𝓔_T</span><span class="v" id="gm-E">—</span></div>
+        <div class="stat"><span class="k">d_eff / A_eff</span><span class="v" id="gm-d">—</span></div>
+        <div class="stat"><span class="k">웨이퍼 이온 플럭스</span><span class="v" id="gm-G">—</span></div>
+        <div class="stat"><span class="k">이온 전류 밀도</span><span class="v" id="gm-J">—</span></div>
+        <div class="stat"><span class="k">전리도 n₀/n_g</span><span class="v" id="gm-x">—</span></div>
+      </div>
+      <div class="sim-note">그래프는 입자 균형: 생성 쪽 \(K_{iz}(T_e)n_g d_{\text{eff}}\)(초록)와 손실 쪽 \(u_B(T_e)\)(주황)의 교점이 Tₑ다. 이온 질량 슬라이더는 Ar 단면적을 그대로 둔 채 질량만 바꾼 가상 기체다(\(u_B\), \(\mathcal{E}_i\), 탄성 손실만 바뀜). 해볼 것: ① 기준값에서 Tₑ ≈ 2.48 eV, n₀ ≈ 4.2×10¹¹ cm⁻³, u_B ≈ 2.4 km/s, λᵢ ≈ 3.1 mm. ② 전력을 3 kW로 두 배 → n₀ 두 배, Tₑ 그대로. ③ 압력 2 mTorr → Tₑ ≈ 3.6 eV, 50 mTorr → 약 1.9 eV. ④ 질량을 131로(Xe 흉내) 올리면 u_B가 줄어 손실이 줄고 Tₑ가 내려간다. 범위 끝(1 mTorr, 작은 챔버)에서는 Tₑ가 8 eV 가까이 오른다 — 그런 조건은 실제로 방전 유지가 어렵다.</div>
+    </div>
+
+    <div class="callout fab"><strong>IC 모듈 기준점</strong>Ar 10 mTorr(\(n_g\) = 3.2×10²⁰ m⁻³), R = 0.25 m, L = 0.10 m, 흡수 전력 1.5 kW. 입자 균형: \(\lambda_i\) = 3.1 mm, \(h_L\) = 0.197, \(h_R\) = 0.087, \(d_{\text{eff}}\) = 0.215 m → Tₑ = 2.48 eV, \(u_B\) = 2.44 km/s. 전력 균형: \(\mathcal{E}_c\) = 83 eV, \(\mathcal{E}_T\) = 83 + 5.0 + 12.8 ≈ 100 eV, \(A_{\text{eff}}\) = 0.091 m² → \(n_0\) = 4.2×10¹¹ cm⁻³. 웨이퍼 이온 플럭스 \(h_L n_0 u_B\) ≈ 2.0×10²⁰ m⁻²s⁻¹(약 3.2 mA/cm²). 코일에 넣은 전력의 약 85 %가 흡수된다고 보면 발생기 출력은 약 1.75 kW(<a href="icp.html">10장</a>). 모두 PL-300 표와 맞는다.</div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="scaling">
+    <h2>스케일링: 손잡이를 돌리면</h2>
+    <p>두 균형에서 바로 나오는 스케일링 규칙은 다음과 같다. ① Tₑ는 \(n_g d_{\text{eff}}\)의 약한(로그) 함수다 — 압력을 10배 올리면 Tₑ가 약 0.7–1 eV 내려간다. ② \(n_0 \propto P_{\text{abs}}\). ③ 압력이 오르면 Tₑ가 내려가 \(\mathcal{E}_T\)는 커지지만 \(h\)가 작아져 벽 손실 면적이 더 크게 줄어들므로, <strong>같은 전력에서 중심 밀도는 압력과 함께 오른다</strong>. 그러나 벽 전체로 나가는 이온 수는 \(n_0u_BA_{\text{eff}} = P/(e\mathcal{E}_T)\), 곧 "전력 ÷ 이온당 비용"이므로 \(\mathcal{E}_T\)가 커지는 고압에서 웨이퍼 이온 플럭스는 오히려 준다. 플럭스를 원하면 저압·고전력, 래디컬을 원하면 고압이다.</p>
+
+    <div class="sim" id="sim-scale">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>스케일링 그래프: Tₑ–압력, n₀–전력</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sc-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>압력 <output id="sc-p-out"></output></span><input type="range" id="sc-p" min="0" max="2" step="0.01" value="1"></label>
+          <label class="ctrl"><span>전력 <output id="sc-P-out"></output></span><input type="range" id="sc-P" min="100" max="3000" step="10" value="1500"></label>
+          <label class="ctrl"><span>반지름 R <output id="sc-R-out"></output></span><input type="range" id="sc-R" min="0.1" max="0.4" step="0.01" value="0.25"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Tₑ (L = 0.1 m)</span><span class="v" id="sc-Te">—</span></div>
+        <div class="stat"><span class="k">n₀</span><span class="v" id="sc-n">—</span></div>
+        <div class="stat"><span class="k">n₀ / P</span><span class="v" id="sc-np">—</span></div>
+        <div class="stat"><span class="k">웨이퍼 Γᵢ / P</span><span class="v" id="sc-gp">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 압력 1–100 mTorr에 대한 Tₑ, 챔버 높이 L = 0.05 / 0.10 / 0.20 m. 오른쪽: 전력 0–3 kW에 대한 n₀(실선)과 웨이퍼 이온 플럭스(같은 색 점선, 각자 최댓값으로 정규화), 압력 3 / 10 / 30 mTorr. 해볼 것: ① 직선 n₀(P)는 원점을 지난다(전역 모델의 \(n_0 \propto P\)). 실제 ICP는 낮은 전력에서 E 모드로 떨어져 이 직선에서 벗어난다(<a href="icp.html">10장</a>). ② 30 mTorr 선이 n₀는 가장 높지만 Γᵢ는 가장 낮다.</div>
+    </div>
+
+    <div class="sim" id="sim-knob">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>조건 → 결과: 손잡이 하나를 두 배로</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="kn-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>바꿀 손잡이</span><div class="seg" id="kn-k"><button data-value="p" class="on">압력</button><button data-value="P">전력</button><button data-value="R">반지름</button><button data-value="L">높이</button><button data-value="M">질량</button></div></div>
+          <div class="ctrl"><span>방향</span><div class="seg" id="kn-d"><button data-value="2" class="on">× 2</button><button data-value="0.5">× ½</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">기준</span><span class="v" id="kn-base">—</span></div>
+        <div class="stat"><span class="k">변경 후</span><span class="v" id="kn-new">—</span></div>
+      </div>
+      <div class="sim-note">기준은 PL-300 IC 모듈(Ar 10 mTorr, 1.5 kW, R 0.25 m, L 0.10 m). 막대는 변경 후/기준 비(로그 축, 1이 그대로)다. 질량 ×2는 Ar 단면적을 둔 채 질량만 80 u로 바꾼다. 해볼 것: 전력 ×2는 n₀·Γᵢ만 두 배, 압력 ×2는 Tₑ↓·n₀↑·Γᵢ↓, 반지름 ×2(전력 고정)는 부피가 4배라 밀도가 크게 준다 — 300 mm에서 450 mm로 갈 때 전력을 얼마나 키워야 하는지 감을 잡아 보자.</div>
+    </div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>손잡이 (조건)</th><th>Tₑ</th><th>n₀</th><th>웨이퍼 Γᵢ</th><th>이유</th></tr></thead>
+      <tbody>
+        <tr><td>흡수 전력 ↑</td><td>그대로</td><td>∝ P</td><td>∝ P</td><td>입자 균형에 n₀가 없다</td></tr>
+        <tr><td>압력 ↑</td><td>↓ (로그)</td><td>↑ (같은 P)</td><td>↓</td><td>\(n_g d_{\text{eff}}\)↑, \(\mathcal{E}_c\)↑, h↓</td></tr>
+        <tr><td>챔버 크기 ↑ (같은 P)</td><td>↓ 약간</td><td>↓ (∝ 1/A_eff)</td><td>↓</td><td>손실 면적 증가</td></tr>
+        <tr><td>이온 질량 ↑</td><td>↓</td><td>↑ (u_B ↓)</td><td>≈</td><td>느린 이온 = 느린 손실</td></tr>
+        <tr><td>이온화 문턱 ↓ (Ar → Kr, Xe)</td><td>↓</td><td>↑</td><td>↑</td><td>\(\mathcal{E}_c\) ↓</td></tr>
+        <tr><td>전기 음성 기체 첨가</td><td>↑</td><td>nₑ ↓</td><td>≈ 또는 ↓</td><td>부착이 전자를 없앤다 (<a href="#eneg">6절</a>)</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="eneg">
+    <h2>전기 음성 플라즈마: 음이온이 있을 때</h2>
+    <p>O₂, Cl₂, CF₄, SF₆ 같은 식각 기체는 전자를 붙잡아 음이온을 만든다(<span class="term">해리 부착</span>, e + O₂ → O⁻ + O). 음이온은 플라즈마 전위보다 몇 Tₑ 낮은 벽 앞 전위 장벽에 갇혀 벽에 거의 닿지 못하고, 부피에서 양이온과의 <span class="term">이온-이온 재결합</span>(O⁻ + O₂⁺ → O + O₂)이나 <span class="term">탈리</span>(O⁻ + O → O₂ + e)로만 사라진다. 그 결과 음이온 밀도가 전자보다 많아지기도 한다. 전기 음성도 \(\alpha = n_-/n_e\), 준중성 \(n_+ = n_e + n_-\).</p>
+    <div class="formula">$$\underbrace{K_{att}n_{g}n_e}_{\text{생성}} = \underbrace{K_{rec}n_+n_- + K_{det}n_{d}\,n_-}_{\text{손실}},\qquad \underbrace{(K_{iz} - K_{att})n_g + K_{det}n_d\,\alpha}_{\text{전자 순생성 / 전자}} = \frac{u_B}{d_{\text{eff}}}$$<div class="where">첫 식(음이온 균형)은 \(n_e\)가 주어지면 \(\alpha\)의 2차식이다: \(K_{rec}n_e\alpha^2 + (K_{rec}n_e + \nu_{det})\alpha - K_{att}n_{\text{분자}} = 0\). 둘째 식(전자 균형)에는 근사가 하나 있다: 음이온은 벽에 못 가고 벽 근처는 거의 전기 양성이므로, 벽으로 가는 양이온 플럭스를 전자 밀도와 전기 양성 h 인자로 \(h\,n_e u_B\)라 둔다(가운데 음이온이 많아도 가장자리 프로파일은 전자가 정한다는 Lieberman의 근사). 전력 균형에는 부착·해리·여기 손실을 더한다. 반응 속도는 대표 근사식(O₂: \(K_{iz} = 2.34\times10^{-15}T_e^{1.03}e^{-12.29/T_e}\), \(K_{att} = 1.07\times10^{-15}T_e^{-1.39}e^{-6.26/T_e}\), \(K_{rec}\) ≈ 1.4×10⁻¹³ m³/s; Cl₂는 부착이 Tₑ에 거의 무관하고 훨씬 크다)이며, 정밀 계산은 LXCat 단면적을 쓴다.</div></div>
+    <p>두 가지 결과가 중요하다. ① 부착이 전자를 없애므로 같은 압력에서 <strong>Tₑ가 전기 양성 기체보다 높아진다</strong>(전자 손실이 하나 더 생겼으니 생성도 더 해야 한다). ② 재결합 손실이 \(n_e\)에 비례하므로 <strong>전력을 올리면 α가 줄고</strong>, 압력을 올리면(부착 ∝ \(n_g\)) α가 커진다. α가 수십을 넘으면 전자가 거의 없는 <span class="term">이온-이온 플라즈마</span>가 되는데, 펄스 잔광에서 일부러 만들어 음이온을 웨이퍼로 끌어내 대전을 줄이기도 한다(<a href="pulsed.html">12장</a>).</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 240" role="img" aria-label="전기 음성 플라즈마의 층상 구조: 가운데 음이온이 많은 전기 음성 코어, 가장자리 전기 양성 영역, 전자 밀도는 거의 평평">
+        <rect x="20" y="16" width="560" height="210" rx="8" class="gl-box"/>
+        <line x1="50" y1="190" x2="560" y2="190" class="s-axis"/>
+        <rect x="140" y="30" width="330" height="160" style="fill: color-mix(in srgb, var(--m-negion) 8%, transparent)"/>
+        <text x="305" y="48" text-anchor="middle" class="gl-lbl-b">전기 음성 코어 (α ≫ 1)</text>
+        <text x="80" y="48" text-anchor="middle" class="gl-sm">전기 양성</text><text x="520" y="48" text-anchor="middle" class="gl-sm">전기 양성</text>
+        <path d="M60 186 C 90 120, 120 70, 305 62 C 490 70, 520 120, 550 186" class="ms-ion" stroke-width="2.6"/>
+        <path d="M140 188 C 170 120, 210 90, 305 84 C 400 90, 440 120, 470 188" class="ms-negion" stroke-width="2.6"/>
+        <path d="M55 176 C 80 150, 110 150, 305 148 C 500 150, 530 150, 555 176" class="ms-electron" stroke-width="2.6" stroke-dasharray="6 4"/>
+        <text x="200" y="74" class="gl-sm" fill="var(--m-ion)">n₊</text><text x="250" y="102" class="gl-sm" fill="var(--m-negion)">n₋ (포물선)</text><text x="230" y="142" class="gl-sm" fill="var(--m-electron)">nₑ (거의 평평)</text>
+        <line x1="50" y1="30" x2="50" y2="190" class="ms-metal"/><line x1="560" y1="30" x2="560" y2="190" class="ms-metal"/>
+        <text x="60" y="214" class="gl-sm">벽: 음이온은 전위 장벽에 갇혀 부피에서만 사라진다</text>
+        <rect x="600" y="16" width="240" height="210" rx="8" class="gl-box"/>
+        <text x="616" y="40" class="gl-lbl-b">균형</text>
+        <text x="616" y="66" class="gl-sm">생성: e + AB → A⁻ + B</text>
+        <text x="616" y="90" class="gl-sm">손실 1: A⁻ + AB⁺ → 중성</text>
+        <text x="616" y="114" class="gl-sm">손실 2: A⁻ + B → AB + e</text>
+        <text x="616" y="146" class="gl-sm">전력↑ → nₑ↑ → 재결합↑ → α↓</text>
+        <text x="616" y="170" class="gl-sm">압력↑ → 부착↑ → α↑</text>
+        <text x="616" y="194" class="gl-sm">Tₑ: 전기 양성보다 높다</text>
+      </svg>
+      <figcaption><b>그림 8-5.</b> 전기 음성 방전의 층상 구조(stratification). 음이온은 가운데 코어에 모이고(포물선 형), 가장자리는 전기 양성 플라즈마처럼 보인다. 이 그림이 전역 모델에서 "벽 플럭스는 전자로 정한다"는 근사의 근거다. α가 매우 크면 코어가 벽까지 넓어지고 근사가 나빠진다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-eneg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>전기 음성 전역 모델: O₂ · Cl₂ ICP</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="en-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>기체</span><div class="seg" id="en-g"><button data-value="O2" class="on">O₂</button><button data-value="Cl2">Cl₂</button></div></div>
+          <label class="ctrl"><span>압력 <output id="en-p-out"></output></span><input type="range" id="en-p" min="0" max="2" step="0.01" value="1"></label>
+          <label class="ctrl"><span>흡수 전력 <output id="en-P-out"></output></span><input type="range" id="en-P" min="100" max="3000" step="10" value="1500"></label>
+          <label class="ctrl"><span>원자 몰분율(해리) <output id="en-x-out"></output></span><input type="range" id="en-x" min="0" max="0.9" step="0.01" value="0.1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Tₑ</span><span class="v" id="en-Te">—</span></div>
+        <div class="stat"><span class="k">nₑ</span><span class="v" id="en-ne">—</span></div>
+        <div class="stat"><span class="k">n₋ / n₊</span><span class="v" id="en-nn">—</span></div>
+        <div class="stat"><span class="k">α = n₋/nₑ</span><span class="v gl-v" id="en-a">—</span></div>
+        <div class="stat"><span class="k">음이온 손실 (재결합 : 탈리)</span><span class="v" id="en-loss">—</span></div>
+        <div class="stat"><span class="k">같은 조건 Ar의 Tₑ</span><span class="v" id="en-ar">—</span></div>
+      </div>
+      <div class="sim-note">IC 모듈 기하(R 0.25 m, L 0.10 m). 원자 몰분율 \(x\)는 해리 정도로, 부착 대상 분자를 \((1-x)n_g\)로 줄이고 원자에 의한 탈리 \(\nu_{det} = K_{det}x\,n_g\)를 켠다. 왼쪽: 압력에 따른 α(현재 전력). 오른쪽: 전력에 따른 nₑ(파랑), n₋(청록), n₊(주황). 해볼 것: ① O₂ 10 mTorr 1.5 kW에서 α ≈ 0.2, 300 W로 내리면 약 0.5 — 전력↓ → α↑. ② Cl₂로 바꾸면(기본 해리 50 %) α ≈ 3–4, 해리를 10 %로 줄이면 α가 9 근처까지 오른다. ③ 압력을 올리면 α가 커지고 nₑ가 줄어든다. 근사식이므로 숫자는 경향만 믿자.</div>
+    </div>
+
+    <div class="callout fab"><strong>IC 모듈에서 Cl₂로 바꾸면</strong>같은 10 mTorr, 1.5 kW라도 Cl₂ ICP의 전자 밀도는 Ar보다 몇 배 낮다(이 모델로 약 9×10¹⁰ cm⁻³, 해리 50 %). 양이온 밀도는 nₑ(1 + α)라 크게 줄지 않으므로, 웨이퍼 이온 플럭스는 덜 떨어진다. 탐침이나 헤어핀 탐침으로 잰 nₑ만 보고 "플라즈마가 약해졌다"고 판단하면 안 되는 이유다(<a href="diagnostics.html">15장</a>). 해리율은 전력과 함께 오르므로 Cl₂ ICP의 α는 전력에 이중으로 민감하다.</div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="mixture">
+    <h2>혼합 기체: 희석과 페닝 이온화</h2>
+    <p>실제 공정 기체는 거의 항상 혼합물이다(Ar/C₄F₈/O₂, He/O₂, Ar/Cl₂). 전역 모델로는 각 성분의 생성 속도를 몰분율로 더하면 된다. 이온종이 여럿이면 각자의 보옴 속도로 빠져나가므로, 입자 균형은 "모든 이온종의 밀도 합 = 전자 밀도"가 된다.</p>
+    <div class="formula">$$\sum_j \frac{\nu_{iz,j}}{u_{B,j}} = \frac{1}{d_{\text{eff}}},\qquad \nu_{iz,j} = x_j n_g K_{iz,j}(T_e),\qquad \nu_{P} = x_{\text{He}}n_gK_{m,\text{He}}\cdot\frac{k_P x_{\text{Ar}}n_g}{k_P x_{\text{Ar}}n_g + D_m/\Lambda^2}$$<div class="where">\(\nu_P\)는 <span class="term">페닝 이온화</span><span class="en">(Penning ionization)</span>로 만들어지는 Ar⁺: He 준안정 원자(19.8 eV)가 Ar(이온화 15.76 eV)과 부딪혀 Ar을 이온화한다(He* + Ar → He + Ar⁺ + e). \(K_{m}\)은 준안정 생성 속도(He 여기 속도의 절반으로 가정), \(k_P\) ≈ 7×10⁻¹⁷ m³/s, 준안정 손실은 확산 \(D_m/\Lambda^2\)(\(D_m p\) ≈ 0.047 m²s⁻¹·Torr). He 반응 속도는 대표 근사(\(K_{iz} = 2.5\times10^{-14}T_e^{0.68}e^{-24.6/T_e}\), \(K_{ex} = 2.1\times10^{-14}T_e^{0.31}e^{-19.8/T_e}\)).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="페닝 이온화 에너지 준위도: He 준안정 19.8 eV가 Ar 이온화 15.76 eV보다 높아 충돌로 Ar을 이온화한다">
+        <defs><marker id="g86-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text)"/></marker></defs>
+        <rect x="20" y="16" width="500" height="200" rx="8" class="gl-box"/>
+        <line x1="60" y1="196" x2="60" y2="30" class="s-axis"/><text x="66" y="40" class="gl-sm">에너지 (eV)</text>
+        <line x1="100" y1="190" x2="220" y2="190" class="s-line"/><text x="160" y="208" text-anchor="middle" class="gl-sm">He 바닥</text>
+        <line x1="100" y1="54" x2="220" y2="54" class="s-acc" stroke-width="3"/><text x="160" y="46" text-anchor="middle" class="t-acc">He* 19.8 (준안정)</text>
+        <line x1="100" y1="30" x2="220" y2="30" class="gl-dash"/><text x="226" y="34" class="gl-sm">He⁺ 24.6</text>
+        <line x1="320" y1="190" x2="440" y2="190" class="s-line"/><text x="380" y="208" text-anchor="middle" class="gl-sm">Ar 바닥</text>
+        <line x1="320" y1="81" x2="440" y2="81" class="ms-ion" stroke-width="3"/><text x="380" y="74" text-anchor="middle" class="gl-sm" fill="var(--m-ion)">Ar⁺ 15.76</text>
+        <line x1="320" y1="104" x2="440" y2="104" class="gl-dash"/><text x="446" y="108" class="gl-sm">Ar* 11.5</text>
+        <path d="M222 56 C 270 60, 290 76, 318 82" class="gl-arr" marker-end="url(#g86-a)"/>
+        <text x="236" y="130" class="gl-sm">남는 4 eV → 전자 운동 에너지</text>
+        <rect x="540" y="16" width="300" height="200" rx="8" class="gl-box"/>
+        <text x="556" y="40" class="gl-lbl-b">혼합의 두 효과</text>
+        <text x="556" y="66" class="gl-sm">① 희석: 이온화가 쉬운 성분이 Tₑ를 정한다</text>
+        <text x="556" y="88" class="gl-sm">   Ar 몇 %만 섞어도 He 방전의 Tₑ가 뚝</text>
+        <text x="556" y="116" class="gl-sm">② 페닝: 버려질 He* 에너지를 이온화로 재활용</text>
+        <text x="556" y="138" class="gl-sm">   → 𝓔_c ↓, 같은 전력에서 n ↑</text>
+        <text x="556" y="166" class="gl-sm">예: Ne/Ar (형광등·PDP), He/N₂</text>
+        <text x="556" y="188" class="gl-sm">식각: Ar 희석으로 Tₑ·이온 플럭스 조절</text>
+      </svg>
+      <figcaption><b>그림 8-6.</b> 페닝 이온화. 준안정 준위는 빛으로 쉽게 빠져나가지 못해 오래 살고(수 ms), 이온화 에너지가 그보다 낮은 원자를 만나면 에너지를 넘겨 이온화한다. 보통 He 방전에서 여기로 버려지던 에너지가 이온 생성에 쓰이므로 \(\mathcal{E}_c\)가 준다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-mix">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>He/Ar 혼합 전역 모델: 희석과 페닝</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="mx-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>Ar 몰분율 <output id="mx-x-out"></output></span><input type="range" id="mx-x" min="0" max="1" step="0.005" value="0.05"></label>
+          <label class="ctrl"><span>압력 <output id="mx-p-out"></output></span><input type="range" id="mx-p" min="0.5" max="2" step="0.01" value="1.3"></label>
+          <label class="check"><input type="checkbox" id="mx-pen" checked> 페닝 이온화 포함</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Tₑ</span><span class="v" id="mx-Te">—</span></div>
+        <div class="stat"><span class="k">실효 𝓔_c</span><span class="v" id="mx-Ec">—</span></div>
+        <div class="stat"><span class="k">nₑ (1.5 kW)</span><span class="v" id="mx-n">—</span></div>
+        <div class="stat"><span class="k">이온 중 Ar⁺</span><span class="v" id="mx-ar">—</span></div>
+        <div class="stat"><span class="k">Ar⁺ 중 페닝 몫</span><span class="v" id="mx-pf">—</span></div>
+      </div>
+      <div class="sim-note">IC 모듈 기하, 흡수 전력 1.5 kW. 위: Ar 몰분율(0 = 순수 He, 1 = 순수 Ar)에 따른 Tₑ, 아래: nₑ. 실선은 페닝 포함, 점선은 미포함. 해볼 것: ① 순수 He의 Tₑ는 Ar보다 훨씬 높다(이온화 24.6 eV, 가벼운 이온의 빠른 손실). Ar을 몇 %만 섞어도 Tₑ가 Ar 쪽으로 크게 떨어진다 — 이온화가 쉬운 소수 성분이 방전을 "장악"한다. ② 페닝을 켜면 몇 % Ar에서 nₑ가 눈에 띄게 오른다. ③ 압력을 올리면 준안정이 확산으로 사라지기 전에 Ar을 만날 확률이 커져 페닝 몫이 커진다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="time">
+    <h2>시간 의존 전역 모델: 전력 계단과 펄스</h2>
+    <p>전력이 갑자기 바뀌면 두 변수는 서로 다른 속도로 따라간다. 입자 수와 전자 에너지에 대한 부피 평균 방정식은</p>
+    <div class="formula">$$\frac{dn}{dt} = K_{iz}n_g n - \frac{u_B}{d_{\text{eff}}}n,\qquad \frac{d}{dt}\left(\frac32 n T_e\right) = \frac{P_{\text{abs}}(t)}{eV} - n\,n_g\left(K_{iz}\mathcal{E}_{iz} + K_{ex}\mathcal{E}_{ex} + K_{el}\frac{3m}{M}T_e\right) - \frac{u_B}{d_{\text{eff}}}n\,(2T_e + \mathcal{E}_i)$$<div class="where">정상 상태에서는 둘째 식이 전력 균형, 첫째 식이 입자 균형이 된다. 에너지 완화 시간 \(\tau_E \sim \tfrac32 T_e/(n_gK_{iz}\mathcal{E}_c)\)는 IC 모듈에서 수 µs, 밀도 응답 시간 \(\tau_n \sim d_{\text{eff}}/u_B\)는 약 90 µs다. 그래서 <strong>Tₑ가 먼저, n은 나중</strong>에 따라온다. 전력을 켜면 밀도가 아직 낮아 전자 하나당 전력이 커서 Tₑ가 정상값보다 높게 치솟고(오버슈트), 끄면 Tₑ가 µs 안에 떨어진 뒤 밀도가 천천히 감쇠한다(잔광).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="펄스 전력에 대한 전자 온도와 밀도의 시간 응답: Te는 빠르게 오버슈트하고 잔광에서 급랭, 밀도는 천천히 상승·감쇠">
+        <rect x="20" y="16" width="820" height="200" rx="8" class="gl-box"/>
+        <text x="40" y="38" class="gl-lbl-b">펄스 응답 (개념)</text>
+        <path d="M60 70 L 60 50 L 330 50 L 330 70 L 600 70 L 600 50 L 820 50" stroke="var(--text-dim)" stroke-width="1.8" fill="none"/>
+        <text x="66" y="66" class="gl-sm">P_abs 켬</text><text x="336" y="66" class="gl-sm">끔</text>
+        <path d="M60 140 L 66 88 C 80 96, 100 106, 140 110 L 330 110 C 336 150, 345 160, 360 162 L 600 164 L 606 90 C 620 98, 640 106, 680 110 L 820 110" class="s-acc" stroke-width="2.4"/>
+        <text x="74" y="86" class="t-acc">Tₑ 오버슈트</text><text x="380" y="156" class="gl-sm" fill="var(--accent)">Tₑ 급랭 (µs)</text>
+        <path d="M60 200 C 120 160, 200 140, 330 136 C 400 150, 500 172, 600 180 C 650 160, 720 146, 820 140" class="ms-electron" stroke-width="2.4"/>
+        <text x="180" y="132" class="gl-sm" fill="var(--m-electron)">n 상승 (τₙ ~ 수십–100 µs)</text><text x="440" y="190" class="gl-sm" fill="var(--m-electron)">n 감쇠 (잔광)</text>
+      </svg>
+      <figcaption><b>그림 8-7.</b> 펄스 전력에 대한 응답. Tₑ는 수 µs 안에 전력을 따라가며 켤 때 오버슈트, 끌 때 급랭하고, 밀도는 \(\tau_n\)로 느리게 오르내린다. 펄스 주파수가 \(1/\tau_n\)보다 높으면 밀도는 거의 일정하고 Tₑ만 출렁인다. 이 차이를 공정에 쓰는 방법이 <a href="pulsed.html">12장</a>의 주제다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-tdep">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>시간 의존 전역 모델: n(t), Tₑ(t) 적분</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="td-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>전력 파형</span><div class="seg" id="td-m"><button data-value="pulse" class="on">펄스</button><button data-value="step">계단</button></div></div>
+          <label class="ctrl"><span>켜짐 전력 <output id="td-P-out"></output></span><input type="range" id="td-P" min="200" max="3000" step="50" value="1500"></label>
+          <label class="ctrl"><span>펄스 주파수 <output id="td-f-out"></output></span><input type="range" id="td-f" min="0" max="1.3" step="0.01" value="0.7"></label>
+          <label class="ctrl"><span>듀티 / 계단 전 전력비 <output id="td-d-out"></output></span><input type="range" id="td-d" min="0.1" max="0.9" step="0.01" value="0.5"></label>
+          <label class="ctrl"><span>압력(Ar) <output id="td-p-out"></output></span><input type="range" id="td-p" min="0.5" max="1.7" step="0.01" value="1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">τₙ = d_eff/u_B (정상)</span><span class="v" id="td-tn">—</span></div>
+        <div class="stat"><span class="k">τ_E (정상)</span><span class="v" id="td-te">—</span></div>
+        <div class="stat"><span class="k">Tₑ 최대 / 최소</span><span class="v" id="td-T">—</span></div>
+        <div class="stat"><span class="k">n 최대 / 최소</span><span class="v" id="td-n">—</span></div>
+        <div class="stat"><span class="k">시간 평균 n / 평균 전력 정상 n</span><span class="v" id="td-avg">—</span></div>
+      </div>
+      <div class="sim-note">위 두 식을 적응형 RK2(한 단계에 Tₑ·n이 2 % 넘게 변하지 않게)로 적분한다. 펄스 모드는 12주기를 돌려 주기 정상 상태에 이른 뒤 마지막 3주기를 그린다. 계단 모드는 "계단 전 전력비 × 켜짐 전력"에서 켜짐 전력으로 올린다. Tₑ는 12 eV로 상한을 두었다(실제로는 밀도가 낮을 때 소스가 그만큼 전력을 흡수하지 못한다). 해볼 것: ① 5 kHz 50 %에서 밀도는 ±25 % 정도만 출렁이고 Tₑ는 크게 오르내린다. ② 1 kHz 10 %로 바꾸면 긴 잔광에서 Tₑ가 1 eV 아래로 떨어지고, 켜는 순간 큰 오버슈트가 생긴다. ③ 시간 평균 n은 평균 전력의 정상 n보다 크다(5 kHz 50 %에서 약 1.4배, 1 kHz 10 %에서 3배 이상) — 잔광에서 Tₑ가 떨어지면 \(u_B\)가 줄어 손실이 느려지기 때문이다. 같은 평균 전력으로 더 많은 이온을 붙잡아 두는 셈이다(실제로는 확산 냉각·준안정 등이 이 효과를 줄인다). ④ 압력을 올리면 \(d_{\text{eff}}\)가 커져 τₙ가 길어진다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="limits">
+    <h2>전역 모델은 어디까지 믿을까</h2>
+    <p>전역 모델은 "평균"만 맞힌다. 다음 경우에는 다른 장의 도구가 필요하다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>빠진 것</th><th>언제 문제인가</th><th>대신 쓰는 것</th></tr></thead>
+      <tbody>
+        <tr><td>비맥스웰 EEDF(꼬리 고갈, 두 온도)</td><td>저압 ICP 비국소 가열, 고압 CCP</td><td>2항 볼츠만·측정 EEDF로 K 다시 계산 (<a href="eedf.html">4장</a>)</td></tr>
+        <tr><td>공간 균일도</td><td>300 mm 웨이퍼 플럭스 ±3 % 같은 사양</td><td>유체·하이브리드 2D 모델 (<a href="modeling.html">16장</a>)</td></tr>
+        <tr><td>전력 흡수 기구</td><td>E-H 전환, 표피 효과, 정상파</td><td>소스 모델 (<a href="ccp.html">9장</a>·<a href="icp.html">10장</a>)</td></tr>
+        <tr><td>다단계 이온화·준안정·기체 가열</td><td>고밀도·고압, 해리가 심한 분자 기체</td><td>준안정 방정식 추가, 반응 네트워크 (<a href="chemistry.html">13장</a>)</td></tr>
+        <tr><td>기체 고갈(바탕 n_g 감소)</td><td>전리도 ≳ 1 %, 고전력 ICP</td><td>중성 가열·펌핑까지 넣은 전역 모델</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout tip"><strong>실무에서 쓰는 법</strong>새 조건의 "상대 변화"를 예측하는 데 가장 강하다. 기준점(측정된 nₑ, Tₑ)에 맞춰 흡수 효율이나 \(h\)를 한 번 보정하면, 압력·전력·기체 변화의 방향과 크기는 대개 20–30 % 안에서 맞는다. EtchBook의 공정 관점 요약은 <a href="../../etch/chapters/plasma.html#balance">EtchBook 플라스마 장</a>에 있다.</div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>전역 모델은 플라즈마를 상자 하나로 보고, 공간 구조는 가장자리 비 \(h_L, h_R\)로만 남긴다. \(d_{\text{eff}} = V/A_{\text{eff}}\).</li>
+      <li>입자 균형 \(K_{iz}(T_e)n_g d_{\text{eff}} = u_B\)가 Tₑ를 정한다. 전력과 무관하고, 압력·크기가 줄면 Tₑ가 오른다(로그로 약하게).</li>
+      <li>전력 균형 \(P = en_0u_BA_{\text{eff}}\mathcal{E}_T\), \(\mathcal{E}_T = \mathcal{E}_c + 2T_e + \mathcal{E}_i\)가 \(n_0 \propto P\)를 준다. Tₑ가 낮으면 \(\mathcal{E}_c\)가 급증한다(2 eV 127 eV, 3 eV 62 eV).</li>
+      <li>PL-300 IC(Ar 10 mTorr, 1.5 kW): Tₑ ≈ 2.5 eV, \(\mathcal{E}_T\) ≈ 100 eV(이온화 16 %, 여기 66 %), n₀ ≈ 4×10¹¹ cm⁻³, 웨이퍼 플럭스 ≈ 2×10²⁰ m⁻²s⁻¹.</li>
+      <li>압력↑: Tₑ↓, n₀↑, 웨이퍼 Γᵢ↓. 전력↑: n₀·Γᵢ ∝ P. 크기↑(같은 P): 밀도↓.</li>
+      <li>전기 음성 기체는 부착으로 전자를 없애 Tₑ를 올리고 nₑ를 낮춘다. α는 전력↑에 줄고 압력↑에 는다. 음이온은 벽에 못 가 부피에서만 재결합·탈리로 사라진다.</li>
+      <li>혼합 기체에서는 이온화가 쉬운 소수 성분이 Tₑ를 정하고, 페닝 이온화가 준안정 에너지를 재활용한다. 전력 변화에는 Tₑ가 µs, n이 수십–100 µs로 응답한다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. Ar ICP의 흡수 전력을 1 kW에서 2 kW로 올렸다(압력·기하 고정). 전역 모델의 예측은?</p><div class="opts">
+        <button class="opt">Tₑ 두 배, 밀도 그대로</button>
+        <button class="opt" data-correct>Tₑ 그대로, 밀도 두 배</button>
+        <button class="opt">Tₑ √2배, 밀도 √2배</button>
+        <button class="opt">둘 다 두 배</button>
+      </div><div class="quiz-exp">입자 균형 \(K_{iz}(T_e)/u_B = 1/(n_gd_{\text{eff}})\)에는 밀도가 없으므로 Tₑ는 전력과 무관하다. 전력 균형 \(P = en_0u_BA_{\text{eff}}\mathcal{E}_T\)에서 나머지가 고정이므로 \(n_0 \propto P\).</div></div>
+
+      <div class="quiz-q"><p>2. 압력을 올리면 Tₑ가 내려가는 이유로 가장 알맞은 것은?</p><div class="opts">
+        <button class="opt">전자가 기체에 열을 더 많이 빼앗겨서</button>
+        <button class="opt" data-correct>\(n_gd_{\text{eff}}\)가 커져 전자 하나당 이온화 기회가 늘어, 더 낮은 Tₑ로도 벽 손실을 메울 수 있어서</button>
+        <button class="opt">보옴 속도가 압력에 반비례해서</button>
+        <button class="opt">전력이 압력에 반비례해 흡수되어서</button>
+      </div><div class="quiz-exp">생성 \(K_{iz}n_g\)는 압력에 비례하고, 손실 \(u_B/d_{\text{eff}}\)는 \(h\)가 작아져 오히려 준다. 균형을 맞추려면 \(K_{iz}\)가 작아져야 하고, 그러려면 Tₑ가 내려간다.</div></div>
+
+      <div class="quiz-q"><p>3. Tₑ = 3 eV Ar 플라즈마에서 \(\mathcal{E}_c\) ≈ 62 eV이다. 부유 벽 기준 \(\mathcal{E}_T\)에 가장 가까운 값은?</p><div class="opts">
+        <button class="opt">62 eV</button>
+        <button class="opt">68 eV</button>
+        <button class="opt" data-correct>약 84 eV</button>
+        <button class="opt">약 120 eV</button>
+      </div><div class="quiz-exp">\(2T_e\) = 6 eV, \(\mathcal{E}_i\) ≈ 5.2 × 3 = 15.5 eV. 62 + 6 + 15.5 ≈ 84 eV.</div></div>
+
+      <div class="quiz-q"><p>4. 같은 전력에서 챔버 반지름만 두 배로 키웠다(높이·압력 고정, 납작한 챔버). 중심 밀도는 대략?</p><div class="opts">
+        <button class="opt">두 배</button>
+        <button class="opt">그대로</button>
+        <button class="opt" data-correct>약 1/4 (손실 면적이 약 4배)</button>
+        <button class="opt">약 1/2</button>
+      </div><div class="quiz-exp">납작한 챔버의 \(A_{\text{eff}}\)는 위·아래 면 \(2\pi R^2h_L\)이 지배하므로 R²에 비례해 약 4배가 된다. Tₑ는 \(d_{\text{eff}}\)가 거의 그대로라 비슷하고, \(n_0 \propto 1/A_{\text{eff}}\) ≈ 1/4. 웨이퍼가 커지면 같은 플럭스를 위해 전력이 면적에 비례해 커져야 한다.</div></div>
+
+      <div class="quiz-q"><p>5. O₂ ICP에서 전력을 낮추면 전기 음성도 α = n₋/nₑ는?</p><div class="opts">
+        <button class="opt">작아진다</button>
+        <button class="opt" data-correct>커진다</button>
+        <button class="opt">변하지 않는다</button>
+        <button class="opt">0이 된다</button>
+      </div><div class="quiz-exp">음이온 생성(부착)은 \(n_e\)에 비례하지만 손실(이온-이온 재결합)은 \(n_+n_-\)에 비례한다. 정리하면 \(\alpha\)는 대략 \(K_{att}n_g/(K_{rec}n_e)\)이므로 nₑ가 줄면 α가 커진다.</div></div>
+
+      <div class="quiz-q"><p>6. He 방전에 Ar을 몇 % 섞었더니 같은 전력에서 전자 밀도가 올라갔다. 그 이유로 맞지 않는 것은?</p><div class="opts">
+        <button class="opt">이온화 문턱이 낮은 Ar이 이온화를 맡아 Tₑ가 내려간다</button>
+        <button class="opt">He 준안정이 Ar을 페닝 이온화한다</button>
+        <button class="opt">무거운 Ar⁺의 보옴 속도가 느려 손실이 줄어든다</button>
+        <button class="opt" data-correct>Ar이 전자를 부착해 음이온을 만든다</button>
+      </div><div class="quiz-exp">Ar은 전자 친화도가 없어 음이온을 만들지 않는다. 나머지 세 가지(희석, 페닝, 느린 이온)는 모두 \(\mathcal{E}_T\)나 손실을 줄여 같은 전력에서 밀도를 높인다.</div></div>
+
+      <div class="quiz-q"><p>7. 펄스 ICP(10 kHz, 듀티 50 %)에서 펄스를 끈 직후 일어나는 일의 순서로 옳은 것은? (τₙ ≈ 90 µs)</p><div class="opts">
+        <button class="opt">밀도가 먼저 µs 안에 0이 되고 Tₑ는 천천히 내려간다</button>
+        <button class="opt" data-correct>Tₑ가 수 µs 안에 급랭하고, 밀도는 50 µs의 끈 시간 동안 일부만 감쇠한다</button>
+        <button class="opt">Tₑ와 밀도가 같은 시간 상수로 함께 감쇠한다</button>
+        <button class="opt">Tₑ가 끈 직후 오버슈트한다</button>
+      </div><div class="quiz-exp">에너지 완화 시간(수 µs)이 입자 손실 시간(약 90 µs)보다 훨씬 짧다. 끈 시간 50 µs는 τₙ보다 짧아 밀도는 수십 %만 줄어든다. 오버슈트는 켤 때 생긴다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const QE = 1.602176634e-19, ME = 9.1093837e-31, AMU = 1.66054e-27, KB = 1.380649e-23;
+  const font = (px, mono) => px + "px " + getComputedStyle(document.body).getPropertyValue(mono ? "--mono" : "--font");
+  const sci = (x, d) => { if (!isFinite(x) || x === 0) return "0"; const e = Math.floor(Math.log10(Math.abs(x))); return (x / Math.pow(10, e)).toFixed(d == null ? 2 : d) + "×10<sup>" + e + "</sup>"; };
+  const fmtL = (m) => !isFinite(m) ? "—" : m >= 1 ? m.toPrecision(3) + " m" : m >= 1e-2 ? (m * 100).toPrecision(3) + " cm" : m >= 1e-3 ? (m * 1e3).toPrecision(3) + " mm" : (m * 1e6).toPrecision(3) + " µm";
+  const fmtT = (s) => s < 1e-6 ? (s * 1e9).toPrecision(3) + " ns" : s < 1e-3 ? (s * 1e6).toPrecision(3) + " µs" : (s * 1e3).toPrecision(3) + " ms";
+  const fmtP = (mT) => mT >= 1000 ? (mT / 1000).toPrecision(3) + " Torr" : mT.toPrecision(3) + " mTorr";
+  const cm3 = (n) => sci(n * 1e-6, 2) + " cm⁻³";
+  const setCls = (id, c) => { const el = $(id); if (el) el.className = "v gl-v " + c; };
+  const rgba = (c, a) => { const m = /^#([0-9a-f]{6})$/i.exec((c || "").trim()); if (!m) return c; const n = parseInt(m[1], 16); return "rgba(" + (n >> 16) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")"; };
+
+  /* ---------------- 공통 물리 (PL-300 Ar 근사) ---------------- */
+  const ngOf = (mT) => mT * 0.133322 / (KB * 300);
+  const SIGI = 1e-18;
+  const Kiz = (T) => 2.34e-14 * Math.pow(T, 0.59) * Math.exp(-17.44 / T);
+  const Kex = (T) => 2.48e-14 * Math.pow(T, 0.33) * Math.exp(-12.78 / T);
+  const Kel = (T) => { const l = Math.log(T); return 2.336e-14 * Math.pow(T, 1.609) * Math.exp(0.0618 * l * l - 0.1171 * l * l * l); };
+  const EIZ = 15.76, EEX = 12.14;
+  const epsI = (T, M) => T * (0.5 + 0.5 * Math.log(M / (2 * Math.PI * ME)));
+  const uBof = (T, M) => Math.sqrt(QE * T / M);
+  // collisional loss per ionization (eV), computed without overflow
+  const Ec = (T, M) => EIZ + Kex(T) / Kiz(T) * EEX + Kel(T) / Kiz(T) * 3 * ME / M * T;
+  function geom(p, R, L) {
+    const ng = ngOf(p), li = 1 / (ng * SIGI);
+    const hL = 0.86 / Math.sqrt(3 + L / (2 * li)), hR = 0.8 / Math.sqrt(4 + R / li);
+    const V = Math.PI * R * R * L, AL = 2 * Math.PI * R * R * hL, AR = 2 * Math.PI * R * L * hR, Aeff = AL + AR;
+    return { ng, li, hL, hR, V, Aeff, AL, AR, deff: V / Aeff, Awall: 2 * Math.PI * R * R + 2 * Math.PI * R * L };
+  }
+  function bisect(f, lo, hi, n) { let flo = f(lo); if (flo > 0) return lo; if (f(hi) < 0) return hi; for (let k = 0; k < (n || 60); k++) { const m = 0.5 * (lo + hi), fm = f(m); if (fm > 0) hi = m; else lo = m; } return 0.5 * (lo + hi); }
+  function gmodel(p, P, R, L, Mamu) {
+    const M = (Mamu || 40) * AMU, g = geom(p, R, L);
+    const Te = bisect((T) => Kiz(T) * g.ng * g.deff - uBof(T, M), 0.5, 30);
+    const uB = uBof(Te, M), ec = Ec(Te, M), ei = epsI(Te, M), eT = ec + 2 * Te + ei;
+    const n0 = P / (QE * uB * g.Aeff * eT);
+    return Object.assign({ Te, uB, ec, ei, eT, n0, G: g.hL * n0 * uB, M }, g);
+  }
+
+  /* ============================================================
+     1) h 인자
+     ============================================================ */
+  (function () {
+    if (!$("hf-cv")) return;
+    const gp = PB.range("hf-p", (v) => fmtP(Math.pow(10, v)), draw);
+    const gR = PB.range("hf-R", (v) => v.toFixed(2) + " m", draw);
+    const gL = PB.range("hf-L", (v) => v.toFixed(3) + " m", draw);
+    const cv = PB.canvas($("hf-cv"), (ctx, w, h) => {
+      const P = PB.palette(), p = Math.pow(10, gp()), R = gR(), L = gL();
+      const dL = [], dR = [], dD = [];
+      for (let k = 0; k <= 100; k++) { const pp = Math.pow(10, -0.3 + 2.6 * k / 100), g = geom(pp, R, L); dL.push([pp, g.hL]); dR.push([pp, g.hR]); dD.push([pp, g.deff / L]); }
+      const dmax = Math.max(...dD.map((q) => q[1])) * 1.1;
+      const ch = PB.chart(ctx, { x: 52, y: 14, w: w - 104, h: h - 60 }, {
+        x: [0.5, 200], y: [0, 0.6], logX: true, xLabel: "압력 (mTorr)", yLabel: "h",
+        series: [{ data: dL, color: P.electron, width: 2.6 }, { data: dR, color: P.ion, width: 2.6 }, { data: dD.map(([x, y]) => [x, y / dmax * 0.6]), color: P.ok, width: 2, dash: [6, 4] }],
+        vlines: [{ x: p, color: P.bad }], yFmt: (v) => v.toFixed(1),
+      });
+      ctx.font = font(11, true); ctx.fillStyle = P.ok; ctx.textAlign = "left";
+      for (let i = 0; i <= 4; i++) { const v = dmax * i / 4; ctx.fillText(v.toFixed(1), ch.box.x + ch.box.w + 6, ch.Y(0.6 * i / 4) + 4); }
+      ctx.save(); ctx.translate(w - 10, ch.box.y + ch.box.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.font = font(12); ctx.fillText("d_eff / L", 0, 0); ctx.restore();
+      ctx.font = font(12); ctx.fillStyle = P.electron; ctx.fillText("h_L", ch.box.x + 8, ch.box.y + 16); ctx.fillStyle = P.ion; ctx.fillText("h_R", ch.box.x + 40, ch.box.y + 16);
+      const g = geom(p, R, L);
+      PB.stat("hf-li", fmtL(g.li));
+      PB.stat("hf-h", g.hL.toFixed(3) + " / " + g.hR.toFixed(3));
+      PB.stat("hf-d", fmtL(g.deff));
+      PB.stat("hf-a", (g.Aeff / g.Awall).toFixed(3));
+      PB.stat("hf-ax", (g.AL / g.Aeff * 100).toFixed(0) + " %");
+    }, { aspect: 0.5, minHeight: 250, maxHeight: 380 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* ============================================================
+     2) 𝓔_T 분해
+     ============================================================ */
+  (function () {
+    if (!$("ec-cv")) return;
+    const gT = PB.range("ec-Te", (v) => v.toFixed(2) + " eV", draw);
+    const gM = PB.range("ec-M", (v) => v + " u", draw);
+    const gB = PB.range("ec-B", (v) => v + " V", draw);
+    function parts(T, M, B) {
+      const r = Kex(T) / Kiz(T);
+      return [EIZ, r * EEX, Kel(T) / Kiz(T) * 3 * ME / M * T, 2 * T, epsI(T, M) + B];
+    }
+    const cv = PB.canvas($("ec-cv"), (ctx, w, h) => {
+      const P = PB.palette(), T = gT(), M = gM() * AMU, B = gB();
+      const cols = [P.ion, P.photon, P.neutral, P.electron, P.accent];
+      const names = ["이온화", "여기", "탄성", "2Tₑ", "𝓔ᵢ"];
+      const bw = w > 560 ? 130 : 0, ymax = 300;
+      const ch = PB.chart(ctx, { x: 52, y: 14, w: w - 72 - bw, h: h - 58 }, { x: [1.5, 8], y: [0, ymax], xLabel: "Tₑ (eV)", yLabel: "eV / 이온", series: [], vlines: [{ x: T, color: P.bad }] });
+      const N = 120, Ts = [], cum = [];
+      for (let k = 0; k <= N; k++) { const t = 1.5 + 6.5 * k / N; Ts.push(t); let c = 0; cum.push(parts(t, M, B).map((v) => (c += v))); }
+      ctx.save(); ctx.beginPath(); ctx.rect(ch.box.x, ch.box.y, ch.box.w, ch.box.h); ctx.clip();
+      for (let j = 4; j >= 0; j--) {
+        ctx.fillStyle = rgba(cols[j], 0.75); ctx.beginPath();
+        Ts.forEach((t, k) => { const y = ch.Y(Math.min(cum[k][j], ymax * 1.2)); k ? ctx.lineTo(ch.X(t), y) : ctx.moveTo(ch.X(t), y); });
+        ctx.lineTo(ch.X(8), ch.Y(0)); ctx.lineTo(ch.X(1.5), ch.Y(0)); ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+      const pr = parts(T, M, B), tot = pr.reduce((a, b) => a + b, 0);
+      ctx.font = font(11);
+      if (bw) {
+        const bx = w - bw + 20, by = 18, bh = h - 76; let acc = 0;
+        pr.forEach((v, j) => { const y1 = by + bh - (acc + v) / tot * bh, hh = v / tot * bh; ctx.fillStyle = cols[j]; ctx.fillRect(bx, y1, 34, hh); if (hh > 12) { ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.fillText(names[j] + " " + (v / tot * 100).toFixed(0) + "%", bx + 40, y1 + hh / 2 + 4); } acc += v; });
+        ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.fillText("𝓔_T = " + tot.toFixed(0) + " eV", bx - 10, by + bh + 16);
+      } else {
+        ctx.textAlign = "left"; names.forEach((nm, j) => { ctx.fillStyle = cols[j]; ctx.fillText(nm, ch.box.x + 6 + j * 52, ch.box.y + 12); });
+      }
+      const ec = pr[0] + pr[1] + pr[2];
+      PB.stat("ec-c", ec.toFixed(1) + " eV");
+      PB.stat("ec-r", (Kex(T) / Kiz(T)).toFixed(2));
+      PB.stat("ec-i", pr[4].toFixed(1) + " eV");
+      PB.stat("ec-t", tot.toFixed(1) + " eV");
+      PB.stat("ec-f", (EIZ / tot * 100).toFixed(0) + " %");
+    }, { aspect: 0.52, minHeight: 260, maxHeight: 380 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* ============================================================
+     3) 전역 모델 계산기
+     ============================================================ */
+  (function () {
+    if (!$("gm-cv")) return;
+    const gp = PB.range("gm-p", (v) => fmtP(Math.pow(10, v)), draw);
+    const gP = PB.range("gm-P", (v) => v >= 1000 ? (v / 1000).toFixed(2) + " kW" : v + " W", draw);
+    const gR = PB.range("gm-R", (v) => v.toFixed(3) + " m", draw);
+    const gL = PB.range("gm-L", (v) => v.toFixed(3) + " m", draw);
+    const gM = PB.range("gm-M", (v) => v + " u", draw);
+    $("gm-ref").addEventListener("click", () => { gp.set(1); gR.set(0.25); gL.set(0.1); gM.set(40); gP.set(1500); });
+    const cv = PB.canvas($("gm-cv"), (ctx, w, h) => {
+      const P = PB.palette(), r = gmodel(Math.pow(10, gp()), gP(), gR(), gL(), gM());
+      const prod = [], loss = [];
+      for (let k = 0; k <= 160; k++) { const T = 1 + 11 * k / 160; prod.push([T, Kiz(T) * r.ng * r.deff]); loss.push([T, uBof(T, r.M)]); }
+      const ch = PB.chart(ctx, { x: 62, y: 14, w: w - 80, h: h - 60 }, {
+        x: [1, 12], y: [10, 1e6], logY: true, xLabel: "Tₑ (eV)", yLabel: "m/s",
+        series: [{ data: prod, color: P.ok, width: 2.6 }, { data: loss, color: P.ion, width: 2.6 }],
+        vlines: [{ x: r.Te, color: P.bad, label: "Tₑ = " + r.Te.toFixed(2) + " eV" }],
+        points: [{ x: r.Te, y: r.uB, color: P.bad, r: 5 }],
+        yFmt: (v) => v.toExponential(0).replace("e+", "e"),
+      });
+      ctx.font = font(12); ctx.textAlign = "left";
+      ctx.fillStyle = P.ok; ctx.fillText("생성 K_iz n_g d_eff", ch.box.x + 8, ch.box.y + 16);
+      ctx.fillStyle = P.ion; ctx.fillText("손실 u_B", ch.box.x + 8, ch.box.y + 32);
+      PB.stat("gm-Te", r.Te >= 29.9 ? "> 30 eV (유지 불가)" : r.Te.toFixed(2) + " eV");
+      PB.stat("gm-n", cm3(r.n0));
+      PB.stat("gm-uB", (r.uB / 1000).toFixed(2) + " km/s");
+      PB.stat("gm-E", r.ec.toFixed(0) + " / " + r.eT.toFixed(0) + " eV");
+      PB.stat("gm-d", fmtL(r.deff) + " / " + r.Aeff.toFixed(3) + " m²");
+      PB.stat("gm-G", sci(r.G, 2) + " m⁻²s⁻¹");
+      PB.stat("gm-J", (QE * r.G * 0.1).toFixed(2) + " mA/cm²");
+      PB.stat("gm-x", sci(r.n0 / r.ng, 1));
+    }, { aspect: 0.5, minHeight: 260, maxHeight: 380 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* ============================================================
+     4) 스케일링 그래프
+     ============================================================ */
+  (function () {
+    if (!$("sc-cv")) return;
+    const gp = PB.range("sc-p", (v) => fmtP(Math.pow(10, v)), draw);
+    const gP = PB.range("sc-P", (v) => v >= 1000 ? (v / 1000).toFixed(2) + " kW" : v + " W", draw);
+    const gR = PB.range("sc-R", (v) => v.toFixed(2) + " m", draw);
+    const cv = PB.canvas($("sc-cv"), (ctx, w, h) => {
+      const P = PB.palette(), p = Math.pow(10, gp()), Pw = gP(), R = gR();
+      const narrow = w < 560;
+      const b1 = narrow ? { x: 52, y: 12, w: w - 70, h: h / 2 - 50 } : { x: 52, y: 14, w: w / 2 - 74, h: h - 60 };
+      const b2 = narrow ? { x: 52, y: h / 2 + 8, w: w - 70, h: h / 2 - 50 } : { x: w / 2 + 40, y: 14, w: w / 2 - 58, h: h - 60 };
+      const Ls = [0.05, 0.1, 0.2], cL = [P.accent2, P.accent, P.ok];
+      const ser1 = Ls.map((L, i) => { const d = []; for (let k = 0; k <= 60; k++) { const pp = Math.pow(10, 2 * k / 60); d.push([pp, gmodel(pp, 1000, R, L).Te]); } return { data: d, color: cL[i], width: i === 1 ? 2.8 : 1.8 }; });
+      const r0 = gmodel(p, Pw, R, 0.1);
+      const ch1 = PB.chart(ctx, b1, { x: [1, 100], y: [1, 6], logX: true, xLabel: "압력 (mTorr)", yLabel: "Tₑ (eV)", series: ser1, points: [{ x: p, y: r0.Te, color: P.bad, r: 5 }] });
+      ctx.font = font(11); ctx.textAlign = "right";
+      Ls.forEach((L, i) => { ctx.fillStyle = cL[i]; ctx.fillText("L = " + L + " m", ch1.box.x + ch1.box.w - 4, ch1.box.y + 14 + 14 * i); });
+      const ps = [3, 10, 30], cp = [P.accent2, P.accent, P.ok];
+      const lines = ps.map((pp) => gmodel(pp, 1000, R, 0.1));
+      const nmax = Math.max(...lines.map((r) => r.n0 * 3)) * 1e-6 * 1.05, gmax = Math.max(...lines.map((r) => r.G * 3)) * 1.05;
+      const ser2 = [];
+      lines.forEach((r, i) => { ser2.push({ data: [[0, 0], [3000, r.n0 * 3e-6 / nmax]], color: cp[i], width: 2.2 }); ser2.push({ data: [[0, 0], [3000, r.G * 3 / gmax]], color: cp[i], width: 1.4, dash: [5, 4] }); });
+      const ch2 = PB.chart(ctx, b2, { x: [0, 3000], y: [0, 1], xLabel: "흡수 전력 (W)", yLabel: "n₀ (실선) · Γᵢ (점선), 상대", series: ser2, points: [{ x: Pw, y: r0.n0 * 1e-6 / nmax, color: P.bad, r: 5 }], yFmt: (v) => v.toFixed(1) });
+      ctx.textAlign = "left";
+      ps.forEach((pp, i) => { ctx.fillStyle = cp[i]; ctx.fillText(pp + " mTorr", ch2.box.x + 6, ch2.box.y + 14 + 14 * i); });
+      ctx.fillStyle = P.dim; ctx.fillText("n₀ 1.0 = " + nmax.toExponential(1).replace("e+", "e") + " cm⁻³", ch2.box.x + 90, ch2.box.y + 14);
+      PB.stat("sc-Te", r0.Te.toFixed(2) + " eV");
+      PB.stat("sc-n", cm3(r0.n0));
+      PB.stat("sc-np", cm3(r0.n0 / Pw * 1000).replace(" cm⁻³", " cm⁻³/kW"));
+      PB.stat("sc-gp", sci(r0.G / Pw * 1000, 2) + " m⁻²s⁻¹/kW");
+    }, { aspect: 0.5, minHeight: 300, maxHeight: 420 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* ============================================================
+     5) 손잡이 × 2
+     ============================================================ */
+  (function () {
+    if (!$("kn-cv")) return;
+    const gk = PB.seg("kn-k", draw), gd = PB.seg("kn-d", draw);
+    const base = { p: 10, P: 1500, R: 0.25, L: 0.1, M: 40 };
+    const cv = PB.canvas($("kn-cv"), (ctx, w, h) => {
+      const P = PB.palette(), k = gk(), f = +gd();
+      const c = Object.assign({}, base); c[k] *= f;
+      const run = (o) => gmodel(o.p, o.P, o.R, o.L, o.M);
+      const a = run(base), b = run(c);
+      const items = [["Tₑ", b.Te / a.Te], ["n₀", b.n0 / a.n0], ["웨이퍼 Γᵢ", b.G / a.G], ["𝓔_T", b.eT / a.eT], ["부유 이온 에너지", b.ei / a.ei], ["d_eff", b.deff / a.deff]];
+      const x0 = Math.min(140, w * 0.32), x1 = w - 60, mid = (x0 + x1) / 2, rowH = (h - 40) / items.length;
+      const X = (r) => mid + Math.log2(Math.max(0.2, Math.min(5, r))) / 2.32 * (x1 - x0) / 2;
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(mid, 10); ctx.lineTo(mid, h - 26); ctx.stroke();
+      ctx.font = font(11, true); ctx.fillStyle = P.dim; ctx.textAlign = "center";
+      [0.25, 0.5, 1, 2, 4].forEach((r) => { const x = X(r); ctx.fillText(r < 1 ? "×" + r : "×" + r, x, h - 10); ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(x, 10); ctx.lineTo(x, h - 26); ctx.stroke(); });
+      items.forEach(([nm, r], i) => {
+        const y = 14 + i * rowH, bh = rowH * 0.6;
+        ctx.fillStyle = Math.abs(r - 1) < 0.02 ? P.faint : r > 1 ? P.ok : P.bad;
+        const xa = X(1), xb = X(r); ctx.fillRect(Math.min(xa, xb), y, Math.max(2, Math.abs(xb - xa)), bh);
+        ctx.fillStyle = P.text; ctx.font = font(12); ctx.textAlign = "right"; ctx.fillText(nm, x0 - 8, y + bh * 0.75);
+        ctx.textAlign = r >= 1 ? "left" : "right"; ctx.fillStyle = P.dim; ctx.fillText("×" + r.toFixed(2), xb + (r >= 1 ? 6 : -6), y + bh * 0.75);
+      });
+      PB.stat("kn-base", "Tₑ " + a.Te.toFixed(2) + " eV · n₀ " + cm3(a.n0));
+      PB.stat("kn-new", "Tₑ " + b.Te.toFixed(2) + " eV · n₀ " + cm3(b.n0));
+    }, { aspect: 0.45, minHeight: 240, maxHeight: 340 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* ============================================================
+     6) 전기 음성 전역 모델
+     ============================================================ */
+  const GAS = {
+    O2: { M: 32, Kiz: (T) => 2.34e-15 * Math.pow(T, 1.03) * Math.exp(-12.29 / T), Eiz: 12.1, Katt: (T) => 1.07e-15 * Math.pow(T, -1.39) * Math.exp(-6.26 / T), Eatt: 4.4, Kd: (T) => 6.86e-15 * Math.exp(-6.29 / T), Ed: 6.4, Kx: (T) => 1.7e-15 * Math.exp(-2.2 / T), Ex: 1.2, Kel: (T) => 4.7e-14 * Math.sqrt(T), Krec: 1.4e-13, Kdet: 1.4e-16, x0: 0.1 },
+    Cl2: { M: 70, Kiz: (T) => 3.5e-14 * Math.pow(T, 0.59) * Math.exp(-13.0 / T), Eiz: 11.5, Katt: (T) => 2.0e-15 * Math.pow(T, -0.8) * Math.exp(-0.6 / T), Eatt: 0.5, Kd: (T) => 3.8e-14 * Math.exp(-3.8 / T), Ed: 3.1, Kx: (T) => 2.0e-15 * Math.exp(-2.5 / T), Ex: 2.5, Kel: (T) => 5e-14 * Math.sqrt(T), Krec: 5e-14, Kdet: 1e-16, x0: 0.5 },
+  };
+  function eneg(gn, p, Pw, x) {
+    const G = GAS[gn], g = geom(p, 0.25, 0.1), M = G.M * AMU, nud = G.Kdet * x * g.ng, nmol = (1 - x) * g.ng;
+    const alphaOf = (ne, T) => { const a = G.Krec * ne, b = a + nud, c = G.Katt(T) * nmol; return a < 1e-30 ? (b > 0 ? c / b : 0) : (-b + Math.sqrt(b * b + 4 * a * c)) / (2 * a); };
+    let ne = 1e16, T = 3, al = 0;
+    for (let it = 0; it < 70; it++) {
+      const f = (t) => (G.Kiz(t) * g.ng - G.Katt(t) * nmol) + nud * alphaOf(ne, t) - uBof(t, M) / g.deff;
+      T = bisect(f, 0.3, 20, 50);
+      al = alphaOf(ne, T);
+      const uB = uBof(T, M), ei = epsI(T, M);
+      const X = g.ng * G.Kiz(T) * G.Eiz + nmol * (G.Katt(T) * G.Eatt + G.Kd(T) * G.Ed) + g.ng * (G.Kx(T) * G.Ex + G.Kel(T) * 3 * ME / M * T);
+      const nn = Pw / (QE * (g.V * X + g.Aeff * uB * (2 * T + ei)));
+      const prev = ne; ne = Math.sqrt(ne * nn);
+      if (Math.abs(ne / prev - 1) < 1e-6 && it > 5) break;
+    }
+    const nm = al * ne, rec = G.Krec * ne * (1 + al) * nm, det = nud * nm;
+    return { Te: T, ne, nm, np: ne * (1 + al), al, rec, det };
+  }
+  (function () {
+    if (!$("en-cv")) return;
+    const gg = PB.seg("en-g", (v) => { gx.set(GAS[v].x0); });
+    const gp = PB.range("en-p", (v) => fmtP(Math.pow(10, v)), draw);
+    const gP = PB.range("en-P", (v) => v >= 1000 ? (v / 1000).toFixed(2) + " kW" : v + " W", draw);
+    const gx = PB.range("en-x", (v) => (v * 100).toFixed(0) + " %", draw);
+    const cv = PB.canvas($("en-cv"), (ctx, w, h) => {
+      const P = PB.palette(), gn = gg(), p = Math.pow(10, gp()), Pw = gP(), x = gx();
+      const narrow = w < 560;
+      const b1 = narrow ? { x: 56, y: 12, w: w - 74, h: h / 2 - 50 } : { x: 56, y: 14, w: w / 2 - 78, h: h - 60 };
+      const b2 = narrow ? { x: 56, y: h / 2 + 8, w: w - 74, h: h / 2 - 50 } : { x: w / 2 + 44, y: 14, w: w / 2 - 62, h: h - 60 };
+      const ad = []; for (let k = 0; k <= 24; k++) { const pp = Math.pow(10, 2 * k / 24); ad.push([pp, Math.max(1e-3, eneg(gn, pp, Pw, x).al)]); }
+      const r = eneg(gn, p, Pw, x);
+      const amax = Math.pow(10, Math.ceil(Math.log10(Math.max(...ad.map((q) => q[1])) * 1.2)));
+      PB.chart(ctx, b1, { x: [1, 100], y: [Math.min(0.01, amax / 1e3), amax], logX: true, logY: true, xLabel: "압력 (mTorr)", yLabel: "α = n₋/nₑ", series: [{ data: ad, color: P.negion, width: 2.6 }], hlines: [{ y: 1, color: P.faint, label: "α = 1" }], points: [{ x: p, y: Math.max(1e-3, r.al), color: P.bad, r: 5 }] });
+      const de = [], dm = [], dp = [];
+      for (let k = 0; k <= 20; k++) { const pw = 100 + 2900 * k / 20, q = eneg(gn, p, pw, x); de.push([pw, q.ne * 1e-6]); dm.push([pw, Math.max(q.nm, 1) * 1e-6]); dp.push([pw, q.np * 1e-6]); }
+      const ymax = Math.max(...dp.map((q) => q[1]), ...dm.map((q) => q[1])) * 1.1;
+      const ch2 = PB.chart(ctx, b2, { x: [100, 3000], y: [0, ymax], xLabel: "흡수 전력 (W)", yLabel: "밀도 (cm⁻³)", series: [{ data: dp, color: P.ion, width: 2.2 }, { data: dm, color: P.negion, width: 2.2 }, { data: de, color: P.electron, width: 2.6 }], vlines: [{ x: Pw, color: P.bad }], yFmt: (v) => v.toExponential(0).replace("e+", "e") });
+      ctx.font = font(12); ctx.textAlign = "left";
+      ctx.fillStyle = P.ion; ctx.fillText("n₊", ch2.box.x + 8, ch2.box.y + 16); ctx.fillStyle = P.negion; ctx.fillText("n₋", ch2.box.x + 36, ch2.box.y + 16); ctx.fillStyle = P.electron; ctx.fillText("nₑ", ch2.box.x + 64, ch2.box.y + 16);
+      const ar = gmodel(p, Pw, 0.25, 0.1);
+      PB.stat("en-Te", r.Te.toFixed(2) + " eV");
+      PB.stat("en-ne", cm3(r.ne));
+      PB.stat("en-nn", sci(r.nm * 1e-6, 1) + " / " + sci(r.np * 1e-6, 1));
+      PB.stat("en-a", r.al.toFixed(2) + (r.al > 10 ? " (이온-이온)" : ""));
+      setCls("en-a", r.al > 10 ? "bad" : r.al > 1 ? "warn" : "ok");
+      const tot = r.rec + r.det;
+      PB.stat("en-loss", tot > 0 ? (r.rec / tot * 100).toFixed(0) + " : " + (r.det / tot * 100).toFixed(0) : "—");
+      PB.stat("en-ar", ar.Te.toFixed(2) + " eV");
+    }, { aspect: 0.5, minHeight: 300, maxHeight: 420 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* ============================================================
+     7) He/Ar 혼합
+     ============================================================ */
+  (function () {
+    if (!$("mx-cv")) return;
+    const gx = PB.range("mx-x", (v) => (v * 100).toFixed(1) + " %", draw);
+    const gp = PB.range("mx-p", (v) => fmtP(Math.pow(10, v)), draw);
+    const cpen = $("mx-pen"); cpen.addEventListener("change", draw);
+    const He = { M: 4 * AMU, Kiz: (T) => 2.5e-14 * Math.pow(T, 0.68) * Math.exp(-24.6 / T), Kex: (T) => 2.1e-14 * Math.pow(T, 0.31) * Math.exp(-19.8 / T), Kel: (T) => 4e-14 * Math.sqrt(T), Eiz: 24.6, Eex: 19.8 };
+    const MAr = 40 * AMU, KP = 7e-17, R = 0.25, L = 0.1, PW = 1500;
+    function mix(xa, p, pen) {
+      const g = geom(p, R, L), xh = 1 - xa, Lam2inv = Math.pow(2.405 / R, 2) + Math.pow(Math.PI / L, 2);
+      const num = Math.max(0, 0.047 / (p / 1000) * Lam2inv), xi = xa > 0 ? KP * xa * g.ng / (KP * xa * g.ng + num) : 0;
+      const nus = (T) => { const nA = xa * g.ng * Kiz(T), nH = xh * g.ng * He.Kiz(T), nP = pen ? xh * g.ng * 0.5 * He.Kex(T) * xi : 0; return { nA, nH, nP }; };
+      const Te = bisect((T) => { const s = nus(T); return (s.nA + s.nP) / uBof(T, MAr) + s.nH / uBof(T, He.M) - 1 / g.deff; }, 0.5, 40);
+      const s = nus(Te), nu = s.nA + s.nP + s.nH;
+      const X = xa * g.ng * (Kiz(Te) * EIZ + Kex(Te) * EEX + Kel(Te) * 3 * ME / MAr * Te) + xh * g.ng * (He.Kiz(Te) * He.Eiz + He.Kex(Te) * He.Eex + He.Kel(Te) * 3 * ME / He.M * Te);
+      const wall = (s.nA + s.nP) * (2 * Te + epsI(Te, MAr)) + s.nH * (2 * Te + epsI(Te, He.M));
+      const ne = PW / (QE * g.V * (X + wall));
+      return { Te, ne, Ec: X / nu, fAr: (s.nA + s.nP) / uBof(Te, MAr) * g.deff, fP: (s.nA + s.nP) > 0 ? s.nP / (s.nA + s.nP) : 0 };
+    }
+    const cv = PB.canvas($("mx-cv"), (ctx, w, h) => {
+      const P = PB.palette(), xa = gx(), p = Math.pow(10, gp()), pen = cpen.checked;
+      const xs = []; for (let k = 0; k <= 80; k++) { const t = k / 80; xs.push(t < 0.5 ? 0.2 * Math.pow(t / 0.5, 2) : 0.2 + 0.8 * (t - 0.5) / 0.5); }
+      const A = xs.map((x) => mix(x, p, true)), B = xs.map((x) => mix(x, p, false));
+      const h1 = Math.round(h / 2);
+      const tmax = Math.ceil(Math.max(...B.map((r) => r.Te), ...A.map((r) => r.Te)) + 0.5);
+      PB.chart(ctx, { x: 56, y: 12, w: w - 74, h: h1 - 44 }, { x: [0, 1], y: [1, tmax], xLabel: "Ar 몰분율", yLabel: "Tₑ (eV)", series: [{ data: xs.map((x, i) => [x, B[i].Te]), color: P.accent, width: 1.8, dash: [6, 4] }, { data: xs.map((x, i) => [x, A[i].Te]), color: P.accent, width: 2.6 }], vlines: [{ x: xa, color: P.bad }], xFmt: (v) => (v * 100).toFixed(0) + "%" });
+      const nmax = Math.max(...A.map((r) => r.ne), ...B.map((r) => r.ne)) * 1.1e-6;
+      PB.chart(ctx, { x: 56, y: h1 + 6, w: w - 74, h: h - h1 - 46 }, { x: [0, 1], y: [0, nmax], xLabel: "", yLabel: "nₑ (cm⁻³)", series: [{ data: xs.map((x, i) => [x, B[i].ne * 1e-6]), color: P.electron, width: 1.8, dash: [6, 4] }, { data: xs.map((x, i) => [x, A[i].ne * 1e-6]), color: P.electron, width: 2.6 }], vlines: [{ x: xa, color: P.bad }], xFmt: (v) => (v * 100).toFixed(0) + "%", yFmt: (v) => v.toExponential(0).replace("e+", "e") });
+      const r = mix(xa, p, pen);
+      PB.stat("mx-Te", r.Te.toFixed(2) + " eV");
+      PB.stat("mx-Ec", r.Ec.toFixed(0) + " eV");
+      PB.stat("mx-n", cm3(r.ne));
+      PB.stat("mx-ar", (r.fAr * 100).toFixed(0) + " %");
+      PB.stat("mx-pf", (r.fP * 100).toFixed(0) + " %");
+    }, { aspect: 0.62, minHeight: 320, maxHeight: 460 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* ============================================================
+     8) 시간 의존 전역 모델
+     ============================================================ */
+  (function () {
+    if (!$("td-cv")) return;
+    const gm = PB.seg("td-m", sched);
+    const gP = PB.range("td-P", (v) => v >= 1000 ? (v / 1000).toFixed(2) + " kW" : v + " W", sched);
+    const gf = PB.range("td-f", (v) => Math.pow(10, v).toFixed(1) + " kHz", sched);
+    const gd = PB.range("td-d", (v) => (v * 100).toFixed(0) + " %", sched);
+    const gp = PB.range("td-p", (v) => fmtP(Math.pow(10, v)), sched);
+    const M = 40 * AMU, R = 0.25, L = 0.1, TMAX = 12, TMIN = 0.03;
+    let res = null, tmr = 0;
+    function sched() { clearTimeout(tmr); tmr = setTimeout(compute, 30); }
+    function deriv(n, T, Pw, g) {
+      const uB = uBof(T, M), kiz = Kiz(T);
+      const loss = g.ng * (kiz * EIZ + Kex(T) * EEX + Kel(T) * 3 * ME / M * T);
+      const dn = n * (g.ng * kiz - uB / g.deff);
+      const dW = Pw / (QE * g.V) - n * loss - uB / g.deff * n * (2 * T + epsI(T, M)); // d(1.5 n T)/dt in eV m^-3 s^-1
+      const dT = (dW / 1.5 - T * dn) / n;
+      return [dn, dT];
+    }
+    function integrate(n, T, Pf, t0, t1, g, out, every) {
+      let t = t0, lastOut = -1e9;
+      while (t < t1) {
+        const Pw = Pf(t);
+        let [dn, dT] = deriv(n, T, Pw, g);
+        let dt = Math.min(t1 - t, 0.02 * T / (Math.abs(dT) + 1e-30), 0.02 * n / (Math.abs(dn) + 1e-30), every);
+        dt = Math.max(dt, 1e-11);
+        const nm = Math.max(1e6, n + 0.5 * dt * dn), Tm = Math.min(TMAX, Math.max(TMIN, T + 0.5 * dt * dT));
+        [dn, dT] = deriv(nm, Tm, Pf(t + 0.5 * dt), g);
+        n = Math.max(1e6, n + dt * dn); T = Math.min(TMAX, Math.max(TMIN, T + dt * dT)); t += dt;
+        if (out && t - lastOut >= every) { out.push([t, n, T, Pf(t)]); lastOut = t; }
+      }
+      return [n, T];
+    }
+    function compute() {
+      const mode = gm(), Pon = gP(), f = Math.pow(10, gf()) * 1e3, d = gd(), p = Math.pow(10, gp()), g = geom(p, R, L);
+      let Pf, t0, t1, tstart, Pinit;
+      if (mode === "pulse") {
+        const Tp = 1 / f; Pf = (t) => ((t % Tp) + Tp) % Tp < d * Tp ? Pon : 0;
+        t0 = 0; tstart = 9 * Tp; t1 = 12 * Tp; Pinit = Pon * d;
+      } else {
+        const ss = gmodel(p, Pon, R, L); const tw = 6 * ss.deff / ss.uB;
+        Pf = (t) => (t < 0 ? Pon * d : Pon); t0 = -0.15 * tw; tstart = t0; t1 = tw; Pinit = Pon * d;
+      }
+      const s0 = gmodel(p, Math.max(Pinit, 1), R, L);
+      let n = s0.n0, T = s0.Te;
+      if (tstart > t0) [n, T] = integrate(n, T, Pf, t0, tstart, g, null, (t1 - t0) / 1e4);
+      const out = [[tstart, n, T, Pf(tstart)]];
+      integrate(n, T, Pf, tstart, t1, g, out, (t1 - tstart) / 600);
+      const sOn = gmodel(p, Pon, R, L), sAvg = gmodel(p, mode === "pulse" ? Pon * d : Pon, R, L);
+      res = { out, tstart, t1, sOn, sAvg, mode };
+      cv.redraw();
+    }
+    const cv = PB.canvas($("td-cv"), (ctx, w, h) => {
+      if (!res) return;
+      const P = PB.palette(), o = res.out, us = 1e6;
+      const nmax = Math.max(...o.map((q) => q[1])) * 1.1e-6, Tmax = Math.max(4, Math.ceil(Math.max(...o.map((q) => q[2])) + 0.5));
+      const h1 = Math.round(h * 0.5);
+      const xr = [res.tstart * us, res.t1 * us];
+      const pmax = Math.max(...o.map((q) => q[3])) || 1;
+      PB.chart(ctx, { x: 62, y: 12, w: w - 80, h: h1 - 34 }, { x: xr, y: [0, nmax], xLabel: "", yLabel: "n (cm⁻³)", series: [{ data: o.map((q) => [q[0] * us, q[3] / pmax * nmax * 0.98]), color: P.faint, width: 1.2, dash: [3, 3] }, { data: o.map((q) => [q[0] * us, q[1] * 1e-6]), color: P.electron, width: 2.6 }], hlines: [{ y: res.sAvg.n0 * 1e-6, color: P.dim, label: res.mode === "pulse" ? "평균 전력 정상 n" : "새 정상 n" }], yFmt: (v) => v.toExponential(1).replace("e+", "e") });
+      PB.chart(ctx, { x: 62, y: h1 + 4, w: w - 80, h: h - h1 - 46 }, { x: xr, y: [0, Tmax], xLabel: "시간 (µs)", yLabel: "Tₑ (eV)", series: [{ data: o.map((q) => [q[0] * us, q[2]]), color: P.accent, width: 2.4 }], hlines: [{ y: res.sOn.Te, color: P.dim, label: "정상 Tₑ" }] });
+      const ns = o.map((q) => q[1]), Ts = o.map((q) => q[2]);
+      let avg = 0; for (let i = 1; i < o.length; i++) avg += 0.5 * (o[i][1] + o[i - 1][1]) * (o[i][0] - o[i - 1][0]); avg /= (o[o.length - 1][0] - o[0][0]);
+      const s = res.sOn, tauE = 1.5 * s.Te / (s.ng * Kiz(s.Te) * s.ec);
+      PB.stat("td-tn", fmtT(s.deff / s.uB));
+      PB.stat("td-te", fmtT(tauE));
+      PB.stat("td-T", Math.max(...Ts).toFixed(2) + " / " + Math.min(...Ts).toFixed(2) + " eV");
+      PB.stat("td-n", sci(Math.max(...ns) * 1e-6, 1) + " / " + sci(Math.min(...ns) * 1e-6, 1));
+      PB.stat("td-avg", res.mode === "pulse" ? (avg / res.sAvg.n0).toFixed(2) + " 배" : "—");
+    }, { aspect: 0.6, minHeight: 320, maxHeight: 460 });
+    compute();
+  })();
+})();
+</script>
+</body>
+</html>

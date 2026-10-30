@@ -45,7 +45,7 @@
       range(6).forEach((i) => { s += `<rect x="${30 + i * 26}" y="22" width="6" height="8" fill="${W}" fill-opacity=".5"/>`; });
       return svg(s);
     },
-    // 이하 fab·process·etch·cmp·film은 SemiBooks에서 만들어 books 포털과 함께 쓰는 표지다. 움직임은 .fb-·.pr-·.et- 클래스가 맡고,
+    // 이하 fab·process·etch·cmp·film·plasma는 SemiBooks에서 만들어 books 포털과 함께 쓰는 표지다. 움직임은 .fb-·.pr-·.et- 클래스가 맡고,
     // 애니메이션이 없을 때(동작 줄이기)도 그 자체로 완성된 그림이 되도록 기본 도형을 첫 프레임과 같게 그린다.
     // 팹 인프라 단면: FFU가 내려보낸 공기는 바닥 구멍을 지나 양쪽 샤프트를 타고 천장으로 돌아가고,
     // 천장 레일의 OHT는 FOUP을 장비 앞 로드 포트에 내려놓는다. 바닥 아래 배관은 초순수와 가스를 장비로 올려 보낸다.
@@ -178,6 +178,22 @@
       s += `<path d="M${off(0).map((p) => p.join(" ")).join(" L")} V128 H6 Z" fill="#000" fill-opacity=".2" stroke="${W}" stroke-opacity=".6"/>`;
       [[0, 4, ".85"], [4, 8, ".55"], [8, 11, ".3"]].forEach(([a, b, o], k) => {
         s += `<path class="fl-layer" style="animation-delay:${(k * 1.2).toFixed(1)}s" d="${band(a, b)}" fill="${W}" fill-opacity="${o}"/>`;
+      });
+      return svg(s);
+    },
+    // 플라즈마: 위아래 전극 사이에서 글로가 RF에 맞춰 숨 쉬고, 전자는 벌크에서 떠돌며,
+    // 이온은 아래 시스(점선 아래 어두운 띠)를 지나 웨이퍼로 곧게 떨어진다. 왼쪽 사인파는 RF 전원이다.
+    plasma() {
+      let s = `<rect x="40" y="8" width="150" height="7" rx="2" fill="${W}" fill-opacity=".6"/>`;
+      s += `<rect x="40" y="108" width="150" height="7" rx="2" fill="${W}" fill-opacity=".6"/><rect x="52" y="104" width="126" height="4" rx="1" fill="${W}" fill-opacity=".85"/>`;
+      s += `<path d="M8 62 q6 -14 12 0 t12 0" fill="none" stroke="${W}" stroke-opacity=".8" stroke-width="1.6"/><path d="M20 62 H30 M30 62 V111.5 H40" fill="none" stroke="${W}" stroke-opacity=".45"/><circle cx="20" cy="62" r="13" fill="none" stroke="${W}" stroke-opacity=".45"/>`;
+      s += `<ellipse class="pl-glow" cx="115" cy="56" rx="70" ry="28" fill="${W}" fill-opacity=".14"/><ellipse class="cv-pulse" cx="115" cy="56" rx="50" ry="18" fill="#f3d9fa" fill-opacity=".4"/><ellipse cx="115" cy="56" rx="26" ry="9" fill="#fff" fill-opacity=".3"/>`;
+      s += `<path d="M44 90 H186" stroke="${W}" stroke-opacity=".35" stroke-dasharray="2 3"/><rect x="44" y="90" width="142" height="14" fill="#000" fill-opacity=".14"/>`;
+      [[66, 40, 0], [92, 66, 0.3], [118, 38, 0.6], [140, 70, 0.9], [162, 48, 1.2], [80, 58, 1.5], [150, 34, 1.8], [106, 74, 2.1]].forEach(([x, y, d]) => {
+        s += `<circle class="pl-e" style="animation-delay:-${d}s" cx="${x}" cy="${y}" r="1.5" fill="#cfe3ff"/>`;
+      });
+      [72, 96, 120, 144, 166].forEach((x, k) => {
+        s += `<rect class="pl-ion" style="animation-delay:-${(k * 0.27).toFixed(2)}s" x="${x - 0.8}" y="80" width="1.6" height="7" rx=".8" fill="#ffd8a8"/>`;
       });
       return svg(s);
     },

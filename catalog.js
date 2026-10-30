@@ -249,6 +249,34 @@ window.SEMI_BOOKS = [
   "simulators": 138
  },
  {
+  "id": "plasmabook",
+  "code": "PLS",
+  "title": "PlasmaBook",
+  "subtitle": "플라즈마공학 교과서",
+  "headline": "전자가 기체를 깨우는 기술",
+  "description": "식각·증착 공정의 엔진인 저온 플라즈마를 깊이 다루는 편. 데바이 차폐와 충돌, 전자 에너지 분포, 방전 개시와 시스, 전역 모델, CCP·ICP와 RF 정합, 펄스 플라즈마, 래디컬 화학과 표면 손상, 탐침·분광 진단과 PIC 모델링까지. 가상 기준 장비 PL-300의 압력·전력·주파수·바이어스 손잡이로 직접 플라즈마를 켜 보며 배우는 플라즈마공학 교과서.",
+  "url": "plasma/",
+  "stage": "process",
+  "status": "published",
+  "chapters": 18,
+  "color": "#862e9c",
+  "colorDark": "#da77f2",
+  "topics": [
+   "데바이 차폐·준중성",
+   "충돌·EEDF",
+   "방전·시스",
+   "전역 모델",
+   "CCP·ICP",
+   "RF 정합·펄스",
+   "래디컬·표면 상호작용",
+   "탐침·OES·PIC"
+  ],
+  "motif": "plasma",
+  "slug": "plasma",
+  "local": true,
+  "simulators": 147
+ },
+ {
   "id": "cmpbook",
   "code": "CMP",
   "title": "CMPBook",

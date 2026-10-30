@@ -1,0 +1,1458 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and PlasmaBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>플라즈마 진단 · PlasmaBook</title>
+<meta name="description" content="잡음 섞인 랭뮤어 탐침 I-V를 만들고 해석해 Tₑ·nₑ·V_p를 되찾고, 드루이베스테인 EEPF, RF 보상 초크, OES 액티노메트리, V-I 탐침 임피던스, 헤어핀 공진 탐침, 마이크로파 간섭계, 지연 전위 분석기 IEDF, 3D 챔버 탐침 스캔을 시뮬레이터로 계산한다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+  svg .lbl { fill: var(--text); font-family: var(--font); font-size: 14px; }
+  svg .lbl-b { fill: var(--text); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .lbl-sm { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .lbl-acc { fill: var(--accent); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-acc2 { fill: var(--accent-2); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-ion { fill: var(--m-ion); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-el { fill: var(--m-electron); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-ph { fill: var(--m-photon); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-rad { fill: var(--m-radical); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-bad { fill: var(--bad); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .tool { fill: var(--surface); stroke: var(--text-faint); }
+  svg .glow { fill: color-mix(in srgb, var(--m-glow) 24%, transparent); }
+  svg .dash { stroke: var(--text-dim); stroke-dasharray: 5 4; fill: none; stroke-width: 1.4; }
+  svg .c-el { stroke: var(--m-electron); fill: none; stroke-width: 2.4; }
+  svg .c-ion { stroke: var(--m-ion); fill: none; stroke-width: 2.4; }
+  svg .c-ph { stroke: var(--m-photon); fill: none; stroke-width: 2; stroke-dasharray: 6 3; }
+  svg .c-rad { stroke: var(--m-radical); fill: none; stroke-width: 2.2; }
+  svg .wire { stroke: var(--text); fill: none; stroke-width: 1.8; }
+  svg .oxf { fill: color-mix(in srgb, var(--m-oxide) 40%, transparent); stroke: var(--m-oxide); }
+  svg .metf { fill: color-mix(in srgb, var(--m-metal) 45%, transparent); stroke: var(--m-metal); }
+  svg .sif { fill: color-mix(in srgb, var(--m-si) 45%, transparent); stroke: var(--m-si); }
+  .dg-v.ok { color: var(--ok); } .dg-v.warn { color: var(--warn); } .dg-v.bad { color: var(--bad); }
+</style>
+</head>
+<body data-chapter="diagnostics">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 15</div>
+    <h1>플라즈마 진단</h1>
+    <p class="lead">앞 장들은 손잡이를 돌리면 Tₑ, nₑ, 이온 에너지가 어떻게 바뀌는지 <em>계산</em>했다. 이 장은 그 값을 <strong>재는</strong> 방법이다. 플라즈마 안에 금속 바늘을 넣어 전류를 읽고(랭뮤어 탐침), 빛을 나눠 보고(OES), RF 선로의 전압·전류를 재고(V-I 탐침), 마이크로파 공진과 위상으로 밀도를 세고, 웨이퍼 자리에서 이온 에너지를 거른다(RFEA). 어느 계측도 원하는 값을 직접 주지 않는다. 신호에 <strong>모델을 거꾸로 맞춰</strong> 값을 꺼내며, 모델의 가정이 깨지는 곳에서 숫자는 조용히 틀린다. 이 장의 시뮬레이터는 모두 "참값을 아는 가짜 측정"을 만들고 해석해, 어떤 조건에서 얼마나 틀리는지 보여 준다.</p>
+    <ul class="objectives">
+      <li>랭뮤어 탐침 I-V의 세 영역을 설명하고, 반로그 기울기·무릎·이온 포화 전류에서 Tₑ, V_p, V_f, n을 구하며 오차 원인을 짚을 수 있다.</li>
+      <li>평판 보옴 전류, 원통 탐침의 OML·ABR 이론, 시스 팽창이 이온 전류 해석에 주는 영향을 구분한다.</li>
+      <li>드루이베스테인법 \(f(\varepsilon) \propto \sqrt{\varepsilon}\, d^2I/dV^2\)로 EEPF를 얻고, 평활화와 잡음, RF 잔류 진폭의 맞바꿈을 설명한다.</li>
+      <li>RF 보상 탐침의 임피던스 분배 조건과 초크 필터 설계를 계산한다.</li>
+      <li>OES 액티노메트리의 가정(같은 꼴의 여기 단면적, 직접 여기만, 같은 소광)과 깨지는 조건을 판단하고 종말점 검출에 연결한다.</li>
+      <li>V-I 탐침의 위상 오차가 전력 오차로 커지는 이유, 헤어핀 공진 \(f_r^2 = f_0^2 + f_{pe}^2\)와 간섭계 위상 \(\Delta\phi = r_e\lambda\int n\,dl\), RFEA의 \(f(E) \propto -dI_c/dV\)를 계산한다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="map">
+    <h2>무엇을 어디서 재나</h2>
+    <p>공정 플라즈마 진단은 크게 넷이다. <strong>탐침</strong>(랭뮤어, 헤어핀)은 플라즈마 안에 넣어 국소 값을 재므로 공간 분해능이 좋지만 플라즈마를 건드리고 식각 기체에 오염된다. <strong>광학</strong>(OES, 흡수 분광, 레이저 유도 형광)은 창 밖에서 비침습으로 보지만 시선 방향으로 적분된 값을 준다. <strong>전기 신호</strong>(V-I 탐침, 자기 바이어스)는 장비에 늘 달려 있어 양산 감시에 쓰이지만 플라즈마 변수와의 연결이 간접적이다. <strong>웨이퍼 자리 센서</strong>(RFEA, 웨이퍼형 탐침)는 공정에 가장 중요한 값(이온 에너지·플럭스)을 웨이퍼 위치에서 재지만 실제 공정 중에는 못 쓴다. 생산 라인은 V-I와 OES를 상시 감시(FDC)에, 탐침·RFEA·간섭계를 장비 개발과 챔버 매칭에 쓴다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 300" role="img" aria-label="ICP 챔버 단면 위에 표시한 진단 장치의 위치">
+        <rect x="190" y="70" width="500" height="190" rx="6" class="metf" fill-opacity="0.15"/>
+        <rect x="200" y="62" width="480" height="14" class="oxf"/>
+        <g class="wire"><path d="M260 50 h40 M330 50 h40 M400 50 h40 M470 50 h40 M540 50 h40 M610 50 h30"/></g>
+        <text x="440" y="40" text-anchor="middle" class="lbl-sm">평면 코일 13.56 MHz</text>
+        <ellipse cx="440" cy="150" rx="220" ry="62" class="glow"/>
+        <rect x="290" y="236" width="300" height="10" class="sif"/>
+        <rect x="280" y="246" width="320" height="22" class="metf"/>
+        <text x="440" y="290" text-anchor="middle" class="lbl-sm">정전척 + 바이어스 13.56 MHz</text>
+        <!-- Langmuir probe -->
+        <path d="M690 150 H520" class="wire"/><rect x="505" y="147" width="16" height="6" fill="var(--m-metal)"/>
+        <text x="700" y="146" class="lbl-el">① 랭뮤어 탐침</text>
+        <!-- hairpin -->
+        <path d="M690 190 H580" class="wire"/><path d="M580 184 h-30 v12 h30" class="c-ion" stroke-width="1.6"/>
+        <text x="700" y="194" class="lbl-ion">② 헤어핀 탐침</text>
+        <!-- interferometer -->
+        <rect x="150" y="108" width="34" height="24" rx="3" class="tool"/><rect x="696" y="108" width="34" height="24" rx="3" class="tool"/>
+        <path d="M184 120 H696" class="dash"/>
+        <text x="70" y="104" class="lbl-sm">③ 마이크로파</text><text x="70" y="120" class="lbl-sm">간섭계 혼</text>
+        <!-- OES -->
+        <path d="M190 200 L120 230" class="c-ph"/><rect x="60" y="222" width="70" height="26" rx="4" class="tool"/><text x="95" y="240" text-anchor="middle" class="lbl-sm">분광기</text>
+        <text x="20" y="270" class="lbl-ph">④ OES 창 + 광섬유</text>
+        <!-- mass spec -->
+        <rect x="690" y="226" width="80" height="26" rx="4" class="tool"/><text x="730" y="244" text-anchor="middle" class="lbl-sm">QMS</text>
+        <path d="M690 238 H660" class="wire"/><text x="700" y="272" class="lbl-sm">⑤ 질량 분석(벽 오리피스)</text>
+        <!-- RFEA -->
+        <rect x="390" y="228" width="100" height="8" fill="var(--accent-2)"/>
+        <text x="300" y="224" class="lbl-acc2">⑥ 웨이퍼형 RFEA</text>
+        <!-- VI -->
+        <path d="M440 268 V292" class="wire"/>
+        <path d="M440 292 H520" class="wire"/><rect x="520" y="282" width="50" height="18" rx="3" class="tool"/><text x="545" y="295" text-anchor="middle" class="lbl-sm">V-I</text>
+        <path d="M570 291 H620" class="wire"/><rect x="620" y="282" width="56" height="18" rx="3" class="tool"/><text x="648" y="295" text-anchor="middle" class="lbl-sm">정합기</text>
+        <text x="700" y="296" class="lbl-acc">⑦ V-I 탐침</text>
+      </svg>
+      <figcaption><b>그림 15-1.</b> PL-300 IC 모듈에 진단 장치를 모두 달았다고 가정한 단면. ①② 국소·침습, ③④ 시선 적분·비침습, ⑤ 벽에서 표본 추출, ⑥ 웨이퍼 자리 이온 에너지, ⑦ 정합기와 전극 사이 RF 전압·전류. 양산 장비에는 보통 ④⑦만 상시 달려 있다.</figcaption>
+    </figure>
+
+    <div class="callout fab"><strong>진단 장비 사양(교육용)</strong>랭뮤어 탐침: 텅스텐 반지름 \(r_p = 0.1\) mm, 길이 5 mm(수집 면적 \(A_p = 2\pi r_p L + \pi r_p^2 \approx 3.2\) mm²), 스윕 −60 ~ +30 V. OES 200–900 nm, 분해능 약 0.5 nm. V-I 탐침은 기본파와 5차 고조파까지. 헤어핀 공진 탐침 1.5–6 GHz. 웨이퍼형 RFEA. 기준 플라즈마(IC 모듈, Ar 10 mTorr, 1.5 kW): Tₑ ≈ 2.5 eV, nₑ ≈ 4×10¹¹ cm⁻³, 보옴 속도 약 2.4 km/s, 데바이 길이 약 19 µm.</div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="probe">
+    <h2>랭뮤어 탐침 I-V의 세 영역</h2>
+    <p><span class="term">랭뮤어 탐침</span><span class="en">(Langmuir probe)</span>은 플라즈마에 넣은 작은 전극의 전압 \(V\)를 훑으며 전류 \(I\)를 잰다(전자가 탐침으로 들어오는 방향을 +로 잡는다). 탐침 앞에는 <a href="sheath.html">7장</a>의 시스가 생기고, 탐침 전압과 <span class="term">플라즈마 전위</span> \(V_p\)의 차이가 시스 전압이 된다. 곡선은 세 영역으로 나뉜다.</p>
+    <ul>
+      <li><strong>이온 포화</strong>(\(V \ll V_f\)): 전자는 거의 모두 되튕기고 보옴 속도로 들어오는 이온만 모인다. 전류는 작고(수백 µA) 음수다.</li>
+      <li><strong>전자 지연</strong>(\(V_f \lt V \lt V_p\)): 시스가 전자를 되튕기므로 에너지가 \(e(V_p - V)\)보다 큰 전자만 들어온다. 맥스웰 분포면 전자 전류가 지수 함수로 늘어 반로그 그래프에서 직선이 되고, 기울기가 \(1/T_e\)다. 전류가 0인 점이 <span class="term">부유 전위</span> \(V_f\)다.</li>
+      <li><strong>전자 포화</strong>(\(V \gt V_p\)): 탐침이 전자를 끌어당긴다. 평판이면 열 플럭스 \(\tfrac14 n\bar v_e\)에서 포화하고, 가는 원통은 시스가 커지며 계속 늘어난다. 두 영역 사이 꺾임(무릎)이 \(V_p\)다.</li>
+    </ul>
+    <div class="formula">$$I(V) = -I_{is} + I_{es}\exp\!\left(\frac{V - V_p}{T_e}\right)\ (V \lt V_p),\qquad I_{is} = 0.61\,e\,n\,u_B A_p,\qquad I_{es} = \tfrac14 e\,n\,\bar v_e A_p$$<div class="where">\(u_B = \sqrt{eT_e/M}\)는 보옴 속도, \(\bar v_e = \sqrt{8eT_e/\pi m}\)는 전자 평균 속력, \(T_e\)는 V(=eV) 단위. 0.61은 예비 시스에서 밀도가 \(e^{-1/2}\)로 떨어지는 인자다. \(I = 0\)에서 \(V_p - V_f = T_e\ln\!\left[\sqrt{M/2\pi m}/0.61\right]\)이고 Ar은 약 \(5.2\,T_e\)다. 일반 EEDF \(f(\varepsilon)\)이면 지연 영역 전자 전류는 \(I_e = \tfrac{eA_p}{4}\int_{eU}^{\infty} v\,(1 - eU/\varepsilon) f(\varepsilon)\,d\varepsilon\), \(U = V_p - V\)다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 260" role="img" aria-label="랭뮤어 탐침 I-V 곡선의 세 영역과 반로그 그래프">
+        <g transform="translate(20,10)">
+          <line x1="40" y1="160" x2="400" y2="160" class="s-axis"/><line x1="40" y1="10" x2="40" y2="230" class="s-axis"/>
+          <text x="404" y="164" class="lbl-sm">V</text><text x="46" y="20" class="lbl-sm">I (전자 +)</text>
+          <path d="M40 176 L180 172 C220 170 240 160 260 140 C280 110 290 70 300 50 C320 42 360 36 400 30" class="c-el"/>
+          <path d="M40 176 L400 168" class="dash"/>
+          <circle cx="226" cy="160" r="4" fill="var(--accent)"/><text x="212" y="182" class="lbl-acc">V_f</text>
+          <line x1="300" y1="40" x2="300" y2="230" class="dash"/><text x="306" y="222" class="lbl-acc">V_p</text>
+          <text x="60" y="200" class="lbl-ion">이온 포화</text><text x="60" y="216" class="lbl-sm">−0.61 e n u_B A</text>
+          <text x="196" y="100" class="lbl-el">전자 지연</text><text x="186" y="116" class="lbl-sm">∝ exp((V−V_p)/Tₑ)</text>
+          <text x="316" y="70" class="lbl-el">전자 포화</text><text x="316" y="86" class="lbl-sm">¼ e n v̄ₑ A</text>
+        </g>
+        <g transform="translate(460,10)">
+          <line x1="40" y1="220" x2="400" y2="220" class="s-axis"/><line x1="40" y1="10" x2="40" y2="220" class="s-axis"/>
+          <text x="404" y="224" class="lbl-sm">V</text><text x="46" y="20" class="lbl-sm">ln Iₑ</text>
+          <path d="M120 200 L300 60 C320 52 360 48 400 44" class="c-el"/>
+          <path d="M100 215 L320 44" class="dash"/>
+          <text x="140" y="120" class="lbl-acc">기울기 = 1/Tₑ</text>
+          <line x1="300" y1="30" x2="300" y2="220" class="dash"/><text x="306" y="214" class="lbl-acc">V_p(꺾임)</text>
+          <text x="330" y="36" class="lbl-sm">ln I_es</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 15-2.</b> 왼쪽: 탐침 I-V의 세 영역. 오른쪽: 이온 전류를 빼고 전자 전류만 반로그로 그리면 지연 영역이 직선이 되고, 직선과 포화선이 만나는 꺾임이 \(V_p\)다. 실제 데이터에서는 이 꺾임이 둥글어 \(dI/dV\)의 최대나 \(d^2I/dV^2 = 0\)으로 \(V_p\)를 잡는다.</figcaption>
+    </figure>
+
+    <p>PL-300 기준 플라즈마에 탐침을 넣으면 \(I_{is} = 0.61\times1.6\times10^{-19}\times4\times10^{17}\times2400\times3.2\times10^{-6} \approx 0.30\) mA, \(I_{es} \approx 54\) mA로 두 전류의 비가 약 180이다. 이온 전류는 작아 잡음에 묻히기 쉽고, 전자 포화 전류는 커서 탐침이 플라즈마에서 전자를 빼내 \(V_p\) 자체를 끌어내린다(그래서 탐침 면적은 접지 벽 면적보다 아주 작아야 한다: \(A_p/A_{wall} \ll \sqrt{2\pi m/M}\)).</p>
+
+    <div class="sim" id="sim-iv">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>합성 I-V 발생기와 해석: Tₑ·V_f·V_p·n 되찾기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="iv-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>전자 온도 Tₑ <output id="iv-Te-out"></output></span><input type="range" id="iv-Te" min="1" max="8" step="0.1" value="2.5"></label>
+          <label class="ctrl"><span>밀도 n <output id="iv-n-out"></output></span><input type="range" id="iv-n" min="9" max="12" step="0.05" value="11.6"></label>
+          <label class="ctrl"><span>플라즈마 전위 V_p <output id="iv-Vp-out"></output></span><input type="range" id="iv-Vp" min="0" max="25" step="0.5" value="15"></label>
+          <div class="ctrl"><span>EEDF 모양</span><div class="seg" id="iv-shape"><button data-value="max" class="on">맥스웰</button><button data-value="dru">드루이베스테인</button><button data-value="bi">두 온도</button></div></div>
+          <div class="ctrl"><span>이온 전류 이론</span><div class="seg" id="iv-ion"><button data-value="bohm">평판 보옴</button><button data-value="abr" class="on">시스 팽창</button><button data-value="oml">OML</button></div></div>
+          <label class="ctrl"><span>잡음(I_is 대비) <output id="iv-noise-out"></output></span><input type="range" id="iv-noise" min="0" max="20" step="0.5" value="3"></label>
+          <button class="btn primary" id="iv-an">해석하기</button>
+          <button class="btn" id="iv-new">새 측정(잡음 다시)</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Tₑ 해석 (참값)</span><span class="v" id="iv-rTe">—</span></div>
+        <div class="stat"><span class="k">V_f 해석 (참값)</span><span class="v" id="iv-rVf">—</span></div>
+        <div class="stat"><span class="k">V_p 해석 (참값)</span><span class="v" id="iv-rVp">—</span></div>
+        <div class="stat"><span class="k">nᵢ(I_is, 보옴 식)</span><span class="v" id="iv-rni">—</span></div>
+        <div class="stat"><span class="k">nₑ(I_e(V_p))</span><span class="v" id="iv-rne">—</span></div>
+        <div class="stat"><span class="k">r_p/λ_D</span><span class="v" id="iv-rl">—</span></div>
+      </div>
+      <div class="sim-note">위: 선형 I-V(점 = 측정, 회색 = 이온 전류 맞춤선). 아래: 이온 전류를 뺀 전자 전류의 반로그 그래프와 Tₑ 맞춤 직선(V_f에서 V_p − ¼(V_p−V_f)까지), 세로선은 해석한 V_f·V_p. 해석 순서: ① V ≤ V_f − 15 V 구간 직선 맞춤으로 이온 전류를 빼고 ② dI/dV(평활화)의 최대 → V_p ③ 반로그 기울기 → Tₑ ④ I_is를 보옴 식에 넣어 nᵢ, I_e(V_p)를 열 플럭스 식에 넣어 nₑ. 해볼 것: ① 이온 이론을 "시스 팽창"이나 OML로 두면 보옴 식으로 구한 nᵢ가 참값보다 커진다(V_f에서 수집 면적이 탐침보다 크다). ② 두 온도 EEDF는 반로그가 휘어 맞춤 구간에 따라 Tₑ가 달라진다. ③ 잡음 15 %에서는 이온 맞춤이 흔들려 Tₑ 오차가 커진다. ④ n을 10⁹ cm⁻³로 낮추면 r_p/λ_D가 1 아래로 내려가 OML 영역이 된다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="theory">
+    <h2>탐침 이론: 평판·원통, OML과 ABR</h2>
+    <p>위 식의 \(I_{is}\)는 <strong>평판 탐침</strong>, 즉 시스 두께가 탐침 크기보다 아주 얇아(얇은 시스) 수집 면적이 탐침 면적과 같을 때만 맞다. PL-300 탐침은 반지름 0.1 mm 원통이고, 기준 플라즈마의 데바이 길이는 \(\lambda_D = \sqrt{\varepsilon_0 T_e/en} \approx 19\) µm라 \(r_p/\lambda_D \approx 5\)다. 이온 포화 영역의 시스 두께는 수 \(\lambda_D\)이므로 시스가 탐침 반지름과 비슷해지고, 전압을 더 음으로 걸수록 시스 바깥 면(수집 면)이 커져 이온 전류가 포화하지 않고 계속 커진다.</p>
+    <ul>
+      <li><strong>시스 팽창(얇은~중간 시스)</strong>: 차일드 시스 두께 \(s \approx \tfrac{\sqrt2}{3}\lambda_D(2\eta)^{3/4}\), \(\eta = (V_p - V)/T_e\)를 써서 수집 면적을 \(A_p(1 + s/r_p)\)로 키운다.</li>
+      <li><strong>OML</strong><span class="en">(orbital motion limited)</span>: \(r_p \ll \lambda_D\)일 때. 이온이 탐침 둘레를 도는 궤도 운동으로 각운동량이 수집을 제한한다. 차가운 이온이면 \(I_i = A_p e n \tfrac{\sqrt2}{\pi}\sqrt{e(V_p - V)/M}\)로 \(I_i^2\)가 \(V\)에 정비례한다. 전자 포화도 \(I_e = I_{es}[\tfrac{2}{\sqrt\pi}\sqrt{\eta} + e^{\eta}\mathrm{erfc}\sqrt{\eta}]\)로 계속 는다.</li>
+      <li><strong>ABR</strong><span class="en">(Allen–Boyd–Reynolds)</span>: 이온이 지름 방향으로만 떨어진다고 보고 포아송 방정식을 수치로 풀어 표로 준다. \(r_p/\lambda_D \gtrsim 3\)에서 OML보다 실제에 가깝고, 두 이론 사이에 실측이 놓이는 경우가 많다(\(n_{ABR} \lt n_{true} \lt n_{OML}\) 꼴의 괄호). 실무에서는 두 값의 기하 평균을 쓰기도 한다.</li>
+    </ul>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="평판 탐침의 얇은 시스와 원통 탐침의 두꺼운 시스, 이온 궤도">
+        <g transform="translate(20,10)">
+          <text x="140" y="16" text-anchor="middle" class="lbl-b">평판·얇은 시스 (s ≪ r_p)</text>
+          <rect x="40" y="40" width="200" height="16" class="metf"/>
+          <rect x="40" y="56" width="200" height="14" fill="var(--accent-2)" fill-opacity="0.18"/>
+          <text x="248" y="68" class="lbl-sm">시스 s</text>
+          <path d="M80 190 V72 M120 190 V72 M160 190 V72 M200 190 V72" class="c-ion"/>
+          <text x="60" y="210" class="lbl-ion">수집 면적 = A_p, 이온 전류 포화</text>
+        </g>
+        <g transform="translate(320,10)">
+          <text x="120" y="16" text-anchor="middle" class="lbl-b">원통·두꺼운 시스 (OML)</text>
+          <circle cx="120" cy="110" r="70" fill="var(--accent-2)" fill-opacity="0.12" stroke="var(--accent-2)" stroke-dasharray="4 4"/>
+          <circle cx="120" cy="110" r="9" class="metf"/>
+          <path d="M0 60 C80 70 100 80 113 104" class="c-ion"/>
+          <path d="M0 40 C90 50 150 70 160 110 C165 150 120 160 90 140 C60 120 40 90 0 88" class="c-ion" stroke-dasharray="5 3"/>
+          <text x="196" y="60" class="lbl-sm">시스 가장자리</text>
+          <text x="0" y="210" class="lbl-ion">각운동량이 크면 궤도만 돌고 빗나감</text>
+        </g>
+        <g transform="translate(600,10)">
+          <text x="130" y="16" text-anchor="middle" class="lbl-b">이온 전류 I_i(V)</text>
+          <line x1="30" y1="190" x2="260" y2="190" class="s-axis"/><line x1="30" y1="30" x2="30" y2="190" class="s-axis"/>
+          <text x="200" y="208" class="lbl-sm">V_p − V →</text>
+          <path d="M30 150 L260 150" class="c-ion" stroke-dasharray="6 4"/>
+          <path d="M30 150 C80 135 160 118 260 104" class="c-ion"/>
+          <path d="M30 150 C60 110 150 70 260 46" class="c-ion" stroke-width="1.6"/>
+          <text x="186" y="164" class="lbl-sm">평판 보옴</text><text x="190" y="124" class="lbl-sm">ABR·시스 팽창</text><text x="200" y="40" class="lbl-sm">OML</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 15-3.</b> 시스와 탐침 크기의 비가 이온 수집을 정한다. 얇은 시스에서는 수집 면적이 일정해 이온 전류가 포화하고, 두꺼운 시스에서는 수집 면이 넓어지고 궤도 운동이 생겨 이온 전류가 전압과 함께 커진다. 같은 측정이라도 어떤 이론으로 해석하느냐에 따라 n이 수십 % 달라진다.</figcaption>
+    </figure>
+
+    <div class="callout warn"><strong>탐침이 틀리는 다섯 가지 이유</strong>① 해석 이론 선택(평판·OML·ABR)으로 n이 ±30–50 %. ② 식각 기체에서 탐침 표면에 고분자·산화막이 쌓여 접촉 전위가 바뀌고 곡선이 늘어진다(측정 사이 +전압으로 달궈 세정). ③ RF 전위 진동이 I-V를 문지른다(다음 절). ④ 자기장 속에서는 전자 포화 전류가 줄어 V_p를 잘못 읽는다. ⑤ 전기 음성 기체에서는 음이온이 전자 대신 음전하를 실어 보옴 속도와 전자 포화 해석이 모두 바뀐다(<a href="global.html">8장</a>).</div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="druyvesteyn">
+    <h2>드루이베스테인법: I-V의 2차 미분에서 EEDF로</h2>
+    <p>맥스웰 분포를 가정하지 않고 분포 자체를 얻을 수도 있다. 지연 영역 전자 전류 식을 \(U = V_p - V\)로 두 번 미분하면 적분 하한만 남아 분포 함수가 직접 튀어나온다. 이것이 <span class="term">드루이베스테인법</span><span class="en">(Druyvesteyn method)</span>이다(볼록 탐침, 등방 분포 가정, 탐침 모양과 무관).</p>
+    <div class="formula">$$f(\varepsilon) = \frac{2m}{e^2A_p}\sqrt{\frac{2eU}{m}}\;\frac{d^2I_e}{dV^2},\qquad g_p(\varepsilon) = \frac{f(\varepsilon)}{\sqrt{\varepsilon}},\qquad n = \int_0^\infty f\,d\varepsilon,\qquad T_{eff} = \frac{2}{3n}\int_0^\infty \varepsilon f\,d\varepsilon$$<div class="where">\(\varepsilon = eU\). \(f\)는 EEDF(eV⁻¹ m⁻³), \(g_p\)는 EEPF(eV^−3/2 m⁻³). 반로그 EEPF 그래프에서 맥스웰은 직선, 드루이베스테인은 아래로 휘고, 두 온도 분포는 꺾인다(<a href="eedf.html">4장</a>).</div></div>
+    <p>문제는 미분이 잡음을 키운다는 점이다. 2차 미분은 고주파 잡음을 \((\Delta V)^{-2}\)으로 증폭하므로 반드시 평활화(가우스 창, 사비츠키-골레이 필터)를 거친다. 창을 넓히면 잡음은 줄지만 \(V_p\) 근처의 날카로운 구조(저에너지 전자)가 뭉개지고, 좁히면 고에너지 꼬리가 잡음에 묻힌다. 좋은 탐침 시스템은 EEPF를 3–4 자릿수(dynamic range)까지 본다. RF 잔류 진폭 \(\tilde V\)도 같은 방식으로 분포를 폭 \(\sim 2\tilde V\)만큼 문지른다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 200" role="img" aria-label="I, dI/dV, d2I/dV2를 위아래로 겹친 그림과 V_p 위치">
+        <g transform="translate(30,10)">
+          <text x="0" y="16" class="lbl-b">I(V)</text>
+          <path d="M40 150 C120 148 170 140 200 110 C220 80 230 50 240 40 L330 30" class="c-el"/>
+          <line x1="240" y1="20" x2="240" y2="170" class="dash"/><text x="246" y="182" class="lbl-acc">V_p</text>
+        </g>
+        <g transform="translate(320,10)">
+          <text x="0" y="16" class="lbl-b">dI/dV</text>
+          <path d="M30 150 C120 148 170 130 200 90 C215 60 225 40 240 36 C250 60 260 120 330 140" class="c-el"/>
+          <line x1="240" y1="20" x2="240" y2="170" class="dash"/><text x="140" y="70" class="lbl-sm">최대 = V_p</text>
+        </g>
+        <g transform="translate(610,10)">
+          <text x="0" y="16" class="lbl-b">d²I/dV² ∝ f(ε)/√ε</text>
+          <line x1="20" y1="110" x2="250" y2="110" class="s-axis"/>
+          <path d="M20 108 C80 106 130 96 170 60 C190 40 200 40 210 110 C215 150 225 150 250 120" class="c-el"/>
+          <line x1="210" y1="20" x2="210" y2="170" class="dash"/><text x="40" y="150" class="lbl-sm">← ε = e(V_p − V) 증가</text>
+          <text x="216" y="180" class="lbl-acc">0 교차 = V_p</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 15-4.</b> 드루이베스테인 사슬. I-V의 무릎이 dI/dV의 봉우리, d²I/dV²의 0 교차가 된다. \(V_p\)에서 왼쪽으로 갈수록 에너지 \(\varepsilon = e(V_p - V)\)가 커지는 EEPF를 거꾸로 읽는다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-dv">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>드루이베스테인 EEPF: 평활화 창과 잡음의 맞바꿈</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="dv-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>참 EEDF</span><div class="seg" id="dv-shape"><button data-value="max">맥스웰</button><button data-value="dru">드루이베스테인</button><button data-value="bi" class="on">두 온도</button></div></div>
+          <label class="ctrl"><span>평활화 창 σ <output id="dv-w-out"></output></span><input type="range" id="dv-w" min="0.05" max="3" step="0.05" value="0.6"></label>
+          <label class="ctrl"><span>잡음(I_es 대비) <output id="dv-nz-out"></output></span><input type="range" id="dv-nz" min="0" max="0.5" step="0.01" value="0.05"></label>
+          <label class="ctrl"><span>RF 잔류 진폭 Ṽ <output id="dv-rf-out"></output></span><input type="range" id="dv-rf" min="0" max="6" step="0.1" value="0"></label>
+          <button class="btn" id="dv-new">새 측정</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">n(적분) / 참값</span><span class="v" id="dv-n">—</span></div>
+        <div class="stat"><span class="k">T_eff(측정 · 참)</span><span class="v" id="dv-T">—</span></div>
+        <div class="stat"><span class="k">믿을 수 있는 최대 ε</span><span class="v" id="dv-e">—</span></div>
+        <div class="stat"><span class="k">동적 범위</span><span class="v" id="dv-dr">—</span></div>
+      </div>
+      <div class="sim-note">참 플라즈마: n = 4×10¹¹ cm⁻³, Tₑ(유효) = 2.5 eV, PL-300 탐침, 0.05 V 간격 스윕. 측정 I-V에 잡음을 더하고 가우스 창으로 평활화한 뒤 중앙 차분 2회 → 위 식으로 EEPF. 실선 = 측정, 점선 = 참 EEPF(반로그). "믿을 수 있는 최대 ε"은 측정이 참값의 ½–2배 안에 머무는 마지막 에너지. 해볼 것: ① 창을 0.1 V로 줄이면 꼬리가 잡음으로 덮인다. ② 창을 2.5 V로 키우면 저에너지(0–3 eV) 봉우리가 뭉개져 n과 T_eff가 틀어진다. ③ RF 잔류 진폭을 3 V로 올리면 평활화와 똑같은 뭉개짐이 생긴다. 보상 안 된 탐침의 EEPF가 "고에너지 전자가 많아 보이는" 이유다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="rfcomp">
+    <h2>RF 보상 탐침</h2>
+    <p>RF 플라즈마에서는 플라즈마 전위 자체가 RF로 출렁인다: \(V_p(t) = \bar V_p + \tilde V_p\sin\omega t\). CCP에서 \(\tilde V_p\)는 수십 V, ICP도 코일의 정전 결합 때문에 수 V–수십 V다. 탐침이 직류 전압에 묶여 있으면 시스 전압이 RF로 흔들리고, 탐침은 순간 I-V를 한 주기에 걸쳐 <strong>평균</strong>한 전류를 읽는다. 지수 함수의 평균은 지수 함수보다 크므로(정류) 곡선이 늘어지고 \(V_f\)가 음으로 밀리며, 반로그 기울기가 완만해져 Tₑ가 실제보다 크게 나온다.</p>
+    <div class="formula">$$\langle I_e\rangle = I_e(\bar V)\,I_0\!\left(\frac{\tilde V_{sh}}{T_e}\right),\qquad \Delta V_f = -T_e\ln I_0\!\left(\frac{\tilde V_{sh}}{T_e}\right),\qquad \tilde V_{sh} = \tilde V_p\left|\frac{Z_{sh}}{Z_{sh} + Z_{g}}\right|$$<div class="where">\(I_0\)는 0차 변형 베셀 함수, \(\tilde V_{sh}\)는 시스에 실제로 걸리는 RF 진폭. 탐침 끝은 시스 임피던스 \(Z_{sh}\)(저항 \(\approx T_e/I_{is}\)와 시스 커패시턴스 \(\varepsilon_0A/s\)의 병렬)를 거쳐 플라즈마에, \(Z_g\)(초크 필터 + 케이블 대지 용량)를 거쳐 접지에 이어진 전압 분배기다. 지수 영역은 맥스웰에서 정확하지만 V_p 근처와 포화 영역에서는 무너진다.</div></div>
+    <p>보상 원리는 탐침 끝이 \(V_p(t)\)를 따라 출렁이게 하는 것이다. ① 탐침 끝 가까이에 넓은 <strong>보상 전극</strong>(수 cm² 링)을 작은 커패시터로 붙여 \(|Z_{sh}|\)를 낮추고, ② 탐침과 케이블 사이에 RF 주파수와 2차 고조파에 공진하는 <strong>초크</strong>(자기 공진 인덕터, 수십–수백 kΩ)를 넣어 \(|Z_g|\)를 키운다. 기준은 보통 \(\tilde V_{sh} \lesssim T_e/2\)이고, 이를 위해 \(|Z_g|/|Z_{sh}| \gtrsim 2\tilde V_p/T_e\)가 필요하다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 210" role="img" aria-label="RF 보상 탐침의 회로: 탐침 끝, 보상 전극, 초크, 케이블 대지 용량">
+        <defs><marker id="rc-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text-dim)"/></marker></defs>
+        <rect x="20" y="30" width="170" height="150" rx="10" class="glow"/>
+        <text x="105" y="52" text-anchor="middle" class="lbl-b">플라즈마</text>
+        <text x="105" y="72" text-anchor="middle" class="lbl-sm">V_p(t) = V̄ + Ṽ sin ωt</text>
+        <rect x="180" y="96" width="30" height="8" class="metf"/><text x="160" y="124" class="lbl-sm">탐침 끝</text>
+        <rect x="216" y="80" width="10" height="40" class="metf"/><text x="200" y="150" class="lbl-sm">보상 전극(1 cm²)</text>
+        <path d="M210 100 H300" class="wire"/>
+        <text x="236" y="92" class="lbl-acc2">Z_sh</text>
+        <g transform="translate(300,86)"><path d="M0 14 c6 -18 12 -18 18 0 c6 -18 12 -18 18 0 c6 -18 12 -18 18 0" class="wire"/><text x="4" y="-10" class="lbl-sm">초크 13.56</text></g>
+        <path d="M354 100 H380" class="wire"/>
+        <g transform="translate(380,86)"><path d="M0 14 c6 -18 12 -18 18 0 c6 -18 12 -18 18 0 c6 -18 12 -18 18 0" class="wire"/><text x="4" y="-10" class="lbl-sm">초크 27.12</text></g>
+        <path d="M434 100 H600" class="wire"/>
+        <path d="M520 100 V140 M506 140 H534 M506 148 H534 M520 148 V180 M508 180 H532" class="wire"/>
+        <text x="540" y="150" class="lbl-sm">케이블 대지 용량 C_cab</text>
+        <rect x="600" y="84" width="120" height="34" rx="5" class="tool"/><text x="660" y="106" text-anchor="middle" class="lbl-sm">스윕 전원·전류계</text>
+        <path d="M300 160 H430" class="wire" marker-start="url(#rc-arr)" marker-end="url(#rc-arr)"/><text x="340" y="178" class="lbl-acc">Z_g = Z_choke + Z_cab</text>
+        <text x="740" y="60" class="lbl-sm">조건:</text>
+        <text x="740" y="80" class="lbl">|Z_g| ≫ |Z_sh|</text>
+        <text x="740" y="100" class="lbl-sm">→ 탐침 끝이</text>
+        <text x="740" y="118" class="lbl-sm">V_p(t)를 따라감</text>
+      </svg>
+      <figcaption><b>그림 15-5.</b> RF 보상 탐침은 전압 분배기다. 시스에 남는 RF 진폭은 \(\tilde V_p|Z_{sh}/(Z_{sh}+Z_g)|\). 보상 전극은 \(Z_{sh}\)를 낮추고, 탐침 끝 바로 뒤의 초크는 \(Z_g\)를 높인다. 초크가 케이블 끝(챔버 밖)에 있으면 그 앞의 케이블 대지 용량이 초크를 우회해 효과가 사라진다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-rc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>RF 보상: 임피던스 분배와 문질러진 I-V</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rc-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>RF 주파수</span><div class="seg" id="rc-f"><button data-value="2">2 MHz</button><button data-value="13.56" class="on">13.56</button><button data-value="27.12">27.12</button><button data-value="60">60</button></div></div>
+          <label class="ctrl"><span>플라즈마 전위 진폭 Ṽ_p <output id="rc-V-out"></output></span><input type="range" id="rc-V" min="0" max="60" step="1" value="30"></label>
+          <label class="ctrl"><span>케이블 대지 용량 <output id="rc-C-out"></output></span><input type="range" id="rc-C" min="10" max="200" step="5" value="100"></label>
+          <label class="check"><input type="checkbox" id="rc-ref" checked> 보상 전극(1 cm²)</label>
+          <label class="check"><input type="checkbox" id="rc-ck" checked> 초크 필터(13.56 + 27.12 MHz, Q = 60)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">|Z_sh| · |Z_g|</span><span class="v" id="rc-z">—</span></div>
+        <div class="stat"><span class="k">시스 RF 진폭 Ṽ_sh</span><span class="v dg-v" id="rc-vs">—</span></div>
+        <div class="stat"><span class="k">겉보기 Tₑ (참 3 eV)</span><span class="v" id="rc-te">—</span></div>
+        <div class="stat"><span class="k">V_f 이동</span><span class="v" id="rc-vf">—</span></div>
+      </div>
+      <div class="sim-note">플라즈마: PL-300 CP 모듈 기준 nₑ = 5×10¹⁰ cm⁻³, Tₑ = 3 eV, V̄_p = 20 V. 시스 임피던스는 R = Tₑ/I_is ∥ C = ε₀A/(5λ_D), 초크는 병렬 공진 Z = R_p/(1 + jQ(f/f₀ − f₀/f)), R_p ≈ 112 kΩ. 순간 I-V를 RF 한 주기(48 위상)에 걸쳐 평균하고, 같은 반로그 해석을 적용한다. 위: 반로그 전자 전류(점선 = 참, 실선 = 측정). 아래: 초크 임피던스 |Z_g|(f)와 현재 주파수. 해볼 것: ① 보상 전극만 켜고 초크를 끄면 거의 효과가 없다(케이블 용량이 RF를 접지로 뺀다). ② 둘 다 켠 채 60 MHz나 2 MHz로 바꾸면 초크가 공진에서 벗어나 보상이 깨진다. 이중 주파수 CCP용 탐침은 두 주파수 모두에 초크가 필요하다. ③ Ṽ_p가 Tₑ의 10배를 넘으면 13.56 MHz에서도 Tₑ 오차가 생긴다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="oes">
+    <h2>발광 분광과 액티노메트리</h2>
+    <p>플라즈마의 빛은 전자 충돌로 들뜬 원자·분자가 내는 선 스펙트럼이다. <span class="term">발광 분광</span><span class="en">(optical emission spectroscopy, OES)</span>은 창 밖에서 광섬유로 빛을 모아 분광기로 나눈다. 비침습이고 빠르며(ms) 장비에 늘 달 수 있어 양산 감시의 주력이다. 문제는 선 세기가 밀도 하나가 아니라 <strong>세 가지의 곱</strong>이라는 점이다.</p>
+    <div class="formula">$$I_X \propto k_X^{*}(T_e)\,n_e\,n_X,\qquad k^{*} = \langle\sigma^{*}v\rangle \approx \sigma_0\bar v_e\,e^{-E_{th}/T_e},\qquad \frac{n_X}{n_{Ar}} = C_{X}\,\frac{I_X}{I_{Ar}}$$<div class="where">들뜬 상태가 빛을 내고 사라지는(복사 붕괴) 속도가 생성과 균형을 이룬다고 보면(코로나 모델), 세기는 바닥 상태 밀도 × 전자 밀도 × 여기 속도 계수다. 여기 단면적이 문턱 \(E_{th}\) 위에서 \(\sigma_0(1 - E_{th}/\varepsilon)\)로 자란다고 두면 맥스웰 분포에서 \(k^{*} = \sigma_0\bar v_e e^{-E_{th}/T_e}\)가 정확히 나온다. 액티노메트리에서 상수 \(C_X\)는 기준 조건에서 한 번 보정한다.</div></div>
+    <p><span class="term">액티노메트리</span><span class="en">(actinometry)</span>는 밀도를 아는 불활성 기체(보통 Ar 수 %)를 섞어 그 선과 비를 잡는다. \(n_e\)가 약분되고, 두 선의 상위 준위 문턱이 비슷하면 \(T_e\) 의존도 거의 약분된다. F 703.7 nm(상위 준위 14.75 eV)와 Ar 750.4 nm(13.48 eV)는 문턱 차가 1.3 eV로 좋은 짝이다. O 844.6 nm(10.99 eV)는 Ar 750.4 nm와 차가 2.5 eV로 크고, 무엇보다 O₂의 <strong>해리 여기</strong>(e + O₂ → O* + O, 문턱 약 16.6 eV)로도 같은 빛이 나온다. O₂ 해리율이 낮으면 844.6 nm 빛의 대부분이 O 원자가 아닌 O₂에서 와서 O 밀도를 크게 과대평가한다. 그 밖에 상위 준위의 충돌 소광(고압), 준안정 준위를 거친 2단계 여기, 자기 흡수(Ar 강한 선)가 가정을 깬다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="Ar, F, O 원자의 여기 준위와 액티노메트리 선, O2 해리 여기 경로">
+        <line x1="40" y1="220" x2="840" y2="220" class="s-axis"/>
+        <text x="20" y="236" class="lbl-sm">0 eV(바닥)</text>
+        <g transform="translate(90,0)">
+          <text x="70" y="24" text-anchor="middle" class="lbl-b">Ar</text>
+          <line x1="20" y1="51" x2="120" y2="51" class="wire"/><text x="124" y="55" class="lbl-sm">2p₁ 13.48 eV</text>
+          <line x1="20" y1="72" x2="120" y2="72" class="wire" stroke-dasharray="3 3"/><text x="124" y="76" class="lbl-sm">1s 11.8 eV</text>
+          <path d="M40 220 V55" class="c-el"/><path d="M90 51 V70" class="c-ph" stroke-width="2.4"/>
+          <text x="96" y="66" class="lbl-ph">750.4</text>
+        </g>
+        <g transform="translate(350,0)">
+          <text x="70" y="24" text-anchor="middle" class="lbl-b">F</text>
+          <line x1="20" y1="40" x2="120" y2="40" class="wire"/><text x="124" y="44" class="lbl-sm">3p ²P° 14.75 eV</text>
+          <line x1="20" y1="64" x2="120" y2="64" class="wire" stroke-dasharray="3 3"/><text x="124" y="68" class="lbl-sm">3s 12.98 eV</text>
+          <path d="M40 220 V44" class="c-el"/><path d="M90 40 V62" class="c-ph" stroke-width="2.4"/>
+          <text x="96" y="56" class="lbl-ph">703.7</text>
+        </g>
+        <g transform="translate(600,0)">
+          <text x="70" y="24" text-anchor="middle" class="lbl-b">O</text>
+          <line x1="20" y1="95" x2="120" y2="95" class="wire"/><text x="124" y="99" class="lbl-sm">3p ³P 10.99 eV</text>
+          <line x1="20" y1="114" x2="120" y2="114" class="wire" stroke-dasharray="3 3"/><text x="124" y="118" class="lbl-sm">3s 9.52 eV</text>
+          <path d="M40 220 V99" class="c-el"/><path d="M90 95 V112" class="c-ph" stroke-width="2.4"/>
+          <text x="96" y="110" class="lbl-ph">844.6</text>
+          <path d="M-20 220 C-30 140 -10 70 18 94" class="c-rad" stroke-dasharray="5 3"/>
+          <text x="-130" y="160" class="lbl-rad">e + O₂ → O* + O</text><text x="-130" y="176" class="lbl-sm">해리 여기 문턱 ≈ 16.6 eV</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 15-6.</b> 액티노메트리 짝의 상위 준위. 문턱이 비슷할수록(Ar 13.48 ↔ F 14.75 eV) 여기 속도 비가 Tₑ에 둔감하다. O 844.6 nm는 문턱이 낮고, 높은 문턱(≈ 16.6 eV)의 O₂ 해리 여기 경로가 따로 있어 O₂가 많고 Tₑ가 높을수록 과대평가된다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-oe">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>합성 발광 스펙트럼과 액티노메트리 오차</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="oe-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>전자 온도 Tₑ <output id="oe-Te-out"></output></span><input type="range" id="oe-Te" min="1.5" max="6" step="0.05" value="3"></label>
+          <label class="ctrl"><span>F 몰분율(참) <output id="oe-F-out"></output></span><input type="range" id="oe-F" min="0.2" max="10" step="0.1" value="3"></label>
+          <label class="ctrl"><span>O₂ 해리율(참) <output id="oe-d-out"></output></span><input type="range" id="oe-d" min="1" max="90" step="1" value="10"></label>
+          <label class="ctrl"><span>Ar 액티노미터 <output id="oe-Ar-out"></output></span><input type="range" id="oe-Ar" min="1" max="10" step="0.5" value="5"></label>
+          <label class="check"><input type="checkbox" id="oe-q"> 고압 소광(F* 상위 준위)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">I(703.7)/I(750.4)</span><span class="v" id="oe-r">—</span></div>
+        <div class="stat"><span class="k">F 추정 / 참</span><span class="v dg-v" id="oe-eF">—</span></div>
+        <div class="stat"><span class="k">O 추정 / 참</span><span class="v dg-v" id="oe-eO">—</span></div>
+        <div class="stat"><span class="k">844.6 중 O₂ 기여</span><span class="v" id="oe-dO">—</span></div>
+      </div>
+      <div class="sim-note">기체: O₂ 바탕 + F + Ar(액티노미터), 코로나 모델 \(I \propto k^{*}(T_e) n_e n_X\), 선 모양은 0.5 nm 반치폭 가우스(분광기 분해능), 약한 잡음. 보정 상수는 Tₑ = 3 eV, O₂ 해리율 50 %에서 맞춰 두었다. 위: 680–860 nm 스펙트럼(색 = 원소). 아래: Tₑ에 따른 추정/참 비(F 실선, O 점선)와 현재 Tₑ. 해볼 것: ① Tₑ를 1.5 ↔ 6 eV로 움직이면 F 추정은 ±30 % 안에서 움직이지만 O 추정은 몇 배 바뀐다. ② O₂ 해리율을 5 %로 낮추면 844.6 nm 빛의 대부분이 해리 여기에서 와 O가 크게 과대평가된다. ③ 소광을 켜면 F 선만 약해져 F를 과소평가한다(같은 소광 가정이 깨짐).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="endpoint">
+    <h2>종말점과 상시 감시</h2>
+    <p>OES의 가장 큰 양산 용도는 식각 <strong>종말점</strong><span class="en">(endpoint)</span> 검출이다. 막이 다 뚫리면 식각 생성물(SiO₂ 식각의 CO 483.5 nm, Si 식각의 SiF 440 nm)이 줄고 소비되던 식각제(F 703.7 nm)가 늘어난다. 노출 면적이 작으면(접촉 구멍 1 % 이하) 변화가 0.1 % 수준이라 여러 파장을 묶은 주성분 분석과 Ar 선으로 나눈 정규화(액티노메트리와 같은 생각)가 필요하다. 자세한 신호 처리는 <a href="../../etch/chapters/endpoint.html">EtchBook 종말점 장</a>에서 다룬다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 190" role="img" aria-label="식각 시간에 따른 생성물 선과 식각제 선의 변화로 종말점 찾기">
+        <line x1="60" y1="160" x2="820" y2="160" class="s-axis"/><line x1="60" y1="20" x2="60" y2="160" class="s-axis"/>
+        <text x="824" y="164" class="lbl-sm">t</text><text x="66" y="30" class="lbl-sm">I/I_Ar</text>
+        <path d="M60 60 L470 64 C500 66 520 120 560 128 L820 132" class="c-ion"/>
+        <path d="M60 130 L470 126 C500 124 520 78 560 72 L820 70" class="c-rad"/>
+        <line x1="515" y1="20" x2="515" y2="160" class="dash"/>
+        <text x="520" y="36" class="lbl-acc">종말점(1차 미분 최대)</text>
+        <text x="140" y="54" class="lbl-ion">생성물 CO 483.5 nm</text>
+        <text x="140" y="150" class="lbl-rad">식각제 F 703.7 nm</text>
+        <text x="600" y="110" class="lbl-sm">과식각: 아래층 노출</text>
+      </svg>
+      <figcaption><b>그림 15-7.</b> 종말점 신호. 아래층이 드러나는 순간 생성물 선이 떨어지고 식각제 선이 오른다. Ar 선으로 나누면 전력·창 흐림에 의한 전체 세기 변동이 상쇄된다. 창에 증착물이 쌓이면 단파장(UV) 쪽부터 투과율이 떨어진다.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="vi">
+    <h2>V-I 탐침: 임피던스와 전달 전력</h2>
+    <p><span class="term">V-I 탐침</span><span class="en">(V-I probe)</span>은 정합기와 전극 사이에 끼워 RF 전압(용량 분압)과 전류(유도 루프)를 동시에 재고, 푸리에 분해로 기본파·고조파의 진폭과 위상차를 낸다. 여기서 부하 임피던스와 실제로 플라즈마 쪽에 전달된 전력이 나온다.</p>
+    <div class="formula">$$Z = \frac{\tilde V}{\tilde I} = |Z|e^{j\varphi} = R + jX,\qquad P = \tfrac12|\tilde V||\tilde I|\cos\varphi = \tfrac12|\tilde I|^2R,\qquad \frac{\delta P}{P} \approx -\tan\varphi\;\delta\varphi$$<div class="where">CCP 부하는 대부분 시스 커패시턴스라 \(\varphi\)가 −80° ~ −89°에 가깝다. \(\tan\varphi\)가 10–50이므로 위상 1°(0.017 rad) 오차가 전력 17–90 % 오차가 된다. 그래서 V-I 탐침은 위상을 0.1° 아래로 보정해야 하고, 저항이 작은 고밀도 플라즈마일수록 전력 측정이 어렵다. 리액턴스에서 시스 두께도 추정할 수 있다: \(X \approx \omega L_{s} - 1/(\omega C_{sh})\), \(C_{sh} = \varepsilon_0A/s\).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 200" role="img" aria-label="V-I 탐침 위치와 전압 전류 페이저, 위상각">
+        <rect x="20" y="70" width="110" height="44" rx="6" class="tool"/><text x="75" y="96" text-anchor="middle" class="lbl-sm">발생기 50 Ω</text>
+        <path d="M130 92 H180" class="wire"/>
+        <rect x="180" y="70" width="100" height="44" rx="6" class="tool"/><text x="230" y="96" text-anchor="middle" class="lbl-sm">L형 정합기</text>
+        <path d="M280 92 H330" class="wire"/>
+        <rect x="330" y="76" width="60" height="32" rx="4" class="box"/><text x="360" y="97" text-anchor="middle" class="lbl-acc">V-I</text>
+        <path d="M390 92 H440" class="wire"/>
+        <rect x="440" y="60" width="16" height="64" class="metf"/><rect x="456" y="66" width="70" height="52" class="glow"/><rect x="526" y="60" width="16" height="64" class="metf"/>
+        <text x="491" y="140" text-anchor="middle" class="lbl-sm">부하: R_p + 시스 C</text>
+        <g transform="translate(700,100)">
+          <line x1="-80" y1="0" x2="140" y2="0" class="s-axis"/><line x1="0" y1="-80" x2="0" y2="80" class="s-axis"/>
+          <path d="M0 0 L120 0" class="c-el"/><text x="96" y="-8" class="lbl-el">Ṽ</text>
+          <path d="M0 0 L8 70" class="c-ion"/><text x="14" y="78" class="lbl-ion">Ĩ</text>
+          <path d="M40 0 A40 40 0 0 1 4 34" class="dash"/><text x="38" y="34" class="lbl-acc">|φ| ≈ 85°</text>
+          <text x="-80" y="-64" class="lbl-sm">P ∝ cos φ: 작은 값을</text><text x="-80" y="-48" class="lbl-sm">큰 두 값의 곱에서 꺼냄</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 15-8.</b> V-I 탐침은 정합기 뒤(부하 쪽)에서 잰다. 용량성 부하에서는 전류가 전압보다 거의 90° 앞서고, 전력은 \(\cos\varphi\) 하나에 매달린다. 정합기 앞(50 Ω 쪽)의 전력계와 뒤의 V-I 전력 차이가 정합기 손실이다(<a href="rf.html">11장</a>).</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-vi">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>V-I 탐침: 위상 오차가 전력 오차로 커지는 이유</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="vi-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>주파수</span><div class="seg" id="vi-f"><button data-value="13.56" class="on">13.56 MHz</button><button data-value="60">60 MHz</button></div></div>
+          <label class="ctrl"><span>전달 전력(참) <output id="vi-P-out"></output></span><input type="range" id="vi-P" min="100" max="2000" step="50" value="1000"></label>
+          <label class="ctrl"><span>플라즈마 저항 R <output id="vi-R-out"></output></span><input type="range" id="vi-R" min="0.5" max="20" step="0.1" value="2"></label>
+          <label class="ctrl"><span>두 시스 두께 합 s <output id="vi-s-out"></output></span><input type="range" id="vi-s" min="1" max="10" step="0.1" value="3"></label>
+          <label class="ctrl"><span>위상 보정 오차 δφ <output id="vi-e-out"></output></span><input type="range" id="vi-e" min="-2" max="2" step="0.05" value="0.5"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">|Z| · φ</span><span class="v" id="vi-z">—</span></div>
+        <div class="stat"><span class="k">R + jX</span><span class="v" id="vi-rx">—</span></div>
+        <div class="stat"><span class="k">V_rms · I_rms</span><span class="v" id="vi-vi">—</span></div>
+        <div class="stat"><span class="k">측정 전력 (오차)</span><span class="v dg-v" id="vi-pm">—</span></div>
+        <div class="stat"><span class="k">X로 추정한 시스 s</span><span class="v" id="vi-se">—</span></div>
+      </div>
+      <div class="sim-note">부하 모델: R(벌크 플라즈마) + 전극 급전 인덕턴스 L = 20 nH + 두 시스의 직렬 커패시턴스 C = ε₀A/s, 전극 지름 330 mm(PL-300 CP 모듈). 위: 한 주기의 V(t)·I(t). 아래: 측정 전력의 상대 오차 vs 위상 오차(현재 φ에서, −2° ~ +2°). 해볼 것: ① 13.56 MHz, R = 2 Ω이면 φ ≈ −87°, 위상 0.5° 오차로 전력이 20 % 가까이 틀린다. ② 60 MHz로 바꾸면 시스 리액턴스가 작아지고 L이 상쇄해 φ가 0에 가까워져 같은 위상 오차의 영향이 크게 준다. ③ R을 키우면(저밀도·고압) 측정이 쉬워진다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="microwave">
+    <h2>헤어핀 공진 탐침과 마이크로파 간섭계</h2>
+    <p>전자 밀도는 플라즈마의 유전율 \(\varepsilon_p = 1 - f_{pe}^2/f^2\)에 직접 들어 있다(<a href="scales.html">2장</a>). 마이크로파로 유전율을 재면 탐침 이론 없이 밀도를 얻는다. 두 가지가 널리 쓰인다.</p>
+    <p><span class="term">헤어핀 공진 탐침</span><span class="en">(hairpin resonance probe)</span>은 U자 모양 4분의 1 파장 2선 공진기다. 진공에서 공진 주파수는 \(f_0 = c/4L\)이고, 플라즈마에 넣으면 두 선 사이 유전율이 줄어 공진이 위로 옮겨 간다. 전자만 따라 움직이는 GHz 대역이라 이온·RF와 무관하고, 식각 기체의 증착에도 덜 민감하다. 다만 선 둘레의 시스(진공층)가 유효 유전율을 높여 밀도를 낮게 보이게 하므로 시스 보정을 한다.</p>
+    <div class="formula">$$f_r^2 = f_0^2 + \xi f_{pe}^2,\qquad f_{pe} = \frac{1}{2\pi}\sqrt{\frac{e^2n_e}{\varepsilon_0m}} \approx 8.98\sqrt{n_e[\text{m}^{-3}]}\ \text{Hz},\qquad n_e[\text{cm}^{-3}] \approx 1.24\times10^{10}\,\frac{f_r^2 - f_0^2}{\xi}\Big|_{\text{GHz}}$$<div class="where">\(\xi \le 1\)은 시스 보정 인자. 여기서는 동축 근사 \(\xi \approx 1 - \ln(b/a)/\ln(w/a)\)를 쓴다(\(a\) 선 반지름, \(b = a + s\) 시스 바깥 반지름, \(w\) 두 선 간격, \(s\)는 부유 시스 두께 약 \(4\lambda_D\)).</div></div>
+    <p><span class="term">마이크로파 간섭계</span><span class="en">(microwave interferometer)</span>는 챔버를 가로지르는 빔의 위상이 플라즈마 굴절률 \(N = \sqrt{1 - n/n_c} \approx 1 - n/2n_c\)만큼 앞서는 것을 기준 빔과 비교한다. 선 적분 밀도를 주며, 여러 현(chord)을 재서 아벨 변환하면 지름 분포가 나온다. 빔 주파수는 차단 밀도 \(n_c = \varepsilon_0m\omega^2/e^2\)보다 밀도가 충분히 낮도록(굴절을 피하려 \(n \lesssim 0.1n_c\)) 고른다.</p>
+    <div class="formula">$$\Delta\phi = \frac{\omega}{2c\,n_c}\int n_e\,dl = r_e\lambda\int n_e\,dl \approx 2.82\times10^{-15}\,\lambda\int n_e\,dl\ \ [\text{rad}],\qquad n_c \approx 1.24\times10^{-2}f^2\ [\text{m}^{-3}]$$</div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 210" role="img" aria-label="헤어핀 탐침 구조와 공진 이동, 간섭계 빔 경로">
+        <g transform="translate(20,10)">
+          <text x="0" y="16" class="lbl-b">헤어핀 탐침</text>
+          <path d="M20 70 H200 V100 H20" class="c-ion"/>
+          <path d="M0 64 H20 M0 106 H20" class="wire"/>
+          <text x="80" y="62" class="lbl-sm">길이 L = λ₀/4</text><text x="206" y="90" class="lbl-sm">w</text>
+          <ellipse cx="110" cy="70" rx="90" ry="6" fill="var(--accent-2)" fill-opacity="0.18"/>
+          <ellipse cx="110" cy="100" rx="90" ry="6" fill="var(--accent-2)" fill-opacity="0.18"/>
+          <text x="20" y="130" class="lbl-acc2">선 둘레 시스(진공층) → ξ &lt; 1</text>
+          <line x1="20" y1="190" x2="260" y2="190" class="s-axis"/>
+          <path d="M20 150 C60 150 66 186 74 186 C82 186 88 150 130 150 C160 150 172 182 180 182 C188 182 196 150 260 150" class="c-el"/>
+          <text x="58" y="204" class="lbl-sm">f₀</text><text x="170" y="204" class="lbl-sm">f_r</text><text x="238" y="204" class="lbl-sm">f</text>
+        </g>
+        <g transform="translate(330,10)">
+          <text x="0" y="16" class="lbl-b">마이크로파 간섭계</text>
+          <rect x="0" y="70" width="40" height="30" rx="4" class="tool"/><text x="20" y="90" text-anchor="middle" class="lbl-sm">송신</text>
+          <ellipse cx="240" cy="85" rx="150" ry="58" class="glow"/>
+          <path d="M40 85 H440" class="c-el"/>
+          <rect x="440" y="70" width="40" height="30" rx="4" class="tool"/><text x="460" y="90" text-anchor="middle" class="lbl-sm">수신</text>
+          <path d="M20 70 V40 H460 V70" class="dash"/><text x="200" y="34" class="lbl-sm">기준 경로(진공)</text>
+          <text x="140" y="170" class="lbl-acc">Δφ = r_e λ ∫ n dl</text>
+          <path d="M90 125 V145 M390 125 V145 M90 135 H390" class="dash"/><text x="200" y="128" class="lbl-sm">현 길이 2√(R²−y²)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 15-9.</b> 왼쪽: 헤어핀은 플라즈마 속에서 공진이 \(f_0\)에서 \(f_r\)로 올라간다. 반사 신호의 골을 주파수 스윕으로 찾는다. 오른쪽: 간섭계는 플라즈마를 지난 빔과 기준 빔의 위상차로 선 적분 밀도를 잰다. 위상이 2π를 넘으면 무늬(fringe)를 센다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-hp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>헤어핀 공진 탐침 계산기(시스 보정 포함)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="hp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>참 밀도 nₑ <output id="hp-n-out"></output></span><input type="range" id="hp-n" min="9" max="12" step="0.02" value="11.3"></label>
+          <label class="ctrl"><span>헤어핀 길이 L <output id="hp-L-out"></output></span><input type="range" id="hp-L" min="12.5" max="50" step="0.5" value="40"></label>
+          <label class="ctrl"><span>전자 온도 Tₑ <output id="hp-Te-out"></output></span><input type="range" id="hp-Te" min="1" max="6" step="0.1" value="2.5"></label>
+          <label class="ctrl"><span>압력(충돌 폭) <output id="hp-p-out"></output></span><input type="range" id="hp-p" min="2" max="200" step="1" value="10"></label>
+          <label class="check"><input type="checkbox" id="hp-sh" checked> 시스 보정 적용</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">f₀ · f_pe</span><span class="v" id="hp-f0">—</span></div>
+        <div class="stat"><span class="k">공진 f_r</span><span class="v dg-v" id="hp-fr">—</span></div>
+        <div class="stat"><span class="k">시스 s · ξ</span><span class="v" id="hp-xi">—</span></div>
+        <div class="stat"><span class="k">해석 nₑ / 참</span><span class="v" id="hp-ne">—</span></div>
+      </div>
+      <div class="sim-note">선 반지름 a = 0.125 mm, 간격 w = 3 mm. 반사 신호는 공진 근처 로렌츠 골, 반치폭은 전자-중성 충돌 주파수 ν ≈ n_g·10⁻¹³ m³/s(Ar, 수 eV) 정도로 넓어진다. 해볼 것: ① 기준 플라즈마(4×10¹¹ cm⁻³)는 f_pe ≈ 5.7 GHz라, L = 50 mm(f₀ = 1.5 GHz)로도 f_r ≈ 5.9 GHz로 PL-300 스윕 상한 6 GHz에 바짝 붙는다. ② L을 줄이면 f₀가 올라가 측정 상한 밀도가 낮아진다(빨간색 = 범위 밖). ③ 시스 보정을 끄면 밀도를 10–30 % 낮게 읽고, 저밀도(λ_D가 클 때)일수록 오차가 크다. ④ 200 mTorr에서는 공진 골이 넓어져 피크 찾기가 어려워진다.</div>
+    </div>
+
+    <div class="sim" id="sim-mw">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>마이크로파 간섭계: 현 적분, 무늬 세기, 아벨 역변환</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="mw-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>빔 주파수</span><div class="seg" id="mw-f"><button data-value="35">35 GHz</button><button data-value="94" class="on">94 GHz</button><button data-value="140">140 GHz</button></div></div>
+          <label class="ctrl"><span>중심 밀도 n₀ <output id="mw-n-out"></output></span><input type="range" id="mw-n" min="10" max="13.3" step="0.02" value="11.6"></label>
+          <label class="ctrl"><span>현 위치 y(중심에서) <output id="mw-y-out"></output></span><input type="range" id="mw-y" min="0" max="24" step="0.5" value="0"></label>
+          <label class="ctrl"><span>가장자리/중심 h_R <output id="mw-h-out"></output></span><input type="range" id="mw-h" min="0.05" max="0.9" step="0.01" value="0.1"></label>
+          <button class="btn primary" id="mw-on">플라즈마 켜기(무늬 세기)</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">∫n dl (현)</span><span class="v" id="mw-int">—</span></div>
+        <div class="stat"><span class="k">위상 Δφ</span><span class="v" id="mw-ph">—</span></div>
+        <div class="stat"><span class="k">n₀/n_c</span><span class="v dg-v" id="mw-nc">—</span></div>
+        <div class="stat"><span class="k">아벨 복원 n₀ / 참</span><span class="v" id="mw-ab">—</span></div>
+      </div>
+      <div class="sim-note">밀도 분포 n(r) = n₀·J₀(χr/R)(R = 0.25 m, J₀(χ) = h_R), 현은 수평으로 챔버를 가로지른다. 위: 현 위치에 따른 선 적분 밀도(곡선)와 15개 현의 측정값(점, ±1° 위상 잡음)에서 아벨 역변환으로 복원한 n(r)(작은 그림). 아래: 플라즈마를 켤 때(밀도가 0 → n₀로 오를 때) 검출기 신호 cos Δφ(t)와 센 무늬 수. 해볼 것: ① 35 GHz로 기준 밀도를 재면 n₀/n_c ≈ 0.03, 중심 현 위상 약 3 rad. 94 GHz는 위상이 1/2.7로 작아 굴절 걱정은 없지만 위상 잡음의 상대 영향이 커진다. 밀도가 높아 위상이 2π를 넘으면 무늬를 세야 하고, 하나를 놓치면 2π 단위로 틀린다. ② 35 GHz에서 n₀를 10¹³ cm⁻³로 올리면 n₀/n_c ≈ 0.66으로 굴절이 심해지고(경고), 약 1.5×10¹³ cm⁻³를 넘으면 차단(n₀ &gt; n_c)되어 신호가 사라진다. ③ 가장자리 현(y → R)일수록 위상이 작고 상대 오차가 커서 아벨 복원의 중심값이 흔들린다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="rfea">
+    <h2>지연 전위 분석기: 웨이퍼 자리의 이온 에너지</h2>
+    <p>식각 결과를 정하는 것은 웨이퍼에 닿는 이온의 에너지 분포(IEDF)다(<a href="sheath.html">7장</a>). <span class="term">지연 전위 분석기</span><span class="en">(retarding field energy analyzer, RFEA)</span>는 전극(또는 웨이퍼 모양 센서)에 작은 구멍을 내고, 그 아래 격자를 쌓아 이온을 에너지로 거른다. 맨 위 격자는 표면과 같은 전위(플라즈마 차폐, 구멍 &lt; λ_D), 둘째 격자는 큰 음전압으로 전자를 막고, 셋째 <strong>판별 격자</strong>에 \(+V_d\)를 걸어 에너지가 \(eV_d\)보다 작은 이온을 되돌린다. 넷째 격자는 수집기에서 튀어나온 2차 전자를 막는다. 수집 전류를 \(V_d\)로 미분하면 IEDF가 된다.</p>
+    <div class="formula">$$I_c(V_d) = e\,A_{eff}\,\mathcal{T}\int_{eV_d}^{\infty} f(E)\,dE,\qquad f(E) \propto -\frac{dI_c}{dV_d}$$<div class="where">\(\mathcal T\)는 격자 투과율의 곱(격자당 약 50 %, 네 장이면 수 %). 한 축(수직) 에너지만 거르므로 비스듬히 들어온 이온은 낮은 에너지로 보인다. 격자 사이 간격이 이온 평균 자유 행로와 데바이 길이보다 작아야 공간 전하 왜곡이 없다. RF 전극 위에서는 센서 전체가 RF로 떠 있어야 하므로 신호선에 RF 필터가 필요하다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 210" role="img" aria-label="RFEA 격자 적층 구조와 각 격자 전위">
+        <rect x="40" y="30" width="186" height="22" class="sif"/><rect x="254" y="30" width="206" height="22" class="sif"/><text x="470" y="46" class="lbl-sm">표면(웨이퍼·전극) 구멍 ≈ 수십 µm</text>
+        <g class="wire">
+          <path d="M40 72 H460" stroke-dasharray="6 3"/><path d="M40 102 H460" stroke-dasharray="6 3"/><path d="M40 132 H460" stroke-dasharray="6 3"/><path d="M40 162 H460" stroke-dasharray="6 3"/>
+        </g>
+        <rect x="40" y="182" width="420" height="12" class="metf"/>
+        <text x="470" y="76" class="lbl-sm">G1 표면 전위(차폐)</text>
+        <text x="470" y="106" class="lbl-el">G2 −60 V: 전자 차단</text>
+        <text x="470" y="136" class="lbl-ion">G3 +V_d: 이온 에너지 판별</text>
+        <text x="470" y="166" class="lbl-sm">G4 −70 V: 2차 전자 억제</text>
+        <text x="470" y="194" class="lbl-sm">수집기 → I_c(V_d)</text>
+        <path d="M232 10 V128" class="c-ion"/><path d="M246 10 V180" class="c-ion"/>
+        <path d="M232 128 C232 136 226 136 222 120" class="c-ion"/>
+        <text x="100" y="124" class="lbl-sm">E &lt; eV_d: 되돌아감</text><text x="262" y="176" class="lbl-sm">E &gt; eV_d: 수집</text>
+      </svg>
+      <figcaption><b>그림 15-10.</b> 웨이퍼형 RFEA의 4격자 구조. 판별 격자 전압을 0에서 1 kV 이상까지 훑으며 수집 전류를 재면 \(I_c(V_d)\)는 계단 꼴로 줄고, 그 기울기가 IEDF다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-rf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>RFEA: 수집 전류 미분으로 두 봉우리 IEDF 재기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rf-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>바이어스 주파수</span><div class="seg" id="rf-f"><button data-value="2" class="on">2 MHz</button><button data-value="13.56">13.56 MHz</button><button data-value="60">60 MHz</button></div></div>
+          <label class="ctrl"><span>평균 시스 전압 V̄ <output id="rf-Vd-out"></output></span><input type="range" id="rf-Vd" min="100" max="1000" step="10" value="700"></label>
+          <label class="ctrl"><span>시스 RF 진폭 Ṽ <output id="rf-Va-out"></output></span><input type="range" id="rf-Va" min="0" max="900" step="10" value="500"></label>
+          <label class="ctrl"><span>압력 <output id="rf-p-out"></output></span><input type="range" id="rf-p" min="2" max="100" step="1" value="10"></label>
+          <label class="ctrl"><span>판별 전압 간격 ΔV <output id="rf-dV-out"></output></span><input type="range" id="rf-dV" min="2" max="40" step="1" value="10"></label>
+          <label class="ctrl"><span>전류 잡음 <output id="rf-nz-out"></output></span><input type="range" id="rf-nz" min="0" max="2" step="0.05" value="0.3"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">시스 s · 통과 시간 τᵢ</span><span class="v" id="rf-s">—</span></div>
+        <div class="stat"><span class="k">ωτᵢ</span><span class="v" id="rf-wt">—</span></div>
+        <div class="stat"><span class="k">봉우리 간격 ΔE 참 · 측정</span><span class="v" id="rf-dE">—</span></div>
+        <div class="stat"><span class="k">무충돌 비율</span><span class="v" id="rf-cl">—</span></div>
+      </div>
+      <div class="sim-note">플라즈마: PL-300 CP 모듈 nₑ = 5×10¹⁰ cm⁻³, Tₑ = 3 eV, Ar⁺. 차일드 시스 \(s = \tfrac{\sqrt2}{3}\lambda_D(2\bar V/T_e)^{3/4}\), \(\tau_i = 3s\sqrt{M/2e\bar V}\). 이온 에너지 변조 폭은 저역 통과 근사 \(\Delta E = 2e\tilde V/\sqrt{1 + (\omega\tau_i/2)^2}\)로 두고, 위상이 고르게 분포한다고 보아 아크사인 꼴의 두 봉우리를 만든다. 시스 안에서 전하 교환을 겪는 비율 \(1 - e^{-s/\lambda_i}\)(λᵢ = 3 mm × 10 mTorr/p)은 낮은 에너지 꼬리로 보낸다. 위: 수집 전류 I_c(V_d)(점 = 측정). 아래: 참 IEDF(채움)와 −dI_c/dV_d(선). 해볼 것: ① 2 MHz, 10 mTorr 기본값은 PL-300의 "수백 eV ~ 약 1.2 keV 두 봉우리"를 재현한다. ② 13.56·60 MHz로 바꾸면 ωτᵢ ≫ 1이라 두 봉우리가 V̄ 근처로 모인다. ③ ΔV를 40 V로 키우면 측정 봉우리가 뭉개지고, 압력을 올리면 무충돌 봉우리가 사라진다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 11 -->
+  <section id="mass">
+    <h2>질량 분석: 래디컬과 이온</h2>
+    <p><span class="term">사중극자 질량 분석기</span><span class="en">(quadrupole mass spectrometer, QMS)</span>는 챔버 벽의 작은 오리피스(지름 약 0.1 mm)로 기체를 차동 배기된 분석기로 뽑아 질량 대 전하비 m/z로 거른다. 두 모드가 있다. <strong>이온 모드</strong>는 이온화기를 끄고 플라즈마 이온을 그대로 들여 에너지 분석기와 함께 이온 종류별 에너지 분포를 본다. <strong>중성 모드</strong>는 전자 충돌 이온화기로 중성을 이온화해 세는데, 래디컬(F, CF₂)과 그 모분자(CF₄)가 이온화기 안에서 같은 조각 이온(CF₂⁺)을 만들어 구별이 어렵다. 해결책은 <span class="term">문턱 이온화 질량 분석</span><span class="en">(threshold ionization MS)</span>이다. 래디컬의 직접 이온화 문턱(CF₂ → CF₂⁺ 약 11.4 eV)이 모분자의 해리 이온화 문턱(CF₄ → CF₂⁺ 약 20 eV)보다 낮으므로, 이온화 전자 에너지를 그 사이에 두면 래디컬만 센다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 180" role="img" aria-label="질량 분석기의 오리피스, 차동 배기, 이온화기, 사중극자, 검출기와 문턱 이온화 곡선">
+        <rect x="20" y="40" width="110" height="100" rx="8" class="glow"/><text x="75" y="95" text-anchor="middle" class="lbl-sm">플라즈마</text>
+        <rect x="130" y="40" width="8" height="100" class="metf"/><text x="112" y="160" class="lbl-sm">오리피스</text>
+        <rect x="160" y="62" width="70" height="56" rx="5" class="tool"/><text x="195" y="94" text-anchor="middle" class="lbl-sm">이온화기</text>
+        <rect x="250" y="70" width="190" height="40" rx="5" class="box"/>
+        <g class="wire"><path d="M260 78 H430 M260 102 H430"/></g><text x="345" y="94" text-anchor="middle" class="lbl-sm">사중극자 m/z 필터</text>
+        <rect x="460" y="70" width="60" height="40" rx="5" class="tool"/><text x="490" y="94" text-anchor="middle" class="lbl-sm">검출기</text>
+        <path d="M138 90 H160 M230 90 H250 M440 90 H460" class="c-ion"/>
+        <text x="190" y="40" class="lbl-sm">차동 배기 10⁻⁶ Torr 이하</text>
+        <g transform="translate(560,10)">
+          <line x1="20" y1="150" x2="300" y2="150" class="s-axis"/><line x1="20" y1="20" x2="20" y2="150" class="s-axis"/>
+          <text x="210" y="168" class="lbl-sm">전자 에너지 (eV)</text><text x="26" y="30" class="lbl-sm">CF₂⁺ 신호</text>
+          <path d="M70 150 C110 140 150 120 300 90" class="c-rad"/>
+          <path d="M160 150 C200 130 240 80 300 40" class="c-ion" stroke-dasharray="5 3"/>
+          <text x="60" y="140" class="lbl-rad">11.4</text><text x="150" y="140" class="lbl-ion">≈ 20</text>
+          <rect x="85" y="20" width="70" height="130" fill="var(--ok)" fill-opacity="0.12"/><text x="90" y="36" class="lbl-sm">래디컬만</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 15-11.</b> 질량 분석기와 문턱 이온화. 이온화 전자 에너지를 래디컬 문턱과 모분자 해리 이온화 문턱 사이(초록 띠)에 두면 래디컬 신호만 남는다. 오리피스 근처 벽 반응 때문에 반응성 높은 래디컬은 적게 보이므로 빔 차단기로 배경을 뺀다.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ 12 -->
+  <section id="scan3d">
+    <h2>3D 탐침 스캔: 지름 방향 밀도 분포</h2>
+    <p>챔버 매칭과 균일도 개발에서는 탐침을 옆 포트로 넣어 지름 방향으로 밀어 가며 \(n(r)\)을 잰다. 확산이 지배하는 원통 플라즈마의 기본 모드는 지름 방향 \(J_0(\chi r/R)\), 높이 방향 \(\cos\)이다(<a href="transport.html">6장</a>). 저압에서는 가장자리 밀도가 중심보다 크게 낮지 않으므로, 벽에서의 비 \(h_R = n(R)/n_0 \approx 0.8/\sqrt{4 + R/\lambda_i}\)로 \(\chi\)를 정한다(\(J_0(\chi) = h_R\)). 순수한 확산 모드는 중심이 높아 300 mm 웨이퍼 위 균일도가 ±20 %를 넘는다. 실제 장비는 바깥쪽 코일 비중을 높여 가장자리 근처에서 전력을 더 넣어(이온화 원천을 바깥으로) 분포를 평평하게 한다.</p>
+    <div class="formula">$$n(r,z) = n_0\big[(1-w)J_0(\chi r/R) + w\,g(r)\big]\cos\!\left(\frac{\kappa\,(z - H/2)}{H}\right),\qquad g(r) = \left(\frac{r}{r_c}\right)^3 e^{1 - (r/r_c)^3},\qquad U = \frac{n_{max} - n_{min}}{n_{max} + n_{min}}$$<div class="where">\(w\)는 바깥 코일 비중, \(r_c\) = 0.17 m는 바깥 코일이 만드는 이온화 원천 반지름, \(\kappa\)는 위아래 벽의 \(h_L = 0.86/\sqrt{3 + H/2\lambda_i}\)로 정한다. 탐침은 각 위치에서 이온 포화 전류 \(I_{is} = 0.61enu_BA_p\)를 재고, 이를 n으로 바꾼다(±2 % 잡음). 균일도 U는 웨이퍼 반지름 150 mm 안에서 계산한다.</div></div>
+
+    <div class="sim" id="sim-p3">
+      <div class="sim-head"><span class="sim-tag three">3D</span><h3>IC 모듈 챔버 속 탐침 스캔과 균일도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view three" id="p3-view"><span class="hint">드래그: 회전 · 휠: 확대</span></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>탐침 위치 r <output id="p3-r-out"></output></span><input type="range" id="p3-r" min="0" max="24" step="0.5" value="0"></label>
+          <label class="ctrl"><span>탐침 높이 z(웨이퍼 위) <output id="p3-z-out"></output></span><input type="range" id="p3-z" min="1" max="9" step="0.5" value="5"></label>
+          <label class="ctrl"><span>압력 <output id="p3-p-out"></output></span><input type="range" id="p3-p" min="2" max="50" step="1" value="10"></label>
+          <label class="ctrl"><span>코일 전력 <output id="p3-P-out"></output></span><input type="range" id="p3-P" min="200" max="3000" step="50" value="1500"></label>
+          <label class="ctrl"><span>바깥 코일 비중 w <output id="p3-w-out"></output></span><input type="range" id="p3-w" min="0" max="0.8" step="0.01" value="0"></label>
+          <button class="btn primary" id="p3-scan">지름 방향 스캔</button>
+        </div>
+      </div>
+      <div class="sim-view"><canvas id="p3-cv"></canvas></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">탐침 위치 n</span><span class="v" id="p3-n">—</span></div>
+        <div class="stat"><span class="k">I_is · r_p/λ_D</span><span class="v" id="p3-i">—</span></div>
+        <div class="stat"><span class="k">h_R · χ</span><span class="v" id="p3-h">—</span></div>
+        <div class="stat"><span class="k">웨이퍼 위 균일도 U</span><span class="v dg-v" id="p3-u">—</span></div>
+      </div>
+      <div class="sim-note">챔버: 반지름 0.25 m, 창-웨이퍼 0.10 m(3D는 높이를 2.5배 과장), 평면 나선 코일, 300 mm 웨이퍼. 3D: 탐침 높이에서의 밀도 단면(밝을수록 높음)과 옆 포트로 들어온 탐침(텅스텐 끝 5 mm, 반지름 0.1 mm는 보이게 과장). 아래: 참 분포(선)와 스캔 측정점, 웨이퍼 가장자리(150 mm) 세로선. 중심 밀도는 nₑ ∝ P로 1.5 kW에서 4×10¹¹ cm⁻³, Tₑ = 2.5 eV 고정. 해볼 것: ① w = 0이면 U ≈ ±25 %. w를 올려 PL-300 목표 ±3 % 안에 들어오는 값(약 0.27–0.30)을 찾아라. 창이 좁아 w가 0.05만 어긋나도 목표를 벗어나고, 지나치면 가장자리가 높아진다. ② 압력을 50 mTorr로 올리면 λᵢ가 짧아져 h_R가 작아지고 같은 w에서 분포가 더 휜다. ③ 탐침을 가장자리로 밀면 밀도가 낮아져 r_p/λ_D가 줄어든다(해석 이론 선택이 위치마다 달라짐).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 13 -->
+  <section id="compare">
+    <h2>진단 고르기와 손잡이 읽기</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>진단</th><th>재는 값</th><th>침습</th><th>시간 분해</th><th>주된 오차·한계</th><th>쓰임</th></tr></thead>
+      <tbody>
+        <tr><td>랭뮤어 탐침</td><td>Tₑ, nₑ, V_p, V_f, EEDF(국소)</td><td>있음</td><td>ms(스윕), µs(시간 분해)</td><td>해석 이론, 표면 오염, RF 보상, 자기장</td><td>개발, 균일도 스캔</td></tr>
+        <tr><td>헤어핀 탐침</td><td>nₑ(국소)</td><td>작음</td><td>µs–ms</td><td>시스 보정, 상한 밀도 = 스윕 상한</td><td>개발, 펄스 잔광</td></tr>
+        <tr><td>마이크로파 간섭계</td><td>∫nₑ dl</td><td>없음</td><td>µs</td><td>무늬 놓침, 굴절, 아벨 복원</td><td>밀도 기준값, 매칭</td></tr>
+        <tr><td>OES·액티노메트리</td><td>상대 래디컬 밀도, 종말점</td><td>없음</td><td>ms</td><td>Tₑ 의존, 해리 여기, 소광, 창 흐림</td><td>양산 감시, 종말점</td></tr>
+        <tr><td>V-I 탐침</td><td>Z, 전달 전력, 고조파</td><td>없음</td><td>µs</td><td>위상 보정(cos φ 민감), 위치</td><td>양산 FDC, 정합</td></tr>
+        <tr><td>RFEA</td><td>IEDF, 이온 플럭스(웨이퍼)</td><td>웨이퍼 자리</td><td>s</td><td>격자 투과·각도, RF 필터</td><td>바이어스 개발, 매칭</td></tr>
+        <tr><td>질량 분석</td><td>이온·래디컬 종류, IEDF(종별)</td><td>벽 표본</td><td>ms–s</td><td>벽 반응, 조각 이온 겹침</td><td>화학 연구</td></tr>
+      </tbody>
+    </table></div>
+    <p>진단은 손잡이와 플라즈마 변수를 잇는 증거다. 아래 표는 PL-300 IC 모듈에서 손잡이 하나를 돌릴 때 각 진단이 보여 주는 변화다(<a href="global.html">전역 모델</a>의 예측과 비교해 보라).</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>조건(손잡이)</th><th>랭뮤어 탐침</th><th>OES</th><th>V-I·RFEA</th><th>해석</th></tr></thead>
+      <tbody>
+        <tr><td>코일 전력 ↑ (1.5 → 3 kW)</td><td>I_is 약 2배, 반로그 기울기 거의 그대로</td><td>모든 선 세기 ↑, Ar 비는 거의 그대로</td><td>코일 전류 ↓(R_p ↑), 이온 에너지 약간 ↓</td><td>nₑ ∝ P, Tₑ는 입자 균형이 정함</td></tr>
+        <tr><td>압력 ↑ (10 → 50 mTorr)</td><td>기울기 가팔라짐(Tₑ ↓), 분포 중심 집중</td><td>높은 문턱 선이 상대적으로 약해짐</td><td>RFEA 저에너지 전하 교환 꼬리 ↑</td><td>n_g d_eff ↑ → Tₑ ↓, λᵢ ↓</td></tr>
+        <tr><td>바이어스 전력 ↑</td><td>V_p·V_f 거의 그대로(ICP)</td><td>식각 생성물 선 ↑</td><td>V-I 전압 ↑, RFEA 봉우리 오른쪽 이동</td><td>이온 에너지 ↑, 플럭스 거의 그대로</td></tr>
+        <tr><td>바이어스 주파수 2 → 13.56 MHz</td><td>변화 작음</td><td>변화 작음</td><td>RFEA 두 봉우리 간격 크게 ↓</td><td>ωτᵢ ≫ 1이면 이온이 평균 전압만 봄</td></tr>
+        <tr><td>O₂ 첨가(CF₄/O₂)</td><td>탐침 오염 ↑, 전기 음성 → 해석 주의</td><td>F 703.7/Ar 750.4 처음 ↑ 뒤 ↓</td><td>Z 실수부 변화(전기 음성)</td><td>F 밀도 최대(<a href="chemistry.html">13장</a>)</td></tr>
+        <tr><td>바깥 코일 비중 ↑</td><td>n(r) 평탄화, 지나치면 가장자리 ↑</td><td>시선 적분이라 변화 작음</td><td>웨이퍼형 RFEA 플럭스 지도 평탄화</td><td>원천 분포가 확산 모드를 이김</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout fab"><strong>챔버 간 nₑ 매칭 ±5 %를 무엇으로 재나</strong>탐침의 절대 정확도는 ±30 % 수준이라 ±5 % 매칭을 판정할 수 없다. 대신 같은 탐침(같은 해석 이론, 같은 세정 절차)으로 두 챔버를 재는 <strong>상대</strong> 비교를 하거나, 이론이 필요 없는 헤어핀·간섭계로 기준을 잡는다. 기준 플라즈마(4×10¹¹ cm⁻³)는 f_pe ≈ 5.7 GHz로 헤어핀 스윕 상한(6 GHz)에 가까우므로, 매칭 점검은 전력을 낮춘 조건(예: 0.5 kW, 약 1.3×10¹¹ cm⁻³)에서 하고 nₑ ∝ P로 옮긴다. 양산 중에는 V-I 탐침의 기본파 전압·전류와 OES Ar 선 세기를 매칭 지표로 쓴다.</div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>랭뮤어 탐침 I-V: 이온 포화 \(0.61enu_BA_p\), 지연 영역 \(\propto e^{(V-V_p)/T_e}\), 전자 포화 \(\tfrac14en\bar v_eA_p\). 반로그 기울기 → Tₑ, dI/dV 최대 → V_p, I = 0 → V_f(Ar은 \(V_p - 5.2T_e\)).</li>
+      <li>시스가 탐침만큼 두꺼우면(\(r_p/\lambda_D\) ≲ 10) 이온 전류가 포화하지 않는다. 평판 보옴 식은 n을 과대평가하고, OML·ABR이 괄호를 준다.</li>
+      <li>드루이베스테인 \(f \propto \sqrt{U}\,d^2I/dV^2\)는 분포 모양을 직접 준다. 평활화 창과 RF 잔류 진폭은 저에너지 구조를 뭉개고, 잡음은 꼬리를 덮는다.</li>
+      <li>RF 보상: \(\tilde V_{sh} = \tilde V_p|Z_{sh}/(Z_{sh}+Z_g)|\) ≲ Tₑ/2. 보상 전극(\(Z_{sh}\) ↓)과 탐침 끝 가까운 공진 초크(\(Z_g\) ↑)가 함께 필요하고, 모든 RF 주파수에 맞춰야 한다.</li>
+      <li>OES 세기는 \(k^{*}(T_e)n_en_X\). 액티노메트리는 문턱이 비슷한 짝(F 703.7/Ar 750.4)에서만 Tₑ에 둔감하고, 해리 여기(O 844.6 ← O₂)와 소광이 가정을 깬다. 종말점은 생성물·식각제 선의 Ar 정규화 변화로 잡는다.</li>
+      <li>V-I 탐침: \(P = \tfrac12|V||I|\cos\varphi\). 용량성 부하(φ ≈ −87°)에서는 위상 오차 1°가 전력 수십 % 오차다.</li>
+      <li>헤어핀 \(f_r^2 = f_0^2 + \xi f_{pe}^2\)와 간섭계 \(\Delta\phi = r_e\lambda\int n\,dl\)은 탐침 이론 없이 밀도를 준다. 헤어핀은 시스 보정과 스윕 상한, 간섭계는 무늬 세기와 차단 밀도를 조심한다.</li>
+      <li>RFEA는 \(f(E) \propto -dI_c/dV_d\)로 웨이퍼 자리 IEDF를 준다. 두 봉우리 폭은 \(\omega\tau_i\)로 정해지고, 판별 전압 간격·충돌 꼬리가 측정 분해능을 정한다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. Ar 플라즈마에서 탐침 전자 전류의 반로그 그래프 기울기가 0.4 V⁻¹이었다. Tₑ와, V_f = 2 V일 때 V_p의 대략값은?</p><div class="opts">
+        <button class="opt">Tₑ = 0.4 eV, V_p ≈ 4 V</button>
+        <button class="opt" data-correct>Tₑ = 2.5 eV, V_p ≈ 15 V</button>
+        <button class="opt">Tₑ = 2.5 eV, V_p ≈ 4.5 V</button>
+        <button class="opt">Tₑ = 4 eV, V_p ≈ 22 V</button>
+      </div><div class="quiz-exp">\(T_e = 1/0.4 = 2.5\) eV. Ar에서 \(V_p - V_f \approx 5.2T_e = 13\) V이므로 \(V_p \approx 15\) V.</div></div>
+
+      <div class="quiz-q"><p>2. 반지름 0.1 mm 원통 탐침으로 10¹⁰ cm⁻³ 플라즈마를 쟀다. 이온 포화 전류를 평판 보옴 식 \(0.61enu_BA_p\)에 넣어 구한 밀도는 참값에 비해?</p><div class="opts">
+        <button class="opt">항상 정확하다</button>
+        <button class="opt">작게 나온다: 원통은 평판보다 면적이 작다</button>
+        <button class="opt" data-correct>크게 나온다: 시스가 탐침보다 두꺼워 수집 면적이 넓고 전류가 포화하지 않는다</button>
+        <button class="opt">이온 전류가 0이라 구할 수 없다</button>
+      </div><div class="quiz-exp">10¹⁰ cm⁻³, 2–3 eV에서 \(\lambda_D \approx 0.1\) mm라 \(r_p/\lambda_D \approx 1\)이다. 시스 바깥 면(수집 면)이 탐침 면적보다 훨씬 크고 궤도 운동도 생기므로(OML 영역) 같은 n에서 이온 전류가 커진다. 평판 식은 n을 과대평가한다.</div></div>
+
+      <div class="quiz-q"><p>3. CCP에서 보상 안 된 탐침으로 잰 EEPF가 "고에너지 전자가 많은" 모양이고 Tₑ가 크게 나왔다. 가장 그럴듯한 원인은?</p><div class="opts">
+        <button class="opt">CCP의 확률 가열이 실제로 고에너지 전자를 만들어서</button>
+        <button class="opt" data-correct>시스에 걸린 RF 진폭이 I-V를 문질러(정류) 지연 영역 기울기가 완만해져서</button>
+        <button class="opt">이온 전류를 빼지 않아서</button>
+        <button class="opt">탐침 면적이 너무 작아서</button>
+      </div><div class="quiz-exp">\(\langle e^{(V + \tilde V\sin\omega t)/T_e}\rangle = e^{V/T_e}I_0(\tilde V/T_e)\). 전압에 따라 문질러진 곡선은 꺾임이 둥글어지고 반로그 기울기가 줄어 Tₑ가 커 보인다. 보상 전극과 RF·2차 고조파 초크로 \(\tilde V_{sh} \lesssim T_e/2\)를 맞춰야 한다.</div></div>
+
+      <div class="quiz-q"><p>4. O₂ 플라즈마에 Ar을 섞어 O 844.6 nm / Ar 750.4 nm 비로 O 밀도를 추적했다. 전력을 낮춰 O₂ 해리율이 50 %에서 5 %로 떨어졌을 때 액티노메트리 추정의 문제는?</p><div class="opts">
+        <button class="opt">문제없다. 비는 O 밀도에 정확히 비례한다</button>
+        <button class="opt">O를 과소평가한다</button>
+        <button class="opt" data-correct>e + O₂ → O* + O 해리 여기가 844.6 nm 빛의 큰 몫을 차지해 O를 과대평가한다</button>
+        <button class="opt">Ar 선이 사라진다</button>
+      </div><div class="quiz-exp">844.6 nm의 상위 준위 O(3p ³P)는 O 직접 여기뿐 아니라 O₂ 해리 여기로도 채워진다. O₂가 O보다 훨씬 많아지면 빛의 대부분이 O₂에서 와 비가 O 밀도를 대표하지 못한다. 해리 여기 몫을 빼거나 777 nm 선과 함께 보정한다.</div></div>
+
+      <div class="quiz-q"><p>5. 13.56 MHz CCP의 V-I 탐침에서 |V| = 400 V, |I| = 10 A, φ = −87°였다. 전달 전력과, 위상 보정 오차 0.5°가 주는 전력 오차는?</p><div class="opts">
+        <button class="opt">2 kW, 오차 0.5 %</button>
+        <button class="opt" data-correct>약 105 W, 오차 약 17 %</button>
+        <button class="opt">약 105 W, 오차 0.5 %</button>
+        <button class="opt">4 kW, 오차 17 %</button>
+      </div><div class="quiz-exp">\(P = \tfrac12\times400\times10\times\cos87^\circ = 2000\times0.0523 \approx 105\) W. \(\delta P/P \approx \tan87^\circ\times(0.5\pi/180) = 19.1\times0.0087 \approx 0.17\).</div></div>
+
+      <div class="quiz-q"><p>6. 진공 공진 2.0 GHz인 헤어핀이 플라즈마에서 4.0 GHz에 공진했다(시스 보정 ξ = 0.85). 전자 밀도는?</p><div class="opts">
+        <button class="opt">약 1.5×10¹⁰ cm⁻³</button>
+        <button class="opt">약 5.0×10¹⁰ cm⁻³</button>
+        <button class="opt" data-correct>약 1.75×10¹¹ cm⁻³</button>
+        <button class="opt">약 2×10¹² cm⁻³</button>
+      </div><div class="quiz-exp">\(f_{pe}^2 = (4^2 - 2^2)/0.85 = 14.1\) GHz², \(n = 1.24\times10^{10}\times14.1 \approx 1.75\times10^{11}\) cm⁻³. 보정 없이(ξ = 1) 계산하면 1.49×10¹¹ cm⁻³로 15 % 낮게 읽는다.</div></div>
+
+      <div class="quiz-q"><p>7. 2 MHz 바이어스에서 두 봉우리가 뚜렷하던 RFEA IEDF가 같은 평균 전압의 13.56 MHz 바이어스에서는 하나의 좁은 봉우리가 되었다. 이유는?</p><div class="opts">
+        <button class="opt">RFEA 격자가 고주파를 막아서</button>
+        <button class="opt" data-correct>이온이 시스를 건너는 시간 τᵢ가 RF 주기보다 길어져(ωτᵢ ≫ 1) 평균 시스 전압만 느끼기 때문</button>
+        <button class="opt">13.56 MHz에서는 이온이 만들어지지 않아서</button>
+        <button class="opt">전하 교환 충돌이 사라져서</button>
+      </div><div class="quiz-exp">무거운 Ar⁺가 수 mm 시스를 건너는 데 100 ns 이상 걸린다. 2 MHz 주기(500 ns)보다는 짧아 순간 전압을 따라가지만, 13.56 MHz(74 ns)에서는 여러 주기를 평균해 ΔE가 \(\sim 1/(\omega\tau_i)\)로 줄어든다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const qe = PB.C.q, me = PB.C.me, eps0 = PB.C.eps0, cL = PB.C.c, MAr = 39.95 * 1.6605e-27;
+  const clamp = PB.clamp;
+  const SUP = { "-": "⁻", "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹" };
+  function sci(x, d) {
+    d = d || 2;
+    if (!isFinite(x)) return "—";
+    if (x === 0) return "0";
+    let e = Math.floor(Math.log10(Math.abs(x))), m = x / Math.pow(10, e);
+    if (Math.abs(m) >= 9.995 && d <= 3) { m /= 10; e += 1; }
+    return m.toFixed(d - 1) + "×10" + String(e).split("").map((c) => SUP[c] || c).join("");
+  }
+  function alpha(c, a) {
+    c = (c || "").trim();
+    if (/^#[0-9a-f]{6}$/i.test(c)) return c + ("0" + Math.round(clamp(a, 0, 1) * 255).toString(16)).slice(-2);
+    if (/^#[0-9a-f]{3}$/i.test(c)) return "#" + c[1] + c[1] + c[2] + c[2] + c[3] + c[3] + ("0" + Math.round(clamp(a, 0, 1) * 255).toString(16)).slice(-2);
+    const m = c.match(/^rgba?\(([^)]+)\)/);
+    if (m) { const p = m[1].split(",").map((s) => parseFloat(s)); return "rgba(" + p[0] + "," + p[1] + "," + p[2] + "," + a + ")"; }
+    return c;
+  }
+  function rng(seed) {
+    let s = seed >>> 0;
+    return function () {
+      s = (s + 0x6D2B79F5) >>> 0;
+      let t = s;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function gauss(r) { const u = 1 - r(), v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+  function J0(x) { // series, fine for |x| < 4
+    let s = 1, t = 1; const q = -x * x / 4;
+    for (let k = 1; k < 40; k++) { t *= q / (k * k); s += t; if (Math.abs(t) < 1e-14) break; }
+    return s;
+  }
+  function chiFromH(h) { // J0(chi) = h, chi in (0, 2.4048)
+    let a = 0, b = 2.4048;
+    h = clamp(h, 1e-4, 0.9999);
+    for (let i = 0; i < 60; i++) { const m = (a + b) / 2; if (J0(m) > h) a = m; else b = m; }
+    return (a + b) / 2;
+  }
+  function erfcx(x) { // exp(x^2) erfc(x), x >= 0 (Numerical Recipes erfcc without the exp(-x^2))
+    const t = 1 / (1 + 0.5 * x);
+    return t * Math.exp(-1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+  }
+  function linfit(xs, ys) {
+    const n = xs.length; if (n < 2) return null;
+    let sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (let i = 0; i < n; i++) { sx += xs[i]; sy += ys[i]; sxx += xs[i] * xs[i]; sxy += xs[i] * ys[i]; }
+    const d = n * sxx - sx * sx; if (Math.abs(d) < 1e-30) return null;
+    const b = (n * sxy - sx * sy) / d;
+    return { a: (sy - b * sx) / n, b };
+  }
+  function smooth(arr, sig) { // gaussian, sig in points
+    if (sig < 0.3) return arr.slice();
+    const hw = Math.ceil(3 * sig), w = [], out = new Array(arr.length);
+    for (let k = -hw; k <= hw; k++) w.push(Math.exp(-0.5 * k * k / (sig * sig)));
+    for (let i = 0; i < arr.length; i++) {
+      let s = 0, ws = 0;
+      for (let k = -hw; k <= hw; k++) { const j = i + k; if (j < 0 || j >= arr.length) continue; s += arr[j] * w[k + hw]; ws += w[k + hw]; }
+      out[i] = s / ws;
+    }
+    return out;
+  }
+  function setV(id, cls, html) { const el = $(id); if (!el) return; el.className = "v dg-v " + cls; el.innerHTML = html; }
+  const pct = (x) => (x >= 0 ? "+" : "") + (x * 100).toFixed(0) + " %";
+  // complex
+  const cadd = (a, b) => [a[0] + b[0], a[1] + b[1]];
+  const cmul = (a, b) => [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
+  const cdiv = (a, b) => { const d = b[0] * b[0] + b[1] * b[1] || 1e-300; return [(a[0] * b[0] + a[1] * b[1]) / d, (a[1] * b[0] - a[0] * b[1]) / d]; };
+  const cabs = (a) => Math.hypot(a[0], a[1]);
+
+  /* ---------- probe physics shared ---------- */
+  const RP = 0.1e-3, LP = 5e-3, AP = 2 * Math.PI * RP * LP + Math.PI * RP * RP;
+  const uB = (Te) => Math.sqrt(qe * Te / MAr);
+  const vbar = (Te) => Math.sqrt(8 * qe * Te / (Math.PI * me));
+  const lamD = (Te, n) => Math.sqrt(eps0 * Te / (qe * n));
+  // EEDF table: returns {Ie(U), Teff, F(eps) normalized per eV, de}
+  function makeEEDF(shape, Te) {
+    const de = 0.02, Emax = Math.max(80, 25 * Te * (shape === "bi" ? 3 : 1)), N = Math.ceil(Emax / de);
+    const F = new Float64Array(N), eps = new Float64Array(N);
+    const e0 = 1.5 * Te / 0.7397;
+    let norm = 0, mean = 0;
+    for (let i = 0; i < N; i++) {
+      const e = (i + 0.5) * de; eps[i] = e;
+      let f;
+      if (shape === "dru") f = Math.sqrt(e) * Math.exp(-(e / e0) * (e / e0));
+      else if (shape === "bi") f = 0.97 * Math.sqrt(e) * Math.exp(-e / Te) / Math.pow(Te, 1.5) + 0.03 * Math.sqrt(e) * Math.exp(-e / (3 * Te)) / Math.pow(3 * Te, 1.5);
+      else f = Math.sqrt(e) * Math.exp(-e / Te);
+      F[i] = f; norm += f * de;
+    }
+    for (let i = 0; i < N; i++) { F[i] /= norm; mean += eps[i] * F[i] * de; }
+    const S1 = new Float64Array(N + 1), S2 = new Float64Array(N + 1);
+    for (let i = N - 1; i >= 0; i--) {
+      const v = Math.sqrt(2 * qe * eps[i] / me);
+      S1[i] = S1[i + 1] + v * F[i] * de; S2[i] = S2[i + 1] + v * F[i] / eps[i] * de;
+    }
+    const Teff = (2 / 3) * mean;
+    return {
+      de, N, F, eps, Teff,
+      flux(U) { // (1/4) ∫ v (1 - U/e) F de, U >= 0 (volts)
+        if (U <= 0) return 0.25 * S1[0];
+        const k = Math.ceil(U / de - 0.5); if (k >= N) return 0;
+        return Math.max(0, 0.25 * (S1[k] - U * S2[k]));
+      },
+      Fat(e) { const k = Math.floor(e / de); return k >= 0 && k < N ? F[k] : 0; },
+    };
+  }
+  // probe current (A), electrons positive
+  function probeI(V, P) { // P: {n, Vp, Te, ed, ion}
+    const U = P.Vp - V, A = AP, Te = P.ed.Teff;
+    let Ie;
+    if (U >= 0) Ie = qe * A * P.n * P.ed.flux(U);
+    else { const eta = -U / Te; Ie = qe * A * P.n * P.ed.flux(0) * ((2 / Math.sqrt(Math.PI)) * Math.sqrt(eta) + erfcx(Math.sqrt(eta))); }
+    const Iis = 0.61 * qe * P.n * uB(Te) * A;
+    let Ii;
+    if (U <= 0) Ii = Iis * Math.exp(U / 0.05);
+    else if (P.ion === "bohm") Ii = Iis;
+    else if (P.ion === "abr") { const s = (Math.SQRT2 / 3) * lamD(Te, P.n) * Math.pow(2 * U / Te, 0.75); Ii = Iis * (1 + s / RP); }
+    else Ii = Math.max(Iis, A * qe * P.n * (Math.SQRT2 / Math.PI) * Math.sqrt(qe * (U + 0.5 * Te) / MAr));
+    return Ie - Ii;
+  }
+  // analysis of an I-V trace
+  function analyse(V, I, A) {
+    const dV = V[1] - V[0], Is = smooth(I, 0.75 / dV), n = V.length;
+    let kf = -1;
+    for (let k = n - 2; k >= 0; k--) if (Is[k] < 0) { kf = k; break; }
+    if (kf < 0 || kf >= n - 2) return null;
+    const Vf = V[kf] + dV * (-Is[kf]) / Math.max(1e-30, Is[kf + 1] - Is[kf]);
+    let cut = Vf - 15, xs = [], ys = [], short = false;
+    for (let k = 0; k < n; k++) if (V[k] <= cut) { xs.push(V[k]); ys.push(I[k]); }
+    if (xs.length < 20) { short = true; xs = []; ys = []; for (let k = 0; k < Math.min(20, n); k++) { xs.push(V[k]); ys.push(I[k]); } }
+    const ion = linfit(xs, ys) || { a: ys[0] || 0, b: 0 };
+    const Ie = I.map((x, k) => x - (ion.a + ion.b * V[k]));
+    const Ies = smooth(Ie, 1.0 / dV);
+    let best = -Infinity, kp = kf;
+    for (let k = Math.max(1, kf); k < n - 1; k++) { const d = (Ies[k + 1] - Ies[k - 1]); if (d > best) { best = d; kp = k; } }
+    const Vp = V[kp];
+    let hi = Vp - 0.25 * (Vp - Vf), lo = Vf, fx = [], fy = [];
+    for (let k = 0; k < n; k++) if (V[k] >= lo && V[k] <= hi && Ie[k] > 0) { fx.push(V[k]); fy.push(Math.log(Ie[k])); }
+    if (fx.length < 5) { fx = []; fy = []; for (let k = 0; k < n; k++) if (V[k] >= Vf - 3 && V[k] <= Vp - 0.5 && Ie[k] > 0) { fx.push(V[k]); fy.push(Math.log(Ie[k])); } }
+    const lf = linfit(fx, fy);
+    const Te = lf && lf.b > 0 ? clamp(1 / lf.b, 0.1, 50) : NaN;
+    const Iis = -(ion.a + ion.b * Vf);
+    const ni = Iis / (0.61 * qe * A * uB(Te));
+    const ne = 4 * Math.max(0, Ies[kp]) / (qe * A * vbar(Te));
+    return { Vf, Vp, Te, ion, Ie, lf, lo, hi, ni, ne, Iis, short };
+  }
+
+  /* =============================================================
+     1) synthetic I-V + analysis
+     ============================================================= */
+  (function () {
+    if (!$("iv-cv")) return;
+    let seed = 7, data = null, res = null, analysed = false;
+    const gTe = PB.range("iv-Te", (v) => v.toFixed(1) + " eV", gen);
+    const gn = PB.range("iv-n", (v) => sci(Math.pow(10, v)) + " cm⁻³", gen);
+    const gVp = PB.range("iv-Vp", (v) => v.toFixed(1) + " V", gen);
+    const gNz = PB.range("iv-noise", (v) => v.toFixed(1) + " %", gen);
+    const gS = PB.seg("iv-shape", gen), gI = PB.seg("iv-ion", gen);
+    $("iv-an").addEventListener("click", () => { analysed = true; doAn(); cv.redraw(); });
+    $("iv-new").addEventListener("click", () => { seed++; gen(); });
+    function gen() {
+      const Te = gTe(), n = Math.pow(10, gn()) * 1e6, Vp = gVp();
+      const ed = makeEEDF(gS(), Te), P = { n, Vp, Te, ed, ion: gI() };
+      const r = rng(seed), V = [], I = [], It = [];
+      const Iis = 0.61 * qe * n * uB(ed.Teff) * AP, sig = gNz() / 100 * Iis;
+      for (let v = -60; v <= 30.0001; v += 0.25) { const i = probeI(v, P); V.push(v); It.push(i); I.push(i + sig * gauss(r)); }
+      const Vf = (function () { for (let k = It.length - 2; k >= 0; k--) if (It[k] < 0) return V[k] + 0.25 * (-It[k]) / (It[k + 1] - It[k]); return NaN; })();
+      data = { V, I, It, Te, Teff: ed.Teff, n, Vp, Vf, ed };
+      PB.stat("iv-rl", (RP / lamD(ed.Teff, n)).toFixed(1));
+      if (analysed) doAn(); else clearR();
+      cv && cv.redraw();
+    }
+    function clearR() { ["iv-rTe", "iv-rVf", "iv-rVp", "iv-rni", "iv-rne"].forEach((id) => PB.stat(id, "—")); res = null; }
+    function doAn() {
+      res = analyse(data.V, data.I, AP);
+      if (!res) { clearR(); return; }
+      const d = data;
+      PB.stat("iv-rTe", PB.fmt(res.Te, 3) + " <small>(" + d.Teff.toFixed(2) + ")</small>");
+      PB.stat("iv-rVf", res.Vf.toFixed(1) + " <small>(" + d.Vf.toFixed(1) + ")</small>");
+      PB.stat("iv-rVp", res.Vp.toFixed(1) + " <small>(" + d.Vp.toFixed(1) + ")</small>");
+      PB.stat("iv-rni", sci(res.ni / 1e6) + " <small>" + pct(res.ni / d.n - 1) + (res.short ? " · 이온 구간 짧음" : "") + "</small>");
+      PB.stat("iv-rne", sci(res.ne / 1e6) + " <small>" + pct(res.ne / d.n - 1) + "</small>");
+    }
+    const cv = PB.canvas($("iv-cv"), (ctx, w, h) => {
+      if (!data) return;
+      const P = PB.palette(), d = data, h1 = Math.round(h * 0.5);
+      let ymin = 0, ymax = 0;
+      d.I.forEach((x) => { ymin = Math.min(ymin, x); ymax = Math.max(ymax, x); });
+      const sc = 1e3;
+      const pts = d.V.map((v, k) => [v, d.I[k] * sc]);
+      const ser = [{ data: d.V.map((v, k) => [v, d.It[k] * sc]), color: P.faint, width: 1 }];
+      if (res) ser.push({ data: [[-60, (res.ion.a + res.ion.b * -60) * sc], [30, (res.ion.a + res.ion.b * 30) * sc]], color: P.ion, width: 1.4, dash: [5, 4] });
+      const c1 = PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 40 }, { x: [-60, 30], y: [ymin * sc * 1.1 - 0.02, ymax * sc * 1.05 + 0.02], yLabel: "I (mA)", series: ser,
+        vlines: res ? [{ x: res.Vf, color: P.accent2, label: "V_f" }, { x: res.Vp, color: P.accent, label: "V_p" }] : [] });
+      ctx.fillStyle = P.electron;
+      pts.forEach((p, k) => { if (k % 2) return; ctx.fillRect(c1.X(p[0]) - 1.2, c1.Y(p[1]) - 1.2, 2.4, 2.4); });
+      // semilog of electron current
+      let Ie;
+      if (res) Ie = res.Ie; else { const ion = linfit(d.V.filter((v) => v < d.Vf - 15), d.I.filter((x, k) => d.V[k] < d.Vf - 15)) || { a: 0, b: 0 }; Ie = d.I.map((x, k) => x - (ion.a + ion.b * d.V[k])); }
+      const Imax = Math.max(1e-9, Math.max.apply(null, Ie));
+      const lo = Imax * 1e-4;
+      const c2 = PB.chart(ctx, { x: 58, y: h1 + 6, w: w - 76, h: h - h1 - 50 }, { x: [-60, 30], y: [lo, Imax * 3], logY: true, xLabel: "탐침 전압 V (V)", yLabel: "Iₑ (A)",
+        series: res && res.lf ? [{ data: [[res.lo - 6, Math.exp(res.lf.a + res.lf.b * (res.lo - 6))], [res.hi + 4, Math.exp(res.lf.a + res.lf.b * (res.hi + 4))]], color: P.accent, width: 2 }] : [],
+        bands: res ? [{ x0: res.lo, x1: res.hi, color: alpha(P.accent, 0.1) }] : [],
+        vlines: res ? [{ x: res.Vf, color: P.accent2 }, { x: res.Vp, color: P.accent }] : [], yFmt: (v) => v.toExponential(0) });
+      ctx.fillStyle = P.electron;
+      Ie.forEach((x, k) => { if (x <= lo || k % 2) return; ctx.fillRect(c2.X(d.V[k]) - 1.2, c2.Y(x) - 1.2, 2.4, 2.4); });
+      if (!res) { ctx.fillStyle = P.dim; ctx.font = "12px sans-serif"; ctx.textAlign = "left"; ctx.fillText("‘해석하기’를 누르면 맞춤 결과가 나타난다", c2.box.x + 8, c2.box.y + 14); }
+    }, { aspect: 0.8, maxHeight: 560, minHeight: 380 });
+    gen();
+  })();
+
+  /* =============================================================
+     2) Druyvesteyn EEPF
+     ============================================================= */
+  (function () {
+    if (!$("dv-cv")) return;
+    let seed = 3;
+    const gS = PB.seg("dv-shape", draw);
+    const gW = PB.range("dv-w", (v) => v.toFixed(2) + " V", draw);
+    const gN = PB.range("dv-nz", (v) => v.toFixed(2) + " %", draw);
+    const gR = PB.range("dv-rf", (v) => v.toFixed(1) + " V", draw);
+    $("dv-new").addEventListener("click", () => { seed++; draw(); });
+    const n0 = 4e17, Vp = 15, dV = 0.05;
+    function draw() { cv.redraw(); }
+    const cv = PB.canvas($("dv-cv"), (ctx, w, h) => {
+      const P = PB.palette(), Te = 2.5, ed = makeEEDF(gS(), Te), Pp = { n: n0, Vp, ed, ion: "bohm" };
+      const r = rng(seed), V = [], I = [], Vrf = gR(), NPH = Vrf > 0 ? 32 : 1;
+      const Ies = qe * AP * n0 * ed.flux(0), sig = gN() / 100 * Ies;
+      for (let v = -25; v <= 22.0001; v += dV) {
+        let s = 0;
+        for (let k = 0; k < NPH; k++) { const ph = NPH > 1 ? Vrf * Math.sin(2 * Math.PI * (k + 0.5) / NPH) : 0; s += probeI(v - ph, Pp); }
+        V.push(v); I.push(s / NPH + sig * gauss(r));
+      }
+      // remove ion current (fit V < 0)
+      const ion = linfit(V.filter((v) => v < -10), I.filter((x, k) => V[k] < -10)) || { a: 0, b: 0 };
+      const Ie = I.map((x, k) => x - (ion.a + ion.b * V[k]));
+      const S = smooth(Ie, gW() / dV);
+      let kp = 1, best = -Infinity;
+      for (let k = 1; k < S.length - 1; k++) { const d = S[k + 1] - S[k - 1]; if (d > best) { best = d; kp = k; } }
+      const Vpe = V[kp];
+      const meas = [], tru = [];
+      let nm = 0, em = 0, eMax = 0, broke = false;
+      const g0 = n0 * ed.Fat(0.5) / Math.sqrt(0.5);
+      for (let k = kp - 1; k >= 1; k--) {
+        const U = Vpe - V[k]; if (U > 25) break;
+        const d2 = (S[k + 1] - 2 * S[k] + S[k - 1]) / (dV * dV);
+        const f = (2 * me / (qe * qe * AP)) * Math.sqrt(2 * qe * U / me) * d2; // per eV per m3
+        nm += f * dV; em += U * f * dV;
+        const gm = f / Math.sqrt(U), gt = n0 * ed.Fat(U) / Math.sqrt(U);
+        meas.push([U, gm]); tru.push([U, gt]);
+        if (!broke && U > 1) { const q = gm / gt; if (!(q > 0.5 && q < 2)) broke = true; else eMax = U; }
+      }
+      const gtMax = Math.max.apply(null, tru.map((p) => p[1]).concat([g0]));
+      const ylo = gtMax * 1e-5, yhi = gtMax * 4;
+      const h1 = Math.round(h * 0.3);
+      // top: I-V near Vp
+      PB.chart(ctx, { x: 58, y: 8, w: w - 76, h: h1 - 30 }, { x: [-25, 22], y: [Math.min.apply(null, I) * 1e3, Math.max.apply(null, I) * 1e3 * 1.05], yLabel: "I (mA)",
+        series: [{ data: V.map((v, k) => [v, I[k] * 1e3]), color: P.faint, width: 1 }, { data: V.map((v, k) => [v, S[k] * 1e3]), color: P.electron, width: 1.8 }],
+        vlines: [{ x: Vpe, color: P.accent, label: "V_p" }] });
+      PB.chart(ctx, { x: 58, y: h1 + 8, w: w - 76, h: h - h1 - 54 }, { x: [0, 25], y: [ylo, yhi], logY: true, xLabel: "전자 에너지 ε = e(V_p − V) (eV)", yLabel: "EEPF g_p (eV^-3/2 m⁻³)",
+        series: [{ data: tru, color: P.dim, width: 1.6, dash: [6, 4] }, { data: meas.filter((p) => p[1] > 0), color: P.electron, width: 2 }],
+        vlines: eMax > 0 ? [{ x: eMax, color: P.warn, label: "신뢰 한계" }] : [], yFmt: (v) => v.toExponential(0) });
+      const Tm = nm > 0 ? (2 / 3) * em / nm : NaN;
+      PB.stat("dv-n", (nm / n0).toFixed(2));
+      PB.stat("dv-T", (isFinite(Tm) ? Tm.toFixed(2) : "—") + " · " + ed.Teff.toFixed(2) + " <small>eV</small>");
+      PB.stat("dv-e", eMax > 0 ? eMax.toFixed(1) + " <small>eV</small>" : "1 eV 미만");
+      const gte = n0 * ed.Fat(eMax) / Math.sqrt(Math.max(eMax, 0.5));
+      PB.stat("dv-dr", eMax > 0 && gte > 0 ? Math.log10(g0 / gte).toFixed(1) + " <small>자릿수</small>" : "—");
+    }, { aspect: 0.78, maxHeight: 540, minHeight: 380 });
+  })();
+
+  /* =============================================================
+     3) RF compensation
+     ============================================================= */
+  (function () {
+    if (!$("rc-cv")) return;
+    const gF = PB.seg("rc-f", draw);
+    const gV = PB.range("rc-V", (v) => v + " V", draw);
+    const gC = PB.range("rc-C", (v) => v + " pF", draw);
+    $("rc-ref").addEventListener("change", draw); $("rc-ck").addEventListener("change", draw);
+    const n = 5e16, Te = 3, Vp0 = 20, Rp = 112e3, Q = 60;
+    function chokeZ(f, f0) { const y = Q * (f / f0 - f0 / f); return cdiv([Rp, 0], [1, y]); }
+    function Zg(f) {
+      const w = 2 * Math.PI * f, zc = [0, -1 / (w * gC() * 1e-12)];
+      return $("rc-ck").checked ? cadd(cadd(chokeZ(f, 13.56e6), chokeZ(f, 27.12e6)), zc) : zc;
+    }
+    function Zsh(f) {
+      const A = AP + ($("rc-ref").checked ? 1e-4 : 0), w = 2 * Math.PI * f;
+      const R = Te / (0.61 * qe * n * uB(Te) * A), C = eps0 * A / (5 * lamD(Te, n));
+      return cdiv([R, 0], [1, w * R * C]);
+    }
+    function draw() { cv.redraw(); }
+    const ed = makeEEDF("max", Te);
+    const cv = PB.canvas($("rc-cv"), (ctx, w, h) => {
+      const P = PB.palette(), f = Number(gF()) * 1e6;
+      const zs = Zsh(f), zg = Zg(f), frac = cabs(cdiv(zs, cadd(zs, zg))), Vs = gV() * frac;
+      const PP = { n, Vp: Vp0, ed, ion: "bohm" };
+      const V = [], I0 = [], I1 = [];
+      for (let v = -60; v <= 30.0001; v += 0.25) {
+        V.push(v); I0.push(probeI(v, PP));
+        let s = 0; for (let k = 0; k < 48; k++) s += probeI(v - Vs * Math.sin(2 * Math.PI * (k + 0.5) / 48), PP);
+        I1.push(s / 48);
+      }
+      const r0 = analyse(V, I0, AP), r1 = analyse(V, I1, AP);
+      const h1 = Math.round(h * 0.56);
+      const ie0 = r0 ? r0.Ie : I0, ie1 = r1 ? r1.Ie : I1, mx = Math.max.apply(null, ie0.concat(ie1));
+      PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 44 }, { x: [-60, 30], y: [mx * 1e-4, mx * 3], logY: true, xLabel: "탐침 전압 V (V)", yLabel: "Iₑ (A)",
+        series: [{ data: V.map((v, k) => [v, ie0[k]]), color: P.dim, width: 1.5, dash: [6, 4] }, { data: V.map((v, k) => [v, ie1[k]]), color: P.electron, width: 2.2 }],
+        vlines: r1 ? [{ x: r1.Vf, color: P.accent2, label: "V_f(측정)" }] : [], yFmt: (v) => v.toExponential(0) });
+      // impedance vs frequency
+      const zser = [], sser = [];
+      for (let lf = 0; lf <= 2.0001; lf += 0.01) { const ff = Math.pow(10, lf) * 1e6; zser.push([Math.pow(10, lf), cabs(Zg(ff))]); sser.push([Math.pow(10, lf), cabs(Zsh(ff))]); }
+      PB.chart(ctx, { x: 58, y: h1 + 6, w: w - 76, h: h - h1 - 50 }, { x: [1, 100], y: [10, 1e6], logX: true, logY: true, xLabel: "주파수 (MHz)", yLabel: "|Z| (Ω)",
+        series: [{ data: zser, color: P.accent, width: 2 }, { data: sser, color: P.electron, width: 1.6, dash: [5, 4] }],
+        vlines: [{ x: Number(gF()), color: P.warn, label: gF() + " MHz" }], yFmt: (v) => v >= 1e3 ? v / 1e3 + "k" : String(v) });
+      ctx.fillStyle = P.dim; ctx.font = "11px sans-serif"; ctx.textAlign = "right";
+      ctx.fillText("실선 |Z_g|, 점선 |Z_sh|", w - 22, h1 + 18);
+      PB.stat("rc-z", PB.si(cabs(zs), "Ω", 2) + " · " + PB.si(cabs(zg), "Ω", 2));
+      setV("rc-vs", Vs <= Te / 2 ? "ok" : Vs <= Te * 2 ? "warn" : "bad", Vs.toFixed(2) + " <small>V (Tₑ/2 = 1.5)</small>");
+      PB.stat("rc-te", r1 ? r1.Te.toFixed(2) + " <small>eV " + pct(r1.Te / Te - 1) + "</small>" : "—");
+      PB.stat("rc-vf", r0 && r1 ? (r1.Vf - r0.Vf).toFixed(1) + " <small>V (식 " + (-Te * Math.log(besselI0(Vs / Te))).toFixed(1) + ")</small>" : "—");
+    }, { aspect: 0.8, maxHeight: 520, minHeight: 380 });
+    function besselI0(x) { let s = 1, t = 1; for (let k = 1; k < 200; k++) { t *= (x / (2 * k)) * (x / (2 * k)); s += t; if (t < 1e-12 * s) break; } return s; }
+  })();
+
+  /* =============================================================
+     4) OES actinometry
+     ============================================================= */
+  (function () {
+    if (!$("oe-cv")) return;
+    const gT = PB.range("oe-Te", (v) => v.toFixed(2) + " eV", draw);
+    const gF = PB.range("oe-F", (v) => v.toFixed(1) + " %", draw);
+    const gD = PB.range("oe-d", (v) => v + " %", draw);
+    const gA = PB.range("oe-Ar", (v) => v.toFixed(1) + " %", draw);
+    $("oe-q").addEventListener("change", draw);
+    const E = { Ar: 13.48, F: 14.75, O: 10.99, Od: 16.6 };
+    const LINES = [
+      ["Ar", 696.5, 0.3], ["Ar", 706.7, 0.3], ["Ar", 727.3, 0.12], ["Ar", 738.4, 0.4], ["Ar", 750.4, 1.0], ["Ar", 751.5, 0.5], ["Ar", 763.5, 0.9], ["Ar", 772.4, 0.4],
+      ["Ar", 794.8, 0.5], ["Ar", 800.6, 0.4], ["Ar", 801.5, 0.5], ["Ar", 811.5, 1.0], ["Ar", 826.5, 0.4], ["Ar", 840.8, 0.4], ["Ar", 842.5, 0.6], ["Ar", 852.1, 0.3],
+      ["F", 685.6, 0.8], ["F", 690.2, 0.5], ["F", 703.7, 1.0], ["F", 712.8, 0.4], ["F", 720.2, 0.3], ["F", 739.9, 0.25],
+      ["O", 777.4, 1.5], ["O", 844.6, 1.0],
+    ];
+    const k = (Eth, Te) => Math.sqrt(Te) * Math.exp(-Eth / Te);
+    const SIG = { Ar: 1.0, F: 0.6, O: 0.5, Od: 0.3 };
+    function state(Te, xF, d, xAr, quench) {
+      const nAr = xAr, nF = xF, nO20 = Math.max(0.01, 1 - xAr - xF), nO = 2 * d * nO20, nO2 = (1 - d) * nO20;
+      const IAr = SIG.Ar * k(E.Ar, Te) * nAr, IF = SIG.F * k(E.F, Te) * nF * (quench ? 0.5 : 1);
+      const IOdir = SIG.O * k(E.O, Te) * nO, IOd = SIG.Od * k(E.Od, Te) * nO2;
+      return { nAr, nF, nO, IAr, IF, IO: IOdir + IOd, IOd };
+    }
+    function estRatios(Te, xF, d, xAr, q) {
+      const s = state(Te, xF, d, xAr, q), r = state(3, xF, 0.5, xAr, false);
+      const cF = (r.nF / r.nAr) / (r.IF / r.IAr), cO = (r.nO / r.nAr) / (r.IO / r.IAr);
+      return { s, eF: cF * (s.IF / s.IAr) * s.nAr / s.nF, eO: cO * (s.IO / s.IAr) * s.nAr / s.nO };
+    }
+    function draw() { cv.redraw(); }
+    const r0 = rng(5), noise = []; for (let i = 0; i < 2000; i++) noise.push(gauss(r0));
+    const cv = PB.canvas($("oe-cv"), (ctx, w, h) => {
+      const P = PB.palette(), Te = gT(), xF = gF() / 100, d = gD() / 100, xAr = gA() / 100, q = $("oe-q").checked;
+      const { s, eF, eO } = estRatios(Te, xF, d, xAr, q);
+      const amp = { Ar: s.IAr, F: s.IF, O: s.IO / 1.0 };
+      const sg = 0.5 / 2.3548;
+      const comp = { Ar: [], F: [], O: [] }, tot = [];
+      let mx = 0, i = 0;
+      for (let l = 680; l <= 860.0001; l += 0.1, i++) {
+        const v = { Ar: 0, F: 0, O: 0 };
+        LINES.forEach((L) => { const dl = l - L[1]; if (Math.abs(dl) < 2) v[L[0]] += amp[L[0]] * L[2] * Math.exp(-0.5 * dl * dl / (sg * sg)); });
+        comp.Ar.push([l, v.Ar]); comp.F.push([l, v.F]); comp.O.push([l, v.O]);
+        const t = v.Ar + v.F + v.O; tot.push(t); mx = Math.max(mx, t);
+      }
+      const totS = tot.map((t, j) => [680 + j * 0.1, t + 0.004 * mx * noise[j % 2000]]);
+      const h1 = Math.round(h * 0.6);
+      const c1 = PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 44 }, { x: [680, 860], y: [0, mx * 1.1], xLabel: "파장 (nm)", yLabel: "세기 (상대)",
+        series: [{ data: totS, color: P.faint, width: 1 }, { data: comp.Ar, color: P.neutral, width: 1.6 }, { data: comp.F, color: P.radical, width: 1.8 }, { data: comp.O, color: P.accent2, width: 1.8 }],
+        yFmt: () => "" });
+      ctx.font = "11px sans-serif"; ctx.textAlign = "center";
+      [["F", 703.7, P.radical], ["Ar", 750.4, P.neutral], ["O", 844.6, P.accent2], ["O", 777.4, P.accent2]].forEach((L) => {
+        ctx.fillStyle = L[2]; ctx.fillText(L[0] + " " + L[1], c1.X(L[1]), c1.box.y + 10);
+      });
+      // bottom: est/true vs Te
+      const sF = [], sO = [];
+      for (let T = 1.5; T <= 6.0001; T += 0.05) { const e = estRatios(T, xF, d, xAr, q); sF.push([T, e.eF]); sO.push([T, e.eO]); }
+      PB.chart(ctx, { x: 58, y: h1 + 6, w: w - 76, h: h - h1 - 50 }, { x: [1.5, 6], y: [0.1, 10], logY: true, xLabel: "전자 온도 Tₑ (eV)", yLabel: "추정/참",
+        series: [{ data: sF, color: P.radical, width: 2.2 }, { data: sO, color: P.accent2, width: 2.2, dash: [6, 4] }],
+        hlines: [{ y: 1, color: P.faint }], vlines: [{ x: Te, color: P.warn }], yFmt: (v) => String(v) });
+      const cls = (e) => (Math.abs(Math.log(e)) < Math.log(1.15) ? "ok" : Math.abs(Math.log(e)) < Math.log(1.6) ? "warn" : "bad");
+      PB.stat("oe-r", (s.IF * 1.0 / (s.IAr * 1.0)).toFixed(3));
+      setV("oe-eF", cls(eF), eF.toFixed(2) + " <small>" + pct(eF - 1) + "</small>");
+      setV("oe-eO", cls(eO), eO.toFixed(2) + " <small>" + pct(eO - 1) + "</small>");
+      PB.stat("oe-dO", (s.IOd / s.IO * 100).toFixed(0) + " <small>%</small>");
+    }, { aspect: 0.78, maxHeight: 520, minHeight: 380 });
+  })();
+
+  /* =============================================================
+     5) V-I probe
+     ============================================================= */
+  (function () {
+    if (!$("vi-cv")) return;
+    const gF = PB.seg("vi-f", draw);
+    const gP = PB.range("vi-P", (v) => v + " W", draw);
+    const gR = PB.range("vi-R", (v) => v.toFixed(1) + " Ω", draw);
+    const gS = PB.range("vi-s", (v) => v.toFixed(1) + " mm", draw);
+    const gE = PB.range("vi-e", (v) => (v >= 0 ? "+" : "") + v.toFixed(2) + "°", draw);
+    const Ael = Math.PI * 0.165 * 0.165, Ls = 20e-9;
+    function draw() { cv.redraw(); }
+    const cv = PB.canvas($("vi-cv"), (ctx, w, h) => {
+      const Pc = PB.palette(), f = Number(gF()) * 1e6, om = 2 * Math.PI * f, Pw = gP(), R = gR(), s = gS() / 1000, de = gE() * Math.PI / 180;
+      const C = eps0 * Ael / s, X = om * Ls - 1 / (om * C), Z = Math.hypot(R, X), phi = Math.atan2(X, R);
+      const I = Math.sqrt(2 * Pw / R), V = I * Z;
+      const Pm = 0.5 * V * I * Math.cos(phi + de), err = Pm / Pw - 1;
+      const Xm = Z * Math.sin(phi + de), sEst = eps0 * Ael * om * (om * Ls - Xm);
+      const h1 = Math.round(h * 0.5);
+      const vs = [], is = [];
+      for (let t = 0; t <= 2.0001; t += 0.01) { vs.push([t, Math.cos(2 * Math.PI * t + phi)]); is.push([t, Math.cos(2 * Math.PI * t)]); }
+      const c1 = PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 40 }, { x: [0, 2], y: [-1.2, 1.2], xLabel: "시간 (RF 주기)", yLabel: "정규화",
+        series: [{ data: vs, color: Pc.electron, width: 2.2 }, { data: is, color: Pc.ion, width: 2.2, dash: [6, 3] }], yFmt: (v) => String(v) });
+      ctx.font = "11px sans-serif"; ctx.textAlign = "left";
+      ctx.fillStyle = Pc.electron; ctx.fillText("V(t) 진폭 " + PB.si(V, "V", 3), c1.box.x + 6, c1.box.y + 12);
+      ctx.fillStyle = Pc.ion; ctx.fillText("I(t) 진폭 " + PB.si(I, "A", 3), c1.box.x + 6, c1.box.y + 26);
+      const es = [];
+      let emin = 0, emax = 0;
+      for (let d = -2; d <= 2.0001; d += 0.02) { const e = Math.cos(phi + d * Math.PI / 180) / Math.cos(phi) - 1; es.push([d, e * 100]); emin = Math.min(emin, e * 100); emax = Math.max(emax, e * 100); }
+      const lim = clamp(Math.max(Math.abs(emin), Math.abs(emax)) * 1.1, 2, 300);
+      PB.chart(ctx, { x: 58, y: h1 + 6, w: w - 76, h: h - h1 - 50 }, { x: [-2, 2], y: [-lim, lim], xLabel: "위상 보정 오차 δφ (°)", yLabel: "전력 오차 (%)",
+        series: [{ data: es.map((p) => [p[0], clamp(p[1], -lim, lim)]), color: Pc.accent, width: 2.2 }],
+        hlines: [{ y: 0, color: Pc.faint }], points: [{ x: gE(), y: clamp(err * 100, -lim, lim), color: Pc.bad, r: 5 }] });
+      PB.stat("vi-z", Z.toFixed(1) + " Ω · " + (phi * 180 / Math.PI).toFixed(1) + "°");
+      PB.stat("vi-rx", R.toFixed(1) + (X >= 0 ? " + j" : " − j") + Math.abs(X).toFixed(1) + " <small>Ω</small>");
+      PB.stat("vi-vi", PB.si(V / Math.SQRT2, "V", 3) + " · " + PB.si(I / Math.SQRT2, "A", 3));
+      setV("vi-pm", Math.abs(err) < 0.03 ? "ok" : Math.abs(err) < 0.15 ? "warn" : "bad", PB.fmt(Pm, 3) + " W <small>" + pct(err) + "</small>");
+      PB.stat("vi-se", sEst > 0 ? (sEst * 1000).toFixed(2) + " <small>mm</small>" : "—");
+    }, { aspect: 0.75, maxHeight: 500, minHeight: 360 });
+  })();
+
+  /* =============================================================
+     6) hairpin
+     ============================================================= */
+  (function () {
+    if (!$("hp-cv")) return;
+    const gn = PB.range("hp-n", (v) => sci(Math.pow(10, v)) + " cm⁻³", draw);
+    const gL = PB.range("hp-L", (v) => v.toFixed(1) + " mm", draw);
+    const gT = PB.range("hp-Te", (v) => v.toFixed(1) + " eV", draw);
+    const gp = PB.range("hp-p", (v) => v + " mTorr", draw);
+    $("hp-sh").addEventListener("change", draw);
+    const a = 0.125e-3, wsep = 3e-3;
+    function xi(n, Te) { const s = 4 * lamD(Te, n), b = Math.min(a + s, 0.9 * wsep); return { s, xi: clamp(1 - Math.log(b / a) / Math.log(wsep / a), 0.05, 1) }; }
+    function draw() { cv.redraw(); }
+    const cv = PB.canvas($("hp-cv"), (ctx, w, h) => {
+      const P = PB.palette(), n = Math.pow(10, gn()) * 1e6, Te = gT(), L = gL() / 1000;
+      const f0 = cL / (4 * L), fpe = 8.98 * Math.sqrt(n), X = xi(n, Te), fr = Math.sqrt(f0 * f0 + X.xi * fpe * fpe);
+      // interpretation
+      let nApp = (fr * fr - f0 * f0) / 80.6, nEst = nApp;
+      if ($("hp-sh").checked) for (let i = 0; i < 30; i++) nEst = nApp / xi(Math.max(nEst, 1e12), Te).xi;
+      const ng = 3.22e19 * gp(), nu = ng * 1e-13;
+      const fw = nu / (2 * Math.PI) * (X.xi * fpe * fpe) / (fr * fr) + fr / 150;
+      const lor = (f, fc, wd, dep) => 1 - dep / (1 + Math.pow(2 * (f - fc) / wd, 2));
+      const sv = [], sp = [];
+      for (let f = 1; f <= 9.0001; f += 0.005) { sv.push([f, lor(f * 1e9, f0, f0 / 150, 0.9)]); sp.push([f, lor(f * 1e9, fr, fw, 0.8)]); }
+      const inR = fr <= 6e9 && fr >= 1.5e9;
+      PB.chart(ctx, null, { x: [1, 9], y: [0, 1.05], xLabel: "주파수 (GHz)", yLabel: "반사 |Γ|²",
+        bands: [{ x0: 1.5, x1: 6, color: alpha(P.ok, 0.1) }],
+        series: [{ data: sv, color: P.dim, width: 1.5, dash: [6, 4] }, { data: sp, color: inR ? P.electron : P.bad, width: 2.2 }],
+        vlines: [{ x: f0 / 1e9, color: P.faint, label: "f₀" }, { x: Math.min(8.99, fr / 1e9), color: inR ? P.accent : P.bad, label: "f_r" }], yFmt: (v) => v.toFixed(1) });
+      ctx.fillStyle = P.dim; ctx.font = "11px sans-serif"; ctx.textAlign = "right"; ctx.fillText("초록 띠 = PL-300 스윕 1.5–6 GHz", w - 24, 30);
+      PB.stat("hp-f0", (f0 / 1e9).toFixed(2) + " · " + (fpe / 1e9).toFixed(2) + " <small>GHz</small>");
+      setV("hp-fr", inR ? "ok" : "bad", (fr / 1e9).toFixed(2) + " <small>GHz" + (inR ? "" : " 범위 밖") + "</small>");
+      PB.stat("hp-xi", (X.s * 1e3).toFixed(2) + " mm · " + X.xi.toFixed(2));
+      PB.stat("hp-ne", inR ? sci(nEst / 1e6) + " <small>" + pct(nEst / n - 1) + "</small>" : "측정 불가");
+    }, { aspect: 0.5, maxHeight: 380, minHeight: 260 });
+  })();
+
+  /* =============================================================
+     7) microwave interferometer
+     ============================================================= */
+  (function () {
+    if (!$("mw-cv")) return;
+    const gF = PB.seg("mw-f", draw);
+    const gn = PB.range("mw-n", (v) => sci(Math.pow(10, v)) + " cm⁻³", draw);
+    const gy = PB.range("mw-y", (v) => v.toFixed(1) + " cm", draw);
+    const gh = PB.range("mw-h", (v) => v.toFixed(2), draw);
+    const R = 0.25, re = 2.818e-15, NCH = 15;
+    let anim = null; const r0 = rng(21);
+    const noiseCh = []; for (let i = 0; i < NCH; i++) noiseCh.push(gauss(r0));
+    $("mw-on").addEventListener("click", () => { anim = { t: 0 }; loop.start(); });
+    function prof(r, n0, chi) { return r >= R ? 0 : n0 * J0(chi * r / R); }
+    function chord(y, n0, chi) {
+      if (y >= R) return 0;
+      const L = Math.sqrt(R * R - y * y), N = 200; let s = 0;
+      for (let i = 0; i < N; i++) { const x = (i + 0.5) / N * L; s += prof(Math.sqrt(x * x + y * y), n0, chi); }
+      return 2 * s * L / N;
+    }
+    function draw() { cv.redraw(); }
+    const loop = PB.loop($("mw-cv"), (dt) => { if (!anim) { loop.stop(); return; } anim.t += dt / 2.5; if (anim.t >= 1) { anim.t = 1; cv.redraw(); anim = null; loop.stop(); return; } cv.redraw(); });
+    loop.stop();
+    const cv = PB.canvas($("mw-cv"), (ctx, w, h) => {
+      const P = PB.palette(), f = Number(gF()) * 1e9, lam = cL / f, n0 = Math.pow(10, gn()) * 1e6, chi = chiFromH(gh()), y = gy() / 100;
+      const nc = 1.24e-2 * f * f, cut = n0 >= nc;
+      const intY = chord(y, n0, chi), dphi = re * lam * intY;
+      const h1 = Math.round(h * 0.56);
+      // chord-integrated vs y
+      const ser = [];
+      for (let yy = 0; yy <= R + 1e-9; yy += R / 100) ser.push([yy * 100, chord(yy, n0, chi)]);
+      const yMax = ser[0][1] * 1.15 || 1;
+      const sigInt = (1 * Math.PI / 180) / (re * lam);
+      const meas = [];
+      for (let k = 0; k < NCH; k++) { const yk = (k + 0.5) / NCH * R; meas.push([yk, chord(yk, n0, chi) + sigInt * noiseCh[k]]); }
+      const c1 = PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 44 }, { x: [0, 25], y: [0, yMax], xLabel: "현 위치 y (cm)", yLabel: "∫n dl (m⁻²)",
+        series: [{ data: ser, color: P.electron, width: 2.2 }], vlines: [{ x: y * 100, color: P.warn }], points: meas.map((m) => ({ x: m[0] * 100, y: m[1], color: P.accent2, r: 3 })), yFmt: (v) => v.toExponential(1) });
+      // onion peeling
+      const dR = R / NCH, rec = new Array(NCH).fill(0);
+      for (let k = NCH - 1; k >= 0; k--) {
+        const yk = (k + 0.5) * dR; let s = meas[k][1];
+        let Lkk = 0;
+        for (let j = k; j < NCH; j++) {
+          const ri = Math.max(j * dR, yk), ro = (j + 1) * dR;
+          const Lkj = 2 * (Math.sqrt(Math.max(0, ro * ro - yk * yk)) - Math.sqrt(Math.max(0, ri * ri - yk * yk)));
+          if (j === k) Lkk = Lkj; else s -= rec[j] * Lkj;
+        }
+        rec[k] = Lkk > 0 ? s / Lkk : 0;
+      }
+      // inset with reconstruction
+      const ix = c1.box.x + c1.box.w * 0.58, iw = c1.box.w * 0.4, iy = c1.box.y + 4, ih = c1.box.h * 0.5;
+      ctx.fillStyle = alpha(P.bg, 0.85); ctx.fillRect(ix, iy, iw, ih); ctx.strokeStyle = P.border; ctx.strokeRect(ix, iy, iw, ih);
+      ctx.strokeStyle = P.dim; ctx.lineWidth = 1.4; ctx.beginPath();
+      for (let i = 0; i <= 50; i++) { const r = i / 50 * R, px = ix + 4 + (iw - 8) * r / R, py = iy + ih - 4 - (ih - 16) * prof(r, n0, chi) / n0; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
+      ctx.stroke();
+      ctx.fillStyle = P.accent2;
+      rec.forEach((v, j) => { const r = (j + 0.5) * dR, px = ix + 4 + (iw - 8) * r / R, py = iy + ih - 4 - (ih - 16) * clamp(v / n0, -0.2, 1.4); ctx.fillRect(px - 2, py - 2, 4, 4); });
+      ctx.fillStyle = P.dim; ctx.font = "10px sans-serif"; ctx.textAlign = "left"; ctx.fillText("아벨 복원 n(r)", ix + 6, iy + 11);
+      // fringe trace
+      const tEnd = anim ? anim.t : 1, tr = [];
+      const ramp = (t) => (1 - Math.exp(-t / 0.18)) / (1 - Math.exp(-1 / 0.18));
+      for (let t = 0; t <= tEnd + 1e-9; t += 0.002) { const ph = cut ? 0 : dphi * ramp(t); tr.push([t, cut && t > 0.05 ? 0 : Math.cos(ph)]); }
+      PB.chart(ctx, { x: 58, y: h1 + 6, w: w - 76, h: h - h1 - 50 }, { x: [0, 1], y: [-1.2, 1.2], xLabel: "시간 (켠 뒤, 상대)", yLabel: "cos Δφ",
+        series: [{ data: tr, color: P.accent, width: 1.6 }], yFmt: (v) => String(v) });
+      const curPh = cut ? NaN : dphi * ramp(tEnd);
+      ctx.fillStyle = P.text; ctx.font = "12px sans-serif"; ctx.textAlign = "right";
+      ctx.fillText(cut ? "차단: 빔이 통과하지 못함" : "무늬 " + Math.floor(curPh / (2 * Math.PI)) + "개 + " + ((curPh / (2 * Math.PI)) % 1).toFixed(2), w - 24, h1 + 22);
+      PB.stat("mw-int", sci(intY) + " <small>m⁻²</small>");
+      PB.stat("mw-ph", cut ? "—" : dphi.toFixed(2) + " <small>rad (" + (dphi / (2 * Math.PI)).toFixed(2) + " 무늬)</small>");
+      setV("mw-nc", cut ? "bad" : n0 / nc < 0.1 ? "ok" : "warn", (n0 / nc).toFixed(3) + (cut ? " <small>차단</small>" : ""));
+      PB.stat("mw-ab", cut ? "—" : (rec[0] / n0).toFixed(2));
+    }, { aspect: 0.8, maxHeight: 540, minHeight: 380 });
+  })();
+
+  /* =============================================================
+     8) RFEA
+     ============================================================= */
+  (function () {
+    if (!$("rf-cv")) return;
+    const gF = PB.seg("rf-f", draw);
+    const gVd = PB.range("rf-Vd", (v) => v + " V", draw);
+    const gVa = PB.range("rf-Va", (v) => v + " V", draw);
+    const gp = PB.range("rf-p", (v) => v + " mTorr", draw);
+    const gdV = PB.range("rf-dV", (v) => v + " V", draw);
+    const gnz = PB.range("rf-nz", (v) => v.toFixed(2) + " %", draw);
+    const n = 5e16, Te = 3, EM = 2200, r0 = rng(9), noise = []; for (let i = 0; i < 4000; i++) noise.push(gauss(r0));
+    function draw() { cv.redraw(); }
+    const cv = PB.canvas($("rf-cv"), (ctx, w, h) => {
+      const P = PB.palette(), f = Number(gF()) * 1e6, Vb = gVd(), Va = Math.min(gVa(), Vb - Te), p = gp();
+      const s = (Math.SQRT2 / 3) * lamD(Te, n) * Math.pow(2 * Vb / Te, 0.75);
+      const tau = 3 * s * Math.sqrt(MAr / (2 * qe * Vb)), wt = 2 * Math.PI * f * tau;
+      const dE = 2 * Va / Math.sqrt(1 + (wt / 2) * (wt / 2));
+      const lam = 3.1e-3 * 10 / p, fcl = Math.exp(-s / lam);
+      // IEDF on 1 eV grid
+      const fE = new Float64Array(EM + 1);
+      const NPH = 6000;
+      for (let k = 0; k < NPH; k++) { const E = Vb + 0.5 * dE * Math.sin(2 * Math.PI * (k + 0.5) / NPH); const i = Math.round(E); if (i >= 0 && i <= EM) fE[i] += fcl / NPH; }
+      // gaussian broadening sigma 4 eV
+      const g = new Float64Array(EM + 1), sg = 4;
+      for (let i = 0; i <= EM; i++) { if (!fE[i]) continue; for (let j = Math.max(0, i - 16); j <= Math.min(EM, i + 16); j++) g[j] += fE[i] * Math.exp(-0.5 * (j - i) * (j - i) / (sg * sg)) / (sg * Math.sqrt(2 * Math.PI)); }
+      // collisional (charge exchange) part
+      const Emx = Vb + 0.5 * dE; let cn = 0; const cc = new Float64Array(EM + 1);
+      for (let i = 0; i <= Math.min(EM, Emx); i++) { cc[i] = Math.exp(-i / (0.3 * Vb)); cn += cc[i]; }
+      for (let i = 0; i <= EM; i++) g[i] += (1 - fcl) * cc[i] / Math.max(cn, 1e-30);
+      // collector current I(Vd) = ∫_{Vd}^∞ f dE, 1 µA total
+      const cum = new Float64Array(EM + 2);
+      for (let i = EM; i >= 0; i--) cum[i] = cum[i + 1] + g[i];
+      const dV = gdV(), sig = gnz() / 100, xmax = Math.min(EM, Math.max(800, Math.ceil((Vb + Va + 150) / 100) * 100));
+      const Vs = [], Im = [];
+      let j = 0;
+      for (let V = 0; V <= xmax; V += dV, j++) { Vs.push(V); Im.push(cum[Math.min(EM, Math.round(V))] + sig * noise[j % 4000]); }
+      const Isn = Im.map((x, k) => (k > 0 && k < Im.length - 1 ? (Im[k - 1] + 2 * x + Im[k + 1]) / 4 : x));
+      const dI = [];
+      for (let k = 1; k < Isn.length - 1; k++) dI.push([Vs[k], -(Isn[k + 1] - Isn[k - 1]) / (2 * dV)]);
+      const gMax = Math.max.apply(null, Array.from(g.slice(0, xmax + 1))) || 1;
+      const h1 = Math.round(h * 0.42);
+      const c1 = PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 40 }, { x: [0, xmax], y: [-0.05, 1.1], yLabel: "I_c (µA)", series: [] });
+      ctx.fillStyle = P.ion; Vs.forEach((v, k) => ctx.fillRect(c1.X(v) - 1.5, c1.Y(Im[k]) - 1.5, 3, 3));
+      const tru = []; for (let i = 0; i <= xmax; i += 2) tru.push([i, g[i] / gMax]);
+      const mm = dI.map((q) => [q[0], q[1] / gMax]);
+      PB.chart(ctx, { x: 58, y: h1 + 6, w: w - 76, h: h - h1 - 50 }, { x: [0, xmax], y: [-0.1, 1.3], xLabel: "이온 에너지 E = eV_d (eV)", yLabel: "IEDF (정규화)",
+        series: [{ data: tru, color: alpha(P.ion, 0.9), width: 1, fill: alpha(P.ion, 0.18) }, { data: mm, color: P.accent, width: 2 }],
+        vlines: [{ x: Vb, color: P.faint, label: "V̄" }], yFmt: (v) => v.toFixed(1) });
+      // measured peaks
+      function peak(a, b) { let bx = NaN, bv = -Infinity; dI.forEach((q) => { if (q[0] >= a && q[0] <= b && q[1] > bv) { bv = q[1]; bx = q[0]; } }); return bx; }
+      const lo = peak(Vb - dE / 2 - 60, Vb), hi = peak(Vb, Vb + dE / 2 + 60), dEm = hi - lo;
+      PB.stat("rf-s", (s * 1e3).toFixed(2) + " mm · " + (tau * 1e9).toFixed(0) + " ns");
+      PB.stat("rf-wt", wt.toFixed(2));
+      PB.stat("rf-dE", dE.toFixed(0) + " · " + (dE > 2.5 * dV && isFinite(dEm) ? dEm.toFixed(0) : "분해 안 됨") + " <small>eV</small>");
+      PB.stat("rf-cl", (fcl * 100).toFixed(0) + " <small>%</small>");
+    }, { aspect: 0.8, maxHeight: 540, minHeight: 380 });
+  })();
+
+  /* =============================================================
+     9) 3D chamber probe scan
+     ============================================================= */
+  (function () {
+    const el = $("p3-view"); if (!el) return;
+    const R = 0.25, H = 0.10, rc = 0.17, YS = 25, XS = 10;
+    const gr = PB.range("p3-r", (v) => v.toFixed(1) + " cm", () => upd(false));
+    const gz = PB.range("p3-z", (v) => v.toFixed(1) + " cm", () => upd(true));
+    const gp = PB.range("p3-p", (v) => v + " mTorr", () => { scan = []; upd(true); });
+    const gP = PB.range("p3-P", (v) => (v / 1000).toFixed(2) + " kW", () => { scan = []; upd(true); });
+    const gw = PB.range("p3-w", (v) => v.toFixed(2), () => { scan = []; upd(true); });
+    let scan = [], scanning = null, M = null;
+    const rr = rng(77);
+    function model() {
+      const p = gp(), lam = 3.1e-3 * 10 / p;
+      const hR = 0.8 / Math.sqrt(4 + R / lam), hL = 0.86 / Math.sqrt(3 + H / (2 * lam));
+      const chi = chiFromH(hR), kap = 2 * Math.acos(clamp(hL, 1e-3, 0.999));
+      const lam10 = 3.1e-3, hR10 = 0.8 / Math.sqrt(4 + R / lam10), hL10 = 0.86 / Math.sqrt(3 + H / (2 * lam10));
+      const Aeff = (hl, hr) => 2 * Math.PI * R * R * hl + 2 * Math.PI * R * H * hr;
+      const w = gw(), g = (r) => { const q = Math.pow(r / rc, 3); return q * Math.exp(1 - q); };
+      const raw = (r) => (1 - w) * J0(chi * r / R) + w * g(r);
+      let mx = 0; for (let i = 0; i <= 100; i++) mx = Math.max(mx, raw(i / 100 * R));
+      const n0 = 4e17 * (gP() / 1500) * Aeff(hL10, hR10) / Aeff(hL, hR);
+      const prof = (r) => raw(Math.min(r, R)) / mx;
+      const zf = (z) => Math.cos(kap * (z - H / 2) / H);
+      let a = Infinity, b = 0; for (let i = 0; i <= 60; i++) { const v = prof(i / 60 * 0.15); a = Math.min(a, v); b = Math.max(b, v); }
+      return { hR, chi, n0, prof, zf, U: (b - a) / (b + a) };
+    }
+    const T = PB.three(el, { camera: [5.2, 4.6, 6.4], target: [0, 1.0, 0], fov: 38, minDistance: 3, maxDistance: 20 });
+    const cvs = PB.canvas($("p3-cv"), drawChart, { aspect: 0.34, minHeight: 210, maxHeight: 300 });
+    let slice = null, sliceCol = null, shaft = null, tip = null, Lp = null;
+    if (T) {
+      const THREE = T.THREE;
+      const wall = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 2.5, 3.1, 64, 1, true), new THREE.MeshStandardMaterial({ color: 0xb8c0ca, metalness: 0.6, roughness: 0.4, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }));
+      wall.position.y = 0.95; T.scene.add(wall);
+      const win = new THREE.Mesh(new THREE.CylinderGeometry(2.55, 2.55, 0.15, 64), new THREE.MeshStandardMaterial({ color: 0xeadfc8, roughness: 0.6, transparent: true, opacity: 0.55 }));
+      win.position.y = 2.575; T.scene.add(win);
+      const pts = []; for (let i = 0; i <= 300; i++) { const t = i / 300, r = 0.3 + 1.9 * t, a = 2 * Math.PI * 3.5 * t; pts.push(new THREE.Vector3(r * Math.cos(a), 2.78, r * Math.sin(a))); }
+      T.scene.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 400, 0.045, 8, false), T.material(0xc87533, { metalness: 0.8, roughness: 0.3 })));
+      const chuck = new THREE.Mesh(new THREE.CylinderGeometry(1.65, 1.65, 0.4, 64), T.material(0x8d96a0, { metalness: 0.6, roughness: 0.4 })); chuck.position.y = -0.2; T.scene.add(chuck);
+      const wafer = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.03, 64), T.material(0x3a4a63, { metalness: 0.3, roughness: 0.3 })); wafer.position.y = 0.015; T.scene.add(wafer);
+      const glow = new THREE.Mesh(new THREE.CylinderGeometry(2.45, 2.45, 2.4, 48, 1, true), new THREE.MeshBasicMaterial({ color: 0xb070ff, transparent: true, opacity: 0.07, depthWrite: false, side: THREE.DoubleSide }));
+      glow.position.y = 1.25; T.scene.add(glow);
+      const sg = new THREE.RingGeometry(0.001, 2.48, 96, 40); sg.rotateX(-Math.PI / 2);
+      sliceCol = new Float32Array(sg.attributes.position.count * 3); sg.setAttribute("color", new THREE.BufferAttribute(sliceCol, 3));
+      slice = new THREE.Mesh(sg, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false }));
+      T.scene.add(slice);
+      const port = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.3, 24), T.material(0x9aa3ad, { metalness: 0.7 })); port.rotation.z = Math.PI / 2; T.scene.add(port);
+      shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1, 16), T.material(0xe9e4da, { roughness: 0.7 })); shaft.rotation.z = Math.PI / 2; T.scene.add(shaft);
+      tip = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.05, 10), T.material(0x606a74, { metalness: 0.9, roughness: 0.25 })); tip.rotation.z = Math.PI / 2; T.scene.add(tip);
+      shaft.userData.port = port;
+      T.label("세라믹 창 + 나선 코일", [-1.2, 3.1, -1.2]); T.label("300 mm 웨이퍼", [0.8, 0.05, 1.5]);
+      Lp = T.label("탐침", [0, 1, 0]);
+      T.onFrame((dt) => {
+        if (!scanning) return;
+        scanning.t += dt;
+        const r = Math.min(24, scanning.t * 8);
+        gr.set(Math.round(r * 2) / 2);
+        while (scanning.next <= r + 1e-9) { const rm = scanning.next / 100, M2 = M; scan.push([scanning.next, M2.n0 * M2.prof(rm) * M2.zf(gz() / 100) * (1 + 0.02 * gauss(rr))]); scanning.next += 1; }
+        if (r >= 24) { scanning = null; cvs.redraw(); upd(false); }
+      });
+    }
+    $("p3-scan").addEventListener("click", () => { scan = []; scanning = { t: 0, next: 0 }; gr.set(0); });
+    function colorSlice() {
+      if (!slice) return;
+      const pos = slice.geometry.attributes.position, zf = M.zf(gz() / 100);
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i), z = pos.getZ(i), r = Math.sqrt(x * x + z * z) / XS;
+        const v = clamp(M.prof(r) * zf, 0, 1);
+        sliceCol[3 * i] = 0.1 + 0.85 * v; sliceCol[3 * i + 1] = 0.06 + 0.5 * v * v; sliceCol[3 * i + 2] = 0.22 + 0.78 * v;
+      }
+      slice.geometry.attributes.color.needsUpdate = true;
+      slice.position.y = gz() / 100 * YS;
+    }
+    function placeProbe() {
+      if (!shaft) return;
+      const xt = gr() / 100 * XS, y = gz() / 100 * YS, xo = 2.9, x0 = xt + 0.05, len = xo - x0;
+      shaft.scale.y = Math.max(0.01, len); shaft.position.set((xo + x0) / 2, y, 0);
+      tip.position.set(xt + 0.025, y, 0);
+      shaft.userData.port.position.set(2.55, y, 0);
+      Lp.pos.set(xt, y + 0.25, 0);
+    }
+    function upd(full) {
+      M = model();
+      if (full) colorSlice();
+      placeProbe();
+      const r = gr() / 100, z = gz() / 100, n = M.n0 * M.prof(r) * M.zf(z), Te = 2.5;
+      const Iis = 0.61 * qe * n * uB(Te) * AP;
+      PB.stat("p3-n", sci(n / 1e6) + " <small>cm⁻³</small>");
+      PB.stat("p3-i", (Iis * 1e3).toFixed(3) + " mA · " + (RP / lamD(Te, Math.max(n, 1e12))).toFixed(1));
+      PB.stat("p3-h", M.hR.toFixed(3) + " · " + M.chi.toFixed(2));
+      let mtxt = "";
+      if (scan.length > 15) { const w = scan.filter((q) => q[0] <= 15).map((q) => q[1]); const a = Math.min.apply(null, w), b = Math.max.apply(null, w); mtxt = " <small>(측정 ±" + ((b - a) / (b + a) * 100).toFixed(1) + " %)</small>"; }
+      setV("p3-u", M.U <= 0.03 ? "ok" : M.U <= 0.08 ? "warn" : "bad", "±" + (M.U * 100).toFixed(1) + " %" + mtxt);
+      cvs.redraw();
+    }
+    function drawChart(ctx, w, h) {
+      if (!M) return;
+      const P = PB.palette(), z = gz() / 100, ser = [];
+      let mx = 0;
+      for (let i = 0; i <= 100; i++) { const r = i / 100 * R, v = M.n0 * M.prof(r) * M.zf(z) / 1e17; ser.push([r * 100, v]); mx = Math.max(mx, v); }
+      const ymax = Math.max(mx * 1.2, 0.1);
+      PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h - 56 }, { x: [0, 25], y: [0, ymax], xLabel: "반지름 r (cm)", yLabel: "n (10¹¹ cm⁻³)",
+        series: [{ data: ser, color: P.glow, width: 2.2 }], bands: [{ x0: 0, x1: 15, color: alpha(P.si, 0.08) }],
+        vlines: [{ x: 15, color: P.faint, label: "웨이퍼 가장자리" }, { x: gr(), color: P.warn }],
+        points: scan.map((q) => ({ x: q[0], y: q[1] / 1e17, color: P.electron, r: 3.5 })) });
+    }
+    upd(true);
+  })();
+})();
+</script>
+</body>
+</html>

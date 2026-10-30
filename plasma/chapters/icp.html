@@ -1,0 +1,1230 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and PlasmaBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>유도 결합 플라즈마와 고밀도 소스 · PlasmaBook</title>
+<meta name="description" content="코일 전류가 만드는 방위각 유도 전기장, 충돌·무충돌 표피 깊이, 코일과 플라즈마 한 바퀴의 변압기 모델과 전력 전달 효율, E-H 모드 전환과 히스테리시스, 패러데이 차폐, 코일 구조와 반경 균일도, 바이어스 독립성, 헬리콘·ECR·표면파 소스를 시뮬레이터와 3D 챔버로 계산한다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+  svg .ic-l { fill: var(--text); font-family: var(--font); font-size: 14px; }
+  svg .ic-b { fill: var(--text); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .ic-s { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .ic-box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .ic-win { fill: color-mix(in srgb, var(--m-oxide) 22%, transparent); stroke: var(--m-oxide); stroke-width: 1.5; }
+  svg .ic-glow { fill: color-mix(in srgb, var(--m-glow) 24%, transparent); }
+  svg .ic-glow2 { fill: color-mix(in srgb, var(--m-glow) 48%, transparent); }
+  svg .ic-wall { fill: none; stroke: var(--m-metal); stroke-width: 3; }
+  svg .ic-coil { fill: #c97a3a; stroke: #8a4b1c; stroke-width: 1; }
+  svg .ic-dash { stroke: var(--text-dim); stroke-dasharray: 5 4; fill: none; stroke-width: 1.4; }
+  svg .ic-arr { stroke: var(--text); stroke-width: 1.8; fill: none; }
+  svg .ic-wire { stroke: var(--text); stroke-width: 1.8; fill: none; }
+  .ic-v.ok { color: var(--ok); } .ic-v.warn { color: var(--warn); } .ic-v.bad { color: var(--bad); }
+  p.ic-small { font-size: 14px; color: var(--text-dim); }
+</style>
+</head>
+<body data-chapter="icp">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 10</div>
+    <h1>유도 결합 플라즈마와 고밀도 소스</h1>
+    <p class="lead"><a href="ccp.html">9장</a>의 CCP는 전극 전압으로 전자를 흔든다. 그래서 밀도를 올리려고 전력을 넣으면 시스 전압도 함께 올라가 이온 에너지까지 커진다. <span class="term">유도 결합 플라즈마</span><span class="en">(inductively coupled plasma, ICP)</span>는 유전체 창 위의 코일에 13.56 MHz 전류를 흘려, 플라즈마 안에 고리 모양 전기장을 <strong>유도</strong>한다. 전자는 시스를 건너지 않고 창 바로 아래 1 cm 남짓한 표피층에서 가열된다. 그래서 시스 전압은 수십 V에 머물고, 10 mTorr에서도 nₑ가 10¹¹–10¹² cm⁻³까지 오른다. 이온 에너지는 웨이퍼 쪽 바이어스 전원이 따로 정한다.</p>
+    <ul class="objectives">
+      <li>코일 전류가 만드는 벡터 퍼텐셜과 방위각 유도 전기장 \(E_\theta = -j\omega A_\theta\)를 계산하고, 플라즈마 전류가 코일 전류와 반대 방향으로 흐르는 이유를 설명할 수 있다.</li>
+      <li>복소 유전율로 충돌·무충돌(이상) 표피 깊이를 구하고, \(\nu/\omega\)와 \(\bar v_e/\omega\delta\)로 가열 영역을 판정할 수 있다.</li>
+      <li>코일-플라즈마 변압기 모델로 반사 저항 \(R_s\)와 전력 전달 효율 \(\eta = R_s/(R_s+R_{coil})\)을 밀도의 함수로 계산할 수 있다.</li>
+      <li>E 모드(용량성)와 H 모드(유도성)의 전력 흡수·손실 곡선으로 모드 전환과 히스테리시스를 설명할 수 있다.</li>
+      <li>패러데이 차폐, 코일 배치(평면 나선·돔·다중 구역)가 창 스퍼터와 반경 균일도에 미치는 영향을 계산할 수 있다.</li>
+      <li>소스 전력은 이온 플럭스, 바이어스 전력은 이온 에너지를 정한다는 ICP의 분리 원리와 그 한계를 수치로 보이고, 헬리콘·ECR·표면파 소스를 비교할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="induction">
+    <h2>코일 전류에서 방위각 전기장으로</h2>
+    <p>평면 나선 코일에 RF 전류 \(I\cos\omega t\)를 흘리면 코일 둘레로 자기장 \(\mathbf{B}\)가 생긴다. 이 자기장이 시간에 따라 바뀌므로 패러데이 법칙에 따라 코일과 같은 축을 도는 <strong>방위각(θ 방향) 전기장</strong>이 생긴다. 축대칭 코일에서 \(\mathbf{B}\)를 직접 다루기보다 벡터 퍼텐셜 \(A_\theta\)를 쓰면 편하다. 고리 하나의 \(A_\theta\)는 완전 타원 적분으로 정확히 쓸 수 있고, 여러 바퀴는 더하면 된다.</p>
+    <div class="formula">$$\oint \mathbf{E}\cdot d\mathbf{l} = -\frac{d\Phi_B}{dt}\;\Rightarrow\; E_\theta = -j\omega A_\theta,\qquad A_\theta(r,z) = \frac{\mu_0 I}{\pi k}\sqrt{\frac{a}{r}}\left[\left(1-\frac{k^2}{2}\right)K(k) - E(k)\right],\qquad k^2 = \frac{4ar}{(a+r)^2+z^2}$$<div class="where">\(a\)는 코일 고리 반지름, \((r,z)\)는 관측점(고리 평면에서 \(z\)만큼 아래), \(K, E\)는 제1·2종 완전 타원 적분. 복소 표기는 \(e^{j\omega t}\)를 쓴다. 13.56 MHz(\(\omega = 8.52\times10^7\) s⁻¹), 코일 전류 20 A면 창 바로 아래에서 \(E_\theta\)가 수백 V/m 수준이다. 축 위(\(r = 0\))에서는 대칭 때문에 \(E_\theta = 0\)이다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 300" role="img" aria-label="PL-300 IC 모듈 단면: 세라믹 창 위 평면 나선 코일, 창 아래 표피층의 고리 모양 유도 전류와 도넛형 글로, 웨이퍼와 정전척, 소스와 바이어스 RF 전원">
+        <defs><marker id="icf1-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text)"/></marker></defs>
+        <path d="M70 70 L70 270 L610 270 L610 70" class="ic-wall"/>
+        <rect x="62" y="56" width="556" height="16" rx="3" class="ic-win"/>
+        <text x="630" y="68" class="ic-s">세라믹 창 (Al₂O₃, 약 25 mm)</text>
+        <g class="ic-coil"><circle cx="130" cy="44" r="7"/><circle cx="185" cy="44" r="7"/><circle cx="240" cy="44" r="7"/><circle cx="295" cy="44" r="7"/><circle cx="385" cy="44" r="7"/><circle cx="440" cy="44" r="7"/><circle cx="495" cy="44" r="7"/><circle cx="550" cy="44" r="7"/></g>
+        <g fill="#fff" font-size="11" text-anchor="middle" font-family="var(--font)"><text x="130" y="48">•</text><text x="185" y="48">•</text><text x="240" y="48">•</text><text x="295" y="48">•</text><text x="385" y="48">×</text><text x="440" y="48">×</text><text x="495" y="48">×</text><text x="550" y="48">×</text></g>
+        <text x="340" y="22" text-anchor="middle" class="ic-s">평면 나선 코일 13.56 MHz 0–3 kW (● 나옴, × 들어감)</text>
+        <rect x="74" y="72" width="532" height="168" class="ic-glow"/>
+        <ellipse cx="200" cy="94" rx="90" ry="16" class="ic-glow2"/><ellipse cx="480" cy="94" rx="90" ry="16" class="ic-glow2"/>
+        <line x1="74" y1="112" x2="606" y2="112" class="ic-dash"/>
+        <text x="630" y="98" class="ic-s">표피층 δ ≈ 1 cm: 유도 전류·가열</text>
+        <g font-size="12" text-anchor="middle" font-family="var(--font)" fill="var(--m-electron)"><text x="200" y="98">× 전자 전류</text><text x="480" y="98">● 전자 전류</text></g>
+        <text x="340" y="170" text-anchor="middle" class="ic-l">벌크 플라즈마: Tₑ ≈ 2.5 eV, nₑ ≈ 4×10¹¹ cm⁻³ (Ar 10 mTorr, 1.5 kW)</text>
+        <g class="ic-arr"><line x1="250" y1="190" x2="250" y2="232" marker-end="url(#icf1-a)"/><line x1="340" y1="190" x2="340" y2="232" marker-end="url(#icf1-a)"/><line x1="430" y1="190" x2="430" y2="232" marker-end="url(#icf1-a)"/></g>
+        <text x="455" y="216" class="ic-s">양극성 확산 → 이온 플럭스</text>
+        <rect x="74" y="240" width="532" height="8" fill="var(--text-faint)" opacity="0.25"/>
+        <rect x="190" y="244" width="300" height="6" class="m-si"/>
+        <rect x="170" y="250" width="340" height="18" class="f-surface"/>
+        <text x="340" y="263" text-anchor="middle" class="ic-s">정전척(ESC) · 바이어스 13.56 MHz 0–1.5 kW</text>
+        <text x="630" y="246" class="ic-s">시스 수십 V (바이어스 없을 때)</text>
+        <text x="630" y="130" class="ic-s">반지름 R = 0.25 m</text>
+        <text x="630" y="150" class="ic-s">창-웨이퍼 L = 0.10 m</text>
+        <line x1="40" y1="72" x2="40" y2="244" class="s-line"/><text x="18" y="160" class="ic-s">L</text>
+      </svg>
+      <figcaption><b>그림 10-1.</b> PL-300 IC 모듈 단면(개념도). 코일 왼쪽과 오른쪽은 한 바퀴 고리의 양쪽 단면이므로 전류 방향이 반대로 보인다. 플라즈마 안의 유도 전자 전류는 렌츠 법칙에 따라 코일 전류와 반대 방향이고(‘전자 전류’ 표시는 전류 방향 기준), 창 아래 표피층에 몰려 도넛 모양으로 가장 밝다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-field">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>평면 나선 코일의 유도 전기장 지도 (타원 적분 비오-사바르)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="fd-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>코일 전류 진폭 <output id="fd-I-out"></output></span><input type="range" id="fd-I" min="5" max="40" step="1" value="20"></label>
+          <label class="ctrl"><span>코일 바퀴 수 <output id="fd-N-out"></output></span><input type="range" id="fd-N" min="2" max="6" step="1" value="4"></label>
+          <label class="ctrl"><span>바깥 바퀴 반지름 <output id="fd-ro-out"></output></span><input type="range" id="fd-ro" min="0.10" max="0.23" step="0.01" value="0.17"></label>
+          <label class="ctrl"><span>코일-플라즈마 거리 <output id="fd-h-out"></output></span><input type="range" id="fd-h" min="0.015" max="0.06" step="0.005" value="0.03"></label>
+          <label class="check"><input type="checkbox" id="fd-pl" checked> 플라즈마 있음 (표피 감쇠 δ ≈ 1 cm)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">창 아래 최대 E<sub>θ</sub></span><span class="v" id="fd-Emax">—</span></div>
+        <div class="stat"><span class="k">최대 위치 r</span><span class="v" id="fd-rmax">—</span></div>
+        <div class="stat"><span class="k">2 cm 깊이 E<sub>θ</sub></span><span class="v" id="fd-E2">—</span></div>
+        <div class="stat"><span class="k">r = 12 cm 한 바퀴 기전력</span><span class="v" id="fd-emf">—</span></div>
+      </div>
+      <div class="sim-note">위 식을 바퀴마다 계산해 더한 진공 \(|E_\theta|\) 지도(가로 지름 50 cm, 세로 창~웨이퍼 10 cm, 위쪽 주황 점이 코일 단면). ‘플라즈마 있음’은 진공 장에 \(e^{-z/\delta}\)를 곱한 근사다(실제 감쇠는 다음 절에서 푼다). 기전력은 \(\mathcal{E} = 2\pi r E_\theta\). 해볼 것: ① 축(\(r = 0\))과 벽 근처는 장이 약하고 코일 중간 반지름 아래가 가장 세다 — 도넛 글로의 이유. ② 코일을 창에서 멀리 띄우면 장이 빠르게 약해진다(창 두께가 결합을 떨어뜨림). ③ 플라즈마를 켜면 장이 창 아래 1–2 cm에만 남는다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="skin">
+    <h2>표피 깊이: 충돌 표피와 무충돌(이상) 표피</h2>
+    <p>플라즈마는 도체처럼 전자기장을 가린다. 유도 전기장이 전자를 흔들면 전자 전류가 생기고, 그 전류가 다시 원래 장을 지우는 쪽으로 자기장을 만든다. 그래서 장은 창에서 멀어질수록 지수적으로 줄고, 그 길이가 <span class="term">표피 깊이</span><span class="en">(skin depth)</span> δ다. 차가운 플라즈마의 복소 유전율에서 바로 나온다.</p>
+    <div class="formula">$$\tilde\varepsilon_p = 1 - \frac{\omega_{pe}^2}{\omega(\omega - j\nu_{\text{eff}})},\qquad \delta = \frac{1}{\operatorname{Im}\left(k_0\sqrt{\tilde\varepsilon_p}\right)},\qquad k_0 = \frac{\omega}{c},\qquad \omega_{pe} = \sqrt{\frac{e^2 n_e}{\varepsilon_0 m}}$$<div class="where">극한 셋: \(\nu \ll \omega\)이면 <strong>무충돌 표피</strong> \(\delta_p = c/\omega_{pe}\) (nₑ = 4×10¹¹ cm⁻³에서 8.4 mm). \(\nu \gg \omega\)이면 <strong>충돌 표피</strong> \(\delta_c = \sqrt{2/(\omega\mu_0\sigma_{dc})}\), \(\sigma_{dc} = e^2 n_e/(m\nu_m)\). 전자가 표피층을 RF 반 주기 안에 가로지르면(\(\bar v_e/\omega \gt \delta\)) 장을 국소적으로 느끼지 않고 지나가며 에너지를 얻는다. 이것이 <span class="term">무충돌 가열</span><span class="en">(stochastic / anomalous heating)</span>이고, 이 영역의 <strong>이상 표피</strong> 깊이는 \(\delta_a = \left(c^2\bar v_e/\omega\,\omega_{pe}^2\right)^{1/3}\)이다. 이 장에서는 무충돌 가열을 실효 충돌 주파수 \(\nu_{\text{eff}} = \nu_m + \bar v_e/4\delta\)로 넣어 δ와 함께 자기 일관되게 푼다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="세 가지 표피 영역: 충돌 표피에서는 전자가 표피층 안에서 여러 번 충돌하고, 무충돌 표피에서는 관성으로 반응하며, 이상 표피에서는 전자가 표피층을 빠르게 가로질러 가열된다">
+        <defs><marker id="icf2-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-electron)"/></marker></defs>
+        <g transform="translate(10,0)">
+          <rect x="0" y="0" width="275" height="200" rx="8" class="ic-box"/>
+          <text x="137" y="22" text-anchor="middle" class="ic-b">충돌 표피 (ν ≫ ω)</text>
+          <rect x="14" y="34" width="247" height="10" class="ic-win"/>
+          <rect x="14" y="44" width="247" height="40" class="ic-glow2"/>
+          <path d="M60 60 l12 8 l-6 10 l14 -4 l2 12 l12 -8 l6 10" class="ms-electron" stroke-width="1.6" marker-end="url(#icf2-a)"/>
+          <text x="137" y="110" text-anchor="middle" class="ic-s">충돌이 위상을 흐트러뜨림 → 저항 가열</text>
+          <text x="137" y="132" text-anchor="middle" class="ic-l">δ = √(2/ωμ₀σ)</text>
+          <text x="137" y="160" text-anchor="middle" class="ic-s">수백 mTorr 이상</text>
+          <text x="137" y="180" text-anchor="middle" class="ic-s">δ ∝ (ν/n)^½</text>
+        </g>
+        <g transform="translate(300,0)">
+          <rect x="0" y="0" width="275" height="200" rx="8" class="ic-box"/>
+          <text x="137" y="22" text-anchor="middle" class="ic-b">무충돌 표피 (ν ≪ ω)</text>
+          <rect x="14" y="34" width="247" height="10" class="ic-win"/>
+          <rect x="14" y="44" width="247" height="28" class="ic-glow2"/>
+          <path d="M70 62 q15 -12 30 0 t30 0 t30 0 t30 0" class="ms-electron" stroke-width="1.6"/>
+          <text x="137" y="98" text-anchor="middle" class="ic-s">전자 관성이 장을 가림 (유도성)</text>
+          <text x="137" y="132" text-anchor="middle" class="ic-l">δ = c / ω<tspan font-size="10" dy="3">pe</tspan></text>
+          <text x="137" y="160" text-anchor="middle" class="ic-s">δ ∝ n<tspan font-size="9" dy="-5">−½</tspan><tspan dy="5">, 4×10¹¹ cm⁻³ → 8.4 mm</tspan></text>
+          <text x="137" y="180" text-anchor="middle" class="ic-s">충돌 없으면 가열도 없음</text>
+        </g>
+        <g transform="translate(590,0)">
+          <rect x="0" y="0" width="280" height="200" rx="8" class="ic-box"/>
+          <text x="140" y="22" text-anchor="middle" class="ic-b">이상 표피 (v̄ₑ/ω &gt; δ)</text>
+          <rect x="14" y="34" width="252" height="10" class="ic-win"/>
+          <rect x="14" y="44" width="252" height="28" class="ic-glow2"/>
+          <path d="M40 120 L 110 50 L 180 120" class="ms-electron" stroke-width="1.8" marker-end="url(#icf2-a)"/>
+          <text x="200" y="104" class="ic-s">벌크에서 온</text>
+          <text x="200" y="120" class="ic-s">빠른 전자</text>
+          <text x="140" y="146" text-anchor="middle" class="ic-l">δ = (c²v̄ₑ / ωω<tspan font-size="10" dy="3">pe</tspan><tspan dy="-3">²)^⅓</tspan></text>
+          <text x="140" y="170" text-anchor="middle" class="ic-s">ν<tspan font-size="9" dy="3">stoc</tspan><tspan dy="-3"> ≈ v̄ₑ/4δ, 수 mTorr에서 지배</tspan></text>
+          <text x="140" y="188" text-anchor="middle" class="ic-s">비국소 EEDF의 원인</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-2.</b> 표피 영역 세 가지. PL-300 기준점(10 mTorr, Tₑ 2.5 eV, nₑ 4×10¹¹ cm⁻³)은 \(\nu_m/\omega \approx 0.37\), \(\bar v_e/\omega \approx 12\) mm \(\gt \delta \approx 10\) mm로, 무충돌 표피와 이상 표피의 경계에 있다. 저압 ICP의 비국소 EEDF는 <a href="eedf.html">4장</a>에서 다룬다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-skin">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>표피 깊이 계산기: 복소 유전율 · 충돌 · 무충돌</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sk-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>전자 밀도 nₑ <output id="sk-n-out"></output></span><input type="range" id="sk-n" min="9" max="13" step="0.02" value="11.6"></label>
+          <label class="ctrl"><span>압력 (Ar) <output id="sk-p-out"></output></span><input type="range" id="sk-p" min="0" max="2.7" step="0.01" value="1"></label>
+          <label class="ctrl"><span>전자 온도 Tₑ <output id="sk-T-out"></output></span><input type="range" id="sk-T" min="1" max="6" step="0.1" value="2.5"></label>
+          <div class="ctrl"><span>주파수</span><div class="seg" id="sk-f"><button data-value="2e6">2 MHz</button><button data-value="13.56e6" class="on">13.56 MHz</button><button data-value="27.12e6">27.12 MHz</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">δ (자기 일관)</span><span class="v" id="sk-d">—</span></div>
+        <div class="stat"><span class="k">c/ω<sub>pe</sub></span><span class="v" id="sk-dp">—</span></div>
+        <div class="stat"><span class="k">ν<sub>m</sub>/ω</span><span class="v" id="sk-nu">—</span></div>
+        <div class="stat"><span class="k">v̄ₑ/(ωδ)</span><span class="v" id="sk-an">—</span></div>
+        <div class="stat"><span class="k">영역</span><span class="v" id="sk-reg">—</span></div>
+      </div>
+      <div class="sim-note">곡선: 실선(굵게)이 \(\nu_{\text{eff}} = \nu_m + \bar v_e/4\delta\)로 자기 일관하게 푼 δ, 가는 실선은 충돌만(\(\nu_m = n_g K_{el}\)) 넣은 δ, 점선은 \(c/\omega_{pe}\), 파선은 이상 표피 \(\delta_a\). 회색 띠는 창-웨이퍼 간격 10 cm. 해볼 것: ① 밀도가 10¹⁰ cm⁻³ 아래로 내려가면 δ가 챔버 높이를 넘는다 — 장이 플라즈마를 그냥 통과해 유도 결합이 약해지는 E 모드 영역. ② 압력을 300 mTorr 이상으로 올리면 \(\nu_m/\omega \gt 1\)이 되어 δ가 \(c/\omega_{pe}\)보다 커진다(충돌 표피). ③ 2 MHz로 낮추면 같은 밀도에서도 충돌 영역이 된다.</div>
+    </div>
+
+    <p>표피층 안에서 장이 어떻게 줄고 위상이 어떻게 밀리는지는 1차원 파동 방정식 \(d^2E_\theta/dz^2 = -k_0^2\tilde\varepsilon_p E_\theta\)를 창(\(z = 0\))과 웨이퍼 쪽 금속 경계(\(z = L\), \(E = 0\)) 사이에서 풀면 보인다.</p>
+    <div class="formula">$$E_\theta(z) = E_0\,\frac{\sinh\gamma(L-z)}{\sinh\gamma L},\qquad \gamma = jk_0\sqrt{\tilde\varepsilon_p},\qquad p_{\text{abs}}(z) = \tfrac12\operatorname{Re}(\tilde\sigma_p)\,|E_\theta|^2,\qquad \tilde\sigma_p = \frac{\varepsilon_0\omega_{pe}^2}{\nu_{\text{eff}} + j\omega}$$<div class="where">\(\operatorname{Re}\gamma = 1/\delta\)가 감쇠, \(\operatorname{Im}\gamma\)가 위상 지연이다. 흡수 전력 밀도는 \(|E|^2\)를 따라 \(e^{-2z/\delta}\)로 줄어, 전력의 약 86 %가 첫 δ 안에서 흡수된다.</div></div>
+
+    <div class="sim" id="sim-decay">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>플라즈마 속으로 스며드는 RF 장: 감쇠·위상·흡수</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="dc-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>전자 밀도 nₑ <output id="dc-n-out"></output></span><input type="range" id="dc-n" min="9" max="12.6" step="0.02" value="11.6"></label>
+          <label class="ctrl"><span>압력 (Ar) <output id="dc-p-out"></output></span><input type="range" id="dc-p" min="0.3" max="2.7" step="0.01" value="1"></label>
+          <label class="check"><input type="checkbox" id="dc-st" checked> 무충돌 가열 포함 (ν<sub>eff</sub>)</label>
+          <button class="btn" id="dc-run">일시정지</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">δ</span><span class="v" id="dc-d">—</span></div>
+        <div class="stat"><span class="k">|E|(1 cm)/E₀</span><span class="v" id="dc-e1">—</span></div>
+        <div class="stat"><span class="k">위상 지연(δ에서)</span><span class="v" id="dc-ph">—</span></div>
+        <div class="stat"><span class="k">첫 2 cm 흡수 비율</span><span class="v" id="dc-f2">—</span></div>
+      </div>
+      <div class="sim-note">위: 순간 장 \(\operatorname{Re}[E_\theta(z)e^{j\omega t}]\)(움직이는 곡선, 실제 13.56 MHz를 느리게 재생)과 포락선 \(\pm|E_\theta|\). 아래: 흡수 전력 밀도(최댓값으로 정규화). 해볼 것: ① 밀도를 10¹² cm⁻³로 올리면 장과 가열이 창 아래 5 mm 안으로 몰린다. ② 10⁹ cm⁻³로 내리면 장이 웨이퍼까지 거의 줄지 않고 가열도 고르게 약해진다(흡수 비율 급감). ③ 무충돌 가열을 끄고 압력을 낮추면 흡수가 줄어든다 — 저압 ICP에서 무충돌 가열이 필수인 이유.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="transformer">
+    <h2>변압기 모델: 플라즈마는 한 바퀴짜리 2차 코일</h2>
+    <p>코일(1차, \(N\)바퀴)이 만든 자속이 표피층의 전자 전류 고리(2차, 한 바퀴)를 감싼다. 2차 회로는 전자-중성 충돌과 무충돌 가열이 만든 저항 \(R_p\), 전자 관성이 만든 인덕턴스 \(L_e\), 전류 고리 자체의 기하 인덕턴스 \(L_2\)로 이뤄진다. 정합기 쪽에서 보면 이 2차 회로가 1차로 <strong>반사</strong>되어 코일 저항에 직렬로 붙은 \(R_s\)로 보인다.</p>
+    <div class="formula">$$Z_s = R_s + jX_s = j\omega L_c + \frac{\omega^2M^2}{R_p + j\omega(L_2 + L_e)},\qquad R_p = \frac{2\pi r_p}{\sigma_{\text{eff}}\,w\,\delta_{\text{eff}}},\qquad L_e = \frac{R_p}{\nu_{\text{eff}}},\qquad \eta = \frac{R_s}{R_s + R_{coil}}$$<div class="where">\(M = k\sqrt{L_cL_2}\)는 상호 인덕턴스(\(k\)는 결합 계수), \(r_p\) = 12 cm는 전류 고리 반지름, \(w\) = 8 cm는 고리 폭, \(\delta_{\text{eff}} = \delta(1-e^{-L/\delta})\)는 챔버 높이로 자른 표피 깊이, \(\sigma_{\text{eff}} = e^2n_e/(m\nu_{\text{eff}})\). 코일 \(L_c\) = 2.0 µH, \(L_2\) = 0.1 µH, \(R_{coil}\) = 1.0 Ω(코일·정합기 손실 포함, 교육용 값). 발생기가 넣는 전력 \(P = \tfrac12 I^2(R_s + R_{coil})\) 중 플라즈마 몫은 \(\eta P\)다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="변압기 등가 회로: 1차 쪽 RF 전원, 정합기, 코일 저항과 코일 인덕턴스, 상호 인덕턴스 M, 2차 쪽 플라즈마 고리의 기하 인덕턴스, 전자 관성 인덕턴스, 플라즈마 저항">
+        <defs><marker id="icf3-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker></defs>
+        <circle cx="50" cy="110" r="22" class="f-surface"/><path d="M38 110 q6 -12 12 0 t12 0" class="ic-wire"/>
+        <text x="50" y="152" text-anchor="middle" class="ic-s">RF 50 Ω</text>
+        <rect x="100" y="90" width="70" height="40" rx="5" class="f-acc2-soft"/><text x="135" y="115" text-anchor="middle" class="ic-s">정합기</text>
+        <path d="M50 88 L50 50 L100 50 M50 132 L50 180 L330 180 M170 110 L190 110 L190 50 L210 50" class="ic-wire"/>
+        <path d="M100 50 L100 90" class="ic-wire"/>
+        <path d="M210 50 l6 -8 l8 16 l8 -16 l8 16 l8 -16 l6 8" class="ic-wire"/><text x="230" y="30" text-anchor="middle" class="ic-s">R<tspan font-size="9" dy="3">coil</tspan></text>
+        <path d="M254 50 L300 50 L300 64" class="ic-wire"/>
+        <path d="M300 64 c18 0 18 18 0 18 c18 0 18 18 0 18 c18 0 18 18 0 18 c18 0 18 18 0 18" class="ic-wire"/>
+        <path d="M300 136 L300 180 L330 180" class="ic-wire"/>
+        <text x="268" y="112" text-anchor="end" class="ic-l">L<tspan font-size="10" dy="3">c</tspan></text>
+        <line x1="334" y1="60" x2="334" y2="150" stroke="var(--text-dim)" stroke-width="2"/><line x1="342" y1="60" x2="342" y2="150" stroke="var(--text-dim)" stroke-width="2"/>
+        <text x="338" y="48" text-anchor="middle" class="ic-b">M = k√(L<tspan font-size="10" dy="3">c</tspan><tspan dy="-3">L</tspan><tspan font-size="10" dy="3">2</tspan><tspan dy="-3">)</tspan></text>
+        <path d="M376 64 c-18 0 -18 18 0 18 c-18 0 -18 18 0 18 c-18 0 -18 18 0 18 c-18 0 -18 18 0 18" class="ic-wire"/>
+        <text x="392" y="112" class="ic-l">L<tspan font-size="10" dy="3">2</tspan></text>
+        <path d="M376 64 L376 50 L440 50" class="ic-wire"/>
+        <path d="M440 50 c10 -14 20 -14 30 0 c10 -14 20 -14 30 0 c10 -14 20 -14 30 0" class="ic-wire" stroke="var(--m-electron)"/>
+        <text x="485" y="26" text-anchor="middle" class="ic-s">L<tspan font-size="9" dy="3">e</tspan><tspan dy="-3"> 전자 관성</tspan></text>
+        <path d="M530 50 L560 50 L560 70" class="ic-wire"/>
+        <path d="M560 70 l-8 6 l16 8 l-16 8 l16 8 l-16 8 l16 8 l-8 6" class="ic-wire" stroke="var(--m-electron)"/>
+        <text x="578" y="104" class="ic-s">R<tspan font-size="9" dy="3">p</tspan><tspan dy="-3"> 충돌+무충돌</tspan></text>
+        <path d="M560 122 L560 180 L376 180 L376 136" class="ic-wire"/>
+        <rect x="350" y="8" width="250" height="196" rx="10" fill="none" stroke="var(--m-glow)" stroke-dasharray="6 4"/>
+        <text x="475" y="198" text-anchor="middle" class="ic-s" fill="var(--m-glow)">플라즈마 한 바퀴 고리 (2차)</text>
+        <rect x="640" y="20" width="230" height="190" rx="8" class="ic-box"/>
+        <text x="755" y="44" text-anchor="middle" class="ic-b">1차에서 본 부하</text>
+        <text x="656" y="72" class="ic-l">R<tspan font-size="10" dy="3">s</tspan><tspan dy="-3"> = ω²M²R</tspan><tspan font-size="10" dy="3">p</tspan><tspan dy="-3"> / |Z</tspan><tspan font-size="10" dy="3">2</tspan><tspan dy="-3">|²</tspan></text>
+        <text x="656" y="98" class="ic-s">저밀도: R<tspan font-size="9" dy="3">p</tspan><tspan dy="-3"> 큼 → R</tspan><tspan font-size="9" dy="3">s</tspan><tspan dy="-3"> ∝ nₑ (작음)</tspan></text>
+        <text x="656" y="120" class="ic-s">고밀도: R<tspan font-size="9" dy="3">p</tspan><tspan dy="-3"> 작음 → R</tspan><tspan font-size="9" dy="3">s</tspan><tspan dy="-3"> 포화</tspan></text>
+        <text x="656" y="150" class="ic-l">η = R<tspan font-size="10" dy="3">s</tspan><tspan dy="-3"> / (R</tspan><tspan font-size="10" dy="3">s</tspan><tspan dy="-3"> + R</tspan><tspan font-size="10" dy="3">coil</tspan><tspan dy="-3">)</tspan></text>
+        <text x="656" y="176" class="ic-s">PL-300: 1.5 kW에서 η ≈ 0.87</text>
+        <text x="656" y="196" class="ic-s" fill="var(--accent)">→ 1.3 kW가 전자에게</text>
+      </svg>
+      <figcaption><b>그림 10-3.</b> ICP 변압기 등가 회로. 2차 회로의 저항과 인덕턴스가 \(\omega^2M^2/|Z_2|^2\)배로 1차에 반사된다. 반사된 리액턴스는 \(\omega L_c\)를 조금 줄이고(코일이 덜 유도성으로 보임), 정합기는 그 변화를 따라가야 한다(<a href="rf.html">11장</a>).</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-tx">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>변압기 모델: 반사 저항 R<sub>s</sub>와 전력 전달 효율 η</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="tx-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>동작 밀도 nₑ <output id="tx-n-out"></output></span><input type="range" id="tx-n" min="9" max="12.5" step="0.02" value="11.56"></label>
+          <label class="ctrl"><span>결합 계수 k <output id="tx-k-out"></output></span><input type="range" id="tx-k" min="0.2" max="0.9" step="0.01" value="0.5"></label>
+          <label class="ctrl"><span>코일·정합기 손실 R<sub>coil</sub> <output id="tx-R-out"></output></span><input type="range" id="tx-R" min="0.2" max="3" step="0.05" value="1.0"></label>
+          <label class="ctrl"><span>압력 (Ar) <output id="tx-p-out"></output></span><input type="range" id="tx-p" min="2" max="50" step="1" value="10"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">R<sub>p</sub> / ωL<sub>e</sub></span><span class="v" id="tx-rp">—</span></div>
+        <div class="stat"><span class="k">R<sub>s</sub></span><span class="v" id="tx-rs">—</span></div>
+        <div class="stat"><span class="k">효율 η</span><span class="v" id="tx-eta">—</span></div>
+        <div class="stat"><span class="k">1.5 kW 코일 전류</span><span class="v" id="tx-I">—</span></div>
+        <div class="stat"><span class="k">코일 단자 전압</span><span class="v" id="tx-V">—</span></div>
+      </div>
+      <div class="sim-note">곡선: \(R_s(n_e)\)(파랑, 왼쪽 축)과 \(\eta(n_e)\)(주황, 오른쪽 축 0–1). 세로선이 동작점, 회색 점선이 \(R_{coil}\). 해볼 것: ① 10¹⁰ cm⁻³ 아래에서는 \(R_s \ll R_{coil}\)이라 전력 대부분이 코일에서 열로 사라진다 — E 모드가 비효율적인 이유. ② 결합 계수를 0.3으로 낮추면(두꺼운 창, 코일을 띄움) η가 떨어진다. ③ 코일 전류와 단자 전압이 수십 A, 수 kV라는 점에 주목 — 이 전압이 창을 통해 용량 결합을 만든다(5절).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="eh">
+    <h2>E–H 모드 전환과 히스테리시스</h2>
+    <p>전력이 낮을 때 ICP는 사실 <strong>용량성</strong>으로 켜진다. 코일 양 끝의 수 kV 전압이 창을 사이에 두고 플라즈마와 커패시터를 이루어, CCP처럼 전자를 흔든다(<span class="term">E 모드</span>). 밀도는 10⁹ cm⁻³ 안팎으로 낮고 빛은 흐리다. 전력을 올리다 어느 순간 밀도가 한 자릿수 이상 뛰고 밝은 도넛 글로가 나타난다. 유도 결합이 주도하는 <span class="term">H 모드</span>다. 전력을 다시 내리면 올라갈 때의 전환점보다 낮은 전력까지 H 모드가 버틴다. 이것이 <span class="term">히스테리시스</span>다.</p>
+    <p>동작점은 <a href="global.html">8장 전역 모델</a>의 전력 균형으로 정해진다. 흡수 전력 곡선 \(P_{\text{abs}}(n_e)\)와 손실 곡선 \(P_{\text{loss}}(n_e)\)가 만나는 점이 평형이고, 흡수 곡선이 손실 곡선을 위에서 아래로 지나가는 점만 안정하다.</p>
+    <div class="formula">$$P_{\text{abs}}(n_e) = P\,\frac{R_s(n_e) + R_{cap}(n_e)}{R_s + R_{cap} + R_{coil}},\qquad P_{\text{loss}}(n_e) = e\,n_e u_B A_{\text{eff}}\left[\mathcal{E}_c + 2T_e + \bar V_s(n_e)\right],\qquad \bar V_s = 5.2\,T_e + \frac{V_{cap}}{1 + (n_e/n_s)^3}$$<div class="where">\(R_{cap} = R_{c0}\,2x/(1+x^2)\), \(x = n_e/n_{c0}\)는 창을 통한 용량 결합 저항(밀도가 낮을 때 최대, 플라즈마가 좋은 도체가 되면 줄어듦). \(\bar V_s\)는 이온 한 개가 벽에 부딪힐 때 가져가는 에너지: H 모드에서는 부유 시스 \(5.2\,T_e\)뿐이지만, E 모드에서는 코일 전압이 창 아래에 수백 V(\(V_{cap}\) ≈ 600 V)의 용량성 시스를 만들어 이온당 손실이 몇 배로 커진다. 이 비선형성이 히스테리시스를 만든다(Turner &amp; Lieberman, 1999의 결론: 선형 손실만으로는 히스테리시스가 생기지 않는다). \(T_e\), \(u_B\), \(A_{\text{eff}}\), \(\mathcal{E}_c\)는 8장 입자 균형으로 압력마다 구한다. 상수 \(R_{c0}\) = 0.2 Ω, \(n_{c0}\) = 2×10⁹ cm⁻³, \(n_s\) = 6×10⁹ cm⁻³는 교육용.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="E 모드와 H 모드 비교: E 모드에서는 코일 전압이 창을 통해 수직 전기장을 만들어 흐린 플라즈마, H 모드에서는 고리 모양 유도 전류가 밝은 도넛 글로를 만든다">
+        <defs><marker id="icf4-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent-2)"/></marker></defs>
+        <g transform="translate(10,0)">
+          <rect x="0" y="0" width="420" height="215" rx="8" class="ic-box"/>
+          <text x="210" y="22" text-anchor="middle" class="ic-b">E 모드 (용량성) · 수십 W</text>
+          <g class="ic-coil"><circle cx="90" cy="46" r="6"/><circle cx="150" cy="46" r="6"/><circle cx="270" cy="46" r="6"/><circle cx="330" cy="46" r="6"/></g>
+          <text x="90" y="36" text-anchor="middle" class="ic-s">+kV</text><text x="330" y="36" text-anchor="middle" class="ic-s">−kV</text>
+          <rect x="30" y="56" width="360" height="12" class="ic-win"/>
+          <g stroke="var(--accent-2)" stroke-width="1.6"><line x1="90" y1="54" x2="90" y2="120" marker-end="url(#icf4-a)"/><line x1="150" y1="54" x2="150" y2="104" marker-end="url(#icf4-a)"/><line x1="270" y1="104" x2="270" y2="54" marker-end="url(#icf4-a)"/><line x1="330" y1="120" x2="330" y2="54" marker-end="url(#icf4-a)"/></g>
+          <rect x="30" y="68" width="360" height="100" class="ic-glow" opacity="0.55"/>
+          <text x="210" y="132" text-anchor="middle" class="ic-l">nₑ ≈ 10⁸–10⁹ cm⁻³, 흐린 빛</text>
+          <text x="210" y="190" text-anchor="middle" class="ic-s">창 아래 시스 수백 V → 창 스퍼터, 이온당 손실 큼</text>
+          <text x="210" y="207" text-anchor="middle" class="ic-s">R<tspan font-size="9" dy="3">s</tspan><tspan dy="-3"> ≪ R</tspan><tspan font-size="9" dy="3">coil</tspan><tspan dy="-3">: 전력 대부분이 코일 열</tspan></text>
+        </g>
+        <g transform="translate(450,0)">
+          <rect x="0" y="0" width="420" height="215" rx="8" class="ic-box"/>
+          <text x="210" y="22" text-anchor="middle" class="ic-b">H 모드 (유도성) · 수백 W 이상</text>
+          <g class="ic-coil"><circle cx="90" cy="46" r="6"/><circle cx="150" cy="46" r="6"/><circle cx="270" cy="46" r="6"/><circle cx="330" cy="46" r="6"/></g>
+          <rect x="30" y="56" width="360" height="12" class="ic-win"/>
+          <rect x="30" y="68" width="360" height="100" class="ic-glow"/>
+          <ellipse cx="120" cy="84" rx="70" ry="13" class="ic-glow2"/><ellipse cx="300" cy="84" rx="70" ry="13" class="ic-glow2"/>
+          <g font-size="12" text-anchor="middle" font-family="var(--font)" fill="var(--m-electron)"><text x="120" y="88">⊗ 유도 전류</text><text x="300" y="88">⊙ 유도 전류</text></g>
+          <text x="210" y="132" text-anchor="middle" class="ic-l">nₑ ≈ 10¹¹–10¹² cm⁻³, 밝은 도넛</text>
+          <text x="210" y="190" text-anchor="middle" class="ic-s">시스 ≈ 5Tₑ ≈ 13 V, 이온당 손실 ≈ 100 eV</text>
+          <text x="210" y="207" text-anchor="middle" class="ic-s">R<tspan font-size="9" dy="3">s</tspan><tspan dy="-3"> ≈ 6 R</tspan><tspan font-size="9" dy="3">coil</tspan><tspan dy="-3">: η ≈ 85–90 %</tspan></text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-4.</b> E 모드와 H 모드. E 모드의 장은 코일 전압이 만든 수직(정전) 성분, H 모드의 장은 코일 전류가 만든 방위각(유도) 성분이다. 두 모드는 같은 장비에서 전력만으로 넘나든다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-eh">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>전력 램프와 E–H 히스테리시스 (전력 균형 근 찾기)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="eh-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>코일 RF 전력 <output id="eh-P-out"></output></span><input type="range" id="eh-P" min="0" max="1500" step="5" value="60"></label>
+          <label class="ctrl"><span>압력 (Ar) <output id="eh-p-out"></output></span><input type="range" id="eh-p" min="3" max="50" step="1" value="10"></label>
+          <div class="ctrl"><span>용량 결합</span><div class="seg" id="eh-sh"><button data-value="1" class="on">차폐 없음</button><button data-value="0.6">부분 차폐</button><button data-value="0.25">패러데이 차폐</button></div></div>
+          <button class="btn primary" id="eh-ramp">자동 램프 (0 → 600 → 0 W)</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">모드</span><span class="v" id="eh-mode">—</span></div>
+        <div class="stat"><span class="k">nₑ</span><span class="v" id="eh-n">—</span></div>
+        <div class="stat"><span class="k">흡수 비율</span><span class="v" id="eh-eta">—</span></div>
+        <div class="stat"><span class="k">E→H / H→E</span><span class="v" id="eh-th">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 현재 전력에서 \(P_{\text{abs}}(n_e)\)(파랑)와 \(P_{\text{loss}}(n_e)\)(주황). 채운 점이 안정 평형, 빈 점이 불안정 평형. 오른쪽: 전력을 올릴 때(파랑)와 내릴 때(주황)의 nₑ 경로, 빨간 점이 현재 상태. 상태는 기억된다: 전력을 바꾸면 직전 밀도에 가장 가까운 안정 근을 따라가고, 그 근이 사라지면 다른 가지로 뛴다. 해볼 것: ① 자동 램프로 고리를 그려 보자(10 mTorr 차폐 없음: E→H 약 160 W, H→E 약 110 W). ② 압력을 5 mTorr로 낮추면 전환 전력이 오른다. ③ 패러데이 차폐를 넣으면 E 모드 가지가 약해져 히스테리시스가 사라진다 — 대신 저전력 점화가 어려워진다.</div>
+    </div>
+
+    <div class="callout fab"><strong>IC 모듈의 점화와 동작점</strong>Ar 10 mTorr에서 코일 전력을 0부터 올리면 수십 W에서 E 모드로 점화되고, 약 160 W에서 H 모드로 뛴다(밀도 약 10배). 내려올 때는 약 110 W까지 H 모드가 유지된다. 공정 레시피는 E→H 경계에서 충분히 떨어진 수백 W 이상에서만 운전하고, 점화 단계에서 정합기를 E 모드 임피던스에 미리 맞춰 둔다. 기준점 1.5 kW에서 모델은 η ≈ 0.87(흡수 약 1.3 kW), Tₑ ≈ 2.5 eV, 중심 nₑ ≈ 3.6×10¹¹ cm⁻³을 준다 — PL-300 표의 ‘약 4×10¹¹ cm⁻³’, ‘H 모드 효율 약 85 %’와 같은 범위다.</div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="faraday">
+    <h2>코일의 정전 결합과 패러데이 차폐</h2>
+    <p>코일은 인덕터이므로 양 끝 사이에 \(\omega L_c I\)의 전압이 걸린다. 2 µH, 20 A면 약 3.4 kV다. 이 전압은 창을 통해 플라즈마와 용량 결합한다. H 모드에서도 이 결합은 남아, 창 아래 시스 전압을 키워 창을 이온으로 두드린다. 세라믹 창이 스퍼터되면 Al·O가 웨이퍼로 날아가 오염이 되고, 창에 붙은 부산물이 떨어져 입자가 된다.</p>
+    <p>대책은 둘이다. 첫째, 코일 끝에 직렬 커패시터를 달아 전압이 0이 되는 <strong>중성점</strong>을 코일 가운데로 옮긴다(최대 전압이 절반). 둘째, 코일과 창 사이에 반지름 방향 슬롯이 뚫린 접지 금속판, <span class="term">패러데이 차폐</span><span class="en">(Faraday shield)</span>를 넣는다. 슬롯이 코일과 수직이라 방위각 유도 전기장은 통과하지만, 수직 정전기장은 접지판에서 끝난다.</p>
+    <div class="formula">$$V_{\text{coil}}(x) = j\omega L_c I\,(x - \xi),\qquad V_{\text{sh}} = \kappa\,s_F\,|V_{\text{coil}}|,\qquad \kappa = \frac{C_w}{C_w + C_{\text{sh}}},\qquad C_{\text{sh}} = \frac{\varepsilon_0}{s},\qquad s = \frac{\sqrt2}{3}\lambda_{De}\left(\frac{2V_{\text{sh}}}{T_e}\right)^{3/4}$$<div class="where">\(x\)는 코일 입력 끝에서 잰 상대 위치(0–1), \(\xi\)는 중성점 위치, \(s_F\)는 차폐 투과율, \(C_w = \varepsilon_0\varepsilon_r/t\)는 창의 단위 면적 정전 용량(Al₂O₃ \(\varepsilon_r\) = 9, \(t\) = 25 mm), \(s\)는 창 아래 차일드 시스 두께(<a href="sheath.html">7장</a>). 시스가 두꺼워질수록 \(C_{\text{sh}}\)가 줄어 \(\kappa\)가 커지므로 반복해서 푼다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="패러데이 차폐: 위에서 본 나선 코일과 반지름 방향 슬롯이 뚫린 접지판, 옆에서 본 코일 전압 분포와 중성점 위치">
+        <g transform="translate(20,10)">
+          <text x="150" y="12" text-anchor="middle" class="ic-b">위에서 본 패러데이 차폐</text>
+          <circle cx="150" cy="115" r="95" class="f-surface"/>
+          <g stroke="var(--canvas-bg)" stroke-width="5">
+            <line x1="150" y1="40" x2="150" y2="95"/><line x1="150" y1="135" x2="150" y2="190"/><line x1="75" y1="115" x2="130" y2="115"/><line x1="170" y1="115" x2="225" y2="115"/>
+            <line x1="97" y1="62" x2="136" y2="101"/><line x1="164" y1="129" x2="203" y2="168"/><line x1="203" y1="62" x2="164" y2="101"/><line x1="136" y1="129" x2="97" y2="168"/>
+          </g>
+          <path d="M150 115 m0 -20 a20 20 0 1 1 -1 0 m1 -18 a38 38 0 1 1 -1 0 m1 -18 a56 56 0 1 1 -1 0 m1 -18 a74 74 0 1 1 -1 0" fill="none" stroke="#c97a3a" stroke-width="3" opacity="0.85"/>
+          <text x="150" y="222" text-anchor="middle" class="ic-s">슬롯 ⟂ 코일: 유도 E<tspan font-size="9" dy="3">θ</tspan><tspan dy="-3"> 통과, 정전 E</tspan><tspan font-size="9" dy="3">z</tspan><tspan dy="-3"> 차단</tspan></text>
+        </g>
+        <g transform="translate(340,10)">
+          <text x="260" y="12" text-anchor="middle" class="ic-b">코일을 따라 본 전압 |V(x)|</text>
+          <line x1="20" y1="180" x2="510" y2="180" class="s-axis"/><line x1="20" y1="30" x2="20" y2="180" class="s-axis"/>
+          <path d="M20 180 L510 40" class="ms-ion" stroke-width="2.4"/>
+          <text x="420" y="52" class="ic-s" fill="var(--m-ion)">끝 접지(ξ = 0): 최대 ωL I</text>
+          <path d="M20 110 L265 180 L510 110" stroke="var(--accent)" stroke-width="2.4" fill="none"/>
+          <text x="300" y="150" class="ic-s" fill="var(--accent)">중성점 가운데(ξ = 0.5): 최대 절반</text>
+          <line x1="265" y1="180" x2="265" y2="190" class="s-line"/><text x="265" y="204" text-anchor="middle" class="ic-s">중성점</text>
+          <text x="20" y="204" class="ic-s">입력 끝</text><text x="510" y="204" text-anchor="end" class="ic-s">끝 (C<tspan font-size="9" dy="3">t</tspan><tspan dy="-3">)</tspan></text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-5.</b> 정전 결합을 줄이는 두 방법. 왼쪽: 반지름 방향 슬롯을 낸 접지판(슬롯을 지나는 방위각 경로가 없으므로 유도 전류가 판에 돌지 못한다). 오른쪽: 끝 커패시터 \(C_t\)를 \(1/\omega C_t = \tfrac12\omega L_c\)로 고르면 중성점이 코일 가운데로 와서 최대 전압이 절반이 된다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-shield">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>코일 전압 분포와 창 스퍼터 이온 에너지</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sf-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>코일 RF 전력 <output id="sf-P-out"></output></span><input type="range" id="sf-P" min="200" max="3000" step="10" value="1500"></label>
+          <label class="ctrl"><span>중성점 위치 ξ <output id="sf-x-out"></output></span><input type="range" id="sf-x" min="0" max="1" step="0.01" value="0"></label>
+          <div class="ctrl"><span>차폐</span><div class="seg" id="sf-sh"><button data-value="1" class="on">없음</button><button data-value="0.3">슬롯 넓은 차폐</button><button data-value="0.06">패러데이 차폐</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">코일 전류 진폭</span><span class="v" id="sf-I">—</span></div>
+        <div class="stat"><span class="k">최대 코일 전압</span><span class="v" id="sf-V">—</span></div>
+        <div class="stat"><span class="k">창 최대 이온 에너지</span><span class="v" id="sf-E">—</span></div>
+        <div class="stat"><span class="k">상대 창 침식률</span><span class="v" id="sf-Y">—</span></div>
+      </div>
+      <div class="sim-note">위: 코일 위치별 전압 진폭 \(|V(x)|\). 아래: 그 아래 창 표면에 도달하는 이온 에너지 \(\approx V_{\text{sh}} + 5.2T_e\)와 세라믹 스퍼터 문턱(약 50 eV, 점선). 코일 전류는 변압기 모델(\(R_s + R_{coil}\))과 H 모드 밀도에서 계산한다. 침식률은 \(\int\max(0, E - E_{th})\,dx\)에 비례한다고 보고 ‘끝 접지·차폐 없음·1.5 kW’를 100으로 놓았다. 해볼 것: ① 중성점을 0.5로 옮기면 최대 전압과 침식이 크게 준다. ② 패러데이 차폐를 넣으면 창 이온 에너지가 문턱 아래로 내려간다. ③ 전력을 올리면 전류가 \(\sqrt{P}\)로 늘어 창 공격이 커진다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="uniformity">
+    <h2>코일 구조와 반경 균일도</h2>
+    <p>웨이퍼가 받는 이온 플럭스의 반경 분포는 세 단계로 정해진다. ① 코일 모양이 창 아래 <strong>가열 분포</strong> \(p_{\text{abs}}(r,z)\)를 정하고, ② 전자가 에너지를 잃기 전에 움직이는 거리 \(\lambda_\varepsilon\)(<span class="term">에너지 완화 길이</span>)만큼 가열이 번져 <strong>이온화 분포</strong>가 되고, ③ 이온이 양극성 확산으로 벽과 웨이퍼로 흘러가며(<a href="transport.html">6장</a>) 분포가 한 번 더 부드러워진다. 압력이 낮으면 \(\lambda_\varepsilon\)가 챔버보다 길어 이온화가 거의 고르고(비국소), 압력이 높으면 이온화가 코일 바로 아래 고리에 몰린다.</p>
+    <div class="formula">$$-\lambda_\varepsilon^2\nabla^2 u + u = p_{\text{abs}}(r,z),\qquad -D_a\nabla^2 n = S \propto u,\qquad \Gamma_w(r) = -D_a\left.\frac{\partial n}{\partial z}\right|_{\text{wafer}},\qquad \lambda_\varepsilon \approx 5\ \text{cm}\times\frac{10\ \text{mTorr}}{p}$$<div class="where">\(p_{\text{abs}} \propto |A_\theta|^2 e^{-2z/\delta}\)(1절 타원 적분, δ = 1 cm), \(u\)는 번진 이온화 원천, \(n = 0\)을 벽·창·웨이퍼에, 축에서 대칭 조건을 둔다. 원통 좌표 격자(26 × 13)에서 SOR로 푼다. 이온화가 밀도에 비례하는 고윳값 문제를 원천이 주어진 확산 문제로 단순화한 교육용 모델이다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 220" role="img" aria-label="세 가지 코일 구조: 평면 나선, 돔 측면 코일, 안쪽과 바깥쪽 전류를 따로 조절하는 2구역 코일과 각각의 가열 분포">
+        <g transform="translate(10,0)">
+          <rect x="0" y="0" width="280" height="210" rx="8" class="ic-box"/>
+          <text x="140" y="22" text-anchor="middle" class="ic-b">평면 나선 (4바퀴)</text>
+          <g class="ic-coil"><circle cx="50" cy="48" r="5"/><circle cx="80" cy="48" r="5"/><circle cx="110" cy="48" r="5"/><circle cx="170" cy="48" r="5"/><circle cx="200" cy="48" r="5"/><circle cx="230" cy="48" r="5"/></g>
+          <rect x="20" y="56" width="240" height="8" class="ic-win"/>
+          <rect x="22" y="64" width="236" height="80" class="ic-glow"/>
+          <ellipse cx="85" cy="76" rx="45" ry="10" class="ic-glow2"/><ellipse cx="195" cy="76" rx="45" ry="10" class="ic-glow2"/>
+          <path d="M30 186 Q 140 160 250 186" class="s-acc"/>
+          <text x="140" y="204" text-anchor="middle" class="ic-s">10 mTorr: 약 ±5 %, 고압에서 가장자리↑</text>
+        </g>
+        <g transform="translate(300,0)">
+          <rect x="0" y="0" width="280" height="210" rx="8" class="ic-box"/>
+          <text x="140" y="22" text-anchor="middle" class="ic-b">돔 (측면) 코일</text>
+          <path d="M30 144 L30 84 Q140 30 250 84 L250 144" class="ic-win" fill="none"/>
+          <g class="ic-coil"><circle cx="22" cy="96" r="5"/><circle cx="22" cy="118" r="5"/><circle cx="258" cy="96" r="5"/><circle cx="258" cy="118" r="5"/><circle cx="40" cy="74" r="5"/><circle cx="240" cy="74" r="5"/></g>
+          <path d="M34 144 L34 86 Q140 36 246 86 L246 144 Z" class="ic-glow"/>
+          <ellipse cx="48" cy="105" rx="12" ry="28" class="ic-glow2"/><ellipse cx="232" cy="105" rx="12" ry="28" class="ic-glow2"/>
+          <path d="M30 176 Q 140 196 250 176" class="s-acc"/>
+          <text x="140" y="204" text-anchor="middle" class="ic-s">가장자리 가열: 저압에서만 고름</text>
+        </g>
+        <g transform="translate(590,0)">
+          <rect x="0" y="0" width="280" height="210" rx="8" class="ic-box"/>
+          <text x="140" y="22" text-anchor="middle" class="ic-b">2구역 코일 (I<tspan font-size="10" dy="3">안</tspan><tspan dy="-3"> : I</tspan><tspan font-size="10" dy="3">밖</tspan><tspan dy="-3">)</tspan></text>
+          <g fill="#c97a3a"><circle cx="110" cy="48" r="5"/><circle cx="125" cy="48" r="5"/><circle cx="155" cy="48" r="5"/><circle cx="170" cy="48" r="5"/></g>
+          <g fill="var(--accent-2)"><circle cx="40" cy="48" r="5"/><circle cx="58" cy="48" r="5"/><circle cx="222" cy="48" r="5"/><circle cx="240" cy="48" r="5"/></g>
+          <rect x="20" y="56" width="240" height="8" class="ic-win"/>
+          <rect x="22" y="64" width="236" height="80" class="ic-glow"/>
+          <ellipse cx="140" cy="76" rx="40" ry="10" class="ic-glow2"/><ellipse cx="50" cy="76" rx="28" ry="9" class="ic-glow2"/><ellipse cx="230" cy="76" rx="28" ry="9" class="ic-glow2"/>
+          <path d="M30 176 L250 176" class="s-acc"/>
+          <text x="140" y="204" text-anchor="middle" class="ic-s">전류비로 중심/가장자리 보정 → ±3 %</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-6.</b> 코일 구조와 가열 분포(개념도). 아래 곡선은 웨이퍼 이온 플럭스의 대략적 모양. 다중 구역 코일은 안쪽·바깥쪽 전류를 나눠(전류 분배기 또는 별도 정합) 공정마다 반경 분포를 맞춘다. 공정 관점의 비교는 <a href="../../etch/chapters/reactors.html">EtchBook 반응기 장</a>을 보자.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-unif">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>코일 배치 → 가열 → 확산 → 웨이퍼 이온 플럭스 균일도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="un-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>코일</span><div class="seg" id="un-type"><button data-value="spiral" class="on">평면 나선</button><button data-value="dome">돔</button><button data-value="zone">2구역</button></div></div>
+          <label class="ctrl"><span>2구역 전류비 I<sub>안</sub>/I<sub>밖</sub> <output id="un-r-out"></output></span><input type="range" id="un-r" min="0" max="3" step="0.05" value="1"></label>
+          <label class="ctrl"><span>압력 (Ar) <output id="un-p-out"></output></span><input type="range" id="un-p" min="2" max="50" step="1" value="10"></label>
+          <label class="ctrl"><span>창-웨이퍼 높이 <output id="un-L-out"></output></span><input type="range" id="un-L" min="0.06" max="0.20" step="0.01" value="0.10"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">균일도 (r ≤ 150 mm)</span><span class="v" id="un-u">—</span></div>
+        <div class="stat"><span class="k">중심/가장자리</span><span class="v" id="un-ce">—</span></div>
+        <div class="stat"><span class="k">λ<sub>ε</sub></span><span class="v" id="un-lam">—</span></div>
+        <div class="stat"><span class="k">PL-300 목표 ±3 %</span><span class="v" id="un-ok">—</span></div>
+      </div>
+      <div class="sim-note">위: 챔버 단면(가로 지름 50 cm, 세로는 높이)의 이온 밀도 \(n(r,z)\)와 코일 위치(주황·청록 점). 아래: 웨이퍼 이온 플럭스 \(\Gamma_w(r)\)(웨이퍼 중심 값으로 정규화, 회색 띠가 300 mm 웨이퍼). 균일도는 \((\max - \min)/(\max + \min)\). 해볼 것: ① 평면 나선에서 압력을 3 → 30 mTorr로 올리면 가장자리 고리가 드러난다. ② 2구역에서 전류비를 바꿔 10 mTorr에서 ±3 % 이내로 맞춰 보자(약 2). ③ 높이를 늘리면 확산이 분포를 펴지만 중심이 볼록해지고, 플라즈마 부피가 커져 밀도는 준다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="bias">
+    <h2>바이어스 독립성: 플럭스는 소스가, 에너지는 바이어스가</h2>
+    <p>ICP의 가장 큰 장점은 두 손잡이의 <strong>분리</strong>다. 코일 전력은 전자를 가열해 밀도, 곧 이온 플럭스를 정한다. 정전척에 거는 RF 바이어스는 웨이퍼 시스 전압, 곧 이온 에너지를 정한다. 바이어스 전력은 대부분 시스 안 이온 가속에 쓰이므로, 시스 평균 전압은 대략 바이어스 전력을 이온 전류로 나눈 값이다.</p>
+    <div class="formula">$$\Gamma_i = h_l n_0 u_B,\qquad \bar V_s \approx \frac{P_{\text{bias}}}{e\Gamma_i A_w},\qquad \bar{\mathcal{E}}_i \approx \bar V_s + 5.2\,T_e,\qquad \Delta E_i \approx \frac{2eV_1}{\sqrt{1 + (\omega\tau_i)^2}},\qquad \tau_i = 3\bar s\sqrt{\frac{M}{2e\bar V_s}}$$<div class="where">\(n_0\)는 소스 전력과 8장 전력 균형(\(\eta P_s = e n_0 u_B A_{\text{eff}}\mathcal{E}_T\))으로 구한 중심 밀도, \(h_l\)은 축 방향 가장자리 비, \(A_w\) = 707 cm²(300 mm 웨이퍼), \(V_1 \approx \bar V_s\)는 바이어스 RF 진폭, \(\bar s\)는 차일드 시스 두께, \(\tau_i\)는 이온의 시스 통과 시간. \(\Delta E_i\)는 IEDF 두 봉우리의 간격으로, 이온이 RF 주기보다 오래 시스에 머물수록 좁아진다(<a href="sheath.html">7장</a>). 결과: 같은 바이어스 전력에서 소스 전력을 올리면 \(\Gamma_i\)가 늘어 \(\bar V_s\)가 내려간다 — 완전한 분리는 아니다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 200" role="img" aria-label="ICP의 손잡이 분리: 코일 전력은 전자 가열과 밀도와 이온 플럭스로, 바이어스 전력은 시스 전압과 이온 에너지로 이어지고, 플럭스가 시스 전압에 되먹임한다">
+        <defs><marker id="icf6-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text)"/></marker>
+        <marker id="icf6-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--bad)"/></marker></defs>
+        <rect x="10" y="20" width="150" height="50" rx="8" class="f-acc-soft"/><text x="85" y="50" text-anchor="middle" class="ic-b">코일 전력 P<tspan font-size="10" dy="3">s</tspan></text>
+        <rect x="230" y="20" width="150" height="50" rx="8" class="ic-box"/><text x="305" y="42" text-anchor="middle" class="ic-l">표피층 전자 가열</text><text x="305" y="60" text-anchor="middle" class="ic-s">η ≈ 0.87</text>
+        <rect x="450" y="20" width="150" height="50" rx="8" class="ic-box"/><text x="525" y="42" text-anchor="middle" class="ic-l">밀도 n₀</text><text x="525" y="60" text-anchor="middle" class="ic-s">n₀ ∝ P<tspan font-size="9" dy="3">s</tspan><tspan dy="-3">, Tₑ 그대로</tspan></text>
+        <rect x="670" y="20" width="200" height="50" rx="8" class="f-ok-soft"/><text x="770" y="42" text-anchor="middle" class="ic-b">이온 플럭스 Γᵢ</text><text x="770" y="60" text-anchor="middle" class="ic-s">식각 속도·래디컬</text>
+        <rect x="10" y="130" width="150" height="50" rx="8" class="f-acc2-soft"/><text x="85" y="160" text-anchor="middle" class="ic-b">바이어스 P<tspan font-size="10" dy="3">b</tspan></text>
+        <rect x="230" y="130" width="150" height="50" rx="8" class="ic-box"/><text x="305" y="152" text-anchor="middle" class="ic-l">웨이퍼 시스</text><text x="305" y="170" text-anchor="middle" class="ic-s">V̄ₛ ≈ P<tspan font-size="9" dy="3">b</tspan><tspan dy="-3">/(eΓᵢA</tspan><tspan font-size="9" dy="3">w</tspan><tspan dy="-3">)</tspan></text>
+        <rect x="670" y="130" width="200" height="50" rx="8" class="f-warn-soft"/><text x="770" y="152" text-anchor="middle" class="ic-b">이온 에너지 Ēᵢ, IEDF</text><text x="770" y="170" text-anchor="middle" class="ic-s">방향성·선택비·손상</text>
+        <g class="ic-arr"><line x1="160" y1="45" x2="226" y2="45" marker-end="url(#icf6-a)"/><line x1="380" y1="45" x2="446" y2="45" marker-end="url(#icf6-a)"/><line x1="600" y1="45" x2="666" y2="45" marker-end="url(#icf6-a)"/><line x1="160" y1="155" x2="226" y2="155" marker-end="url(#icf6-a)"/><line x1="380" y1="155" x2="666" y2="155" marker-end="url(#icf6-a)"/></g>
+        <path d="M720 72 C 640 110, 420 100, 340 128" stroke="var(--bad)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#icf6-b)"/>
+        <text x="560" y="112" text-anchor="middle" class="ic-s" fill="var(--bad)">결합: Γᵢ↑ → 같은 P<tspan font-size="9" dy="3">b</tspan><tspan dy="-3">에서 V̄ₛ↓</tspan></text>
+      </svg>
+      <figcaption><b>그림 10-7.</b> ICP 손잡이의 분리와 남는 결합. 실무에서는 바이어스를 전력이 아니라 전압(V<sub>pp</sub> 또는 V<sub>dc</sub>)으로 제어해 이 결합을 끊기도 한다. 높은 바이어스는 시스 가열로 밀도를 조금 올리기도 한다(이 모델에서는 무시).</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-bias">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>소스 × 바이어스: 이온 플럭스, 시스 전압, IEDF</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bi-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>코일(소스) 전력 <output id="bi-Ps-out"></output></span><input type="range" id="bi-Ps" min="300" max="3000" step="50" value="1500"></label>
+          <label class="ctrl"><span>바이어스 전력 <output id="bi-Pb-out"></output></span><input type="range" id="bi-Pb" min="0" max="1500" step="10" value="300"></label>
+          <label class="ctrl"><span>압력 (Ar) <output id="bi-p-out"></output></span><input type="range" id="bi-p" min="2" max="50" step="1" value="10"></label>
+          <div class="ctrl"><span>바이어스 주파수</span><div class="seg" id="bi-f"><button data-value="2e6">2 MHz</button><button data-value="13.56e6" class="on">13.56 MHz</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">이온 플럭스 Γᵢ</span><span class="v" id="bi-G">—</span></div>
+        <div class="stat"><span class="k">웨이퍼 이온 전류</span><span class="v" id="bi-J">—</span></div>
+        <div class="stat"><span class="k">평균 이온 에너지</span><span class="v" id="bi-E">—</span></div>
+        <div class="stat"><span class="k">IEDF 폭 ΔE</span><span class="v" id="bi-dE">—</span></div>
+        <div class="stat"><span class="k">시스 s̄ / ωτᵢ</span><span class="v" id="bi-s">—</span></div>
+      </div>
+      <div class="sim-note">위: 바이어스 전력에 따른 평균 이온 에너지(주황, 왼쪽 축)와 이온 플럭스(파랑, 오른쪽 축, 현재 소스 전력). 주황 파선은 소스 전력을 두 배로 했을 때의 이온 에너지. 아래: 현재 조건의 IEDF(위상 균등 표본 + 저역 통과 응답). 해볼 것: ① 바이어스를 0 → 1,500 W로 올려도 플럭스 곡선은 평평하다. ② 바이어스 300 W에서 소스를 1.5 → 3 kW로 올리면 이온 에너지가 약 절반이 된다. ③ 2 MHz 바이어스는 \(\omega\tau_i\)가 작아 IEDF가 넓게 벌어진다(<a href="ccp.html">9장</a> 이중 주파수와 같은 원리).</div>
+    </div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>손잡이 (기준: Ar 10 mTorr, 1.5 kW, 바이어스 300 W)</th><th>Tₑ</th><th>nₑ, Γᵢ</th><th>이온 에너지</th><th>반경 분포</th></tr></thead>
+      <tbody>
+        <tr><td>코일 전력 ↑ (1.5 → 3 kW)</td><td>거의 그대로 (2.5 eV)</td><td>약 2배 (∝ ηP)</td><td>바이어스 전력 고정이면 ↓ (약 절반)</td><td>거의 그대로</td></tr>
+        <tr><td>바이어스 전력 ↑ (300 → 900 W)</td><td>그대로</td><td>거의 그대로</td><td>약 3배 (∝ P<sub>b</sub>/Γᵢ)</td><td>그대로</td></tr>
+        <tr><td>압력 ↑ (5 → 20 mTorr)</td><td>2.9 → 2.2 eV</td><td>중심 2.9 → 4.5×10¹¹ cm⁻³</td><td>약간 ↓ (Γᵢ↑), 고압이면 시스 충돌로 분포 번짐</td><td>λ<sub>ε</sub>↓ → 코일 아래 고리 드러남</td></tr>
+        <tr><td>압력 ↓ (10 → 3 mTorr)</td><td>↑ (약 3.3 eV)</td><td>↓, E→H 전력 ↑</td><td>↑, 좁은 분포</td><td>비국소 가열 → 고르게</td></tr>
+        <tr><td>패러데이 차폐 추가</td><td>그대로</td><td>H 모드 거의 그대로, 점화 어려움</td><td>창 이온 에너지 ↓ (오염·입자 ↓)</td><td>그대로</td></tr>
+        <tr><td>2구역 안쪽 전류 ↑</td><td>그대로</td><td>중심 ↑</td><td>중심 쪽 약간 ↓</td><td>가장자리 → 중심 쪽으로 이동</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="hdsources">
+    <h2>다른 고밀도 소스: 헬리콘 · ECR · 마이크로파 표면파</h2>
+    <p>ICP 말고도 무전극 고밀도 소스가 몇 가지 있다. 공통점은 전자를 시스 전압이 아니라 <strong>파동</strong>으로 가열해 시스를 낮게 두는 것이다.</p>
+    <ul>
+      <li><strong>헬리콘</strong>: 축 방향 자기장(수십–수백 G) 속에서 안테나가 휘슬러 계열의 헬리콘파를 띄운다. 파동이 플라즈마 깊숙이 들어가 nₑ가 10¹³ cm⁻³까지 오르지만, 자기장 때문에 밀도가 축 근처에 몰리고 모드 점프가 있어 웨이퍼 공정에서는 확산 챔버를 덧붙여 쓴다.</li>
+      <li><strong>ECR</strong>(전자 사이클로트론 공명): 2.45 GHz 마이크로파와 전자의 자기장 속 회전 주파수 \(\omega_{ce} = eB/m\)가 같아지는 면(875 G)에서 전자가 공명 가열된다. 0.1–1 mTorr의 아주 낮은 압력에서도 켜지고 이온 에너지가 낮아, 방향성 식각과 저손상 공정에 쓰였다.</li>
+      <li><strong>마이크로파 표면파</strong>: 유전체 창을 따라 표면파가 퍼지며, 차단 밀도보다 짙은 플라즈마의 표면을 가열한다. 자석 없이 대면적으로 균일하게 만들 수 있어 애싱·래디컬 소스(PL-300 RP 모듈 애싱 모드 2.45 GHz 3 kW)에 쓴다.</li>
+    </ul>
+    <div class="formula">$$\omega_{ce} = \frac{eB}{m} = \omega\;\Rightarrow\; B_{\text{res}} = \frac{2\pi f m}{e} = 875\ \text{G}\ (f = 2.45\ \text{GHz}),\qquad n_c = \frac{\varepsilon_0 m\omega^2}{e^2} = 7.4\times10^{10}\ \text{cm}^{-3},\qquad n_{sw} \gt n_c(1 + \varepsilon_d)$$<div class="where">\(n_c\)는 마이크로파 차단 밀도(<a href="scales.html">2장</a>): 이보다 짙은 플라즈마에는 파가 들어가지 못하고 반사된다. 표면파가 창을 따라 퍼지려면 밀도가 \(n_c(1+\varepsilon_d)\)를 넘어야 한다(\(\varepsilon_d\)는 창의 유전율, 석영 3.8 → 3.6×10¹¹ cm⁻³).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 210" role="img" aria-label="헬리콘, ECR, 표면파 소스 개략도: 헬리콘은 안테나와 축 자기장, ECR은 도파관과 자석 코일과 875 가우스 공명면, 표면파는 슬롯 안테나와 유전체 창">
+        <g transform="translate(10,0)">
+          <rect x="0" y="0" width="280" height="200" rx="8" class="ic-box"/>
+          <text x="140" y="22" text-anchor="middle" class="ic-b">헬리콘</text>
+          <rect x="105" y="36" width="70" height="100" rx="6" class="ic-win"/>
+          <path d="M98 52 C 150 62 130 92 182 102 M98 102 C 150 92 130 62 182 52" stroke="#c97a3a" stroke-width="3" fill="none"/>
+          <rect x="112" y="40" width="56" height="94" class="ic-glow2"/>
+          <rect x="70" y="40" width="14" height="94" class="f-acc2-soft"/><rect x="196" y="40" width="14" height="94" class="f-acc2-soft"/>
+          <text x="40" y="92" class="ic-s">자석</text>
+          <rect x="60" y="136" width="160" height="30" class="ic-glow"/>
+          <text x="140" y="186" text-anchor="middle" class="ic-s">B ≈ 100 G, nₑ 최대 10¹³ cm⁻³</text>
+        </g>
+        <g transform="translate(300,0)">
+          <rect x="0" y="0" width="280" height="200" rx="8" class="ic-box"/>
+          <text x="140" y="22" text-anchor="middle" class="ic-b">ECR 2.45 GHz</text>
+          <rect x="120" y="30" width="40" height="30" class="f-surface"/><text x="170" y="48" class="ic-s">도파관</text>
+          <rect x="90" y="60" width="100" height="8" class="ic-win"/>
+          <rect x="60" y="70" width="18" height="60" class="f-acc2-soft"/><rect x="202" y="70" width="18" height="60" class="f-acc2-soft"/>
+          <rect x="84" y="68" width="112" height="96" class="ic-glow"/>
+          <path d="M84 104 Q140 124 196 104" stroke="var(--bad)" stroke-width="2.4" fill="none"/>
+          <text x="140" y="140" text-anchor="middle" class="ic-s" fill="var(--bad)">공명면 B = 875 G</text>
+          <text x="140" y="186" text-anchor="middle" class="ic-s">0.1–1 mTorr, 낮은 이온 에너지</text>
+        </g>
+        <g transform="translate(590,0)">
+          <rect x="0" y="0" width="280" height="200" rx="8" class="ic-box"/>
+          <text x="140" y="22" text-anchor="middle" class="ic-b">마이크로파 표면파</text>
+          <rect x="30" y="32" width="220" height="16" class="f-surface"/>
+          <g fill="var(--canvas-bg)"><rect x="60" y="36" width="20" height="8"/><rect x="110" y="36" width="20" height="8"/><rect x="160" y="36" width="20" height="8"/><rect x="210" y="36" width="20" height="8"/></g>
+          <text x="140" y="62" text-anchor="middle" class="ic-s">슬롯 안테나</text>
+          <rect x="30" y="68" width="220" height="12" class="ic-win"/>
+          <path d="M30 86 q14 -8 27 0 t27 0 t27 0 t27 0 t27 0 t27 0 t27 0 t27 0" stroke="var(--accent)" stroke-width="2" fill="none"/>
+          <rect x="30" y="80" width="220" height="70" class="ic-glow"/>
+          <text x="140" y="120" text-anchor="middle" class="ic-s">n &gt; n<tspan font-size="9" dy="3">c</tspan><tspan dy="-3">(1 + ε</tspan><tspan font-size="9" dy="3">d</tspan><tspan dy="-3">)</tspan></text>
+          <text x="140" y="186" text-anchor="middle" class="ic-s">무자석 대면적, 애싱·래디컬 소스</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-8.</b> ICP 밖의 고밀도 소스(개념도). 셋 다 시스가 낮고(수십 V) 이온 에너지는 별도 바이어스로 정한다. 반도체 양산에서는 장치가 단순하고 300 mm 균일도를 맞추기 쉬운 ICP가 주류가 되었다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ecr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>ECR 공명면과 마이크로파 차단·표면파 밀도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ec-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>마이크로파 주파수 <output id="ec-f-out"></output></span><input type="range" id="ec-f" min="0.9" max="8" step="0.05" value="2.45"></label>
+          <label class="ctrl"><span>자석 중심 자기장 B₀ <output id="ec-B-out"></output></span><input type="range" id="ec-B" min="0.03" max="0.3" step="0.005" value="0.15"></label>
+          <label class="ctrl"><span>창 유전율 ε<sub>d</sub> <output id="ec-e-out"></output></span><input type="range" id="ec-e" min="1" max="10" step="0.1" value="3.8"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">공명 자기장</span><span class="v" id="ec-Br">—</span></div>
+        <div class="stat"><span class="k">공명면 위치 z</span><span class="v" id="ec-z">—</span></div>
+        <div class="stat"><span class="k">차단 밀도 n<sub>c</sub></span><span class="v" id="ec-nc">—</span></div>
+        <div class="stat"><span class="k">표면파 최소 밀도</span><span class="v" id="ec-nsw">—</span></div>
+      </div>
+      <div class="sim-note">위: 자석 코일(반지름 12 cm 고리 근사, \(B(z) = B_0/(1 + (z/a)^2)^{3/2}\)) 축 자기장과 공명 자기장(빨간 선). 교점이 공명면이다. 아래: 밀도 축 위에 차단 밀도, 표면파 최소 밀도, PL-300 IC 기준 밀도를 표시. 해볼 것: ① B₀를 875 G 아래로 낮추면 공명면이 사라져 ECR 가열이 꺼진다. ② 주파수를 5.8 GHz로 올리면 공명 자기장 2,070 G, 차단 밀도도 \(f^2\)으로 커진다. ③ 창 유전율을 올리면 표면파가 유지되는 최소 밀도가 오른다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="chamber3d">
+    <h2>3D로 보는 ICP 챔버</h2>
+    <p>아래 3D 모델은 PL-300 IC 모듈이다(반지름 25 cm, 높이 10 cm를 같은 비율로). 세라믹 창 위 평면 나선 코일의 전류(주황 점)가 RF 위상에 따라 앞뒤로 흐르고, 창 아래 표피층에는 반대 방향의 유도 전자 전류 고리(파랑 점)가 돈다. 전력 슬라이더는 4절 히스테리시스 모델을 그대로 써서 E/H 모드와 밀도를 정한다(전력 이력 기억). 바이어스를 켜면 웨이퍼 위 시스에서 이온이 가속되어 떨어진다.</p>
+    <div class="sim" id="sim-3d">
+      <div class="sim-head"><span class="sim-tag three">3D</span><h3>PL-300 IC 모듈: 코일 · 유도 전류 고리 · 도넛 글로 · 바이어스</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view three" id="i3-view"></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>코일 전력 <output id="i3-P-out"></output></span><input type="range" id="i3-P" min="0" max="3000" step="10" value="1500"></label>
+          <label class="ctrl"><span>바이어스 전력 <output id="i3-B-out"></output></span><input type="range" id="i3-B" min="0" max="1500" step="10" value="300"></label>
+          <label class="check"><input type="checkbox" id="i3-cur" checked> 코일·유도 전류 표시</label>
+          <label class="check"><input type="checkbox" id="i3-glow" checked> 플라즈마 글로</label>
+          <label class="check"><input type="checkbox" id="i3-cut" checked> 챔버 벽 잘라 보기</label>
+          <label class="check"><input type="checkbox" id="i3-rot"> 자동 회전</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">모드</span><span class="v" id="i3-mode">—</span></div>
+        <div class="stat"><span class="k">nₑ (중심)</span><span class="v" id="i3-n">—</span></div>
+        <div class="stat"><span class="k">표피 깊이 δ</span><span class="v" id="i3-d">—</span></div>
+        <div class="stat"><span class="k">이온 에너지</span><span class="v" id="i3-E">—</span></div>
+      </div>
+      <div class="sim-note">드래그로 회전, 휠로 확대. 글로 밝기는 nₑ, 도넛의 두께는 표피 깊이를 따른다. E 모드에서는 도넛 없이 흐린 빛만 창 아래에 남는다. 해볼 것: 전력을 0에서 천천히 올려 약 160 W에서 도넛이 켜지는 것을, 다시 내려 약 110 W에서 꺼지는 것을 보자. 바이어스를 올리면 이온 낙하가 빨라지고(에너지↑) 개수(플럭스)는 거의 그대로다.</div>
+    </div>
+    <div class="callout fab"><strong>IC 모듈 기준점 요약</strong>Ar 10 mTorr, 코일 1.5 kW: η ≈ 0.87, 흡수 약 1.3 kW, Tₑ ≈ 2.5 eV, nₑ ≈ 3.6×10¹¹ cm⁻³, 보옴 속도 2.4 km/s, 웨이퍼 이온 플럭스 ≈ 1.7×10¹⁶ cm⁻²s⁻¹(이온 전류 약 2 A), 표피 깊이 ≈ 1 cm, 코일 전류 약 20 A·단자 전압 약 3.4 kV. 바이어스 300 W를 더하면 평균 이온 에너지 약 165 eV. 반경 균일도 ±3 % 목표는 2구역 코일 전류비로 맞춘다. 공정 쪽 적용(도체 식각, HDP-CVD)은 <a href="../../etch/chapters/reactors.html">EtchBook</a>과 <a href="applications.html">17장</a>.</div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>코일 전류는 방위각 유도 전기장 \(E_\theta = -j\omega A_\theta\)를 만든다. 축 위는 0, 코일 중간 반지름 아래가 최대라 글로가 도넛 모양이다. 플라즈마 전류는 코일 전류와 반대로 흐른다.</li>
+      <li>장은 표피 깊이 δ 안에서만 산다. 저압 ICP는 \(\delta \approx c/\omega_{pe}\) ≈ 1 cm이고, \(\bar v_e/\omega \gt \delta\)라 무충돌(이상) 가열이 중요하다(\(\nu_{\text{eff}} = \nu_m + \bar v_e/4\delta\)).</li>
+      <li>변압기 모델에서 플라즈마는 한 바퀴 2차 코일이고, 반사 저항 \(R_s = \omega^2M^2R_p/|Z_2|^2\)은 저밀도에서 nₑ에 비례하다 고밀도에서 포화한다. 효율 \(\eta = R_s/(R_s + R_{coil})\)은 PL-300 1.5 kW에서 약 0.87이다.</li>
+      <li>저전력의 E 모드는 코일 전압의 용량 결합으로 유지되고 이온당 손실이 크다. 흡수·손실 곡선의 교점이 여러 개가 되는 구간에서 히스테리시스가 생긴다(10 mTorr: E→H 약 160 W, H→E 약 110 W).</li>
+      <li>코일 단자 전압은 kV 수준이다. 중성점을 가운데로 옮기는 끝 커패시터와 패러데이 차폐가 창 스퍼터·오염을 줄인다.</li>
+      <li>반경 균일도는 코일 배치(가열) → 에너지 완화 길이(번짐) → 양극성 확산이 정한다. 저압일수록 고르고, 다중 구역 코일 전류비로 ±3 %를 맞춘다.</li>
+      <li>소스 전력은 플럭스, 바이어스 전력은 에너지를 정하지만, 같은 바이어스 전력에서 플럭스가 늘면 \(\bar V_s \approx P_b/(e\Gamma_iA_w)\)가 줄어 완전히 독립은 아니다.</li>
+      <li>헬리콘·ECR(875 G @ 2.45 GHz)·표면파(\(n \gt n_c(1+\varepsilon_d)\))도 파동으로 전자를 가열하는 무전극 고밀도 소스다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 평면 나선 코일 ICP에서 글로가 중심이 아니라 도넛 모양으로 가장 밝은 이유는?</p><div class="opts">
+        <button class="opt">중심에 가스 주입구가 있어 밀도가 낮기 때문</button>
+        <button class="opt" data-correct>방위각 유도 전기장 \(E_\theta\)가 축에서 0이고 코일 중간 반지름 아래에서 최대이기 때문</button>
+        <button class="opt">중심의 시스가 가장 두껍기 때문</button>
+        <button class="opt">코일 중심의 전압이 가장 높기 때문</button>
+      </div><div class="quiz-exp">축대칭 코일의 \(A_\theta\)는 \(r = 0\)에서 대칭 때문에 0이고 코일 전류가 지나는 반지름 근처에서 가장 크다. 가열 \(\propto|E_\theta|^2\)이 고리 모양이라 표피층 글로가 도넛이 되고, 확산이 그 아래를 메운다.</div></div>
+
+      <div class="quiz-q"><p>2. nₑ = 4×10¹¹ cm⁻³ 플라즈마의 무충돌 표피 깊이 \(c/\omega_{pe}\)에 가장 가까운 값은? (\(\omega_{pe} = 5.64\times10^4\sqrt{n_e[\text{cm}^{-3}]}\) s⁻¹)</p><div class="opts">
+        <button class="opt">0.8 mm</button>
+        <button class="opt" data-correct>8.4 mm</button>
+        <button class="opt">8.4 cm</button>
+        <button class="opt">84 µm</button>
+      </div><div class="quiz-exp">\(\omega_{pe} = 5.64\times10^4\times6.3\times10^5 \approx 3.57\times10^{10}\) s⁻¹, \(c/\omega_{pe} = 3\times10^8/3.57\times10^{10} \approx 8.4\) mm. 챔버 높이 10 cm보다 훨씬 얇아 가열이 창 아래에 몰린다.</div></div>
+
+      <div class="quiz-q"><p>3. 변압기 모델에서 밀도가 아주 낮을 때 전력 전달 효율이 나쁜 이유는?</p><div class="opts">
+        <button class="opt">플라즈마 저항 \(R_p\)가 0이 되어 단락되기 때문</button>
+        <button class="opt">코일 인덕턴스가 커지기 때문</button>
+        <button class="opt" data-correct>반사 저항 \(R_s\)가 nₑ에 비례해 작아져 \(R_{coil}\)보다 훨씬 작으므로 전력이 코일·정합기에서 열로 사라지기 때문</button>
+        <button class="opt">표피 깊이가 너무 얇아지기 때문</button>
+      </div><div class="quiz-exp">저밀도에서는 \(R_p\)와 \(\omega L_e\)가 커서 \(R_s \approx M^2\nu^2/R_p \propto n_e\)이다. \(\eta = R_s/(R_s+R_{coil})\)이 작아 넣은 전력의 대부분을 코일 저항이 먹는다. 이 비효율이 E 모드의 한 원인이다.</div></div>
+
+      <div class="quiz-q"><p>4. Ar 10 mTorr ICP에서 전력을 올릴 때는 160 W에서 H 모드로, 내릴 때는 110 W에서 E 모드로 바뀌었다. 이 히스테리시스를 만드는 데 꼭 필요한 것은?</p><div class="opts">
+        <button class="opt">정합기의 반응 지연</button>
+        <button class="opt" data-correct>전력 흡수나 손실의 비선형성(예: E 모드에서 이온당 손실 에너지가 큰 것) 때문에 한 전력에서 안정 평형점이 둘 생기는 것</button>
+        <button class="opt">코일 저항의 온도 의존성</button>
+        <button class="opt">기체 온도 상승</button>
+      </div><div class="quiz-exp">\(P_{\text{abs}}(n)\)와 \(P_{\text{loss}}(n)\)가 한 번만 만나면 경로가 하나뿐이다. E 모드 용량성 시스가 이온당 손실을 키우는 것 같은 비선형성이 있어야 교점이 셋(안정 둘, 불안정 하나) 생기고, 상태가 이력에 따라 갈린다.</div></div>
+
+      <div class="quiz-q"><p>5. ICP 세라믹 창이 스퍼터되어 웨이퍼에 Al 오염이 생겼다. 가장 직접적인 대책은?</p><div class="opts">
+        <button class="opt">바이어스 전력을 올린다</button>
+        <button class="opt">압력을 낮춘다</button>
+        <button class="opt" data-correct>코일과 창 사이에 패러데이 차폐를 넣거나 끝 커패시터로 중성점을 코일 가운데로 옮긴다</button>
+        <button class="opt">코일 바퀴 수를 늘려 인덕턴스를 키운다</button>
+      </div><div class="quiz-exp">창 스퍼터는 코일 전압(kV)의 용량 결합이 창 아래 시스를 키워서 생긴다. 슬롯 접지 차폐는 정전 성분만 막고, 중성점 이동은 최대 전압을 절반으로 줄인다. 바퀴 수를 늘리면 \(\omega L_c I\)가 커져 오히려 나빠진다.</div></div>
+
+      <div class="quiz-q"><p>6. 바이어스 전력 300 W를 고정하고 코일 전력을 1.5 kW에서 3 kW로 올리면 웨이퍼 이온에 일어나는 일은?</p><div class="opts">
+        <button class="opt">플럭스와 에너지 모두 두 배</button>
+        <button class="opt">플럭스는 그대로, 에너지 두 배</button>
+        <button class="opt" data-correct>플럭스는 약 두 배, 평균 에너지는 약 절반</button>
+        <button class="opt">아무 변화 없음</button>
+      </div><div class="quiz-exp">\(\Gamma_i \propto n_0 \propto \eta P_s\)로 약 두 배. 바이어스 전력은 이온 전류 × 시스 전압이므로 \(\bar V_s \approx P_b/(e\Gamma_iA_w)\)가 약 절반이 된다. 에너지를 고정하려면 바이어스를 전압으로 제어해야 한다.</div></div>
+
+      <div class="quiz-q"><p>7. 2.45 GHz ECR 소스에서 공명 자기장과 차단 밀도로 옳은 조합은?</p><div class="opts">
+        <button class="opt">87.5 G, 7.4×10¹² cm⁻³</button>
+        <button class="opt" data-correct>875 G, 7.4×10¹⁰ cm⁻³</button>
+        <button class="opt">8,750 G, 7.4×10⁸ cm⁻³</button>
+        <button class="opt">875 G, 7.4×10¹² cm⁻³</button>
+      </div><div class="quiz-exp">\(B = 2\pi fm/e = 1.54\times10^{10}\times9.11\times10^{-31}/1.6\times10^{-19} = 0.0875\) T = 875 G. \(n_c = \varepsilon_0 m\omega^2/e^2 \approx 7.4\times10^{16}\) m⁻³ = 7.4×10¹⁰ cm⁻³. 이보다 짙은 플라즈마에는 마이크로파가 들어가지 못하므로 공명면이 차단 밀도 아래 영역에 있어야 한다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const font = (px, mono) => px + "px " + getComputedStyle(document.body).getPropertyValue(mono ? "--mono" : "--font");
+  const sup = (x, d) => { if (!isFinite(x) || x <= 0) return "0"; const e = Math.floor(Math.log10(x)); return (x / Math.pow(10, e)).toFixed(d == null ? 1 : d) + "×10<sup>" + e + "</sup>"; };
+  const supT = (x, d) => { if (!isFinite(x) || x <= 0) return "0"; const e = Math.floor(Math.log10(x)); const s = "⁰¹²³⁴⁵⁶⁷⁸⁹"; return (x / Math.pow(10, e)).toFixed(d == null ? 1 : d) + "×10" + String(e).split("").map((c) => c === "-" ? "⁻" : s[+c]).join(""); };
+  const fmtL = (m) => !isFinite(m) ? "—" : m >= 1 ? m.toPrecision(3) + " m" : m >= 0.01 ? (m * 100).toPrecision(3) + " cm" : (m * 1000).toPrecision(3) + " mm";
+  const ncm = (n) => sup(n / 1e6) + " cm⁻³";
+  const setCls = (id, cls) => { const el = $(id); if (el) el.className = "v ic-v " + cls; };
+  const fmtP = (p) => p >= 100 ? p.toFixed(0) + " mTorr" : p >= 10 ? p.toFixed(0) + " mTorr" : p.toFixed(1) + " mTorr";
+  /* ---------- 공통 물리: PL-300 IC 모듈 (Ar) ---------- */
+  const QE = 1.602176634e-19, ME = 9.1093837e-31, MAR = 40 * 1.66054e-27, EPS0 = 8.8541878e-12, CL = 2.99792458e8, MU0 = 4e-7 * Math.PI;
+  const RCH = 0.25, LCH = 0.10, AW = Math.PI * 0.15 * 0.15;
+  const Kiz = (T) => 2.34e-14 * Math.pow(T, 0.59) * Math.exp(-17.44 / T);
+  const Kex = (T) => 2.48e-14 * Math.pow(T, 0.33) * Math.exp(-12.78 / T);
+  const Kel = (T) => { const l = Math.log(T); return 2.336e-14 * Math.pow(T, 1.609) * Math.exp(0.0618 * l * l - 0.1171 * l * l * l); };
+  const Ecol = (T) => 15.76 + (12.14 * Kex(T) + 3 * ME / MAR * T * Kel(T)) / Kiz(T);
+  function geom(pm, R, L) {
+    R = R || RCH; L = L || LCH;
+    const ng = 3.2e19 * pm, li = 1 / (ng * 1e-18);
+    const hl = 0.86 / Math.sqrt(3 + L / (2 * li)), hr = 0.8 / Math.sqrt(4 + R / li);
+    const A = 2 * Math.PI * R * R * hl + 2 * Math.PI * R * L * hr, V = Math.PI * R * R * L;
+    return { ng, li, hl, hr, A, V, deff: V / A };
+  }
+  function teOf(pm, R, L) {
+    const g = geom(pm, R, L); let lo = 0.8, hi = 15;
+    for (let i = 0; i < 50; i++) { const m = (lo + hi) / 2; if (Kiz(m) / Math.sqrt(QE * m / MAR) > 1 / (g.ng * g.deff)) hi = m; else lo = m; }
+    return (lo + hi) / 2;
+  }
+  // 플라즈마 상태 묶음(압력별): Te, uB, A_eff, 충돌 주파수
+  function gas(pm) {
+    const g = geom(pm), Te = teOf(pm), uB = Math.sqrt(QE * Te / MAR);
+    return Object.assign(g, { Te, uB, Ec: Ecol(Te), num: g.ng * Kel(Te), vbar: Math.sqrt(8 * QE * Te / (Math.PI * ME)) });
+  }
+  // 복소 유전율로 구한 표피 깊이(무충돌 가열 주파수 v̄/4δ를 자체 일관으로 더함)
+  function skin(n, f, num, vbar, stoc) {
+    const w = 2 * Math.PI * f, wp2 = n * QE * QE / (EPS0 * ME);
+    let nu = num, d = 0.05;
+    for (let i = 0; i < 30; i++) {
+      nu = num + (stoc === false ? 0 : vbar / (4 * d));
+      const re = 1 - wp2 / (w * w + nu * nu), im = wp2 * nu / (w * (w * w + nu * nu)), mod = Math.hypot(re, im);
+      d = CL / (w * Math.sqrt(Math.max(1e-30, (mod - re) / 2)));
+      d = Math.min(d, 50);
+    }
+    return { d, nu, wp: Math.sqrt(wp2) };
+  }
+  // 변압기 모델: 코일(1차) ↔ 플라즈마 한 바퀴(2차)
+  const TX = { f: 13.56e6, Lc: 2.0e-6, L2: 0.1e-6, rp: 0.12, wb: 0.08 };
+  function transformer(n, G, k, Rcoil) {
+    const w = 2 * Math.PI * TX.f, M = k * Math.sqrt(TX.Lc * TX.L2);
+    if (n <= 0) return { Rs: 0, Xs: w * TX.Lc, Rp: Infinity, Le: Infinity, d: Infinity, nu: G.num, eta: 0 };
+    const s = skin(n, TX.f, G.num, G.vbar), de = s.d * (1 - Math.exp(-LCH / s.d));
+    const sig = n * QE * QE / (ME * s.nu), Rp = 2 * Math.PI * TX.rp / (sig * TX.wb * de), Le = Rp / s.nu;
+    const X2 = w * (TX.L2 + Le), den = Rp * Rp + X2 * X2;
+    const Rs = w * w * M * M * Rp / den, Xs = w * TX.Lc - w * w * M * M * X2 / den;
+    return { Rs, Xs, Rp, Le, d: s.d, nu: s.nu, eta: Rs / (Rs + Rcoil) };
+  }
+  // E-H 모델: 용량성 결합 저항 + E 모드 시스 손실(코일 전압이 만든 수백 V 시스)
+  const EH = { k: 0.5, Rcoil: 1.0, Rcm: 0.2, nc0: 2e15, Vcap: 600, ns: 6e15 };
+  const Rcap = (n, sh) => { const x = n / EH.nc0; return EH.Rcm * sh * sh * 2 * x / (1 + x * x); };
+  const Vsh = (n, G, sh) => 5.2 * G.Te + EH.Vcap * sh / (1 + Math.pow(n / EH.ns, 3));
+  const Ploss = (n, G, sh) => QE * n * G.uB * G.A * (G.Ec + 2 * G.Te + Vsh(n, G, sh));
+  const Pabs = (P, n, G, sh) => { const R = transformer(n, G, EH.k, EH.Rcoil).Rs + Rcap(n, sh); return P * R / (R + EH.Rcoil); };
+  // 안정 평형점(P_abs가 P_loss를 위에서 아래로 가로지르는 n)을 모두 찾는다
+  function ehRoots(P, G, sh) {
+    const out = []; let pf = null, pn = 0;
+    for (let i = 0; i <= 220; i++) {
+      const n = Math.pow(10, 13 + 5.5 * i / 220), f = Pabs(P, n, G, sh) - Ploss(n, G, sh);
+      if (pf !== null && pf > 0 && f <= 0) { let a = pn, b = n; for (let j = 0; j < 30; j++) { const m = Math.sqrt(a * b); if (Pabs(P, m, G, sh) - Ploss(m, G, sh) > 0) a = m; else b = m; } out.push(Math.sqrt(a * b)); }
+      pf = f; pn = n;
+    }
+    return out;
+  }
+
+  /* 타원 적분(AGM)과 원형 고리의 벡터 퍼텐셜 */
+  function ellKE(k2) {
+    k2 = Math.min(Math.max(k2, 0), 0.999999);
+    let a = 1, b = Math.sqrt(1 - k2), c = Math.sqrt(k2), sum = 0.5 * c * c, p = 0.5;
+    for (let i = 0; i < 20 && Math.abs(c) > 1e-12; i++) { const an = (a + b) / 2; c = (a - b) / 2; b = Math.sqrt(a * b); a = an; p *= 2; sum += p * c * c; }
+    const K = Math.PI / (2 * a); return [K, K * (1 - sum)];
+  }
+  function Aloop(a, r, z, I) {
+    if (r < 1e-6) return 0;
+    const k2 = 4 * a * r / ((a + r) * (a + r) + z * z), [K, E] = ellKE(k2), k = Math.sqrt(Math.max(k2, 1e-12));
+    return MU0 * I / (Math.PI * k) * Math.sqrt(a / r) * ((1 - k2 / 2) * K - E);
+  }
+  const W1356 = 2 * Math.PI * 13.56e6;
+  const G10 = gas(10);
+  // 상태를 기억하는 동작점 선택: 직전 밀도에 가장 가까운 안정 근
+  function pickRoot(roots, prev) {
+    if (!roots.length) return 0;
+    if (!(prev > 0)) return roots[0];
+    let best = roots[0], bd = Infinity;
+    roots.forEach((r) => { const d = Math.abs(Math.log(r / prev)); if (d < bd) { bd = d; best = r; } });
+    return best;
+  }
+
+  /* =============================================================
+     1) 유도 전기장 지도
+     ============================================================= */
+  (function () {
+    if (!$("fd-cv")) return;
+    const gI = PB.range("fd-I", (v) => v + " A", draw), gN = PB.range("fd-N", (v) => v + "바퀴", draw);
+    const gR = PB.range("fd-ro", (v) => (v * 100).toFixed(0) + " cm", draw), gH = PB.range("fd-h", (v) => (v * 1000).toFixed(0) + " mm", draw);
+    $("fd-pl").addEventListener("change", draw);
+    function loops() { const N = gN(), ro = gR(), ri = 0.04, out = []; for (let i = 0; i < N; i++) out.push(N === 1 ? ro : ri + (ro - ri) * i / (N - 1)); return out; }
+    function Eth(r, z) { const I = gI(), h = gH(); let A = 0; loops().forEach((a) => { A += Aloop(a, r, h + z, I); }); return W1356 * Math.abs(A); }
+    const cv = PB.canvas($("fd-cv"), (ctx, w, h) => {
+      const P = PB.palette(), pl = $("fd-pl").checked, top = 26, bot = 22, left = 10, right = 10;
+      const bw = w - left - right, bh = h - top - bot, NR = 40, NZ = 22;
+      // 정규화: 진공 창 바로 아래 최댓값
+      let emax = 1e-9; for (let i = 1; i <= 100; i++) emax = Math.max(emax, Eth(RCH * i / 100, 0));
+      const col = P.glow; ctx.fillStyle = col;
+      for (let j = 0; j < NZ; j++) for (let i = 0; i < NR; i++) {
+        const r = (i + 0.5) / NR * RCH, z = (j + 0.5) / NZ * LCH;
+        let e = Eth(r, z) / emax; if (pl) e *= Math.exp(-z / 0.01);
+        ctx.globalAlpha = PB.clamp(Math.sqrt(e), 0, 1) * 0.95;
+        const cw = bw / (2 * NR), ch = bh / NZ;
+        ctx.fillRect(left + bw / 2 + i * cw, top + j * ch, cw + 0.6, ch + 0.6);
+        ctx.fillRect(left + bw / 2 - (i + 1) * cw, top + j * ch, cw + 0.6, ch + 0.6);
+      }
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = P.oxide; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(left, top); ctx.lineTo(left + bw, top); ctx.stroke();
+      ctx.strokeStyle = P.si; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(left + bw / 2 - bw * 0.3, top + bh); ctx.lineTo(left + bw / 2 + bw * 0.3, top + bh); ctx.stroke();
+      ctx.strokeStyle = P.metal; ctx.lineWidth = 2; ctx.strokeRect(left, top, bw, bh);
+      ctx.fillStyle = "#c97a3a";
+      const hpx = Math.min(top - 6, 6 + gH() * 300);
+      loops().forEach((a) => { [1, -1].forEach((s) => { ctx.beginPath(); ctx.arc(left + bw / 2 + s * a / RCH * bw / 2, top - hpx * 0.5 - 2, 4, 0, 7); ctx.fill(); }); });
+      ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      ctx.fillText("창", left + 4, top - 4); ctx.textAlign = "center"; ctx.fillText("웨이퍼 (z = 10 cm)", left + bw / 2, h - 6);
+      ctx.textAlign = "right"; ctx.fillText(pl ? "|Eθ| · 표피 감쇠" : "|Eθ| 진공", left + bw - 4, h - 6);
+      // 통계
+      let rm = 0, em = 0; for (let i = 1; i <= 200; i++) { const r = RCH * i / 200, e = Eth(r, 0); if (e > em) { em = e; rm = r; } }
+      const e2 = Eth(rm, 0.02) * (pl ? Math.exp(-2) : 1);
+      PB.stat("fd-Emax", em.toFixed(0) + " V/m"); PB.stat("fd-rmax", (rm * 100).toFixed(1) + " cm");
+      PB.stat("fd-E2", e2.toFixed(0) + " V/m"); PB.stat("fd-emf", (2 * Math.PI * 0.12 * Eth(0.12, 0)).toFixed(0) + " V");
+    }, { aspect: 0.5, minHeight: 220, maxHeight: 380 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     2) 표피 깊이 계산기
+     ============================================================= */
+  (function () {
+    if (!$("sk-cv")) return;
+    const gn = PB.range("sk-n", (v) => supT(Math.pow(10, v)) + " cm⁻³", draw);
+    const gp = PB.range("sk-p", (v) => fmtP(Math.pow(10, v)), draw);
+    const gT = PB.range("sk-T", (v) => v.toFixed(1) + " eV", draw);
+    const gf = PB.seg("sk-f", draw);
+    const cv = PB.canvas($("sk-cv"), (ctx, w, h) => {
+      const P = PB.palette(), f = +gf(), w0 = 2 * Math.PI * f, pm = Math.pow(10, gp()), Te = gT();
+      const num = 3.2e19 * pm * Kel(Te), vbar = Math.sqrt(8 * QE * Te / (Math.PI * ME));
+      const sF = [], sC = [], sP = [], sA = [];
+      for (let i = 0; i <= 120; i++) {
+        const lc = 9 + 4 * i / 120, n = Math.pow(10, lc + 6), nc = Math.pow(10, lc);
+        const a = skin(n, f, num, vbar, true), b = skin(n, f, num, vbar, false);
+        sF.push([nc, a.d]); sC.push([nc, b.d]); sP.push([nc, CL / a.wp]); sA.push([nc, Math.pow(CL * CL * vbar / (w0 * a.wp * a.wp), 1 / 3)]);
+      }
+      const n = Math.pow(10, gn() + 6), s = skin(n, f, num, vbar, true);
+      PB.chart(ctx, { x: 60, y: 12, w: w - 76, h: h - 58 }, {
+        x: [1e9, 1e13], y: [1e-3, 3], logX: true, logY: true, xLabel: "전자 밀도 nₑ (cm⁻³)", yLabel: "표피 깊이 δ",
+        series: [{ data: sC, color: P.accent2, width: 1.4 }, { data: sP, color: P.dim, width: 1.4, dash: [2, 3] }, { data: sA, color: P.warn, width: 1.6, dash: [7, 4] }, { data: sF, color: P.accent, width: 3 }],
+        bands: [], hlines: [{ y: LCH, color: P.faint, label: "챔버 높이 10 cm" }],
+        vlines: [{ x: n / 1e6, color: P.bad }], points: [{ x: n / 1e6, y: s.d, color: P.bad, r: 5 }],
+        xFmt: (v) => "10" + String(Math.round(Math.log10(v))).replace(/\d/g, (c) => "⁰¹²³⁴⁵⁶⁷⁸⁹"[+c]),
+        yFmt: (v) => v >= 1 ? v + " m" : v >= 0.01 ? (v * 100) + " cm" : (v * 1000) + " mm",
+      });
+      ctx.font = font(11); ctx.textAlign = "left";
+      [[P.accent, "자기 일관 δ (ν_m + v̄/4δ)"], [P.accent2, "충돌만 (ν_m)"], [P.dim, "c/ω_pe"], [P.warn, "이상 표피 δ_a"]].forEach(([c, t], i) => { ctx.fillStyle = c; ctx.fillText(t, w - 190, 28 + 14 * i); });
+      const an = vbar / (w0 * s.d), nr = num / w0;
+      PB.stat("sk-d", fmtL(s.d)); PB.stat("sk-dp", fmtL(CL / s.wp)); PB.stat("sk-nu", nr.toFixed(2)); PB.stat("sk-an", an.toFixed(2));
+      let reg = nr > 1 ? "충돌 표피" : an > 1 ? "이상 표피 (무충돌 가열)" : "무충돌 표피 (관성)";
+      if (s.d > LCH) reg += " · δ &gt; L"; PB.stat("sk-reg", reg);
+      setCls("sk-reg", s.d > LCH ? "warn" : "ok");
+    }, { aspect: 0.56, minHeight: 280, maxHeight: 420 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     3) 장 감쇠 (1D 파동 방정식 해석해, 복소수)
+     ============================================================= */
+  const C = {
+    add: (a, b) => [a[0] + b[0], a[1] + b[1]], sub: (a, b) => [a[0] - b[0], a[1] - b[1]],
+    mul: (a, b) => [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]],
+    div: (a, b) => { const d = b[0] * b[0] + b[1] * b[1]; return [(a[0] * b[0] + a[1] * b[1]) / d, (a[1] * b[0] - a[0] * b[1]) / d]; },
+    exp: (a) => { const m = Math.exp(a[0]); return [m * Math.cos(a[1]), m * Math.sin(a[1])]; },
+    sqrt: (a) => { const m = Math.hypot(a[0], a[1]), re = Math.sqrt(Math.max(0, (m + a[0]) / 2)), im = Math.sqrt(Math.max(0, (m - a[0]) / 2)); return [re, a[1] < 0 ? -im : im]; },
+    abs: (a) => Math.hypot(a[0], a[1]),
+  };
+  (function () {
+    if (!$("dc-cv")) return;
+    const gn = PB.range("dc-n", (v) => supT(Math.pow(10, v)) + " cm⁻³", upd);
+    const gp = PB.range("dc-p", (v) => fmtP(Math.pow(10, v)), upd);
+    $("dc-st").addEventListener("change", upd);
+    let M = null, phase = 0;
+    function upd() {
+      const n = Math.pow(10, gn() + 6), pm = Math.pow(10, gp()), G = gas(pm), w = W1356;
+      const s = skin(n, 13.56e6, G.num, G.vbar, $("dc-st").checked), nu = s.nu, wp2 = s.wp * s.wp;
+      const eps = [1 - wp2 / (w * w + nu * nu), -wp2 * nu / (w * (w * w + nu * nu))];
+      const sq = C.sqrt(eps), k0 = w / CL, gam = [-k0 * sq[1], k0 * sq[0]];
+      const den = C.sub([1, 0], C.exp(C.mul(gam, [-2 * LCH, 0])));
+      const N = 160, E = [];
+      for (let i = 0; i <= N; i++) { const z = LCH * i / N; E.push(C.div(C.sub(C.exp(C.mul(gam, [-z, 0])), C.exp(C.mul(gam, [-(2 * LCH - z), 0]))), den)); }
+      let tot = 0, two = 0; E.forEach((e, i) => { const p = e[0] * e[0] + e[1] * e[1]; tot += p; if (i * LCH / N <= 0.02) two += p; });
+      const d = 1 / gam[0], id = Math.min(N, Math.round(d / LCH * N));
+      M = { E, d };
+      PB.stat("dc-d", fmtL(d)); PB.stat("dc-e1", C.abs(E[Math.round(0.01 / LCH * N)]).toFixed(3));
+      PB.stat("dc-ph", d < LCH ? (Math.abs(Math.atan2(E[id][1], E[id][0])) * 180 / Math.PI).toFixed(0) + "°" : "δ &gt; L");
+      PB.stat("dc-f2", (two / tot * 100).toFixed(0) + " %");
+      cv.redraw();
+    }
+    const cv = PB.canvas($("dc-cv"), (ctx, w, h) => {
+      if (!M) return; const P = PB.palette(), N = M.E.length - 1;
+      const b1 = { x: 56, y: 12, w: w - 72, h: (h - 60) * 0.58 }, b2 = { x: 56, y: b1.y + b1.h + 14, w: w - 72, h: (h - 60) * 0.42 };
+      const inst = [], envP = [], envN = [], pw = [];
+      const cph = Math.cos(phase), sph = Math.sin(phase);
+      let pmax = 1e-30; M.E.forEach((e) => { pmax = Math.max(pmax, e[0] * e[0] + e[1] * e[1]); });
+      M.E.forEach((e, i) => { const z = i / N * 10, a = C.abs(e); inst.push([z, e[0] * cph - e[1] * sph]); envP.push([z, a]); envN.push([z, -a]); pw.push([z, (e[0] * e[0] + e[1] * e[1]) / pmax]); });
+      PB.chart(ctx, b1, { x: [0, 10], y: [-1.05, 1.05], yLabel: "Eθ/E₀", series: [{ data: envP, color: P.faint, width: 1.2, dash: [4, 3] }, { data: envN, color: P.faint, width: 1.2, dash: [4, 3] }, { data: inst, color: P.accent, width: 2.4 }], vlines: M.d < LCH ? [{ x: M.d * 100, color: P.bad, label: "δ" }] : [], xFmt: () => "" });
+      PB.chart(ctx, b2, { x: [0, 10], y: [0, 1.05], xLabel: "창에서 거리 z (cm) → 웨이퍼", yLabel: "흡수 p(z)", series: [{ data: pw, color: P.glow, width: 2.2, fill: "color-mix(in srgb, " + P.glow + " 25%, transparent)" }], xFmt: (v) => String(v) });
+    }, { aspect: 0.6, minHeight: 300, maxHeight: 440 });
+    const loop = PB.loop($("dc-cv"), (dt) => { phase += dt * 2.5; cv.redraw(); });
+    $("dc-run").addEventListener("click", () => { const r = loop.toggle(); $("dc-run").textContent = r ? "일시정지" : "재생"; });
+    upd();
+  })();
+
+  /* =============================================================
+     4) 변압기 모델
+     ============================================================= */
+  (function () {
+    if (!$("tx-cv")) return;
+    const gn = PB.range("tx-n", (v) => supT(Math.pow(10, v)) + " cm⁻³", draw);
+    const gk = PB.range("tx-k", (v) => v.toFixed(2), draw), gR = PB.range("tx-R", (v) => v.toFixed(2) + " Ω", draw), gp = PB.range("tx-p", (v) => v + " mTorr", draw);
+    const cv = PB.canvas($("tx-cv"), (ctx, w, h) => {
+      const P = PB.palette(), G = gas(gp()), k = gk(), Rc = gR();
+      const rs = [], et = []; let rmax = Rc * 1.2;
+      const pts = []; for (let i = 0; i <= 120; i++) { const lc = 9 + 3.5 * i / 120, t = transformer(Math.pow(10, lc + 6), G, k, Rc); pts.push([Math.pow(10, lc), t]); rmax = Math.max(rmax, t.Rs * 1.15); }
+      pts.forEach(([x, t]) => { rs.push([x, t.Rs]); et.push([x, t.eta * rmax]); });
+      const n = Math.pow(10, gn() + 6), t = transformer(n, G, k, Rc);
+      const ch = PB.chart(ctx, { x: 58, y: 14, w: w - 110, h: h - 60 }, {
+        x: [1e9, Math.pow(10, 12.5)], y: [0, rmax], logX: true, xLabel: "전자 밀도 nₑ (cm⁻³)", yLabel: "R_s (Ω)",
+        series: [{ data: rs, color: P.accent, width: 2.6 }, { data: et, color: P.ion, width: 2.6 }],
+        hlines: [{ y: Rc, color: P.faint, label: "R_coil" }], vlines: [{ x: n / 1e6, color: P.bad }],
+        points: [{ x: n / 1e6, y: t.Rs, color: P.accent, r: 5 }, { x: n / 1e6, y: t.eta * rmax, color: P.ion, r: 5 }],
+        xFmt: (v) => "10" + String(Math.round(Math.log10(v))).replace(/\d/g, (c) => "⁰¹²³⁴⁵⁶⁷⁸⁹"[+c]),
+      });
+      ctx.fillStyle = P.ion; ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      [0, 0.25, 0.5, 0.75, 1].forEach((e) => ctx.fillText(e.toFixed(2), ch.box.x + ch.box.w + 6, ch.Y(e * rmax)));
+      ctx.save(); ctx.translate(w - 8, ch.box.y + ch.box.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillText("효율 η", 0, 0); ctx.restore();
+      const I = Math.sqrt(2 * 1500 / (t.Rs + Rc)), V = I * Math.hypot(t.Rs + Rc, t.Xs);
+      PB.stat("tx-rp", PB.fmt(t.Rp, 3) + " / " + PB.fmt(W1356 * t.Le, 3) + " Ω"); PB.stat("tx-rs", t.Rs.toFixed(2) + " Ω");
+      PB.stat("tx-eta", (t.eta * 100).toFixed(1) + " %"); setCls("tx-eta", t.eta >= 0.8 ? "ok" : t.eta >= 0.5 ? "warn" : "bad");
+      PB.stat("tx-I", I.toFixed(1) + " A"); PB.stat("tx-V", (V / 1000).toFixed(2) + " kV");
+    }, { aspect: 0.56, minHeight: 280, maxHeight: 420 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     5) E-H 히스테리시스
+     ============================================================= */
+  (function () {
+    if (!$("eh-cv")) return;
+    let G = G10, sh = 1, nCur = 0, branches = null;
+    const PGRID = []; for (let i = 0; i <= 90; i++) PGRID.push(5 * Math.pow(300, i / 90)); // 5–1500 W
+    const isH = (n) => n > 2 * EH.ns;
+    function walk(order) { let n = 0; const out = []; order.forEach((P) => { n = pickRoot(ehRoots(P, G, sh), n); out.push([P, n]); }); return out; }
+    function rebuild() {
+      G = gas(gp()); sh = +gs();
+      const up = walk(PGRID), dn = walk(PGRID.slice().reverse()).reverse();
+      let eh = null, he = null;
+      for (let i = 1; i < up.length; i++) if (!isH(up[i - 1][1]) && isH(up[i][1])) { eh = up[i][0]; break; }
+      for (let i = dn.length - 2; i >= 0; i--) if (isH(dn[i + 1][1]) && !isH(dn[i][1])) { he = dn[i + 1][0]; break; }
+      branches = { up, dn, eh, he };
+    }
+    function state() {
+      const P = gP();
+      nCur = P <= 0 ? 0 : pickRoot(ehRoots(P, G, sh), nCur);
+      cv.redraw();
+    }
+    const gP = PB.range("eh-P", (v) => v + " W", state);
+    const gp = PB.range("eh-p", (v) => v + " mTorr", () => { rebuild(); state(); });
+    const gs = PB.seg("eh-sh", () => { rebuild(); state(); });
+    const cv = PB.canvas($("eh-cv"), (ctx, w, h) => {
+      if (!branches) return;
+      const Pl = PB.palette(), P = Math.max(gP(), 0.5), wide = w >= 620;
+      const b1 = wide ? { x: 56, y: 14, w: w / 2 - 76, h: h - 60 } : { x: 56, y: 14, w: w - 72, h: h / 2 - 50 };
+      const b2 = wide ? { x: w / 2 + 50, y: 14, w: w / 2 - 66, h: h - 60 } : { x: 56, y: h / 2 + 14, w: w - 72, h: h / 2 - 60 };
+      const pa = [], pl = [], st = [], un = [];
+      let prev = null;
+      for (let i = 0; i <= 160; i++) {
+        const n = Math.pow(10, 13 + 5.5 * i / 160), a = Pabs(P, n, G, sh), l = Ploss(n, G, sh);
+        pa.push([n / 1e6, a]); pl.push([n / 1e6, l]);
+        if (prev && prev[1] < 0 && a - l >= 0) un.push({ x: n / 1e6, y: a, color: Pl.text, r: 4 });
+        prev = [n, a - l];
+      }
+      ehRoots(P, G, sh).forEach((n) => st.push({ x: n / 1e6, y: Ploss(n, G, sh), color: Math.abs(Math.log(n / (nCur || 1))) < 0.05 ? Pl.bad : Pl.text, r: 5 }));
+      const lf = (v) => "10" + String(Math.round(Math.log10(v))).replace(/-/, "⁻").replace(/\d/g, (c) => "⁰¹²³⁴⁵⁶⁷⁸⁹"[+c]);
+      PB.chart(ctx, b1, { x: [1e7, Math.pow(10, 12.5)], y: [0.1, 1e4], logX: true, logY: true, xLabel: "nₑ (cm⁻³)", yLabel: "전력 (W)", series: [{ data: pa, color: Pl.accent, width: 2.4 }, { data: pl, color: Pl.ion, width: 2.4 }], points: st, xFmt: lf, yFmt: (v) => v >= 1 ? String(v) : "0.1" });
+      ctx.save(); ctx.strokeStyle = Pl.text; ctx.lineWidth = 1.5;
+      un.forEach((p) => { const X = b1.x + (Math.log10(p.x) - 7) / 5.5 * b1.w, Y = b1.y + b1.h - (Math.log10(p.y) + 1) / 5 * b1.h; ctx.fillStyle = Pl.bg; ctx.beginPath(); ctx.arc(X, Y, 4, 0, 7); ctx.fill(); ctx.stroke(); });
+      ctx.restore();
+      ctx.font = font(11); ctx.textAlign = "left"; ctx.fillStyle = Pl.accent; ctx.fillText("P_abs", b1.x + 6, b1.y + 12); ctx.fillStyle = Pl.ion; ctx.fillText("P_loss", b1.x + 6, b1.y + 26);
+      const up = branches.up.map(([p, n]) => [p, n > 0 ? n / 1e6 : NaN]), dn = branches.dn.map(([p, n]) => [p, n > 0 ? n / 1e6 : NaN]);
+      PB.chart(ctx, b2, { x: [5, 1500], y: [1e7, Math.pow(10, 12.5)], logX: true, logY: true, xLabel: "코일 전력 (W)", yLabel: "nₑ (cm⁻³)", series: [{ data: up, color: Pl.accent, width: 2.4 }, { data: dn, color: Pl.ion, width: 2.4, dash: [6, 3] }], points: nCur > 0 && gP() >= 5 ? [{ x: gP(), y: nCur / 1e6, color: Pl.bad, r: 6 }] : [], yFmt: lf, xFmt: (v) => String(v) });
+      ctx.fillStyle = Pl.accent; ctx.fillText("↑ 올릴 때", b2.x + 6, b2.y + 12); ctx.fillStyle = Pl.ion; ctx.fillText("↓ 내릴 때", b2.x + 6, b2.y + 26);
+      const mode = nCur <= 0 ? "꺼짐" : isH(nCur) ? "H 모드 (유도성)" : "E 모드 (용량성)";
+      PB.stat("eh-mode", mode); setCls("eh-mode", nCur <= 0 ? "bad" : isH(nCur) ? "ok" : "warn");
+      PB.stat("eh-n", nCur > 0 ? ncm(nCur) : "—");
+      if (nCur > 0) { const R = transformer(nCur, G, EH.k, EH.Rcoil).Rs + Rcap(nCur, sh); PB.stat("eh-eta", (R / (R + EH.Rcoil) * 100).toFixed(0) + " %"); } else PB.stat("eh-eta", "—");
+      const b = branches; PB.stat("eh-th", b.eh && b.he && b.eh > b.he * 1.03 ? b.eh.toFixed(0) + " / " + b.he.toFixed(0) + " W" : b.eh ? "약 " + b.eh.toFixed(0) + " W (이력 없음)" : "—");
+    }, { aspect: 0.5, minHeight: 330, maxHeight: 440 });
+    let ramp = 0;
+    $("eh-ramp").addEventListener("click", () => {
+      if (ramp) { cancelAnimationFrame(ramp); ramp = 0; return; }
+      let t0 = null; nCur = 0; gP.set(0);
+      const step = (ts) => { if (t0 === null) t0 = ts; const s = (ts - t0) / 1000, T = 6; const v = s < T ? 600 * s / T : s < 2 * T ? 600 * (2 - s / T) : 0;
+        gP.set(Math.round(v / 5) * 5); if (s < 2 * T) ramp = requestAnimationFrame(step); else ramp = 0; };
+      ramp = requestAnimationFrame(step);
+    });
+    rebuild(); state();
+  })();
+
+  /* =============================================================
+     6) 코일 전압과 창 스퍼터
+     ============================================================= */
+  (function () {
+    if (!$("sf-cv")) return;
+    const CW = EPS0 * 9 / 0.025, ETH = 50;
+    function nH(P) { const r = ehRoots(P, G10, 1); return r.length ? r[r.length - 1] : 1e16; }
+    function sheathV(Vloc, ns, Te) {
+      const lde = Math.sqrt(EPS0 * Te / (QE * ns)); let V = 0.1 * Vloc;
+      for (let i = 0; i < 40; i++) { const s = Math.SQRT2 / 3 * lde * Math.pow(2 * Math.max(V, 1e-3) / Te, 0.75), kap = CW / (CW + EPS0 / s); V = kap * Vloc; }
+      return V;
+    }
+    function calc(P, xi, sh) {
+      const n = nH(P), t = transformer(n, G10, EH.k, EH.Rcoil), I = Math.sqrt(2 * P / (t.Rs + EH.Rcoil)), ns = G10.hl * n;
+      const xs = [], V = [], E = []; let ero = 0;
+      for (let i = 0; i <= 100; i++) { const x = i / 100, v = W1356 * TX.Lc * I * Math.abs(x - xi), e = sheathV(sh * v, ns, G10.Te) + 5.2 * G10.Te; xs.push(x); V.push([x, v / 1000]); E.push([x, e]); ero += Math.max(0, e - ETH) / 101; }
+      return { I, V, E, ero, vmax: Math.max(...V.map((p) => p[1])), emax: Math.max(...E.map((p) => p[1])) };
+    }
+    const REF = calc(1500, 0, 1).ero;
+    const gP = PB.range("sf-P", (v) => v + " W", draw), gx = PB.range("sf-x", (v) => v.toFixed(2), draw), gs = PB.seg("sf-sh", draw);
+    const cv = PB.canvas($("sf-cv"), (ctx, w, h) => {
+      const Pl = PB.palette(), r = calc(gP(), gx(), +gs());
+      const b1 = { x: 56, y: 12, w: w - 72, h: (h - 62) * 0.48 }, b2 = { x: 56, y: b1.y + b1.h + 16, w: w - 72, h: (h - 62) * 0.52 };
+      PB.chart(ctx, b1, { x: [0, 1], y: [0, Math.max(1, r.vmax * 1.15)], yLabel: "|V| (kV)", series: [{ data: r.V, color: Pl.ion, width: 2.4 }], vlines: [{ x: gx(), color: Pl.faint, label: "중성점" }], xFmt: () => "" });
+      const ymax = Math.max(120, r.emax * 1.15);
+      PB.chart(ctx, b2, { x: [0, 1], y: [0, ymax], xLabel: "코일 위치 (입력 끝 → 끝 커패시터)", yLabel: "창 이온 E (eV)", series: [{ data: r.E, color: Pl.accent, width: 2.4, fill: "color-mix(in srgb, " + Pl.accent + " 18%, transparent)" }], hlines: [{ y: ETH, color: Pl.bad, label: "스퍼터 문턱 ~50 eV" }], xFmt: (v) => v.toFixed(1) });
+      PB.stat("sf-I", r.I.toFixed(1) + " A"); PB.stat("sf-V", r.vmax.toFixed(2) + " kV"); PB.stat("sf-E", r.emax.toFixed(0) + " eV");
+      setCls("sf-E", r.emax < ETH ? "ok" : r.emax < 200 ? "warn" : "bad");
+      PB.stat("sf-Y", (r.ero / REF * 100).toFixed(r.ero / REF < 0.1 ? 1 : 0));
+    }, { aspect: 0.56, minHeight: 290, maxHeight: 420 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     7) 반경 균일도 (가열 → 번짐 → 확산)
+     ============================================================= */
+  (function () {
+    if (!$("un-cv")) return;
+    const LOOPS = { spiral: [[0.05, 1], [0.09, 1], [0.13, 1], [0.17, 1]], dome: [[0.19, 1], [0.215, 1], [0.24, 1]], zone: [[0.04, "i"], [0.07, "i"], [0.17, 1], [0.21, 1]] };
+    const NR = 26, NZ = 13; let M = null, pend = 0;
+    function solve() {
+      const type = gt(), ratio = gr(), pm = gp(), L = gL(), dr = RCH / (NR - 1), dz = L / (NZ - 1), lam = Math.min(0.4, 0.05 * 10 / pm);
+      const loops = LOOPS[type].map(([a, wt]) => [a, wt === "i" ? ratio : wt]), zc = type === "dome" ? 0.015 : 0.03;
+      const p = new Float64Array(NR * NZ), u = new Float64Array(NR * NZ), n = new Float64Array(NR * NZ);
+      let pm_ = 1e-30;
+      for (let j = 0; j < NZ; j++) for (let i = 0; i < NR; i++) { let A = 0; loops.forEach(([a, I]) => { A += Aloop(a, i * dr, zc + j * dz, I); }); const v = A * A * Math.exp(-2 * j * dz / 0.01); p[j * NR + i] = v; pm_ = Math.max(pm_, v); }
+      for (let q = 0; q < p.length; q++) p[q] /= pm_;
+      const l2 = lam * lam, az = 1 / (dz * dz);
+      const coef = (i) => { if (i === 0) return [4 / (dr * dr), 0]; const r = i * dr; return [(1 + dr / (2 * r)) / (dr * dr), (1 - dr / (2 * r)) / (dr * dr)]; };
+      for (let it = 0; it < 400; it++) for (let j = 0; j < NZ; j++) for (let i = 0; i < NR; i++) {
+        const id = j * NR + i, uE = i < NR - 1 ? u[id + 1] : u[id - 1], uW = i > 0 ? u[id - 1] : u[id + 1], uN = j > 0 ? u[id - NR] : u[id + NR], uS = j < NZ - 1 ? u[id + NR] : u[id - NR];
+        const [ae, aw] = coef(i), diag = l2 * (ae + aw + 2 * az) + 1, rhs = p[id] + l2 * (ae * uE + aw * uW + az * (uN + uS));
+        u[id] += 1.6 * (rhs / diag - u[id]);
+      }
+      for (let it = 0; it < 700; it++) for (let j = 1; j < NZ - 1; j++) for (let i = 0; i < NR - 1; i++) {
+        const id = j * NR + i, nW = i > 0 ? n[id - 1] : n[id + 1], [ae, aw] = coef(i), diag = ae + aw + 2 * az;
+        n[id] += 1.85 * ((u[id] + ae * n[id + 1] + aw * nW + az * (n[id - NR] + n[id + NR])) / diag - n[id]);
+      }
+      const Gw = []; for (let i = 0; i < NR; i++) Gw.push(Math.max(0, n[(NZ - 2) * NR + i]));
+      const g0 = Gw[0] || 1e-30, ws = Gw.slice(0, 16), mx = Math.max(...ws), mn = Math.min(...ws);
+      let nmax = 1e-30; for (let q = 0; q < n.length; q++) nmax = Math.max(nmax, n[q]);
+      M = { n, nmax, Gw: Gw.map((g, i) => [i * dr * 1000, g / g0]), u: mx + mn > 0 ? (mx - mn) / (mx + mn) * 100 : 0, ce: Gw[15] > 0 ? Gw[0] / Gw[15] : NaN, lam, loops, L, type };
+      PB.stat("un-u", "±" + M.u.toFixed(1) + " %"); setCls("un-u", M.u <= 3 ? "ok" : M.u <= 8 ? "warn" : "bad");
+      PB.stat("un-ce", isFinite(M.ce) ? M.ce.toFixed(2) : "—"); PB.stat("un-lam", fmtL(lam));
+      PB.stat("un-ok", M.u <= 3 ? "충족" : "미충족"); setCls("un-ok", M.u <= 3 ? "ok" : "bad");
+      cv.redraw();
+    }
+    const sched = () => { if (!pend) pend = requestAnimationFrame(() => { pend = 0; solve(); }); };
+    const gt = PB.seg("un-type", sched), gr = PB.range("un-r", (v) => v.toFixed(2), sched), gp = PB.range("un-p", (v) => v + " mTorr", sched), gL = PB.range("un-L", (v) => (v * 100).toFixed(0) + " cm", sched);
+    const cv = PB.canvas($("un-cv"), (ctx, w, h) => {
+      if (!M) return; const Pl = PB.palette();
+      const hb = (h - 70) * 0.5, bw = w - 72, x0 = 56, y0 = 18, hz = hb * Math.min(1, M.L / 0.2) / 1 + 10;
+      const cw = bw / (2 * NR), chh = hz / NZ;
+      ctx.fillStyle = Pl.glow;
+      for (let j = 0; j < NZ; j++) for (let i = 0; i < NR; i++) { ctx.globalAlpha = PB.clamp(M.n[j * NR + i] / M.nmax, 0, 1) * 0.95; ctx.fillRect(x0 + bw / 2 + i * cw, y0 + j * chh, cw + 0.6, chh + 0.6); ctx.fillRect(x0 + bw / 2 - (i + 1) * cw, y0 + j * chh, cw + 0.6, chh + 0.6); }
+      ctx.globalAlpha = 1; ctx.strokeStyle = Pl.metal; ctx.lineWidth = 2; ctx.strokeRect(x0, y0, bw, hz);
+      ctx.strokeStyle = Pl.oxide; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 + bw, y0); ctx.stroke();
+      ctx.strokeStyle = Pl.si; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x0 + bw / 2 - bw * 0.3, y0 + hz); ctx.lineTo(x0 + bw / 2 + bw * 0.3, y0 + hz); ctx.stroke();
+      M.loops.forEach(([a, I]) => { ctx.fillStyle = M.type === "zone" && a > 0.1 ? Pl.accent2 : "#c97a3a"; ctx.globalAlpha = I > 0 ? 1 : 0.25; [1, -1].forEach((s) => { ctx.beginPath(); ctx.arc(x0 + bw / 2 + s * a / RCH * bw / 2, y0 - 8, 4, 0, 7); ctx.fill(); }); });
+      ctx.globalAlpha = 1;
+      const b2 = { x: x0, y: y0 + hz + 18, w: bw, h: h - (y0 + hz + 18) - 44 };
+      const ymin = Math.min(0.6, Math.floor(Math.min(...M.Gw.slice(0, 16).map((p) => p[1])) * 10) / 10), ymax = Math.max(1.4, Math.ceil(Math.max(...M.Gw.map((p) => p[1])) * 10) / 10);
+      PB.chart(ctx, b2, { x: [0, 250], y: [Math.max(0, ymin), ymax], xLabel: "반지름 r (mm)", yLabel: "Γ/Γ(0)", series: [{ data: M.Gw, color: Pl.ion, width: 2.6 }], bands: [{ x0: 0, x1: 150, color: "color-mix(in srgb, " + Pl.si + " 14%, transparent)" }], hlines: [{ y: 1.03, color: Pl.faint }, { y: 0.97, color: Pl.faint }] });
+    }, { aspect: 0.62, minHeight: 320, maxHeight: 460 });
+    solve();
+  })();
+
+  /* =============================================================
+     8) 소스 × 바이어스
+     ============================================================= */
+  function source(Ps, G) {
+    let n = 1e17; const ET = G.Ec + 2 * G.Te + 5.2 * G.Te;
+    for (let i = 0; i < 20; i++) { const t = transformer(n, G, EH.k, EH.Rcoil); n = Math.max(1e14, t.eta * Ps / (QE * G.uB * G.A * ET)); }
+    return n;
+  }
+  function biasCalc(Ps, Pb, G, f) {
+    const n = source(Ps, G), Gam = G.hl * n * G.uB, Ii = QE * Gam * AW, Vb = Math.min(5000, Pb / Ii), Vf = 5.2 * G.Te;
+    const V = Math.max(Vb, Vf), ns = G.hl * n, lde = Math.sqrt(EPS0 * G.Te / (QE * ns));
+    const s = Math.SQRT2 / 3 * lde * Math.pow(2 * V / G.Te, 0.75), tau = 3 * s * Math.sqrt(MAR / (2 * QE * V)), wt = 2 * Math.PI * f * tau;
+    return { n, Gam, Ii, Vb, Em: Vb + Vf, dE: 2 * Vb / Math.sqrt(1 + wt * wt), s, wt };
+  }
+  (function () {
+    if (!$("bi-cv")) return;
+    const gS = PB.range("bi-Ps", (v) => (v / 1000).toFixed(2) + " kW", draw), gB = PB.range("bi-Pb", (v) => v + " W", draw), gp = PB.range("bi-p", (v) => v + " mTorr", draw), gf = PB.seg("bi-f", draw);
+    const cv = PB.canvas($("bi-cv"), (ctx, w, h) => {
+      const Pl = PB.palette(), G = gas(gp()), f = +gf(), Ps = gS(), r = biasCalc(Ps, gB(), G, f);
+      const c1 = [], c2 = []; for (let i = 0; i <= 60; i++) { const pb = 1500 * i / 60; c1.push([pb, biasCalc(Ps, pb, G, f).Em]); c2.push([pb, biasCalc(2 * Ps, pb, G, f).Em]); }
+      const ymax = Math.max(100, c1[60][1] * 1.1);
+      const b1 = { x: 58, y: 12, w: w - 112, h: (h - 64) * 0.55 }, b2 = { x: 58, y: b1.y + b1.h + 16, w: w - 112, h: (h - 64) * 0.45 };
+      const gRef = 3e20, gl = [[0, r.Gam / gRef * ymax], [1500, r.Gam / gRef * ymax]];
+      const ch = PB.chart(ctx, b1, { x: [0, 1500], y: [0, ymax], yLabel: "Ēᵢ (eV)", series: [{ data: c1, color: Pl.ion, width: 2.6 }, { data: c2, color: Pl.ion, width: 1.6, dash: [6, 4] }, { data: gl, color: Pl.accent, width: 2.4 }], vlines: [{ x: gB(), color: Pl.bad }], points: [{ x: gB(), y: r.Em, color: Pl.bad, r: 5 }], xFmt: (v) => v + " W" });
+      ctx.font = font(11); ctx.fillStyle = Pl.accent; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      [0, 1, 2, 3].forEach((g) => { const y = ch.Y(g * 1e20 / gRef * ymax); if (y >= b1.y - 1) ctx.fillText(g + "e16", b1.x + b1.w + 6, y); });
+      ctx.save(); ctx.translate(w - 8, b1.y + b1.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillText("Γᵢ (cm⁻²s⁻¹)", 0, 0); ctx.restore();
+      ctx.textAlign = "left"; ctx.fillStyle = Pl.ion; ctx.fillText("Ēᵢ (P_s)", b1.x + 6, b1.y + 10); ctx.fillText("- - Ēᵢ (2 P_s)", b1.x + 6, b1.y + 24); ctx.fillStyle = Pl.accent; ctx.fillText("Γᵢ", b1.x + 6, b1.y + 38);
+      // IEDF
+      const Emax = Math.max(60, (r.Em + r.dE / 2) * 1.25), NB = 120, hist = new Float64Array(NB);
+      for (let k = 0; k < 6000; k++) { const ph = 2 * Math.PI * (k + 0.5) / 6000, E = r.Em + r.dE / 2 * Math.sin(ph) + 2 * PB.randn(); const b = Math.floor(E / Emax * NB); if (b >= 0 && b < NB) hist[b]++; }
+      const hm = Math.max(...hist) || 1, hd = []; for (let b = 0; b < NB; b++) hd.push([(b + 0.5) / NB * Emax, hist[b] / hm]);
+      PB.chart(ctx, b2, { x: [0, Emax], y: [0, 1.08], xLabel: "이온 에너지 (eV)", yLabel: "IEDF", series: [{ data: hd, color: Pl.ion, width: 2, fill: "color-mix(in srgb, " + Pl.ion + " 22%, transparent)" }], xFmt: (v) => v.toFixed(0) });
+      PB.stat("bi-G", sup(r.Gam / 1e4) + " cm⁻²s⁻¹"); PB.stat("bi-J", r.Ii.toFixed(2) + " A"); PB.stat("bi-E", r.Em.toFixed(0) + " eV");
+      PB.stat("bi-dE", r.dE.toFixed(0) + " eV"); PB.stat("bi-s", (r.s * 1000).toFixed(2) + " mm / " + r.wt.toFixed(1));
+    }, { aspect: 0.62, minHeight: 330, maxHeight: 460 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     9) ECR 공명면과 차단 밀도
+     ============================================================= */
+  (function () {
+    if (!$("ec-cv")) return;
+    const gf = PB.range("ec-f", (v) => v.toFixed(2) + " GHz", draw), gB = PB.range("ec-B", (v) => (v * 1e4).toFixed(0) + " G", draw), ge = PB.range("ec-e", (v) => v.toFixed(1), draw);
+    const A = 0.12;
+    const cv = PB.canvas($("ec-cv"), (ctx, w, h) => {
+      const Pl = PB.palette(), f = gf() * 1e9, B0 = gB(), Br = 2 * Math.PI * f * ME / QE, nc = EPS0 * ME * Math.pow(2 * Math.PI * f, 2) / (QE * QE), nsw = nc * (1 + ge());
+      const zr = B0 >= Br ? A * Math.sqrt(Math.pow(B0 / Br, 2 / 3) - 1) : NaN;
+      const d = []; for (let i = 0; i <= 120; i++) { const z = 0.4 * i / 120; d.push([z * 100, B0 / Math.pow(1 + (z / A) * (z / A), 1.5) * 1e4]); }
+      const b1 = { x: 58, y: 12, w: w - 74, h: (h - 50) * 0.66 };
+      PB.chart(ctx, b1, { x: [0, 40], y: [0, Math.max(B0, Br) * 1.2e4], xLabel: "자석 중심에서 거리 z (cm)", yLabel: "B (G)", series: [{ data: d, color: Pl.accent, width: 2.6 }], hlines: [{ y: Br * 1e4, color: Pl.bad, label: "B_res" }], vlines: isFinite(zr) && zr <= 0.4 ? [{ x: zr * 100, color: Pl.bad, label: "공명면" }] : [], xFmt: (v) => String(v), yFmt: (v) => v.toFixed(0) });
+      // 밀도 축
+      const y = h - 18, xa = 58, xb = w - 16, L = (n) => xa + (Math.log10(n) - 9) / 4 * (xb - xa);
+      ctx.strokeStyle = Pl.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(xa, y); ctx.lineTo(xb, y); ctx.stroke();
+      ctx.font = font(10); ctx.fillStyle = Pl.dim; ctx.textAlign = "center"; ctx.textBaseline = "top";
+      for (let e = 9; e <= 13; e++) { ctx.fillText("10" + String(e).replace(/\d/g, (c) => "⁰¹²³⁴⁵⁶⁷⁸⁹"[+c]), L(Math.pow(10, e)), y + 3); }
+      const mark = (n, col, t, dy) => { const x = PB.clamp(L(n), xa, xb); ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill(); ctx.textBaseline = "bottom"; ctx.fillText(t, PB.clamp(x, xa + 40, xb - 40), y - 4 - dy); };
+      ctx.font = font(11);
+      mark(nc / 1e6, Pl.bad, "n_c", 0); mark(nsw / 1e6, Pl.warn, "표면파 최소", 14); mark(3.6e11, Pl.ion, "IC 기준", 0);
+      PB.stat("ec-Br", (Br * 1e4).toFixed(0) + " G"); PB.stat("ec-z", isFinite(zr) ? (zr * 100).toFixed(1) + " cm" : "공명면 없음"); setCls("ec-z", isFinite(zr) ? "ok" : "bad");
+      PB.stat("ec-nc", ncm(nc)); PB.stat("ec-nsw", ncm(nsw));
+    }, { aspect: 0.55, minHeight: 280, maxHeight: 400 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     10) 3D ICP 챔버
+     ============================================================= */
+  (function () {
+    const el = $("i3-view"); if (!el) return;
+    const T = PB.three(el, { camera: [5.2, 4.2, 6.2], target: [0, 0.5, 0], fov: 38, minDistance: 3, maxDistance: 18 });
+    if (!T) return;
+    const THREE = T.THREE, S = 10; // 1 단위 = 10 cm
+    let nCur = 0, M = { n: 0, d: 0.01, H: false, Gam: 0, Em: 0 };
+    // 챔버
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xb8c0ca, metalness: 0.7, roughness: 0.35, side: THREE.DoubleSide, transparent: true, opacity: 0.32 });
+    const wallCut = new THREE.Mesh(new THREE.CylinderGeometry(2.55, 2.55, 1.3, 64, 1, true, 0, Math.PI * 1.5), wallMat); wallCut.position.y = 0.5; wallCut.rotation.y = Math.PI * 0.25; T.scene.add(wallCut);
+    const wallFull = new THREE.Mesh(new THREE.CylinderGeometry(2.55, 2.55, 1.3, 64, 1, true), wallMat); wallFull.position.y = 0.5; wallFull.visible = false; T.scene.add(wallFull);
+    const floor = new THREE.Mesh(new THREE.CylinderGeometry(2.55, 2.55, 0.06, 64), T.material(0x8d96a0, { metalness: 0.6, roughness: 0.4 })); floor.position.y = -0.4; T.scene.add(floor);
+    // 세라믹 창
+    const win = new THREE.Mesh(new THREE.CylinderGeometry(2.62, 2.62, 0.25, 64), new THREE.MeshStandardMaterial({ color: 0xe8e2d4, roughness: 0.5, transparent: true, opacity: 0.55 })); win.position.y = 1.125; T.scene.add(win);
+    // 평면 나선 코일
+    const pts = []; const TURNS = 4, NS = 400;
+    for (let i = 0; i <= NS; i++) { const u = i / NS, a = u * TURNS * Math.PI * 2, r = 0.5 + 1.2 * u; pts.push(new THREE.Vector3(r * Math.cos(a), 1.33, r * Math.sin(a))); }
+    const curve = new THREE.CatmullRomCurve3(pts);
+    T.scene.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 500, 0.045, 8, false), new THREE.MeshStandardMaterial({ color: 0xc97a3a, metalness: 0.8, roughness: 0.3 })));
+    // 정전척 + 웨이퍼
+    const esc = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 0.36, 64), T.material(0xd9d4c8, { roughness: 0.6 })); esc.position.y = -0.2; T.scene.add(esc);
+    const wafer = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.02, 64), new THREE.MeshStandardMaterial({ color: 0x5c677d, metalness: 0.4, roughness: 0.25 })); wafer.position.y = 0.0; T.scene.add(wafer);
+    // 플라즈마: 벌크 + 도넛
+    const bulkMat = new THREE.MeshBasicMaterial({ color: 0xc77dff, transparent: true, opacity: 0.15, depthWrite: false });
+    const bulk = new THREE.Mesh(new THREE.CylinderGeometry(2.45, 2.45, 0.9, 64), bulkMat); bulk.position.y = 0.5; T.scene.add(bulk);
+    const torMat = new THREE.MeshBasicMaterial({ color: 0xe599f7, transparent: true, opacity: 0.45, depthWrite: false });
+    const torus = new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.1, 20, 80), torMat); torus.rotation.x = Math.PI / 2; torus.position.y = 0.9; T.scene.add(torus);
+    const sheathMat = new THREE.MeshBasicMaterial({ color: 0x4dabf7, transparent: true, opacity: 0.12, depthWrite: false });
+    const sheath = new THREE.Mesh(new THREE.CylinderGeometry(1.52, 1.52, 0.1, 64), sheathMat); T.scene.add(sheath);
+    // 입자: 코일 전류(주황), 유도 전류(파랑), 이온(주황 계열)
+    function pointsLayer(N, color, size) { const g = new THREE.BufferGeometry(), a = new Float32Array(N * 3); g.setAttribute("position", new THREE.BufferAttribute(a, 3)); const m = new THREE.Points(g, new THREE.PointsMaterial({ color, size, transparent: true, opacity: 0.95, depthWrite: false })); T.scene.add(m); return { g, a, m }; }
+    const NC = 120, NI = 160, NION = 260;
+    const coilP = pointsLayer(NC, 0xffa94d, 0.09), indP = pointsLayer(NI, 0x91a7ff, 0.08), ionP = pointsLayer(NION, 0xff8c42, 0.06);
+    const cu = Array.from({ length: NC }, (_, i) => i / NC), ia = Array.from({ length: NI }, (_, i) => ({ a: i / NI * Math.PI * 2, r: 1.15 + (Math.random() - 0.5) * 0.5, dz: Math.random() }));
+    const ions = Array.from({ length: NION }, () => ({ x: 0, z: 0, y: -1, v: 0, on: false }));
+    const Lc = T.label("평면 나선 코일", [1.8, 1.55, 0.6]), Lw = T.label("세라믹 창", [-2.3, 1.3, 1.0]), Lt = T.label("유도 전류 고리", [0, 0.9, 1.3]), Lf = T.label("웨이퍼 · 정전척", [1.2, -0.05, 1.3]);
+    const gP = PB.range("i3-P", (v) => v >= 1000 ? (v / 1000).toFixed(2) + " kW" : v + " W", upd), gB = PB.range("i3-B", (v) => v + " W", upd);
+    function upd() {
+      const P = gP(), G = G10;
+      nCur = P <= 0 ? 0 : pickRoot(ehRoots(P, G, 1), nCur);
+      const n = nCur, H = n > 2 * EH.ns;
+      const d = n > 0 ? skin(n, 13.56e6, G.num, G.vbar).d : 0;
+      const Gam = G.hl * n * G.uB, Vb = n > 0 ? Math.min(3000, gB() / (QE * Gam * AW)) : 0;
+      M = { n, d, H, Gam, Em: n > 0 ? Vb + 5.2 * G.Te : 0 };
+      PB.stat("i3-mode", n <= 0 ? "꺼짐" : H ? "H 모드" : "E 모드"); setCls("i3-mode", n <= 0 ? "bad" : H ? "ok" : "warn");
+      PB.stat("i3-n", n > 0 ? ncm(n) : "—"); PB.stat("i3-d", n > 0 ? fmtL(d) : "—"); PB.stat("i3-E", n > 0 ? M.Em.toFixed(0) + " eV" : "—");
+      const glowOn = $("i3-glow").checked, lg = n > 0 ? PB.clamp((Math.log10(n) - 14) / 4, 0.05, 1) : 0;
+      bulk.visible = glowOn && n > 0; bulkMat.opacity = 0.04 + 0.22 * lg;
+      torus.visible = glowOn && H; torMat.opacity = 0.2 + 0.4 * lg;
+      const tube = PB.clamp(d * S * 0.6, 0.05, 0.35); torus.scale.set(1, 1, tube / 0.1); torus.position.y = 1.0 - tube - 0.02;
+      if (H) bulk.position.y = 0.5;
+      const sh = PB.clamp(0.04 + 0.0005 * M.Em, 0.04, 0.5); sheath.scale.y = sh / 0.1; sheath.position.y = 0.01 + sh / 2; sheath.visible = n > 0;
+      Lt.setVisible(H && $("i3-cur").checked);
+    }
+    ["i3-glow", "i3-cur"].forEach((id) => $(id).addEventListener("change", upd));
+    $("i3-cut").addEventListener("change", (e) => { wallCut.visible = e.target.checked; wallFull.visible = !e.target.checked; });
+    $("i3-rot").addEventListener("change", (e) => { if (T.controls) T.controls.autoRotate = e.target.checked; });
+    upd();
+    let ph = 0;
+    T.onFrame((dt) => {
+      ph += dt * 1.6; // RF 위상을 느리게 재생
+      const v = Math.cos(ph), show = $("i3-cur").checked && M.n > 0, amp = M.n > 0 ? PB.clamp(Math.sqrt(gP() / 1500), 0.2, 1.5) : 0;
+      coilP.m.visible = $("i3-cur").checked && gP() > 0; indP.m.visible = show && M.H;
+      for (let i = 0; i < NC; i++) { cu[i] = (cu[i] + v * amp * dt * 0.05 + 1) % 1; const p = curve.getPointAt(cu[i]); coilP.a.set([p.x, p.y + 0.06, p.z], i * 3); }
+      coilP.g.attributes.position.needsUpdate = true;
+      const yR = torus.position.y;
+      for (let i = 0; i < NI; i++) { const s = ia[i]; s.a -= v * amp * dt * 0.6; indP.a.set([s.r * Math.cos(s.a), yR + (s.dz - 0.5) * 0.15, s.r * Math.sin(s.a)], i * 3); }
+      indP.g.attributes.position.needsUpdate = true;
+      // 이온: 플럭스 ∝ 생성률, 시스에서 가속
+      const rate = M.n > 0 ? PB.clamp(M.Gam / 1.7e20, 0, 2) * 80 : 0, top = sheath.position.y * 2, spd = 0.6 + Math.sqrt(Math.max(M.Em, 1)) * 0.25;
+      let spawn = PB.poisson(rate * dt);
+      for (let i = 0; i < NION; i++) {
+        const o = ions[i];
+        if (!o.on && spawn > 0) { spawn--; const r = 1.45 * Math.sqrt(Math.random()), a = Math.random() * 6.283; o.x = r * Math.cos(a); o.z = r * Math.sin(a); o.y = top + 0.3 + Math.random() * 0.3; o.v = 0.25; o.on = true; }
+        if (o.on) { o.v = o.y < top ? o.v + spd * 6 * dt : 0.25; o.y -= o.v * dt; if (o.y <= 0.02) o.on = false; }
+        ionP.a.set(o.on ? [o.x, o.y, o.z] : [0, -5, 0], i * 3);
+      }
+      ionP.g.attributes.position.needsUpdate = true; ionP.m.visible = M.n > 0;
+    });
+  })();
+})();
+
+</script>
+</body>
+</html>

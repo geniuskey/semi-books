@@ -1,0 +1,1115 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and PlasmaBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>펄스 플라즈마와 맞춤 파형 · PlasmaBook</title>
+<meta name="description" content="펄스 주기·듀티와 평균 전력, 잔광에서 전자 온도의 µs 급랭과 밀도의 양극성 감쇠를 시간 의존 전역 모델로 풀고, Tₑ 오버슈트, 전기 음성 잔광의 음이온 추출과 대전 완화, 소스·바이어스 동기 펄스, HiPIMS, 펄스 DC·톱니파 맞춤 바이어스로 좁힌 IEDF, 펄스 시 정합과 주파수 튜닝을 시뮬레이터로 계산한다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .lbl { fill: var(--text); font-family: var(--font); font-size: 14px; }
+  svg .lbl-b { fill: var(--text); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .lbl-sm { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .lbl-acc { fill: var(--accent); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-acc2 { fill: var(--accent-2); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-el { fill: var(--m-electron); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-ion { fill: var(--m-ion); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-neg { fill: var(--m-negion); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .pl-glow { fill: color-mix(in srgb, var(--m-glow) 30%, transparent); }
+  svg .pl-glow-dim { fill: color-mix(in srgb, var(--m-glow) 10%, transparent); stroke: var(--m-glow); stroke-dasharray: 4 3; }
+  svg .wave { fill: none; stroke: var(--accent); stroke-width: 2.4; }
+  svg .wave2 { fill: none; stroke: var(--accent-2); stroke-width: 2.4; }
+  svg .w-el { fill: none; stroke: var(--m-electron); stroke-width: 2.4; }
+  svg .w-ion { fill: none; stroke: var(--m-ion); stroke-width: 2.4; }
+  svg .w-neg { fill: none; stroke: var(--m-negion); stroke-width: 2.4; }
+  svg .w-bad { fill: none; stroke: var(--bad); stroke-width: 2.2; }
+  svg .dash { stroke: var(--text-dim); stroke-dasharray: 5 4; fill: none; stroke-width: 1.3; }
+  svg .arr { stroke: var(--text); stroke-width: 1.6; fill: none; }
+  svg .on-band { fill: color-mix(in srgb, var(--accent) 10%, transparent); }
+  p.small { font-size: 14px; color: var(--text-dim); }
+  .pu-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pu-btns .btn { font-size: 13px; padding: 5px 9px; }
+  .v.ok { color: var(--ok); } .v.warn { color: var(--warn); } .v.bad { color: var(--bad); }
+</style>
+</head>
+<body data-chapter="pulsed">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 12</div>
+    <h1>펄스 플라즈마와 맞춤 파형</h1>
+    <p class="lead">지금까지의 플라즈마는 켜 두면 정상 상태에 머무는 연속파(CW) 방전이었다. 전력을 수십 µs마다 켰다 끄면 새로운 손잡이가 생긴다. 끄는 순간 전자 온도는 µs 안에 무너지고 밀도는 수십–수백 µs에 걸쳐 천천히 빠진다. 이 두 시간 척도의 차이 덕분에 <strong>밀도는 거의 그대로 두고 전자 온도만 낮출 수 있고</strong>, 음이온을 벽으로 꺼내 대전을 풀 수 있으며, 바이어스 파형을 직접 설계해 이온 에너지를 한 봉우리로 모을 수 있다. 이 장은 <a href="global.html">8장 전역 모델</a>에 시간을 넣어 이 효과를 계산한다.</p>
+    <ul class="objectives">
+      <li>펄스 주파수·듀티로 주기, 켜짐·꺼짐 시간, 평균 전력을 계산하고 꺼짐 시간을 Tₑ·nₑ 감쇠 시간과 비교할 수 있다.</li>
+      <li>시간 의존 전역 모델(입자·에너지 균형 ODE)로 잔광의 Tₑ 급랭과 nₑ 감쇠, 재점화 때의 Tₑ 오버슈트를 설명할 수 있다.</li>
+      <li>전기 음성 잔광에서 전자가 부착으로 사라지고 이온-이온 플라즈마가 되어 음이온이 벽에 닿는 과정을 계산할 수 있다.</li>
+      <li>소스·바이어스 동기·지연 펄스가 이온 에너지와 플럭스를 어떻게 나누는지 타이밍도로 설명할 수 있다.</li>
+      <li>HiPIMS가 높은 순간 전력으로 금속 원자를 이온화하는 원리와 증착 속도 손실을 계산할 수 있다.</li>
+      <li>사인파·펄스 DC·맞춤(톱니) 바이어스에서 이온 에너지 분포 폭을 계산하고, 펄스 시 반사 전력 스파이크와 주파수 튜닝을 설명할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="basics">
+    <h2>펄스 변수: 주기·듀티·평균 전력</h2>
+    <p>RF 발생기 출력을 수 kHz의 사각파로 <span class="term">변조</span>하면 RF 반송파(13.56 MHz) 위에 느린 켜짐/꺼짐 포락선이 얹힌다. 손잡이는 셋이다. <span class="term">펄스 주파수</span> \(f\)(PL-300: 0.1–20 kHz), <span class="term">듀티</span> \(D\)(10–90 %), <span class="term">순간(피크) 전력</span> \(P_{\text{peak}}\).</p>
+    <div class="formula">$$T = \frac{1}{f},\qquad t_{\text{on}} = D\,T,\qquad t_{\text{off}} = (1-D)\,T,\qquad \langle P\rangle = D\,P_{\text{peak}}$$
+      <div class="where">예: 1 kHz, 듀티 50 %, 피크 1.5 kW → \(T = 1\) ms, \(t_{\text{on}} = t_{\text{off}} = 500\ \mu\)s, 평균 750 W.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="펄스 RF 파형: 13.56 MHz 반송파가 사각 포락선으로 켜지고 꺼지며 주기 T, 켜짐 시간, 꺼짐 시간, 피크와 평균 전력이 표시됨">
+        <defs><marker id="f1-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text)"/></marker></defs>
+        <line x1="40" y1="120" x2="840" y2="120" class="s-axis"/>
+        <text x="842" y="138" class="lbl-sm" text-anchor="end">시간 →</text>
+        <rect x="80" y="30" width="200" height="180" class="on-band"/>
+        <rect x="440" y="30" width="200" height="180" class="on-band"/>
+        <path id="f1-carrier" class="wave" d="M80 120 l5 -70 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 70"/>
+        <line x1="280" y1="120" x2="440" y2="120" class="wave"/>
+        <path class="wave" d="M440 120 l5 -70 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 140 l5 -140 l5 70"/>
+        <path class="wave2" d="M40 120 L80 120 L80 46 L280 46 L280 120 L440 120 L440 46 L640 46 L640 120 L800 120" stroke-dasharray="6 3"/>
+        <line x1="40" y1="83" x2="800" y2="83" class="dash"/>
+        <text x="800" y="78" class="lbl-sm" text-anchor="end">⟨P⟩ = D·P_peak</text>
+        <text x="645" y="44" class="lbl-acc2">포락선 (P_peak)</text>
+        <line x1="80" y1="222" x2="440" y2="222" class="arr" marker-start="url(#f1-ar)" marker-end="url(#f1-ar)"/>
+        <text x="260" y="218" class="lbl-b" text-anchor="middle">T = 1/f</text>
+        <line x1="80" y1="20" x2="280" y2="20" class="arr" marker-start="url(#f1-ar)" marker-end="url(#f1-ar)"/>
+        <text x="180" y="16" class="lbl" text-anchor="middle">t_on = D·T</text>
+        <line x1="280" y1="20" x2="440" y2="20" class="arr" marker-start="url(#f1-ar)" marker-end="url(#f1-ar)"/>
+        <text x="360" y="16" class="lbl" text-anchor="middle">t_off (잔광)</text>
+        <text x="360" y="150" class="lbl-sm" text-anchor="middle">RF 꺼짐: 전자 냉각·밀도 감쇠</text>
+        <text x="180" y="204" class="lbl-sm" text-anchor="middle">13.56 MHz 반송파 (실제로는 수만 주기)</text>
+      </svg>
+      <figcaption><b>그림 12-1.</b> 펄스 RF의 정의. 13.56 MHz 반송파 한 주기는 74 ns이고 1 kHz 펄스 켜짐 500 µs 안에 약 6800주기가 들어간다. 그림은 반송파를 크게 과장했다.</figcaption>
+    </figure>
+
+    <p>펄스가 의미를 가지려면 꺼짐 시간을 플라즈마의 두 시간 척도와 비교해야 한다. 전자 에너지가 빠지는 시간 \(\tau_{T} \sim\) 수 µs(비탄성 충돌), 밀도가 벽으로 빠지는 시간 \(\tau_n \sim\) 수백 µs(양극성·보옴 손실, 처음에는 \(d_{\text{eff}}/u_B \approx 90\ \mu\)s이지만 Tₑ가 식으며 느려짐). \(t_{\text{off}} \ll \tau_T\)이면 플라즈마는 펄스를 알아채지 못하는 <b>준연속</b>, \(\tau_T \lt t_{\text{off}} \lt \tau_n\)이면 <b>Tₑ만 내려가고 nₑ는 유지</b>되는 펄스의 단물 구간, \(t_{\text{off}} \gg \tau_n\)이면 매번 <b>꺼졌다 다시 점화</b>된다.</p>
+
+    <div class="sim" id="sim-pw">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>펄스 계산기와 영역 지도: t_off를 τ_T·τ_n과 비교</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pw-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>펄스 주파수 <output id="pw-f-out"></output></span><input type="range" id="pw-f" min="-1" max="1.301" step="0.01" value="0"></label>
+          <label class="ctrl"><span>듀티 <output id="pw-d-out"></output></span><input type="range" id="pw-d" min="10" max="90" step="1" value="50"></label>
+          <label class="ctrl"><span>피크 전력 <output id="pw-p-out"></output></span><input type="range" id="pw-p" min="100" max="3000" step="50" value="1500"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">주기 T</span><span class="v" id="pw-T">—</span></div>
+        <div class="stat"><span class="k">t_on / t_off</span><span class="v" id="pw-on">—</span></div>
+        <div class="stat"><span class="k">평균 전력</span><span class="v" id="pw-avg">—</span></div>
+        <div class="stat"><span class="k">잔광 끝 nₑ / 켜짐 nₑ</span><span class="v" id="pw-dec">—</span></div>
+        <div class="stat"><span class="k">영역</span><span class="v" id="pw-reg">—</span></div>
+      </div>
+      <div class="sim-note">위: 포락선 3주기. 아래: (주파수, 듀티) 평면에 잔광 끝 밀도 비 \(n(t_{\text{off}})/n_0\)를 색으로 칠했다(PL-300 IC, Ar 10 mTorr 기준. 감쇠 곡선은 다음 절의 시간 의존 전역 모델로 CW에서 전력을 끈 잔광을 직접 풀어 얻었다: Tₑ가 1 eV 아래로 내려가는 \(\tau_T \approx 18\ \mu\)s, 밀도가 1/e이 되는 \(\tau_n \approx 330\ \mu\)s). 점선은 \(t_{\text{off}} = \tau_T\), \(t_{\text{off}} = \tau_n\). 해볼 것: 듀티 50 %에서 주파수를 0.1 kHz → 20 kHz로 올리며 점이 "재점화"에서 "준연속"으로 건너가는 것을 보자.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="afterglow">
+    <h2>잔광의 물리: Tₑ는 µs, nₑ는 수백 µs</h2>
+    <p>RF를 끄면 전자를 덥히던 전기장이 사라진다. 이후의 플라즈마를 <span class="term">잔광</span><span class="en">(afterglow)</span>이라 한다. 두 단계로 나뉜다.</p>
+    <ol>
+      <li><b>초기 잔광(0–수 µs):</b> EEDF 꼬리(11.5 eV 이상) 전자가 여기·이온화 충돌로 에너지를 잃어 꼬리가 먼저 잘린다. Ar 10 mTorr에서 \(n_g K_{iz}\mathcal{E}_c \approx 10^6\) eV/s이므로 처음 1 µs에 Tₑ가 약 0.6 eV 내려간다. 이온화는 \(e^{-17.44/T_e}\)라서 Tₑ가 2.5 → 1.5 eV로만 떨어져도 생성률은 약 100배 준다.</li>
+      <li><b>후기 잔광(수십–수백 µs):</b> 남은 전자는 주로 벽으로 빠지는 고에너지 전자를 통해 식는다(벽 손실 에너지 \(\approx 7.2\,T_e\)). Tₑ가 1 eV 아래로 내려가면 보옴 속도 \(u_B = \sqrt{eT_e/M}\)도 작아져 밀도 감쇠가 점점 느려진다. 밀도는 양극성 확산 시간(<a href="transport.html">6장</a>) 정도로 빠진다.</li>
+    </ol>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 260" role="img" aria-label="펄스 한 주기 동안 전자 온도와 전자 밀도의 시간 변화 개념도: 켜질 때 Tₑ 오버슈트, 꺼지면 Tₑ가 수 µs에 급락하고 nₑ는 수백 µs에 걸쳐 감쇠">
+        <rect x="60" y="20" width="250" height="210" class="on-band"/>
+        <rect x="600" y="20" width="240" height="210" class="on-band"/>
+        <line x1="60" y1="230" x2="840" y2="230" class="s-axis"/><line x1="60" y1="20" x2="60" y2="230" class="s-axis"/>
+        <text x="66" y="36" class="lbl-sm">켜짐</text><text x="316" y="36" class="lbl-sm">꺼짐 (잔광)</text><text x="606" y="36" class="lbl-sm">재점화</text>
+        <!-- Te -->
+        <path class="w-el" d="M60 70 C 70 50, 78 48, 90 60 C 110 76, 150 78, 310 78 C 318 78, 322 150, 340 170 C 370 190, 450 196, 600 200 C 606 200, 610 60, 625 52 C 640 46, 660 74, 700 78 L 840 78"/>
+        <text x="96" y="52" class="lbl-el">Tₑ 오버슈트</text>
+        <text x="340" y="150" class="lbl-el">Tₑ 급락 (~µs)</text>
+        <!-- ne -->
+        <path class="w-ion" d="M60 205 C 120 130, 180 112, 310 110 C 380 112, 430 150, 520 175 C 560 186, 590 190, 600 191 C 650 160, 700 120, 840 112"/>
+        <text x="430" y="140" class="lbl-ion">nₑ ≈ n₊ 감쇠 (100 µs 단위)</text>
+        <text x="14" y="84" class="lbl-el">Tₑ</text><text x="14" y="118" class="lbl-ion">nₑ</text>
+        <line x1="310" y1="78" x2="340" y2="78" class="dash"/>
+        <text x="312" y="252" class="lbl-sm">t_off 시작</text><text x="580" y="252" class="lbl-sm">t_off 끝</text>
+        <text x="700" y="160" class="lbl-sm">낮은 nₑ에 같은 전력 →</text><text x="700" y="176" class="lbl-sm">전자당 전력↑ → Tₑ↑</text>
+      </svg>
+      <figcaption><b>그림 12-2.</b> 펄스 한 주기의 Tₑ(파랑 계열)와 nₑ(이온 색) 개념도. 시간 척도가 두 자릿수 다르기 때문에 꺼짐 동안 "밀도는 남았는데 전자는 차가운" 플라즈마가 만들어진다.</figcaption>
+    </figure>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 240" role="img" aria-label="켜짐, 초기 잔광, 후기 잔광의 EEPF를 로그 축에 그린 개념도: 잔광에서 꼬리가 먼저 사라짐">
+        <line x1="70" y1="210" x2="520" y2="210" class="s-axis"/><line x1="70" y1="20" x2="70" y2="210" class="s-axis"/>
+        <text x="295" y="234" class="lbl-sm" text-anchor="middle">전자 에너지 ε (eV)</text>
+        <text x="20" y="120" class="lbl-sm" transform="rotate(-90 20 120)" text-anchor="middle">log EEPF</text>
+        <g class="lbl-sm" text-anchor="middle"><text x="70" y="226">0</text><text x="190" y="226">5</text><text x="310" y="226">10</text><text x="430" y="226">15</text></g>
+        <line x1="346" y1="20" x2="346" y2="210" class="dash"/><text x="350" y="34" class="lbl-sm">11.5 eV 여기 문턱</text>
+        <line x1="448" y1="20" x2="448" y2="210" class="dash"/><text x="452" y="52" class="lbl-sm">15.8 이온화</text>
+        <path class="wave" d="M70 30 L 500 140"/>
+        <path class="wave2" d="M70 32 L 250 100 C 300 120, 330 160, 346 205"/>
+        <path class="w-el" d="M70 40 C 110 90, 140 160, 170 205"/>
+        <text x="420" y="122" class="lbl-acc">켜짐 Tₑ ≈ 2.5 eV</text>
+        <text x="250" y="88" class="lbl-acc2">초기 잔광 (1–3 µs)</text>
+        <text x="150" y="150" class="lbl-el">후기 잔광</text>
+        <g transform="translate(560,26)">
+          <rect x="0" y="0" width="290" height="190" rx="8" class="box"/>
+          <text x="14" y="26" class="lbl-b">잔광에서 꺼지는 것</text>
+          <text x="14" y="52" class="lbl">• 이온화·해리: 꼬리 전자 의존 → 즉시 ↓</text>
+          <text x="14" y="76" class="lbl">• 발광(OES): 수 µs 안에 소멸</text>
+          <text x="14" y="100" class="lbl">• 시스 전위 ≈ 5.2 Tₑ: 함께 ↓</text>
+          <text x="14" y="128" class="lbl-b">남는 것</text>
+          <text x="14" y="152" class="lbl">• 이온·전자 밀도 (τ_n ~ 100 µs)</text>
+          <text x="14" y="176" class="lbl">• 래디컬 (벽 손실 ms), 준안정 원자</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-3.</b> 잔광의 EEPF 변화(개념도, 로그 축에서 맥스웰 분포는 직선). 비탄성 문턱 위의 꼬리가 먼저 잘리고, 낮은 에너지 부분은 천천히 식는다. 래디컬은 ms 단위로 남아 있으므로 펄스로 이온/래디컬 비를 조절할 수 있다(<a href="chemistry.html">13장</a>).</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="model">
+    <h2>시간 의존 전역 모델</h2>
+    <p><a href="global.html">8장</a>의 전역 모델은 입자 균형으로 Tₑ를, 전력 균형으로 n₀를 정했다. 펄스에서는 두 균형이 매 순간 맞지 않으므로 시간 미분을 남긴다(Lieberman–Ashida 형).</p>
+    <div class="formula">$$\frac{dn}{dt} = n\,n_g K_{iz}(T_e) - n\,\frac{u_B(T_e)}{d_{\text{eff}}}$$
+    $$\frac{d}{dt}\Big(\tfrac32\,n T_e\Big) = \frac{\eta(n)\,P(t)}{eV} - n\,n_g\Big[K_{iz}\mathcal{E}_{iz} + K_{ex}\mathcal{E}_{ex} + K_{el}\tfrac{3m}{M}(T_e - T_g)\Big] - n\,\frac{u_B}{d_{\text{eff}}}\,7.2\,T_e$$
+      <div class="where">\(d_{\text{eff}} = V/A_{\text{eff}} = RL/[2(Rh_L + Lh_R)]\), \(T_e\)는 eV. PL-300 IC 챔버(R = 0.25 m, L = 0.10 m), Ar 10 mTorr: \(\lambda_i \approx 3.1\) mm, \(h_L \approx 0.20\), \(h_R \approx 0.087\), \(d_{\text{eff}} \approx 0.22\) m. \(K_{iz}, K_{ex}, K_{el}\)은 PL-300 표의 Lieberman 근사, \(\mathcal{E}_{iz} = 15.76\) eV, \(\mathcal{E}_{ex} = 12.14\) eV. 벽 손실 \(7.2T_e = 2T_e\)(전자) \(+\,5.2T_e\)(시스·예비 시스에서 이온이 얻는 에너지). 결합 효율 \(\eta(n) = n/(n + n_c)\), \(n_c = 3\times10^{10}\) cm⁻³: 밀도가 낮으면 코일 전력이 플라즈마에 잘 안 들어가는 E 모드 근사(<a href="icp.html">10장</a>).</div></div>
+    <p>CW 1.5 kW이면 이 식의 정상해가 Tₑ = 2.5 eV, nₑ ≈ 3.9×10¹¹ cm⁻³로 PL-300 표(약 4×10¹¹)와 맞는다. 시뮬레이터는 이 ODE를 적응 시간 간격(한 단계에서 ln n과 Tₑ의 상대 변화 2 % 이하, 에너지 식의 이완 시간의 0.4배 이하—명시적 적분이 출렁이지 않게)으로 적분하고, 주기적 정상 상태가 될 때까지(최소 5주기) 돌린 뒤 마지막 두 주기를 그린다. 밀도 하한 10⁷ cm⁻³는 잔류 전하(재점화 씨앗)다.</p>
+
+    <div class="sim" id="sim-gm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>펄스 Ar ICP 전역 모델: nₑ(t), Tₑ(t), 시간 평균 vs 피크</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gm-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>펄스 주파수 <output id="gm-f-out"></output></span><input type="range" id="gm-f" min="-1" max="1.301" step="0.01" value="0"></label>
+          <label class="ctrl"><span>듀티 <output id="gm-d-out"></output></span><input type="range" id="gm-d" min="10" max="100" step="1" value="50"></label>
+          <label class="ctrl"><span>피크 흡수 전력 <output id="gm-p-out"></output></span><input type="range" id="gm-p" min="100" max="3000" step="50" value="1500"></label>
+          <label class="ctrl"><span>압력 <output id="gm-pr-out"></output></span><input type="range" id="gm-pr" min="2" max="50" step="1" value="10"></label>
+          <div class="ctrl"><span>프리셋</span><div class="pu-btns">
+            <button class="btn" data-gm="0,100">CW</button>
+            <button class="btn" data-gm="0,50">1 kHz 50 %</button>
+            <button class="btn" data-gm="1,50">10 kHz 50 %</button>
+            <button class="btn" data-gm="-1,20">100 Hz 20 %</button>
+          </div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">nₑ 최대 / 최소 (10¹¹ cm⁻³)</span><span class="v" id="gm-n">—</span></div>
+        <div class="stat"><span class="k">⟨nₑ⟩ 시간 평균 (10¹¹)</span><span class="v" id="gm-navg">—</span></div>
+        <div class="stat"><span class="k">CW(같은 ⟨P⟩) nₑ (10¹¹)</span><span class="v" id="gm-ncw">—</span></div>
+        <div class="stat"><span class="k">Tₑ 최대 / 켜짐 끝</span><span class="v" id="gm-T">—</span></div>
+        <div class="stat"><span class="k">⟨Tₑ⟩ (밀도 가중)</span><span class="v" id="gm-Tavg">—</span></div>
+        <div class="stat"><span class="k">⟨이온화율⟩ / CW</span><span class="v" id="gm-iz">—</span></div>
+      </div>
+      <div class="sim-note">위: nₑ (10¹¹ cm⁻³, 회색 점선은 같은 평균 전력의 CW 값), 아래: Tₑ (eV). 음영이 켜짐 구간. 해볼 것: ① 10 kHz 50 %에서 ⟨nₑ⟩는 CW(750 W)보다 오히려 높고 ⟨Tₑ⟩는 확연히 낮다—"밀도는 두고 온도만 낮추기". ② 100 Hz 20 %에서 nₑ가 바닥까지 빠졌다가 재점화 때 Tₑ가 4 eV 넘게 튀는 것을 보자. ③ 전력을 200 W 아래로 내리면 η(n) 때문에 펄스마다 다시 켜지지 못한다(E 모드에 머무름).</div>
+    </div>
+
+    <div class="callout fab"><strong>IC 모듈 1 kHz 펄스</strong>Ar 10 mTorr, 피크 1.5 kW, 1 kHz, 듀티 50 %를 위 모델로 풀면 nₑ는 약 3.9×10¹¹ ↔ 1.2×10¹¹ cm⁻³ 사이를 오가고, 꺼짐 500 µs 동안 Tₑ는 2.5 eV에서 기체 온도 근처까지 내려간다. 재점화 때 Tₑ는 약 3 eV로 잠깐 오버슈트한다. 눈여겨볼 점은 평균 전력이 같은 CW(750 W, nₑ ≈ 1.8×10¹¹)보다 <b>시간 평균 밀도가 약 1.5배(2.7×10¹¹) 높다</b>는 것이다. 잔광에서 식은 전자는 벽으로 빠질 때 에너지를 거의 가져가지 않으므로(7.2Tₑ가 작음) 이온 하나를 잃는 "비용"이 줄기 때문이다. 밀도 가중 평균 Tₑ는 약 1.75 eV로 CW(2.5 eV)보다 낮다. 10 kHz로 올리면 nₑ 출렁임이 약 ±17 %로 줄고 꺼짐 끝 Tₑ는 약 0.5 eV에 머문다. 실제 장비에서는 준안정 원자의 페닝 이온화·다단계 이온화 때문에 잔광 Tₑ 바닥이 0.2–0.5 eV 정도로 이 모델보다 높게 측정되고, PL-300 IC보다 작은 챔버에서는 밀도 감쇠도 수십 µs로 빨라진다.</div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="overshoot">
+    <h2>재점화와 Tₑ 오버슈트</h2>
+    <p>꺼짐 끝에 남은 밀도 \(n_{\text{off}}\)에 갑자기 피크 전력이 들어오면 전자 한 개가 받는 전력 \(P/(eVn)\)이 정상 상태보다 훨씬 크다. 에너지 식에서 \(\tfrac32\,dT_e/dt \approx P/(eVn) - n_gK_{iz}\mathcal{E}_c\)이므로 Tₑ는 이온화가 따라잡을 때까지 올라간다. 이것이 <span class="term">Tₑ 오버슈트</span>다. 오버슈트 동안 이온화율은 지수적으로 커져 밀도가 빨리 회복되고, 밀도가 회복되면 Tₑ는 정상값으로 돌아온다. 꺼짐이 길수록 \(n_{\text{off}}\)이 작아 오버슈트가 크고 길다. 오버슈트 전자는 EEDF 꼬리를 키워 해리·발광을 순간적으로 높이며, 높은 Tₑ는 시스 전위(≈ 5.2 Tₑ)를 키워 웨이퍼로 가는 이온 에너지도 잠깐 올린다.</p>
+
+    <div class="sim" id="sim-os">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>꺼짐 시간과 재점화 오버슈트</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="os-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>꺼짐 시간 t_off <output id="os-t-out"></output></span><input type="range" id="os-t" min="0.5" max="3.7" step="0.01" value="2.3"></label>
+          <label class="ctrl"><span>피크 흡수 전력 <output id="os-p-out"></output></span><input type="range" id="os-p" min="300" max="3000" step="50" value="1500"></label>
+          <label class="ctrl"><span>압력 <output id="os-pr-out"></output></span><input type="range" id="os-pr" min="2" max="50" step="1" value="10"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">재점화 직전 nₑ</span><span class="v" id="os-n0">—</span></div>
+        <div class="stat"><span class="k">Tₑ 최대</span><span class="v" id="os-Tm">—</span></div>
+        <div class="stat"><span class="k">최대까지 걸린 시간</span><span class="v" id="os-tp">—</span></div>
+        <div class="stat"><span class="k">nₑ 90 % 회복 시간</span><span class="v" id="os-t90">—</span></div>
+      </div>
+      <div class="sim-note">CW 정상 상태에서 출발해 t_off 동안 끄고 다시 켠 뒤 처음 60 µs의 Tₑ(t)를 그린다. 회색 곡선은 t_off = 10, 30, 100, 300, 1000, 3000 µs. 오른쪽 작은 그래프는 t_off에 따른 Tₑ 최대(같은 모델). 해볼 것: 압력을 낮추면(2 mTorr) 같은 t_off에서도 오버슈트가 커진다—정상 Tₑ가 높고 n_g K_iz 가 작아 따라잡는 데 오래 걸리기 때문이다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="eneg">
+    <h2>전기 음성 잔광: 음이온 추출과 대전 완화</h2>
+    <p>Cl₂, O₂, SF₆, C₄F₈ 같은 <span class="term">전기 음성</span> 기체에서는 전자가 분자에 붙어 음이온이 된다(<a href="global.html">8장</a>의 \(\alpha = n_-/n_e\)). CW 플라즈마에서 음이온은 벌크의 양전위 우물(≈ 5Tₑ)에 갇혀 벽에 닿지 못한다. 잔광에서는 사정이 바뀐다.</p>
+    <ol>
+      <li>Tₑ가 떨어지면 Cl₂의 해리 부착(문턱 거의 0 eV) 속도 계수는 오히려 커져, 전자가 µs–수십 µs 안에 음이온으로 바뀐다.</li>
+      <li>전자가 사라지면 벽을 음으로 대전시키던 전위 장벽 \(\Phi \approx 5.2\,T_e\,n_e/(n_e+n_-)\)이 무너진다. 양이온과 음이온만 남은 <span class="term">이온-이온 플라즈마</span>가 된다.</li>
+      <li>음이온이 벽과 웨이퍼에 닿는다. 고종횡비 트렌치 바닥은 CW에서 이온만 받아 양으로 대전되는데(<a href="surface.html">14장</a> 전자 그늘 효과), 잔광의 음이온(과 바이어스를 걸면 가속된 음이온)이 이 양전하를 중화한다.</li>
+    </ol>
+    <div class="formula">$$\frac{dn_e}{dt} = G(t) - \nu_{\text{att}}n_e + \nu_{\text{det}}n_- - \frac{u_B(T_e)}{d_{\text{eff}}(1+\alpha)}\,n_e,\qquad \frac{dn_-}{dt} = \nu_{\text{att}}n_e - \nu_{\text{det}}n_- - k_{\text{rec}}n_+n_- - s\,\frac{u_-}{d_{\text{eff}}}\,n_-$$
+      <div class="where">\(G = P/(eV\mathcal{E}_T)\)(켜짐, \(\mathcal{E}_T \approx 100\) eV), \(n_+ = n_e + n_-\)(준중성), \(\nu_{\text{att}} = x\,n_g k_{\text{att}}(T_e)\), \(k_{\text{att}} = 2\times10^{-16}(1 + 3e^{-T_e/0.4})\) m³/s(낮은 Tₑ에서 커짐), \(\nu_{\text{det}} = 10^3\) s⁻¹, \(k_{\text{rec}} = 5\times10^{-14}\) m³/s, 음이온 탈출 확률 \(s = \exp(-\Phi/T_-)\), \(T_- = 0.05\) eV, \(u_- = \sqrt{2eT_-/M_-}\). Tₑ는 켜짐에서 3 eV(1 µs로 이완), 꺼짐에서 \(\tau_T = 10\ \mu\)s로 기체 온도까지 감쇠하는 단순화된 모델이다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 260" role="img" aria-label="트렌치 대전: 켜짐 동안 전자는 등방성이라 트렌치 입구에 막히고 이온은 바닥에 닿아 양전하가 쌓임, 잔광에서는 음이온이 바닥으로 들어가 양전하를 중화">
+        <defs><marker id="f4-ai" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--m-ion)"/></marker>
+          <marker id="f4-an" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--m-negion)"/></marker>
+          <marker id="f4-ae" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--m-electron)"/></marker></defs>
+        <g transform="translate(20,0)">
+          <text x="190" y="20" class="lbl-b" text-anchor="middle">켜짐 (CW): 전자 그늘 → 바닥 + 대전</text>
+          <rect x="20" y="30" width="360" height="70" class="pl-glow"/>
+          <rect x="20" y="120" width="140" height="110" class="m-polymer"/><rect x="240" y="120" width="140" height="110" class="m-polymer"/>
+          <rect x="160" y="215" width="80" height="15" class="m-si"/>
+          <line x1="190" y1="50" x2="190" y2="205" stroke="var(--m-ion)" stroke-width="2" marker-end="url(#f4-ai)"/>
+          <line x1="210" y1="50" x2="210" y2="205" stroke="var(--m-ion)" stroke-width="2" marker-end="url(#f4-ai)"/>
+          <line x1="90" y1="60" x2="150" y2="118" stroke="var(--m-electron)" stroke-width="2" marker-end="url(#f4-ae)"/>
+          <line x1="310" y1="60" x2="250" y2="118" stroke="var(--m-electron)" stroke-width="2" marker-end="url(#f4-ae)"/>
+          <text x="70" y="140" class="lbl-el">− − −</text><text x="290" y="140" class="lbl-el">− − −</text>
+          <text x="200" y="212" class="lbl-ion" text-anchor="middle">+ + + +</text>
+          <text x="200" y="252" class="lbl-sm" text-anchor="middle">바닥 전위 상승 → 이온 휨·노칭, 게이트 손상</text>
+        </g>
+        <g transform="translate(450,0)">
+          <text x="190" y="20" class="lbl-b" text-anchor="middle">잔광: 이온-이온 플라즈마 → 중화</text>
+          <rect x="20" y="30" width="360" height="70" class="pl-glow-dim"/>
+          <rect x="20" y="120" width="140" height="110" class="m-polymer"/><rect x="240" y="120" width="140" height="110" class="m-polymer"/>
+          <rect x="160" y="215" width="80" height="15" class="m-si"/>
+          <line x1="185" y1="50" x2="190" y2="205" stroke="var(--m-negion)" stroke-width="2" marker-end="url(#f4-an)"/>
+          <line x1="215" y1="50" x2="210" y2="205" stroke="var(--m-negion)" stroke-width="2" marker-end="url(#f4-an)"/>
+          <text x="60" y="64" class="lbl-neg">Cl⁻</text><text x="120" y="84" class="lbl-ion">Cl₂⁺</text><text x="290" y="64" class="lbl-neg">Cl⁻</text><text x="330" y="88" class="lbl-ion">Ar⁺</text>
+          <text x="200" y="212" class="lbl-sm" text-anchor="middle">+ − + −</text>
+          <text x="200" y="252" class="lbl-sm" text-anchor="middle">전자 없음 → 장벽 붕괴, 음이온이 바닥 양전하 중화</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-4.</b> 펄스로 대전을 푸는 원리(개념도). 등방성 전자는 좁은 입구 옆벽에 막히고 방향성 이온만 바닥에 닿아 바닥이 + 로 대전된다. 잔광의 음이온은 이 불균형을 줄인다. 공정 쪽 효과는 <a href="../../etch/chapters/har.html">EtchBook 고종횡비 식각</a> 참고.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-en">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>전기 음성 잔광: 전자 → 음이온, 음이온 벽 플럭스</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="en-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>펄스 주파수 <output id="en-f-out"></output></span><input type="range" id="en-f" min="-1" max="1.301" step="0.01" value="0"></label>
+          <label class="ctrl"><span>듀티 <output id="en-d-out"></output></span><input type="range" id="en-d" min="10" max="90" step="1" value="50"></label>
+          <label class="ctrl"><span>전기 음성 기체 분율 x (Cl₂) <output id="en-x-out"></output></span><input type="range" id="en-x" min="0" max="1" step="0.01" value="0.5"></label>
+          <label class="ctrl"><span>피크 전력 <output id="en-p-out"></output></span><input type="range" id="en-p" min="300" max="3000" step="50" value="1500"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">켜짐 끝 α = n₋/nₑ</span><span class="v" id="en-a">—</span></div>
+        <div class="stat"><span class="k">이온-이온 진입 (nₑ &lt; n₋/100)</span><span class="v" id="en-tii">—</span></div>
+        <div class="stat"><span class="k">음이온 벽 플럭스 최대</span><span class="v" id="en-fx">—</span></div>
+        <div class="stat"><span class="k">주기당 음이온 플루언스</span><span class="v" id="en-fl">—</span></div>
+        <div class="stat"><span class="k">음이온 / 양이온 도즈 (주기)</span><span class="v" id="en-ratio">—</span></div>
+      </div>
+      <div class="sim-note">위: 로그 밀도(cm⁻³) — 전자, 음이온, 양이온. 아래: 음이온 벽 플럭스(cm⁻² s⁻¹)와 Tₑ. 해볼 것: x = 0(순수 Ar)이면 음이온이 없고, x를 올리면 꺼짐 수십 µs 뒤 전자가 사라지며 음이온 플럭스가 켜진다. 꺼짐이 너무 짧으면(20 kHz 90 %) 이온-이온 단계에 들어가지 못해 음이온 플럭스가 거의 0이다. 음이온 도즈 비는 양이온(Bohm) 도즈와 비교한 대전 완화의 척도다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="sync">
+    <h2>소스·바이어스 동기 펄스와 지연 펄스</h2>
+    <p>ICP·CCP 식각기는 밀도를 만드는 <b>소스</b>와 이온 에너지를 정하는 <b>바이어스</b>를 따로 펄스할 수 있다. 같은 주파수에서 위상(지연)과 듀티를 고르면 세 가지 대표 방식이 나온다.</p>
+    <ul>
+      <li><b>동기(synchronous):</b> 소스와 바이어스가 함께 켜지고 꺼진다. 꺼짐 동안 이온 충격이 쉬어 웨이퍼 표면 반응·부산물 탈착 시간을 준다.</li>
+      <li><b>지연(잔광 바이어스):</b> 바이어스를 소스 꺼짐에 맞춘다. 차가운 잔광 플라즈마에서 이온을 뽑아 Tₑ 관련 손상(UV, 전자 그늘)을 줄이고, 이온-이온 잔광이면 음이온까지 가속한다.</li>
+      <li><b>소스 CW + 바이어스 펄스:</b> 밀도는 일정, 이온 에너지만 켜졌다 꺼진다. 식각 깊이와 선택비를 듀티로 조절(<a href="../../etch/chapters/ale.html">ALE</a>와 비슷한 생각).</li>
+    </ul>
+    <p>바이어스 전력을 일정하게 제어하면 시스 전압은 이온 전류에 반비례한다: \(V_b \approx P_b/(e\Gamma_i A)\), \(\Gamma_i = h_L n u_B\). 그래서 밀도가 빠진 잔광에서 같은 바이어스 전력을 걸면 <b>이온 에너지가 치솟는다</b>(발생기 전압 한계에서 잘림). 바이어스 펄스는 전압 제어 모드로 바꾸거나 전력을 단계별로 정하는 이유다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="동기 펄스와 지연 펄스의 타이밍도: 소스 포락선, 동기 바이어스, 지연 바이어스, 그리고 밀도">
+        <g class="lbl-sm"><text x="10" y="50">소스</text><text x="10" y="105">바이어스(동기)</text><text x="10" y="160">바이어스(지연)</text><text x="10" y="215">nₑ</text></g>
+        <path class="wave" d="M120 60 L160 60 L160 30 L360 30 L360 60 L520 60 L520 30 L720 30 L720 60 L840 60"/>
+        <path class="wave2" d="M120 115 L160 115 L160 85 L360 85 L360 115 L520 115 L520 85 L720 85 L720 115 L840 115"/>
+        <path class="wave2" d="M120 170 L360 170 L360 140 L470 140 L470 170 L720 170 L720 140 L830 140 L830 170 L840 170"/>
+        <path class="w-ion" d="M120 232 C 140 232, 150 232, 160 232 C 200 205, 260 198, 360 197 C 400 210, 460 226, 520 230 C 560 205, 620 198, 720 197 C 760 210, 820 226, 840 230"/>
+        <line x1="360" y1="20" x2="360" y2="240" class="dash"/><line x1="720" y1="20" x2="720" y2="240" class="dash"/>
+        <text x="480" y="132" class="lbl-acc2">잔광 이온 + 음이온 가속</text>
+        <text x="220" y="78" class="lbl-sm">이온 에너지 ∝ P_b/n</text>
+        <text x="540" y="248" class="lbl-sm">잔광: n↓ → 같은 P_b에서 V_b↑</text>
+      </svg>
+      <figcaption><b>그림 12-5.</b> 동기 펄스(가운데)와 지연(잔광) 바이어스(아래)의 타이밍. 바이어스를 잔광 앞쪽에 두면 밀도가 아직 남아 있어 플럭스를 얻으면서 Tₑ는 낮다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-sync">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>소스·바이어스 타이밍과 이온 에너지·플럭스</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sy-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>펄스 주파수 <output id="sy-f-out"></output></span><input type="range" id="sy-f" min="-1" max="1.301" step="0.01" value="0.301"></label>
+          <label class="ctrl"><span>소스 듀티 <output id="sy-ds-out"></output></span><input type="range" id="sy-ds" min="10" max="100" step="1" value="50"></label>
+          <label class="ctrl"><span>바이어스 지연 (주기 %) <output id="sy-dl-out"></output></span><input type="range" id="sy-dl" min="0" max="99" step="1" value="0"></label>
+          <label class="ctrl"><span>바이어스 듀티 <output id="sy-db-out"></output></span><input type="range" id="sy-db" min="10" max="100" step="1" value="50"></label>
+          <label class="ctrl"><span>바이어스 전력 <output id="sy-pb-out"></output></span><input type="range" id="sy-pb" min="50" max="1500" step="10" value="300"></label>
+          <div class="ctrl"><span>프리셋</span><div class="pu-btns">
+            <button class="btn" data-sy="50,0,50">동기</button>
+            <button class="btn" data-sy="50,50,30">잔광 바이어스</button>
+            <button class="btn" data-sy="100,0,30">소스 CW</button>
+          </div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">바이어스 중 이온 에너지 범위</span><span class="v" id="sy-E">—</span></div>
+        <div class="stat"><span class="k">플럭스 가중 ⟨Eᵢ⟩</span><span class="v" id="sy-Eavg">—</span></div>
+        <div class="stat"><span class="k">바이어스 받은 이온 비율</span><span class="v" id="sy-frac">—</span></div>
+        <div class="stat"><span class="k">바이어스 중 ⟨Tₑ⟩</span><span class="v" id="sy-Te">—</span></div>
+        <div class="stat"><span class="k">전압 한계(1.5 kV) 도달</span><span class="v" id="sy-lim">—</span></div>
+      </div>
+      <div class="sim-note">nₑ(t)는 켜짐에서 \(dn/dt = (n_{ss} - n)/\tau_r\), 꺼짐에서 \(dn/dt = -n/\tau_n\)(\(\tau_r\) = 20 µs, \(\tau_n\) = 300 µs, \(n_{ss}\) = 4×10¹¹ cm⁻³), Tₑ는 켜짐 2.5 eV, 꺼짐 \(\tau_T\) = 10 µs로 0.3 eV까지 감쇠. 웨이퍼 이온 전류 \(I_i = e h_L n u_B(T_e) A\)(A = 0.0707 m²), 시스 전압 \(V_b = \min(P_b/I_i,\ 1500\ \text{V})\). 해볼 것: "잔광 바이어스"에서 지연을 50 %→80 %로 늦추면 밀도가 빠져 이온 에너지가 전압 한계까지 오르고 플럭스는 준다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="hipims">
+    <h2>HiPIMS: 짧고 센 펄스로 금속을 이온화</h2>
+    <p>DC 마그네트론 스퍼터(<a href="breakdown.html">5장</a>, PL-300 PE: Ar 3 mTorr, 20 kW, −400 ~ −600 V)에서 튀어나온 금속 원자는 대부분 <b>중성</b>으로 웨이퍼에 간다. 이온화 영역(타깃 앞 ~1–2 cm)의 전자 밀도가 약 10¹¹ cm⁻³뿐이라 금속 원자가 그곳을 지나는 수십 µs 동안 이온화될 확률이 몇 %에 그치기 때문이다. <span class="term">HiPIMS</span><span class="en">(high-power impulse magnetron sputtering)</span>는 평균 전력은 그대로 두고 <b>50–200 µs 펄스를 1 % 남짓의 듀티로</b> 걸어 순간 전력 밀도를 0.5–3 kW/cm²로 올린다. 순간 전자 밀도가 10¹²–10¹³ cm⁻³까지 오르면 금속 원자의 상당수가 이온이 되고, 기판 바이어스로 그 방향과 에너지를 정할 수 있어 깊은 비아 바닥 피복과 막 밀도가 좋아진다(<a href="../../thinfilm/chapters/sputter.html">ThinFilmBook 스퍼터</a>).</p>
+    <div class="formula">$$P_{\text{peak}} = \frac{\langle P\rangle}{f\,t_p},\qquad \alpha_{iz} = 1 - \exp\!\Big(-\frac{n_e k_{iz,m} L}{v_m}\Big),\qquad \phi_{\text{ion}} = \frac{\alpha_{iz}(1-\beta)}{1-\alpha_{iz}\beta}$$
+      <div class="where">\(L\)은 이온화 영역 두께(약 1.5 cm), \(v_m \approx 1\) km/s는 스퍼터 원자 속도, \(k_{iz,m} \approx 3\times10^{-14}\) m³/s(Cu, Tₑ ≈ 3 eV, 문턱 7.73 eV). \(\beta\)는 이온이 된 금속이 타깃 전위에 끌려 돌아가는 <span class="term">귀환 확률</span>. 돌아간 이온은 자기 스퍼터에 쓰이지만 기판에는 오지 않으므로, 같은 평균 전력에서 증착 속도는 \((1-\alpha_{iz}\beta)\)배로 준다. 높은 방전 전압에서는 와트당 스퍼터 수율도 약 \(V^{-1/2}\)로 준다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="마그네트론 타깃 앞 이온화 영역에서 DC와 HiPIMS의 비교: DC는 중성 금속이 대부분, HiPIMS는 금속 이온이 많고 일부는 타깃으로 귀환">
+        <defs><marker id="f6-am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--m-metal)"/></marker>
+          <marker id="f6-ai" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--m-ion)"/></marker></defs>
+        <g transform="translate(10,0)">
+          <text x="200" y="20" class="lbl-b" text-anchor="middle">DC: ~13 W/cm², nₑ ~ 10¹¹ cm⁻³</text>
+          <rect x="20" y="30" width="360" height="22" class="m-metal"/><text x="200" y="46" class="lbl-sm" text-anchor="middle">타깃 (−450 V)</text>
+          <rect x="20" y="54" width="360" height="40" class="pl-glow-dim"/><text x="372" y="80" class="lbl-sm" text-anchor="end">이온화 영역</text>
+          <g stroke="var(--m-metal)" stroke-width="2"><line x1="80" y1="60" x2="80" y2="190" marker-end="url(#f6-am)"/><line x1="150" y1="60" x2="160" y2="190" marker-end="url(#f6-am)"/><line x1="240" y1="60" x2="230" y2="190" marker-end="url(#f6-am)"/><line x1="320" y1="60" x2="330" y2="190" marker-end="url(#f6-am)"/></g>
+          <line x1="200" y1="90" x2="200" y2="190" stroke="var(--m-ion)" stroke-width="2" marker-end="url(#f6-ai)"/>
+          <rect x="20" y="194" width="360" height="12" class="m-si"/>
+          <text x="200" y="230" class="lbl-sm" text-anchor="middle">금속 이온 비율 수 % · 증착 빠름</text>
+        </g>
+        <g transform="translate(450,0)">
+          <text x="200" y="20" class="lbl-b" text-anchor="middle">HiPIMS: ~1 kW/cm², nₑ ~ 10¹²–10¹³</text>
+          <rect x="20" y="30" width="360" height="22" class="m-metal"/><text x="200" y="46" class="lbl-sm" text-anchor="middle">타깃 (−800 V, 100 µs)</text>
+          <rect x="20" y="54" width="360" height="40" class="pl-glow"/>
+          <g stroke="var(--m-ion)" stroke-width="2"><line x1="80" y1="88" x2="80" y2="190" marker-end="url(#f6-ai)"/><line x1="150" y1="88" x2="150" y2="190" marker-end="url(#f6-ai)"/><line x1="230" y1="88" x2="230" y2="190" marker-end="url(#f6-ai)"/><path d="M300 80 C 310 70, 320 66, 330 56" marker-end="url(#f6-ai)" fill="none"/><path d="M110 80 C 120 70, 125 64, 130 56" marker-end="url(#f6-ai)" fill="none"/></g>
+          <line x1="340" y1="60" x2="345" y2="190" stroke="var(--m-metal)" stroke-width="2" marker-end="url(#f6-am)"/>
+          <text x="318" y="112" class="lbl-ion">귀환 β</text>
+          <rect x="20" y="194" width="360" height="12" class="m-si"/>
+          <text x="200" y="230" class="lbl-sm" text-anchor="middle">금속 이온 비율 수십 % · 증착 속도 ↓</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-6.</b> DC 마그네트론과 HiPIMS(개념도). 금속 색 화살표는 중성 금속, 이온 색 화살표는 금속 이온. HiPIMS 이온의 일부는 타깃 전위에 끌려 돌아가(귀환) 자기 스퍼터에 쓰인다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-hip">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>HiPIMS 계산기: 순간 전력 밀도 → 금속 이온화와 증착 속도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="hp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>평균 전력 <output id="hp-p-out"></output></span><input type="range" id="hp-p" min="2" max="20" step="0.5" value="10"></label>
+          <label class="ctrl"><span>펄스 주파수 <output id="hp-f-out"></output></span><input type="range" id="hp-f" min="1.7" max="3" step="0.01" value="2"></label>
+          <label class="ctrl"><span>펄스 폭 t_p <output id="hp-tp-out"></output></span><input type="range" id="hp-tp" min="10" max="500" step="5" value="100"></label>
+          <label class="ctrl"><span>귀환 확률 β <output id="hp-b-out"></output></span><input type="range" id="hp-b" min="0.3" max="0.95" step="0.01" value="0.8"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">듀티</span><span class="v" id="hp-d">—</span></div>
+        <div class="stat"><span class="k">피크 전력 / 밀도</span><span class="v" id="hp-pk">—</span></div>
+        <div class="stat"><span class="k">이온화 영역 nₑ</span><span class="v" id="hp-ne">—</span></div>
+        <div class="stat"><span class="k">금속 이온화 확률 α</span><span class="v" id="hp-a">—</span></div>
+        <div class="stat"><span class="k">기판 금속 이온 비율 φ</span><span class="v" id="hp-phi">—</span></div>
+        <div class="stat"><span class="k">증착 속도 / DC</span><span class="v" id="hp-r">—</span></div>
+      </div>
+      <div class="sim-note">타깃 면적 0.15 m²(지름 약 44 cm) 가정. 이온화 영역 밀도 근사 \(n_e \approx 10^{11}\,(p_d/10\ \text{W/cm}^2)^{0.8}\) cm⁻³(상한 3×10¹³), 방전 전압 \(V \approx 450\,(p_d/13)^{0.12}\) V(상한 1100 V), \(\beta\)는 DC와 HiPIMS에 같게 적용. 곡선: α(이온화 확률), φ(기판 도달 이온 비율), 증착 속도 비(DC 대비, 같은 평균 전력). 점: 왼쪽 DC, 오른쪽 현재 HiPIMS 조건. 해볼 것: 펄스 폭을 줄여 피크를 올리면 φ는 포화하는데 증착 속도는 계속 떨어진다—HiPIMS의 근본적 교환 관계다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="tailored">
+    <h2>맞춤 바이어스 파형과 좁은 IEDF</h2>
+    <p><a href="sheath.html">7장</a>에서 보았듯 사인파 바이어스의 이온 에너지 분포(IEDF)는 두 봉우리이고, 이온이 시스를 건너는 시간 \(\tau_i\)에 비해 RF 주기가 길수록 폭 \(\Delta E\)가 \(\approx 2eV_{\text{rf}}\)까지 넓어진다. 이온은 시간에 따라 바뀌는 시스 전압의 <b>히스토그램</b>을 그대로 받아 적기 때문이다. 사인파는 위·아래 끝에서 가장 오래 머물러 그 두 에너지에 이온이 몰린다. 그렇다면 시스 전압이 한 주기의 대부분 동안 <b>일정한</b> 파형을 걸면 IEDF는 한 봉우리가 된다. 이것이 <span class="term">맞춤 파형</span><span class="en">(tailored waveform)</span> 바이어스다.</p>
+    <ul>
+      <li><b>펄스 DC:</b> 주기의 대부분은 −V₀, 짧게 0 V(또는 +) 구간을 넣어 전자를 불러 표면 전하를 지운다. 문제는 웨이퍼 위 유전막이 이온 전류로 충전되어 시스 전압이 시간에 따라 줄어드는 것: \(dV_{\text{surf}}/dt = J_i/C_s\), \(C_s = \varepsilon_0\varepsilon_r/d\).</li>
+      <li><b>맞춤(톱니) 파형:</b> 음 구간 동안 전극 전압을 \(-J_i t/C_s\) 기울기로 더 내려 충전을 상쇄한다. 이상적으로 시스 전압이 상수가 되어 단일 에너지 IEDF.</li>
+    </ul>
+    <div class="formula">$$\tau_i\,\frac{dE_i}{dt} = eV_s(t) - E_i,\qquad \tau_i \approx \frac{3s}{\sqrt{2eV_s/M}},\qquad s = \frac{\sqrt2}{3}\lambda_{De}\Big(\frac{2V_s}{T_e}\Big)^{3/4}$$
+      <div class="where">이온은 \(\tau_i\)보다 빠른 시스 전압 변화를 평균해서 받는다(1차 저역 통과 근사). 시스 두께는 차일드 법칙(<a href="sheath.html">7장</a>), 시스 경계 밀도는 \(J_i = e n_s u_B\)에서 구한다(Tₑ = 3 eV, Ar). IEDF는 \(E_i(t)\)를 한 주기 동안 균일한 이온 플럭스로 모은 히스토그램에 3 eV 폭의 열·충돌 퍼짐을 더한 것이다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 270" role="img" aria-label="세 가지 바이어스 파형: 사인파, 충전되는 펄스 DC, 기울기로 보상한 맞춤 파형과 각각의 IEDF 모양">
+        <g class="lbl-b" text-anchor="middle"><text x="140" y="20">사인파</text><text x="430" y="20">펄스 DC (충전 있음)</text><text x="720" y="20">맞춤 톱니 (충전 보상)</text></g>
+        <g transform="translate(20,30)">
+          <rect x="0" y="0" width="240" height="110" class="box"/>
+          <path class="wave" d="M10 20 C 30 20, 40 95, 65 95 C 90 95, 100 20, 120 20 C 140 20, 150 95, 175 95 C 200 95, 210 20, 230 20"/>
+          <text x="6" y="134" class="lbl-sm">시스 전압 (아래로 클수록 큼)</text>
+        </g>
+        <g transform="translate(310,30)">
+          <rect x="0" y="0" width="240" height="110" class="box"/>
+          <path class="wave" d="M10 15 L20 15 L20 95 L100 75 L100 15 L120 15 L120 95 L200 75 L200 15 L230 15"/>
+          <text x="150" y="58" class="lbl-sm">ΔV = J·t/C</text>
+        </g>
+        <g transform="translate(600,30)">
+          <rect x="0" y="0" width="240" height="110" class="box"/>
+          <path class="wave2" d="M10 15 L20 15 L20 95 L100 115 L100 15 L120 15 L120 95 L200 115 L200 15 L230 15" stroke-dasharray="5 3"/>
+          <path class="wave" d="M20 95 L100 95 M120 95 L200 95"/>
+          <text x="120" y="58" class="lbl-acc2" text-anchor="middle">전극: 기울기 보상</text>
+          <text x="150" y="88" class="lbl-acc" text-anchor="middle">시스: 일정</text>
+        </g>
+        <g transform="translate(20,180)"><line x1="0" y1="70" x2="240" y2="70" class="s-axis"/><path class="w-ion" d="M10 70 L30 70 C 40 10, 50 10, 55 50 L 185 55 C 190 10, 200 10, 210 70 L 235 70"/><text x="120" y="88" class="lbl-sm" text-anchor="middle">두 봉우리, ΔE ≈ 2eV_rf</text></g>
+        <g transform="translate(310,180)"><line x1="0" y1="70" x2="240" y2="70" class="s-axis"/><path class="w-ion" d="M10 70 L 15 40 L 22 70 L150 70 L152 30 L200 30 L202 70 L235 70"/><text x="120" y="88" class="lbl-sm" text-anchor="middle">넓은 판 + 낮은 봉우리(0 V 구간)</text></g>
+        <g transform="translate(600,180)"><line x1="0" y1="70" x2="240" y2="70" class="s-axis"/><path class="w-ion" d="M10 70 L 15 55 L 22 70 L185 70 C 192 70, 194 0, 200 0 C 206 0, 208 70, 215 70 L235 70"/><text x="120" y="88" class="lbl-sm" text-anchor="middle">단일 봉우리</text></g>
+      </svg>
+      <figcaption><b>그림 12-7.</b> 바이어스 파형(위)과 IEDF(아래, 가로축 이온 에너지) 개념도. 펄스 DC의 판 모양 폭은 유전막 충전이, 맞춤 파형의 좁은 봉우리는 기울기 보상이 만든다. 펄스 DC의 낮은 봉우리는 전하를 지우는 0 V 구간에 들어온 이온이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-iedf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>바이어스 파형 → 시스 전압 히스토그램 → IEDF</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ie-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>파형</span><div class="seg" id="ie-w"><button data-value="sine" class="on">사인</button><button data-value="pulse">펄스 DC</button><button data-value="tail">맞춤</button></div></div>
+          <label class="ctrl"><span>바이어스 주파수 <output id="ie-f-out"></output></span><input type="range" id="ie-f" min="5" max="7.132" step="0.01" value="5.602"></label>
+          <label class="ctrl"><span>목표 이온 에너지 / 진폭 <output id="ie-v-out"></output></span><input type="range" id="ie-v" min="100" max="1000" step="10" value="400"></label>
+          <label class="ctrl"><span>이온 전류 밀도 J <output id="ie-j-out"></output></span><input type="range" id="ie-j" min="1" max="20" step="0.5" value="10"></label>
+          <label class="ctrl"><span>유전막 SiO₂ 두께 <output id="ie-d-out"></output></span><input type="range" id="ie-d" min="0" max="3" step="0.05" value="1"></label>
+          <label class="ctrl"><span>기울기 보상 (맞춤) <output id="ie-c-out"></output></span><input type="range" id="ie-c" min="0" max="150" step="5" value="100"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">이온 통과 시간 τᵢ / 주기</span><span class="v" id="ie-tau">—</span></div>
+        <div class="stat"><span class="k">한 주기 충전 ΔV</span><span class="v" id="ie-dv">—</span></div>
+        <div class="stat"><span class="k">ΔE (반치 포락 폭)</span><span class="v" id="ie-de">—</span></div>
+        <div class="stat"><span class="k">목표 ±5 % 안 이온</span><span class="v" id="ie-in">—</span></div>
+        <div class="stat"><span class="k">ΔE 사인 / 펄스 / 맞춤</span><span class="v" id="ie-cmp">—</span></div>
+      </div>
+      <div class="sim-note">위: 시스 전압 eV_s(t)(얇은 선)와 이온이 받는 에너지 E_i(t)(굵은 선) 두 주기. 아래: IEDF(현재 파형은 채움, 나머지 둘은 점선). 사인파는 \(V_s = V_p + V_0(1-\sin\omega t)\)로 최대 \(2V_0\)까지 출렁이고(여기서 진폭 슬라이더는 평균 에너지 \(V_0\)), 펄스·맞춤은 주기의 92 %가 음 구간, 8 %가 0 V(시스 ≈ 플라즈마 전위 \(V_p\) = 15 V). 유전막 두께 0이면 도체 웨이퍼(충전 없음). ΔE는 IEDF가 최댓값의 절반을 넘는 가장 낮은 에너지에서 가장 높은 에너지까지의 폭(두 봉우리면 봉우리 간격, 한 봉우리면 반치폭)이다. 해볼 것: 주파수를 낮추면(100 kHz) 펄스 DC의 충전 폭이 커지고, 13.56 MHz로 올리면 τᵢ가 주기와 비슷해져 사인파 봉우리가 가운데로 모인다. 맞춤 파형에서 보상을 100 %에서 벗어나게 하면 폭이 다시 넓어진다.</div>
+    </div>
+
+    <div class="callout fab"><strong>IC 바이어스 맞춤 파형</strong>IC 모듈 기준(nₑ ≈ 4×10¹¹ cm⁻³, 시스 경계 밀도 비 \(h_L \approx 0.2\)) 웨이퍼 평균 이온 전류 밀도는 \(J_i \approx e\,h_L n\,u_B \approx 3\) mA/cm²이고, 중심부 국소값이나 피크 전력 펄스에서는 2–3배 크다. 1 µm SiO₂의 \(C_s = \varepsilon_0\varepsilon_r/d \approx 3.5\) nF/cm² 위에서 10 mA/cm²이면 충전 속도 \(J_i/C_s \approx 2.9\) V/µs다. 400 kHz 펄스 DC(음 구간 약 2.3 µs)에서는 주기당 약 6.7 V, 100 kHz에서는 약 27 V가 되어, 400 eV에서 ±2 %(±8 eV)라는 이온 에너지 재현성 목표를 넘는다. 맞춤 파형의 기울기는 실시간 이온 전류 측정으로 갱신한다.</div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="matching">
+    <h2>펄스 시 정합: 가장자리마다 튀는 반사 전력</h2>
+    <p>정합기(<a href="rf.html">11장</a>)는 플라즈마 임피던스 \(Z_L\)을 50 Ω으로 바꾸도록 맞춰 둔다. 그런데 \(Z_L\)은 밀도에 따라 변한다. 펄스가 켜지는 순간 밀도는 꺼짐 끝의 낮은 값이고, 수십 µs에 걸쳐 정상값으로 오른다. 그동안 \(Z_L\)은 정합점에서 벗어나 있으므로 <b>매 펄스 앞 가장자리마다 반사 전력이 튄다</b>. 진공 커패시터를 모터로 돌리는 기계식 정합은 0.5–1 s가 걸려 µs 변화를 따라갈 수 없다. 해법은 세 가지다.</p>
+    <ol>
+      <li><b>정합점 옮기기:</b> 정상 상태가 아니라 펄스 평균 임피던스에 맞춘다(스파이크는 줄지만 정상 구간 반사가 생김).</li>
+      <li><b>주파수 튜닝:</b> 발생기 주파수를 ±5 % 안에서 바꿔 정합 회로의 리액턴스를 빠르게 조절한다. 정규화 리액턴스는 \(x \to x + 2Q\,\delta f/f\)만큼 움직인다(\(Q\)는 정합 회로의 부하 Q). 저항 성분은 못 고친다.</li>
+      <li><b>펄스 동기 주파수 프로파일:</b> 펄스 위상마다 쓸 주파수를 미리 학습해 표로 재생한다. 응답 지연이 없다.</li>
+    </ol>
+    <div class="formula">$$\Gamma = \frac{Z - Z_0}{Z + Z_0},\qquad \frac{P_{\text{ref}}}{P_{\text{fwd}}} = |\Gamma|^2,\qquad z(n) = r(n) + j\big[x(n) + 2Q\,\delta(t)\big]$$
+      <div class="where">정합기 출력 쪽에서 본 정규화 임피던스 근사: \(r = 0.3 + 0.7u\), \(x = 1.2(1-u)\), \(u = n/n_{ss}\). 정상 상태(\(u = 1\))에서 \(z = 1\)로 정합. 주파수 튜닝은 목표 \(\delta^* = -x/(2Q)\)를 응답 시간 \(\tau_{ft}\)의 1차 지연으로 따라가고 ±5 %에서 잘린다. 밀도는 흡수된 전력 \((1-|\Gamma|^2)P\)로 오르므로 반사가 클수록 회복이 늦어진다(되먹임).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 220" role="img" aria-label="펄스 포락선과 반사 전력: 각 펄스 앞 가장자리에서 반사 전력 스파이크가 생기고 주파수 튜닝으로 줄어듦">
+        <g class="lbl-sm"><text x="10" y="56">순방향</text><text x="10" y="126">반사 (고정 정합)</text><text x="10" y="196">반사 (주파수 튜닝)</text></g>
+        <path class="wave" d="M130 70 L170 70 L170 30 L380 30 L380 70 L500 70 L500 30 L710 30 L710 70 L840 70"/>
+        <path class="w-bad" d="M130 140 L170 140 L170 92 C 185 100, 200 125, 240 136 L380 138 L380 140 L500 140 L500 92 C 515 100, 530 125, 570 136 L710 138 L710 140 L840 140"/>
+        <path class="w-ion" d="M130 210 L170 210 L170 175 C 175 195, 182 205, 200 208 L380 209 L380 210 L500 210 L500 175 C 505 195, 512 205, 530 208 L710 209 L710 210 L840 210"/>
+        <text x="250" y="110" class="lbl-sm">nₑ가 회복될 때까지 Γ ≠ 0</text>
+        <text x="540" y="186" class="lbl-sm">µs–ms 안에 δf로 x 상쇄</text>
+        <line x1="380" y1="20" x2="380" y2="215" class="dash"/>
+        <text x="384" y="20" class="lbl-sm">끌 때: 전력 0이라 반사 무관</text>
+      </svg>
+      <figcaption><b>그림 12-8.</b> 펄스 앞 가장자리의 반사 전력 스파이크(개념도). 꺼짐이 길수록(밀도가 많이 빠질수록) 스파이크가 크고 길다. 발생기는 반사 전력 보호로 출력을 줄이므로 플라즈마가 받는 전력은 더 줄어든다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-mt">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>펄스 정합: 반사 전력 스파이크와 주파수 튜닝</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="mt-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>정합 방식</span><div class="seg" id="mt-m"><button data-value="fix" class="on">고정</button><button data-value="avg">평균 정합</button><button data-value="ft">주파수 튜닝</button><button data-value="tab">동기 프로파일</button></div></div>
+          <label class="ctrl"><span>펄스 주파수 <output id="mt-f-out"></output></span><input type="range" id="mt-f" min="-1" max="1.301" step="0.01" value="0"></label>
+          <label class="ctrl"><span>듀티 <output id="mt-d-out"></output></span><input type="range" id="mt-d" min="10" max="90" step="1" value="50"></label>
+          <label class="ctrl"><span>주파수 튜닝 응답 τ_ft <output id="mt-t-out"></output></span><input type="range" id="mt-t" min="0" max="4" step="0.05" value="2"></label>
+          <label class="ctrl"><span>정합 회로 Q <output id="mt-q-out"></output></span><input type="range" id="mt-q" min="2" max="20" step="0.5" value="8"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">켜짐 직후 반사 최대</span><span class="v" id="mt-pk">—</span></div>
+        <div class="stat"><span class="k">켜짐 평균 반사</span><span class="v" id="mt-avg">—</span></div>
+        <div class="stat"><span class="k">반사 1 % 아래까지</span><span class="v" id="mt-t1">—</span></div>
+        <div class="stat"><span class="k">켜짐 끝 nₑ/n_ss</span><span class="v" id="mt-n">—</span></div>
+        <div class="stat"><span class="k">전달 에너지 / 순방향</span><span class="v" id="mt-eff">—</span></div>
+      </div>
+      <div class="sim-note">한 주기를 그린다: 반사율 |Γ|²(%, 빨강), 상대 밀도 u(강조색), 주파수 이동 δ(%, 오른쪽 축의 의미로 점선). 밀도 모델: 켜짐 \(du/dt = [(1-|\Gamma|^2) - u]/\tau_r\), 꺼짐 \(du/dt = -u/\tau_n\), \(\tau_r\) = 20 µs, \(\tau_n\) = 300 µs, 하한 u = 10⁻³. 주기적 정상 상태(6주기 반복)의 마지막 주기를 그린다. 해볼 것: 고정 정합에서 100 Hz로 내리면 반사 스파이크가 거의 100 %까지 커진다. 주파수 튜닝 τ_ft를 1 ms(PL-300 "수 ms")로 두면 1 kHz 펄스(켜짐 500 µs)는 끝까지 따라가지 못한다. 동기 프로파일은 리액턴스를 즉시 지우지만 남는 저항 불일치는 못 지운다.</div>
+    </div>
+
+    <div class="callout fab"><strong>펄스 정합 전략</strong>PL-300 RF 전달 규격은 기계식 L형 정합 0.5–1 s, 주파수 튜닝 ±5 %(수 ms), 반사 목표 1 % 미만이다. 1–5 kHz 펄스에서는 커패시터를 펄스 평균 임피던스 근처에 고정해 두고, 주파수 튜닝은 느린 드리프트(시즈닝·온도)만 따라가게 한 뒤, 펄스 앞 가장자리는 동기 주파수 프로파일로 처리하는 조합이 흔하다. 반사 1 % 미만 규격은 "켜짐 구간 평균"으로 정의하고 가장자리 수십 µs는 별도 한계(예: 순간 30 % 미만)로 둔다. 아크 감지(수 µs)가 이 정상적인 스파이크를 아크로 오인하지 않게 펄스 가장자리 동안 감지 문턱을 가리는(blanking) 설정도 필요하다(<a href="rf.html">11장</a>).</div>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="knobs">
+    <h2>조건 → 결과: 펄스 손잡이 한눈에</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>손잡이 (다른 것은 고정)</th><th>nₑ</th><th>Tₑ·이온화</th><th>이온 에너지·플럭스</th><th>부수 효과</th></tr></thead>
+      <tbody>
+        <tr><td>펄스 주파수 ↑ (듀티 고정)</td><td>출렁임 ↓, 평균 거의 그대로</td><td>꺼짐 끝 Tₑ ↑, 오버슈트 ↓</td><td>준연속에 가까워짐</td><td>정합 스파이크 ↓, 음이온 추출 ↓</td></tr>
+        <tr><td>듀티 ↓ (피크 전력 고정)</td><td>평균 ↓ (전력보다 덜 줄어듦)</td><td>⟨Tₑ⟩ ↓, 재점화 오버슈트 ↑</td><td>평균 플럭스 ↓</td><td>UV·대전 손상 ↓, 래디컬/이온 비 ↑</td></tr>
+        <tr><td>피크 전력 ↑</td><td>피크 ∝ P</td><td>정상 Tₑ 그대로</td><td>플럭스 ∝ P</td><td>너무 낮으면 재점화 실패(E 모드)</td></tr>
+        <tr><td>꺼짐 시간 &gt; τ_n</td><td>매 펄스 거의 0에서 재점화</td><td>Tₑ 오버슈트 4 eV 이상</td><td>켜짐 앞부분 이온 에너지 ↑</td><td>반사 스파이크·점화 불안정</td></tr>
+        <tr><td>전기 음성 기체 + 꺼짐 &gt; 부착 시간</td><td>잔광에서 nₑ → 0, n₋ 남음</td><td>—</td><td>음이온 벽 플럭스 생김</td><td>트렌치 대전 완화, 노칭 ↓</td></tr>
+        <tr><td>바이어스를 잔광에 (전력 제어)</td><td>낮은 n에서 이온 추출</td><td>Tₑ 낮음</td><td>에너지 ↑ (∝ P_b/n), 플럭스 ↓</td><td>전압 한계·전압 제어 필요</td></tr>
+        <tr><td>사인 → 맞춤 파형 바이어스</td><td>—</td><td>—</td><td>IEDF 폭 ↓, 한 봉우리</td><td>선택비·손상 제어 ↑, 충전 보상 필요</td></tr>
+        <tr><td>HiPIMS 피크 전력 밀도 ↑</td><td>이온화 영역 nₑ ↑</td><td>—</td><td>금속 이온 비율 ↑</td><td>증착 속도 ↓ (귀환)</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>\(T = 1/f\), \(t_{\text{on}} = DT\), \(\langle P\rangle = DP_{\text{peak}}\). 펄스의 효과는 꺼짐 시간을 Tₑ 이완(µs–20 µs)과 밀도 감쇠(PL-300 IC에서 약 300 µs)에 견주어 정해진다.</li>
+      <li>시간 의존 전역 모델: \(dn/dt = nn_gK_{iz} - nu_B/d_{\text{eff}}\), \(d(\tfrac32 nT_e)/dt = \eta P/(eV) - \)충돌 손실 \(-\) 벽 손실(7.2 Tₑ). 잔광에서 꼬리가 먼저 잘려 이온화가 즉시 멈추고, 밀도는 천천히 빠진다.</li>
+      <li>잔광에서 식은 전자는 벽 손실 에너지가 작아, 같은 평균 전력에서 펄스의 시간 평균 밀도가 CW보다 높을 수 있고 평균 Tₑ는 낮다.</li>
+      <li>재점화 때 전자당 전력이 커 Tₑ가 오버슈트한다. 꺼짐이 길고 압력이 낮을수록 크다.</li>
+      <li>전기 음성 잔광에서는 전자가 부착으로 사라지고 이온-이온 플라즈마가 되어 음이온이 벽에 닿는다. 트렌치 바닥의 양전하를 중화해 대전 손상과 노칭을 줄인다.</li>
+      <li>소스·바이어스 동기·지연 펄스로 밀도와 이온 에너지 타이밍을 나눈다. 전력 제어 바이어스는 잔광의 낮은 밀도에서 전압이 치솟는다.</li>
+      <li>HiPIMS는 듀티 ~1 %로 순간 전력 밀도를 kW/cm²까지 올려 금속을 이온화하지만, 이온 귀환 때문에 증착 속도가 준다.</li>
+      <li>IEDF는 시스 전압 히스토그램을 \(\tau_i\)로 거른 것이다. 펄스 DC + 충전 보상 기울기(맞춤 파형)로 한 봉우리 IEDF를 만든다.</li>
+      <li>펄스 앞 가장자리마다 밀도가 낮아 반사 전력이 튄다. 기계식 정합은 못 따라가므로 평균 정합 + 주파수 튜닝 + 동기 프로파일을 조합한다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 펄스 주파수 2 kHz, 듀티 30 %, 피크 전력 2 kW일 때 꺼짐 시간과 평균 전력은?</p><div class="opts">
+        <button class="opt">150 µs, 600 W</button>
+        <button class="opt" data-correct>350 µs, 600 W</button>
+        <button class="opt">350 µs, 1400 W</button>
+        <button class="opt">500 µs, 600 W</button>
+      </div><div class="quiz-exp">\(T = 1/2000 = 500\ \mu\)s, \(t_{\text{off}} = 0.7 \times 500 = 350\ \mu\)s, \(\langle P\rangle = 0.3 \times 2 = 0.6\) kW.</div></div>
+
+      <div class="quiz-q"><p>2. RF를 끈 직후 Ar 플라즈마의 이온화율이 Tₑ보다 훨씬 빨리(상대적으로) 줄어드는 이유는?</p><div class="opts">
+        <button class="opt">이온이 먼저 벽으로 빠지기 때문</button>
+        <button class="opt" data-correct>이온화는 15.8 eV 이상의 꼬리 전자에 의존해 \(K_{iz} \propto e^{-17.44/T_e}\)로 Tₑ에 지수적으로 민감하기 때문</button>
+        <button class="opt">기체 밀도가 줄기 때문</button>
+        <button class="opt">전자 밀도가 µs 안에 0이 되기 때문</button>
+      </div><div class="quiz-exp">Tₑ가 2.5 → 1.5 eV로만 내려가도 \(K_{iz}\)는 100배 이상 준다. 꼬리 전자는 여기·이온화 충돌로 먼저 에너지를 잃으므로 이온화는 거의 즉시 멈추고, 밀도는 그 뒤 수백 µs에 걸쳐 빠진다.</div></div>
+
+      <div class="quiz-q"><p>3. 펄스 재점화 때 Tₑ가 정상값보다 높게 튀는(오버슈트) 직접 원인은?</p><div class="opts">
+        <button class="opt">펄스 주파수가 높아서</button>
+        <button class="opt">기체 온도가 올라가서</button>
+        <button class="opt" data-correct>꺼짐 동안 밀도가 줄어 같은 피크 전력이 더 적은 전자에 나눠지기 때문(전자당 전력 \(P/(eVn)\) ↑)</button>
+        <button class="opt">정합기가 반사 전력을 늘려서</button>
+      </div><div class="quiz-exp">에너지 식의 가열항 \(\eta P/(eVn)\)이 낮은 \(n\)에서 커진다. 이온화가 지수적으로 늘어 밀도가 회복되면 Tₑ는 정상값으로 돌아온다. 꺼짐이 길수록 오버슈트가 크다.</div></div>
+
+      <div class="quiz-q"><p>4. Cl₂ 펄스 플라즈마에서 꺼짐 시간이 충분히 길 때 대전 손상이 줄어드는 메커니즘은?</p><div class="opts">
+        <button class="opt">잔광에서 전자 밀도가 증가해 바닥을 중화한다</button>
+        <button class="opt" data-correct>전자가 부착으로 사라져 벽 전위 장벽이 무너지고, 음이온이 트렌치 바닥에 닿아 양전하를 중화한다</button>
+        <button class="opt">이온 에너지가 0이 되어 대전이 없어진다</button>
+        <button class="opt">래디컬이 바닥 전하를 가져간다</button>
+      </div><div class="quiz-exp">CW에서 음이온은 벌크 양전위에 갇힌다. 잔광에서 Tₑ가 떨어져 부착이 빨라지면 이온-이온 플라즈마가 되고 장벽 \(\Phi \approx 5.2T_e n_e/(n_e+n_-)\)이 사라져 음이온이 방향성 있게 들어갈 수 있다.</div></div>
+
+      <div class="quiz-q"><p>5. 바이어스를 전력 제어(300 W 고정)로 잔광 후반에 걸면 이온 에너지는 어떻게 되는가?</p><div class="opts">
+        <button class="opt">밀도와 함께 줄어든다</button>
+        <button class="opt">변하지 않는다</button>
+        <button class="opt" data-correct>이온 전류가 줄어 \(V_b \approx P_b/I_i\)가 커지므로 치솟고, 발생기 전압 한계에서 잘린다</button>
+        <button class="opt">0이 된다</button>
+      </div><div class="quiz-exp">\(I_i = eh_Lnu_BA\)가 밀도·Tₑ와 함께 작아지므로 같은 전력을 넣으려면 전압이 커져야 한다. 그래서 잔광 바이어스는 전압 제어나 전력 단계 설정을 쓴다.</div></div>
+
+      <div class="quiz-q"><p>6. 400 kHz 펄스 DC 바이어스로 SiO₂ 막 위를 식각할 때 IEDF가 넓어지는 원인과 처방이 바르게 짝지어진 것은?</p><div class="opts">
+        <button class="opt">이온 통과 시간이 길어서 — 주파수를 낮춘다</button>
+        <button class="opt" data-correct>이온 전류가 유전막을 충전해 시스 전압이 줄어서 — 음 구간에 \(J_i/C_s\) 기울기를 더한 맞춤 파형</button>
+        <button class="opt">전자 온도가 높아서 — 압력을 낮춘다</button>
+        <button class="opt">자기 바이어스 때문 — 블로킹 커패시터를 없앤다</button>
+      </div><div class="quiz-exp">\(dV_{\text{surf}}/dt = J_i/C_s\). 주기 동안 표면 전위가 올라 시스 전압이 내려가므로 이온 에너지가 판 모양으로 퍼진다. 전극 전압을 같은 기울기로 더 내리면 시스 전압이 상수가 된다. 주파수를 낮추면 충전 폭은 오히려 커진다.</div></div>
+
+      <div class="quiz-q"><p>7. HiPIMS(평균 10 kW, 100 Hz, 펄스 100 µs)의 듀티와 피크 전력은?</p><div class="opts">
+        <button class="opt">10 %, 100 kW</button>
+        <button class="opt" data-correct>1 %, 1 MW</button>
+        <button class="opt">1 %, 100 kW</button>
+        <button class="opt">0.1 %, 10 MW</button>
+      </div><div class="quiz-exp">\(D = f t_p = 100 \times 10^{-4} = 0.01\). \(P_{\text{peak}} = 10\ \text{kW}/0.01 = 1\) MW. 타깃 0.15 m²이면 약 0.67 kW/cm²로 HiPIMS 영역이다.</div></div>
+
+      <div class="quiz-q"><p>8. 1 kHz 소스 펄스의 앞 가장자리 반사 전력 스파이크를 줄이는 데 가장 효과가 적은 방법은?</p><div class="opts">
+        <button class="opt">펄스 위상에 동기한 주파수 프로파일</button>
+        <button class="opt">펄스 평균 임피던스에 맞춘 정합점</button>
+        <button class="opt" data-correct>기계식 진공 커패시터 정합 속도를 높이도록 PID 이득을 올리기</button>
+        <button class="opt">펄스 주파수를 올려 꺼짐 동안 밀도 감소를 줄이기</button>
+      </div><div class="quiz-exp">기계식 정합은 0.5–1 s 단위라 이득을 올려도 수십 µs 변화를 따라갈 수 없고 헌팅만 생긴다. 나머지는 모두 스파이크를 줄인다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const QE = 1.602176634e-19, AMU = 1.6605e-27, MAR = 40 * AMU, ME = 9.109e-31, EPS0 = 8.8541878128e-12, TG = 0.0259;
+  const font = (px, mono) => px + "px " + getComputedStyle(document.body).getPropertyValue(mono ? "--mono" : "--font");
+  const sci = (x, d) => { if (!isFinite(x) || x <= 0) return "0"; const e = Math.floor(Math.log10(x)); return (x / Math.pow(10, e)).toFixed(d == null ? 2 : d) + "×10<sup>" + e + "</sup>"; };
+  const fmtT = (s) => !isFinite(s) ? "—" : s < 1e-6 ? (s * 1e9).toPrecision(3) + " ns" : s < 1e-3 ? (s * 1e6).toPrecision(3) + " µs" : s < 1 ? (s * 1e3).toPrecision(3) + " ms" : s.toPrecision(3) + " s";
+  const fmtF = (f) => f >= 1e6 ? (f / 1e6).toPrecision(3) + " MHz" : f >= 1e3 ? (f / 1e3).toPrecision(3) + " kHz" : f.toPrecision(3) + " Hz";
+  const fmtW = (p) => p >= 1e6 ? (p / 1e6).toPrecision(3) + " MW" : p >= 1e3 ? (p / 1e3).toPrecision(3) + " kW" : p.toFixed(0) + " W";
+  const n11 = (n) => { const v = n * 1e-17; return v >= 0.01 ? v.toPrecision(3) : sci(v, 1); };
+  const pct = (x, d) => (x * 100).toFixed(d == null ? 1 : d) + " %";
+  const setCls = (id, cls) => { const el = $(id); if (el) el.className = "v " + cls; };
+  const debounce = (fn) => { let q = 0; return () => { if (q) return; q = requestAnimationFrame(() => { q = 0; fn(); }); }; };
+  const label = (ctx, txt, x, y, col, align) => { ctx.fillStyle = col; ctx.font = font(12); ctx.textAlign = align || "left"; ctx.textBaseline = "middle"; ctx.fillText(txt, x, y); };
+
+  /* ================= 공통: Ar 시간 의존 전역 모델 (PL-300 IC) ================= */
+  const Kiz = (T) => 2.34e-14 * Math.pow(T, 0.59) * Math.exp(-17.44 / T);
+  const Kex = (T) => 2.48e-14 * Math.pow(T, 0.33) * Math.exp(-12.78 / T);
+  const Kel = (T) => { T = Math.max(T, 1); const l = Math.log(T); return 2.336e-14 * Math.pow(T, 1.609) * Math.exp(0.0618 * l * l - 0.1171 * l * l * l); };
+  function geom(pm) {
+    const R = 0.25, L = 0.10, ng = 3.2e19 * pm, li = 1 / (ng * 1e-18);
+    const hL = 0.86 / Math.sqrt(3 + L / (2 * li)), hR = 0.8 / Math.sqrt(4 + R / li);
+    const V = Math.PI * R * R * L, A = 2 * Math.PI * R * R * hL + 2 * Math.PI * R * L * hR;
+    return { ng, V, A, deff: V / A, hL };
+  }
+  const NC = 3e16, NFLOOR = 1e13;
+  /** st={n,Te}; Pfun(t)→W; 구간 [t0,t1] 적분. rec(t,n,Te) 콜백. edges: 전력이 바뀌는 시각 배열(정렬) */
+  function gmIntegrate(st, g, Pfun, t0, t1, rec, edges) {
+    let t = t0, n = st.n, Te = st.Te, steps = 0, ei = 0;
+    while (edges && ei < edges.length && edges[ei] <= t0) ei++;
+    while (t < t1 && steps < 300000) {
+      steps++;
+      const P = Pfun(t);
+      const uB = Math.sqrt(QE * Te / MAR), kiz = Kiz(Te), nuL = uB / g.deff;
+      const eta = n / (n + NC);
+      const lossc = g.ng * (kiz * 15.76 + Kex(Te) * 12.14 + Kel(Te) * 3 * ME / MAR * (Te - TG));
+      const dln = g.ng * kiz - nuL;
+      const dTe = (2 / 3) * (eta * P / (QE * g.V * n) - lossc - nuL * 7.2 * Te) - Te * dln;
+      const rate = Math.abs(dln) + Math.abs(dTe) / Math.max(Te, 0.05) + 1e3;
+      const stiff = (2 / 3) * lossc * 18 / (Te * Te) + nuL * 5 + eta * P / (QE * g.V * n * Math.max(Te, 0.05)); // ∂(dTe/dt)/∂Te 근사
+      let dt = Math.min(0.02 / rate, 0.4 / stiff, 2e-6, t1 - t);
+      while (edges && ei < edges.length && edges[ei] <= t) ei++;
+      if (edges && ei < edges.length && edges[ei] - t < dt) dt = Math.max(edges[ei] - t + 1e-12, 1e-12);
+      n = Math.min(1e19, Math.max(NFLOOR, n * Math.exp(PB.clamp(dln * dt, -5, 5))));
+      Te = Math.min(20, Math.max(TG, Te + dTe * dt));
+      t += dt;
+      if (rec) rec(t, n, Te);
+    }
+    st.n = n; st.Te = Te;
+    return st;
+  }
+  const cwCache = {};
+  function gmCW(P, pm) {
+    const key = P + "|" + pm;
+    if (cwCache[key]) return cwCache[key];
+    const g = geom(pm), st = { n: Math.max(1e15, 3.9e17 * P / 1500), Te: 2.5 };
+    gmIntegrate(st, g, () => P, 0, 4e-3, null, null);
+    return (cwCache[key] = { n: st.n, Te: st.Te });
+  }
+  /** 펄스 주기적 정상 상태: 마지막 2주기 기록 */
+  function gmPulse(f, duty, P, pm) {
+    const g = geom(pm), T = 1 / f, ton = duty * T;
+    const nper = Math.max(5, Math.ceil(0.006 * f));
+    const cw = gmCW(P, pm), st = { n: cw.n, Te: cw.Te };
+    const edges = [];
+    for (let k = 0; k <= nper; k++) { edges.push(k * T + ton); edges.push((k + 1) * T); }
+    const Pfun = (t) => ((t % T) < ton * (1 - 1e-9) ? P : 0);
+    const tRec = (nper - 2) * T, out = [];
+    gmIntegrate(st, g, Pfun, 0, nper * T, (t, n, Te) => { if (t >= tRec) out.push([t - tRec, n, Te]); }, duty >= 1 ? null : edges);
+    return { out, T, ton, g };
+  }
+
+  /* =============================================================
+     1) 펄스 계산기와 영역 지도
+     ============================================================= */
+  (function () {
+    if (!$("pw-cv")) return;
+    // 잔광 감쇠 곡선 (CW 1.5 kW, 10 mTorr에서 전력 끔)
+    const g = geom(10), cw = gmCW(1500, 10), st = { n: cw.n, Te: cw.Te }, dec = [[0, 1, cw.Te]];
+    gmIntegrate(st, g, () => 0, 0, 0.02, (t, n, Te) => dec.push([t, n / cw.n, Te]), null);
+    let tauT = NaN, tauN = NaN;
+    for (const [t, r, Te] of dec) { if (isNaN(tauT) && Te < 1) tauT = t; if (isNaN(tauN) && r < 1 / Math.E) tauN = t; }
+    const ratioAt = (toff) => { let lo = 0, hi = dec.length - 1; if (toff >= dec[hi][0]) return dec[hi][1]; while (hi - lo > 1) { const m = (lo + hi) >> 1; dec[m][0] < toff ? (lo = m) : (hi = m); } const a = dec[lo], b = dec[hi], s = (toff - a[0]) / Math.max(1e-15, b[0] - a[0]); return a[1] + (b[1] - a[1]) * s; };
+    const gF = PB.range("pw-f", (v) => fmtF(1000 * Math.pow(10, v)), () => cv.redraw());
+    const gD = PB.range("pw-d", (v) => v + " %", () => cv.redraw());
+    const gP = PB.range("pw-p", (v) => fmtW(v), () => cv.redraw());
+    const cv = PB.canvas($("pw-cv"), (ctx, w, h) => {
+      const P = PB.palette(), f = 1000 * Math.pow(10, gF()), d = gD() / 100, Pk = gP();
+      const T = 1 / f, ton = d * T, toff = T - ton, r = ratioAt(toff);
+      // 위: 파형
+      const hTop = Math.round(h * 0.3);
+      const wave = []; for (let k = 0; k < 3; k++) { wave.push([k * T, 0], [k * T, Pk], [k * T + ton, Pk], [k * T + ton, 0], [(k + 1) * T, 0]); }
+      PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: hTop - 34 }, { x: [0, 3 * T], y: [0, 3000], series: [{ data: wave, color: P.accent, width: 2, fill: "color-mix(in srgb, " + P.accent + " 15%, transparent)" }], hlines: [{ y: d * Pk, color: P.warn, label: "⟨P⟩ " + fmtW(d * Pk) }], xFmt: (v) => T * 3 < 2e-3 ? (v * 1e6).toFixed(0) + "µs" : (v * 1e3).toPrecision(3) + "ms", yFmt: (v) => (v / 1000) + "k", yTicks: [0, 1500, 3000] });
+      // 아래: 지도
+      const box = { x: 58, y: hTop + 8, w: w - 76, h: h - hTop - 52 };
+      const ch = PB.chart(ctx, box, { x: [100, 20000], y: [10, 90], logX: true, xLabel: "펄스 주파수 (Hz)", yLabel: "듀티 (%)", xFmt: (v) => v >= 1000 ? v / 1000 + "k" : String(v) });
+      const NX = 70, NY = 32;
+      for (let i = 0; i < NX; i++) for (let j = 0; j < NY; j++) {
+        const lf = 2 + (Math.log10(20000) - 2) * (i + 0.5) / NX, ff = Math.pow(10, lf), dd = 0.1 + 0.8 * (j + 0.5) / NY;
+        const rr = ratioAt((1 - dd) / ff);
+        const x0 = ch.X(Math.pow(10, 2 + (Math.log10(20000) - 2) * i / NX)), x1 = ch.X(Math.pow(10, 2 + (Math.log10(20000) - 2) * (i + 1) / NX));
+        const y0 = ch.Y(10 + 80 * (j + 1) / NY), y1 = ch.Y(10 + 80 * j / NY);
+        ctx.globalAlpha = 0.08 + 0.75 * (1 - rr); ctx.fillStyle = P.bad; const X0 = Math.round(x0), X1 = Math.round(x1), Y0 = Math.round(y0), Y1 = Math.round(y1); ctx.fillRect(X0, Y0, X1 - X0, Y1 - Y0);
+      }
+      ctx.globalAlpha = 1;
+      // 경계선 t_off = τ
+      [[tauT, "t_off = τ_T"], [tauN, "t_off = τ_n"]].forEach(([tau, lab]) => {
+        ctx.strokeStyle = P.text; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.4; ctx.beginPath(); let s = false, lx = 0, ly = 0;
+        for (let k = 80; k >= 0; k--) { const dd = 0.1 + 0.8 * k / 80, ff = (1 - dd) / tau; if (ff < 100 || ff > 20000) { s = false; continue; } const X = ch.X(ff), Y = ch.Y(dd * 100); s ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); if (!s) { lx = X; ly = Y; } s = true; }
+        ctx.stroke(); ctx.setLineDash([]);
+        if (lx) label(ctx, lab, Math.min(lx + 6, box.x + box.w - 74), ly + 12, P.text);
+      });
+      label(ctx, "색이 진할수록 잔광에서 nₑ가 많이 빠짐", box.x + 6, box.y + box.h - 10, P.text);
+      ctx.fillStyle = P.accent; ctx.strokeStyle = P.bg; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ch.X(f), ch.Y(d * 100), 6, 0, 7); ctx.fill(); ctx.stroke();
+      PB.stat("pw-T", fmtT(T));
+      PB.stat("pw-on", fmtT(ton) + " / " + fmtT(toff));
+      PB.stat("pw-avg", fmtW(d * Pk));
+      PB.stat("pw-dec", r.toFixed(3));
+      const reg = toff < tauT ? ["준연속 (t_off &lt; τ_T)", "warn"] : toff < tauN ? ["Tₑ만 낮춤, nₑ 유지", "ok"] : ["매 펄스 재점화", "bad"];
+      PB.stat("pw-reg", reg[0]); setCls("pw-reg", reg[1]);
+    }, { aspect: 0.72, minHeight: 340, maxHeight: 500 });
+  })();
+
+  /* =============================================================
+     2) 펄스 전역 모델
+     ============================================================= */
+  (function () {
+    if (!$("gm-cv")) return;
+    let res = null;
+    const recompute = debounce(() => { compute(); cv.redraw(); });
+    const gF = PB.range("gm-f", (v) => fmtF(1000 * Math.pow(10, v)), recompute);
+    const gD = PB.range("gm-d", (v) => v >= 100 ? "100 % (CW)" : v + " %", recompute);
+    const gP = PB.range("gm-p", (v) => fmtW(v), recompute);
+    const gR = PB.range("gm-pr", (v) => v + " mTorr", recompute);
+    document.querySelectorAll("[data-gm]").forEach((b) => b.addEventListener("click", () => { const [f, d] = b.dataset.gm.split(","); gF.set(+f); gD.set(+d); }));
+    function compute() {
+      const f = 1000 * Math.pow(10, gF()), d = gD() / 100, P = gP(), pm = gR();
+      const r = gmPulse(f, d, P, pm), o = r.out;
+      let sn = 0, snT = 0, siz = 0, st = 0, nmax = 0, nmin = Infinity, Tmax = 0, Tend = 0;
+      for (let i = 1; i < o.length; i++) {
+        const dt = o[i][0] - o[i - 1][0], n = o[i][1], T = o[i][2];
+        if (o[i][0] >= r.T) { sn += n * dt; snT += n * T * dt; siz += n * r.g.ng * Kiz(T) * dt; st += dt; }
+        nmax = Math.max(nmax, n); nmin = Math.min(nmin, n); Tmax = Math.max(Tmax, T);
+        if (o[i][0] <= r.ton) Tend = T;
+      }
+      const cw = gmCW(P * d, pm);
+      // 그림용 다운샘플
+      const step = Math.max(1, Math.floor(o.length / 1600)), ns = [], Ts = [];
+      for (let i = 0; i < o.length; i += step) { ns.push([o[i][0], o[i][1] * 1e-17]); Ts.push([o[i][0], o[i][2]]); }
+      res = { f, d, T: r.T, ton: r.ton, ns, Ts, cw, navg: st ? sn / st : 0, Tw: sn ? snT / sn : 0, iz: st ? siz / st : 0, nmax, nmin, Tmax, Tend, P, pm };
+    }
+    compute();
+    const cv = PB.canvas($("gm-cv"), (ctx, w, h) => {
+      if (!res) return;
+      const P = PB.palette(), T = res.T, ms = 2 * T >= 2e-3;
+      const xf = (v) => ms ? (v * 1e3).toPrecision(3) : (v * 1e6).toFixed(0);
+      const bands = res.d < 1 ? [{ x0: 0, x1: res.ton, color: "color-mix(in srgb, " + P.accent + " 10%, transparent)" }, { x0: T, x1: T + res.ton, color: "color-mix(in srgb, " + P.accent + " 10%, transparent)" }] : [];
+      const h1 = Math.round((h - 30) * 0.55);
+      const nTop = Math.max(1, res.nmax * 1e-17, res.cw.n * 1e-17) * 1.12;
+      PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 22 }, { x: [0, 2 * T], y: [0, nTop], yLabel: "nₑ (10¹¹ cm⁻³)", bands, series: [{ data: res.ns, color: P.ion, width: 2.4 }], hlines: [{ y: res.cw.n * 1e-17, color: P.dim, label: "CW ⟨P⟩" }, { y: res.navg * 1e-17, color: P.ion, label: "⟨nₑ⟩", dash: [2, 3] }], xFmt: () => "" });
+      PB.chart(ctx, { x: 58, y: h1 + 4, w: w - 76, h: h - h1 - 50 }, { x: [0, 2 * T], y: [0, Math.max(3, res.Tmax * 1.1)], yLabel: "Tₑ (eV)", xLabel: ms ? "시간 (ms)" : "시간 (µs)", bands, series: [{ data: res.Ts, color: P.electron, width: 2.4 }], hlines: [{ y: 2.5, color: P.dim, label: "CW 1.5 kW" }], xFmt: xf });
+      PB.stat("gm-n", n11(res.nmax) + " / " + n11(res.nmin));
+      PB.stat("gm-navg", n11(res.navg));
+      PB.stat("gm-ncw", n11(res.cw.n));
+      PB.stat("gm-T", res.Tmax.toFixed(2) + " / " + res.Tend.toFixed(2) + " eV");
+      PB.stat("gm-Tavg", res.Tw.toFixed(2) + " eV");
+      const izcw = res.cw.n * geom(res.pm).ng * Kiz(res.cw.Te);
+      PB.stat("gm-iz", res.cw.n < 1e15 ? "CW도 유지 안 됨" : izcw > 0 ? (res.iz / izcw).toFixed(2) + " ×" : "—");
+    }, { aspect: 0.7, minHeight: 340, maxHeight: 480 });
+  })();
+
+  /* =============================================================
+     3) 재점화 오버슈트
+     ============================================================= */
+  (function () {
+    if (!$("os-cv")) return;
+    const TOFFS = [10e-6, 30e-6, 100e-6, 300e-6, 1e-3, 3e-3], TW = 60e-6;
+    const curveCache = {};
+    function shot(toff, P, pm) {
+      const g = geom(pm), cw = gmCW(P, pm), st = { n: cw.n, Te: cw.Te };
+      gmIntegrate(st, g, () => 0, 0, toff, null, null);
+      const n0 = st.n, data = [[0, st.Te]]; let Tm = st.Te, tp = 0, t90 = NaN;
+      gmIntegrate(st, g, () => P, 0, 2e-3, (t, n, Te) => { if (t <= TW) data.push([t, Te]); if (Te > Tm) { Tm = Te; tp = t; } if (isNaN(t90) && n >= 0.9 * cw.n) t90 = t; }, null);
+      return { n0, data, Tm, tp, t90 };
+    }
+    const recompute = debounce(() => cv.redraw());
+    const gT = PB.range("os-t", (v) => fmtT(Math.pow(10, v) * 1e-6), recompute);
+    const gP = PB.range("os-p", (v) => fmtW(v), recompute);
+    const gR = PB.range("os-pr", (v) => v + " mTorr", recompute);
+    const cv = PB.canvas($("os-cv"), (ctx, w, h) => {
+      const P = PB.palette(), Pw = gP(), pm = gR(), toff = Math.pow(10, gT()) * 1e-6;
+      const key = Pw + "|" + pm;
+      if (!curveCache[key]) {
+        const ghosts = TOFFS.map((t) => shot(t, Pw, pm).data);
+        const curve = []; for (let k = 0; k <= 18; k++) { const t = Math.pow(10, 0.5 + 3.2 * k / 18) * 1e-6; curve.push([t * 1e6, shot(t, Pw, pm).Tm]); }
+        curveCache[key] = { ghosts, curve };
+      }
+      const C = curveCache[key], cur = shot(toff, Pw, pm);
+      const yMax = Math.max(4, ...C.curve.map((c) => c[1]), cur.Tm) * 1.08;
+      const wide = w > 520, mainW = wide ? w * 0.64 : w - 76;
+      const series = C.ghosts.map((d) => ({ data: d.map(([t, T]) => [t * 1e6, T]), color: P.faint, width: 1.2 }));
+      series.push({ data: cur.data.map(([t, T]) => [t * 1e6, T]), color: P.electron, width: 2.8 });
+      PB.chart(ctx, { x: 58, y: 12, w: mainW, h: wide ? h - 58 : h * 0.58 - 40 }, { x: [0, TW * 1e6], y: [0, yMax], xLabel: "재점화 후 시간 (µs)", yLabel: "Tₑ (eV)", series, hlines: [{ y: gmCW(Pw, pm).Te, color: P.dim, label: "정상 Tₑ" }], points: [{ x: cur.tp * 1e6, y: cur.Tm, color: P.electron }] });
+      const ib = wide ? { x: 58 + mainW + 52, y: 12, w: w - mainW - 58 - 52 - 12, h: h - 58 } : { x: 58, y: h * 0.58 + 6, w: w - 76, h: h * 0.42 - 50 };
+      PB.chart(ctx, ib, { x: [3, 5000], y: [0, yMax], logX: true, xLabel: "t_off (µs)", series: [{ data: C.curve, color: P.accent, width: 2 }], points: [{ x: toff * 1e6, y: cur.Tm, color: P.electron }], xFmt: (v) => v >= 1000 ? v / 1000 + "k" : String(v) });
+      label(ctx, "Tₑ 최대", ib.x + 6, ib.y + 10, P.accent);
+      PB.stat("os-n0", sci(cur.n0 * 1e-6) + " cm⁻³");
+      PB.stat("os-Tm", cur.Tm.toFixed(2) + " eV");
+      PB.stat("os-tp", fmtT(cur.tp));
+      PB.stat("os-t90", isNaN(cur.t90) ? "&gt; 2 ms" : fmtT(cur.t90));
+    }, { aspect: 0.6, minHeight: 320, maxHeight: 440 });
+  })();
+
+  /* =============================================================
+     4) 전기 음성 잔광 (이온-이온 모델)
+     ============================================================= */
+  (function () {
+    if (!$("en-cv")) return;
+    const ng = 3.2e20, g = geom(10), V = g.V, deff = g.deff, ET = 100, KREC = 5e-14, TM = 0.05, MM = 35.5 * AMU;
+    const um = Math.sqrt(QE * 2 * TM / MM);
+    function run(f, duty, P, x) {
+      const T = 1 / f, ton = duty * T, tEnd = Math.max(6 * T, 6e-3), nper = Math.ceil(tEnd / T), tRec = (nper - 1) * T;
+      let ne = 1e16, nm = 1e15, Te = 3, t = 0, steps = 0;
+      const out = []; let flM = 0, flP = 0;
+      while (t < nper * T && steps < 400000) {
+        steps++;
+        const ph = t - Math.floor(t / T) * T, on = ph < ton;
+        let dt = on ? Math.min(0.2e-6 + 0.5 * ph, 2e-6) : Math.min(0.5e-6 + 0.2 * (ph - ton), 2e-6);
+        const edge = on ? ton - ph : T - ph; if (edge > 1e-12) dt = Math.min(dt, edge + 1e-12);
+        // Te (exact exponential relaxation)
+        Te = on ? 3 + (Te - 3) * Math.exp(-dt / 1e-6) : TG + (Te - TG) * Math.exp(-dt / 10e-6);
+        const G = on ? P / (QE * V * ET) : 0, al = nm / ne, np = ne + nm;
+        const katt = 2e-16 * (1 + 3 * Math.exp(-Te / 0.4)), nuA = x * ng * katt, nuD = 1e3;
+        const nuE = Math.sqrt(QE * Te / MAR) / deff / (1 + al);
+        const Phi = 5.2 * Te * ne / (ne + nm), s = Math.exp(-Phi / TM), nuM = s * um / deff;
+        // 반암시적(손실항 암시적) → 항상 양수
+        const ne1 = (ne + (G + nuD * nm) * dt) / (1 + (nuA + nuE) * dt);
+        const nm1 = (nm + nuA * ne1 * dt) / (1 + (nuD + KREC * np + nuM) * dt);
+        ne = Math.min(1e19, Math.max(1e12, ne1)); nm = Math.min(1e19, Math.max(1e12, nm1));
+        t += dt;
+        if (t >= tRec) { const fM = nm * s * um, fP = (nuE * ne + nuM * nm) * deff; flM += fM * dt; flP += fP * dt; out.push([t - tRec, ne, nm, ne + nm, Te, fM]); }
+      }
+      return { out, flM, flP, T, ton };
+    }
+    const recompute = debounce(() => cv.redraw());
+    const gF = PB.range("en-f", (v) => fmtF(1000 * Math.pow(10, v)), recompute);
+    const gD = PB.range("en-d", (v) => v + " %", recompute);
+    const gX = PB.range("en-x", (v) => v.toFixed(2), recompute);
+    const gP = PB.range("en-p", (v) => fmtW(v), recompute);
+    const cv = PB.canvas($("en-cv"), (ctx, w, h) => {
+      const P = PB.palette(), f = 1000 * Math.pow(10, gF()), d = gD() / 100, r = run(f, d, gP(), gX());
+      const o = r.out, step = Math.max(1, Math.floor(o.length / 1500)), T = r.T, ms = T >= 2e-3;
+      const se = [], sm = [], sp = [], sT = [], sf = [];
+      let fmax = 0, aEnd = 0, tii = NaN;
+      for (let i = 0; i < o.length; i++) {
+        const [t, ne, nm, np, Te, fM] = o[i];
+        fmax = Math.max(fmax, fM);
+        if (t <= r.ton) aEnd = nm / ne;
+        if (isNaN(tii) && t > r.ton && ne < nm / 100) tii = t - r.ton;
+        if (i % step === 0) { se.push([t, ne * 1e-6]); sm.push([t, nm * 1e-6]); sp.push([t, np * 1e-6]); sT.push([t, Te]); sf.push([t, fM * 1e-4]); }
+      }
+      const bands = [{ x0: 0, x1: r.ton, color: "color-mix(in srgb, " + P.accent + " 10%, transparent)" }];
+      const xf = (v) => ms ? (v * 1e3).toPrecision(3) : (v * 1e6).toFixed(0);
+      const h1 = Math.round((h - 30) * 0.58);
+      PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 22 }, { x: [0, T], y: [1e6, 1e12], logY: true, yLabel: "밀도 (cm⁻³)", bands, series: [{ data: sp, color: P.ion, width: 2 }, { data: sm, color: P.negion, width: 2.4 }, { data: se, color: P.electron, width: 2.4 }], xFmt: () => "", yFmt: (v) => "1e" + Math.round(Math.log10(v)) });
+      label(ctx, "n₊", w - 60, 22, P.ion); label(ctx, "n₋", w - 40, 22, P.negion); label(ctx, "nₑ", w - 20, 22, P.electron);
+      const fTop = Math.max(1e10, fmax * 1e-4 * 1.15);
+      const ch2 = PB.chart(ctx, { x: 58, y: h1 + 4, w: w - 76, h: h - h1 - 50 }, { x: [0, T], y: [0, fTop], yLabel: "Γ₋ (cm⁻²s⁻¹)", xLabel: ms ? "시간 (ms)" : "시간 (µs)", bands, series: [{ data: sf, color: P.negion, width: 2.4, fill: "color-mix(in srgb, " + P.negion + " 18%, transparent)" }, { data: sT.map(([t, Te]) => [t, Te / 3 * fTop * 0.9]), color: P.electron, width: 1.4, dash: [4, 3] }], xFmt: xf, yFmt: (v) => v === 0 ? "0" : v.toExponential(0).replace("e+", "e") });
+      label(ctx, "Tₑ (점선, 3 eV = 90 %)", ch2.box.x + ch2.box.w - 4, ch2.box.y + 10, P.electron, "right");
+      PB.stat("en-a", aEnd.toFixed(1));
+      PB.stat("en-tii", isNaN(tii) ? "도달 못함" : "꺼짐 후 " + fmtT(tii));
+      PB.stat("en-fx", sci(fmax * 1e-4, 1) + " cm⁻²s⁻¹");
+      PB.stat("en-fl", sci(r.flM * 1e-4, 1) + " cm⁻²");
+      PB.stat("en-ratio", r.flP > 0 ? pct(r.flM / r.flP, 1) : "—");
+    }, { aspect: 0.7, minHeight: 340, maxHeight: 480 });
+  })();
+
+  /* =============================================================
+     5) 소스·바이어스 타이밍
+     ============================================================= */
+  (function () {
+    if (!$("sy-cv")) return;
+    const NSS = 4e17, TR = 20e-6, TN = 300e-6, TT = 10e-6, A = 0.0707, HL = 0.2, VMAX = 1500;
+    const recompute = debounce(() => cv.redraw());
+    const gF = PB.range("sy-f", (v) => fmtF(1000 * Math.pow(10, v)), recompute);
+    const gS = PB.range("sy-ds", (v) => v + " %", recompute);
+    const gL = PB.range("sy-dl", (v) => v + " %", recompute);
+    const gB = PB.range("sy-db", (v) => v + " %", recompute);
+    const gPb = PB.range("sy-pb", (v) => fmtW(v), recompute);
+    document.querySelectorAll("[data-sy]").forEach((b) => b.addEventListener("click", () => { const [s, l, bb] = b.dataset.sy.split(","); gS.set(+s); gL.set(+l); gB.set(+bb); }));
+    const cv = PB.canvas($("sy-cv"), (ctx, w, h) => {
+      const P = PB.palette(), f = 1000 * Math.pow(10, gF()), T = 1 / f, ds = gS() / 100, dl = gL() / 100, db = gB() / 100, Pb = gPb();
+      const N = 1500, dt = T / N, NP = 8;
+      let n = NSS * 0.5, Te = 2.5;
+      const src = [], bia = [], nn = [], tt = [], vv = [];
+      let sI = 0, sIb = 0, sIV = 0, sTe = 0, cntB = 0, cntLim = 0, Emin = Infinity, Emax = 0;
+      for (let k = 0; k < NP * N; k++) {
+        const t = k * dt, ph = (t % T) / T;
+        const sOn = ph < ds || ds >= 1;
+        const bph = ((ph - dl) % 1 + 1) % 1, bOn = bph < db || db >= 1;
+        n = sOn ? NSS + (n - NSS) * Math.exp(-dt / TR) : n * Math.exp(-dt / TN);
+        n = Math.max(1e13, n);
+        Te = sOn ? 2.5 + (Te - 2.5) * Math.exp(-dt / 1e-6) : 0.3 + (Te - 0.3) * Math.exp(-dt / TT);
+        const Ii = QE * HL * n * Math.sqrt(QE * Te / MAR) * A;
+        let V = 5.2 * Te;
+        if (bOn) { V = Math.max(V, Math.min(Pb / Ii, VMAX)); }
+        if (k >= (NP - 2) * N) {
+          const tr = t - (NP - 2) * T;
+          src.push([tr, sOn ? 1 : 0]); bia.push([tr, bOn ? 1 : 0]); nn.push([tr, n * 1e-17]); tt.push([tr, Te]); vv.push([tr, V]);
+          sI += Ii;
+          if (bOn) { sIb += Ii; sIV += Ii * V; sTe += Te; cntB++; if (V >= VMAX - 1e-6) cntLim++; Emin = Math.min(Emin, V); Emax = Math.max(Emax, V); }
+        }
+      }
+      const ms = 2 * T >= 2e-3, xf = (v) => ms ? (v * 1e3).toPrecision(3) : (v * 1e6).toFixed(0);
+      const W = w - 76, hA = Math.round(h * 0.22), hB = Math.round(h * 0.3);
+      const env = (arr, off) => { const o = []; for (let i = 0; i < arr.length; i++) { if (i && arr[i][1] !== arr[i - 1][1]) o.push([arr[i][0], arr[i - 1][1] * 0.8 + off]); o.push([arr[i][0], arr[i][1] * 0.8 + off]); } return o; };
+      PB.chart(ctx, { x: 58, y: 8, w: W, h: hA }, { x: [0, 2 * T], y: [0, 2], series: [{ data: env(src, 1.05), color: P.accent, width: 2 }, { data: env(bia, 0.05), color: P.accent2, width: 2 }], xFmt: () => "", yTicks: [] });
+      label(ctx, "소스", 8, 8 + hA * 0.3, P.accent); label(ctx, "바이어스", 8, 8 + hA * 0.8, P.accent2);
+      PB.chart(ctx, { x: 58, y: 16 + hA, w: W, h: hB }, { x: [0, 2 * T], y: [0, 4.5], yLabel: "nₑ (10¹¹)", series: [{ data: nn, color: P.ion, width: 2.2 }, { data: tt, color: P.electron, width: 1.6, dash: [4, 3] }], xFmt: () => "" });
+      label(ctx, "nₑ", w - 50, 26 + hA, P.ion); label(ctx, "Tₑ (eV, 점선)", w - 20, 42 + hA, P.electron, "right");
+      PB.chart(ctx, { x: 58, y: 24 + hA + hB, w: W, h: h - (24 + hA + hB) - 44 }, { x: [0, 2 * T], y: [0, VMAX * 1.08], yLabel: "Eᵢ (eV)", xLabel: ms ? "시간 (ms)" : "시간 (µs)", series: [{ data: vv, color: P.ion, width: 2.2, fill: "color-mix(in srgb, " + P.ion + " 14%, transparent)" }], hlines: [{ y: VMAX, color: P.bad, label: "전압 한계" }], xFmt: xf });
+      PB.stat("sy-E", cntB ? Emin.toFixed(0) + "–" + Emax.toFixed(0) + " eV" : "—");
+      PB.stat("sy-Eavg", sIb > 0 ? (sIV / sIb).toFixed(0) + " eV" : "—");
+      PB.stat("sy-frac", sI > 0 ? pct(sIb / sI, 0) : "—");
+      PB.stat("sy-Te", cntB ? (sTe / cntB).toFixed(2) + " eV" : "—");
+      const lim = cntB ? cntLim / cntB : 0;
+      PB.stat("sy-lim", lim > 0 ? "바이어스 시간의 " + pct(lim, 0) : "없음"); setCls("sy-lim", lim > 0.05 ? "bad" : "ok");
+    }, { aspect: 0.72, minHeight: 360, maxHeight: 500 });
+  })();
+
+  /* =============================================================
+     6) HiPIMS
+     ============================================================= */
+  (function () {
+    if (!$("hp-cv")) return;
+    const AT = 1500, KIZ = 3e-14, LIR = 0.015, VM = 1000;
+    const neOf = (pd) => Math.min(3e19, 1e17 * Math.pow(pd / 10, 0.8));
+    const Vof = (pd) => Math.min(1100, 450 * Math.pow(pd / 13, 0.12));
+    const alpha = (pd) => 1 - Math.exp(-neOf(pd) * KIZ * LIR / VM);
+    const redraw = () => cv.redraw();
+    const gP = PB.range("hp-p", (v) => v + " kW", redraw);
+    const gF = PB.range("hp-f", (v) => fmtF(Math.pow(10, v)), redraw);
+    const gT = PB.range("hp-tp", (v) => v + " µs", redraw);
+    const gB = PB.range("hp-b", (v) => v.toFixed(2), redraw);
+    const cv = PB.canvas($("hp-cv"), (ctx, w, h) => {
+      const P = PB.palette(), Pav = gP() * 1e3, f = Math.pow(10, gF()), tp = gT() * 1e-6, b = gB();
+      const duty = Math.min(1, f * tp), Ppk = Pav / duty, pd = Ppk / AT, pdc = Pav / AT;
+      const phi = (a) => a * (1 - b) / (1 - a * b);
+      const aDC = alpha(pdc), rateRel = (p) => (1 - alpha(p) * b) / (1 - aDC * b) * Math.pow(Vof(p) / Vof(pdc), -0.5);
+      const sa = [], sp = [], sr = [];
+      for (let k = 0; k <= 120; k++) { const p = Math.pow(10, 5 * k / 120); sa.push([p, alpha(p)]); sp.push([p, phi(alpha(p))]); sr.push([p, rateRel(p)]); }
+      const a = alpha(pd), ph = phi(a), rr = rateRel(pd);
+      const ch = PB.chart(ctx, null, { x: [1, 1e5], y: [0, 1.25], logX: true, xLabel: "순간 전력 밀도 (W/cm²)", yLabel: "비율", series: [{ data: sa, color: P.ion, width: 2.4 }, { data: sp, color: P.accent2, width: 2.4 }, { data: sr, color: P.metal, width: 2.2, dash: [6, 4] }], bands: [{ x0: 500, x1: 3000, color: "color-mix(in srgb, " + P.ok + " 12%, transparent)" }], vlines: [{ x: pdc, color: P.dim, label: "DC" }], points: [{ x: pdc, y: aDC, color: P.ion, r: 5 }, { x: pd, y: a, color: P.ion, r: 6 }, { x: pd, y: ph, color: P.accent2, r: 6 }, { x: pd, y: rr, color: P.metal, r: 6 }], xFmt: (v) => v >= 1000 ? v / 1000 + "k" : String(v) });
+      label(ctx, "α 이온화 확률", ch.box.x + 8, ch.box.y + 12, P.ion);
+      label(ctx, "φ 기판 금속 이온 비율", ch.box.x + 8, ch.box.y + 28, P.accent2);
+      label(ctx, "증착 속도 / DC", ch.box.x + 8, ch.box.y + 44, P.metal);
+      label(ctx, "전형적 HiPIMS", ch.X(1200), ch.box.y + ch.box.h - 10, P.ok, "center");
+      PB.stat("hp-d", pct(duty, 2));
+      PB.stat("hp-pk", fmtW(Ppk) + " / " + (pd >= 1000 ? (pd / 1000).toPrecision(3) + " kW/cm²" : pd.toPrecision(3) + " W/cm²"));
+      PB.stat("hp-ne", sci(neOf(pd) * 1e-6, 1) + " cm⁻³");
+      PB.stat("hp-a", pct(a, 0) + " (DC " + pct(aDC, 1) + ")");
+      PB.stat("hp-phi", pct(ph, 0) + " (DC " + pct(phi(aDC), 1) + ")");
+      PB.stat("hp-r", pct(rr, 0)); setCls("hp-r", rr < 0.4 ? "bad" : rr < 0.7 ? "warn" : "ok");
+    }, { aspect: 0.6, minHeight: 300, maxHeight: 420 });
+  })();
+
+  /* =============================================================
+     7) 맞춤 바이어스 파형 → IEDF
+     ============================================================= */
+  (function () {
+    if (!$("ie-cv")) return;
+    const VP = 15, TEb = 3, NS = 1000, SIG = 3;
+    const recompute = debounce(() => cv.redraw());
+    const gW = PB.seg("ie-w", recompute);
+    const gF = PB.range("ie-f", (v) => fmtF(Math.pow(10, v)), recompute);
+    const gV = PB.range("ie-v", (v) => v + " V", recompute);
+    const gJ = PB.range("ie-j", (v) => v + " mA/cm²", recompute);
+    const gD = PB.range("ie-d", (v) => v === 0 ? "도체" : v.toFixed(2) + " µm", recompute);
+    const gC = PB.range("ie-c", (v) => v + " %", recompute);
+    function model(wf, f, V0, J, dum, comp) {
+      const T = 1 / f, k = dum > 0 ? J / (EPS0 * 3.9 / (dum * 1e-6)) : 0; // V/s
+      const Vs = new Float64Array(NS);
+      for (let i = 0; i < NS; i++) {
+        const t = (i / NS) * T;
+        if (wf === "sine") Vs[i] = VP + V0 * (1 - Math.sin(2 * Math.PI * i / NS));
+        else if (i / NS < 0.92) { const slope = wf === "tail" ? (1 - comp) * k : k; Vs[i] = Math.max(VP, VP + V0 - slope * t); }
+        else Vs[i] = VP;
+      }
+      let vm = 0; for (let i = 0; i < NS; i++) vm += Vs[i]; vm /= NS;
+      const ns = (J / QE) / Math.sqrt(QE * TEb / MAR);
+      const lD = Math.sqrt(EPS0 * TEb / (QE * ns)), s = Math.SQRT2 / 3 * lD * Math.pow(2 * vm / TEb, 0.75);
+      const tau = 3 * s / Math.sqrt(2 * QE * vm / MAR);
+      const a = 1 - Math.exp(-(T / NS) / tau);
+      let E = vm; const Ei = new Float64Array(NS);
+      for (let rep = 0; rep < 4; rep++) for (let i = 0; i < NS; i++) { E += (Vs[i] - E) * a; if (rep === 3) Ei[i] = E; }
+      // histogram + gaussian smoothing
+      const Emax = VP + 2 * V0 + 40, NB = 320, bw = Emax / NB, hist = new Float64Array(NB);
+      for (let i = 0; i < NS; i++) { const b = Math.min(NB - 1, Math.max(0, Math.floor(Ei[i] / bw))); hist[b] += 1; }
+      const sm = new Float64Array(NB), kr = Math.ceil(3 * SIG / bw);
+      for (let b = 0; b < NB; b++) { let acc = 0, wsum = 0; for (let j = -kr; j <= kr; j++) { const bb = b + j; if (bb < 0 || bb >= NB) continue; const wt = Math.exp(-0.5 * Math.pow(j * bw / SIG, 2)); acc += hist[bb] * wt; wsum += wt; } sm[b] = wsum ? acc / wsum : 0; }
+      let tot = 0; for (let b = 0; b < NB; b++) tot += sm[b];
+      /* ΔE: IEDF가 최댓값의 절반을 넘는 가장 낮은 에너지 ~ 가장 높은 에너지 (두 봉우리면 봉우리 간격) */
+      let smax = 0; for (let b = 0; b < NB; b++) smax = Math.max(smax, sm[b]);
+      let e5 = NaN, e95 = NaN; const pts = [];
+      for (let b = 0; b < NB; b++) { if (sm[b] >= 0.5 * smax) { if (isNaN(e5)) e5 = b * bw; e95 = (b + 1) * bw; } pts.push([(b + 0.5) * bw, sm[b] / tot / bw]); }
+      const tgt = VP + V0; let inn = 0; for (let i = 0; i < NS; i++) if (Math.abs(Ei[i] - tgt) <= 0.05 * tgt) inn++;
+      return { Vs, Ei, pts, dE: e95 - e5, inn: inn / NS, tau, T, dV: k * 0.92 * T, Emax };
+    }
+    const cv = PB.canvas($("ie-cv"), (ctx, w, h) => {
+      const P = PB.palette(), wf = gW(), f = Math.pow(10, gF()), V0 = gV(), J = gJ() * 10, dum = gD(), comp = gC() / 100;
+      const all = { sine: model("sine", f, V0, J, dum, comp), pulse: model("pulse", f, V0, J, dum, comp), tail: model("tail", f, V0, J, dum, comp) };
+      const m = all[wf], T = m.T;
+      const h1 = Math.round(h * 0.36), sv = [], se = [];
+      for (let rep = 0; rep < 2; rep++) for (let i = 0; i < NS; i += 2) { const t = (rep + i / NS) * T; sv.push([t, m.Vs[i]]); se.push([t, m.Ei[i]]); }
+      const tf = T < 1e-6 ? (v) => (v * 1e9).toFixed(0) + "ns" : (v) => (v * 1e6).toPrecision(2) + "µs";
+      PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 30 }, { x: [0, 2 * T], y: [0, VP + 2 * V0 + 20], yLabel: "eV", series: [{ data: sv, color: P.dim, width: 1.2 }, { data: se, color: P.ion, width: 2.4 }], xFmt: tf });
+      const yMax = Math.max(...m.pts.map((p) => p[1])) * 1.12 || 1;
+      const COL = { sine: P.accent, pulse: P.warn, tail: P.ok };
+      const ser = [];
+      ["sine", "pulse", "tail"].forEach((k) => { if (k !== wf) ser.push({ data: all[k].pts, color: COL[k], width: 1.4, dash: [4, 3] }); });
+      ser.push({ data: m.pts, color: COL[wf], width: 2.4, fill: "color-mix(in srgb, " + COL[wf] + " 20%, transparent)" });
+      const ch = PB.chart(ctx, { x: 58, y: h1 + 4, w: w - 76, h: h - h1 - 48 }, { x: [0, m.Emax], y: [0, yMax], xLabel: "이온 에너지 (eV)", yLabel: "IEDF", series: ser, vlines: [{ x: VP + V0, color: P.dim, label: "목표" }], yFmt: () => "" });
+      label(ctx, "사인", ch.box.x + ch.box.w - 120, ch.box.y + 10, COL.sine); label(ctx, "펄스", ch.box.x + ch.box.w - 80, ch.box.y + 10, COL.pulse); label(ctx, "맞춤", ch.box.x + ch.box.w - 40, ch.box.y + 10, COL.tail);
+      PB.stat("ie-tau", fmtT(m.tau) + " / " + fmtT(T));
+      PB.stat("ie-dv", dum > 0 ? m.dV.toPrecision(3) + " V" : "0 (도체)");
+      PB.stat("ie-de", m.dE.toFixed(0) + " eV");
+      PB.stat("ie-in", pct(m.inn, 0));
+      PB.stat("ie-cmp", all.sine.dE.toFixed(0) + " / " + all.pulse.dE.toFixed(0) + " / " + all.tail.dE.toFixed(0) + " eV");
+    }, { aspect: 0.72, minHeight: 340, maxHeight: 480 });
+  })();
+
+  /* =============================================================
+     8) 펄스 정합
+     ============================================================= */
+  (function () {
+    if (!$("mt-cv")) return;
+    const TR = 20e-6, TN = 300e-6, DMAX = 0.05;
+    const recompute = debounce(() => cv.redraw());
+    const gM = PB.seg("mt-m", recompute);
+    const gF = PB.range("mt-f", (v) => fmtF(1000 * Math.pow(10, v)), recompute);
+    const gD = PB.range("mt-d", (v) => v + " %", recompute);
+    const gT = PB.range("mt-t", (v) => fmtT(Math.pow(10, v) * 1e-6), recompute);
+    const gQ = PB.range("mt-q", (v) => v.toFixed(1), recompute);
+    const zr = (u) => 0.3 + 0.7 * u, zx = (u) => 1.2 * (1 - u);
+    function run(mode, f, d, tft, Q, rs, xs) {
+      const T = 1 / f, N = 3000, dt = T / N, NP = 6, ton = d * T;
+      let u = 0.5, del = 0; const out = [];
+      let sR = 0, sOn = 0, pk = 0, t1 = NaN, uEnd = 0, sr = 0, sx = 0;
+      for (let k = 0; k < NP * N; k++) {
+        const ph = (k % N) * dt, on = ph < ton, last = k >= (NP - 1) * N;
+        let R = 0;
+        if (on) {
+          let r = zr(u), x = zx(u);
+          if (mode === "avg") { r = r / rs; x = x - xs; }
+          const dstar = PB.clamp(-x / (2 * Q), -DMAX, DMAX);
+          if (mode === "ft") del = dstar + (del - dstar) * Math.exp(-dt / tft);
+          else if (mode === "tab") del = dstar;
+          else del = 0;
+          const X = x + 2 * Q * del;
+          R = ((r - 1) * (r - 1) + X * X) / ((r + 1) * (r + 1) + X * X);
+          u = (1 - R) + (u - (1 - R)) * Math.exp(-dt / TR);
+          if (last) { sR += R; sOn++; pk = Math.max(pk, R); if (isNaN(t1) && R < 0.01) t1 = ph; uEnd = u; sr += zr(u); sx += zx(u); }
+        } else u = u * Math.exp(-dt / TN);
+        u = Math.max(1e-3, Math.min(1, u));
+        if (last && (k % 3 === 0)) out.push([ph, R * 100, u * 100, del * 100]);
+      }
+      return { out, pk, avg: sOn ? sR / sOn : 0, t1, uEnd, eff: sOn ? 1 - sR / sOn : 0, rbar: sOn ? sr / sOn : 1, xbar: sOn ? sx / sOn : 0, T, ton };
+    }
+    const cv = PB.canvas($("mt-cv"), (ctx, w, h) => {
+      const P = PB.palette(), mode = gM(), f = 1000 * Math.pow(10, gF()), d = gD() / 100, tft = Math.pow(10, gT()) * 1e-6, Q = gQ();
+      let r;
+      if (mode === "avg") { let a = run("fix", f, d, tft, Q, 1, 0); for (let it = 0; it < 3; it++) a = run("avg", f, d, tft, Q, Math.max(0.3, a.rbar), a.xbar); r = a; }
+      else r = run(mode, f, d, tft, Q, 1, 0);
+      const T = r.T, ms = T >= 2e-3, xf = (v) => ms ? (v * 1e3).toPrecision(3) : (v * 1e6).toFixed(0);
+      const bands = [{ x0: 0, x1: r.ton, color: "color-mix(in srgb, " + P.accent + " 10%, transparent)" }];
+      const h1 = Math.round((h - 30) * 0.66);
+      PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 22 }, { x: [0, T], y: [0, 105], yLabel: "%", bands, series: [{ data: r.out.map((o) => [o[0], o[2]]), color: P.accent, width: 2 }, { data: r.out.map((o) => [o[0], o[1]]), color: P.bad, width: 2.4 }], hlines: [{ y: 1, color: P.ok, label: "1 %" }], xFmt: () => "" });
+      label(ctx, "반사 |Γ|²", w - 24, 22, P.bad, "right"); label(ctx, "밀도 u", w - 24, 38, P.accent, "right");
+      PB.chart(ctx, { x: 58, y: h1 + 4, w: w - 76, h: h - h1 - 50 }, { x: [0, T], y: [-5.5, 5.5], yLabel: "δf (%)", xLabel: ms ? "시간 (ms)" : "시간 (µs)", bands, series: [{ data: r.out.map((o) => [o[0], o[3]]), color: P.accent2, width: 2, dash: [5, 3] }], hlines: [{ y: 5, color: P.faint }, { y: -5, color: P.faint }], xFmt: xf, yTicks: [-5, 0, 5] });
+      PB.stat("mt-pk", pct(r.pk, 1)); setCls("mt-pk", r.pk > 0.3 ? "bad" : r.pk > 0.05 ? "warn" : "ok");
+      PB.stat("mt-avg", pct(r.avg, 2)); setCls("mt-avg", r.avg > 0.01 ? "bad" : "ok");
+      PB.stat("mt-t1", isNaN(r.t1) ? "도달 못함" : fmtT(r.t1));
+      PB.stat("mt-n", r.uEnd.toFixed(3));
+      PB.stat("mt-eff", pct(r.eff, 1));
+    }, { aspect: 0.66, minHeight: 320, maxHeight: 460 });
+  })();
+})();
+</script>
+</body>
+</html>

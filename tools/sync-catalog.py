@@ -3,7 +3,7 @@
 
 Usage: python3 tools/sync-catalog.py [path/to/books/data/books.json]
 Default source: migration/books.json. An external portal catalog is optional.
-InfraBook, CMPBook and ThinFilmBook metadata live in LOCAL below. Chapter and simulator counts come from the sources.
+InfraBook, CMPBook, ThinFilmBook and PlasmaBook metadata live in LOCAL below. Chapter and simulator counts come from the sources.
 """
 import json
 import re
@@ -16,7 +16,7 @@ SOURCE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "migration" / "books
 # 서가 순서와 semi.euiyun.com/{slug}/ 경로
 ORDER = [
     ("devicebook", "device"), ("digitalbook", "digital"), ("designbook", "design"), ("socbook", "soc"),
-    ("analogbook", "analog"), ("processbook", "process"), ("lithobook", "litho"), ("etchbook", "etch"), ("thinfilmbook", "thinfilm"), ("cmpbook", "cmp"),
+    ("analogbook", "analog"), ("processbook", "process"), ("lithobook", "litho"), ("etchbook", "etch"), ("thinfilmbook", "thinfilm"), ("plasmabook", "plasma"), ("cmpbook", "cmp"),
     ("dopingbook", "doping"), ("yieldbook", "yield"), ("failurebook", "failure"), ("tcadbook", "tcad"),
     ("infrabook", "infra"),
     ("packagingbook", "packaging"), ("testbook", "test"), ("memorybook", "memory"), ("opticsbook", "optics"),
@@ -42,6 +42,15 @@ LOCAL = {
         "color": "#8c4a15", "colorDark": "#e7a36a",
         "topics": ["열산화·딜-그로브", "열 예산·RTP", "핵생성·성장 모드", "증발·스퍼터링", "CVD 반응과 수송", "ALD 반응과 포화", "피복성·균일도", "막질·계측"],
         "motif": "film",
+    },
+    "plasmabook": {
+        "id": "plasmabook", "code": "PLS", "title": "PlasmaBook", "subtitle": "플라즈마공학 교과서",
+        "headline": "전자가 기체를 깨우는 기술",
+        "description": "식각·증착 공정의 엔진인 저온 플라즈마를 깊이 다루는 편. 데바이 차폐와 충돌, 전자 에너지 분포, 방전 개시와 시스, 전역 모델, CCP·ICP와 RF 정합, 펄스 플라즈마, 래디컬 화학과 표면 손상, 탐침·분광 진단과 PIC 모델링까지. 가상 기준 장비 PL-300의 압력·전력·주파수·바이어스 손잡이로 직접 플라즈마를 켜 보며 배우는 플라즈마공학 교과서.",
+        "url": "plasma/", "stage": "process", "status": "published", "chapters": 18,
+        "color": "#862e9c", "colorDark": "#da77f2",
+        "topics": ["데바이 차폐·준중성", "충돌·EEDF", "방전·시스", "전역 모델", "CCP·ICP", "RF 정합·펄스", "래디컬·표면 상호작용", "탐침·OES·PIC"],
+        "motif": "plasma",
     },
     "cmpbook": {
         "id": "cmpbook", "code": "CMP", "title": "CMPBook", "subtitle": "반도체 CMP·세정 교과서",

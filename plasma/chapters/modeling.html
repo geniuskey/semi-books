@@ -1,0 +1,1152 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and PlasmaBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>플라즈마 모델링: 유체·PIC·하이브리드 · PlasmaBook</title>
+<meta name="description" content="1D 표류-확산 + 포아송 RF 방전 풀이, 샤페터-거멜 이산화, 국소장과 국소 평균 에너지 근사, PIC/MCC 한 사이클, 1D 정전 PIC로 플라즈마 진동·이류 불안정·수치 가열, 2D ICP 하이브리드 반복, 진단과의 검증·교정, 계산 비용 추정을 시뮬레이터로 익힌다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .lbl { fill: var(--text); font-family: var(--font); font-size: 14px; }
+  svg .lbl-b { fill: var(--text); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .lbl-sm { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .lbl-acc { fill: var(--accent); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-acc2 { fill: var(--accent-2); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-ion { fill: var(--m-ion); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-el { fill: var(--m-electron); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-bad { fill: var(--bad); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-ok { fill: var(--ok); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .box2 { fill: var(--surface); stroke: var(--text-faint); }
+  svg .glow { fill: color-mix(in srgb, var(--m-glow) 24%, transparent); }
+  svg .dash { stroke: var(--text-dim); stroke-dasharray: 5 4; fill: none; stroke-width: 1.4; }
+  svg .arr { stroke: var(--text-dim); stroke-width: 1.8; fill: none; }
+  svg .c-el { stroke: var(--m-electron); fill: none; stroke-width: 2.4; }
+  svg .c-ion { stroke: var(--m-ion); fill: none; stroke-width: 2.4; }
+  svg .c-acc { stroke: var(--accent); fill: none; stroke-width: 2.2; }
+  svg .c-acc2 { stroke: var(--accent-2); fill: none; stroke-width: 2.2; }
+  svg .oxf { fill: color-mix(in srgb, var(--m-oxide) 40%, transparent); stroke: var(--m-oxide); }
+  svg .metf { fill: color-mix(in srgb, var(--m-metal) 45%, transparent); stroke: var(--m-metal); }
+  svg .sif { fill: color-mix(in srgb, var(--m-si) 45%, transparent); stroke: var(--m-si); }
+  .md-v.ok { color: var(--ok); } .md-v.warn { color: var(--warn); } .md-v.bad { color: var(--bad); }
+  .md-stage { font-size: 14px; color: var(--text-dim); line-height: 1.5; min-height: 3em; }
+</style>
+</head>
+<body data-chapter="modeling">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 16</div>
+    <h1>플라즈마 모델링: 유체·PIC·하이브리드</h1>
+    <p class="lead"><a href="global.html">8장 전역 모델</a>은 챔버 전체를 숫자 몇 개(Tₑ, n₀)로 줄였다. 밀도 분포, 시스 구조, 웨이퍼 위 균일도, 이온 에너지 분포를 알려면 공간과 속도 공간을 나눠 풀어야 한다. 전자를 연속체(유체)로 보면 빠르지만 분포 함수의 꼬리를 잃고, 입자로 추적하면(PIC/MCC) 정확하지만 데바이 길이와 플라즈마 주기를 다 풀어야 해서 비싸다. 이 장은 표류-확산 유체 풀이와 1D PIC를 직접 돌려 보며 <strong>각 모델이 무엇을 예측하고 언제 깨지는지</strong>, 수치 조건을 어기면 어떤 가짜 물리가 생기는지, 그리고 장비 설계에 쓰는 하이브리드 모델이 어떻게 조립되는지 본다.</p>
+    <ul class="objectives">
+      <li>전역·유체·운동론 모델의 가정, 출력, 계산 비용을 비교하고 문제에 맞는 모델을 고를 수 있다.</li>
+      <li>표류-확산 근사와 포아송 방정식을 결합한 1D RF 방전 모델을 세우고, 샤페터-거멜 이산화와 반암시적 포아송이 필요한 이유를 설명한다.</li>
+      <li>국소장 근사(LFA)와 국소 평균 에너지 근사(LMEA)의 차이를 음극 시스·글로에서 이온화 원천으로 설명한다.</li>
+      <li>PIC/MCC 한 사이클(전하 할당 → 장 풀이 → 보간 → 입자 밀기 → 충돌)을 따라가고, 안정 조건 \(\Delta x \lesssim \lambda_D\), \(\omega_{pe}\Delta t \lesssim 0.2\)을 어겼을 때의 수치 가열·발산을 알아본다.</li>
+      <li>ICP 하이브리드 모델(전자기 → 전자 에너지 → 유체 수송)의 반복 구조와, 모델을 진단으로 검증·교정하는 절차와 함정을 설명한다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="hierarchy">
+    <h2>모델의 위계</h2>
+    <p>플라즈마의 모든 정보는 종마다 위치·속도의 분포 함수 \(f_s(\mathbf r, \mathbf v, t)\)에 들어 있고, 이것이 볼츠만 방정식을 따른다. 모델은 이 방정식을 얼마나 줄이느냐로 나뉜다.</p>
+    <div class="formula">$$\frac{\partial f_s}{\partial t} + \mathbf v\cdot\nabla_{\mathbf r}f_s + \frac{q_s}{m_s}(\mathbf E + \mathbf v\times\mathbf B)\cdot\nabla_{\mathbf v}f_s = \left(\frac{\partial f_s}{\partial t}\right)_{c}$$<div class="where">6차원(+시간) 방정식. <strong>운동론</strong>(PIC/MCC, 직접 볼츠만 풀이)은 이것을 거의 그대로 푼다. <strong>유체</strong>는 속도에 대해 적분한 모멘트(밀도, 플럭스, 에너지)만 풀고 분포 모양은 가정한다. <strong>전역</strong>은 공간까지 평균해 상미분 방정식 몇 개로 줄인다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 270" role="img" aria-label="전역, 유체, 하이브리드, 운동론 모델의 위계와 예측하는 것, 비용">
+        <g>
+          <rect x="20" y="200" width="520" height="52" rx="8" class="box2"/>
+          <text x="40" y="222" class="lbl-b">전역(0D)</text><text x="40" y="242" class="lbl-sm">입자·전력 균형 → Tₑ, n₀, 래디컬 평균 밀도</text>
+          <rect x="70" y="140" width="420" height="52" rx="8" class="box2"/>
+          <text x="90" y="162" class="lbl-b">유체(1–3D)</text><text x="90" y="182" class="lbl-sm">밀도·전위·시스 분포, 균일도(EEDF 가정)</text>
+          <rect x="120" y="80" width="320" height="52" rx="8" class="box2"/>
+          <text x="140" y="102" class="lbl-b">하이브리드</text><text x="140" y="122" class="lbl-sm">유체 이온 + 운동론 전자 + 전자기장</text>
+          <rect x="170" y="20" width="220" height="52" rx="8" class="box2"/>
+          <text x="190" y="42" class="lbl-b">운동론(PIC/MCC)</text><text x="190" y="62" class="lbl-sm">EEDF·IEDF, 무충돌 가열</text>
+        </g>
+        <g transform="translate(570,0)">
+          <line x1="20" y1="250" x2="20" y2="20" class="arr"/><path d="M14 30 L20 18 L26 30" class="arr"/>
+          <text x="30" y="30" class="lbl-acc">물리 충실도 ↑</text>
+          <line x1="140" y1="250" x2="140" y2="20" class="arr"/><path d="M134 30 L140 18 L146 30" class="arr"/>
+          <text x="150" y="30" class="lbl-bad">계산 비용 ↑</text>
+          <text x="30" y="230" class="lbl-sm">초 (노트북)</text>
+          <text x="30" y="170" class="lbl-sm">분–시간</text>
+          <text x="30" y="110" class="lbl-sm">시간–일</text>
+          <text x="30" y="50" class="lbl-sm">일–주 (클러스터)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 16-1.</b> 모델 위계. 아래로 갈수록 빠르고 위로 갈수록 정확하다. 실무에서는 전역 모델로 조건을 훑고, 유체·하이브리드로 장비 형상을 설계하고, PIC/MCC로 핵심 물리(저압 시스, IEDF)를 확인한다.</figcaption>
+    </figure>
+    <p>모델 선택의 첫 잣대는 <strong>크누센 수</strong> \(\lambda/L\)(평균 자유 행로 / 관심 길이)다. 전자 에너지 이완 길이가 장치보다 짧으면(수 Torr PECVD) 전자가 국소 전기장과 평형을 이뤄 유체가 잘 맞는다. 수 mTorr ICP·CCP에서는 전자 에너지 이완 길이가 챔버만 해 EEDF가 비국소적이고(<a href="eedf.html">4장</a>), 시스를 건너는 이온도 충돌이 거의 없어 IEDF를 유체로 얻을 수 없다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="fluid">
+    <h2>표류-확산 유체 모델과 포아송</h2>
+    <p>운동량 방정식에서 관성을 버리고(충돌이 잦아 가속 시간 ≪ 관심 시간) 압력 기울기와 전기력이 충돌 마찰과 균형을 이룬다고 보면 플럭스가 <span class="term">표류-확산 근사</span><span class="en">(drift-diffusion approximation)</span>로 닫힌다. 전자·이온 연속 방정식과 포아송 방정식이 서로를 물고 돈다.</p>
+    <div class="formula">$$\frac{\partial n_s}{\partial t} + \nabla\cdot\boldsymbol\Gamma_s = S,\qquad \boldsymbol\Gamma_e = -\mu_en_e\mathbf E - D_e\nabla n_e,\qquad \boldsymbol\Gamma_i = \mu_in_i\mathbf E - D_i\nabla n_i,\qquad \nabla\cdot(\varepsilon_0\nabla\phi) = -e(n_i - n_e)$$<div class="where">\(\mathbf E = -\nabla\phi\). 국소장 근사에서 이온화 원천은 \(S = \alpha(E/p)\,|\boldsymbol\Gamma_e|\), \(\alpha = Ap\,e^{-Bp/|E|}\)(Ar: \(A \approx 12\) cm⁻¹Torr⁻¹, \(B \approx 180\) V cm⁻¹Torr⁻¹). 이동도 \(\mu_ep \approx 30\) m²Torr/(V s), \(\mu_ip \approx 0.14\) m²Torr/(V s), 확산 계수는 아인슈타인 관계 \(D = \mu T\)(<a href="transport.html">6장</a>).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 220" role="img" aria-label="표류-확산 모델의 결합 루프: 연속 방정식, 플럭스, 포아송, 이온화 원천">
+        <defs><marker id="md-a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text-dim)"/></marker></defs>
+        <rect x="30" y="80" width="170" height="60" rx="8" class="box2"/><text x="115" y="106" text-anchor="middle" class="lbl-b">포아송</text><text x="115" y="126" text-anchor="middle" class="lbl-sm">ρ = e(nᵢ − nₑ) → φ, E</text>
+        <rect x="260" y="20" width="200" height="60" rx="8" class="box2"/><text x="360" y="46" text-anchor="middle" class="lbl-el">전자 플럭스 Γₑ</text><text x="360" y="66" text-anchor="middle" class="lbl-sm">−μₑnₑE − Dₑ∇nₑ (SG)</text>
+        <rect x="260" y="140" width="200" height="60" rx="8" class="box2"/><text x="360" y="166" text-anchor="middle" class="lbl-ion">이온 플럭스 Γᵢ</text><text x="360" y="186" text-anchor="middle" class="lbl-sm">μᵢnᵢE − Dᵢ∇nᵢ (SG)</text>
+        <rect x="520" y="80" width="170" height="60" rx="8" class="box2"/><text x="605" y="106" text-anchor="middle" class="lbl-b">연속 방정식</text><text x="605" y="126" text-anchor="middle" class="lbl-sm">암시적 3중 대각</text>
+        <rect x="730" y="80" width="130" height="60" rx="8" class="box2"/><text x="795" y="106" text-anchor="middle" class="lbl-acc">원천 S</text><text x="795" y="126" text-anchor="middle" class="lbl-sm">α(E/p)|Γₑ|</text>
+        <path d="M200 100 L258 54" class="arr" marker-end="url(#md-a1)"/><path d="M200 120 L258 166" class="arr" marker-end="url(#md-a1)"/>
+        <path d="M460 50 L518 96" class="arr" marker-end="url(#md-a1)"/><path d="M460 170 L518 124" class="arr" marker-end="url(#md-a1)"/>
+        <path d="M730 110 H692" class="arr" marker-end="url(#md-a1)"/>
+        <path d="M605 140 C605 210 115 210 115 142" class="arr" marker-end="url(#md-a1)"/><text x="300" y="214" class="lbl-sm">새 nₑ, nᵢ → 다음 시간 단계</text>
+        <path d="M460 40 C600 0 780 20 795 78" class="dash" marker-end="url(#md-a1)"/>
+      </svg>
+      <figcaption><b>그림 16-2.</b> 표류-확산 모델의 한 시간 단계. 장이 플럭스를, 플럭스가 밀도를, 밀도가 다시 장을 정한다. 전자는 가볍고 빨라 이 고리가 강하게 결합되어 있다. 순서대로 따로 풀면(분리) 시간 간격이 유전 이완 시간에 묶인다.</figcaption>
+    </figure>
+
+    <p>수치로 풀 때 두 가지 함정이 있다. 첫째, <strong>유전 이완 시간</strong> \(\tau_d = \varepsilon_0/(e\mu_en_e)\)은 10¹⁵ m⁻³, 1 Torr에서 수 ps다. 포아송을 앞 단계 밀도로 풀면(명시적) 시간 간격이 \(\tau_d\)보다 작아야 하고, 아니면 전하가 출렁이며 발산한다. 다음 단계의 표류 전류를 포아송에 미리 넣는 <strong>반암시적</strong> 방법이 이 제한을 없앤다. 둘째, 시스 안에서는 표류가 확산보다 수십 배 커서(셀 페클레 수 \(|a| = |v|h/D \gg 2\)) 중앙 차분이 음의 밀도와 진동을 만든다. 반도체 소자 시뮬레이션에서 온 <span class="term">샤페터-거멜</span><span class="en">(Scharfetter–Gummel)</span> 이산화가 표준 해법이다(<a href="../../tcad/">TCADBook</a>의 소자 방정식과 같은 꼴).</p>
+    <div class="formula">$$\Gamma_{i+1/2} = \frac{D}{h}\Big[B(-a)\,n_i - B(a)\,n_{i+1}\Big],\qquad B(x) = \frac{x}{e^x - 1},\qquad a = \frac{v\,h}{D};\qquad \nabla\cdot\!\big[(\varepsilon_0 + e\Delta t(\mu_en_e + \mu_in_i))\nabla\phi^{k+1}\big] = -\rho^{k}$$<div class="where">셀 안에서 플럭스가 일정하다고 보고 표류-확산 방정식을 정확히 푼 지수 꼴의 해를 이은 것이다. \(a \to 0\)이면 중앙 차분 확산, \(|a| \to \infty\)이면 바람 거슬러(upwind) 표류로 자연스럽게 넘어간다. 암시적 연속 방정식과 함께 쓰면 계수 행렬이 M-행렬이 되어 밀도가 음이 되지 않는다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 190" role="img" aria-label="샤페터-거멜 이산화: 두 격자점 사이 지수 꼴 밀도 분포">
+        <line x1="60" y1="150" x2="820" y2="150" class="s-axis"/>
+        <g class="lbl-sm"><circle cx="140" cy="150" r="5" fill="var(--text)"/><circle cx="440" cy="150" r="5" fill="var(--text)"/><circle cx="740" cy="150" r="5" fill="var(--text)"/></g>
+        <text x="130" y="174" class="lbl-sm">nᵢ₋₁</text><text x="430" y="174" class="lbl-sm">nᵢ</text><text x="730" y="174" class="lbl-sm">nᵢ₊₁</text>
+        <path d="M440 50 C560 54 680 80 740 130" class="c-acc"/>
+        <path d="M440 50 L740 130" class="dash"/>
+        <path d="M440 50 C470 140 600 132 740 130" class="c-acc2" stroke-dasharray="4 3"/>
+        <text x="560" y="44" class="lbl-acc">SG: 셀 안 정확한 지수 해</text>
+        <text x="600" y="110" class="lbl-sm">중앙 차분: 직선(|a| &gt; 2에서 진동)</text>
+        <text x="470" y="146" class="lbl-acc2">강한 표류(|a| ≫ 1): 경계층</text>
+        <line x1="590" y1="20" x2="590" y2="150" class="dash"/><text x="596" y="30" class="lbl-sm">Γᵢ₊½</text>
+        <text x="80" y="40" class="lbl-sm">h = 격자 간격</text><path d="M140 60 H440" class="arr" marker-start="url(#md-a1)" marker-end="url(#md-a1)"/>
+      </svg>
+      <figcaption><b>그림 16-3.</b> 샤페터-거멜은 격자점 사이 밀도를 직선이 아닌 표류-확산 방정식의 정확한 지수 해로 잇는다. 그래서 큰 페클레 수에서도 진동 없이 표류 플럭스를 옮긴다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-sg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>이산화 비교: 중앙 차분 · 바람 거슬러 · 샤페터-거멜</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sg-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>전역 페클레 수 Pe = vL/D <output id="sg-pe-out"></output></span><input type="range" id="sg-pe" min="-40" max="40" step="0.5" value="20"></label>
+          <label class="ctrl"><span>셀 수 N <output id="sg-n-out"></output></span><input type="range" id="sg-n" min="4" max="60" step="1" value="8"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">셀 페클레 수 a</span><span class="v" id="sg-a">—</span></div>
+        <div class="stat"><span class="k">최대 오차: 중앙</span><span class="v md-v" id="sg-ec">—</span></div>
+        <div class="stat"><span class="k">최대 오차: 바람 거슬러</span><span class="v" id="sg-eu">—</span></div>
+        <div class="stat"><span class="k">최대 오차: SG</span><span class="v" id="sg-es">—</span></div>
+      </div>
+      <div class="sim-note">정상 1D 표류-확산 \(d(vn - D\,dn/dx)/dx = 0\), \(n(0) = 1\), \(n(1) = 0\)의 정확한 해 \(n = (e^{Pe} - e^{Pe\,x})/(e^{Pe} - 1)\)(회색)와 세 이산화의 격자 해(점). 해볼 것: ① N = 8, Pe = 20(a = 2.5)에서 중앙 차분은 음의 밀도로 출렁인다(빨강). ② 바람 거슬러는 늘 양수지만 수치 확산으로 경계층이 퍼진다. ③ SG는 셀 수와 상관없이 격자점에서 정확하다. 실제 시스는 a가 10–100이다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="ddsolver">
+    <h2>1D RF 방전을 직접 풀기</h2>
+    <p>위 식들을 평행판 사이에서 풀어 보자. 왼쪽 전극에 13.56 MHz 전압 \(V_{rf}\sin\omega t\), 오른쪽은 접지, 두 전극에서 밀도 0(흡수). 시간 간격은 RF 주기의 1/100(약 0.74 ns)로, 유전 이완 시간보다 수백 배 길지만 반암시적 포아송과 암시적 SG 덕분에 안정하다. 처음에 작은 씨앗 밀도에서 시작하면 전자 사태로 밀도가 자라고, 전극 앞에서 전자가 빠져 양전하층(시스)이 생기며, 시스가 벌크 전기장을 가려 이온화가 줄어 정상 상태에 이른다. 이 모델은 수백 mTorr–수 Torr(PL-300 PE 모듈 PECVD 조건) 쪽에서 믿을 만하고, 수십 mTorr 아래로 내려가면 국소장 근사가 깨진다.</p>
+
+    <div class="sim" id="sim-dd">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>1D 표류-확산 + 포아송: RF 방전이 시스를 만드는 과정</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="dd-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>전극 간격</span><div class="seg" id="dd-gap"><button data-value="10">10 mm (PE)</button><button data-value="25" class="on">25 mm (CP)</button></div></div>
+          <label class="ctrl"><span>압력 <output id="dd-p-out"></output></span><input type="range" id="dd-p" min="0.3" max="3" step="0.05" value="1"></label>
+          <label class="ctrl"><span>RF 전압 진폭 <output id="dd-V-out"></output></span><input type="range" id="dd-V" min="100" max="400" step="5" value="250"></label>
+          <label class="ctrl"><span>프레임당 RF 주기 <output id="dd-sp-out"></output></span><input type="range" id="dd-sp" min="1" max="40" step="1" value="10"></label>
+          <button class="btn primary" id="dd-run">일시정지</button>
+          <button class="btn" id="dd-reset">씨앗부터 다시</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">흐른 RF 주기</span><span class="v" id="dd-t">—</span></div>
+        <div class="stat"><span class="k">최대 nᵢ(주기 평균)</span><span class="v" id="dd-n">—</span></div>
+        <div class="stat"><span class="k">시스 두께(왼쪽)</span><span class="v" id="dd-s">—</span></div>
+        <div class="stat"><span class="k">전극 이온 플럭스</span><span class="v" id="dd-g">—</span></div>
+        <div class="stat"><span class="k">상태</span><span class="v md-v" id="dd-st">—</span></div>
+      </div>
+      <div class="sim-note">Ar, Tₑ = 2 eV(확산 계수용 고정), 101 격자점, 주기당 100 시간 단계, 국소장 이온화 \(\alpha(E/p)|\Gamma_e|\). 위: 주기 평균 nₑ(파랑 계열)·nᵢ(이온 색), 얇은 선은 현재 순간의 nₑ. 아래: 현재 위상의 전위 φ(x)(진한 선)와 한 주기 동안의 포락선(옅은 띠). 해볼 것: ① 처음 수십 주기 동안 밀도가 지수 함수로 자라다 시스가 생기며 포화한다. ② 압력을 3 Torr로 올리면 시스가 얇아지고 밀도 봉우리가 뾰족해진다. ③ 전압을 250 → 100 V로 낮추면 밀도가 약 1/3로 준다. 이 모델에는 2차 전자 방출과 전자 에너지 수송이 없어 실제 유지 전압 문턱은 잘 맞추지 못한다. ④ 10 mm 간격(PECVD)에서는 시스가 간격의 큰 몫을 차지한다. 시스 두께는 주기 평균 nₑ가 nᵢ의 절반이 되는 위치로 잰다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="lfa">
+    <h2>국소장 근사와 국소 평균 에너지 근사</h2>
+    <p>위 모델은 이온화율을 그 자리의 전기장 \(E/p\) 하나로 정했다. 이것이 <span class="term">국소장 근사</span><span class="en">(local field approximation, LFA)</span>다. 전자가 장과 평형을 이루는 길이(에너지 이완 길이 \(\lambda_\varepsilon\))가 장의 변화 길이보다 짧을 때만 맞다. 음극 시스처럼 장이 수 mm 안에서 0으로 떨어지는 곳에서는 시스에서 에너지를 얻은 전자가 장이 거의 없는 글로 영역까지 날아가 이온화한다. LFA는 이 이온화를 놓치고(글로에서 원천 0), 시스 깊숙한 곳의 원천을 과대평가한다.</p>
+    <p><span class="term">국소 평균 에너지 근사</span><span class="en">(local mean energy approximation, LMEA)</span>는 전자 평균 에너지 \(\bar\varepsilon\)에 대한 수송 방정식을 하나 더 풀고, 반응 속도와 수송 계수를 \(E/p\)가 아닌 \(\bar\varepsilon\)의 함수로 표에서 찾는다(표는 볼츠만 풀이기로 미리 만든다).</p>
+    <div class="formula">$$\frac{\partial(n_e\bar\varepsilon)}{\partial t} + \nabla\cdot\boldsymbol\Gamma_\varepsilon = -e\boldsymbol\Gamma_e\cdot\mathbf E - n_eN\,\mathcal L(\bar\varepsilon)\quad\Rightarrow\quad \frac{d\bar\varepsilon}{dx} = E(x) - E_{eq}(\bar\varepsilon)\ \ (\text{1D 정상 빔 근사})$$<div class="where">\(\mathcal L\)은 탄성·비탄성 충돌로 잃는 에너지 손실 함수, \(E_{eq}(\bar\varepsilon)\)는 그 평균 에너지를 국소 평형으로 유지하는 장(여기서는 \(E_{eq} = c\,p\,\bar\varepsilon^{3/2}\), \(c \approx 316\) V m⁻¹Torr⁻¹eV^−3/2로 근사). 장이 갑자기 떨어지면 \(\bar\varepsilon\)는 이완 길이 \(\lambda_\varepsilon \sim \bar\varepsilon/E_{eq}\)에 걸쳐 천천히 식는다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 200" role="img" aria-label="음극 시스와 글로에서 전기장, 국소 평형 에너지, 실제 평균 에너지, 이온화 원천">
+        <rect x="40" y="20" width="14" height="160" class="metf"/><text x="20" y="196" class="lbl-sm">음극</text>
+        <rect x="54" y="20" width="200" height="160" fill="var(--accent-2)" fill-opacity="0.08"/><text x="110" y="196" class="lbl-sm">음극 시스</text>
+        <rect x="254" y="20" width="580" height="160" class="glow"/><text x="500" y="196" class="lbl-sm">음 글로(장 ≈ 0)</text>
+        <path d="M54 40 L254 168 L834 168" class="dash"/><text x="70" y="36" class="lbl-sm">E(x)</text>
+        <path d="M54 60 C150 100 230 160 254 168 L834 168" class="c-acc2"/><text x="150" y="130" class="lbl-acc2">LFA 원천</text>
+        <path d="M54 166 C120 120 220 50 280 50 C380 52 460 120 600 160 L834 166" class="c-acc"/><text x="380" y="70" class="lbl-acc">LMEA 원천(글로로 번짐)</text>
+      </svg>
+      <figcaption><b>그림 16-4.</b> 음극 시스와 글로. LFA는 이온화 원천을 장이 큰 시스 안에 가두고 글로에서 0으로 만든다. 에너지 수송을 푸는 LMEA(또는 운동론 모델)에서는 시스에서 가속된 전자가 글로로 들어가 이온화가 번진다. 실제 음 글로가 빛나는 이유다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-lm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>LFA vs LMEA: 음극 시스 뒤 이온화 원천</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="lm-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>압력 <output id="lm-p-out"></output></span><input type="range" id="lm-p" min="0.1" max="5" step="0.05" value="1"></label>
+          <label class="ctrl"><span>음극 강하 V_c <output id="lm-V-out"></output></span><input type="range" id="lm-V" min="100" max="600" step="10" value="300"></label>
+          <label class="ctrl"><span>시스 두께 d_s <output id="lm-d-out"></output></span><input type="range" id="lm-d" min="1" max="10" step="0.1" value="3"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">이완 길이 λ_ε(10 eV)</span><span class="v" id="lm-l">—</span></div>
+        <div class="stat"><span class="k">원천 최대 위치 LFA · LMEA</span><span class="v" id="lm-x">—</span></div>
+        <div class="stat"><span class="k">글로 쪽 이온화 몫 LFA · LMEA</span><span class="v" id="lm-f">—</span></div>
+        <div class="stat"><span class="k">증배 ln M LFA · LMEA</span><span class="v" id="lm-m">—</span></div>
+      </div>
+      <div class="sim-note">선형 시스 장 \(E = (2V_c/d_s)(1 - x/d_s)\), 글로 장 \(E_b = 200p\) V/m. 전자는 음극에서 1 eV로 출발해 \(d\bar\varepsilon/dx = E - cp\bar\varepsilon^{3/2}\)를 따르고, 이온화 계수는 LFA에서 \(\alpha(E)\), LMEA에서 \(\alpha(E_{eq}(\bar\varepsilon))\)다. 원천 \(S = \alpha\Gamma\), \(d\Gamma/dx = \alpha\Gamma\). 위: 정규화한 원천 S(x)(LFA 점선, LMEA 실선)와 시스 경계. 아래: 평균 에너지 ε̄(x)와 국소 평형 에너지 ε_loc(E(x)). 해볼 것: ① 0.2 Torr로 내리면 λ_ε가 시스보다 길어져 LMEA 원천이 글로 깊숙이 들어간다. ② 5 Torr에서는 λ_ε ≪ d_s라 두 근사의 원천 봉우리 위치가 거의 같아진다. ③ LFA는 음극 바로 앞(x ≈ 0)이 장이 가장 커서 α도 가장 크다고 보지만, 실제로는 막 출발한 전자의 에너지가 낮아 거기서 이온화하지 못한다(아래 그림에서 ε̄가 ε_loc를 늦게 따라감).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="pic">
+    <h2>PIC/MCC: 입자로 풀기</h2>
+    <p><span class="term">PIC</span><span class="en">(particle-in-cell)</span>은 실제 전자·이온 수천억 개를 대신하는 <strong>거대 입자</strong>(macro-particle, 한 개가 10⁶–10⁹개를 대표) 수만–수억 개를 추적한다. 입자는 연속 공간에서 움직이지만 전기장은 격자에서 푼다. 충돌은 <span class="term">MCC</span><span class="en">(Monte Carlo collision)</span>로 확률적으로 처리한다. 한 시간 단계는 네 단계(+충돌)의 고리다.</p>
+    <div class="formula">$$\rho_j = \sum_p q_p\,W(x_p - x_j),\quad \frac{\phi_{j+1} - 2\phi_j + \phi_{j-1}}{\Delta x^2} = -\frac{\rho_j}{\varepsilon_0},\quad v_p^{n+1/2} = v_p^{n-1/2} + \frac{q}{m}E(x_p^n)\Delta t,\quad x_p^{n+1} = x_p^n + v_p^{n+1/2}\Delta t$$<div class="where">\(W\)는 할당 함수(구름 입자법 CIC: 이웃 두 격자점에 거리에 반비례해 나눔). 장을 입자 위치로 보간할 때도 같은 \(W\)를 써야 자기 힘이 사라진다. 속도와 위치를 반 단계 엇갈려 두는 립프로그(leapfrog)는 2차 정확도이고 에너지를 장기간 잘 보존한다. 충돌 확률은 \(P = 1 - e^{-\nu\Delta t}\)이고, 에너지마다 다른 \(\nu(\varepsilon)\)는 최대 주파수 \(\nu_{max}\)로 뽑은 뒤 \(\nu(\varepsilon)/\nu_{max}\) 확률로 받아들이는 <strong>널 충돌법</strong>(null collision)으로 효율을 높인다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="PIC/MCC 한 사이클: 전하 할당, 장 풀이, 보간, 입자 밀기, 충돌">
+        <defs><marker id="md-a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker></defs>
+        <rect x="330" y="10" width="220" height="50" rx="8" class="box2"/><text x="440" y="32" text-anchor="middle" class="lbl-b">① 전하 할당 x_p → ρ_j</text><text x="440" y="50" text-anchor="middle" class="lbl-sm">CIC 가중치</text>
+        <rect x="620" y="100" width="230" height="50" rx="8" class="box2"/><text x="735" y="122" text-anchor="middle" class="lbl-b">② 장 풀이 ρ_j → φ_j, E_j</text><text x="735" y="140" text-anchor="middle" class="lbl-sm">포아송(3중 대각·FFT·다중 격자)</text>
+        <rect x="330" y="190" width="220" height="50" rx="8" class="box2"/><text x="440" y="212" text-anchor="middle" class="lbl-b">③ 보간 E_j → E(x_p)</text><text x="440" y="230" text-anchor="middle" class="lbl-sm">같은 가중치</text>
+        <rect x="30" y="100" width="230" height="50" rx="8" class="box2"/><text x="145" y="122" text-anchor="middle" class="lbl-b">④ 입자 밀기 v, x 갱신</text><text x="145" y="140" text-anchor="middle" class="lbl-sm">립프로그 + 경계(흡수·방출)</text>
+        <path d="M550 40 C640 40 700 60 720 96" class="c-acc" marker-end="url(#md-a2)"/>
+        <path d="M720 152 C700 200 640 214 552 214" class="c-acc" marker-end="url(#md-a2)"/>
+        <path d="M330 214 C240 214 180 200 160 154" class="c-acc" marker-end="url(#md-a2)"/>
+        <path d="M160 98 C180 60 240 40 328 38" class="c-acc" marker-end="url(#md-a2)"/>
+        <circle cx="440" cy="125" r="46" class="glow"/><text x="440" y="120" text-anchor="middle" class="lbl-acc2">⑤ MCC</text><text x="440" y="138" text-anchor="middle" class="lbl-sm">P = 1 − e^(−νΔt)</text>
+        <path d="M262 125 H392" class="dash"/>
+      </svg>
+      <figcaption><b>그림 16-5.</b> PIC/MCC 사이클. 입자 → 격자(할당), 격자에서 장 풀이, 격자 → 입자(보간), 입자 밀기, 그리고 충돌. 계산 시간의 대부분은 ①③④처럼 입자 수에 비례하는 단계가 차지한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-cy">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>PIC 한 사이클 따라가기(입자 12개, 격자 8칸)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cy-cv"></canvas></div>
+        <div class="sim-controls">
+          <button class="btn primary" id="cy-step">다음 단계 ▶</button>
+          <label class="check"><input type="checkbox" id="cy-auto"> 자동 재생</label>
+          <label class="ctrl"><span>충돌 주파수 ν/ω_pe <output id="cy-nu-out"></output></span><input type="range" id="cy-nu" min="0" max="1" step="0.05" value="0.3"></label>
+          <button class="btn" id="cy-reset">처음으로</button>
+          <div class="md-stage" id="cy-txt"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">단계</span><span class="v" id="cy-st">—</span></div>
+        <div class="stat"><span class="k">시간 tω_pe</span><span class="v" id="cy-t">—</span></div>
+        <div class="stat"><span class="k">전체 에너지</span><span class="v" id="cy-e">—</span></div>
+      </div>
+      <div class="sim-note">주기 경계, 정규화 단위(ω_pe = 1, 이온은 균일한 양전하 바탕), Δt = 0.3. 위: 입자(점, 화살표 = 속도)와 격자점, 막대 = 할당된 전하 밀도 ρ_j. 아래: 전위 φ_j(선)와 전기장 E_j(점선). 한 번 누를 때마다 할당 → 장 풀이 → 보간(입자 위 화살표 = 힘) → 밀기 → 충돌(주황 테두리 = 이번에 충돌한 입자, 속도 방향이 무작위로 바뀜) 순서로 진행한다.</div>
+    </div>
+
+    <h3>안정 조건: 무엇을 풀어야 하나</h3>
+    <p>PIC의 수치 조건은 물리 척도에서 나온다(<a href="scales.html">2장</a>). 격자가 데바이 길이를 못 풀면(\(\Delta x \gg \lambda_D\)) 격자보다 짧은 파장의 요동이 긴 파장으로 둔갑(에일리어싱)해 전자를 데우는 <strong>유한 격자 불안정</strong>이 생기고, \(\lambda_D\)가 \(\Delta x/\pi\) 정도로 커질 때까지 가짜 가열이 이어진다. 시간 간격은 립프로그가 플라즈마 진동을 풀어야 하므로 \(\omega_{pe}\Delta t \lt 2\)가 안정 한계, 정확도를 위해 \(\omega_{pe}\Delta t \lesssim 0.2\)다. 입자가 한 단계에 한 칸 이상 건너뛰면 안 되므로(\(v\Delta t \lt \Delta x\)) 고에너지 전자도 고려한다. 셀당 입자 수가 적으면 통계 잡음이 \(1/\sqrt{N_{ppc}}\)로 커져 충돌처럼 작용하는 수치 충돌·가열이 생긴다.</p>
+    <div class="formula">$$\Delta x \lesssim \lambda_D = \sqrt{\frac{\varepsilon_0T_e}{en_e}},\qquad \omega_{pe}\Delta t \lesssim 0.2\ \ (\text{안정 한계 } 2),\qquad \sin\frac{\omega\Delta t}{2} = \frac{\omega_{pe}\Delta t}{2},\qquad \omega^2 = \omega_{pe}^2 + 3k^2v_{th}^2$$<div class="where">세 번째 식은 립프로그가 차가운 플라즈마 진동을 풀 때의 수치 분산 관계다. \(\omega_{pe}\Delta t\)가 2를 넘으면 실수해가 없어 진폭이 매 단계 커진다. 마지막은 따뜻한 플라즈마의 보옴-그로스 분산 관계다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 200" role="img" aria-label="격자 간격과 데바이 길이, 시간 간격과 플라즈마 주기 비교">
+        <g transform="translate(20,10)">
+          <text x="0" y="16" class="lbl-b">공간: Δx vs λ_D</text>
+          <path d="M10 110 C40 60 70 160 100 110 C130 60 160 160 190 110 C220 60 250 160 280 110 C310 60 340 160 370 110" class="c-el"/>
+          <g class="arr"><path d="M10 170 V150 M60 170 V150 M110 170 V150 M160 170 V150 M210 170 V150 M260 170 V150 M310 170 V150 M360 170 V150"/></g>
+          <text x="0" y="188" class="lbl-ok">Δx = λ_D/2: 요동이 풀림</text>
+          <g class="arr" stroke-dasharray="3 3"><path d="M10 60 V40 M190 60 V40 M370 60 V40"/></g>
+          <text x="200" y="40" class="lbl-bad">Δx ≫ λ_D: 에일리어싱 → 가열</text>
+        </g>
+        <g transform="translate(460,10)">
+          <text x="0" y="16" class="lbl-b">시간: ω_pe Δt</text>
+          <path d="M10 100 C50 40 90 40 130 100 C170 160 210 160 250 100 C290 40 330 40 370 100" class="c-acc"/>
+          <g fill="var(--ok)"><circle cx="10" cy="100" r="3.5"/><circle cx="40" cy="58" r="3.5"/><circle cx="70" cy="45" r="3.5"/><circle cx="100" cy="62" r="3.5"/><circle cx="130" cy="100" r="3.5"/><circle cx="160" cy="140" r="3.5"/><circle cx="190" cy="155" r="3.5"/><circle cx="220" cy="140" r="3.5"/></g>
+          <g fill="var(--bad)"><circle cx="10" cy="100" r="5"/><circle cx="210" cy="150" r="5"/><circle cx="370" cy="100" r="5"/></g>
+          <text x="0" y="186" class="lbl-ok">초록: ω_pe Δt ≈ 0.2 (주기당 30점)</text>
+          <text x="230" y="186" class="lbl-bad">빨강: ω_pe Δt ≈ 3 → 발산</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 16-6.</b> PIC의 두 조건. 격자는 데바이 길이를, 시간 간격은 플라즈마 진동을 풀어야 한다. PL-300 IC 기준 플라즈마에서 \(\lambda_D \approx 19\) µm, \(1/\omega_{pe} \approx 28\) ps이므로 명시적 PIC로 챔버 전체(0.25 m)를 ms 동안 푸는 것은 사실상 불가능하다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-pc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>1D 정전 PIC: 플라즈마 진동, 이류 불안정, 수치 가열</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pc-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>실험</span><div class="seg" id="pc-mode"><button data-value="osc" class="on">플라즈마 진동</button><button data-value="ts">이류 불안정</button><button data-value="th">열 플라즈마(가열 검사)</button></div></div>
+          <label class="ctrl"><span>격자 Δx/λ_D <output id="pc-dx-out"></output></span><input type="range" id="pc-dx" min="0.1" max="4" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span>시간 간격 ω_pe Δt <output id="pc-dt-out"></output></span><input type="range" id="pc-dt" min="0.05" max="2.3" step="0.05" value="0.2"></label>
+          <label class="ctrl"><span>셀당 입자 수 <output id="pc-ppc-out"></output></span><input type="range" id="pc-ppc" min="10" max="100" step="5" value="60"></label>
+          <label class="ctrl"><span>충돌(MCC) ν/ω_pe <output id="pc-nu-out"></output></span><input type="range" id="pc-nu" min="0" max="0.5" step="0.01" value="0"></label>
+          <button class="btn primary" id="pc-run">일시정지</button>
+          <button class="btn" id="pc-reset">다시 시작</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">시간 tω_pe</span><span class="v" id="pc-t">—</span></div>
+        <div class="stat"><span class="k">전체 에너지 변화</span><span class="v md-v" id="pc-e">—</span></div>
+        <div class="stat"><span class="k">측정 ω/ω_pe (이론)</span><span class="v" id="pc-w">—</span></div>
+        <div class="stat"><span class="k">Tₑ/Tₑ₀ · 성장률 γ</span><span class="v" id="pc-g">—</span></div>
+      </div>
+      <div class="sim-note">64칸 주기 경계, 전자 거대 입자 64 × (셀당 입자 수), 이온은 균일 바탕, CIC 할당·보간, 립프로그. 정규화: ω_pe = 1, λ_D = v_th/ω_pe = 1. 위: 위상 공간(x, v). 아래: 운동 에너지(전자 색)·장 에너지(강조색, 로그)·전체(회색), 처음 전체 에너지로 정규화. 해볼 것: ① 플라즈마 진동은 장 에너지가 2ω로 출렁이며, 측정 ω는 보옴-그로스 값(립프로그 보정 포함)과 맞는다. ω_peΔt를 1.5로 키우면 주파수가 눈에 띄게 어긋나고, 2를 넘기면 발산한다. ② 이류 불안정은 장 에너지가 로그 그래프에서 직선(γ ≈ 0.35 ω_pe)으로 자라다 위상 공간에 소용돌이가 생기며 포화한다. ③ 열 플라즈마에서 Δx/λ_D를 3 이상으로 두면 Tₑ가 서서히 올라간다(유한 격자 가열). 0.5로 두면 거의 일정하다. ④ 충돌을 넣으면 진동이 감쇠한다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="hybrid">
+    <h2>하이브리드와 2D 장비 모델</h2>
+    <p>장비 설계용 2D·3D 모델은 대부분 <strong>하이브리드</strong>다. 서로 시간 척도가 다른 물리를 모듈로 나누고, 각 모듈을 자기 척도로 풀어 결과를 주고받으며 수렴할 때까지 반복한다. ICP 모델의 전형적인 구성은 다음과 같다.</p>
+    <ul>
+      <li><strong>전자기 모듈</strong>: 코일 전류가 만드는 방위각 장을 주파수 영역 헬름홀츠 식 \(\nabla^2E_\theta - E_\theta/r^2 + k_0^2\varepsilon_p E_\theta = -i\omega\mu_0J_{coil}\)로 푼다. 플라즈마 유전율 \(\varepsilon_p = 1 - \omega_{pe}^2/(\omega(\omega - i\nu_m))\)이 밀도에 달려 있어 표피 깊이(<a href="icp.html">10장</a>)가 결과로 나온다.</li>
+      <li><strong>전자 에너지 모듈</strong>: 흡수 전력 분포 \(\tfrac12\mathrm{Re}(\sigma)|E|^2\)로 전자 온도(유체 에너지 방정식) 또는 EEDF(전자 몬테카를로)를 구하고, 이온화·해리 속도를 낸다.</li>
+      <li><strong>유체 수송 모듈</strong>: 이온·중성·래디컬의 연속·운동량 방정식, 양극성 확산, 기체 흐름과 펌핑. 전자는 준중성으로 묶는다. 이온은 시스 입구까지 유체로, 시스 안과 웨이퍼 IEDF는 별도 이온 몬테카를로로 뽑는다.</li>
+      <li><strong>회로·화학 모듈</strong>: 정합기·블로킹 커패시터·바이어스 회로, 수십–수백 개 반응 화학과 표면 반응(벽 재결합, 식각 생성물).</li>
+    </ul>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="하이브리드 모델의 모듈과 주고받는 변수">
+        <defs><marker id="md-a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text-dim)"/></marker></defs>
+        <rect x="20" y="80" width="200" height="70" rx="8" class="box2"/><text x="120" y="108" text-anchor="middle" class="lbl-b">전자기(EM)</text><text x="120" y="130" text-anchor="middle" class="lbl-sm">E_θ(r,z), 흡수 전력</text>
+        <rect x="340" y="20" width="200" height="70" rx="8" class="box2"/><text x="440" y="48" text-anchor="middle" class="lbl-b">전자 에너지</text><text x="440" y="70" text-anchor="middle" class="lbl-sm">Tₑ 또는 EEDF, 반응 속도</text>
+        <rect x="340" y="140" width="200" height="70" rx="8" class="box2"/><text x="440" y="168" text-anchor="middle" class="lbl-b">유체 수송</text><text x="440" y="190" text-anchor="middle" class="lbl-sm">nᵢ, n_rad, 흐름, 전위</text>
+        <rect x="660" y="80" width="200" height="70" rx="8" class="box2"/><text x="760" y="108" text-anchor="middle" class="lbl-b">시스·표면</text><text x="760" y="130" text-anchor="middle" class="lbl-sm">IEDF(이온 MC), 식각 플럭스</text>
+        <path d="M220 100 L338 60" class="arr" marker-end="url(#md-a3)"/><text x="230" y="70" class="lbl-sm">P(r,z)</text>
+        <path d="M440 90 V138" class="arr" marker-end="url(#md-a3)"/><text x="448" y="120" class="lbl-sm">S_iz, k(Tₑ)</text>
+        <path d="M338 180 L222 132" class="arr" marker-end="url(#md-a3)"/><text x="230" y="176" class="lbl-sm">nₑ → σ, ε_p</text>
+        <path d="M540 175 L658 125" class="arr" marker-end="url(#md-a3)"/><text x="590" y="176" class="lbl-sm">Γᵢ, Tₑ, V_sh</text>
+        <text x="440" y="226" text-anchor="middle" class="lbl-acc">수렴할 때까지 반복(수십–수백 회)</text>
+      </svg>
+      <figcaption><b>그림 16-7.</b> ICP 하이브리드 모델의 모듈 고리. 전자기 모듈의 흡수 전력이 이온화 원천을, 원천이 밀도를, 밀도가 다시 유전율과 표피 깊이를 정한다. 각 모듈은 자기 시간 척도(ns~ms)로 따로 풀고 결과만 주고받는다.</figcaption>
+    </figure>
+
+    <p>아래 시뮬레이터는 이 고리를 가장 단순하게 줄인 것이다. PL-300 IC 모듈의 (r, z) 단면에서 ① 코일 아래 전력 흡수를 표피 깊이 \(\delta = c/\omega_{pe}\)(무충돌 근사)로 감쇠시키고 ② 이온화 원천 \(S = P/(e\mathcal E_T)\)로 양극성 확산 \(\nabla\cdot(D_a\nabla n) + S = 0\)을 풀고(벽에서 보옴 플럭스 경계) ③ 새 밀도로 표피 깊이를 다시 구하는 반복을 수렴할 때까지 돈다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 200" role="img" aria-label="IC 모듈의 2D 축대칭 계산 영역과 경계 조건">
+        <rect x="80" y="40" width="720" height="130" class="glow"/>
+        <rect x="80" y="26" width="720" height="14" class="oxf"/>
+        <g fill="var(--m-metal)"><circle cx="230" cy="16" r="6"/><circle cx="300" cy="16" r="6"/><circle cx="560" cy="16" r="6"/><circle cx="620" cy="16" r="6"/><circle cx="680" cy="16" r="6"/></g>
+        <rect x="170" y="170" width="540" height="10" class="sif"/>
+        <line x1="440" y1="30" x2="440" y2="190" class="dash"/><text x="446" y="196" class="lbl-sm">대칭축 r = 0</text>
+        <g stroke="var(--grid)" stroke-width="0.8"><path d="M440 40 V170 M470 40 V170 M500 40 V170 M530 40 V170 M560 40 V170 M590 40 V170 M620 40 V170 M650 40 V170 M680 40 V170 M710 40 V170 M740 40 V170 M770 40 V170 M440 70 H800 M440 100 H800 M440 130 H800"/></g>
+        <text x="90" y="62" class="lbl-sm">계산 영역(반쪽): r 30칸 × z 12칸</text>
+        <text x="610" y="60" class="lbl-acc">표피층 δ: 전력 흡수</text>
+        <text x="806" y="110" class="lbl-sm">벽:</text><text x="806" y="126" class="lbl-sm">Γ = n u_B</text>
+        <text x="260" y="196" class="lbl-sm">웨이퍼(이온 플럭스 → 균일도)</text>
+        <text x="150" y="12" class="lbl-sm">안쪽 코일</text><text x="700" y="12" class="lbl-sm">바깥 코일</text>
+      </svg>
+      <figcaption><b>그림 16-8.</b> 축대칭 2D 계산 영역. 반쪽만 풀고 거울상으로 보인다. 위는 세라믹 창(코일), 아래는 웨이퍼, 옆은 벽. 상용 코드는 코일·창·척·펌핑 포트까지 수만–수십만 개의 비정렬 격자로 나눈다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-hy">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2D ICP 하이브리드 반복: 표피 흡수 ↔ 양극성 확산</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="hy-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>흡수 전력 <output id="hy-P-out"></output></span><input type="range" id="hy-P" min="300" max="3000" step="50" value="1500"></label>
+          <label class="ctrl"><span>압력 <output id="hy-p-out"></output></span><input type="range" id="hy-p" min="5" max="50" step="1" value="10"></label>
+          <label class="ctrl"><span>바깥 코일 전류 비중 <output id="hy-w-out"></output></span><input type="range" id="hy-w" min="0" max="1" step="0.02" value="0.5"></label>
+          <button class="btn primary" id="hy-run">처음부터 반복</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">반복 · 변화량</span><span class="v md-v" id="hy-it">—</span></div>
+        <div class="stat"><span class="k">최대 nₑ</span><span class="v" id="hy-n">—</span></div>
+        <div class="stat"><span class="k">표피 깊이 δ(중간 반지름)</span><span class="v" id="hy-d">—</span></div>
+        <div class="stat"><span class="k">웨이퍼 이온 플럭스 균일도</span><span class="v md-v" id="hy-u">—</span></div>
+      </div>
+      <div class="sim-note">\(D_a\)는 Ar⁺ 이동도와 Tₑ = 2.5 eV로 \(D_a \approx 38\times(10\,\text{mTorr}/p)\) m²/s, \(\mathcal E_T\) ≈ 108 eV(Tₑ = 2.5 eV, 전역 모델 값), 벽 경계 플럭스 \(n/(\Delta/2D_a + 1/u_B)\). 코일은 반지름 8 cm(안쪽)·18 cm(바깥) 두 고리로, 전력 흡수는 \(e^{-2(H-z)/\delta(r)}\)로 감쇠, δ(r)는 창 아래 밀도로 구한다(반복마다 반만 갱신). 위: n(r, z) 단면(좌우 거울상, 흰 선 = 흡수 전력 밀도 50 % 등고선). 아래: 웨이퍼 이온 플럭스 Γ(r)(웨이퍼 영역 강조)와 반복에 따른 최대 밀도 수렴. 해볼 것: ① 전력을 올리면 밀도가 커지고 δ가 얇아져 흡수가 창에 붙는다. ② 바깥 코일 비중으로 균일도를 맞춰 보라. 최선은 약 0.45–0.5에서 ±4 % 남짓으로, 두 고리만으로는 PL-300 목표 ±3 %에 닿지 않는다. 실제 장비가 코일을 3–4 구역으로 나누고 구역별 전류를 따로 조절하는 이유다. ③ 압력을 올리면 확산이 느려져 분포가 원천 모양을 더 닮는다. 이 단순 모델의 중심 밀도(1.5 kW, 10 mTorr에서 약 2.4×10¹¹ cm⁻³)는 PL-300 전역 모델 값(4×10¹¹)보다 약 40 % 낮다. 저압에서 확산 근사와 보옴 경계가 벽 손실을 과대평가하기 때문이며, 이런 차이를 메우는 것이 다음 절의 교정이다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="validation">
+    <h2>검증과 교정: 모델을 진단과 맞대기</h2>
+    <p>모델의 입력에는 불확실한 값이 많다(단면적, 벽 재결합 계수, 2차 전자 계수, 전력 전달 효율). <strong>교정</strong>(calibration)은 그런 손잡이를 측정에 맞게 조정하는 것이고, <strong>검증</strong>(validation)은 교정에 쓰지 않은 다른 조건·다른 진단으로 예측을 시험하는 것이다. 둘을 섞으면 "맞춘 것을 맞혔다"는 자기만족이 된다. 진단 자체의 오차(<a href="diagnostics.html">15장</a>: 탐침 n은 ±30 % 수준)도 비교에 넣어야 한다. 탐침의 계통 오차가 모델 매개변수에 흡수되면 다른 조건에서 예측이 빗나간다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 170" role="img" aria-label="교정과 검증의 흐름">
+        <defs><marker id="md-a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text-dim)"/></marker></defs>
+        <rect x="20" y="20" width="170" height="54" rx="8" class="box2"/><text x="105" y="44" text-anchor="middle" class="lbl-b">모델</text><text x="105" y="62" text-anchor="middle" class="lbl-sm">손잡이: γ, σ, η</text>
+        <rect x="20" y="100" width="170" height="54" rx="8" class="box2"/><text x="105" y="124" text-anchor="middle" class="lbl-b">진단 A</text><text x="105" y="142" text-anchor="middle" class="lbl-sm">조건 1–3(교정용)</text>
+        <rect x="320" y="56" width="200" height="60" rx="8" class="box2"/><text x="420" y="80" text-anchor="middle" class="lbl-acc">교정</text><text x="420" y="100" text-anchor="middle" class="lbl-sm">χ² 최소, 오차 막대 고려</text>
+        <rect x="640" y="20" width="220" height="54" rx="8" class="box2"/><text x="750" y="44" text-anchor="middle" class="lbl-ok">검증</text><text x="750" y="62" text-anchor="middle" class="lbl-sm">새 조건 4–6, 진단 B</text>
+        <rect x="640" y="100" width="220" height="54" rx="8" class="box2"/><text x="750" y="124" text-anchor="middle" class="lbl-bad">함정</text><text x="750" y="142" text-anchor="middle" class="lbl-sm">진단 계통 오차가 손잡이에 흡수</text>
+        <path d="M190 47 L318 78" class="arr" marker-end="url(#md-a4)"/><path d="M190 127 L318 96" class="arr" marker-end="url(#md-a4)"/>
+        <path d="M520 78 L638 50" class="arr" marker-end="url(#md-a4)"/><path d="M520 96 L638 124" class="arr" marker-end="url(#md-a4)"/>
+      </svg>
+      <figcaption><b>그림 16-9.</b> 교정과 검증. 교정에 쓴 자료로 모델을 평가하지 않는다. 가능하면 원리가 다른 진단(탐침 vs 간섭계, OES vs 질량 분석)으로 교차 확인한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-va">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>모델 교정: 탐침 지름 분포에 확산 모델 맞추기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="va-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>모델: 원천 반지름 r_s <output id="va-r-out"></output></span><input type="range" id="va-r" min="0.04" max="0.22" step="0.005" value="0.08"></label>
+          <label class="ctrl"><span>모델: 확산 계수 배율 <output id="va-d-out"></output></span><input type="range" id="va-d" min="0.3" max="3" step="0.02" value="1"></label>
+          <label class="check"><input type="checkbox" id="va-bias"> 탐침 계통 오차 +25 %(해석 이론)</label>
+          <button class="btn primary" id="va-fit">자동 교정(격자 탐색)</button>
+          <button class="btn" id="va-chk">검증: 30 mTorr 조건 예측</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">χ²/자유도</span><span class="v md-v" id="va-c">—</span></div>
+        <div class="stat"><span class="k">r_s · D 배율</span><span class="v" id="va-p">—</span></div>
+        <div class="stat"><span class="k">검증 조건 중심 n 오차</span><span class="v md-v" id="va-v">—</span></div>
+      </div>
+      <div class="sim-note">모델: 1D 지름 방향 정상 확산 \((1/r)(rD\,n')' + S(r) = 0\), 가우스 고리 원천(폭 4 cm, 전력 1.5 kW 고정), 벽에서 보옴 플럭스. "측정": 숨겨진 참 매개변수(r_s = 0.13 m, D 배율 1.4)로 만든 분포에 3 % 잡음을 더한 탐침 13점, 오차 막대 ±5 %. 검증은 압력을 3배(D를 1/3)로 바꾼 조건의 중심 밀도를 교정된 모델로 예측해 참값과 비교한다. 해볼 것: ① 손으로 χ²/자유도를 1 근처까지 낮춰 보라. ② 자동 교정은 참값 근처를 찾는다. ③ 계통 오차를 켜고 교정하면 χ²는 여전히 좋지만 D 배율이 틀린 값(약 1.1)으로 가고, 검증 조건에서도 25 % 틀린다. 측정과 잘 맞는 모델이 옳은 모델이라는 보장은 없다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="cost">
+    <h2>계산 비용과 모델 고르기</h2>
+    <p>명시적 PIC의 비용은 격자 수 × 셀당 입자 수 × 시간 단계 수에 비례하고, 격자와 시간 간격이 \(\lambda_D\)와 \(1/\omega_{pe}\)에 묶여 있어 밀도가 오르면 빠르게 커진다(1D에서 \(\propto n^{1/2}\cdot n^{1/2}\), 3D에서 \(\propto n^{3/2}\cdot n^{1/2} = n^2\)). 그래서 실제 PIC는 밀도를 낮추거나 장치를 줄이고(축척), 질량비를 바꾸고, 암시적·에너지 보존 PIC나 GPU를 쓴다. 유체는 시스를 풀 만큼만 격자를 촘촘히 하면 되고 반암시적으로 큰 시간 간격을 쓸 수 있어 수 자릿수 싸다.</p>
+    <div class="formula">$$\text{비용} \approx N_{cell}\,N_{ppc}\,N_{step}\,c_p,\qquad N_{cell} = \prod_d\frac{L_d}{\Delta x},\qquad N_{step} = \frac{t_{sim}}{\Delta t} = \frac{t_{sim}\,\omega_{pe}}{0.2}$$<div class="where">\(c_p\)는 입자 하나를 한 단계 처리하는 연산 수(할당·보간·밀기·충돌 약 50–100 flop). 유체는 \(N_{cell}N_{step}c_f\), \(c_f\)는 셀 하나에 방정식 여럿을 암시적으로 푸는 비용(수천 flop).</div></div>
+
+    <div class="sim" id="sim-co">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>계산 비용 추정기: 격자 × 입자 × 시간 단계</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="co-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>차원</span><div class="seg" id="co-dim"><button data-value="1">1D</button><button data-value="2" class="on">2D</button><button data-value="3">3D</button></div></div>
+          <label class="ctrl"><span>전자 밀도 <output id="co-n-out"></output></span><input type="range" id="co-n" min="9" max="12" step="0.05" value="11.6"></label>
+          <label class="ctrl"><span>모사 시간 <output id="co-t-out"></output></span><input type="range" id="co-t" min="-6" max="-2" step="0.1" value="-4"></label>
+          <label class="ctrl"><span>PIC 셀당 입자 수 <output id="co-ppc-out"></output></span><input type="range" id="co-ppc" min="10" max="500" step="10" value="100"></label>
+          <label class="ctrl"><span>코어 수 <output id="co-c-out"></output></span><input type="range" id="co-c" min="0" max="12" step="1" value="6"></label>
+          <label class="ctrl"><span>밀도 축척(PIC) <output id="co-s-out"></output></span><input type="range" id="co-s" min="0" max="3" step="0.1" value="0"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">λ_D · 1/ω_pe</span><span class="v" id="co-l">—</span></div>
+        <div class="stat"><span class="k">PIC 격자 · 입자</span><span class="v" id="co-g">—</span></div>
+        <div class="stat"><span class="k">PIC 시간 단계</span><span class="v" id="co-st">—</span></div>
+        <div class="stat"><span class="k">PIC 벽시계 시간</span><span class="v md-v" id="co-w">—</span></div>
+      </div>
+      <div class="sim-note">영역: PL-300 IC 모듈(1D: 창-웨이퍼 0.10 m, 2D: 반지름 0.25 × 높이 0.10 m, 3D: 0.5 × 0.5 × 0.10 m 상자), Tₑ = 2.5 eV. PIC: Δx = λ_D, ω_peΔt = 0.2, 전자·이온 두 종, 입자-단계당 80 flop, 장 풀이 셀-단계당 30 flop. 유체: Δx = max(λ_D, 0.5 mm)(시스 근처를 풀 정도), Δt = RF 주기/200, 셀-단계당 2000 flop. 하이브리드: 유체 이온(Δt = 1 ns, 셀-단계당 1000 flop) + 전자 몬테카를로 10⁵개 × 10⁴ 단계 × 반복 50회. 전역: 약 10⁸ flop. 코어당 유효 1 GFLOP/s, 병렬 효율 70 %. "밀도 축척"은 PIC에서 밀도를 10^s 배 낮춰 푸는 흔한 꼼수(λ_D ↑, ω_pe ↓). 막대는 벽시계 시간(로그). 해볼 것: ① 기준 플라즈마의 2D PIC는 100 µs만 풀어도 64코어로 십 년이 넘게 걸린다. 밀도 축척 2–3을 넣어야 일 단위가 된다(대신 시스·EEDF 물리가 바뀐다). ② 1D PIC는 노트북으로도 충분하다. 저압 CCP의 IEDF·EEDF 연구가 1D PIC로 많이 이뤄진 이유다.</div>
+    </div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>질문</th><th>권장 모델</th><th>이유</th></tr></thead>
+      <tbody>
+        <tr><td>압력·전력·기체 비율을 넓게 훑어 Tₑ, n, 래디컬 경향 보기</td><td><a href="global.html">전역 모델</a></td><td>초 단위, 수백 반응 화학도 가능</td></tr>
+        <tr><td>수 Torr PECVD 평행판의 시스·밀도 분포</td><td>1D/2D 유체(LFA 또는 LMEA)</td><td>λ_ε ≪ 간격, 국소 평형이 맞음</td></tr>
+        <tr><td>ICP 코일·창 설계와 웨이퍼 균일도</td><td>2D 하이브리드(EM + 유체 + 전자 에너지)</td><td>형상·전자기·화학이 함께 필요</td></tr>
+        <tr><td>저압 CCP의 IEDF, 확률 가열, 이중 주파수 결합</td><td>1D PIC/MCC</td><td>무충돌 시스·비국소 EEDF는 운동론만 정확</td></tr>
+        <tr><td>VHF 정상파·표피 효과 균일도</td><td>2D/3D 전자기 + 유체</td><td>파장이 전극만 해 전자기 풀이가 핵심</td></tr>
+        <tr><td>고종횡비 구멍 안 이온·전자 그늘, 대전</td><td>시스 IEDF(PIC/MC) + 형상 내 입자 추적</td><td>구멍 척도 µm, 반응기 모델과 연결(<a href="../../tcad/">TCADBook</a> 형상 모사)</td></tr>
+        <tr><td>펄스 잔광 µs 동역학</td><td>시간 의존 전역 + 1D PIC</td><td>Tₑ 급랭은 운동론, 밀도 감쇠는 전역으로 충분</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>조건 변화</th><th>모델에 미치는 결과</th></tr></thead>
+      <tbody>
+        <tr><td>압력 ↓ (1 Torr → 10 mTorr)</td><td>λ_ε·λᵢ가 장치만 해짐 → LFA 붕괴, 유체 IEDF 무의미, PIC 필요성 ↑. 대신 밀도가 낮아 PIC 비용은 덜 큼</td></tr>
+        <tr><td>전력 ↑ (nₑ 10배)</td><td>λ_D가 1/√10, ω_pe가 √10배 → 2D PIC 비용 약 30–100배, 유체는 시스 격자만 조금 촘촘히</td></tr>
+        <tr><td>주파수 ↑ (13.56 → 60 MHz)</td><td>유체·PIC 모두 RF 주기 해상 비용 ↑, 전자기(정상파) 모듈 필요</td></tr>
+        <tr><td>전기 음성 기체 추가</td><td>음이온 종과 반응 수십 개 추가, 이온-이온 플라즈마는 준중성 가정이 바뀜 → 유체·전역 모두 화학이 비용 지배</td></tr>
+        <tr><td>격자 Δx를 λ_D의 3배로 키움(PIC)</td><td>유한 격자 가열로 Tₑ가 가짜로 오름 → 계산이 빨라진 대가로 물리가 틀림</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="callout fab"><strong>IC 모듈 균일도 개발의 모델 사슬</strong>코일 배치 후보 수십 개는 2D 하이브리드 모델로 하루 안에 거르고(시뮬레이터처럼 바깥 코일 비중을 훑어 웨이퍼 이온 플럭스 ±3 % 안의 창을 찾는다), 상위 3개를 3D로 확인한다(코일 끝단·급전부가 만드는 방위각 비대칭, 2D로는 볼 수 없다). 바이어스 IEDF는 시스만 떼어 1D PIC/MCC로 따로 푼다. 마지막에 웨이퍼형 RFEA와 탐침 스캔(<a href="diagnostics.html#scan3d">15장</a>)으로 검증하는데, 탐침 절대값(±30 %) 대신 분포 모양과 전력에 따른 기울기를 비교한다.</div>
+    <div class="callout fab"><strong>PIC로 PL-300을 바로 풀 수 없는 이유</strong>기준 플라즈마 \(\lambda_D \approx 19\) µm, \(\omega_{pe} \approx 3.6\times10^{10}\) s⁻¹. 2D (0.25 × 0.10 m) 명시적 PIC는 격자 약 7×10⁷개, 셀당 100입자면 입자 약 10¹⁰개, 1 ms를 풀려면 약 1.8×10⁸ 단계다. 연산 약 10²⁰ flop로, 1000 코어에서도 10년 가까이 걸린다. 실제 연구는 1D·축척·암시적 PIC로 한다.</div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>모델 위계: 전역(0D, 초) → 유체(분포·시스, EEDF 가정) → 하이브리드(EM + 유체 + 운동론 전자) → PIC/MCC(EEDF·IEDF, 비쌈). 크누센 수 \(\lambda/L\)가 선택의 첫 잣대다.</li>
+      <li>표류-확산 모델: \(\partial_tn + \nabla\cdot\Gamma = S\), \(\Gamma = \pm\mu nE - D\nabla n\), 포아송과 결합. 반암시적 포아송은 유전 이완 시간 제한을, 샤페터-거멜 \(\Gamma = (D/h)[B(-a)n_i - B(a)n_{i+1}]\)은 큰 페클레 수의 진동을 없앤다.</li>
+      <li>LFA는 반응을 국소 \(E/p\)로, LMEA는 평균 에너지 방정식의 \(\bar\varepsilon\)로 정한다. 에너지 이완 길이가 장 변화 길이보다 길면(저압, 시스-글로 경계) LFA가 원천 위치를 틀린다.</li>
+      <li>PIC/MCC 사이클: 할당 → 장 풀이 → 보간 → 밀기 → 충돌(널 충돌법). 조건: \(\Delta x \lesssim \lambda_D\)(아니면 유한 격자 가열), \(\omega_{pe}\Delta t \lesssim 0.2\)(2를 넘으면 발산), \(v\Delta t \lt \Delta x\), 셀당 입자 수가 잡음을 정함.</li>
+      <li>1D PIC로 플라즈마 진동(보옴-그로스, 립프로그 분산), 이류 불안정(γ ≈ 0.35 ω_pe), 충돌 감쇠, 수치 가열을 직접 볼 수 있다.</li>
+      <li>ICP 하이브리드는 전자기(표피 깊이) ↔ 전자 에너지(이온화 원천) ↔ 유체 수송(밀도)을 수렴할 때까지 반복한다. 코일 분포가 웨이퍼 플럭스 균일도를 정한다.</li>
+      <li>교정과 검증을 나누고, 진단 오차를 비교에 넣는다. 진단의 계통 오차는 모델 매개변수에 흡수되어 다른 조건 예측을 틀리게 한다.</li>
+      <li>PIC 비용 ∝ 격자 × 입자 × 단계, 3D에서 대략 \(n^2\)로 늘어난다. 기준 ICP를 명시적 2D PIC로 푸는 것은 비현실적이라 유체·하이브리드가 장비 설계의 주력이다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 3 Torr PECVD 평행판(간격 10 mm)과 5 mTorr ICP 중, 국소장 근사 유체 모델이 더 잘 맞는 쪽과 이유는?</p><div class="opts">
+        <button class="opt">5 mTorr ICP: 충돌이 적어 계산이 쉽다</button>
+        <button class="opt" data-correct>3 Torr PECVD: 전자 에너지 이완 길이가 간격보다 훨씬 짧아 전자가 국소 장과 평형을 이룬다</button>
+        <button class="opt">둘 다 같다: 유체 모델은 압력과 무관하다</button>
+        <button class="opt">5 mTorr ICP: 전자 밀도가 높아서</button>
+      </div><div class="quiz-exp">LFA는 \(\lambda_\varepsilon \ll L\)일 때 맞다. 수 Torr에서 \(\lambda_\varepsilon\)은 수십 µm–mm, 수 mTorr에서는 수 cm–챔버 크기로 EEDF가 비국소적이다.</div></div>
+
+      <div class="quiz-q"><p>2. 시스 안 격자 간격 0.25 mm에서 전자 표류 속도 10⁶ m/s, 확산 계수 50 m²/s이다. 셀 페클레 수와 적절한 이산화는?</p><div class="opts">
+        <button class="opt">a = 0.2, 중앙 차분으로 충분</button>
+        <button class="opt" data-correct>a = 5, 중앙 차분은 진동하므로 샤페터-거멜(또는 바람 거슬러)이 필요</button>
+        <button class="opt">a = 5000, 어떤 이산화도 불가능</button>
+        <button class="opt">a = 5, 시간 간격만 줄이면 중앙 차분도 된다</button>
+      </div><div class="quiz-exp">\(a = vh/D = 10^6\times2.5\times10^{-4}/50 = 5 \gt 2\). 중앙 차분의 정상 해는 \(|a| \gt 2\)에서 진동(음의 밀도)하고, 이는 시간 간격과 무관한 공간 이산화 문제다.</div></div>
+
+      <div class="quiz-q"><p>3. 1D 표류-확산 모델에서 포아송을 이전 단계 밀도로(명시적으로) 풀었더니 Δt = 1 ns에서 발산했다. 원인은?</p><div class="opts">
+        <button class="opt">CFL 조건: 이온이 한 칸 이상 움직였다</button>
+        <button class="opt" data-correct>Δt가 유전 이완 시간 ε₀/(eμₑnₑ)(수 ps)보다 훨씬 커서 전하가 매 단계 과보정된다</button>
+        <button class="opt">이온화 계수가 너무 작다</button>
+        <button class="opt">격자가 데바이 길이보다 작다</button>
+      </div><div class="quiz-exp">명시적 결합에서 공간 전하는 \(e^{-t/\tau_d}\)로 사라져야 하는데 Δt ≫ τ_d면 부호가 뒤집히며 커진다. 다음 단계 표류 전류를 포아송에 넣는 반암시적 방법으로 해결한다.</div></div>
+
+      <div class="quiz-q"><p>4. nₑ = 10¹⁶ m⁻³, Tₑ = 2 eV 플라즈마를 1D 명시적 PIC로 풀 때 권장 격자 간격과 시간 간격에 가장 가까운 것은?</p><div class="opts">
+        <button class="opt">Δx ≈ 1 mm, Δt ≈ 1 ns</button>
+        <button class="opt" data-correct>Δx ≈ 0.1 mm, Δt ≈ 35 ps</button>
+        <button class="opt">Δx ≈ 1 µm, Δt ≈ 1 fs</button>
+        <button class="opt">Δx ≈ 10 mm, Δt ≈ 1 µs</button>
+      </div><div class="quiz-exp">\(\lambda_D = 7430\sqrt{2/10^{16}} \approx 1.05\times10^{-4}\) m, \(\omega_{pe} = 56.4\sqrt{10^{16}} \approx 5.6\times10^9\) s⁻¹. \(\Delta t = 0.2/\omega_{pe} \approx 36\) ps.</div></div>
+
+      <div class="quiz-q"><p>5. 열 플라즈마 PIC에서 계산을 빨리 하려고 Δx를 λ_D의 4배로 키웠더니 시간이 갈수록 Tₑ가 올랐다. 무엇이 일어났나?</p><div class="opts">
+        <button class="opt">실제 물리: 플라즈마가 스스로 가열된다</button>
+        <button class="opt">립프로그 시간 불안정</button>
+        <button class="opt" data-correct>유한 격자 불안정: 격자가 풀지 못하는 짧은 파장 요동이 에일리어싱되어 전자를 가짜로 데운다</button>
+        <button class="opt">충돌을 넣지 않아서</button>
+      </div><div class="quiz-exp">\(\Delta x \gg \lambda_D\)이면 격자보다 짧은 파장의 전하 요동이 긴 파장 모드와 섞여 에너지가 입자로 흘러든다. λ_D가 Δx/π 정도까지 커지면 가열이 멈춘다.</div></div>
+
+      <div class="quiz-q"><p>6. ICP 하이브리드 모델에서 전력을 2배로 올렸더니 흡수가 창 바로 아래로 더 몰렸다. 모델 안에서 일어난 고리는?</p><div class="opts">
+        <button class="opt">코일 전류가 줄어 장이 약해짐</button>
+        <button class="opt" data-correct>밀도 ↑ → ω_pe ↑ → 표피 깊이 δ = c/ω_pe ↓ → 흡수층이 얇아짐</button>
+        <button class="opt">압력이 올라 확산이 느려짐</button>
+        <button class="opt">이온 온도가 올라감</button>
+      </div><div class="quiz-exp">무충돌 표피 깊이 \(\delta = c/\omega_{pe} \propto n^{-1/2}\). 4×10¹¹ cm⁻³에서 약 8 mm다. 전자기 모듈과 유체 모듈이 밀도를 주고받으며 이 비선형 고리를 수렴시킨다.</div></div>
+
+      <div class="quiz-q"><p>7. 탐침 지름 분포에 모델을 교정했더니 χ²가 아주 작았다. 그런데 다른 압력 조건 예측이 25 % 틀렸다. 가장 그럴듯한 원인은?</p><div class="opts">
+        <button class="opt">교정 자료가 너무 많아서</button>
+        <button class="opt" data-correct>탐침 해석의 계통 오차가 모델 매개변수(예: 확산 계수)에 흡수되어, 맞춘 조건에서만 맞는 모델이 되었다</button>
+        <button class="opt">χ²가 작으면 모델은 반드시 옳으므로 측정이 틀렸다</button>
+        <button class="opt">격자가 너무 촘촘해서</button>
+      </div><div class="quiz-exp">교정은 측정과 모델의 차이를 매개변수로 메운다. 측정 자체에 계통 오차가 있으면 매개변수가 틀린 값으로 간다. 교정에 쓰지 않은 조건과 원리가 다른 진단으로 검증해야 드러난다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const qe = PB.C.q, eps0 = PB.C.eps0, clamp = PB.clamp;
+  const SUP = { "-": "⁻", "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹" };
+  function sci(x, d) {
+    d = d || 2;
+    if (!isFinite(x)) return "—";
+    if (x === 0) return "0";
+    let e = Math.floor(Math.log10(Math.abs(x))), m = x / Math.pow(10, e);
+    if (Math.abs(m) >= 9.995) { m /= 10; e += 1; }
+    return m.toFixed(d - 1) + "×10" + String(e).split("").map((c) => SUP[c] || c).join("");
+  }
+  function alpha(c, a) {
+    c = (c || "").trim();
+    if (/^#[0-9a-f]{6}$/i.test(c)) return c + ("0" + Math.round(clamp(a, 0, 1) * 255).toString(16)).slice(-2);
+    if (/^#[0-9a-f]{3}$/i.test(c)) return "#" + c[1] + c[1] + c[2] + c[2] + c[3] + c[3] + ("0" + Math.round(clamp(a, 0, 1) * 255).toString(16)).slice(-2);
+    const m = c.match(/^rgba?\(([^)]+)\)/);
+    if (m) { const p = m[1].split(",").map((s) => parseFloat(s)); return "rgba(" + p[0] + "," + p[1] + "," + p[2] + "," + a + ")"; }
+    return c;
+  }
+  function rng(seed) {
+    let s = seed >>> 0;
+    return function () {
+      s = (s + 0x6D2B79F5) >>> 0;
+      let t = s;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function gauss(r) { const u = 1 - r(), v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+  function setV(id, cls, html) { const el = $(id); if (!el) return; el.className = "v md-v " + cls; el.innerHTML = html; }
+  const pct = (x) => (x >= 0 ? "+" : "") + (x * 100).toFixed(0) + " %";
+  const Bern = (x) => (Math.abs(x) < 1e-8 ? 1 - x / 2 : x / Math.expm1(x));
+  // Thomas algorithm: a lower, b diag, c upper, d rhs (all length n), result in x
+  function tri(a, b, c, d, x, n, cp, dp) {
+    cp[0] = c[0] / b[0]; dp[0] = d[0] / b[0];
+    for (let i = 1; i < n; i++) { const m = b[i] - a[i] * cp[i - 1]; cp[i] = c[i] / m; dp[i] = (d[i] - a[i] * dp[i - 1]) / m; }
+    x[n - 1] = dp[n - 1];
+    for (let i = n - 2; i >= 0; i--) x[i] = dp[i] - cp[i] * x[i + 1];
+  }
+
+  /* =============================================================
+     1) discretisation comparison
+     ============================================================= */
+  (function () {
+    if (!$("sg-cv")) return;
+    const gPe = PB.range("sg-pe", (v) => v.toFixed(1), draw);
+    const gN = PB.range("sg-n", (v) => String(v), draw);
+    function exact(x, Pe) { if (Math.abs(Pe) < 1e-6) return 1 - x; return (Math.exp(Pe * x) - Math.exp(Pe)) / (1 - Math.exp(Pe)); }
+    function solve(Pe, N, type) {
+      let p, q;
+      if (type === "c") { p = Pe / 2 + N; q = Pe / 2 - N; }
+      else if (type === "u") { if (Pe >= 0) { p = Pe + N; q = -N; } else { p = N; q = Pe - N; } }
+      else { const a = Pe / N; p = N * Bern(-a); q = -N * Bern(a); }
+      const m = N - 1, A = new Float64Array(m), B = new Float64Array(m), Cc = new Float64Array(m), D = new Float64Array(m), X = new Float64Array(m), cp = new Float64Array(m), dp = new Float64Array(m);
+      for (let i = 0; i < m; i++) { A[i] = -p; B[i] = p - q; Cc[i] = q; D[i] = 0; }
+      D[0] = p * 1;
+      tri(A, B, Cc, D, X, m, cp, dp);
+      const out = [[0, 1]]; for (let i = 0; i < m; i++) out.push([(i + 1) / N, X[i]]); out.push([1, 0]);
+      return out;
+    }
+    function draw() { cv.redraw(); }
+    const cv = PB.canvas($("sg-cv"), (ctx, w, h) => {
+      const P = PB.palette(), Pe = gPe(), N = gN();
+      const ex = []; for (let i = 0; i <= 400; i++) ex.push([i / 400, exact(i / 400, Pe)]);
+      const c = solve(Pe, N, "c"), u = solve(Pe, N, "u"), s = solve(Pe, N, "s");
+      const err = (arr) => arr.reduce((m, q) => Math.max(m, Math.abs(q[1] - exact(q[0], Pe))), 0);
+      const mn = Math.min(-0.1, ...c.map((q) => q[1])), mx = Math.max(1.15, ...c.map((q) => q[1]));
+      const ch = PB.chart(ctx, null, { x: [0, 1], y: [Math.max(-3, mn - 0.05), Math.min(4, mx + 0.05)], xLabel: "x / L", yLabel: "n",
+        series: [{ data: ex, color: P.dim, width: 2.5 }, { data: c, color: P.bad, width: 1.2, dash: [4, 3] }, { data: u, color: P.warn, width: 1.2, dash: [2, 3] }, { data: s, color: P.accent, width: 1.2 }],
+        hlines: [{ y: 0, color: P.faint }] });
+      const dot = (arr, col, r) => { ctx.fillStyle = col; arr.forEach((q) => { const y = clamp(q[1], -3, 4); ctx.beginPath(); ctx.arc(ch.X(q[0]), ch.Y(y), r, 0, 7); ctx.fill(); }); };
+      dot(c, P.bad, 4); dot(u, P.warn, 3.5); dot(s, P.accent, 3);
+      ctx.font = "12px sans-serif"; ctx.textAlign = "left";
+      [["중앙 차분", P.bad], ["바람 거슬러", P.warn], ["샤페터-거멜", P.accent], ["정확한 해", P.dim]].forEach((L, i) => { ctx.fillStyle = L[1]; ctx.fillText("● " + L[0], ch.box.x + 10 + (i % 2) * 110, ch.box.y + 14 + Math.floor(i / 2) * 16); });
+      const a = Pe / N, ec = err(c), cmin = Math.min(...c.map((q) => q[1]));
+      PB.stat("sg-a", a.toFixed(2) + (Math.abs(a) > 2 ? " <small>(&gt; 2)</small>" : ""));
+      setV("sg-ec", cmin < -1e-9 ? "bad" : ec > 0.05 ? "warn" : "ok", ec.toFixed(3) + (cmin < -1e-9 ? " <small>음수 밀도</small>" : ""));
+      PB.stat("sg-eu", err(u).toFixed(3)); PB.stat("sg-es", err(s).toExponential(1));
+    }, { aspect: 0.55, maxHeight: 400, minHeight: 280 });
+  })();
+
+  /* =============================================================
+     2) 1D drift-diffusion + Poisson RF discharge
+     ============================================================= */
+  (function () {
+    if (!$("dd-cv")) return;
+    const N = 100, NS = 100, f = 13.56e6, om = 2 * Math.PI * f, dt = 1 / (f * NS), Te = 2;
+    const gG = PB.seg("dd-gap", reset), gp = PB.range("dd-p", (v) => v.toFixed(2) + " Torr"), gV = PB.range("dd-V", (v) => v + " V"), gs = PB.range("dd-sp", (v) => String(v));
+    const ne = new Float64Array(N + 1), ni = new Float64Array(N + 1), phi = new Float64Array(N + 1);
+    const ef = new Float64Array(N), Ef = new Float64Array(N), Ge = new Float64Array(N), Gi = new Float64Array(N), S = new Float64Array(N + 1);
+    const m = N - 1, A = new Float64Array(m), B = new Float64Array(m), C = new Float64Array(m), D = new Float64Array(m), X = new Float64Array(m), cp = new Float64Array(m), dp = new Float64Array(m);
+    const accE = new Float64Array(N + 1), accI = new Float64Array(N + 1), avgE = new Float64Array(N + 1), avgI = new Float64Array(N + 1), pmin = new Float64Array(N + 1), pmax = new Float64Array(N + 1), emin = new Float64Array(N + 1), emax = new Float64Array(N + 1);
+    let h = 0.025 / N, t = 0, nstep = 0, per = 0, running = true, status = "성장 중", hist = [], accG = 0, Gwall = 0;
+    function reset() {
+      h = Number(gG()) * 1e-3 / N; t = 0; nstep = 0; per = 0; hist = []; status = "성장 중"; accG = 0; Gwall = 0;
+      for (let i = 0; i <= N; i++) { const x = i / N, v = 1e13 * Math.pow(Math.sin(Math.PI * x), 2); ne[i] = v; ni[i] = v; phi[i] = 0; accE[i] = accI[i] = 0; avgE[i] = v; avgI[i] = v; pmin[i] = 1e9; pmax[i] = -1e9; }
+      Ge.fill(0); Gi.fill(0);
+      if (!running) { running = true; $("dd-run").textContent = "일시정지"; loop.start(); }
+      cv && cv.redraw();
+    }
+    function solveSpecies(n, mu, Dc, sgn, src) {
+      const k = dt * Dc / (h * h);
+      for (let i = 1; i < N; i++) {
+        const vm = sgn * mu * Ef[i - 1], vp = sgn * mu * Ef[i];
+        const Pm = vm * h / Dc, Pp = vp * h / Dc, r = i - 1;
+        A[r] = -k * Bern(-Pm); C[r] = -k * Bern(Pp); B[r] = 1 + k * (Bern(-Pp) + Bern(Pm)); D[r] = n[i] + dt * src[i];
+      }
+      tri(A, B, C, D, X, m, cp, dp);
+      for (let i = 1; i < N; i++) n[i] = Math.max(0, X[i - 1]);
+      n[0] = 0; n[N] = 0;
+    }
+    function step() {
+      const p = gp(), mue = 30 / p, mui = 0.14 / p, De = mue * Te, Di = mui * 0.026;
+      t += dt; nstep++;
+      const V0 = gV() * Math.sin(om * t);
+      for (let j = 0; j < N; j++) ef[j] = eps0 + qe * dt * (mue * 0.5 * (ne[j] + ne[j + 1]) + mui * 0.5 * (ni[j] + ni[j + 1]));
+      for (let i = 1; i < N; i++) { const r = i - 1; A[r] = ef[i - 1]; C[r] = ef[i]; B[r] = -(ef[i - 1] + ef[i]); D[r] = -qe * (ni[i] - ne[i]) * h * h; }
+      D[0] -= ef[0] * V0; A[0] = 0; C[m - 1] = 0;
+      tri(A, B, C, D, X, m, cp, dp);
+      phi[0] = V0; phi[N] = 0; for (let i = 1; i < N; i++) phi[i] = X[i - 1];
+      for (let j = 0; j < N; j++) Ef[j] = -(phi[j + 1] - phi[j]) / h;
+      S[0] = S[N] = 0;
+      for (let i = 1; i < N; i++) {
+        const E = Math.abs(0.5 * (Ef[i - 1] + Ef[i])), G = 0.5 * (Math.abs(Ge[i - 1]) + Math.abs(Ge[i]));
+        const al = 1200 * p * Math.exp(-18000 * p / Math.max(E, 1));
+        S[i] = Math.min(al * G, 0.5 * ne[i] / dt + 1e10);
+      }
+      solveSpecies(ne, mue, De, -1, S);
+      solveSpecies(ni, mui, Di, 1, S);
+      for (let j = 0; j < N; j++) {
+        const ae = -mue * Ef[j] * h / De, ai = mui * Ef[j] * h / Di;
+        Ge[j] = (De / h) * (Bern(-ae) * ne[j] - Bern(ae) * ne[j + 1]);
+        Gi[j] = (Di / h) * (Bern(-ai) * ni[j] - Bern(ai) * ni[j + 1]);
+      }
+      accG += -Gi[0];
+      for (let i = 0; i <= N; i++) { accE[i] += ne[i]; accI[i] += ni[i]; if (phi[i] < pmin[i]) pmin[i] = phi[i]; if (phi[i] > pmax[i]) pmax[i] = phi[i]; }
+      if (nstep % NS === 0) {
+        per++;
+        let mx = 0;
+        for (let i = 0; i <= N; i++) { avgE[i] = accE[i] / NS; avgI[i] = accI[i] / NS; accE[i] = accI[i] = 0; emin[i] = pmin[i]; emax[i] = pmax[i]; pmin[i] = 1e9; pmax[i] = -1e9; mx = Math.max(mx, avgI[i]); }
+        Gwall = accG / NS; accG = 0;
+        hist.push(mx); if (hist.length > 400) hist.shift();
+      }
+    }
+    function check() {
+      let mx = 0, bad = false;
+      for (let i = 0; i <= N; i++) { if (!isFinite(ne[i]) || !isFinite(ni[i])) bad = true; mx = Math.max(mx, ni[i], ne[i]); }
+      if (bad || mx > 1e19) { status = "발산 → 다시 시작"; reset(); return; }
+      if (mx < 1e8 && per > 20) status = "꺼짐(유지 전압 부족)";
+      else if (hist.length > 30) { const a = hist[hist.length - 1], b = hist[hist.length - 21]; const ch = Math.abs(a - b) / Math.max(a, 1); status = ch < 0.01 ? "정상 상태" : a > b ? "성장 중" : "감소 중"; }
+    }
+    const loop = PB.loop($("dd-cv"), () => {
+      if (!running) return;
+      const n = gs() * NS;
+      for (let k = 0; k < n; k++) step();
+      check(); cv.redraw();
+    });
+    $("dd-run").addEventListener("click", () => { running = !running; $("dd-run").textContent = running ? "일시정지" : "계속"; if (running) loop.start(); });
+    $("dd-reset").addEventListener("click", reset);
+    const cv = PB.canvas($("dd-cv"), (ctx, w, hh) => {
+      const P = PB.palette(), L = Number(gG());
+      let mx = 1; for (let i = 0; i <= N; i++) mx = Math.max(mx, avgI[i], avgE[i], ne[i]);
+      const ex = Math.floor(Math.log10(mx)), sc = Math.pow(10, ex);
+      const xs = (i) => i / N * L;
+      const h1 = Math.round(hh * 0.55);
+      PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 44 }, { x: [0, L], y: [0, mx / sc * 1.1], xLabel: "x (mm)", yLabel: "n (10^" + ex + " m⁻³)",
+        series: [{ data: Array.from(ne, (v, i) => [xs(i), v / sc]), color: alpha(P.electron, 0.5), width: 1 },
+          { data: Array.from(avgE, (v, i) => [xs(i), v / sc]), color: P.electron, width: 2.4 }, { data: Array.from(avgI, (v, i) => [xs(i), v / sc]), color: P.ion, width: 2.4 }] });
+      ctx.font = "12px sans-serif"; ctx.textAlign = "left";
+      ctx.fillStyle = P.electron; ctx.fillText("nₑ(평균)", 66, 26); ctx.fillStyle = P.ion; ctx.fillText("nᵢ(평균)", 136, 26);
+      const V = gV();
+      PB.chart(ctx, { x: 58, y: h1 + 6, w: w - 76, h: hh - h1 - 50 }, { x: [0, L], y: [-V * 1.05, V * 1.05 + 30], xLabel: "x (mm)", yLabel: "φ (V)",
+        series: [{ data: Array.from(emin, (v, i) => [xs(i), v < 1e8 ? v : NaN]), color: alpha(P.accent, 0.35), width: 1 }, { data: Array.from(emax, (v, i) => [xs(i), v > -1e8 ? v : NaN]), color: alpha(P.accent, 0.35), width: 1 },
+          { data: Array.from(phi, (v, i) => [xs(i), v]), color: P.accent, width: 2.2 }], hlines: [{ y: 0, color: P.faint }] });
+      let ip = 0; for (let i = 0; i <= N; i++) if (avgI[i] > avgI[ip]) ip = i;
+      let sI = NaN; for (let i = 1; i <= ip; i++) if (avgE[i] >= 0.5 * avgI[i]) { sI = i; break; }
+      PB.stat("dd-t", String(per));
+      PB.stat("dd-n", sci(avgI[ip]) + " <small>m⁻³</small>");
+      PB.stat("dd-s", isFinite(sI) ? (sI * h * 1e3).toFixed(2) + " <small>mm</small>" : "—");
+      PB.stat("dd-g", sci(Gwall) + " <small>m⁻²s⁻¹</small>");
+      setV("dd-st", /정상/.test(status) ? "ok" : /꺼짐|발산/.test(status) ? "bad" : "warn", status);
+    }, { aspect: 0.75, maxHeight: 520, minHeight: 360 });
+    reset();
+  })();
+
+  /* =============================================================
+     3) LFA vs LMEA
+     ============================================================= */
+  (function () {
+    if (!$("lm-cv")) return;
+    const gp = PB.range("lm-p", (v) => v.toFixed(2) + " Torr", draw), gV = PB.range("lm-V", (v) => v + " V", draw), gd = PB.range("lm-d", (v) => v.toFixed(1) + " mm", draw);
+    const c = 316, Aa = 1200, Bb = 18000, NG = 2000;
+    function draw() { cv.redraw(); }
+    const cv = PB.canvas($("lm-cv"), (ctx, w, h) => {
+      const P = PB.palette(), p = gp(), Vc = gV(), ds = gd() / 1000, X = 4 * ds, dx = X / NG, Eb = 200 * p, E0 = 2 * Vc / ds;
+      const xs = [], eps = [], eloc = [], aL = [], aM = [];
+      let e = 1;
+      for (let i = 0; i <= NG; i++) {
+        const x = i * dx, E = x < ds ? E0 * (1 - x / ds) : Eb;
+        xs.push(x * 1000); eps.push(e); eloc.push(Math.pow(Math.max(E, 1e-3) / (c * p), 2 / 3));
+        aL.push(Aa * p * Math.exp(-Bb * p / Math.max(E, 1)));
+        aM.push(Aa * p * Math.exp(-Bb / (c * Math.pow(e, 1.5))));
+        for (let k = 0; k < 10; k++) { const xx = x + k * dx / 10, EE = xx < ds ? E0 * (1 - xx / ds) : Eb; e = clamp(e + dx / 10 * (EE - c * p * Math.pow(e, 1.5)), 0.05, 5000); }
+      }
+      function src(al) {
+        let lg = 0; const lgs = [];
+        for (let i = 0; i <= NG; i++) { lgs.push(lg); lg += al[i] * dx; }
+        const S = al.map((a, i) => a * Math.exp(lgs[i] - lg));
+        const mx = Math.max(...S) || 1;
+        let tot = 0, glow = 0, im = 0;
+        S.forEach((s, i) => { tot += s; if (xs[i] > ds * 1000) glow += s; if (s > S[im]) im = i; });
+        return { S: S.map((s) => s / mx), lnM: lg, frac: tot > 0 ? glow / tot : 0, xm: xs[im] };
+      }
+      const L = src(aL), M = src(aM);
+      const h1 = Math.round(h * 0.52);
+      PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 44 }, { x: [0, X * 1000], y: [0, 1.1], xLabel: "음극에서 거리 x (mm)", yLabel: "S / S_max",
+        series: [{ data: L.S.map((s, i) => [xs[i], s]), color: P.accent2, width: 2, dash: [6, 4] }, { data: M.S.map((s, i) => [xs[i], s]), color: P.accent, width: 2.4 }],
+        vlines: [{ x: ds * 1000, color: P.faint, label: "시스 경계" }], yFmt: (v) => v.toFixed(1) });
+      ctx.font = "12px sans-serif"; ctx.textAlign = "right"; ctx.fillStyle = P.accent2; ctx.fillText("LFA (점선)", w - 24, 28); ctx.fillStyle = P.accent; ctx.fillText("LMEA (실선)", w - 24, 44);
+      PB.chart(ctx, { x: 58, y: h1 + 6, w: w - 76, h: h - h1 - 50 }, { x: [0, X * 1000], y: [0.1, 2000], logY: true, xLabel: "x (mm)", yLabel: "에너지 (eV)",
+        series: [{ data: eloc.map((v, i) => [xs[i], clamp(v, 0.1, 2000)]), color: P.dim, width: 1.6, dash: [5, 4] }, { data: eps.map((v, i) => [xs[i], v]), color: P.electron, width: 2.2 }],
+        vlines: [{ x: ds * 1000, color: P.faint }], yFmt: (v) => String(v) });
+      ctx.textAlign = "right"; ctx.fillStyle = P.electron; ctx.fillText("ε̄(x)", w - 24, h1 + 24); ctx.fillStyle = P.dim; ctx.fillText("ε_loc(E(x))", w - 24, h1 + 40);
+      PB.stat("lm-l", PB.si(1 / (c * p * Math.sqrt(10)), "m", 2));
+      PB.stat("lm-x", L.xm.toFixed(2) + " · " + M.xm.toFixed(2) + " <small>mm</small>");
+      PB.stat("lm-f", (L.frac * 100).toFixed(0) + " · " + (M.frac * 100).toFixed(0) + " <small>%</small>");
+      PB.stat("lm-m", L.lnM.toFixed(1) + " · " + M.lnM.toFixed(1));
+    }, { aspect: 0.72, maxHeight: 500, minHeight: 360 });
+  })();
+
+  /* =============================================================
+     4) PIC cycle step-through
+     ============================================================= */
+  (function () {
+    if (!$("cy-cv")) return;
+    const NG = 8, L = 8, NP = 12, dt = 0.3, wq = L / NP;
+    const STG = ["① 전하 할당", "② 장 풀이", "③ 보간", "④ 입자 밀기", "⑤ 충돌(MCC)"];
+    let x, v, rho, E, phi, Ep, stage, t, hit, r;
+    const gnu = PB.range("cy-nu", (q) => q.toFixed(2));
+    function init() {
+      r = rng(4); x = []; v = []; Ep = new Array(NP).fill(0); hit = [];
+      for (let p = 0; p < NP; p++) { const x0 = (p + 0.5) * L / NP; x.push((x0 + 0.5 * Math.sin(2 * Math.PI * x0 / L) + L) % L); v.push(0.25 * gauss(r)); }
+      rho = new Array(NG).fill(0); E = new Array(NG).fill(0); phi = new Array(NG).fill(0); stage = -1; t = 0;
+      txt("‘다음 단계’를 누르면 한 사이클을 단계별로 진행한다.");
+      cv && cv.redraw();
+    }
+    function txt(s) { $("cy-txt").textContent = s; }
+    function weight() {
+      rho.fill(0);
+      x.forEach((xp) => { const j = Math.floor(xp), f = xp - j; rho[j % NG] += wq * (1 - f); rho[(j + 1) % NG] += wq * f; });
+      for (let j = 0; j < NG; j++) rho[j] = 1 - rho[j];
+    }
+    function field() {
+      const Eh = new Array(NG).fill(0); let acc = 0;
+      for (let j = 0; j < NG; j++) { acc += rho[j]; Eh[j] = acc; }
+      const mean = Eh.reduce((a, b) => a + b, 0) / NG; for (let j = 0; j < NG; j++) Eh[j] -= mean;
+      for (let j = 0; j < NG; j++) E[j] = 0.5 * (Eh[(j - 1 + NG) % NG] + Eh[j]);
+      phi[0] = 0; for (let j = 1; j < NG; j++) phi[j] = phi[j - 1] - Eh[j - 1];
+      const pm = phi.reduce((a, b) => a + b, 0) / NG; for (let j = 0; j < NG; j++) phi[j] -= pm;
+    }
+    function energy() { let k = 0, f = 0; v.forEach((q) => (k += 0.5 * wq * q * q)); E.forEach((q) => (f += 0.5 * q * q)); return k + f; }
+    function advance() {
+      stage = (stage + 1) % 5; hit = [];
+      if (stage === 0) { weight(); txt("각 입자의 전하를 이웃 두 격자점에 거리에 반비례해 나눈다(CIC). ρ = [" + rho.map((q) => q.toFixed(2)).join(", ") + "] (이온 바탕 +1 포함)"); }
+      else if (stage === 1) { field(); txt("격자에서 dE/dx = ρ(가우스 법칙)를 적분하고 평균을 빼 주기 경계 장을 얻는다. E = [" + E.map((q) => q.toFixed(2)).join(", ") + "]"); }
+      else if (stage === 2) { x.forEach((xp, p) => { const j = Math.floor(xp), f = xp - j; Ep[p] = E[j % NG] * (1 - f) + E[(j + 1) % NG] * f; }); txt("같은 CIC 가중치로 격자 장을 입자 위치로 보간한다. 화살표는 전자에 걸리는 힘 −eE(전자는 장의 반대 방향)."); }
+      else if (stage === 3) { for (let p = 0; p < NP; p++) { v[p] += -Ep[p] * dt; x[p] = ((x[p] + v[p] * dt) % L + L) % L; } t += dt; txt("립프로그: v ← v − E·Δt, x ← x + v·Δt (정규화 q/m = −1, Δt = 0.3). 경계를 넘은 입자는 반대편으로 들어온다."); }
+      else { const P = 1 - Math.exp(-gnu() * dt); for (let p = 0; p < NP; p++) if (r() < P) { v[p] = (r() < 0.5 ? -1 : 1) * Math.abs(v[p]); hit.push(p); } txt("각 입자가 확률 P = 1 − exp(−νΔt) = " + P.toFixed(3) + "로 무거운 중성과 탄성 충돌: 속력은 그대로, 방향은 무작위. 이번 단계 충돌 " + hit.length + "개."); }
+      PB.stat("cy-st", STG[stage]); PB.stat("cy-t", t.toFixed(1)); PB.stat("cy-e", stage >= 1 ? energy().toFixed(4) : "—");
+      cv.redraw();
+    }
+    $("cy-step").addEventListener("click", advance);
+    $("cy-reset").addEventListener("click", init);
+    let acc = 0;
+    const loop = PB.loop($("cy-cv"), (d) => { if (!$("cy-auto").checked) return; acc += d; if (acc > 0.9) { acc = 0; advance(); } });
+    const cv = PB.canvas($("cy-cv"), (ctx, w, h) => {
+      if (!x) return;
+      const P = PB.palette(), x0 = 40, ww = w - 70, X = (q) => x0 + q / L * ww;
+      const yA = h * 0.36, h1 = Math.round(h * 0.55);
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x0, yA); ctx.lineTo(x0 + ww, yA); ctx.stroke();
+      ctx.font = "11px sans-serif"; ctx.textAlign = "center"; ctx.fillStyle = P.dim;
+      for (let j = 0; j <= NG; j++) { ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(X(j), 10); ctx.lineTo(X(j), h1 - 10); ctx.stroke(); if (j < NG) ctx.fillText("j=" + j, X(j), h1 - 2); }
+      if (stage >= 0) rho.forEach((q, j) => { ctx.fillStyle = alpha(q >= 0 ? P.ion : P.electron, 0.45); const bh = clamp(q, -1.5, 1.5) * h * 0.1; ctx.fillRect(X(j) - 8, yA - Math.max(bh, 0), 16, Math.abs(bh)); });
+      x.forEach((xp, p) => {
+        const px = X(xp), py = yA + 22;
+        if (stage === 0) { const j = Math.floor(xp); ctx.strokeStyle = alpha(P.electron, 0.4); ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(X(j), yA); ctx.moveTo(px, py); ctx.lineTo(X(j + 1), yA); ctx.stroke(); }
+        ctx.fillStyle = P.electron; ctx.beginPath(); ctx.arc(px, py, 5, 0, 7); ctx.fill();
+        if (hit.indexOf(p) >= 0) { ctx.strokeStyle = P.warn; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(px, py, 8, 0, 7); ctx.stroke(); ctx.lineWidth = 1; }
+        ctx.strokeStyle = P.electron; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(px, py + 12); ctx.lineTo(px + v[p] * 40, py + 12); ctx.stroke();
+        if (stage === 2) { ctx.strokeStyle = P.warn; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(px, py - 10); ctx.lineTo(px - Ep[p] * 60, py - 10); ctx.stroke(); }
+        ctx.lineWidth = 1;
+      });
+      if (stage >= 1 || stage === -1) {
+        const ph = [], ee = []; for (let j = 0; j <= NG; j++) { ph.push([j, phi[j % NG]]); ee.push([j, E[j % NG]]); }
+        const lim = Math.max(0.3, ...phi.map(Math.abs), ...E.map(Math.abs)) * 1.2;
+        PB.chart(ctx, { x: x0, y: h1 + 8, w: ww, h: h - h1 - 46 }, { x: [0, L], y: [-lim, lim], xLabel: "x (격자 단위)", series: [{ data: ph, color: P.accent, width: 2.2 }, { data: ee, color: P.accent2, width: 1.8, dash: [5, 4] }], yFmt: (q) => q.toFixed(1) });
+        ctx.fillStyle = P.accent; ctx.textAlign = "left"; ctx.fillText("φ_j", x0 + 6, h1 + 20); ctx.fillStyle = P.accent2; ctx.fillText("E_j", x0 + 40, h1 + 20);
+      }
+    }, { aspect: 0.62, maxHeight: 420, minHeight: 320 });
+    init();
+    loop.start();
+  })();
+
+  /* =============================================================
+     5) 1D electrostatic PIC
+     ============================================================= */
+  (function () {
+    if (!$("pc-cv")) return;
+    const NG = 64;
+    const gM = PB.seg("pc-mode", init), gdx = PB.range("pc-dx", (v) => v.toFixed(2), init), gdt = PB.range("pc-dt", (v) => v.toFixed(2)), gppc = PB.range("pc-ppc", (v) => String(v), init), gnu = PB.range("pc-nu", (v) => v.toFixed(2));
+    let S = null, running = true;
+    function init() {
+      const mode = gM(), dx = gdx(), L = NG * dx, Np = NG * gppc(), k1 = 2 * Math.PI / L, r = rng(11);
+      const x = new Float64Array(Np), v = new Float64Array(Np);
+      const v0 = 0.6 / k1;
+      for (let p = 0; p < Np; p++) {
+        if (mode === "th") { x[p] = r() * L; v[p] = gauss(r); }
+        else if (mode === "osc") { const x0 = (p + 0.5) * L / Np; x[p] = ((x0 - (0.1 / k1) * Math.sin(k1 * x0)) % L + L) % L; v[p] = gauss(r); }
+        else { const q = p >> 1, x0 = (q + 0.5) * L / (Np / 2); x[p] = ((x0 + 1e-3 * L * Math.sin(k1 * x0)) % L + L) % L; v[p] = (p & 1 ? 1 : -1) * v0 + 0.02 * v0 * gauss(r); }
+      }
+      S = { mode, dx, L, Np, k1, v0, x, v, w: L / Np, rho: new Float64Array(NG), E: new Float64Array(NG), Eh: new Float64Array(NG), t: 0, hist: [], E0: 0, T0: 0, cross: [], last: null, proj: null, diverged: false, fe0: 0, gfit: [] };
+      field(); S.E0 = energy().tot; S.T0 = temp(); S.fe0 = Math.max(energy().fe, 1e-30);
+      if (!running) { running = true; $("pc-run").textContent = "일시정지"; }
+      cv && cv.redraw();
+    }
+    function field() {
+      const { rho, E, Eh, x, w, dx } = S;
+      rho.fill(0);
+      for (let p = 0; p < S.Np; p++) { const g = x[p] / dx; let j = Math.floor(g); const f = g - j; j = ((j % NG) + NG) % NG; rho[j] += 1 - f; rho[(j + 1) % NG] += f; }
+      for (let j = 0; j < NG; j++) rho[j] = 1 - rho[j] * w / dx;
+      let acc = 0; for (let j = 0; j < NG; j++) { acc += rho[j] * dx; Eh[j] = acc; }
+      let mean = 0; for (let j = 0; j < NG; j++) mean += Eh[j]; mean /= NG;
+      for (let j = 0; j < NG; j++) Eh[j] -= mean;
+      for (let j = 0; j < NG; j++) E[j] = 0.5 * (Eh[(j - 1 + NG) % NG] + Eh[j]);
+    }
+    function energy() { let k = 0, f = 0; for (let p = 0; p < S.Np; p++) k += S.v[p] * S.v[p]; k *= 0.5 * S.w; for (let j = 0; j < NG; j++) f += S.E[j] * S.E[j]; f *= 0.5 * S.dx; return { ke: k, fe: f, tot: k + f }; }
+    function temp() { let m = 0, s = 0; for (let p = 0; p < S.Np; p++) m += S.v[p]; m /= S.Np; for (let p = 0; p < S.Np; p++) s += (S.v[p] - m) * (S.v[p] - m); return s / S.Np; }
+    function step(dt) {
+      const { x, v, E, dx, L } = S, Pc = 1 - Math.exp(-gnu() * dt);
+      for (let p = 0; p < S.Np; p++) {
+        const g = x[p] / dx; let j = Math.floor(g); const f = g - j; j = ((j % NG) + NG) % NG;
+        const Ep = E[j] * (1 - f) + E[(j + 1) % NG] * f;
+        v[p] -= Ep * dt;
+        if (Pc > 0 && Math.random() < Pc) v[p] = (Math.random() < 0.5 ? -1 : 1) * Math.abs(v[p]);
+        let xn = x[p] + v[p] * dt;
+        if (!isFinite(xn)) { S.diverged = true; xn = 0; }
+        xn = xn % L; if (xn < 0) xn += L; x[p] = xn;
+      }
+      field(); S.t += dt;
+      // mode-1 projection for frequency measurement
+      let c = 0, s = 0; for (let j = 0; j < NG; j++) { const a = S.k1 * j * dx; c += E[j] * Math.cos(a); s += E[j] * Math.sin(a); }
+      if (S.proj === null) S.proj = Math.abs(c) > Math.abs(s) ? "c" : "s";
+      const val = S.proj === "c" ? c : s;
+      if (S.last !== null && S.last * val < 0) S.cross.push(S.t - dt * Math.abs(val) / (Math.abs(val) + Math.abs(S.last)));
+      S.last = val;
+    }
+    const loop = PB.loop($("pc-cv"), () => {
+      if (!running || !S || S.diverged) return;
+      const dt = gdt(), n = clamp(Math.round(0.6 / dt), 1, 12);
+      for (let k = 0; k < n; k++) step(dt);
+      const en = energy();
+      if (!isFinite(en.tot) || en.tot > 50 * S.E0) S.diverged = true;
+      S.hist.push([S.t, en.ke / S.E0, en.fe / S.E0, en.tot / S.E0]);
+      if (S.hist.length > 1500) S.hist = S.hist.filter((q, i) => i % 2 === 0);
+      cv.redraw();
+    });
+    $("pc-run").addEventListener("click", () => { running = !running; $("pc-run").textContent = running ? "일시정지" : "계속"; });
+    $("pc-reset").addEventListener("click", init);
+    const cv = PB.canvas($("pc-cv"), (ctx, w, h) => {
+      if (!S) return;
+      const P = PB.palette(), h1 = Math.round(h * 0.56), vm = S.mode === "ts" ? 2.5 * S.v0 : 5;
+      const c1 = PB.chart(ctx, { x: 58, y: 10, w: w - 76, h: h1 - 44 }, { x: [0, S.L], y: [-vm, vm], xLabel: "x (λ_D 단위)", yLabel: "v (v_th)", yFmt: (q) => q.toFixed(1) });
+      ctx.fillStyle = alpha(P.electron, S.Np > 3000 ? 0.45 : 0.7);
+      for (let p = 0; p < S.Np; p++) { const vy = S.v[p]; if (vy < -vm || vy > vm) continue; ctx.fillRect(c1.X(S.x[p]) - 0.8, c1.Y(vy) - 0.8, 1.6, 1.6); }
+      if (S.diverged) { ctx.fillStyle = P.bad; ctx.font = "bold 15px sans-serif"; ctx.textAlign = "center"; ctx.fillText("수치 발산 (ω_peΔt ≥ 2?) — ‘다시 시작’", c1.box.x + c1.box.w / 2, c1.box.y + c1.box.h / 2); }
+      const H = S.hist, tmax = Math.max(10, H.length ? H[H.length - 1][0] : 10);
+      PB.chart(ctx, { x: 58, y: h1 + 6, w: w - 76, h: h - h1 - 50 }, { x: [0, tmax], y: [1e-6, 10], logY: true, xLabel: "시간 tω_pe", yLabel: "에너지 / E₀",
+        series: [{ data: H.map((q) => [q[0], q[1]]), color: P.electron, width: 1.6 }, { data: H.map((q) => [q[0], Math.max(q[2], 1e-7)]), color: P.accent, width: 1.6 }, { data: H.map((q) => [q[0], q[3]]), color: P.dim, width: 1.2, dash: [4, 3] }],
+        yFmt: (q) => q.toExponential(0) });
+      // readouts
+      const en = energy(), dE = en.tot / S.E0 - 1;
+      PB.stat("pc-t", S.t.toFixed(1));
+      setV("pc-e", S.diverged ? "bad" : Math.abs(dE) < 0.02 ? "ok" : Math.abs(dE) < 0.2 ? "warn" : "bad", S.diverged ? "발산" : pct(dE));
+      const dt = gdt(), kl = S.k1, wbg = Math.sqrt(1 + 3 * kl * kl), arg = wbg * dt / 2, wth = arg < 1 ? (2 / dt) * Math.asin(arg) : NaN;
+      if (S.mode === "osc") {
+        const cr = S.cross; let wm = NaN;
+        if (cr.length >= 3) { const n = cr.length - 1; wm = Math.PI * n / (cr[cr.length - 1] - cr[0]); }
+        PB.stat("pc-w", (isFinite(wm) ? wm.toFixed(3) : "…") + " <small>(" + (isFinite(wth) ? wth.toFixed(3) : "불안정") + ")</small>");
+      } else PB.stat("pc-w", "— <small>(진동 실험)</small>");
+      let gtxt = "—";
+      if (S.mode === "ts") {
+        let best = NaN, sx = 0, sy = 0, sxx = 0, sxy = 0, nn = 0, peak = 0;
+        for (let i = 0; i < H.length; i++) {
+          if (H[i][2] > peak) peak = H[i][2];
+          if (H[i][0] < 5 || H[i][2] < 1e-4 || H[i][2] > 3e-2 || H[i][2] < 0.5 * peak) continue;
+          const y = Math.log(H[i][2]); sx += H[i][0]; sy += y; sxx += H[i][0] * H[i][0]; sxy += H[i][0] * y; nn++;
+        }
+        if (nn > 4) best = (nn * sxy - sx * sy) / (nn * sxx - sx * sx) / 2;
+        gtxt = isFinite(best) ? "γ = " + best.toFixed(3) : "…";
+      }
+      else if (S.mode !== "ts") gtxt = (temp() / S.T0).toFixed(3);
+      PB.stat("pc-g", gtxt);
+    }, { aspect: 0.78, maxHeight: 540, minHeight: 380 });
+    init();
+  })();
+
+  /* =============================================================
+     6) 2D ICP hybrid iteration
+     ============================================================= */
+  (function () {
+    if (!$("hy-cv")) return;
+    const R = 0.25, H = 0.10, NR = 30, NZ = 12, dr = R / NR, dz = H / NZ, uB = 2456, ET = 108, D0 = 38;
+    const rs = () => restart(false);
+    const gP = PB.range("hy-P", (v) => (v / 1000).toFixed(2) + " kW", rs), gp = PB.range("hy-p", (v) => v + " mTorr", rs), gw = PB.range("hy-w", (v) => v.toFixed(2), rs);
+    const n = new Float64Array(NR * NZ), Sv = new Float64Array(NR * NZ), sh = new Float64Array(NR * NZ), del = new Float64Array(NR);
+    let it = 0, change = 1, hist = [], acc = 0;
+    const id = (i, j) => j * NR + i;
+    function restart(anim) { n.fill(0); del.fill(0.02); it = 0; change = 1; hist = []; if (anim === false) { while (it < 40 && !(it > 3 && change < 1e-4)) iterate(); cv && cv.redraw(); } else loop.start(); }
+    function source() {
+      const w = gw(), P = gP();
+      let tot = 0, smax = 0;
+      for (let i = 0; i < NR; i++) {
+        const r = (i + 0.5) * dr;
+        const C = ((1 - w) * Math.exp(-Math.pow((r - 0.08) / 0.04, 2)) + w * Math.exp(-Math.pow((r - 0.18) / 0.04, 2))) * r / (r + 0.02);
+        for (let j = 0; j < NZ; j++) { const z = (j + 0.5) * dz, s = C * Math.exp(-2 * (H - z) / del[i]); sh[id(i, j)] = s; tot += s * 2 * Math.PI * r * dr * dz; smax = Math.max(smax, s); }
+      }
+      const k = P / (qe * ET) / Math.max(tot, 1e-30);
+      for (let q = 0; q < NR * NZ; q++) { Sv[q] = sh[q] * k; sh[q] /= smax; }
+    }
+    function solve() {
+      const D = D0 * 10 / gp(), Gr = 1 / (dr / 2 / D + 1 / uB), Gz = 1 / (dz / 2 / D + 1 / uB);
+      for (let sweep = 0; sweep < 3000; sweep++) {
+        let mx = 0, nm = 1;
+        for (let j = 0; j < NZ; j++) for (let i = 0; i < NR; i++) {
+          const r = (i + 0.5) * dr, rp = (i + 1) * dr, rm = i * dr;
+          let diag = 0, sum = Sv[id(i, j)];
+          if (i < NR - 1) { const a = D * rp / (r * dr * dr); diag += a; sum += a * n[id(i + 1, j)]; } else diag += Gr * rp / (r * dr);
+          if (i > 0) { const a = D * rm / (r * dr * dr); diag += a; sum += a * n[id(i - 1, j)]; }
+          if (j < NZ - 1) { const a = D / (dz * dz); diag += a; sum += a * n[id(i, j + 1)]; } else diag += Gz / dz;
+          if (j > 0) { const a = D / (dz * dz); diag += a; sum += a * n[id(i, j - 1)]; } else diag += Gz / dz;
+          const q = id(i, j), nn = Math.max(0, n[q] + 1.8 * (sum / diag - n[q]));
+          mx = Math.max(mx, Math.abs(nn - n[q])); nm = Math.max(nm, nn); n[q] = nn;
+        }
+        if (mx < 1e-7 * nm) break;
+      }
+      return Gz;
+    }
+    let Gz = 0;
+    function iterate() {
+      source(); Gz = solve();
+      let nmax = 0; for (let q = 0; q < NR * NZ; q++) nmax = Math.max(nmax, n[q]);
+      for (let i = 0; i < NR; i++) { const nt = Math.max(n[id(i, NZ - 1)], 1e14), dn = clamp(5.31e6 / Math.sqrt(nt), 1e-3, 0.2); del[i] = 0.5 * del[i] + 0.5 * dn; }
+      const prev = hist.length ? hist[hist.length - 1] : 0; change = Math.abs(nmax - prev) / Math.max(nmax, 1);
+      hist.push(nmax); it++;
+    }
+    const loop = PB.loop($("hy-cv"), (d) => { acc += d; if (acc < 0.08) return; acc = 0; if (it >= 40 || (it > 3 && change < 1e-4)) { loop.stop(); return; } iterate(); cv.redraw(); });
+    $("hy-run").addEventListener("click", () => restart(true));
+    function cmap(v) { v = clamp(v, 0, 1); return "rgb(" + Math.round(30 + 200 * v) + "," + Math.round(16 + 120 * v * v) + "," + Math.round(60 + 195 * Math.sqrt(v)) + ")"; }
+    const cv = PB.canvas($("hy-cv"), (ctx, w, h) => {
+      const P = PB.palette();
+      let nmax = 1; for (let q = 0; q < NR * NZ; q++) nmax = Math.max(nmax, n[q]);
+      const x0 = 20, ww = w - 40, hh = Math.min(ww * 0.4, h * 0.48), y0 = 10, cw = ww / (2 * NR), chh = hh / NZ;
+      for (let j = 0; j < NZ; j++) for (let i = 0; i < NR; i++) {
+        ctx.fillStyle = cmap(n[id(i, j)] / nmax);
+        const yy = y0 + (NZ - 1 - j) * chh;
+        ctx.fillRect(x0 + ww / 2 + i * cw, yy, cw + 0.6, chh + 0.6); ctx.fillRect(x0 + ww / 2 - (i + 1) * cw, yy, cw + 0.6, chh + 0.6);
+      }
+      ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 1.4; ctx.beginPath();
+      for (let j = 0; j < NZ; j++) for (let i = 0; i < NR; i++) {
+        const inn = sh[id(i, j)] >= 0.5; if (!inn) continue;
+        const yy = y0 + (NZ - 1 - j) * chh;
+        [1, -1].forEach((sg) => {
+          const xl = sg > 0 ? x0 + ww / 2 + i * cw : x0 + ww / 2 - (i + 1) * cw;
+          const nbR = i + 1 < NR && sh[id(i + 1, j)] >= 0.5, nbL = i > 0 && sh[id(i - 1, j)] >= 0.5, nbD = j > 0 && sh[id(i, j - 1)] >= 0.5;
+          const right = sg > 0 ? nbR : nbL, left = sg > 0 ? nbL : nbR;
+          if (!right) { ctx.moveTo(xl + cw, yy); ctx.lineTo(xl + cw, yy + chh); }
+          if (!left && !(i === 0)) { ctx.moveTo(xl, yy); ctx.lineTo(xl, yy + chh); }
+          if (!nbD) { ctx.moveTo(xl, yy + chh); ctx.lineTo(xl + cw, yy + chh); }
+        });
+      }
+      ctx.stroke();
+      ctx.fillStyle = P.oxide; ctx.fillRect(x0, y0 - 4, ww, 4);
+      ctx.fillStyle = P.si; const wx = ww / 2 * 0.15 / R; ctx.fillRect(x0 + ww / 2 - wx, y0 + hh, 2 * wx, 4);
+      ctx.fillStyle = P.dim; ctx.font = "11px sans-serif"; ctx.textAlign = "left"; ctx.fillText("창(코일 쪽)", x0 + 4, y0 + 12); ctx.fillText("웨이퍼", x0 + ww / 2 - wx, y0 + hh + 16);
+      // wafer flux
+      const fl = []; let fmx = 0; for (let i = 0; i < NR; i++) { const g = Gz * n[id(i, 0)]; fl.push([(i + 0.5) * dr * 100, g]); fmx = Math.max(fmx, g); }
+      const yb = y0 + hh + 24;
+      PB.chart(ctx, { x: 58, y: yb, w: w - 76, h: h - yb - 46 }, { x: [0, 25], y: [0, Math.max(fmx * 1.15, 1)], xLabel: "반지름 r (cm)", yLabel: "Γᵢ 웨이퍼 (m⁻²s⁻¹)",
+        series: [{ data: fl, color: P.ion, width: 2.4 }], bands: [{ x0: 0, x1: 15, color: alpha(P.si, 0.1) }], yFmt: (v) => v.toExponential(0) });
+      const wf = fl.filter((q) => q[0] <= 15).map((q) => q[1]), a = Math.min(...wf), b = Math.max(...wf), U = b > 0 ? (b - a) / (b + a) : NaN;
+      setV("hy-it", change < 1e-3 ? "ok" : "warn", it + " · " + (change * 100).toFixed(2) + " %");
+      PB.stat("hy-n", sci(nmax / 1e6) + " <small>cm⁻³</small>");
+      PB.stat("hy-d", (del[Math.round(NR * 0.5)] * 1000).toFixed(1) + " <small>mm</small>");
+      setV("hy-u", U <= 0.03 ? "ok" : U <= 0.08 ? "warn" : "bad", isFinite(U) ? "±" + (U * 100).toFixed(1) + " %" : "—");
+    }, { aspect: 0.75, maxHeight: 560, minHeight: 380 });
+    restart(false);
+  })();
+
+  /* =============================================================
+     7) validation / calibration
+     ============================================================= */
+  (function () {
+    if (!$("va-cv")) return;
+    const R = 0.25, NR = 50, dr = R / NR, Hh = 0.1, uB = 2456, ET = 108, D0 = 38, kz2 = Math.pow(Math.PI / Hh, 2), Pw = 1500;
+    const gr = PB.range("va-r", (v) => (v * 100).toFixed(1) + " cm", draw), gd = PB.range("va-d", (v) => v.toFixed(2), draw);
+    $("va-bias").addEventListener("change", draw);
+    let showVal = false;
+    $("va-chk").addEventListener("click", () => { showVal = !showVal; draw(); });
+    const A = new Float64Array(NR), B = new Float64Array(NR), C = new Float64Array(NR), Dd = new Float64Array(NR), X = new Float64Array(NR), cp = new Float64Array(NR), dp = new Float64Array(NR);
+    function model(rs, dm) {
+      const D = D0 * dm, G = 1 / (dr / 2 / D + 1 / uB);
+      let tot = 0; const s = [];
+      for (let i = 0; i < NR; i++) { const r = (i + 0.5) * dr, v = Math.exp(-Math.pow((r - rs) / 0.04, 2)); s.push(v); tot += v * 2 * Math.PI * r * dr * Hh; }
+      const k = Pw / (qe * ET) / tot;
+      for (let i = 0; i < NR; i++) {
+        const r = (i + 0.5) * dr, rp = (i + 1) * dr, rm = i * dr;
+        const aE = i < NR - 1 ? D * rp / (r * dr * dr) : 0, aW = i > 0 ? D * rm / (r * dr * dr) : 0, wall = i === NR - 1 ? G * rp / (r * dr) : 0;
+        A[i] = -aW; C[i] = -aE; B[i] = aE + aW + wall + D * kz2; Dd[i] = s[i] * k;
+      }
+      tri(A, B, C, Dd, X, NR, cp, dp);
+      return Array.from(X);
+    }
+    const at = (prof, r) => { const g = r / dr - 0.5, i = clamp(Math.floor(g), 0, NR - 2), f = clamp(g - i, 0, 1); return prof[i] * (1 - f) + prof[i + 1] * f; };
+    const TR = { rs: 0.13, dm: 1.4 }, truth = model(TR.rs, TR.dm), rr = rng(31), RK = [], noise = [];
+    for (let k = 0; k < 13; k++) { RK.push(0.005 + k * 0.02); noise.push(0.03 * gauss(rr)); }
+    function data() { const b = $("va-bias").checked ? 1.25 : 1; return RK.map((r, k) => [r, at(truth, r) * (1 + noise[k]) * b]); }
+    function chi2(prof, d) { let s = 0; d.forEach((q) => { const e = (at(prof, q[0]) - q[1]) / (0.05 * q[1]); s += e * e; }); return s / (d.length - 2); }
+    $("va-fit").addEventListener("click", () => {
+      const d = data(); let best = [Infinity, 0, 0];
+      for (let rs = 0.04; rs <= 0.2201; rs += 0.005) for (let dm = 0.3; dm <= 3.001; dm += 0.02) { const c = chi2(model(rs, dm), d); if (c < best[0]) best = [c, rs, dm]; }
+      gr.set(Math.round(best[1] * 1000) / 1000); gd.set(Math.round(best[2] * 100) / 100);
+    });
+    function draw() { cv.redraw(); }
+    const cv = PB.canvas($("va-cv"), (ctx, w, h) => {
+      const P = PB.palette(), d = data(), prof = model(gr(), gd()), c = chi2(prof, d);
+      const pv = model(gr(), gd() / 3), tv = model(TR.rs, TR.dm / 3), verr = pv[0] / tv[0] - 1;
+      const sc = 1e17;
+      let ymax = Math.max(...prof, ...d.map((q) => q[1] * 1.05));
+      if (showVal) ymax = Math.max(ymax, ...pv, ...tv);
+      const ser = [{ data: prof.map((v, i) => [(i + 0.5) * dr * 100, v / sc]), color: P.accent, width: 2.4 }];
+      if (showVal) { ser.push({ data: tv.map((v, i) => [(i + 0.5) * dr * 100, v / sc]), color: P.ok, width: 1.6, dash: [6, 4] }); ser.push({ data: pv.map((v, i) => [(i + 0.5) * dr * 100, v / sc]), color: P.warn, width: 2 }); }
+      const ch = PB.chart(ctx, null, { x: [0, 25], y: [0, ymax / sc * 1.15], xLabel: "반지름 r (cm)", yLabel: "n (10¹¹ cm⁻³)", series: ser });
+      ctx.strokeStyle = P.electron; ctx.fillStyle = P.electron;
+      d.forEach((q) => { const x = ch.X(q[0] * 100), y = ch.Y(q[1] / sc), e = ch.Y(q[1] * 0.95 / sc) - y; ctx.beginPath(); ctx.moveTo(x, y - e); ctx.lineTo(x, y + e); ctx.stroke(); ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 7); ctx.fill(); });
+      ctx.font = "12px sans-serif"; ctx.textAlign = "right";
+      ctx.fillStyle = P.electron; ctx.fillText("● 탐침 측정(±5 %)", w - 24, 28); ctx.fillStyle = P.accent; ctx.fillText("— 모델(교정 조건)", w - 24, 44);
+      if (showVal) { ctx.fillStyle = P.warn; ctx.fillText("— 모델 예측(3배 압력)", w - 24, 60); ctx.fillStyle = P.ok; ctx.fillText("- - 참값(3배 압력)", w - 24, 76); }
+      setV("va-c", c < 2 ? "ok" : c < 10 ? "warn" : "bad", c.toFixed(2));
+      PB.stat("va-p", (gr() * 100).toFixed(1) + " cm · " + gd().toFixed(2));
+      setV("va-v", Math.abs(verr) < 0.08 ? "ok" : Math.abs(verr) < 0.2 ? "warn" : "bad", pct(verr));
+    }, { aspect: 0.55, maxHeight: 400, minHeight: 280 });
+  })();
+
+  /* =============================================================
+     8) computational cost estimator
+     ============================================================= */
+  (function () {
+    if (!$("co-cv")) return;
+    const gD = PB.seg("co-dim", draw);
+    const gn = PB.range("co-n", (v) => sci(Math.pow(10, v)) + " cm⁻³", draw);
+    const gt = PB.range("co-t", (v) => PB.si(Math.pow(10, v), "s", 2), draw);
+    const gppc = PB.range("co-ppc", (v) => String(v), draw);
+    const gc = PB.range("co-c", (v) => String(Math.pow(2, v)), draw);
+    const gs = PB.range("co-s", (v) => "1/" + PB.fmt(Math.pow(10, v), 3), draw);
+    const Te = 2.5;
+    const lam = (n) => Math.sqrt(eps0 * Te / (qe * n)), wpe = (n) => 56.4 * Math.sqrt(n);
+    function human(s) {
+      if (!isFinite(s)) return "—";
+      if (s < 60) return s.toFixed(s < 1 ? 2 : 0) + " 초";
+      if (s < 3600) return (s / 60).toFixed(1) + " 분";
+      if (s < 86400) return (s / 3600).toFixed(1) + " 시간";
+      if (s < 3.156e7) return (s / 86400).toFixed(1) + " 일";
+      return PB.fmt(s / 3.156e7, 3) + " 년";
+    }
+    function draw() { cv.redraw(); }
+    const cv = PB.canvas($("co-cv"), (ctx, w, h) => {
+      const P = PB.palette(), d = Number(gD()), n = Math.pow(10, gn()) * 1e6, t = Math.pow(10, gt()), ppc = gppc(), cores = Math.pow(2, gc()), np = n / Math.pow(10, gs());
+      const Ls = d === 1 ? [0.1] : d === 2 ? [0.25, 0.1] : [0.5, 0.5, 0.1];
+      const rate = cores * 1e9 * (cores > 1 ? 0.7 : 1);
+      const lD = lam(np), cellsP = Ls.reduce((a, L) => a * Math.max(1, L / lD), 1), parts = 2 * ppc * cellsP, stepsP = t * wpe(np) / 0.2;
+      const flP = stepsP * (parts * 80 + cellsP * 30);
+      const dxf = Math.max(lam(n), 5e-4), cellsF = Ls.reduce((a, L) => a * Math.max(1, L / dxf), 1), stepsF = t * 13.56e6 * 200;
+      const flF = cellsF * stepsF * 2000, flH = cellsF * (t / 1e-9) * 1000 + 1e5 * 1e4 * 50 * 100, flG = 1e8;
+      const rows = [["전역", flG / rate, P.ok], ["유체", flF / rate, P.accent2], ["하이브리드", flH / rate, P.warn], ["PIC/MCC", flP / rate, P.bad]];
+      const x0 = 96, ww = w - x0 - 20, lo = -3, hi = 12, X = (s) => x0 + (clamp(Math.log10(Math.max(s, 1e-3)), lo, hi) - lo) / (hi - lo) * ww;
+      const marks = [[1, "1초"], [60, "1분"], [3600, "1시간"], [86400, "1일"], [3.156e7, "1년"], [3.156e9, "100년"]];
+      ctx.font = "11px sans-serif"; ctx.textAlign = "center";
+      marks.forEach((m) => { const px = X(m[0]); ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(px, 10); ctx.lineTo(px, h - 26); ctx.stroke(); ctx.fillStyle = P.dim; ctx.fillText(m[1], px, h - 10); });
+      const bh = Math.min(34, (h - 50) / 4 - 10);
+      rows.forEach((r, i) => {
+        const y = 16 + i * (bh + 12);
+        ctx.fillStyle = alpha(r[2], 0.75); ctx.fillRect(x0, y, Math.max(2, X(r[1]) - x0), bh);
+        ctx.fillStyle = P.text; ctx.textAlign = "right"; ctx.font = "13px sans-serif"; ctx.fillText(r[0], x0 - 8, y + bh / 2 + 4);
+        ctx.textAlign = "left"; ctx.font = "12px sans-serif"; const lx = Math.min(X(r[1]) + 6, w - 90); ctx.fillText(human(r[1]), lx, y + bh / 2 + 4);
+      });
+      PB.stat("co-l", PB.si(lD, "m", 2) + " · " + PB.si(1 / wpe(np), "s", 2));
+      PB.stat("co-g", sci(cellsP) + " · " + sci(parts));
+      PB.stat("co-st", sci(stepsP));
+      const tp = flP / rate;
+      setV("co-w", tp < 86400 ? "ok" : tp < 2.6e6 ? "warn" : "bad", human(tp));
+    }, { aspect: 0.42, maxHeight: 300, minHeight: 220 });
+  })();
+})();
+</script>
+</body>
+</html>
