@@ -1,3 +1,4 @@
+import { analyticsTag, stripAnalytics } from '@euiyun/book/analytics';
 /* Copyright (c) 2026 geniuskey and SemiBooks contributors. MIT. */
 /* Static monorepo build. Directory home canonicals use /memory/, rather than /memory/index.html. */
 import { execFileSync } from 'node:child_process';
@@ -95,8 +96,7 @@ for (const item of await readdir(root, { withFileTypes: true })) {
   await cp(join(root, item.name), join(output, item.name), { recursive: true,
     filter: (source) => !relative(root, source).split(sep).some((part) => excluded.has(part)) });
 }
-const beacon = /<script\b(?=[^>]*\bsrc\s*=\s*["']https:\/\/static\.cloudflareinsights\.com\/beacon\.min\.js["'])[^>]*>\s*<\/script>\s*/gi;
-const tag = '<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon=\'{"token":"3d6151a0abc94ede89285d462527fa80"}\'></script>';
+const tag = analyticsTag;
 const urls = [];
 async function pages(directory) {
   for (const item of await readdir(directory, { withFileTypes: true })) {
@@ -105,7 +105,7 @@ async function pages(directory) {
     if (!item.name.endsWith('.html')) continue;
     const rel = relative(output, file).split(sep).join('/');
     const url = `${origin}/${rel.replace(/(^|\/)index\.html$/, '$1')}`;
-    let html = (await readFile(file, 'utf8')).replace(beacon, '');
+    let html = stripAnalytics(await readFile(file, 'utf8'));
     if (!/<\/head>/i.test(html)) throw new Error(`Missing </head>: ${rel}`);
     const info = generated.get(rel.split('/')[0]);
     if (info) {
