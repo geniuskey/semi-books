@@ -1,0 +1,1205 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and ThinFilmBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CVD 반응과 수송 · ThinFilmBook</title>
+<meta name="description" content="CVD의 다섯 단계, 그로브 모델의 기체 수송 계수 h_g와 표면 반응 계수 k_s, 반응 제한과 수송 제한, 아레니우스 그림의 꺾임, 경계층 두께, 부착 계수, 랭뮤어-힌셜우드 반응 차수, 기상 핵생성과 입자, 실레인·DCS·TEOS 반응 경로를 장비 조건과 연결해 시뮬레이터로 계산한다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .lbl { fill: var(--text); font-family: var(--font); font-size: 14px; }
+  svg .lbl-b { fill: var(--text); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .lbl-sm { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .lbl-acc { fill: var(--accent); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .lbl-acc2 { fill: var(--accent-2); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .lbl-w { fill: #fff; font-family: var(--font); font-size: 12px; font-weight: 600; }
+  svg .box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .tool { fill: var(--surface-2, var(--surface)); stroke: var(--text-faint); }
+  svg .arr { stroke: var(--text); stroke-width: 2; fill: none; }
+  svg .arr-acc { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+  svg .arr-acc2 { stroke: var(--accent-2); stroke-width: 2.4; fill: none; }
+  svg .arr-gas { stroke: var(--m-gas); stroke-width: 2.2; fill: none; }
+  svg .dash { stroke: var(--text-dim); stroke-dasharray: 5 4; fill: none; stroke-width: 1.4; }
+  p.small { font-size: 14px; color: var(--text-dim); }
+  .cv-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cv-btns .btn { font-size: 13px; padding: 5px 9px; }
+  .v.ok { color: var(--ok); } .v.warn { color: var(--warn); } .v.bad { color: var(--bad); }
+</style>
+</head>
+<body data-chapter="cvd">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 09</div>
+    <h1>CVD 반응과 수송</h1>
+    <p class="lead">화학 기상 증착<span class="en">(Chemical Vapor Deposition, CVD)</span>은 기체 분자를 웨이퍼 표면까지 날라 와 그곳에서 반응시켜 고체 막을 남긴다. 그래서 증착 속도는 언제나 두 과정, <strong>분자를 표면까지 실어 오는 수송</strong>과 <strong>표면에서 일어나는 반응</strong> 가운데 느린 쪽이 정한다. 이 장은 그 경쟁을 그로브 모델 하나로 정리하고, 온도·압력·유량·희석비라는 장비 손잡이가 어떤 영역에서 막 두께를 움직이는지 계산해 본다. 반응기 하드웨어는 <a href="reactor.html">10장</a>, 균일도는 <a href="uniformity.html">14장</a>에서 이어진다.</p>
+    <ul class="objectives">
+      <li>CVD의 단계(수송·확산·흡착·표면 반응·탈착·배기)를 순서대로 말하고, 어느 단계가 속도를 정하는지 판단할 수 있다.</li>
+      <li>그로브 모델 \(G = \dfrac{k_s h_g}{k_s + h_g}\dfrac{C_g}{N}\)을 유도하고 TF-300 LPCVD 폴리실리콘의 증착 속도(약 9 nm/min)를 계산할 수 있다.</li>
+      <li>아레니우스 그림의 꺾임에서 반응 제한·수송 제한 영역과 전이 온도를 읽고, 겉보기 활성화 에너지를 구할 수 있다.</li>
+      <li>경계층 두께 \(\delta\)와 확산 계수 \(D\)가 압력·온도·유속에 따라 어떻게 변하는지, LPCVD가 왜 반응 제한이 되는지 설명할 수 있다.</li>
+      <li>부착 계수와 \(k_s\)의 관계, 랭뮤어-힌셜우드 흡착에서 반응 차수가 바뀌는 이유를 설명할 수 있다.</li>
+      <li>기상 반응이 입자(분말)를 만드는 조건과 실레인·DCS·TEOS의 반응 경로를 비교할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="steps">
+    <h2>CVD의 단계: 기체에서 고체까지</h2>
+    <p>CVD 반응기 안에서 전구체<span class="en">(precursor)</span> 분자 하나가 막의 일부가 되기까지 거치는 길은 거의 모든 CVD에 공통이다. ① 주 기류를 타고 웨이퍼 근처까지 오는 <strong>대류 수송</strong>, ② 웨이퍼 바로 위의 느린 기체층, 곧 <span class="term">경계층</span><span class="en">(boundary layer)</span>을 가로지르는 <strong>확산</strong>, ③ 표면에 붙는 <strong>흡착</strong>, ④ 표면 확산 후 자리를 찾아 일어나는 <strong>표면 반응</strong>, ⑤ 부산물(H₂, HCl, 유기물)의 <strong>탈착</strong>, ⑥ 부산물이 다시 경계층과 주 기류를 거쳐 <strong>배기</strong>된다. 여기에 원치 않는 길이 하나 더 있다. 표면에 닿기 전 기체 안에서 먼저 분해·중합하는 <strong>기상 반응</strong>이다. 이 길이 강해지면 막 대신 가루가 생긴다(7절).</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="CVD의 여섯 단계: 주 기류, 경계층 확산, 흡착, 표면 확산과 반응, 부산물 탈착, 배기, 그리고 기상 반응">
+        <defs>
+          <marker id="c1-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text)"/></marker>
+          <marker id="c1-ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-gas)"/></marker>
+          <marker id="c1-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent-2)"/></marker>
+        </defs>
+        <rect x="10" y="10" width="840" height="70" rx="6" class="f-acc-soft" opacity="0.55"/>
+        <text x="24" y="32" class="lbl-b">주 기류 (대류)</text>
+        <line x1="40" y1="56" x2="820" y2="56" class="arr-gas" marker-end="url(#c1-ag)"/>
+        <rect x="10" y="80" width="840" height="120" class="f-surface" opacity="0.6"/>
+        <text x="24" y="100" class="lbl-sm">경계층 δ (속도·농도가 바뀌는 층)</text>
+        <path d="M10 200 Q 300 196 850 82" class="dash"/>
+        <rect x="10" y="200" width="840" height="22" class="m-poly"/>
+        <rect x="10" y="222" width="840" height="60" class="m-si"/>
+        <text x="430" y="257" text-anchor="middle" class="lbl-w">Si 기판</text>
+        <text x="760" y="216" text-anchor="middle" class="lbl-w">증착된 막</text>
+        <!-- step 1 -->
+        <circle cx="120" cy="56" r="9" class="m-gas"/><text x="120" y="38" text-anchor="middle" class="lbl-sm">SiH₄</text>
+        <text x="100" y="74" class="lbl-acc">①</text>
+        <!-- step 2 -->
+        <line x1="150" y1="72" x2="190" y2="182" class="arr-gas" stroke-dasharray="4 4" marker-end="url(#c1-ag)"/>
+        <text x="182" y="128" class="lbl-acc">② 확산</text>
+        <!-- step 3 -->
+        <circle cx="210" cy="191" r="8" class="m-gas"/>
+        <text x="226" y="186" class="lbl-acc">③ 흡착</text>
+        <!-- step 4 -->
+        <path d="M300 192 q 20 -12 40 0 q 20 -12 40 0" class="arr-acc2" marker-end="url(#c1-aa)"/>
+        <text x="300" y="176" class="lbl-acc2">④ 표면 확산·반응</text>
+        <circle cx="398" cy="192" r="7" class="m-poly" stroke="var(--text)" stroke-width="1"/>
+        <!-- step 5 -->
+        <circle cx="470" cy="160" r="6" fill="var(--text-dim)"/><circle cx="482" cy="156" r="6" fill="var(--text-dim)"/>
+        <line x1="476" y1="190" x2="500" y2="110" class="arr" marker-end="url(#c1-ar)"/>
+        <text x="508" y="150" class="lbl">⑤ 부산물 탈착 (H₂)</text>
+        <!-- step 6 -->
+        <line x1="520" y1="96" x2="600" y2="64" class="arr" marker-end="url(#c1-ar)"/>
+        <text x="610" y="74" class="lbl">⑥ 배기</text>
+        <!-- gas-phase -->
+        <g transform="translate(700,128)">
+          <circle cx="0" cy="0" r="7" class="m-gas"/><circle cx="12" cy="-4" r="7" class="m-gas"/><circle cx="6" cy="9" r="7" class="m-gas"/><circle cx="18" cy="8" r="6" class="m-poly"/>
+        </g>
+        <text x="690" y="104" class="lbl-sm">기상 반응 → 입자</text>
+        <text x="16" y="296" class="lbl-sm">속도 = 가장 느린 직렬 단계 (②수송 또는 ③④표면 반응)</text>
+      </svg>
+      <figcaption><b>그림 9-1.</b> CVD의 단계. 대류(①)와 경계층 확산(②)이 <em>수송</em>, 흡착·표면 반응·탈착(③–⑤)이 <em>반응</em>이다. 두 묶음은 직렬로 이어져 있어 느린 쪽이 전체 속도를 정한다. 기상 반응(오른쪽)은 막이 아니라 입자를 만드는 곁가지다.</figcaption>
+    </figure>
+
+    <p>직렬 과정의 속도가 느린 쪽에 묶인다는 사실은 전기 회로의 직렬 저항과 똑같다. 수송이 느리면 표면에 오는 족족 반응하므로 표면 농도는 0에 가까워지고, 반응이 느리면 표면 농도가 기체 농도와 거의 같아진다. 어느 쪽인지에 따라 <strong>장비에서 돌려야 할 손잡이가 완전히 달라진다</strong>. 이것이 이 장 전체의 요점이다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>속도 제한 단계</th><th>증착 속도가 민감한 것</th><th>둔감한 것</th><th>대표 공정</th></tr></thead>
+      <tbody>
+        <tr><td><b>표면 반응 제한</b> (\(k_s \ll h_g\))</td><td>웨이퍼 온도(아레니우스, %/K), 표면 상태</td><td>유속, 웨이퍼 배치, 반응기 기하</td><td>LPCVD 폴리·질화막·TEOS — 150장 배치 가능</td></tr>
+        <tr><td><b>수송 제한</b> (\(h_g \ll k_s\))</td><td>유속·압력·경계층 두께, 반응기 형상, 전구체 분압</td><td>온도(수 %/100 K)</td><td>APCVD, 고온 에피, W CVD 일부</td></tr>
+        <tr><td><b>기상 반응 우세</b></td><td>압력·온도·체류 시간</td><td>—</td><td>피해야 할 조건(분말, 거친 막)</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="grove">
+    <h2>그로브 모델: \(h_g\)와 \(k_s\)의 직렬 연결</h2>
+    <p>A. S. Grove는 1967년 에피 성장 데이터를 두 개의 플럭스로 정리했다. 경계층을 가로지르는 확산 플럭스 \(F_1\)은 기체 쪽 농도 \(C_g\)와 표면 농도 \(C_s\)의 차이에 비례하고, 표면에서 소비되는 플럭스 \(F_2\)는 1차 반응이라면 \(C_s\)에 비례한다. 정상 상태에서는 두 플럭스가 같다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 280" role="img" aria-label="그로브 모델: 경계층을 지나는 농도 분포와 두 플럭스, 그리고 직렬 저항 등가 회로">
+        <defs>
+          <marker id="c2-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker>
+          <marker id="c2-ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent-2)"/></marker>
+        </defs>
+        <!-- left: profile -->
+        <rect x="30" y="20" width="110" height="220" class="m-si"/>
+        <rect x="140" y="20" width="16" height="220" class="m-poly"/>
+        <text x="85" y="135" text-anchor="middle" class="lbl-w">웨이퍼</text>
+        <rect x="156" y="20" width="160" height="220" class="f-surface" opacity="0.7"/>
+        <text x="236" y="262" text-anchor="middle" class="lbl-sm">경계층 δ</text>
+        <line x1="156" y1="250" x2="316" y2="250" class="s-line"/>
+        <line x1="316" y1="20" x2="316" y2="240" class="dash"/>
+        <text x="420" y="262" text-anchor="middle" class="lbl-sm">주 기류</text>
+        <path d="M156 190 L316 60 L470 60" class="s-acc" stroke-width="3"/>
+        <text x="476" y="64" class="lbl-acc">C<tspan font-size="11" dy="4">g</tspan></text>
+        <text x="164" y="210" class="lbl-acc">C<tspan font-size="11" dy="4">s</tspan></text>
+        <line x1="268" y1="92" x2="172" y2="92" class="arr-acc" marker-end="url(#c2-ar)"/>
+        <text x="166" y="78" class="lbl-acc">F₁ = h<tspan font-size="11" dy="4">g</tspan><tspan dy="-4">(C</tspan><tspan font-size="11" dy="4">g</tspan><tspan dy="-4">−C</tspan><tspan font-size="11" dy="4">s</tspan><tspan dy="-4">)</tspan></text>
+        <line x1="150" y1="160" x2="112" y2="160" class="arr-acc2" marker-end="url(#c2-ab)"/>
+        <text x="40" y="186" class="lbl-acc2">F₂ = k<tspan font-size="11" dy="4">s</tspan><tspan dy="-4">C</tspan><tspan font-size="11" dy="4">s</tspan></text>
+        <!-- right: circuit -->
+        <text x="560" y="40" class="lbl-b">등가 직렬 회로</text>
+        <line x1="540" y1="120" x2="580" y2="120" class="s-line"/>
+        <rect x="580" y="104" width="80" height="32" rx="4" class="f-acc-soft"/>
+        <text x="620" y="125" text-anchor="middle" class="lbl">1/h<tspan font-size="10" dy="4">g</tspan></text>
+        <line x1="660" y1="120" x2="690" y2="120" class="s-line"/>
+        <rect x="690" y="104" width="80" height="32" rx="4" class="f-acc2-soft"/>
+        <text x="730" y="125" text-anchor="middle" class="lbl">1/k<tspan font-size="10" dy="4">s</tspan></text>
+        <line x1="770" y1="120" x2="820" y2="120" class="s-line"/>
+        <text x="528" y="112" class="lbl-sm" text-anchor="end">C<tspan font-size="9" dy="3">g</tspan></text>
+        <text x="828" y="112" class="lbl-sm">0</text>
+        <text x="620" y="160" text-anchor="middle" class="lbl-sm">수송 저항</text>
+        <text x="730" y="160" text-anchor="middle" class="lbl-sm">반응 저항</text>
+        <text x="540" y="210" class="lbl">플럭스 F = C<tspan font-size="10" dy="4">g</tspan><tspan dy="-4"> / (1/h</tspan><tspan font-size="10" dy="4">g</tspan><tspan dy="-4"> + 1/k</tspan><tspan font-size="10" dy="4">s</tspan><tspan dy="-4">)</tspan></text>
+        <text x="540" y="236" class="lbl-sm">큰 저항이 전류(증착 속도)를 정한다</text>
+      </svg>
+      <figcaption><b>그림 9-2.</b> 그로브 모델. 왼쪽: 경계층 안에서 반응물 농도가 \(C_g\)에서 \(C_s\)로 떨어진다(선형 근사). 오른쪽: 같은 내용을 직렬 저항으로 그린 것. 수송 저항 \(1/h_g\)와 반응 저항 \(1/k_s\) 중 큰 쪽이 속도를 정한다.</figcaption>
+    </figure>
+
+    <div class="formula">$$F_1 = h_g\,(C_g - C_s),\qquad F_2 = k_s\,C_s,\qquad F_1 = F_2 \;\Rightarrow\; C_s = \frac{C_g}{1 + k_s/h_g}$$<div class="where">\(h_g\)는 <span class="term">기체 수송 계수</span><span class="en">(mass transfer coefficient)</span>, 단위 cm/s. 경계층을 지나는 확산이라면 \(h_g = D/\delta\). \(k_s\)는 <span class="term">표면 반응 속도 상수</span><span class="en">(surface reaction rate constant)</span>, 역시 cm/s이며 \(k_s = k_0\,e^{-E_a/kT}\)로 온도에 지수적으로 의존한다. 무차원 비 \(\mathrm{Da} = k_s/h_g\)를 <span class="term">담쾰러 수</span><span class="en">(Damköhler number)</span>라 부른다.</div></div>
+
+    <div class="formula">$$G = \frac{F}{N} = \frac{k_s\,h_g}{k_s + h_g}\cdot\frac{C_g}{N} = \frac{k_s\,h_g}{k_s + h_g}\cdot\frac{y\,P}{N\,kT}$$<div class="where">\(G\)는 증착 속도(cm/s), \(N\)은 막 단위 부피당 원자 수(Si: 5.0×10²² cm⁻³, SiO₂ 속 Si: 2.3×10²² cm⁻³), \(C_g = yP/kT\)는 반응물 농도(\(y\): 몰분율, \(P\): 전체 압력). 두 극한: \(k_s \ll h_g\)이면 \(G \approx k_s C_g/N\) (<strong>반응 제한</strong>), \(h_g \ll k_s\)이면 \(G \approx h_g C_g/N\) (<strong>수송 제한</strong>).</div></div>
+
+    <div class="callout fab"><strong>LPCVD 폴리실리콘 기준점</strong>FX 퍼니스, SiH₄ 100 %, 0.25 Torr, 620 °C(893 K). \(C_g = 0.25\times133.3/(1.381\times10^{-23}\cdot 893) = 2.70\times10^{21}\) m⁻³ = 2.70×10¹⁵ cm⁻³. 증착 속도 9 nm/min = 1.5×10⁻⁸ cm/s에서 거꾸로 풀면 \(k_s C_g = G N = 7.5\times10^{14}\) cm⁻²s⁻¹이므로 \(k_s \approx 0.28\) cm/s. 한편 0.25 Torr에서 확산 계수는 약 3,600 cm²/s, 경계층(반응기 치수로 묶여)은 약 5 cm라 \(h_g \approx 700\) cm/s. \(\mathrm{Da} \approx 4\times10^{-4}\) — 완전한 반응 제한이다. 그래서 웨이퍼를 6 mm 간격으로 150장 세워도 된다.</div>
+
+    <div class="sim" id="sim-grove">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>그로브 모델 계산기: 경계층 속 농도와 두 저항</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gv-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>화학</span><div class="seg" id="gv-chem"><button data-value="poly" class="on">SiH₄ 폴리</button><button data-value="nit">DCS 질화막</button><button data-value="teos">TEOS</button></div></div>
+          <label class="ctrl"><span>웨이퍼 온도 <output id="gv-T-out"></output></span><input type="range" id="gv-T" min="450" max="1150" step="5" value="620"></label>
+          <label class="ctrl"><span>전체 압력 <output id="gv-P-out"></output></span><input type="range" id="gv-P" min="-1" max="2.881" step="0.01" value="-0.6"></label>
+          <label class="ctrl"><span>반응물 몰분율 y <output id="gv-y-out"></output></span><input type="range" id="gv-y" min="-3" max="0" step="0.01" value="0"></label>
+          <label class="ctrl"><span>주 기류 유속 U <output id="gv-U-out"></output></span><input type="range" id="gv-U" min="3" max="150" step="1" value="30"></label>
+          <div class="ctrl"><span>운반 기체</span><div class="seg" id="gv-car"><button data-value="N2" class="on">N₂</button><button data-value="H2">H₂</button></div></div>
+          <div class="ctrl"><span>프리셋</span><div class="cv-btns">
+            <button class="btn" data-gv="poly,620,0.25,1">LPCVD 폴리</button>
+            <button class="btn" data-gv="nit,760,0.25,0.1667">LPCVD 질화막</button>
+            <button class="btn" data-gv="teos,700,0.3,1">LPCVD TEOS</button>
+            <button class="btn" data-gv="poly,850,760,0.01">APCVD 1 % SiH₄</button>
+          </div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">k<sub>s</sub></span><span class="v" id="gv-ks">—</span></div>
+        <div class="stat"><span class="k">h<sub>g</sub> = D/δ</span><span class="v" id="gv-hg">—</span></div>
+        <div class="stat"><span class="k">Da = k<sub>s</sub>/h<sub>g</sub></span><span class="v" id="gv-da">—</span></div>
+        <div class="stat"><span class="k">C<sub>s</sub>/C<sub>g</sub></span><span class="v" id="gv-cs">—</span></div>
+        <div class="stat"><span class="k">증착 속도 G</span><span class="v" id="gv-G">—</span></div>
+        <div class="stat"><span class="k">영역</span><span class="v" id="gv-reg">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽 그림은 웨이퍼(왼쪽 끝)에서 주 기류까지의 농도 분포, 오른쪽 막대는 두 저항 \(1/h_g\), \(1/k_s\)의 상대 크기(로그)다. 모델: \(D = D_0 (T/273)^{1.75}(760/P)\), \(\delta = \min(5\sqrt{\nu x/U},\,5\ \text{cm})\) (\(x\) = 5 cm), \(k_s\)는 TF-300 기준점에 맞춘 아레니우스. 해볼 것: ① LPCVD 폴리에서 온도를 600→640 °C로 올려 G가 두 배 가까이 되는 것을 확인. ② APCVD 프리셋에서 같은 일을 하면 G가 거의 그대로다. ③ APCVD에서 유속 U를 4배로 하면 \(\delta\)가 절반, G가 약 두 배.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="arrhenius">
+    <h2>아레니우스 그림의 꺾임</h2>
+    <p>그로브 식에서 온도 의존성은 대부분 \(k_s\)에 있다. \(D\)는 \(T^{1.75}\) 정도로만 변하고, \(\delta\)는 점성 \(\nu\)를 통해 \(T^{0.8}\) 정도로 굵어져서 \(h_g\)는 온도에 거의 둔감하다. 그래서 \(\ln G\)를 \(1/T\)에 대해 그리면 낮은 온도에서는 기울기 \(-E_a/k\)인 가파른 직선, 높은 온도에서는 거의 평평한 직선이 되고, 둘 사이에 <strong>꺾임</strong>이 생긴다. 꺾이는 온도 \(T^*\)는 \(k_s(T^*) = h_g\)인 곳이다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 260" role="img" aria-label="아레니우스 그림 개념도: 낮은 온도에서 가파른 반응 제한 직선, 높은 온도에서 평평한 수송 제한 직선, 압력을 낮추면 꺾임점이 고온으로 이동">
+        <rect x="70" y="20" width="460" height="200" class="f-elev"/>
+        <line x1="70" y1="220" x2="530" y2="220" class="s-axis"/><line x1="70" y1="20" x2="70" y2="220" class="s-axis"/>
+        <text x="300" y="248" text-anchor="middle" class="lbl-sm">1000/T (K⁻¹) →   (오른쪽이 저온)</text>
+        <text x="30" y="120" class="lbl-sm" transform="rotate(-90 30 120)" text-anchor="middle">ln G</text>
+        <path d="M90 60 L 230 64 Q 260 66 290 90 L 510 210" class="s-acc" stroke-width="3"/>
+        <path d="M90 34 L 160 38 Q 190 40 220 64" class="s-acc2" stroke-width="2.5" stroke-dasharray="6 4"/>
+        <path d="M230 64 L 330 124" class="dash"/>
+        <text x="100" y="52" class="lbl-acc">수송 제한 (평평)</text>
+        <text x="380" y="140" class="lbl-acc">반응 제한</text>
+        <text x="380" y="158" class="lbl-sm">기울기 = −E<tspan font-size="9" dy="3">a</tspan><tspan dy="-3">/k</tspan></text>
+        <circle cx="262" cy="72" r="5" class="f-acc"/>
+        <text x="268" y="98" class="lbl-sm">T* : k<tspan font-size="9" dy="3">s</tspan><tspan dy="-3"> = h</tspan><tspan font-size="9" dy="3">g</tspan></text>
+        <text x="160" y="30" class="lbl-acc2">압력↓ → h<tspan font-size="10" dy="3">g</tspan><tspan dy="-3">↑ → T*가 고온 쪽으로</tspan></text>
+        <!-- right -->
+        <text x="570" y="40" class="lbl-b">겉보기 활성화 에너지</text>
+        <text x="570" y="70" class="lbl">반응 제한: E<tspan font-size="10" dy="3">app</tspan><tspan dy="-3"> ≈ E</tspan><tspan font-size="10" dy="3">a</tspan><tspan dy="-3"> (1.5–2 eV)</tspan></text>
+        <text x="570" y="98" class="lbl">수송 제한: E<tspan font-size="10" dy="3">app</tspan><tspan dy="-3"> ≈ 0 ± 0.1 eV</tspan></text>
+        <text x="570" y="126" class="lbl">중간: E<tspan font-size="10" dy="3">app</tspan><tspan dy="-3"> = E</tspan><tspan font-size="10" dy="3">a</tspan><tspan dy="-3"> /(1+Da)</tspan></text>
+        <text x="570" y="166" class="lbl-sm">온도 민감도 (반응 제한, 620 °C, 1.7 eV)</text>
+        <text x="570" y="188" class="lbl-acc">(1/G)dG/dT = E<tspan font-size="10" dy="3">a</tspan><tspan dy="-3">/kT² ≈ 2.5 %/K</tspan></text>
+        <text x="570" y="214" class="lbl-sm">→ 0.5 % 균일도 = 웨이퍼 온도 ±0.2 K</text>
+      </svg>
+      <figcaption><b>그림 9-3.</b> 아레니우스 그림의 두 영역과 꺾임(개념도). 압력을 낮추면 \(D \propto 1/P\)로 \(h_g\)가 커져 꺾임점이 고온 쪽으로 밀리고, 넓은 온도 범위가 반응 제한이 된다.</figcaption>
+    </figure>
+
+    <div class="formula">$$E_{\text{app}} \equiv -k\,\frac{d\ln G}{d(1/T)} = \frac{E_a}{1+\mathrm{Da}} + \frac{\mathrm{Da}}{1+\mathrm{Da}}\,E_{h},\qquad |E_h| = \left|k\frac{d\ln (h_g C_g)}{d(1/T)}\right| \lesssim 0.1\ \text{eV}$$<div class="where">반응 제한(\(\mathrm{Da}\to 0\))에서는 표면 반응의 \(E_a\)가 그대로 보이고, 수송 제한(\(\mathrm{Da}\to\infty\))에서는 기체 수송의 약한 온도 의존만 남는다. 측정된 아레니우스 그림의 기울기로 지금 어느 영역에 있는지 판단할 수 있다.</div></div>
+
+    <div class="sim" id="sim-arr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>아레니우스 그림: 꺾임점과 겉보기 활성화 에너지</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ar-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>화학</span><div class="seg" id="ar-chem"><button data-value="poly" class="on">SiH₄</button><button data-value="nit">DCS</button><button data-value="teos">TEOS</button></div></div>
+          <label class="ctrl"><span>전체 압력 <output id="ar-P-out"></output></span><input type="range" id="ar-P" min="-1" max="2.881" step="0.01" value="2.881"></label>
+          <label class="ctrl"><span>몰분율 y <output id="ar-y-out"></output></span><input type="range" id="ar-y" min="-3" max="0" step="0.01" value="-2"></label>
+          <label class="ctrl"><span>유속 U <output id="ar-U-out"></output></span><input type="range" id="ar-U" min="3" max="150" step="1" value="30"></label>
+          <label class="check"><input type="checkbox" id="ar-asym" checked> 두 극한(k<sub>s</sub>만, h<sub>g</sub>만) 표시</label>
+          <label class="check"><input type="checkbox" id="ar-fam"> 압력 4종 비교 (760·10·1·0.25 Torr)</label>
+          <button class="btn" id="ar-meas">측정 데이터 새로 뽑기</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">전이 온도 T*</span><span class="v" id="ar-ts">—</span></div>
+        <div class="stat"><span class="k">저온 맞춤 E<sub>app</sub></span><span class="v" id="ar-el">—</span></div>
+        <div class="stat"><span class="k">고온 맞춤 E<sub>app</sub></span><span class="v" id="ar-eh">—</span></div>
+        <div class="stat"><span class="k">입력 E<sub>a</sub></span><span class="v" id="ar-ea">—</span></div>
+      </div>
+      <div class="sim-note">점은 ±4 % 측정 잡음을 넣은 가상 데이터, 실선은 그로브 모델이다. 저온 4점과 고온 4점에 각각 직선을 맞춰 겉보기 \(E_a\)를 구한다. 해볼 것: ① 760 Torr에서 꺾임을 보고, 압력을 0.25 Torr로 내리면 꺾임이 그래프 밖(1,100 °C 이상)으로 나가는 것을 확인. ② 몰분율 y는 곡선을 위아래로 옮길 뿐 꺾임 온도를 바꾸지 않는다(1차 반응이기 때문). ③ 유속을 올리면 고온 평탄부만 올라간다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="boundary">
+    <h2>경계층: \(\delta\)와 \(D\)를 정하는 장비 조건</h2>
+    <p>기체가 평판(서셉터, 웨이퍼) 위를 흐르면 벽에서 속도가 0이 되는 점성 때문에 벽 근처에 느린 층이 자란다. 평판 앞끝에서 거리 \(x\)만큼 떨어진 곳의 경계층 두께는 블라시우스 해로 근사한다.</p>
+    <div class="formula">$$\delta(x) \approx 5\sqrt{\frac{\nu\,x}{U}} = \frac{5x}{\sqrt{\mathrm{Re}_x}},\qquad \nu = \frac{\mu}{\rho} \propto \frac{T^{1.7}}{P},\qquad D = D_0\left(\frac{T}{273}\right)^{1.75}\frac{760}{P\,[\text{Torr}]}$$<div class="where">\(\nu\)는 동점성 계수, \(U\)는 주 기류 속도, \(\mathrm{Re}_x = Ux/\nu\)는 레이놀즈 수. 점성 \(\mu\)는 압력과 무관하고 밀도 \(\rho\)가 압력에 비례하므로 \(\nu \propto 1/P\)다. 따라서 \(h_g = D/\delta \propto P^{-1}\cdot P^{1/2} = P^{-1/2}\)로, 압력을 1 atm에서 0.25 Torr로 3,000분의 1로 낮추면 \(h_g\)는 약 55배 커진다(경계층이 반응기 치수에 막히면 그 이상). 이것이 LPCVD가 반응 제한이 되는 물리적 이유다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="평판 위 경계층의 성장과 기울인 서셉터: 하류로 갈수록 경계층이 두꺼워져 증착 속도가 줄고, 서셉터를 기울이면 유로가 좁아져 이를 보상">
+        <defs><marker id="c4-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-gas)"/></marker></defs>
+        <text x="20" y="22" class="lbl-b">수평 평판</text>
+        <rect x="40" y="170" width="360" height="16" class="m-si"/>
+        <path d="M40 170 C 120 140, 250 118, 400 104" class="s-acc" stroke-width="2.5"/>
+        <g class="arr-gas">
+          <line x1="20" y1="60" x2="60" y2="60" marker-end="url(#c4-ar)"/><line x1="20" y1="100" x2="60" y2="100" marker-end="url(#c4-ar)"/><line x1="20" y1="140" x2="60" y2="140" marker-end="url(#c4-ar)"/>
+        </g>
+        <g stroke="var(--text-dim)" stroke-width="1.4" fill="none">
+          <path d="M300 170 Q 304 140 320 118 L 360 118"/><line x1="300" y1="170" x2="300" y2="60"/>
+          <line x1="300" y1="150" x2="314" y2="150"/><line x1="300" y1="132" x2="322" y2="132"/><line x1="300" y1="100" x2="360" y2="100"/><line x1="300" y1="80" x2="360" y2="80"/>
+        </g>
+        <text x="370" y="96" class="lbl-sm">속도 분포</text>
+        <text x="140" y="132" class="lbl-acc">δ(x) ∝ √x</text>
+        <text x="40" y="208" class="lbl-sm">앞쪽: δ 얇음 → G 큼</text>
+        <text x="260" y="208" class="lbl-sm">뒤쪽: δ 두꺼움, 고갈</text>
+        <text x="40" y="236" class="lbl">→ 수송 제한이면 하류로 갈수록 얇아진다</text>
+        <text x="470" y="22" class="lbl-b">기울인 서셉터 (Eversteyn 보정)</text>
+        <path d="M470 40 L 840 40" class="s-line"/>
+        <path d="M470 180 L 840 120 L 840 136 L 470 196 Z" class="m-si"/>
+        <path d="M470 180 C 560 150, 700 132, 840 112" class="s-acc" stroke-width="2.5"/>
+        <g class="arr-gas"><line x1="480" y1="80" x2="520" y2="80" marker-end="url(#c4-ar)"/><line x1="480" y1="130" x2="520" y2="130" marker-end="url(#c4-ar)"/><line x1="760" y1="84" x2="830" y2="80" marker-end="url(#c4-ar)" stroke-width="3"/></g>
+        <text x="640" y="72" class="lbl-sm">유로가 좁아져 U↑ → δ↓</text>
+        <text x="470" y="226" class="lbl">고갈(C<tspan font-size="10" dy="3">g</tspan><tspan dy="-3">↓)을 h</tspan><tspan font-size="10" dy="3">g</tspan><tspan dy="-3">↑로 상쇄 → 길이 방향 균일</tspan></text>
+      </svg>
+      <figcaption><b>그림 9-4.</b> 경계층의 성장. 왼쪽: 평판 앞끝에서 멀어질수록 \(\delta\)가 \(\sqrt{x}\)로 두꺼워지고 반응물도 소모되어 수송 제한 증착은 하류에서 얇아진다. 오른쪽: 서셉터를 몇 도 기울여 유로를 좁히면 하류 유속이 빨라져 \(\delta\)가 얇아지고, 고갈을 상쇄한다(수평 APCVD·에피 반응기의 고전적 해법).</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-bl">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>수평 반응기의 경계층과 길이 방향 증착 분포</h3></div>
+      <div class="sim-body">
+        <div class="sim-view"><canvas id="bl-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>입구 유속 U₀ <output id="bl-U-out"></output></span><input type="range" id="bl-U" min="5" max="150" step="1" value="40"></label>
+          <label class="ctrl"><span>온도 <output id="bl-T-out"></output></span><input type="range" id="bl-T" min="550" max="1100" step="5" value="900"></label>
+          <label class="ctrl"><span>압력 <output id="bl-P-out"></output></span><input type="range" id="bl-P" min="0" max="2.881" step="0.01" value="2.881"></label>
+          <label class="ctrl"><span>서셉터 기울기 <output id="bl-a-out"></output></span><input type="range" id="bl-a" min="0" max="5" step="0.1" value="0"></label>
+          <button class="btn" id="bl-auto">균일도 최적 기울기 찾기</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">δ (입구 → 끝)</span><span class="v" id="bl-d">—</span></div>
+        <div class="stat"><span class="k">Da (중앙)</span><span class="v" id="bl-da">—</span></div>
+        <div class="stat"><span class="k">G 평균 (웨이퍼)</span><span class="v" id="bl-G">—</span></div>
+        <div class="stat"><span class="k">웨이퍼 구간 범위</span><span class="v" id="bl-u">—</span></div>
+        <div class="stat"><span class="k">반응물 이용률</span><span class="v" id="bl-eta">—</span></div>
+      </div>
+      <div class="sim-note">위: 반응기 측면(높이 4 cm, 길이 30 cm, 1 % SiH₄/N₂, 대기압 기준). 점은 기체 분자, 주황 곡선이 경계층 \(\delta(x)\). 아래: 길이 방향 증착 속도 \(G(x) = \frac{k_s h_g(x)}{k_s+h_g(x)} C(x)/N\), 반응물은 \(U H\,dC/dx = -k_{\text{eff}}C\)로 소모된다. 범위는 회색 띠(웨이퍼 한 장, x = 7.5–22.5 cm) 안에서 계산한다. 해볼 것: ① 900 °C 대기압에서 기울기 0이면 하류가 얇다. 버튼을 눌러 최적 기울기를 찾자. ② 온도를 600 °C로 내리면 Da가 1 아래로 내려가 기울기의 효과가 작아진다. ③ 900 °C에서 압력만 10 Torr로 낮추면 \(h_g\)가 커져 반응물이 입구에서 거의 다 소모된다 — 낮은 압력에서는 온도도 함께 낮춰야 반응 제한이 된다(LPCVD가 600–800 °C인 이유).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="sticking">
+    <h2>부착 계수: \(k_s\)를 분자 한 개의 확률로 읽기</h2>
+    <p>표면 반응 상수 \(k_s\)는 분자 수준의 확률로 다시 쓸 수 있다. 기체 운동론에서 단위 면적에 단위 시간당 부딪히는 분자 수는 헤르츠-크누센 플럭스 \(\Phi = \tfrac14 C\bar v\)이다(<a href="vacuum.html">2장</a>). 부딪힌 분자 가운데 막으로 남는 비율을 <span class="term">반응성 부착 계수</span><span class="en">(reactive sticking coefficient)</span> \(s\)라 하면 증착 플럭스는 \(s\Phi\)이고, 이를 \(k_s C_s\)와 비교하면 다음 관계가 나온다.</p>
+    <div class="formula">$$k_s = s\,\frac{\bar v}{4},\qquad \bar v = \sqrt{\frac{8kT}{\pi m}},\qquad \Phi = \frac{P}{\sqrt{2\pi m k T}}$$<div class="where">SiH₄(32 amu), 893 K: \(\bar v \approx 769\) m/s, \(\bar v/4 \approx 1.9\times10^{4}\) cm/s. 앞의 \(k_s = 0.28\) cm/s를 넣으면 \(s \approx 1.5\times10^{-5}\). 실레인 분자는 표면에 약 7만 번 부딪혀야 한 번 막이 된다. 반대로 SiH₂ 같은 래디컬은 \(s\)가 0.1–1에 이른다.</div></div>
+    <p>부착 계수는 <strong>피복성</strong>을 정하는 핵심 변수이기도 하다. \(s\)가 작은 분자는 트렌치 안에서 수없이 튀어 다니며 바닥까지 고르게 퍼지고, \(s\)가 큰 래디컬은 입구 근처에 먼저 붙어 오버행을 만든다. LPCVD 막이 PECVD 막보다 피복성이 좋은 이유가 여기 있다. 자세한 몬테카를로 해석은 <a href="conformality.html">13장</a>에서 한다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 200" role="img" aria-label="부착 계수가 작은 분자와 큰 래디컬의 표면 충돌 비교: 작은 s는 여러 번 튀고, 큰 s는 처음 닿는 곳에 붙는다">
+        <rect x="20" y="150" width="380" height="20" class="m-si"/>
+        <rect x="460" y="150" width="380" height="20" class="m-si"/>
+        <path d="M50 30 L 90 148 L 130 60 L 170 148 L 210 70 L 250 148 L 290 50 L 330 148" class="arr-gas" stroke-dasharray="5 3"/>
+        <circle cx="330" cy="142" r="7" class="m-poly" stroke="var(--text)" stroke-width="1"/>
+        <text x="40" y="22" class="lbl-b">SiH₄: s ≈ 10⁻⁵</text>
+        <text x="40" y="192" class="lbl-sm">수만 번 튄 뒤 반응 → 피복성 좋음, 온도 민감</text>
+        <path d="M520 30 L 600 148" class="arr-gas" stroke-dasharray="5 3"/>
+        <circle cx="600" cy="142" r="7" class="m-poly" stroke="var(--text)" stroke-width="1"/>
+        <path d="M700 30 L 760 148" class="arr-gas" stroke-dasharray="5 3"/>
+        <circle cx="760" cy="142" r="7" class="m-poly" stroke="var(--text)" stroke-width="1"/>
+        <text x="480" y="22" class="lbl-b">SiH₂·SiH₃ 래디컬: s ≈ 0.1–1</text>
+        <text x="480" y="192" class="lbl-sm">처음 닿는 곳에 붙음 → 피복성 나쁨, 수송 제한</text>
+      </svg>
+      <figcaption><b>그림 9-5.</b> 부착 계수의 직관. 같은 \(\Phi\)가 와도 \(s\)가 다섯 자리 차이 나면 증착 영역(반응 제한/수송 제한)과 피복성이 완전히 달라진다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-stick">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>부착 계수와 충돌 횟수: 트렌치 속 분자 몬테카를로</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="st-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>부착 계수 s <output id="st-s-out"></output></span><input type="range" id="st-s" min="-3" max="0" step="0.05" value="-1"></label>
+          <label class="ctrl"><span>종횡비 AR <output id="st-ar-out"></output></span><input type="range" id="st-ar" min="1" max="6" step="0.5" value="3"></label>
+          <label class="ctrl"><span>온도(플럭스 계산) <output id="st-T-out"></output></span><input type="range" id="st-T" min="300" max="900" step="10" value="620"></label>
+          <label class="ctrl"><span>SiH₄ 분압 <output id="st-p-out"></output></span><input type="range" id="st-p" min="-2" max="0.5" step="0.05" value="-0.6"></label>
+          <div class="cv-btns"><button class="btn primary" id="st-run">일시정지</button><button class="btn" id="st-clr">초기화</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">충돌 플럭스 Φ</span><span class="v" id="st-phi">—</span></div>
+        <div class="stat"><span class="k">k<sub>s</sub> = s·v̄/4</span><span class="v" id="st-ks">—</span></div>
+        <div class="stat"><span class="k">평탄면 G (이 s로)</span><span class="v" id="st-G">—</span></div>
+        <div class="stat"><span class="k">평균 충돌 횟수</span><span class="v" id="st-nb">—</span></div>
+        <div class="stat"><span class="k">바닥/입구 두께비</span><span class="v" id="st-sc">—</span></div>
+      </div>
+      <div class="sim-note">분자는 위에서 코사인 분포로 들어와 벽에 닿을 때마다 확률 \(s\)로 붙고, 아니면 코사인 분포로 다시 튄다(애니메이션은 s ≥ 10⁻³만; 실제 SiH₄의 1.5×10⁻⁵이면 거의 완벽히 고르다). 막대는 벽 위치별 누적 증착량. 해볼 것: s = 1에서는 입구가 두껍고 바닥이 얇다. s를 0.01로 내리면 바닥/입구 비가 1에 가까워지지만, 평탄면 증착 속도 G도 100배 느려진다 — 피복성과 속도의 교환.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="kinetics">
+    <h2>표면 반응 속도식: 랭뮤어-힌셜우드와 반응 차수</h2>
+    <p>그로브 모델은 \(F_2 = k_s C_s\)라는 1차 반응을 가정했다. 실제 표면 반응은 분자가 먼저 빈 자리에 흡착한 다음 반응하므로, 흡착 자리가 차면 속도가 포화한다. 이것을 <span class="term">랭뮤어-힌셜우드 모델</span><span class="en">(Langmuir–Hinshelwood)</span>로 쓴다. 부산물 H₂가 자리를 차지하면 반응을 늦춘다(<strong>수소 억제</strong>).</p>
+    <div class="formula">$$R = k_r\,\theta_A,\qquad \theta_A = \frac{K_A p_A}{1 + K_A p_A + K_H p_{H_2}},\qquad K_A = K_0\,e^{E_{\text{ads}}/kT}$$<div class="where">\(\theta_A\)는 SiH₄ 흡착 피복률, \(K_A\)는 흡착 평형 상수(흡착 에너지 \(E_{\text{ads}}\)가 클수록, 온도가 낮을수록 큼). 분압이 낮으면 \(R \approx k_r K_A p_A\) (1차), 높으면 \(R \to k_r\) (0차). LPCVD 실레인의 측정 반응 차수가 0.5–1 사이로 나오는 것은 TF-300 조건이 그 중간에 있기 때문이다.</div></div>
+
+    <div class="sim" id="sim-lh">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>흡착 자리 격자와 반응 차수</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="lh-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>SiH₄ 분압 <output id="lh-p-out"></output></span><input type="range" id="lh-p" min="-2" max="0.7" step="0.02" value="-0.6"></label>
+          <label class="ctrl"><span>H₂ 분압 <output id="lh-h-out"></output></span><input type="range" id="lh-h" min="0" max="1" step="0.01" value="0"></label>
+          <label class="ctrl"><span>온도 <output id="lh-T-out"></output></span><input type="range" id="lh-T" min="560" max="700" step="2" value="620"></label>
+          <label class="ctrl"><span>흡착 에너지 <output id="lh-E-out"></output></span><input type="range" id="lh-E" min="0.2" max="1.4" step="0.05" value="0.8"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">θ (이론)</span><span class="v" id="lh-th">—</span></div>
+        <div class="stat"><span class="k">θ (격자 MC)</span><span class="v" id="lh-mc">—</span></div>
+        <div class="stat"><span class="k">국소 반응 차수 n</span><span class="v" id="lh-n">—</span></div>
+        <div class="stat"><span class="k">증착 속도</span><span class="v" id="lh-G">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽 격자: 빈 자리(회색), 흡착 SiH₄(분홍), 흡착 H(회청), 반응해 Si가 된 순간(노랑 깜빡임). 매 단계 흡착·탈착·반응을 확률로 처리하는 몬테카를로로, 평균 피복률이 위 식과 일치한다. 오른쪽: 증착 속도 대 분압(로그-로그)과 기울기(반응 차수). 해볼 것: ① 분압을 올리면 기울기가 1에서 0으로 줄어든다. ② H₂ 분압을 0.5 Torr로 올리면 속도가 줄어든다 — 배치 퍼니스 하류에서 H₂가 쌓이는 효과(<a href="reactor.html">10장</a>). ③ 온도를 올리면 \(K_A\)가 작아져 1차 쪽으로 간다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="gasphase">
+    <h2>기상 반응과 입자: 막이 아니라 가루가 될 때</h2>
+    <p>실레인은 표면에 닿지 않아도 충분히 뜨거우면 기체 안에서 분해한다. \(\text{SiH}_4 \to \text{SiH}_2 + \text{H}_2\) (약 2.4–2.6 eV)로 생긴 SiH₂는 다른 SiH₄에 끼어들어 Si₂H₆, Si₃H₈… 로 사슬을 키우고, 결국 수 nm–µm 크기의 <span class="term">기상 핵생성</span><span class="en">(homogeneous nucleation)</span> 입자가 된다. 입자는 웨이퍼에 떨어져 결함이 되고, 막에 섞여 들어가면 거칠고 밀도가 낮은 막을 만든다. 기상 반응은 활성화 에너지가 표면 반응보다 크고, 분자끼리의 충돌이 필요하므로 <strong>온도와 압력이 높을수록, 체류 시간이 길수록</strong> 급격히 늘어난다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 220" role="img" aria-label="표면 반응(불균일 핵생성)과 기상 반응(균일 핵생성)의 비교: 기상에서 사슬이 자라 입자가 되어 웨이퍼에 떨어진다">
+        <rect x="20" y="170" width="820" height="30" class="m-si"/>
+        <rect x="20" y="160" width="400" height="10" class="m-poly"/>
+        <text x="30" y="24" class="lbl-b">표면 반응 (원하는 길)</text>
+        <circle cx="80" cy="70" r="8" class="m-gas"/><circle cx="150" cy="100" r="8" class="m-gas"/><circle cx="230" cy="60" r="8" class="m-gas"/>
+        <path d="M80 80 L 100 155 M150 110 L 160 155 M230 70 L 260 155" class="dash"/>
+        <text x="30" y="150" class="lbl-sm">조밀하고 매끈한 막</text>
+        <line x1="440" y1="20" x2="440" y2="200" class="s-line" stroke-dasharray="3 4"/>
+        <text x="460" y="24" class="lbl-b">기상 반응 (피해야 할 길)</text>
+        <circle cx="500" cy="60" r="8" class="m-gas"/><text x="514" y="64" class="lbl-sm">SiH₄ → SiH₂ + H₂</text>
+        <g transform="translate(620,90)"><circle r="7" class="m-gas"/><circle cx="12" cy="3" r="7" class="m-gas"/><circle cx="5" cy="13" r="7" class="m-poly"/></g>
+        <text x="650" y="96" class="lbl-sm">Si₂H₆, Si₃H₈ … 사슬</text>
+        <g transform="translate(760,120)"><circle r="9" class="m-poly"/><circle cx="14" cy="4" r="9" class="m-poly"/><circle cx="4" cy="16" r="9" class="m-poly"/><circle cx="-10" cy="10" r="8" class="m-poly"/></g>
+        <path d="M770 150 L 770 166" class="arr"/>
+        <rect x="740" y="160" width="60" height="10" class="m-poly" opacity="0.6"/>
+        <text x="600" y="150" class="lbl-sm">입자 낙하 → 결함</text>
+        <text x="460" y="214" class="lbl-sm">온도↑·압력↑·체류 시간↑·분압↑ 에서 급증</text>
+      </svg>
+      <figcaption><b>그림 9-6.</b> 표면 반응(불균일 핵생성)과 기상 반응(균일 핵생성). LPCVD가 낮은 압력에서 도는 두 번째 이유가 이것이다. 분자 간 충돌이 드물어 기상 사슬 반응이 억제된다.</figcaption>
+    </figure>
+
+    <div class="formula">$$\mathcal{R} \equiv \frac{\text{기상 소비}}{\text{표면 소비}} = \frac{k_g\,C\,L}{k_{\text{eff}}\,C} = \frac{k_g L}{k_{\text{eff}}},\qquad k_g = A_g\,e^{-E_g/kT}\cdot\frac{P}{P + P_{1/2}}\cdot\left(\frac{p_A}{p_{\text{ref}}}\right)^{1/2}$$<div class="where">\(L\)은 웨이퍼 위 기체층 두께(약 1 cm), \(E_g \approx 2.5\) eV, \(P/(P+P_{1/2})\)는 단분자 분해의 압력 의존(낮은 압력에서는 충돌로 활성화되지 못해 느림, \(P_{1/2}\) ≈ 50 Torr). \(\mathcal{R}\)이 0.1을 넘으면 입자 관리가 필요하고, 1을 넘으면 막 대신 분말이 쌓인다(교육용 지표).</div></div>
+
+    <div class="sim" id="sim-gas">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>기상 핵생성 위험 지도: 온도 × 압력</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>온도 <output id="gp-T-out"></output></span><input type="range" id="gp-T" min="450" max="950" step="5" value="620"></label>
+          <label class="ctrl"><span>전체 압력 <output id="gp-P-out"></output></span><input type="range" id="gp-P" min="-1.3" max="2.881" step="0.01" value="-0.6"></label>
+          <label class="ctrl"><span>SiH₄ 몰분율 <output id="gp-y-out"></output></span><input type="range" id="gp-y" min="-3" max="0" step="0.01" value="0"></label>
+          <div class="ctrl"><span>프리셋</span><div class="cv-btns">
+            <button class="btn" data-gp="620,0.25,1">LPCVD 폴리</button>
+            <button class="btn" data-gp="700,760,0.01">APCVD 700 °C</button>
+            <button class="btn" data-gp="850,760,0.01">APCVD 850 °C</button>
+            <button class="btn" data-gp="650,2,1">고압 LPCVD</button>
+          </div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">기상/표면 비 𝓡</span><span class="v" id="gp-R">—</span></div>
+        <div class="stat"><span class="k">판정</span><span class="v" id="gp-j">—</span></div>
+        <div class="stat"><span class="k">표면 증착 속도</span><span class="v" id="gp-G">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽 위 상자: 기체 분자(분홍)가 무작위로 움직이며, 확률 \(\mathcal{R}/(1+\mathcal{R})\)로 기체 안에서 뭉쳐 입자(노랑)가 되고, 나머지는 바닥(웨이퍼)에 막으로 쌓인다. 아래 지도: 몰분율을 고정했을 때 \(\log_{10}\mathcal{R}\) (색), 점선은 𝓡 = 0.1, 실선은 𝓡 = 1. 해볼 것: APCVD에서 온도를 700→850 °C로 올리면 𝓡이 한 자리 이상 커진다. 같은 온도라도 압력을 0.25 Torr로 낮추면 안전 영역으로 들어간다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="chemistry">
+    <h2>실레인·DCS·TEOS의 반응 경로</h2>
+    <p>FX 퍼니스에서 쓰는 세 가지 대표 LPCVD 화학은 같은 그로브 틀에 들어가지만 활성화 에너지, 몰분율, 막 원자 밀도가 다르다. 각각의 TF-300 기준 레시피와 반응 경로를 정리하면 다음과 같다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="세 가지 LPCVD 반응 경로: 실레인 폴리실리콘, DCS와 암모니아 질화막, TEOS 산화막">
+        <rect x="10" y="10" width="270" height="230" rx="8" class="box"/>
+        <rect x="295" y="10" width="270" height="230" rx="8" class="box"/>
+        <rect x="580" y="10" width="270" height="230" rx="8" class="box"/>
+        <rect x="10" y="10" width="270" height="34" rx="8" class="m-poly"/><text x="145" y="32" text-anchor="middle" class="lbl-w">폴리실리콘 · 620 °C · 0.25 Torr</text>
+        <rect x="295" y="10" width="270" height="34" rx="8" class="m-nitride"/><text x="430" y="32" text-anchor="middle" class="lbl-w">질화막 · 760 °C · 0.25 Torr</text>
+        <rect x="580" y="10" width="270" height="34" rx="8" class="m-oxide"/><text x="715" y="32" text-anchor="middle" class="lbl-w">TEOS 산화막 · 700 °C · 0.3 Torr</text>
+        <text x="24" y="70" class="lbl">SiH₄(g) → SiH₄*(흡착)</text>
+        <text x="24" y="96" class="lbl">SiH₄* → Si(s) + 2H₂(g)</text>
+        <text x="24" y="122" class="lbl-sm">기상: SiH₄ → SiH₂ + H₂</text>
+        <text x="24" y="150" class="lbl-sm">E<tspan font-size="9" dy="3">a</tspan><tspan dy="-3"> ≈ 1.7 eV, s ≈ 10⁻⁵</tspan></text>
+        <text x="24" y="176" class="lbl-sm">580 °C 이하 비정질, 이상 다결정</text>
+        <text x="24" y="202" class="lbl-acc">≈ 9 nm/min</text>
+        <text x="24" y="226" class="lbl-sm">H₂ 억제, 고갈 → 온도 경사</text>
+        <text x="309" y="70" class="lbl">3SiH₂Cl₂ + 4NH₃</text>
+        <text x="309" y="96" class="lbl">→ Si₃N₄ + 6HCl + 6H₂</text>
+        <text x="309" y="122" class="lbl-sm">NH₃ 과잉(1:5)으로 Si 과잉 방지</text>
+        <text x="309" y="150" class="lbl-sm">E<tspan font-size="9" dy="3">a</tspan><tspan dy="-3"> ≈ 1.8 eV</tspan></text>
+        <text x="309" y="176" class="lbl-sm">부산물 NH₄Cl → 배기 가열 필요</text>
+        <text x="309" y="202" class="lbl-acc">≈ 2.5 nm/min</text>
+        <text x="309" y="226" class="lbl-sm">인장 응력 ≈ 1 GPa, 굴절률 2.0</text>
+        <text x="594" y="70" class="lbl">Si(OC₂H₅)₄ → SiO₂</text>
+        <text x="594" y="96" class="lbl">+ 유기 부산물(C₂H₄, H₂O …)</text>
+        <text x="594" y="122" class="lbl-sm">흡착 후 에톡시기 순차 분해</text>
+        <text x="594" y="150" class="lbl-sm">E<tspan font-size="9" dy="3">a</tspan><tspan dy="-3"> ≈ 1.9 eV, s ≈ 10⁻⁴</tspan></text>
+        <text x="594" y="176" class="lbl-sm">피복성 우수(흐름 같은 등각)</text>
+        <text x="594" y="202" class="lbl-acc">≈ 10 nm/min</text>
+        <text x="594" y="226" class="lbl-sm">액체 원료 → 기화기·라인 가열</text>
+      </svg>
+      <figcaption><b>그림 9-7.</b> FX 퍼니스의 세 가지 대표 LPCVD 반응 경로(TF-300 교육용 값). 셋 다 1.7–1.9 eV의 반응 제한이라 웨이퍼 온도가 두께를 정하고, 질화막은 부산물 염화암모늄이, TEOS는 액체 원료 공급이 장비 설계의 숙제다. 기체 공급은 <a href="../../infra/chapters/gas.html">InfraBook 특수 가스</a> 참고.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-chem">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>세 화학의 증착 속도 비교 (반응 제한 LPCVD)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ch-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>온도 <output id="ch-T-out"></output></span><input type="range" id="ch-T" min="550" max="850" step="2" value="700"></label>
+          <label class="ctrl"><span>압력 배율 (기준 대비) <output id="ch-P-out"></output></span><input type="range" id="ch-P" min="0.2" max="4" step="0.05" value="1"></label>
+          <label class="ctrl"><span>목표 두께 <output id="ch-th-out"></output></span><input type="range" id="ch-th" min="10" max="500" step="5" value="100"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">폴리 G / 시간</span><span class="v" id="ch-o1">—</span></div>
+        <div class="stat"><span class="k">질화막 G / 시간</span><span class="v" id="ch-o2">—</span></div>
+        <div class="stat"><span class="k">TEOS G / 시간</span><span class="v" id="ch-o3">—</span></div>
+        <div class="stat"><span class="k">온도 민감도 (%/K)</span><span class="v" id="ch-o4">—</span></div>
+      </div>
+      <div class="sim-note">세 곡선은 각 화학의 기준 몰분율과 압력(× 배율)에서 그로브 모델로 계산했다(\(h_g \gg k_s\)). 표시된 사각형은 TF-300 기준점. 압력 배율은 1차 반응이라 G를 그대로 비례시키지만, 실제로는 2절의 랭뮤어 포화와 7절의 기상 반응 때문에 배율을 무작정 올릴 수 없다. 해볼 것: 질화막을 폴리 속도(9 nm/min)로 올리려면 몇 °C가 필요한가? (약 830 °C — 열 예산 문제로 실제로는 쓰지 않는다)</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="growth">
+    <h2>증착 속도 계산과 막 구조: 폴리실리콘 예</h2>
+    <p>CVD 막의 두께는 \(d = G\,(t - t_{\text{inc}})\)로 계산한다. \(t_{\text{inc}}\)는 <span class="term">잠복 시간</span><span class="en">(incubation time)</span>으로, 산화막 위에서 첫 핵이 생기기까지의 지연이다(핵생성 이론은 <a href="nucleation.html">6장</a>). 같은 화학이라도 온도는 속도와 함께 <strong>막 구조</strong>를 바꾼다. SiH₄ LPCVD는 약 580 °C 아래에서는 원자가 자리를 찾을 시간이 없어 비정질 Si(a-Si)로, 그 위에서는 (110) 방향 기둥 모양 결정립을 가진 다결정으로 자란다. 비정질로 증착한 뒤 600 °C 근처에서 고상 결정화하면 결정립이 훨씬 커지므로, 게이트·3D 낸드 채널은 이 경로를 쓰기도 한다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 200" role="img" aria-label="증착 온도에 따른 실리콘 막 구조: 비정질, 혼합, 기둥형 다결정">
+        <g transform="translate(20,20)">
+          <rect x="0" y="120" width="250" height="30" class="m-si"/><rect x="0" y="110" width="250" height="10" class="m-oxide"/>
+          <rect x="0" y="40" width="250" height="70" class="m-poly" opacity="0.75"/>
+          <text x="125" y="20" text-anchor="middle" class="lbl-b">≤ 575 °C : 비정질</text>
+          <text x="125" y="78" text-anchor="middle" class="lbl-w">a-Si (매끈)</text>
+          <text x="125" y="170" text-anchor="middle" class="lbl-sm">표면 거칠기 ≈ 0.3 nm</text>
+        </g>
+        <g transform="translate(305,20)">
+          <rect x="0" y="120" width="250" height="30" class="m-si"/><rect x="0" y="110" width="250" height="10" class="m-oxide"/>
+          <rect x="0" y="40" width="250" height="70" class="m-poly" opacity="0.75"/>
+          <path d="M30 110 L 34 70 M70 110 L 66 60 M120 110 L 124 74 M170 110 L 166 64 M215 110 L 219 72" stroke="var(--text)" stroke-width="1" opacity="0.6"/>
+          <text x="125" y="20" text-anchor="middle" class="lbl-b">≈ 590 °C : 혼합</text>
+          <text x="125" y="170" text-anchor="middle" class="lbl-sm">아래 결정, 위 비정질</text>
+        </g>
+        <g transform="translate(590,20)">
+          <rect x="0" y="120" width="250" height="30" class="m-si"/><rect x="0" y="110" width="250" height="10" class="m-oxide"/>
+          <path d="M0 110 L0 46 L 20 40 L 42 48 L 64 38 L 90 46 L 112 36 L 138 46 L 160 40 L 184 48 L 206 38 L 230 46 L 250 40 L 250 110 Z" class="m-poly"/>
+          <path d="M20 110 L 20 40 M42 110 L 42 48 M64 110 L 64 38 M90 110 L 90 46 M112 110 L 112 36 M138 110 L 138 46 M160 110 L 160 40 M184 110 L 184 48 M206 110 L 206 38 M230 110 L 230 46" stroke="var(--text)" stroke-width="1" opacity="0.55"/>
+          <text x="125" y="20" text-anchor="middle" class="lbl-b">≥ 610 °C : 기둥형 다결정</text>
+          <text x="125" y="170" text-anchor="middle" class="lbl-sm">결정립 20–50 nm, (110) 우선 방위</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 9-8.</b> SiH₄ LPCVD 실리콘의 증착 온도별 구조. 온도는 증착 속도(아레니우스)와 표면 확산 거리를 함께 키워 결정성·거칠기를 바꾼다. TF-300 표준 620 °C는 다결정 영역이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-grow">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>LPCVD 실리콘 성장 단면: 잠복기·속도·결정 구조</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>온도 <output id="gr-T-out"></output></span><input type="range" id="gr-T" min="540" max="700" step="1" value="620"></label>
+          <label class="ctrl"><span>SiH₄ 압력 <output id="gr-P-out"></output></span><input type="range" id="gr-P" min="0.1" max="1" step="0.01" value="0.25"></label>
+          <label class="ctrl"><span>목표 두께 <output id="gr-d-out"></output></span><input type="range" id="gr-d" min="20" max="300" step="5" value="100"></label>
+          <div class="ctrl"><span>바닥막</span><div class="seg" id="gr-sub"><button data-value="ox" class="on">SiO₂</button><button data-value="si">Si (HF 세정)</button></div></div>
+          <div class="cv-btns"><button class="btn primary" id="gr-run">처음부터 증착</button><button class="btn" id="gr-reset">초기화</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">증착 속도 G</span><span class="v" id="gr-G">—</span></div>
+        <div class="stat"><span class="k">잠복 시간</span><span class="v" id="gr-ti">—</span></div>
+        <div class="stat"><span class="k">목표까지 시간</span><span class="v" id="gr-tt">—</span></div>
+        <div class="stat"><span class="k">경과 / 두께</span><span class="v" id="gr-now">—</span></div>
+        <div class="stat"><span class="k">구조</span><span class="v" id="gr-st">—</span></div>
+      </div>
+      <div class="sim-note">모델: \(G\)는 랭뮤어-힌셜우드(6절)로 압력 의존을 넣은 그로브 반응 제한 식, \(t_{\text{inc}} = t_0 e^{E_i/kT}\) (SiO₂ 위 620 °C에서 약 40 s, \(E_i\) ≈ 2 eV; HF 세정 Si 위에서는 약 1/10). 결정 구조는 온도로, 결정립 폭은 \(\propto e^{(T-893)/45}\)로 그렸다. 해볼 것: 560 °C로 내리면 비정질이 되지만 속도가 1/4로 떨어지고 잠복기가 길어진다. 100 nm에 걸리는 시간을 비교하자.</div>
+    </div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>CVD는 수송(대류·경계층 확산)과 반응(흡착·표면 반응·탈착)의 직렬 과정이며, 느린 쪽이 증착 속도를 정한다.</li>
+      <li>그로브 모델: \(G = \frac{k_s h_g}{k_s+h_g}\frac{C_g}{N}\). \(\mathrm{Da} = k_s/h_g\)가 작으면 반응 제한(온도 민감, 유동 둔감), 크면 수송 제한(유동·형상 민감, 온도 둔감).</li>
+      <li>TF-300 LPCVD 폴리(620 °C, 0.25 Torr): \(k_s \approx 0.28\) cm/s, \(h_g \approx 700\) cm/s, G ≈ 9 nm/min, 온도 민감도 약 2.5 %/K.</li>
+      <li>\(h_g = D/\delta \propto P^{-1/2}\)이고 \(D \propto 1/P\)이므로 낮은 압력은 수송을 빠르게 해 반응 제한을 만든다. 이것이 대량 배치 LPCVD의 근거다.</li>
+      <li>아레니우스 그림의 꺾임 온도에서 \(k_s = h_g\). 겉보기 활성화 에너지 \(E_a/(1+\mathrm{Da})\)로 영역을 판정한다.</li>
+      <li>\(k_s = s\bar v/4\): SiH₄의 반응성 부착 계수는 약 10⁻⁵. 작은 \(s\)는 피복성을, 큰 \(s\)(래디컬)는 빠르지만 비등각 증착을 준다.</li>
+      <li>랭뮤어-힌셜우드 흡착은 반응 차수를 1에서 0으로 바꾸고, H₂는 자리를 빼앗아 속도를 늦춘다.</li>
+      <li>기상 반응은 고온·고압·긴 체류 시간에서 급증해 입자를 만든다. 낮은 압력은 이를 억제하는 두 번째 이유다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 어떤 CVD 공정에서 웨이퍼 온도를 20 K 올렸더니 증착 속도가 2 % 늘었고, 운반 기체 유량을 두 배로 했더니 40 % 늘었다. 이 공정은 어느 영역에 있는가?</p><div class="opts">
+        <button class="opt">표면 반응 제한</button>
+        <button class="opt" data-correct>기체 수송 제한</button>
+        <button class="opt">기상 반응 제한</button>
+        <button class="opt">판단할 수 없다</button>
+      </div><div class="quiz-exp">온도에 둔감하고 유속(경계층 두께)에 민감한 것이 수송 제한의 표지다. 유속 2배 → \(\delta \propto U^{-1/2}\)로 약 0.71배 → \(h_g\) 약 1.41배, 측정된 40 %와 맞는다. 반응 제한이라면 20 K에 수십 % 변했을 것이다.</div></div>
+
+      <div class="quiz-q"><p>2. TF-300 LPCVD 폴리(SiH₄ 0.25 Torr, 893 K)에서 \(C_g = 2.7\times10^{15}\) cm⁻³, \(k_s = 0.28\) cm/s, \(h_g = 700\) cm/s, \(N = 5\times10^{22}\) cm⁻³이다. 증착 속도는?</p><div class="opts">
+        <button class="opt">약 0.9 nm/min</button>
+        <button class="opt" data-correct>약 9 nm/min</button>
+        <button class="opt">약 90 nm/min</button>
+        <button class="opt">약 2.3 µm/min</button>
+      </div><div class="quiz-exp">\(k_{\text{eff}} = (0.28\cdot700)/(700.28) \approx 0.28\) cm/s. \(G = 0.28\times2.7\times10^{15}/5\times10^{22} = 1.5\times10^{-8}\) cm/s = 0.15 nm/s ≈ 9 nm/min. \(h_g\)는 거의 영향이 없다(반응 제한).</div></div>
+
+      <div class="quiz-q"><p>3. 압력을 760 Torr에서 0.25 Torr로 낮추면 그로브 모델의 \(h_g\)는 대략 어떻게 되는가? (경계층이 반응기에 막히지 않는다고 가정)</p><div class="opts">
+        <button class="opt">약 3,000배 감소</button>
+        <button class="opt">변하지 않음</button>
+        <button class="opt" data-correct>약 55배 증가</button>
+        <button class="opt">약 3,000배 증가</button>
+      </div><div class="quiz-exp">\(D \propto 1/P\)로 3,040배, \(\delta \propto \sqrt{\nu} \propto P^{-1/2}\)로 약 55배 두꺼워진다. \(h_g = D/\delta \propto P^{-1/2}\) → \(\sqrt{3040} \approx 55\)배 증가.</div></div>
+
+      <div class="quiz-q"><p>4. 아레니우스 그림의 저온 직선에서 구한 기울기가 1.7 eV, 고온 쪽은 0.08 eV였다. 고온 쪽 증착 속도를 올리는 가장 효과적인 방법은?</p><div class="opts">
+        <button class="opt">웨이퍼 온도를 50 K 더 올린다</button>
+        <button class="opt" data-correct>유속을 높이거나 압력을 낮춰 경계층 수송을 키운다</button>
+        <button class="opt">활성화 에너지가 낮은 표면 처리를 한다</button>
+        <button class="opt">웨이퍼 간격을 좁힌다</button>
+      </div><div class="quiz-exp">고온 쪽은 수송 제한(\(E_{\text{app}}\) ≈ 0.08 eV)이다. 속도는 \(h_g C_g\)로 정해지므로 \(\delta\)를 얇게(유속↑) 또는 \(D\)를 크게(압력↓, H₂ 운반 기체) 하거나 반응물 분압을 높여야 한다. 온도나 표면 반응을 바꿔도 거의 소용없다.</div></div>
+
+      <div class="quiz-q"><p>5. SiH₄(893 K)의 \(\bar v/4 \approx 1.9\times10^4\) cm/s이다. \(k_s = 0.28\) cm/s라면 반응성 부착 계수는?</p><div class="opts">
+        <button class="opt">약 0.15</button>
+        <button class="opt">약 1.5×10⁻³</button>
+        <button class="opt" data-correct>약 1.5×10⁻⁵</button>
+        <button class="opt">약 1.5×10⁻⁸</button>
+      </div><div class="quiz-exp">\(s = k_s/(\bar v/4) = 0.28/1.9\times10^4 \approx 1.5\times10^{-5}\). 분자 하나가 약 7만 번 부딪혀야 막이 된다. 이 작은 \(s\)가 LPCVD 폴리의 좋은 피복성과 반응 제한 특성을 함께 설명한다.</div></div>
+
+      <div class="quiz-q"><p>6. 랭뮤어-힌셜우드 모델에서 SiH₄ 분압을 두 배로 했더니 증착 속도가 1.3배가 되었다. 국소 반응 차수와 그 의미는?</p><div class="opts">
+        <button class="opt">약 1.0 — 흡착 자리가 거의 비어 있다</button>
+        <button class="opt" data-correct>약 0.38 — 흡착 자리가 상당 부분 차 있다</button>
+        <button class="opt">약 0 — 수송 제한이다</button>
+        <button class="opt">약 2 — 기상 반응이 우세하다</button>
+      </div><div class="quiz-exp">\(n = \ln 1.3/\ln 2 \approx 0.38\). 차수가 1보다 작으면 \(K_A p\)가 1보다 커서 자리가 상당히 차 있다는 뜻이다(\(n = 1-\theta\) 근사로 \(\theta \approx 0.6\)). 수송 제한이라면 분압에 1차로 비례한다(\(h_g C_g\)).</div></div>
+
+      <div class="quiz-q"><p>7. APCVD 실레인 공정에서 막이 뿌옇고 챔버에 갈색 가루가 쌓인다. 가장 적절한 조치는?</p><div class="opts">
+        <button class="opt">온도를 올려 표면 반응을 더 빠르게 한다</button>
+        <button class="opt">SiH₄ 몰분율을 높인다</button>
+        <button class="opt" data-correct>온도·SiH₄ 분압을 낮추거나 압력을 낮춰 기상 반응을 억제한다</button>
+        <button class="opt">유속을 줄여 체류 시간을 늘린다</button>
+      </div><div class="quiz-exp">가루는 기상 핵생성의 징후다. 기상 반응은 \(E_g \approx 2.5\) eV로 표면 반응보다 온도에 더 민감하고 압력·분압·체류 시간에 따라 늘어난다. 온도·분압·압력을 낮추고 체류 시간을 줄이는(유속↑) 쪽이 맞다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const KB = 8.617e-5, KBJ = 1.380649e-23, TORR = 133.322, AMU = 1.6605e-27;
+  /* ---------------- 공통 그로브 모델 ---------------- */
+  const CHEM = {
+    poly: { name: "SiH₄ 폴리", Ea: 1.7, Tref: 893.15, Pref: 0.25, yref: 1, Gref: 9, N: 5.0e22, D0: 0.15, M: 32, col: "poly" },
+    nit:  { name: "DCS 질화막", Ea: 1.8, Tref: 1033.15, Pref: 0.25, yref: 1 / 6, Gref: 2.5, N: 4.0e22, D0: 0.09, M: 101, col: "nitride" },
+    teos: { name: "TEOS 산화막", Ea: 1.9, Tref: 973.15, Pref: 0.3, yref: 1, Gref: 10, N: 2.3e22, D0: 0.05, M: 208, col: "oxide" },
+  };
+  const CAR = { N2: { f: 1, mu: 1.78e-5, M: 28 }, H2: { f: 3.5, mu: 0.88e-5, M: 2 } };
+  const conc = (P, y, T) => y * P * TORR / (KBJ * T) * 1e-6;               // cm^-3
+  const Dc = (c, T, P, car) => c.D0 * CAR[car].f * Math.pow(T / 273, 1.75) * 760 / P; // cm2/s
+  const nuK = (T, P, car) => { const C = CAR[car]; const mu = C.mu * Math.pow(T / 300, 0.7); const rho = P * TORR * C.M * 1e-3 / (8.314 * T); return mu / rho * 1e4; };
+  const delta = (T, P, car, U, x, dmax) => Math.min(5 * Math.sqrt(nuK(T, P, car) * x / U), dmax || 5);
+  const hg = (c, T, P, car, U, x, dmax) => Dc(c, T, P, car) / delta(T, P, car, U, x, dmax);
+  for (const k in CHEM) {
+    const c = CHEM[k], C = conc(c.Pref, c.yref, c.Tref), keff = c.Gref * 1e-7 / 60 * c.N / C, h = hg(c, c.Tref, c.Pref, "N2", 30, 5);
+    c.ksref = 1 / (1 / keff - 1 / h);
+  }
+  const ks = (c, T) => c.ksref * Math.exp(-c.Ea / KB * (1 / T - 1 / c.Tref));
+  const toNm = (cmps) => cmps * 1e7 * 60;  // cm/s → nm/min
+  function grove(c, T, P, y, car, U, x) {
+    const k = ks(c, T), h = hg(c, T, P, car, U || 30, x || 5), Cg = conc(P, y, T);
+    const keff = k * h / (k + h);
+    return { k, h, Cg, keff, G: toNm(keff * Cg / c.N), da: k / h, cs: 1 / (1 + k / h) };
+  }
+  const logP = (v) => Math.pow(10, v);
+  const fmtP = (P) => P >= 10 ? P.toFixed(0) + " Torr" : P >= 1 ? P.toFixed(1) + " Torr" : P >= 0.1 ? P.toFixed(2) + " Torr" : (P * 1000).toFixed(0) + " mTorr";
+  const fmtG = (g) => g >= 1000 ? (g / 1000).toPrecision(3) + " µm/min" : g >= 1 ? g.toPrecision(3) + " nm/min" : (g * 10).toPrecision(2) + " Å/min";
+  const fmtT = (s) => !isFinite(s) ? "—" : s < 60 ? s.toFixed(0) + " s" : s < 3600 ? Math.floor(s / 60) + " min " + Math.round(s % 60) + " s" : (s / 3600).toFixed(1) + " h";
+  const sci = (x, d) => { if (!isFinite(x) || x === 0) return "0"; const e = Math.floor(Math.log10(Math.abs(x))); return (x / Math.pow(10, e)).toFixed(d == null ? 2 : d) + "×10<sup>" + e + "</sup>"; };
+  const setCls = (id, cls) => { const el = $(id); if (el) el.className = "v " + cls; };
+  const font = (px, mono) => px + "px " + getComputedStyle(document.body).getPropertyValue(mono ? "--mono" : "--font");
+  function regime(da) { return da < 0.1 ? ["반응 제한", "ok"] : da > 10 ? ["수송 제한", "bad"] : ["혼합", "warn"]; }
+
+  /* =============================================================
+     1) 그로브 계산기
+     ============================================================= */
+  (function () {
+    if (!$("gv-cv")) return;
+    const chem = TF.seg("gv-chem", draw), car = TF.seg("gv-car", draw);
+    const gT = TF.range("gv-T", (v) => v + " °C", draw);
+    const gP = TF.range("gv-P", (v) => fmtP(logP(v)), draw);
+    const gy = TF.range("gv-y", (v) => (logP(v) * 100).toPrecision(3) + " %", draw);
+    const gU = TF.range("gv-U", (v) => v + " cm/s", draw);
+    document.querySelectorAll("[data-gv]").forEach((b) => b.addEventListener("click", () => {
+      const [c, T, P, y] = b.dataset.gv.split(",");
+      chem.set(c, false); gT.set(+T); gP.set(Math.log10(+P)); gy.set(Math.log10(+y));
+    }));
+    const cv = TF.canvas($("gv-cv"), (ctx, w, h) => {
+      const P = TF.palette(), c = CHEM[chem()], T = gT() + 273.15, Pt = logP(gP()), y = logP(gy());
+      const r = grove(c, T, Pt, y, car(), gU(), 5), d = delta(T, Pt, car(), gU(), 5);
+      // left panel: concentration profile
+      const L = { x: 16, y: 18, w: Math.min(w * 0.58, w - 150), h: h - 50 };
+      const wx = L.x + 26, blx = wx + L.w * 0.55, ex = L.x + L.w;
+      ctx.fillStyle = P.si; ctx.fillRect(L.x, L.y, 20, L.h);
+      ctx.fillStyle = P[c.col]; ctx.fillRect(L.x + 20, L.y, 6, L.h);
+      ctx.fillStyle = P.surface; ctx.globalAlpha = 0.7; ctx.fillRect(wx, L.y, blx - wx, L.h); ctx.globalAlpha = 1;
+      ctx.strokeStyle = P.faint; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(blx, L.y); ctx.lineTo(blx, L.y + L.h); ctx.stroke(); ctx.setLineDash([]);
+      const Yc = (f) => L.y + L.h - 10 - f * (L.h - 30);
+      ctx.strokeStyle = P.accent; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(wx, Yc(r.cs)); ctx.lineTo(blx, Yc(1)); ctx.lineTo(ex, Yc(1)); ctx.stroke(); ctx.lineWidth = 1;
+      ctx.font = font(12); ctx.fillStyle = P.text; ctx.textAlign = "left";
+      ctx.fillText("Cg", ex - 22, Yc(1) - 6);
+      ctx.fillText("Cs = " + (r.cs * 100).toPrecision(3) + " % Cg", wx + 4, r.cs > 0.8 ? Yc(r.cs) + 16 : Yc(r.cs) - 6);
+      ctx.fillStyle = P.dim; ctx.textAlign = "center";
+      ctx.fillText("δ = " + (d >= 1 ? d.toFixed(2) + " cm" : (d * 10).toFixed(2) + " mm") + (d >= 4.999 ? " (반응기 한계)" : ""), (wx + blx) / 2, L.y + L.h + 16);
+      ctx.fillText("주 기류", (blx + ex) / 2, L.y + L.h + 16);
+      // molecules drifting (static scatter, density ~ C)
+      ctx.fillStyle = P.gas;
+      let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      for (let i = 0; i < 160; i++) {
+        const fx = rnd(), xx = wx + fx * (ex - wx), loc = xx < blx ? r.cs + (1 - r.cs) * (xx - wx) / (blx - wx) : 1;
+        if (rnd() < loc) { ctx.beginPath(); ctx.arc(xx, L.y + 6 + rnd() * (L.h - 12), 2.2, 0, 7); ctx.fill(); }
+      }
+      // right panel: resistance bars (log)
+      const R = { x: L.x + L.w + 24, y: L.y + 10, w: w - (L.x + L.w + 24) - 14, h: L.h - 20 };
+      const r1 = 1 / r.h, r2 = 1 / r.k, lo = -4, hi = 4;
+      const bh = (v) => TF.clamp((Math.log10(v) - lo) / (hi - lo), 0.02, 1) * R.h;
+      const bw = Math.min(46, R.w / 3);
+      [[r1, P.accent, "1/hg"], [r2, P.accent2, "1/ks"]].forEach(([v, col, lab], i) => {
+        const x = R.x + i * (bw + 16) + 4, hh = bh(v);
+        ctx.fillStyle = col; ctx.globalAlpha = 0.8; ctx.fillRect(x, R.y + R.h - hh, bw, hh); ctx.globalAlpha = 1;
+        ctx.fillStyle = P.text; ctx.textAlign = "center"; ctx.font = font(12);
+        ctx.fillText(lab, x + bw / 2, R.y + R.h + 16);
+        ctx.font = font(11, true); ctx.fillStyle = P.dim;
+        ctx.fillText(TF.fmt(v, 2), x + bw / 2, R.y + R.h - hh - 6);
+      });
+      ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "left";
+      ctx.fillText("저항 s/cm (로그)", R.x, R.y - 2);
+      TF.stat("gv-ks", TF.fmt(r.k, 3) + " cm/s");
+      TF.stat("gv-hg", TF.fmt(r.h, 3) + " cm/s");
+      TF.stat("gv-da", TF.fmt(r.da, 2));
+      TF.stat("gv-cs", (r.cs * 100).toPrecision(3) + " %");
+      TF.stat("gv-G", fmtG(r.G));
+      const [rg, cls] = regime(r.da); TF.stat("gv-reg", rg); setCls("gv-reg", cls);
+    }, { aspect: 0.56, minHeight: 260, maxHeight: 400 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     2) 아레니우스 그림
+     ============================================================= */
+  (function () {
+    if (!$("ar-cv")) return;
+    const chem = TF.seg("ar-chem", draw);
+    const gP = TF.range("ar-P", (v) => fmtP(logP(v)), draw);
+    const gy = TF.range("ar-y", (v) => (logP(v) * 100).toPrecision(3) + " %", draw);
+    const gU = TF.range("ar-U", (v) => v + " cm/s", draw);
+    $("ar-asym").addEventListener("change", draw); $("ar-fam").addEventListener("change", draw);
+    let noise = []; const newNoise = () => { noise = Array.from({ length: 14 }, () => 1 + 0.04 * TF.randn()); };
+    newNoise(); $("ar-meas").addEventListener("click", () => { newNoise(); draw(); });
+    const TMIN = 450, TMAX = 1100;
+    function fit(pts) { // ln G vs 1/T → Ea
+      const n = pts.length; let sx = 0, sy = 0, sxx = 0, sxy = 0;
+      pts.forEach(([x, yv]) => { sx += x; sy += yv; sxx += x * x; sxy += x * yv; });
+      const b = (n * sxy - sx * sy) / (n * sxx - sx * sx); return -b * KB;
+    }
+    const cv = TF.canvas($("ar-cv"), (ctx, w, h) => {
+      const Pl = TF.palette(), c = CHEM[chem()], Pt = logP(gP()), y = logP(gy()), U = gU();
+      const curve = (P, yy) => { const d = []; for (let i = 0; i <= 120; i++) { const T = TMIN + (TMAX - TMIN) * i / 120 + 273.15; d.push([1000 / T, grove(c, T, P, yy, "N2", U, 5).G]); } return d; };
+      const main = curve(Pt, y);
+      const series = [];
+      if ($("ar-fam").checked) [760, 10, 1, 0.25].forEach((P, i) => series.push({ data: curve(P, P > 100 ? 0.01 : 1), color: Pl.series[(i + 2) % 6], width: 1.2, dash: [3, 3] }));
+      if ($("ar-asym").checked) {
+        const ka = [], ha = [];
+        for (let i = 0; i <= 60; i++) { const T = TMIN + (TMAX - TMIN) * i / 60 + 273.15, r = grove(c, T, Pt, y, "N2", U, 5); ka.push([1000 / T, toNm(r.k * r.Cg / c.N)]); ha.push([1000 / T, toNm(r.h * r.Cg / c.N)]); }
+        series.push({ data: ka, color: Pl.accent2, width: 1.4, dash: [6, 4] }, { data: ha, color: Pl.warn, width: 1.4, dash: [6, 4] });
+      }
+      series.push({ data: main, color: Pl.accent, width: 2.6 });
+      const all = main.map((p) => p[1]);
+      let ymin = Math.min(...all), ymax = Math.max(...all);
+      ymin = Math.pow(10, Math.floor(Math.log10(ymin) - 0.3)); ymax = Math.pow(10, Math.ceil(Math.log10(ymax) + 0.3));
+      if (ymax / ymin < 1e3) ymin = ymax / 1e3;
+      // T*: bisection on ks = hg
+      let lo = 300, hi = 1800, Ts = NaN;
+      const f = (T) => Math.log(ks(c, T) / hg(c, T, Pt, "N2", U, 5));
+      if (f(lo) < 0 && f(hi) > 0) { for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; f(m) < 0 ? (lo = m) : (hi = m); } Ts = (lo + hi) / 2; }
+      // synthetic measurement points
+      const pts = [];
+      for (let i = 0; i < 14; i++) { const T = TMIN + 15 + (TMAX - TMIN - 30) * i / 13 + 273.15; pts.push([1000 / T, grove(c, T, Pt, y, "N2", U, 5).G * noise[i]]); }
+      const box = { x: 62, y: 14, w: w - 80, h: h - 60 };
+      const ch = TF.chart(ctx, box, {
+        x: [1000 / (TMAX + 273.15), 1000 / (TMIN + 273.15)], y: [ymin, ymax], logY: true, series,
+        xLabel: "1000/T (K⁻¹)   — 위 눈금: °C", yLabel: "증착 속도 G (nm/min)",
+        vlines: isFinite(Ts) && Ts > TMIN + 273 && Ts < TMAX + 273 ? [{ x: 1000 / Ts, color: Pl.bad, label: "T* " + (Ts - 273.15).toFixed(0) + " °C" }] : [],
+        points: pts.map(([x, g]) => ({ x, y: g, color: Pl.text, r: 3 })),
+        xFmt: (v) => v.toFixed(2),
+      });
+      ctx.font = font(10, true); ctx.fillStyle = Pl.dim; ctx.textAlign = "center";
+      [500, 600, 700, 800, 900, 1000, 1100].forEach((tc) => { const px = ch.X(1000 / (tc + 273.15)); if (px >= box.x && px <= box.x + box.w) ctx.fillText(tc + "", px, box.y + 10); });
+      const lowPts = pts.slice(0, 4).map(([x, g]) => [x / 1000, Math.log(g)]), hiPts = pts.slice(-4).map(([x, g]) => [x / 1000, Math.log(g)]);
+      TF.stat("ar-ts", isFinite(Ts) ? (Ts - 273.15).toFixed(0) + " °C" : "범위 밖");
+      TF.stat("ar-el", fit(lowPts).toFixed(2) + " eV");
+      TF.stat("ar-eh", fit(hiPts).toFixed(2) + " eV");
+      TF.stat("ar-ea", c.Ea.toFixed(2) + " eV");
+    }, { aspect: 0.6, minHeight: 280, maxHeight: 440 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     3) 수평 반응기 경계층
+     ============================================================= */
+  (function () {
+    if (!$("bl-cv")) return;
+    const c = CHEM.poly, Lr = 30, H0 = 4, Y = 0.01;
+    const gU = TF.range("bl-U", (v) => v + " cm/s", calc);
+    const gT = TF.range("bl-T", (v) => v + " °C", calc);
+    const gP = TF.range("bl-P", (v) => fmtP(logP(v)), calc);
+    const ga = TF.range("bl-a", (v) => v.toFixed(1) + "°", calc);
+    let prof = null;
+    function solve(Udeg) {
+      const T = gT() + 273.15, P = logP(gP()), tan = Math.tan(Udeg * Math.PI / 180), U0 = gU();
+      const n = 120, dx = Lr / n, k = ks(c, T), D = Dc(c, T, P, "N2");
+      let C = conc(P, Y, T); const C0 = C; const out = [];
+      for (let i = 0; i <= n; i++) {
+        const x = i * dx, H = Math.max(0.5, H0 - x * tan), U = U0 * H0 / H;
+        const d = Math.min(5 * Math.sqrt(nuK(T, P, "N2") * (x + 1) / U), H * 0.6);
+        const h = D / d, keff = k * h / (k + h);
+        out.push({ x, H, d, h, k, G: toNm(keff * C / c.N), C: C / C0 });
+        C = Math.max(0, C - keff * C * dx / (U0 * H0));
+      }
+      return out;
+    }
+    function rng(p) { const g = p.filter((q) => q.x >= 7.5 && q.x <= 22.5).map((q) => q.G); const mx = Math.max(...g), mn = Math.min(...g); return (mx - mn) / (mx + mn); }
+    $("bl-auto").addEventListener("click", () => {
+      let best = 0, bv = Infinity; for (let a = 0; a <= 5.0001; a += 0.05) { const v = rng(solve(a)); if (v < bv) { bv = v; best = a; } }
+      ga.set(Math.round(best * 10) / 10);
+    });
+    const parts = Array.from({ length: 90 }, () => ({ x: Math.random() * Lr, y: Math.random() }));
+    const cv = TF.canvas($("bl-cv"), (ctx, w, h) => {
+      if (!prof) return;
+      const Pl = TF.palette(), top = { x: 50, y: 10, w: w - 66, h: h * 0.42 }, sx = (x) => top.x + x / Lr * top.w, sy = (yy) => top.y + top.h * (1 - yy / H0);
+      // channel
+      ctx.strokeStyle = Pl.axis; ctx.beginPath(); ctx.moveTo(sx(0), sy(H0)); ctx.lineTo(sx(Lr), sy(H0)); ctx.stroke();
+      ctx.fillStyle = Pl.si; ctx.beginPath(); ctx.moveTo(sx(0), sy(H0 - prof[0].H)); prof.forEach((q) => ctx.lineTo(sx(q.x), sy(H0 - q.H))); ctx.lineTo(sx(Lr), top.y + top.h + 8); ctx.lineTo(sx(0), top.y + top.h + 8); ctx.closePath(); ctx.fill();
+      // boundary layer
+      ctx.fillStyle = Pl.warn; ctx.globalAlpha = 0.12; ctx.beginPath(); ctx.moveTo(sx(0), sy(H0 - prof[0].H));
+      prof.forEach((q) => ctx.lineTo(sx(q.x), sy(H0 - q.H + q.d))); for (let i = prof.length - 1; i >= 0; i--) ctx.lineTo(sx(prof[i].x), sy(H0 - prof[i].H)); ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = Pl.warn; ctx.lineWidth = 2; ctx.beginPath(); prof.forEach((q, i) => { const X = sx(q.x), Yy = sy(H0 - q.H + q.d); i ? ctx.lineTo(X, Yy) : ctx.moveTo(X, Yy); }); ctx.stroke(); ctx.lineWidth = 1;
+      // particles
+      ctx.fillStyle = Pl.gas;
+      parts.forEach((p) => { const i = Math.min(prof.length - 1, Math.round(p.x / Lr * (prof.length - 1))), q = prof[i]; const yy = (H0 - q.H) + p.y * q.H; if (Math.random() < 0.15 + 0.85 * q.C) { ctx.beginPath(); ctx.arc(sx(p.x), sy(yy), 2, 0, 7); ctx.fill(); } });
+      ctx.font = font(11); ctx.fillStyle = Pl.dim; ctx.textAlign = "left"; ctx.fillText("기체 →", top.x + 4, top.y + 14);
+      ctx.fillText("경계층 δ(x)", sx(Lr * 0.55), sy(H0 - prof[66].H + prof[66].d) - 6);
+      // bottom chart
+      const gmax = Math.max(...prof.map((q) => q.G)) * 1.15 || 1;
+      TF.chart(ctx, { x: 50, y: top.y + top.h + 22, w: w - 66, h: h - top.h - 70 }, {
+        x: [0, Lr], y: [0, gmax], xLabel: "서셉터 위치 x (cm)", yLabel: "G (nm/min)",
+        series: [{ data: prof.map((q) => [q.x, q.G]), color: Pl.accent, width: 2.4 }, { data: prof.map((q) => [q.x, q.C * gmax / 1.15]), color: Pl.dim, width: 1.2, dash: [4, 4] }],
+        bands: [{ x0: 7.5, x1: 22.5, color: "rgba(127,127,127,0.10)" }],
+      });
+      ctx.fillStyle = Pl.dim; ctx.font = font(11); ctx.textAlign = "right"; ctx.fillText("점선: 반응물 농도 C/C₀ (비례 눈금), 회색 띠: 300 mm 웨이퍼 한 장 구간", w - 18, top.y + top.h + 36);
+    }, { aspect: 0.62, minHeight: 330, maxHeight: 470 });
+    function calc() {
+      prof = solve(ga());
+      const mid = prof[60], sl = prof.filter((q) => q.x >= 7.5 && q.x <= 22.5).map((q) => q.G), mean = sl.reduce((a, b) => a + b, 0) / sl.length;
+      TF.stat("bl-d", (prof[2].d * 10).toFixed(1) + " → " + (prof[prof.length - 1].d * 10).toFixed(1) + " mm");
+      TF.stat("bl-da", TF.fmt(mid.k / mid.h, 2));
+      TF.stat("bl-G", fmtG(mean));
+      const u = rng(prof) * 100; TF.stat("bl-u", "±" + u.toFixed(1) + " %"); setCls("bl-u", u < 3 ? "ok" : u < 10 ? "warn" : "bad");
+      TF.stat("bl-eta", ((1 - prof[prof.length - 1].C) * 100).toFixed(1) + " %");
+      cv.redraw();
+    }
+    calc();
+    TF.loop($("bl-cv"), (dt) => {
+      if (!prof) return;
+      parts.forEach((p) => {
+        const i = Math.min(prof.length - 1, Math.round(p.x / Lr * (prof.length - 1))), q = prof[i];
+        const yAbs = p.y * q.H, frac = Math.min(1, yAbs / Math.max(q.d, 0.05)), u = gU() * H0 / q.H * (frac < 1 ? (1.5 * frac - 0.5 * frac * frac * frac) : 1);
+        p.x += u * dt * 0.25; p.y = TF.clamp(p.y + (Math.random() - 0.5) * 0.04, 0.02, 0.98);
+        if (p.x > Lr) { p.x = 0; p.y = Math.random(); }
+      });
+      cv.redraw();
+    });
+  })();
+
+  /* =============================================================
+     4) 부착 계수 몬테카를로 (트렌치)
+     ============================================================= */
+  (function () {
+    if (!$("st-cv")) return;
+    const gs = TF.range("st-s", (v) => TF.fmt(logP(v), 2), reset);
+    const gar = TF.range("st-ar", (v) => v.toFixed(1), reset);
+    const gT = TF.range("st-T", (v) => v + " °C", stats);
+    const gp = TF.range("st-p", (v) => fmtP(logP(v)), stats);
+    let running = true; $("st-run").addEventListener("click", () => { running = !running; $("st-run").textContent = running ? "일시정지" : "재생"; });
+    $("st-clr").addEventListener("click", reset);
+    const NB = 40; let bins, nStick, nHits, mols;
+    function reset() { bins = new Float64Array(NB + 10); nStick = 0; nHits = 0; mols = []; stats(); }
+    // geometry: trench width 1, depth AR; walls: left x=0, right x=1, bottom y=AR; top opening y=0. bins: 0..NB-1 along left wall+bottom+right wall path
+    function launch() { const x = Math.random(); const th = Math.asin(2 * Math.random() - 1); return { x, y: 0, vx: Math.sin(th), vy: Math.cos(th), trail: [[x, 0]], age: 0 }; }
+    function cosDir(nx, ny) { const th = Math.asin(2 * Math.random() - 1); const tx = -ny, ty = nx; return [nx * Math.cos(th) + tx * Math.sin(th), ny * Math.cos(th) + ty * Math.sin(th)]; }
+    function step(m) {
+      const AR = gar(), s = logP(gs());
+      // ray-cast to walls
+      let t = Infinity, wall = -1;
+      if (m.vx < 0) { const tt = -m.x / m.vx; if (tt < t) { t = tt; wall = 0; } }
+      if (m.vx > 0) { const tt = (1 - m.x) / m.vx; if (tt < t) { t = tt; wall = 1; } }
+      if (m.vy > 0) { const tt = (AR - m.y) / m.vy; if (tt < t) { t = tt; wall = 2; } }
+      if (m.vy < 0) { const tt = -m.y / m.vy; if (tt < t) { t = tt; wall = 3; } }
+      m.x += m.vx * t; m.y += m.vy * t; m.trail.push([m.x, m.y]); if (m.trail.length > 8) m.trail.shift();
+      if (wall === 3 && m.y <= 1e-9) return "escape";
+      nHits++;
+      if (Math.random() < s) {
+        // bin: left wall depth, bottom, right wall
+        let b;
+        if (wall === 0) b = Math.floor(m.y / AR * 15);
+        else if (wall === 2) b = 15 + Math.floor(m.x * 10);
+        else b = 25 + Math.floor((AR - m.y) / AR * 15);
+        bins[TF.clamp(b, 0, NB - 1)]++; nStick++; return "stick";
+      }
+      const n = wall === 0 ? [1, 0] : wall === 1 ? [-1, 0] : [0, -1];
+      const d = cosDir(n[0], n[1]); m.vx = d[0]; m.vy = d[1];
+      m.x = TF.clamp(m.x, 1e-9, 1 - 1e-9); m.y = TF.clamp(m.y, 1e-9, AR - 1e-9);
+      return "bounce";
+    }
+    function sc() {
+      const top = (bins[0] + bins[1] + bins[39] + bins[38]) / 4, bot = (bins[19] + bins[20] + bins[21]) / 3;
+      return top > 0 ? bot / top : NaN;
+    }
+    function stats() {
+      const T = gT() + 273.15, p = logP(gp()), m = 32 * AMU, s = logP(gs());
+      const vbar = Math.sqrt(8 * KBJ * T / (Math.PI * m)) * 100; // cm/s
+      const phi = p * TORR / Math.sqrt(2 * Math.PI * m * KBJ * T) * 1e-4; // cm^-2 s^-1
+      TF.stat("st-phi", sci(phi, 2) + " cm⁻²s⁻¹");
+      TF.stat("st-ks", TF.fmt(s * vbar / 4, 3) + " cm/s");
+      TF.stat("st-G", fmtG(toNm(s * phi / 5e22)));
+      TF.stat("st-nb", nStick > 20 ? TF.fmt(nHits / nStick, 3) + " 회 (1/s = " + TF.fmt(1 / s, 3) + ")" : "1/s = " + TF.fmt(1 / s, 3));
+      const r = sc(); TF.stat("st-sc", nStick > 200 && isFinite(r) ? r.toFixed(2) : "집계 중");
+    }
+    reset();
+    const cv = TF.canvas($("st-cv"), (ctx, w, h) => {
+      const Pl = TF.palette(), AR = gar();
+      const sc2 = Math.min((h - 30) / (AR + 0.6), (w * 0.5) / 2.2), ox = w * 0.28 - sc2 / 2, oy = 14 + sc2 * 0.4;
+      const X = (x) => ox + x * sc2, Yv = (y) => oy + y * sc2;
+      ctx.fillStyle = Pl.si; ctx.fillRect(ox - sc2 * 0.6, oy, sc2 * 0.6, AR * sc2 + 10); ctx.fillRect(X(1), oy, sc2 * 0.6, AR * sc2 + 10); ctx.fillRect(ox - sc2 * 0.6, Yv(AR), sc2 * 2.2, 10);
+      // deposited thickness along walls
+      const mx = Math.max(1, ...bins), th = (v) => v / mx * sc2 * 0.18;
+      ctx.fillStyle = Pl.poly;
+      for (let b = 0; b < 15; b++) { const y0 = Yv(b / 15 * AR), y1 = Yv((b + 1) / 15 * AR); ctx.fillRect(X(0), y0, th(bins[b]), y1 - y0 + 0.5); }
+      for (let b = 0; b < 10; b++) { const x0 = X(b / 10), x1 = X((b + 1) / 10); ctx.fillRect(x0, Yv(AR) - th(bins[15 + b]), x1 - x0 + 0.5, th(bins[15 + b])); }
+      for (let b = 0; b < 15; b++) { const y0 = Yv(AR - (b + 1) / 15 * AR), y1 = Yv(AR - b / 15 * AR); ctx.fillRect(X(1) - th(bins[25 + b]), y0, th(bins[25 + b]), y1 - y0 + 0.5); }
+      // molecules
+      ctx.strokeStyle = Pl.gas; ctx.fillStyle = Pl.gas; ctx.globalAlpha = 0.5;
+      mols.forEach((m) => { ctx.beginPath(); m.trail.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Yv(y)) : ctx.moveTo(X(x), Yv(y)))); ctx.stroke(); });
+      ctx.globalAlpha = 1;
+      mols.forEach((m) => { ctx.beginPath(); ctx.arc(X(m.x), Yv(m.y), 3, 0, 7); ctx.fill(); });
+      // right: profile chart
+      const prof = []; for (let b = 0; b < 15; b++) prof.push([(b + 0.5) / 15 * AR, (bins[b] + bins[39 - b]) / 2]);
+      const bot = (bins[19] + bins[20]) / 2; prof.push([AR, bot]);
+      const pm = Math.max(1, ...prof.map((p) => p[1]));
+      TF.chart(ctx, { x: w * 0.6, y: 14, w: w * 0.38 - 10, h: h - 60 }, { x: [0, AR], y: [0, 1.1], xLabel: "깊이 (폭 단위)", yLabel: "", series: [{ data: prof.map(([x, v]) => [x, v / pm]), color: Pl.poly, width: 2.4 }], yFmt: (v) => v.toFixed(1) });
+      ctx.font = font(11); ctx.fillStyle = Pl.dim; ctx.textAlign = "left"; ctx.fillText("측벽 상대 두께", w * 0.6 + 4, 26);
+    }, { aspect: 0.62, minHeight: 280, maxHeight: 420 });
+    let acc = 0;
+    TF.loop($("st-cv"), (dt) => {
+      if (!running) return;
+      const s = logP(gs());
+      acc += dt;
+      // fast background stats for low s
+      const batch = s < 0.01 ? 60 : 20;
+      for (let k = 0; k < batch; k++) { const m = launch(); for (let i = 0; i < 4000; i++) { const r = step(m); if (r !== "bounce") break; } }
+      if (acc > 0.06) { acc = 0; if (mols.length < 14) mols.push(launch()); }
+      mols = mols.filter((m) => { const r = step(m); return r === "bounce"; });
+      stats(); cv.redraw();
+    });
+  })();
+
+  /* =============================================================
+     5) 랭뮤어-힌셜우드 격자
+     ============================================================= */
+  (function () {
+    if (!$("lh-cv")) return;
+    const gp = TF.range("lh-p", (v) => fmtP(logP(v)), calc);
+    const gh = TF.range("lh-h", (v) => v.toFixed(2) + " Torr", calc);
+    const gT = TF.range("lh-T", (v) => v + " °C", calc);
+    const gE = TF.range("lh-E", (v) => v.toFixed(2) + " eV", calc);
+    const NX = 22, NY = 14, grid = new Uint8Array(NX * NY), flash = new Float32Array(NX * NY); // 0 empty 1 A 2 H
+    // K_A chosen so that K_A*0.25 Torr = 1.5 at 620°C with Eads 0.8 eV
+    const KA = (T, E) => (1.5 / 0.25) * Math.exp(E / KB * (1 / T - 1 / 893.15));
+    const KH = (T) => 2.0 * Math.exp(0.6 / KB * (1 / T - 1 / 893.15));
+    const theta = (p, ph, T, E) => { const a = KA(T, E) * p; return a / (1 + a + KH(T) * ph); };
+    // kr normalized: at 620°C, 0.25 Torr, ph=0, Eads=0.8 → 9 nm/min
+    const th0 = theta(0.25, 0, 893.15, 0.8);
+    // k_r ∝ exp(-2.5 eV/kT): 낮은 피복률에서 겉보기 Ea = 2.5 − 0.8 = 1.7 eV
+    const rate = (p, ph, T, E) => 9 / th0 * Math.exp(-2.5 / KB * (1 / T - 1 / 893.15)) * theta(p, ph, T, E);
+    let mcAvg = 0, mcN = 0;
+    function calc() { mcAvg = 0; mcN = 0; cv.redraw(); }
+    const cv = TF.canvas($("lh-cv"), (ctx, w, h) => {
+      const Pl = TF.palette(), p = logP(gp()), ph = gh(), T = gT() + 273.15, E = gE();
+      const gw = Math.min(w * 0.44, (h - 30) * NX / NY), cs = gw / NX, ox = 10, oy = 18;
+      for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+        const v = grid[j * NX + i];
+        ctx.fillStyle = v === 1 ? Pl.gas : v === 2 ? Pl.blue : Pl.border;
+        ctx.globalAlpha = v ? 0.9 : 0.5; ctx.beginPath(); ctx.arc(ox + (i + 0.5) * cs, oy + (j + 0.5) * cs, cs * 0.38, 0, 7); ctx.fill();
+        if (flash[j * NX + i] > 0) { ctx.globalAlpha = flash[j * NX + i]; ctx.fillStyle = Pl.poly; ctx.beginPath(); ctx.arc(ox + (i + 0.5) * cs, oy + (j + 0.5) * cs, cs * 0.46, 0, 7); ctx.fill(); }
+      }
+      ctx.globalAlpha = 1; ctx.font = font(11); ctx.fillStyle = Pl.dim; ctx.textAlign = "left";
+      ctx.fillText("표면 흡착 자리 (MC)", ox, 12);
+      // chart: rate vs p (log-log)
+      const data = []; for (let i = 0; i <= 80; i++) { const pp = Math.pow(10, -2 + 2.7 * i / 80); data.push([pp, rate(pp, ph, T, E)]); }
+      const ys = data.map((d) => d[1]);
+      const cx = ox + gw + 56;
+      TF.chart(ctx, { x: cx, y: 14, w: w - cx - 12, h: h - 60 }, {
+        x: [0.01, 5], y: [Math.pow(10, Math.floor(Math.log10(Math.min(...ys)))), Math.pow(10, Math.ceil(Math.log10(Math.max(...ys))))], logX: true, logY: true,
+        xLabel: "SiH₄ 분압 (Torr)", series: [{ data, color: Pl.accent, width: 2.4 }],
+        points: [{ x: p, y: rate(p, ph, T, E), color: Pl.bad, r: 5 }], xFmt: (v) => String(v),
+      });
+      ctx.font = font(11); ctx.fillStyle = Pl.dim; ctx.textAlign = "left"; ctx.fillText("G (nm/min)", cx + 6, 26);
+    }, { aspect: 0.5, minHeight: 250, maxHeight: 360 });
+    function stats() {
+      const p = logP(gp()), ph = gh(), T = gT() + 273.15, E = gE();
+      const th = theta(p, ph, T, E), r1 = rate(p, ph, T, E), r2 = rate(p * 1.05, ph, T, E);
+      TF.stat("lh-th", th.toFixed(3));
+      TF.stat("lh-mc", mcN > 5 ? (mcAvg / mcN).toFixed(3) : "…");
+      TF.stat("lh-n", (Math.log(r2 / r1) / Math.log(1.05)).toFixed(2));
+      TF.stat("lh-G", fmtG(r1));
+    }
+    let tick = 0;
+    TF.loop($("lh-cv"), () => {
+      const p = logP(gp()), ph = gh(), T = gT() + 273.15, E = gE();
+      const a = KA(T, E) * p, bH = KH(T) * ph;
+      // per-step probabilities with detailed balance: adsorb ∝ a, desorb ∝ 1, H adsorb ∝ bH, H desorb ∝ 1; reaction small
+      const scale = 0.25 / Math.max(1, a, bH);
+      const pA = a * scale, pD = scale, pH = bH * scale, pR = 0.02 * scale;
+      for (let n = 0; n < NX * NY; n++) {
+        const i = (Math.random() * NX * NY) | 0, v = grid[i];
+        const u = Math.random();
+        if (v === 0) { if (u < pA) grid[i] = 1; else if (u < pA + pH) grid[i] = 2; }
+        else if (v === 1) { if (u < pD) grid[i] = 0; else if (u < pD + pR) { grid[i] = 0; flash[i] = 1; } }
+        else if (u < pD) grid[i] = 0;
+      }
+      for (let i = 0; i < flash.length; i++) flash[i] = Math.max(0, flash[i] - 0.06);
+      let occ = 0; for (let i = 0; i < grid.length; i++) if (grid[i] === 1) occ++;
+      if (++tick > 30) { mcAvg += occ / grid.length; mcN++; if (mcN > 300) { mcAvg *= 0.5; mcN *= 0.5; } }
+      stats(); cv.redraw();
+    });
+  })();
+
+  /* =============================================================
+     6) 기상 핵생성 지도
+     ============================================================= */
+  (function () {
+    if (!$("gp-cv")) return;
+    const c = CHEM.poly;
+    const gT = TF.range("gp-T", (v) => v + " °C", draw);
+    const gP = TF.range("gp-P", (v) => fmtP(logP(v)), draw);
+    const gy = TF.range("gp-y", (v) => (logP(v) * 100).toPrecision(3) + " %", () => { img = null; draw(); });
+    document.querySelectorAll("[data-gp]").forEach((b) => b.addEventListener("click", () => { const [T, P, y] = b.dataset.gp.split(","); gy.set(Math.log10(+y)); gT.set(+T); gP.set(Math.log10(+P)); }));
+    // R = A * exp(-Eg/kT) * P/(P+50) * sqrt(pA/0.25) * L / keff ; calibrate R=1e-3 at LPCVD ref
+    const Eg = 2.5, L = 1;
+    const kgRaw = (T, P, pA) => Math.exp(-Eg / KB * (1 / T - 1 / 893.15)) * (P / (P + 50)) * Math.sqrt(pA / 0.25);
+    const keffAt = (T, P, y) => grove(c, T, P, y, "H2", 30, 5).keff;
+    const A = 1e-4 * keffAt(893.15, 0.25, 1) / (kgRaw(893.15, 0.25, 0.25) * L);
+    const Rf = (T, P, y) => A * kgRaw(T, P, y * P) * L / keffAt(T, P, y);
+    let img = null, imgKey = "";
+    const parts = []; let film = new Float32Array(60), dust = [];
+    const cv = TF.canvas($("gp-cv"), (ctx, w, h) => {
+      const Pl = TF.palette(), T = gT() + 273.15, P = logP(gP()), y = logP(gy());
+      const R = Rf(T, P, y);
+      // top animation box
+      const bx = { x: 12, y: 8, w: w - 24, h: h * 0.3 };
+      ctx.strokeStyle = Pl.border; ctx.strokeRect(bx.x, bx.y, bx.w, bx.h);
+      ctx.fillStyle = Pl.gas; parts.forEach((p) => { ctx.beginPath(); ctx.arc(bx.x + p.x * bx.w, bx.y + p.y * bx.h, 2.2, 0, 7); ctx.fill(); });
+      ctx.fillStyle = Pl.poly; dust.forEach((d) => { ctx.beginPath(); ctx.arc(bx.x + d.x * bx.w, bx.y + d.y * bx.h, 2 + d.r, 0, 7); ctx.fill(); });
+      const fm = Math.max(4, ...film);
+      for (let i = 0; i < 60; i++) { const hh = film[i] / fm * 10; ctx.fillRect(bx.x + i * bx.w / 60, bx.y + bx.h - hh, bx.w / 60 + 0.5, hh); }
+      // map
+      const box = { x: 62, y: bx.y + bx.h + 14, w: w - 78, h: h - bx.h - 64 };
+      const key = box.w + "x" + box.h + gy() + TF.isDark();
+      const T0 = 450, T1 = 950, lp0 = -1.3, lp1 = 2.881;
+      if (!img || imgKey !== key) {
+        const nx = Math.ceil(box.w / 4), ny = Math.ceil(box.h / 4);
+        img = []; imgKey = key;
+        for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) {
+          const TT = T0 + (T1 - T0) * (i + 0.5) / nx + 273.15, PP = Math.pow(10, lp1 - (lp1 - lp0) * (j + 0.5) / ny);
+          img.push([i, j, nx, ny, Math.log10(Rf(TT, PP, y))]);
+        }
+      }
+      img.forEach(([i, j, nx, ny, lr]) => {
+        const t = TF.clamp((lr + 4) / 6, 0, 1);
+        ctx.fillStyle = lr > 0 ? Pl.bad : lr > -1 ? Pl.warn : Pl.ok;
+        ctx.globalAlpha = 0.12 + 0.55 * (lr > 0 ? Math.min(1, 0.4 + lr / 4) : lr > -1 ? 0.5 : t * 0.6);
+        const x0 = Math.floor(box.x + i * box.w / nx), x1 = Math.floor(box.x + (i + 1) * box.w / nx), y0 = Math.floor(box.y + j * box.h / ny), y1 = Math.floor(box.y + (j + 1) * box.h / ny);
+        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+      });
+      ctx.globalAlpha = 1;
+      // contours R=0.1 and 1
+      const cont = (lev) => { const d = []; for (let i = 0; i <= 60; i++) { const TT = T0 + (T1 - T0) * i / 60 + 273.15; let lo = lp0, hi = lp1; const g = (lp) => Math.log10(Rf(TT, Math.pow(10, lp), y)) - lev; if (g(lo) > 0 || g(hi) < 0) continue; for (let k = 0; k < 40; k++) { const m = (lo + hi) / 2; g(m) < 0 ? (lo = m) : (hi = m); } d.push([TT - 273.15, Math.pow(10, (lo + hi) / 2)]); } return d; };
+      TF.chart(ctx, box, {
+        x: [T0, T1], y: [Math.pow(10, lp0), Math.pow(10, lp1)], logY: true, xLabel: "온도 (°C)", yLabel: "압력 (Torr)",
+        series: [{ data: cont(-1), color: Pl.text, width: 1.2, dash: [5, 4] }, { data: cont(0), color: Pl.text, width: 2 }],
+        points: [{ x: gT(), y: P, color: Pl.accent, r: 6, label: "𝓡 = " + TF.fmt(R, 2) }],
+        yFmt: (v) => v >= 1 ? String(v) : v.toExponential(0),
+      });
+    }, { aspect: 0.82, minHeight: 360, maxHeight: 540 });
+    function draw() {
+      const T = gT() + 273.15, P = logP(gP()), y = logP(gy()), R = Rf(T, P, y);
+      TF.stat("gp-R", TF.fmt(R, 3));
+      const j = R > 1 ? ["분말 증착", "bad"] : R > 0.1 ? ["입자 주의", "warn"] : ["안전", "ok"];
+      TF.stat("gp-j", j[0]); setCls("gp-j", j[1]);
+      TF.stat("gp-G", fmtG(grove(c, T, P, y, "H2", 30, 5).G / (1 + R)));
+      film = new Float32Array(60); dust = [];
+      cv.redraw();
+    }
+    for (let i = 0; i < 70; i++) parts.push({ x: Math.random(), y: Math.random() * 0.9 });
+    draw();
+    TF.loop($("gp-cv"), (dt) => {
+      const R = Rf(gT() + 273.15, logP(gP()), logP(gy())), pg = R / (1 + R);
+      parts.forEach((p) => {
+        p.x = (p.x + (Math.random() - 0.5) * 0.02 + 1) % 1; p.y += (Math.random() - 0.42) * 0.03;
+        if (p.y < 0) p.y = 0.02;
+        if (Math.random() < pg * 0.02) { dust.push({ x: p.x, y: p.y, r: 0.5 }); p.y = 0; p.x = Math.random(); }
+        else if (p.y > 0.96) { film[Math.min(59, (p.x * 60) | 0)] += 1; p.y = 0; p.x = Math.random(); }
+      });
+      dust.forEach((d) => { d.r = Math.min(4, d.r + 0.01); d.y += 0.004 + d.r * 0.001; d.x = (d.x + (Math.random() - 0.5) * 0.004 + 1) % 1; });
+      dust = dust.filter((d) => d.y < 0.97);
+      if (dust.length > 40) dust.splice(0, dust.length - 40);
+      cv.redraw();
+    });
+  })();
+
+  /* =============================================================
+     7) 세 화학 비교
+     ============================================================= */
+  (function () {
+    if (!$("ch-cv")) return;
+    const gT = TF.range("ch-T", (v) => v + " °C", draw);
+    const gP = TF.range("ch-P", (v) => "×" + v.toFixed(2), draw);
+    const gth = TF.range("ch-th", (v) => v + " nm", draw);
+    const keys = ["poly", "nit", "teos"];
+    const Gk = (k, T, m) => { const c = CHEM[k]; return grove(c, T, c.Pref * m, c.yref, "N2", 30, 5).G; };
+    const cv = TF.canvas($("ch-cv"), (ctx, w, h) => {
+      const Pl = TF.palette(), m = gP();
+      const series = keys.map((k) => { const d = []; for (let t = 550; t <= 850; t += 3) d.push([t, Gk(k, t + 273.15, m)]); return { data: d, color: Pl[CHEM[k].col], width: 2.4 }; });
+      const pts = keys.map((k) => ({ x: gT(), y: Gk(k, gT() + 273.15, m), color: Pl[CHEM[k].col], r: 5 }));
+      const refs = keys.map((k) => ({ x: CHEM[k].Tref - 273.15, y: CHEM[k].Gref * m, color: Pl.text, r: 3 }));
+      const ch = TF.chart(ctx, null, { x: [550, 850], y: [0.01, 1000], logY: true, xLabel: "온도 (°C)", yLabel: "G (nm/min)", series, points: pts.concat(refs), vlines: [{ x: gT(), color: Pl.faint }], hlines: [{ y: 9, color: Pl.faint, label: "9 nm/min" }] });
+      ctx.font = font(12); ctx.textAlign = "left";
+      keys.forEach((k, i) => { ctx.fillStyle = Pl[CHEM[k].col]; ctx.fillRect(ch.box.x + 10, ch.box.y + 8 + i * 18, 12, 10); ctx.fillStyle = Pl.text; ctx.fillText(CHEM[k].name, ch.box.x + 28, ch.box.y + 17 + i * 18); });
+      const th = gth();
+      ["ch-o1", "ch-o2", "ch-o3"].forEach((id, i) => { const g = Gk(keys[i], gT() + 273.15, m); TF.stat(id, fmtG(g) + " / " + fmtT(th / g * 60)); });
+      const T = gT() + 273.15;
+      TF.stat("ch-o4", keys.map((k) => (CHEM[k].Ea / (KB * T * T) * 100).toFixed(1)).join(" · "));
+    }, { aspect: 0.58, minHeight: 270, maxHeight: 420 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     8) 성장 단면
+     ============================================================= */
+  (function () {
+    if (!$("gr-cv")) return;
+    const gT = TF.range("gr-T", (v) => v + " °C", reset);
+    const gP = TF.range("gr-P", (v) => v.toFixed(2) + " Torr", reset);
+    const gd = TF.range("gr-d", (v) => v + " nm", reset);
+    const sub = TF.seg("gr-sub", reset);
+    let t = 0, running = false;
+    $("gr-run").addEventListener("click", () => { const T = gT() + 273.15; if (!running && t >= tinc(T) + gd() / Gof(T, gP()) * 60 - 1e-6) t = 0; running = !running; $("gr-run").textContent = running ? "일시정지" : "증착 계속"; });
+    $("gr-reset").addEventListener("click", reset);
+    // LH pressure dependence: theta = K p/(1+K p), K*0.25 = 1.5
+    const Gof = (T, P) => { const K = 6; const th = (K * P) / (1 + K * P), th0 = 1.5 / 2.5; return 9 * Math.exp(-1.7 / KB * (1 / T - 1 / 893.15)) * th / th0; };
+    const tinc = (T) => 40 * Math.exp(2.0 / KB * (1 / T - 1 / 893.15)) * (sub() === "si" ? 0.1 : 1);
+    function structure(Tc) { return Tc <= 575 ? "비정질 (a-Si)" : Tc < 600 ? "혼합 (아래 결정)" : "기둥형 다결정"; }
+    // pre-generate grain boundaries
+    let seeds = [];
+    function genSeeds() { const Tc = gT(); const wg = 22 * Math.exp((Tc + 273.15 - 893.15) / 45); seeds = []; let x = 0; while (x < 1) { x += (wg / 400) * (0.6 + 0.8 * Math.random()); seeds.push({ x, tilt: (Math.random() - 0.5) * 0.04, h: Math.random() }); } }
+    function reset() { const T = gT() + 273.15; t = tinc(T) + gd() / Gof(T, gP()) * 60; running = false; $("gr-run").textContent = "처음부터 증착"; genSeeds(); stats(); cv && cv.redraw(); }
+    let cv = null;
+    function thick() { const T = gT() + 273.15; return Math.max(0, Gof(T, gP()) * (t - tinc(T)) / 60); }
+    function stats() {
+      const T = gT() + 273.15, G = Gof(T, gP()), ti = tinc(T);
+      TF.stat("gr-G", fmtG(G)); TF.stat("gr-ti", fmtT(ti)); TF.stat("gr-tt", fmtT(ti + gd() / G * 60));
+      TF.stat("gr-now", fmtT(t) + " / " + thick().toFixed(1) + " nm"); TF.stat("gr-st", structure(gT()));
+    }
+    cv = TF.canvas($("gr-cv"), (ctx, w, h) => {
+      const Pl = TF.palette(), Tc = gT(), d = thick(), dmax = Math.max(gd() * 1.15, 50);
+      const base = h - 46, scale = (base - 20) / dmax;
+      ctx.fillStyle = Pl.si; ctx.fillRect(0, base + 14, w, h - base - 14);
+      if (sub() === "ox") { ctx.fillStyle = Pl.oxide; ctx.fillRect(0, base, w, 14); }
+      else { ctx.fillStyle = Pl.si; ctx.fillRect(0, base, w, 14); }
+      ctx.font = font(11); ctx.fillStyle = "#fff"; ctx.textAlign = "left"; ctx.fillText(sub() === "ox" ? "SiO₂" : "Si", 8, base + 11);
+      if (d > 0) {
+        const top = base - d * scale, amorph = Tc <= 575, mixed = Tc > 575 && Tc < 600;
+        // rough top surface
+        const rough = amorph ? 0.3 : mixed ? 1 : 1.5 + 0.03 * d;
+        ctx.fillStyle = Pl.poly; ctx.beginPath(); ctx.moveTo(0, base);
+        const pts = [];
+        if (amorph) { for (let x = 0; x <= w; x += 6) pts.push([x, top + Math.sin(x * 0.3) * rough * scale * 0.3]); }
+        else { seeds.forEach((s, i) => { const x0 = (i ? seeds[i - 1].x : 0) * w, x1 = s.x * w; pts.push([x0, top + rough * scale * 0.5], [(x0 + x1) / 2, top - rough * scale * (0.6 + s.h * 0.6)], [x1, top + rough * scale * 0.5]); }); }
+        pts.forEach(([x, y]) => ctx.lineTo(x, Math.min(base, y))); ctx.lineTo(w, base); ctx.closePath(); ctx.fill();
+        if (!amorph) {
+          ctx.strokeStyle = Pl.text; ctx.globalAlpha = 0.35; ctx.lineWidth = 1;
+          const yStart = mixed ? base : base, yEnd = mixed ? base - Math.min(d, 30) * scale : top;
+          seeds.forEach((s) => { const x = s.x * w; ctx.beginPath(); ctx.moveTo(x, yStart); ctx.lineTo(x + s.tilt * (yStart - yEnd), Math.max(yEnd, top)); ctx.stroke(); });
+          ctx.globalAlpha = 1;
+        }
+        ctx.fillStyle = Pl.text; ctx.font = font(12); ctx.textAlign = "right"; ctx.fillText(d.toFixed(1) + " nm", w - 8, Math.max(14, top - 8));
+      } else if (t > 0) {
+        // nuclei
+        ctx.fillStyle = Pl.poly; const frac = t / tinc(gT() + 273.15);
+        for (let i = 0; i < 40 * frac; i++) { const x = ((i * 9301 + 49297) % 233280) / 233280 * w; ctx.beginPath(); ctx.arc(x, base, 2 + 2 * frac, Math.PI, 0); ctx.fill(); }
+        ctx.fillStyle = Pl.dim; ctx.font = font(12); ctx.textAlign = "center"; ctx.fillText("잠복기: 핵 생성 중…", w / 2, base - 20);
+      }
+      // target line
+      const ty = base - gd() * scale; ctx.strokeStyle = Pl.accent; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(0, ty); ctx.lineTo(w, ty); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = Pl.accent; ctx.font = font(11); ctx.textAlign = "left"; ctx.fillText("목표 " + gd() + " nm", 6, ty - 4);
+    }, { aspect: 0.5, minHeight: 240, maxHeight: 360 });
+    reset();
+    TF.loop($("gr-cv"), (dt) => {
+      if (!running) return;
+      const T = gT() + 273.15, total = tinc(T) + gd() / Gof(T, gP()) * 60;
+      t += dt * total / 8;  // 약 8초에 목표 도달
+      if (thick() >= gd()) { t = tinc(T) + gd() / Gof(T, gP()) * 60; running = false; $("gr-run").textContent = "완료"; }
+      stats(); cv.redraw();
+    });
+  })();
+})();
+</script>
+</body>
+</html>

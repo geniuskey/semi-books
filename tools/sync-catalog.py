@@ -3,7 +3,7 @@
 
 Usage: python3 tools/sync-catalog.py [path/to/books/data/books.json]
 Default source: migration/books.json. An external portal catalog is optional.
-InfraBook and CMPBook metadata live in LOCAL below. Chapter and simulator counts come from the sources.
+InfraBook, CMPBook and ThinFilmBook metadata live in LOCAL below. Chapter and simulator counts come from the sources.
 """
 import json
 import re
@@ -16,7 +16,7 @@ SOURCE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "migration" / "books
 # 서가 순서와 semi.euiyun.com/{slug}/ 경로
 ORDER = [
     ("devicebook", "device"), ("digitalbook", "digital"), ("designbook", "design"), ("socbook", "soc"),
-    ("analogbook", "analog"), ("processbook", "process"), ("lithobook", "litho"), ("etchbook", "etch"), ("cmpbook", "cmp"),
+    ("analogbook", "analog"), ("processbook", "process"), ("lithobook", "litho"), ("etchbook", "etch"), ("thinfilmbook", "thinfilm"), ("cmpbook", "cmp"),
     ("dopingbook", "doping"), ("yieldbook", "yield"), ("failurebook", "failure"), ("tcadbook", "tcad"),
     ("infrabook", "infra"),
     ("packagingbook", "packaging"), ("testbook", "test"), ("memorybook", "memory"), ("opticsbook", "optics"),
@@ -33,6 +33,15 @@ LOCAL = {
         "color": "#2f5f96", "colorDark": "#8db8ea",
         "topics": ["클린룸·공조", "초순수·폐수", "가스·케미컬", "배기·스크러버", "전력 품질", "냉동·냉각수", "진동·AMHS", "안전·신뢰성·탄소"],
         "motif": "fab",
+    },
+    "thinfilmbook": {
+        "id": "thinfilmbook", "code": "FIL", "title": "ThinFilmBook", "subtitle": "반도체 산화·박막 증착 교과서",
+        "headline": "원자 한 층씩, 막을 쌓는 기술",
+        "description": "8대 공정 학습을 심화하는 산화·박막 편. 진공과 기체 수송, 열산화와 딜-그로브 모델, 계면과 열 예산, 핵생성과 성장 모드, PVD·CVD·ALD의 반응과 수송, 포화, 피복성과 갭필, 균일도, 막질과 계측까지. 가상 기준 장비 TF-300의 온도·압력·유량·펄스 조건으로 직접 막을 키워 보며 배우는 반도체 산화·박막 증착 교과서.",
+        "url": "thinfilm/", "stage": "process", "status": "published", "chapters": 18,
+        "color": "#8c4a15", "colorDark": "#e7a36a",
+        "topics": ["열산화·딜-그로브", "열 예산·RTP", "핵생성·성장 모드", "증발·스퍼터링", "CVD 반응과 수송", "ALD 반응과 포화", "피복성·균일도", "막질·계측"],
+        "motif": "film",
     },
     "cmpbook": {
         "id": "cmpbook", "code": "CMP", "title": "CMPBook", "subtitle": "반도체 CMP·세정 교과서",

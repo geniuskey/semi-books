@@ -45,7 +45,7 @@
       range(6).forEach((i) => { s += `<rect x="${30 + i * 26}" y="22" width="6" height="8" fill="${W}" fill-opacity=".5"/>`; });
       return svg(s);
     },
-    // 이하 fab·process·etch·cmp는 SemiBooks에서 만들어 books 포털과 함께 쓰는 표지다. 움직임은 .fb-·.pr-·.et- 클래스가 맡고,
+    // 이하 fab·process·etch·cmp·film은 SemiBooks에서 만들어 books 포털과 함께 쓰는 표지다. 움직임은 .fb-·.pr-·.et- 클래스가 맡고,
     // 애니메이션이 없을 때(동작 줄이기)도 그 자체로 완성된 그림이 되도록 기본 도형을 첫 프레임과 같게 그린다.
     // 팹 인프라 단면: FFU가 내려보낸 공기는 바닥 구멍을 지나 양쪽 샤프트를 타고 천장으로 돌아가고,
     // 천장 레일의 OHT는 FOUP을 장비 앞 로드 포트에 내려놓는다. 바닥 아래 배관은 초순수와 가스를 장비로 올려 보낸다.
@@ -163,6 +163,22 @@
       s += `<rect x="116" y="30" width="72" height="7" fill="${W}" fill-opacity=".35"/>`;
       s += `<rect x="116" y="22" width="72" height="8" fill="${W}" fill-opacity=".55"/><path class="cm-flat" d="M130 22 V14 H146 V22 Z M160 22 V14 H176 V22 Z" fill="${W}" fill-opacity=".55"/>`;
       s += `<path d="M116 22 H188" stroke="#ffd8e4" stroke-opacity=".8" stroke-dasharray="3 2"/>`;
+      return svg(s);
+    },
+    // 박막 증착: 샤워헤드에서 전구체 분자가 내려와 트렌치 두 개가 패인 기판을 덮고, 컨포멀한 막이 한 겹씩 쌓인다.
+    film() {
+      // 표면에서 t만큼 바깥(기체 쪽)으로 옮긴 선. 두 선 사이가 막 한 겹이다.
+      const off = (t) => [[6, 74 - t], [58 + t, 74 - t], [58 + t, 116 - t], [86 - t, 116 - t], [86 - t, 74 - t], [118 + t, 74 - t], [118 + t, 116 - t], [146 - t, 116 - t], [146 - t, 74 - t], [200, 74 - t]];
+      const band = (a, b) => "M" + off(b).concat(off(a).reverse()).map((p) => p.join(" ")).join(" L") + " Z";
+      let s = `<rect x="14" y="6" width="176" height="9" rx="2.5" fill="${W}" fill-opacity=".5"/>`;
+      range(11).forEach((i) => { s += `<rect x="${24 + i * 15.6}" y="15" width="3" height="3" fill="${W}" fill-opacity=".45"/>`; });
+      [[34, 0], [72, 0.55], [104, 1.1], [132, 0.3], [166, 0.85], [52, 1.35], [150, 1.6]].forEach(([x, d]) => {
+        s += `<circle class="cv-fall" style="animation-delay:-${d}s" cx="${x}" cy="30" r="2.4" fill="${W}" fill-opacity=".9"/>`;
+      });
+      s += `<path d="M${off(0).map((p) => p.join(" ")).join(" L")} V128 H6 Z" fill="#000" fill-opacity=".2" stroke="${W}" stroke-opacity=".6"/>`;
+      [[0, 4, ".85"], [4, 8, ".55"], [8, 11, ".3"]].forEach(([a, b, o], k) => {
+        s += `<path class="fl-layer" style="animation-delay:${(k * 1.2).toFixed(1)}s" d="${band(a, b)}" fill="${W}" fill-opacity="${o}"/>`;
+      });
       return svg(s);
     },
     // 인과적 어텐션 히트맵

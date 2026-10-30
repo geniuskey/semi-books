@@ -5,7 +5,7 @@ python3 tools/import-books.py --write    # first import / safe refresh
 python3 tools/import-books.py --check    # compare with the sibling repositories
 
 Local changes in imported files are never overwritten. Resolve those changes before
-refreshing a snapshot. A book whose book.json has `meta` (infra/, cmp/, memory/) is written in
+refreshing a snapshot. A book whose book.json has `meta` (infra/, cmp/, thinfilm/, memory/) is written in
 this repository: it is skipped, and its manifest entry only keeps its legacy URL rewritten. Per-file hashes and original revisions live in migration/.
 """
 import argparse
@@ -75,7 +75,7 @@ def main():
         slug = book["slug"]
         if args.book and slug not in args.book:
             continue
-        if slug in ("infra", "cmp") or not re.fullmatch(r"[a-z][a-z0-9-]*", slug):
+        if slug in ("infra", "cmp", "thinfilm") or not re.fullmatch(r"[a-z][a-z0-9-]*", slug):
             raise ValueError("unsafe or reserved destination: " + slug)
         local = ROOT / slug / "book.json"
         if local.exists() and "meta" in json.loads(local.read_text()):

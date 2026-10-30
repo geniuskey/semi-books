@@ -221,6 +221,34 @@ window.SEMI_BOOKS = [
   "url": "etch/"
  },
  {
+  "id": "thinfilmbook",
+  "code": "FIL",
+  "title": "ThinFilmBook",
+  "subtitle": "반도체 산화·박막 증착 교과서",
+  "headline": "원자 한 층씩, 막을 쌓는 기술",
+  "description": "8대 공정 학습을 심화하는 산화·박막 편. 진공과 기체 수송, 열산화와 딜-그로브 모델, 계면과 열 예산, 핵생성과 성장 모드, PVD·CVD·ALD의 반응과 수송, 포화, 피복성과 갭필, 균일도, 막질과 계측까지. 가상 기준 장비 TF-300의 온도·압력·유량·펄스 조건으로 직접 막을 키워 보며 배우는 반도체 산화·박막 증착 교과서.",
+  "url": "thinfilm/",
+  "stage": "process",
+  "status": "published",
+  "chapters": 18,
+  "color": "#8c4a15",
+  "colorDark": "#e7a36a",
+  "topics": [
+   "열산화·딜-그로브",
+   "열 예산·RTP",
+   "핵생성·성장 모드",
+   "증발·스퍼터링",
+   "CVD 반응과 수송",
+   "ALD 반응과 포화",
+   "피복성·균일도",
+   "막질·계측"
+  ],
+  "motif": "film",
+  "slug": "thinfilm",
+  "local": true,
+  "simulators": 138
+ },
+ {
   "id": "cmpbook",
   "code": "CMP",
   "title": "CMPBook",

@@ -1,0 +1,1106 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and ThinFilmBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>박막 계측과 공정 제어 · ThinFilmBook</title>
+<meta name="description" content="분산을 넣은 박막 간섭 반사 스펙트럼과 피팅, 엘립소메트리 Ψ·Δ, XRR 키에시그 무늬, 4탐침 면저항, 레이저 휨 측정, 게이지 R&amp;R, SPC 관리도, EWMA 런투런 두께 제어를 계산하는 시뮬레이터로 익힌다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .lbl { fill: var(--text); font-family: var(--font); font-size: 15px; }
+  svg .lbl-b { fill: var(--text); font-family: var(--font); font-size: 15px; font-weight: 700; }
+  svg .lbl-dim { fill: var(--text-dim); font-family: var(--font); font-size: 14px; }
+  svg .lbl-sm { fill: var(--text-dim); font-family: var(--font); font-size: 13px; }
+  svg .lbl-acc { fill: var(--accent); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .lbl-acc2 { fill: var(--accent-2); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .lbl-bad { fill: var(--bad); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .lbl-ok { fill: var(--ok); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .box2 { fill: var(--surface); stroke: var(--border); }
+  svg .s-dash { stroke: var(--text-dim); fill: none; stroke-width: 1.4; stroke-dasharray: 5 4; }
+  svg .s-bad { stroke: var(--bad); fill: none; stroke-width: 2; }
+  svg .s-ok { stroke: var(--ok); fill: none; stroke-width: 2; }
+  svg .light { stroke: var(--warn); fill: none; stroke-width: 2.4; }
+  svg .light2 { stroke: var(--warn); fill: none; stroke-width: 2; stroke-dasharray: 6 3; }
+  p.small { font-size: 14px; color: var(--text-dim); }
+  .q-verdict { font-weight: 700; }
+  .q-verdict.ok { color: var(--ok); } .q-verdict.warn { color: var(--warn); } .q-verdict.bad { color: var(--bad); }
+</style>
+</head>
+<body data-chapter="metrology">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 16</div>
+    <h1>박막 계측과 공정 제어</h1>
+    <p class="lead">막을 쌓았으면 재야 한다. 두께는 1 % 안쪽으로, 굴절률은 소수점 셋째 자리까지, 응력은 수십 MPa 단위로. 그런데 계측기는 두께를 직접 보지 않는다. 반사된 빛의 스펙트럼, 편광 상태의 변화, X선의 간섭 무늬, 전압과 전류, 레이저의 반사각을 잰 뒤 <strong>물리 모델을 거꾸로 풀어</strong> 두께를 추정한다. 이 장은 각 계측의 모델을 직접 계산해 보고, 계측값 자체의 산포(게이지 R&amp;R)를 따진 뒤, 측정값으로 공정을 감시(SPC)하고 다음 웨이퍼의 레시피를 고치는(런투런) 데까지 간다.</p>
+    <ul class="objectives">
+      <li>파장 분산을 넣은 에어리 식으로 Si 위 SiO₂·Si₃N₄의 반사 스펙트럼을 계산하고, 스펙트럼 피팅의 국소 최소 함정을 설명할 수 있다.</li>
+      <li>엘립소메트리 \(\rho = r_p/r_s = \tan\Psi\,e^{i\Delta}\)를 계산해 Ψ–Δ 궤적과 극박막 감도를 이해한다.</li>
+      <li>XRR의 임계각 \(\theta_c = \sqrt{2\delta}\)에서 밀도를, 키에시그 무늬 간격 \(\Delta(2\theta) \approx \lambda/d\)에서 두께를, 감쇠에서 거칠기를 읽는다.</li>
+      <li>4탐침 면저항 \(R_s = (\pi/\ln 2)V/I\), 얇은 금속의 크기 효과, 가장자리 보정을 계산한다.</li>
+      <li>레이저 곡률 측정의 감도 한계, 게이지 R&amp;R(%GRR, P/T), SPC 규칙, EWMA 런투런 제어의 지연·안정성을 설명할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="overview">
+    <h2>무엇을 무엇으로 재나</h2>
+    <p>박막 계측은 크게 <strong>광학</strong>(반사율, 엘립소메트리), <strong>X선</strong>(XRR, XRF, XRD), <strong>전기</strong>(4탐침, C-V·I-V), <strong>기계</strong>(웨이퍼 휨)로 나뉜다. 생산 라인에서는 비파괴·고속인 광학과 휨 측정이 매 로트를 보고, X선과 전기 측정은 모니터 웨이퍼나 표본으로 본다. 단면 TEM·SIMS 같은 파괴 분석은 기준값(reference)을 잡고 광학 모델을 보정하는 데 쓴다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 270" role="img" aria-label="막 특성과 계측 기술의 대응 지도">
+        <text x="140" y="22" text-anchor="middle" class="lbl-b">계측 기술</text>
+        <text x="720" y="22" text-anchor="middle" class="lbl-b">얻는 막 특성</text>
+        <g>
+          <rect x="20" y="36" width="240" height="32" rx="7" class="box2"/><text x="140" y="57" text-anchor="middle" class="lbl">분광 반사율(SR)</text>
+          <rect x="20" y="74" width="240" height="32" rx="7" class="box2"/><text x="140" y="95" text-anchor="middle" class="lbl">분광 엘립소메트리(SE)</text>
+          <rect x="20" y="112" width="240" height="32" rx="7" class="box2"/><text x="140" y="133" text-anchor="middle" class="lbl">X선 반사율(XRR)</text>
+          <rect x="20" y="150" width="240" height="32" rx="7" class="box2"/><text x="140" y="171" text-anchor="middle" class="lbl">X선 형광(XRF)</text>
+          <rect x="20" y="188" width="240" height="32" rx="7" class="box2"/><text x="140" y="209" text-anchor="middle" class="lbl">4탐침 면저항</text>
+          <rect x="20" y="226" width="240" height="32" rx="7" class="box2"/><text x="140" y="247" text-anchor="middle" class="lbl">레이저 곡률(휨)</text>
+        </g>
+        <g>
+          <rect x="600" y="40" width="240" height="32" rx="7" class="f-acc-soft"/><text x="720" y="61" text-anchor="middle" class="lbl">투명막 두께(수 nm–수 µm)</text>
+          <rect x="600" y="80" width="240" height="32" rx="7" class="f-acc-soft"/><text x="720" y="101" text-anchor="middle" class="lbl">굴절률 n, k(조성·밀도)</text>
+          <rect x="600" y="120" width="240" height="32" rx="7" class="f-acc-soft"/><text x="720" y="141" text-anchor="middle" class="lbl">밀도·거칠기·극박막 두께</text>
+          <rect x="600" y="160" width="240" height="32" rx="7" class="f-acc-soft"/><text x="720" y="181" text-anchor="middle" class="lbl">원소 면밀도(금속 두께)</text>
+          <rect x="600" y="200" width="240" height="32" rx="7" class="f-acc-soft"/><text x="720" y="221" text-anchor="middle" class="lbl">면저항(금속 두께·비저항)</text>
+          <rect x="600" y="240" width="240" height="26" rx="7" class="f-acc-soft"/><text x="720" y="258" text-anchor="middle" class="lbl">응력(σh)</text>
+        </g>
+        <g class="s-line" opacity="0.6">
+          <path d="M260 52 L600 56"/><path d="M260 90 L600 56"/><path d="M260 90 L600 96"/><path d="M260 52 L600 96"/><path d="M260 128 L600 136"/><path d="M260 128 L600 56"/><path d="M260 166 L600 176"/><path d="M260 204 L600 216"/><path d="M260 204 L600 176"/><path d="M260 242 L600 253"/>
+        </g>
+        <text x="430" y="40" text-anchor="middle" class="lbl-sm">모델 + 피팅</text>
+      </svg>
+      <figcaption><b>그림 16-1.</b> 계측 기술과 막 특성의 대응. 대부분의 선은 “직접 측정”이 아니라 “모델 피팅”이다. 모델(층 구조, 분산식)이 틀리면 정밀하게 틀린 값이 나온다.</figcaption>
+    </figure>
+
+    <div class="callout fab"><strong>TF-300 계측 계획(교육용)</strong>퍼니스 산화막은 로트마다 모니터 웨이퍼 3장(위·가운데·아래 슬롯)을 49점 반사율로 재서 웨이퍼 안 균일도(목표 ≤ 0.5 %, 1σ)와 웨이퍼 사이 균일도(≤ 1 %)를 본다. PECVD는 매 웨이퍼 9점 SE(두께 + n), 하루 1회 휨(응력)과 WER 모니터. ALD Al₂O₃·HfO₂는 극박막이라 SE 외에 주 1회 XRR로 밀도와 두께를 교차 확인한다. PVD 금속은 4탐침 49점 면저항과 XRF.</div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="reflect">
+    <h2>반사율 박막 간섭</h2>
+    <p>투명한 막 위에서 반사된 빛과 막-기판 계면에서 반사된 빛은 막을 왕복한 만큼 위상이 어긋나 서로 간섭한다. 파장을 훑으면 보강·상쇄가 번갈아 나타나는 줄무늬가 생기고, 줄무늬 간격과 위치가 두께와 굴절률을 알려 준다. 수직 입사 단일층에 대한 <span class="term">에어리 식</span><span class="en">(Airy formula)</span>은 다음과 같다.</p>
+    <div class="formula">$$r = \frac{r_{01} + r_{12}\,e^{-2i\beta}}{1 + r_{01}r_{12}\,e^{-2i\beta}},\qquad \beta = \frac{2\pi n_1(\lambda)\,d}{\lambda},\qquad r_{ij} = \frac{\tilde n_i - \tilde n_j}{\tilde n_i + \tilde n_j},\qquad R = |r|^2$$<div class="where">\(\tilde n_2 = n - ik\)는 Si 기판의 복소 굴절률(400 nm에서 약 5.57 − 0.39i, 633 nm에서 약 3.88 − 0.02i), \(n_1(\lambda)\)은 막의 굴절률이다. SiO₂는 셀마이어 식 \(n^2 - 1 = \sum_j B_j\lambda^2/(\lambda^2 - C_j^2)\)(말리트손 계수), Si₃N₄는 같은 꼴의 2항 셀마이어 식(루크 계수)을 쓴다. 이웃한 극대 사이 간격은 \(\Delta(1/\lambda) \approx 1/(2n d)\)다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="박막 간섭: 막 위와 계면에서 반사된 두 빛의 경로차">
+        <rect x="40" y="110" width="440" height="60" class="m-oxide" opacity="0.75"/>
+        <rect x="40" y="170" width="440" height="45" class="m-si"/>
+        <text x="490" y="146" class="lbl-sm">막 n₁(λ), d</text><text x="490" y="198" class="lbl-sm">Si ñ₂ = n − ik</text>
+        <path d="M120 20 L180 110" class="light"/>
+        <path d="M180 110 L240 20" class="light"/>
+        <path d="M180 110 L215 170 L250 110 L310 20" class="light2"/>
+        <text x="100" y="18" class="lbl-sm">입사광 λ</text>
+        <text x="200" y="40" class="lbl-sm">r₀₁</text><text x="300" y="40" class="lbl-sm">r₁₂ e^(−2iβ)</text>
+        <text x="225" y="196" class="lbl-acc">왕복 경로 2n₁d</text>
+        <g transform="translate(580,20)">
+          <text x="130" y="0" text-anchor="middle" class="lbl-b">두께가 바뀌면 줄무늬가 움직인다</text>
+          <line x1="10" y1="180" x2="270" y2="180" class="s-axis"/><line x1="10" y1="20" x2="10" y2="180" class="s-axis"/>
+          <path d="M10 120 C40 40 60 40 80 120 C100 190 120 190 140 120 C160 50 180 50 200 120 C220 180 240 180 270 120" class="s-acc" stroke-width="2.2"/>
+          <path d="M10 100 C30 170 50 170 70 100 C90 30 110 30 130 100 C150 170 170 170 190 100 C210 30 230 30 270 110" class="s-acc2" stroke-width="2" stroke-dasharray="5 3"/>
+          <text x="140" y="200" text-anchor="middle" class="lbl-sm">파장 λ →</text><text x="2" y="14" class="lbl-sm">R</text>
+          <text x="200" y="40" class="lbl-acc2">d + Δd</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 16-2.</b> 단일층 박막 간섭. 두 반사광의 위상차 \(2\beta = 4\pi n_1 d/\lambda\)가 \(2\pi\)의 정수배이면 보강(산화막/Si에서는 \(n_0 \lt n_1 \lt n_{Si}\)라 두 계면 모두 반사 시 위상 반전이 있어 상쇄 조건과 보강 조건이 같은 꼴). 막이 두꺼울수록 줄무늬가 촘촘해진다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-sr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>분광 반사율: 분산을 넣은 에어리 식</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sr-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>막</span><div class="seg" id="sr-film"><button data-value="ox" class="on">SiO₂</button><button data-value="sin">Si₃N₄</button></div></div>
+          <label class="ctrl"><span>두께 d <output id="sr-d-out"></output></span><input type="range" id="sr-d" min="0" max="2000" step="1" value="100"></label>
+          <label class="check"><input type="checkbox" id="sr-nd"> 비교: 분산 무시(633 nm의 n 고정)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">R @ 633 nm</span><span class="v" id="sr-r">—</span></div>
+        <div class="stat"><span class="k">n(633) · n(400)</span><span class="v" id="sr-n">—</span></div>
+        <div class="stat"><span class="k">극대 개수(400–1000 nm)</span><span class="v" id="sr-pk">—</span></div>
+        <div class="stat"><span class="k">눈에 보이는 색</span><span class="v" id="sr-col">—</span></div>
+      </div>
+      <div class="sim-note">위: 반사 스펙트럼(실선), 점선은 분산을 무시한 계산. 아래 바: 반사광의 겉보기 색(가시광 가중 합)과 막 굴절률 분산 n(λ). 해볼 것: ① 100 nm 산화막은 4nd ≈ 584 nm에서 반사가 가장 낮다. 초록·노랑을 덜 반사하므로 보라색으로 보인다(산화막 색표의 근거). ② Si₃N₄ 1000 nm에서 “분산 무시”를 켜면 단파장 쪽 줄무늬가 크게 어긋난다. 분산을 무시하고 피팅하면 두께가 수 % 틀린다. ③ 두께 0 nm(맨 Si)의 반사율은 약 35 %(633 nm)다.</div>
+    </div>
+
+    <p>측정은 반대 방향이다. 잰 스펙트럼 \(R_m(\lambda)\)과 모델 \(R(\lambda; d)\)의 차이 제곱합 \(\chi^2(d)\)을 최소로 하는 \(d\)를 찾는다. 문제는 \(\chi^2\)가 줄무늬 주기만큼 출렁이며 <strong>국소 최소</strong>를 여럿 갖는다는 점이다. 초깃값이 나쁘면 피팅은 엉뚱한 골짜기에 빠진다. 그래서 상용 장비는 넓은 두께 범위를 거칠게 격자 탐색한 뒤 국소 최적화를 한다. 측정 파장 범위가 넓을수록 골짜기 사이 깊이 차가 뚜렷해진다.</p>
+
+    <div class="sim" id="sim-fit">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>스펙트럼 피팅: χ² 지형과 국소 최소</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="fit-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>초깃값 d₀ <output id="fit-g-out"></output></span><input type="range" id="fit-g" min="50" max="1500" step="5" value="400"></label>
+          <label class="ctrl"><span>측정 잡음 <output id="fit-n-out"></output></span><input type="range" id="fit-n" min="0" max="3" step="0.1" value="0.5"></label>
+          <label class="ctrl"><span>파장 범위 하한 <output id="fit-l-out"></output></span><input type="range" id="fit-l" min="400" max="850" step="10" value="400"></label>
+          <button class="btn primary" id="fit-local">국소 피팅(초깃값에서)</button>
+          <button class="btn" id="fit-global">격자 + 국소(전역)</button>
+          <button class="btn" id="fit-new">새 웨이퍼</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">피팅 두께</span><span class="v" id="fit-d">—</span></div>
+        <div class="stat"><span class="k">참값(TEM 기준)</span><span class="v" id="fit-t">—</span></div>
+        <div class="stat"><span class="k">잔차 χ²(RMS)</span><span class="v" id="fit-c">—</span></div>
+        <div class="stat"><span class="k">판정</span><span class="v q-verdict" id="fit-v">—</span></div>
+      </div>
+      <div class="sim-note">Si 위 SiO₂(참값 300–1300 nm 무작위). 위: 측정 스펙트럼(점)과 피팅 모델(선). 아래: χ²(d) 지형, 세로선은 초깃값·피팅값. 국소 피팅은 초깃값에서 기울기를 따라 내려간다(황금 분할 탐색, ±80 nm 창). 해볼 것: 초깃값을 참값에서 150 nm 이상 떨어뜨리면 국소 피팅이 이웃 골짜기에 빠진다. 파장 하한을 800 nm로 좁히면 골짜기들이 거의 같은 깊이가 되어 전역 탐색도 흔들린다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="ellipso">
+    <h2>엘립소메트리: Ψ와 Δ</h2>
+    <p>반사율은 빛의 세기만 본다. <span class="term">엘립소메트리</span><span class="en">(ellipsometry)</span>는 비스듬히(보통 65–75°) 입사한 빛의 <strong>편광 상태 변화</strong>를 잰다. 입사면에 평행한 p 성분과 수직한 s 성분은 반사 계수가 다르므로, 반사 후 두 성분의 진폭비와 위상차가 바뀐다.</p>
+    <div class="formula">$$\rho = \frac{r_p}{r_s} = \tan\Psi\;e^{i\Delta},\qquad r_{p,s} = \frac{r_{01}^{p,s} + r_{12}^{p,s}e^{-2i\beta}}{1 + r_{01}^{p,s}r_{12}^{p,s}e^{-2i\beta}},\qquad \beta = \frac{2\pi d}{\lambda}\,n_1\cos\theta_1$$<div class="where">\(r^{p}_{ij} = (\tilde n_j\cos\theta_i - \tilde n_i\cos\theta_j)/(\tilde n_j\cos\theta_i + \tilde n_i\cos\theta_j)\), \(r^{s}_{ij} = (\tilde n_i\cos\theta_i - \tilde n_j\cos\theta_j)/(\tilde n_i\cos\theta_i + \tilde n_j\cos\theta_j)\), 각도는 스넬 법칙 \(n_0\sin\theta_0 = n_1\sin\theta_1 = \tilde n_2\sin\theta_2\)로 구한다(복소수). Ψ는 진폭비, Δ는 위상차다.</div></div>
+    <p>엘립소메트리가 강한 이유는 두 가지다. 첫째, 비(ratio)를 재므로 광원 세기 변동에 둔감하다. 둘째, Δ는 극박막에 매우 민감하다. Si 위 SiO₂에서 두께 1 nm당 Δ가 약 1–2° 바뀌고, 장비는 0.01° 수준으로 Δ를 재므로 원리상 0.01 nm 분해가 가능하다. 대신 극박막에서는 두께와 굴절률이 서로 묶여(상관) 따로 구하기 어렵다. 그래서 2 nm 게이트 산화막의 n은 보통 고정하고 두께만 피팅한다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 220" role="img" aria-label="엘립소메터 구성: 광원, 편광자, 시료, 회전 검광자, 검출기">
+        <rect x="30" y="40" width="80" height="40" rx="6" class="box2"/><text x="70" y="65" text-anchor="middle" class="lbl-sm">광원</text>
+        <rect x="140" y="40" width="70" height="40" rx="6" class="box"/><text x="175" y="65" text-anchor="middle" class="lbl-sm">편광자</text>
+        <path d="M110 60 L140 60 M210 60 L410 160" class="light"/>
+        <rect x="300" y="160" width="280" height="14" class="m-oxide"/><rect x="300" y="174" width="280" height="30" class="m-si"/>
+        <path d="M410 160 L620 60" class="light"/>
+        <rect x="620" y="40" width="90" height="40" rx="6" class="box"/><text x="665" y="65" text-anchor="middle" class="lbl-sm">회전 검광자</text>
+        <path d="M710 60 L740 60" class="light"/>
+        <rect x="740" y="40" width="110" height="40" rx="6" class="box2"/><text x="795" y="65" text-anchor="middle" class="lbl-sm">분광 검출기</text>
+        <path d="M410 100 L410 160" class="s-dash"/><text x="420" y="118" class="lbl-sm">θ₀ ≈ 70°</text>
+        <g transform="translate(232,90)"><ellipse cx="0" cy="0" rx="8" ry="20" class="s-acc" transform="rotate(-27)"/><text x="-40" y="-26" class="lbl-acc">선편광 45°</text></g>
+        <g transform="translate(540,100)"><ellipse cx="0" cy="0" rx="16" ry="9" class="s-acc2" transform="rotate(30)"/><text x="18" y="-14" class="lbl-acc2">타원 편광(Ψ, Δ)</text></g>
+      </svg>
+      <figcaption><b>그림 16-3.</b> 회전 검광자형 분광 엘립소메터의 개념. 45° 선편광이 막에서 반사되며 p·s 성분의 진폭비(Ψ)와 위상차(Δ)가 바뀌어 타원 편광이 된다. 검광자를 돌리며 세기를 재서 Ψ, Δ를 구한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-se">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>엘립소메트리 Ψ–Δ 궤적과 극박막 감도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="se-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>막</span><div class="seg" id="se-film"><button data-value="ox" class="on">SiO₂</button><button data-value="alo">Al₂O₃</button><button data-value="sin">Si₃N₄</button></div></div>
+          <label class="ctrl"><span>두께 d <output id="se-d-out"></output></span><input type="range" id="se-d" min="0" max="400" step="0.5" value="20"></label>
+          <label class="ctrl"><span>입사각 θ₀ <output id="se-a-out"></output></span><input type="range" id="se-a" min="45" max="80" step="0.5" value="70"></label>
+          <label class="ctrl"><span>파장 λ <output id="se-l-out"></output></span><input type="range" id="se-l" min="400" max="900" step="1" value="633"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Ψ</span><span class="v" id="se-psi">—</span></div>
+        <div class="stat"><span class="k">Δ</span><span class="v" id="se-del">—</span></div>
+        <div class="stat"><span class="k">감도 dΔ/dd</span><span class="v" id="se-s">—</span></div>
+        <div class="stat"><span class="k">궤적 한 바퀴 두께</span><span class="v" id="se-per">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽(넓은 화면 위): Ψ–Δ 평면에서 두께를 0 → 한 주기로 늘릴 때의 궤적(닫힌 고리, 점은 10 nm 간격), 큰 점이 현재 두께. 오른쪽(아래): 0–10 nm에서 Δ의 변화. 해볼 것: ① 맨 Si(d = 0)는 Δ ≈ 179°(633 nm, 70°)에서 시작한다. ② 2 nm만 쌓아도 Δ가 수 ° 움직인다. ③ 입사각을 Si의 브루스터각(약 75–76°) 근처로 보내면 감도가 커진다. 막의 굴절률은 반사율 시뮬레이터와 같은 분산식(Al₂O₃는 코시 근사 n ≈ 1.63)을 쓴다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="xrr">
+    <h2>XRR: 키에시그 무늬로 두께·밀도·거칠기</h2>
+    <p>X선(Cu Kα, λ = 0.15406 nm)에서 물질의 굴절률은 1보다 아주 조금 작다: \(n = 1 - \delta + i\beta\), \(\delta \sim 10^{-6}\)–\(10^{-5}\). 그래서 아주 얕은 각(수 mrad)으로 들어오면 <strong>전반사</strong>되고, 임계각 \(\theta_c\)를 넘으면 반사율이 \(\theta^{-4}\)로 급히 떨어진다. 막이 있으면 막 위·아래 반사가 간섭해 <span class="term">키에시그 무늬</span><span class="en">(Kiessig fringes)</span>가 생긴다. <span class="term">XRR</span><span class="en">(X-ray reflectivity)</span>은 광학 상수를 따로 몰라도 되고(전자 밀도만 알면 된다), 극박막(1–100 nm)의 두께와 <strong>밀도</strong>를 동시에 주는 거의 유일한 비파괴 방법이다.</p>
+    <div class="formula">$$\delta = \frac{r_e\lambda^2}{2\pi}\,\rho_e = \frac{r_e\lambda^2}{2\pi}\,N_A\,\rho\,\frac{Z}{A},\qquad \theta_c \approx \sqrt{2\delta},\qquad \Delta(2\theta) \approx \frac{\lambda}{d}$$<div class="where">\(r_e = 2.818\times10^{-15}\) m는 고전 전자 반지름, \(\rho_e\)는 전자 밀도, \(Z/A\)는 질량당 전자 수(Si 0.498, SiO₂ 0.499, HfO₂ 0.418). Si(2.33 g/cm³)는 \(\delta \approx 7.6\times10^{-6}\), \(\theta_c \approx 0.22^\circ\)다. 반사율은 파랫 점화식 \(X_j = (r_{j,j+1} + X_{j+1}e^{2ik_{z,j+1}d_{j+1}})/(1 + r_{j,j+1}X_{j+1}e^{2ik_{z,j+1}d_{j+1}})\)으로 계산하고, 거칠기 \(\sigma\)는 네보-크로세 인자 \(e^{-2k_{z,j}k_{z,j+1}\sigma^2}\)로 넣는다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 210" role="img" aria-label="XRR 측정 기하와 반사 곡선의 세 영역">
+        <rect x="30" y="140" width="360" height="16" class="m-highk"/><rect x="30" y="156" width="360" height="40" class="m-si"/>
+        <path d="M40 60 L210 140 L380 60" class="light"/>
+        <path d="M210 140 L240 156 L270 140 L440 60" class="light2"/>
+        <text x="60" y="54" class="lbl-sm">Cu Kα 0.154 nm</text><text x="240" y="120" class="lbl-sm">θ ~ 0.1–3°</text>
+        <text x="400" y="152" class="lbl-sm">막 ρ, d, σ</text>
+        <g transform="translate(500,20)">
+          <line x1="20" y1="170" x2="360" y2="170" class="s-axis"/><line x1="20" y1="10" x2="20" y2="170" class="s-axis"/>
+          <path d="M20 20 L70 22 C80 24 84 60 92 70 C110 90 120 80 130 92 C140 104 150 96 160 110 C170 122 180 114 190 126 C200 136 210 130 220 140 C240 152 260 150 280 158 C310 164 340 166 360 168" class="s-acc" stroke-width="2.2"/>
+          <text x="40" y="16" class="lbl-sm">전반사</text>
+          <text x="80" y="104" class="lbl-sm">θc(밀도)</text>
+          <text x="170" y="96" class="lbl-acc">간격 → 두께</text>
+          <text x="250" y="140" class="lbl-sm">감쇠 → 거칠기</text>
+          <text x="190" y="194" text-anchor="middle" class="lbl-sm">2θ →</text><text x="0" y="12" class="lbl-sm">log R</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 16-4.</b> XRR. 임계각 위치는 막(또는 기판)의 전자 밀도, 키에시그 무늬 간격은 두께, 무늬 진폭은 막-기판 밀도 대비, 고각에서 무늬가 사라지는 빠르기는 표면·계면 거칠기를 알려 준다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-xrr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>XRR 반사 곡선(파랫 점화식 + 네보-크로세 거칠기)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="xrr-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>막</span><div class="seg" id="xrr-film"><button data-value="ox">SiO₂</button><button data-value="alo">Al₂O₃</button><button data-value="hfo" class="on">HfO₂</button><button data-value="tin">TiN</button></div></div>
+          <label class="ctrl"><span>두께 d <output id="xrr-d-out"></output></span><input type="range" id="xrr-d" min="1" max="60" step="0.1" value="10"></label>
+          <label class="ctrl"><span>밀도(벌크 대비) <output id="xrr-r-out"></output></span><input type="range" id="xrr-r" min="70" max="105" step="0.5" value="100"></label>
+          <label class="ctrl"><span>표면 거칠기 σ <output id="xrr-s-out"></output></span><input type="range" id="xrr-s" min="0" max="2" step="0.05" value="0.3"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">막 밀도 · δ</span><span class="v" id="xrr-rho">—</span></div>
+        <div class="stat"><span class="k">θc(막) · θc(Si)</span><span class="v" id="xrr-tc">—</span></div>
+        <div class="stat"><span class="k">무늬 간격 Δ2θ</span><span class="v" id="xrr-p">—</span></div>
+        <div class="stat"><span class="k">극소점 간격으로 추정한 두께</span><span class="v" id="xrr-est">—</span></div>
+      </div>
+      <div class="sim-note">벌크 밀도: SiO₂ 2.2, Al₂O₃(ALD) 3.0, HfO₂ 9.7, TiN 5.2 g/cm³. 기판 Si(σ 0.2 nm). 흡수 β/δ는 물질별 고정 비(Si 0.023, SiO₂ 0.013, Al₂O₃ 0.012, HfO₂ 0.11, TiN 0.05). 해볼 것: ① HfO₂의 밀도를 100 → 85 %로 낮추면(비정질·저온) 첫 꺾임이 왼쪽으로 옮겨 간다. ② 두께를 2배로 하면 무늬 간격이 절반이 된다. ③ σ를 1 nm 이상으로 올리면 고각 무늬가 사라져 두께를 읽기 어려워진다. ④ SiO₂ 막은 Si와 밀도가 비슷해 무늬가 아주 약하다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="xrf">
+    <h2>XRF: 원소 면밀도로 금속 두께 재기</h2>
+    <p><span class="term">XRF</span><span class="en">(X-ray fluorescence)</span>는 X선으로 내각 전자를 떼어 낸 뒤 원자가 내는 고유 형광 X선(예: Hf Lα 7.90 keV, W Lα 8.40 keV, Ti Kα 4.51 keV)의 세기를 센다. 얇은 막에서는 세기가 단위 면적당 원자 수(면밀도, 원자/cm² 또는 µg/cm²)에 비례하므로, 밀도를 알면 두께로 바꾼다: \(I \propto \rho d\,(1 - e^{-\mu\rho d/\rho d_\infty})\). 수 µm 이하 금속막에서는 거의 선형이다. 광학 모델이 필요 없고 불투명한 금속에도 쓸 수 있어 PVD 배리어·시드, ALD HfO₂ 면밀도 모니터에 쓴다. 다만 밀도를 따로 모르면 “두꺼운데 성긴 막”과 “얇은데 치밀한 막”을 구별하지 못한다. XRR과 함께 쓰면 \(\rho\)와 \(d\)를 분리할 수 있다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>방법</th><th>두께 범위</th><th>정밀도(반복성, 대표)</th><th>주는 것</th><th>약점</th></tr></thead>
+      <tbody>
+        <tr><td>분광 반사율</td><td>~10 nm – 수십 µm</td><td>~0.1 nm</td><td>d(+n)</td><td>극박막·불투명막 불가, 분산 모델 의존</td></tr>
+        <tr><td>분광 엘립소메트리</td><td>~0.5 nm – 수 µm</td><td>~0.01–0.05 nm</td><td>d, n, k, 다층</td><td>극박막에서 d–n 상관, 모델 의존</td></tr>
+        <tr><td>XRR</td><td>~1 – 200 nm</td><td>~0.05 nm</td><td>d, ρ, σ</td><td>느림, 큰 측정 면적(수 mm)</td></tr>
+        <tr><td>XRF</td><td>~0.1 nm – 수 µm(금속)</td><td>~0.5 %</td><td>면밀도</td><td>밀도 따로 필요, 경원소 약함</td></tr>
+        <tr><td>4탐침</td><td>금속 수 nm – 수 µm</td><td>~0.2 %</td><td>R<sub>s</sub></td><td>접촉식, 비저항 따로 필요</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="rs">
+    <h2>4탐침 면저항</h2>
+    <p>금속막의 두께는 전기로 잰다. 일직선의 탐침 4개를 간격 \(s\)로 막에 대고 바깥 두 탐침으로 전류 \(I\)를 흘리고 안쪽 두 탐침의 전압 \(V\)를 재면, 탐침 접촉 저항의 영향 없이 막의 <span class="term">면저항</span><span class="en">(sheet resistance)</span>을 얻는다. 막이 \(s\)보다 훨씬 얇고 넓으면</p>
+    <div class="formula">$$R_s = \frac{\rho}{t} = \frac{\pi}{\ln 2}\,\frac{V}{I} \approx 4.532\,\frac{V}{I}\ \ (\Omega/\square),\qquad \rho(t) \approx \rho_0\Bigl[1 + \frac{3\lambda_e}{8t}(1-p) + \frac{3}{2}\,\frac{\lambda_e}{D}\,\frac{R_g}{1-R_g}\Bigr]$$<div class="where">\(\rho\)는 비저항, \(t\)는 두께. 둘째 식은 얇은 금속의 <strong>크기 효과</strong>: 전자 평균 자유 행로 \(\lambda_e\)(Cu 약 39 nm, W 약 19 nm, Al 약 19 nm)가 두께나 결정립 크기 \(D\)와 비슷해지면 표면 산란(푹스-존드하이머, 경면 반사 확률 \(p\))과 결정립계 산란(마야다스-샤츠케스, 반사 계수 \(R_g\))으로 비저항이 커진다. 여기서는 \(p = 0\), \(R_g = 0.3\), \(D \approx t\)로 두었다.</div></div>
+    <p>4.532라는 상수는 무한한 평면을 가정한 것이다. 탐침이 웨이퍼 가장자리에 가까우면 전류가 가장자리에서 막혀 전압이 커지므로 겉보기 \(R_s\)가 커진다. 절연 가장자리는 같은 부호의 <strong>거울상 전류원</strong>으로 다룰 수 있다. 300 mm 웨이퍼의 49점 지도에서 가장자리 3 mm 안쪽 점은 이 보정이 필요하다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 200" role="img" aria-label="일직선 4탐침과 가장자리 거울상 전류원">
+        <rect x="40" y="110" width="520" height="16" class="m-metal" opacity="0.8"/><rect x="40" y="126" width="520" height="40" class="m-oxide" opacity="0.5"/>
+        <g class="s-line"><path d="M150 40 L150 110"/><path d="M230 40 L230 110"/><path d="M310 40 L310 110"/><path d="M390 40 L390 110"/></g>
+        <g><circle cx="150" cy="110" r="5" class="f-acc"/><circle cx="230" cy="110" r="5" class="f-acc2"/><circle cx="310" cy="110" r="5" class="f-acc2"/><circle cx="390" cy="110" r="5" class="f-acc"/></g>
+        <text x="150" y="32" text-anchor="middle" class="lbl-acc">+I</text><text x="390" y="32" text-anchor="middle" class="lbl-acc">−I</text>
+        <text x="270" y="32" text-anchor="middle" class="lbl-acc2">V</text>
+        <path d="M150 90 Q270 60 390 90" class="s-dash"/>
+        <text x="190" y="100" class="lbl-sm">s</text><text x="270" y="100" class="lbl-sm">s</text><text x="350" y="100" class="lbl-sm">s</text>
+        <text x="300" y="186" text-anchor="middle" class="lbl-sm">금속막(두께 t) / 절연막</text>
+        <g transform="translate(610,20)">
+          <rect x="0" y="0" width="240" height="160" rx="8" class="box2"/>
+          <line x1="120" y1="0" x2="120" y2="160" class="s-bad"/>
+          <text x="124" y="16" class="lbl-bad">웨이퍼 가장자리</text>
+          <g><circle cx="60" cy="50" r="5" class="f-acc"/><circle cx="60" cy="110" r="5" class="f-acc"/></g>
+          <g opacity="0.5"><circle cx="180" cy="50" r="5" class="f-acc"/><circle cx="180" cy="110" r="5" class="f-acc"/></g>
+          <path d="M60 50 L60 110" class="s-line"/><path d="M180 50 L180 110" class="s-dash"/>
+          <text x="30" y="140" class="lbl-sm">실제 탐침</text><text x="150" y="140" class="lbl-sm">거울상</text>
+          <text x="96" y="84" class="lbl-sm">a</text><text x="142" y="84" class="lbl-sm">a</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 16-5.</b> 일직선 4탐침. 바깥 탐침으로 전류, 안쪽 탐침으로 전압을 재므로 접촉 저항이 빠진다. 오른쪽: 절연 가장자리에서 거리 \(a\)인 탐침의 효과는 가장자리 너머 \(2a\) 위치의 같은 부호 거울상 전류원으로 계산한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-rs">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>4탐침: 크기 효과 + 49점 면저항 지도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rs-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>금속</span><div class="seg" id="rs-m"><button data-value="cu" class="on">Cu</button><button data-value="w">W</button><button data-value="al">Al</button><button data-value="tin">TiN</button></div></div>
+          <label class="ctrl"><span>평균 두께 <output id="rs-t-out"></output></span><input type="range" id="rs-t" min="3" max="500" step="1" value="50"></label>
+          <label class="ctrl"><span>두께 분포(중심−가장자리) <output id="rs-u-out"></output></span><input type="range" id="rs-u" min="-10" max="10" step="0.5" value="3"></label>
+          <label class="check"><input type="checkbox" id="rs-se" checked> 크기 효과 포함</label>
+          <label class="check"><input type="checkbox" id="rs-ec" checked> 가장자리 보정 적용</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">비저항 ρ(t)</span><span class="v" id="rs-rho">—</span></div>
+        <div class="stat"><span class="k">평균 R<sub>s</sub></span><span class="v" id="rs-rs">—</span></div>
+        <div class="stat"><span class="k">V(I = 1 mA)</span><span class="v" id="rs-v">—</span></div>
+        <div class="stat"><span class="k">R<sub>s</sub> 균일도(1σ)</span><span class="v" id="rs-u1">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽(위): 두께에 따른 R<sub>s</sub>(실선 크기 효과 포함, 점선 벌크 비저항). 오른쪽(아래): 49점(중심 1 + 반지름 49·98·147 mm에 8·16·24점) 지도, 색은 평균 대비 편차. 가장 바깥 줄은 가장자리에서 3 mm, 탐침 간격 1 mm. 벌크 비저항: Cu 1.68, W 5.3, Al 2.65, TiN 약 60 µΩ·cm(TiN은 λ<sub>e</sub>가 짧아 크기 효과 작음). 해볼 것: Cu 10 nm에서 크기 효과를 끄면 R<sub>s</sub>를 절반 가까이 과소평가한다(두께를 반대로 환산하면 크게 틀린다). 가장자리 보정을 끄면 바깥 24점이 조금씩 높게 읽힌다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="bow">
+    <h2>휨과 응력 측정</h2>
+    <p>응력은 <a href="quality.html#stoney">15장</a>의 스토니 식으로 곡률에서 구한다. 곡률은 레이저를 웨이퍼 표면에 쏘아 위치를 옮겨 가며 반사각(기울기)을 재서 얻는다. 표면 높이를 \(z(x) = x^2/2R\)로 두면 기울기는 \(\theta(x) = dz/dx = x/R\)이고, 반사광은 \(2\theta\)만큼 꺾이므로 거리 \(L\)에 둔 위치 검출기(PSD)에서 \(2L\theta\)만큼 움직인다. 기울기를 위치에 대해 직선 맞춤하면 기울기가 \(1/R\)이다.</p>
+    <div class="formula">$$\theta(x) = \frac{x}{R} + \theta_0,\qquad \frac{1}{R} = \text{(맞춤 기울기)},\qquad \sigma_f = \frac{M_s h_s^2}{6h_f}\Bigl(\frac{1}{R_{\text{후}}} - \frac{1}{R_{\text{전}}}\Bigr),\qquad u\bigl(\tfrac1R\bigr) \approx \frac{\sigma_\theta}{\sqrt{\sum(x_i - \bar x)^2}}$$<div class="where">\(\sigma_\theta\)는 각도 측정 잡음(µrad), \(x_i\)는 측정 위치. 웨이퍼는 증착 전에도 수십 µm 휘어 있으므로 반드시 <strong>증착 전 측정을 빼야</strong> 한다. 곡률 불확도는 막 두께와 무관하므로, 막이 얇을수록 응력의 상대 오차가 커진다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 200" role="img" aria-label="레이저 주사 곡률 측정: 기울기에 따라 반사 빔이 위치 검출기에서 움직인다">
+        <path d="M60 170 Q330 120 600 170" class="ms-si" stroke-width="16"/>
+        <path d="M60 161 Q330 111 600 161" class="ms-nitride" stroke-width="4"/>
+        <rect x="140" y="20" width="60" height="30" rx="5" class="box2"/><text x="170" y="40" text-anchor="middle" class="lbl-sm">레이저</text>
+        <path d="M170 50 L200 143" class="light"/><path d="M200 143 L290 30" class="light"/>
+        <path d="M430 50 L460 128" class="light2"/><path d="M460 128 L500 30" class="light2"/>
+        <rect x="260" y="14" width="260" height="16" rx="3" class="f-acc-soft"/><text x="530" y="27" class="lbl-sm">위치 검출기(PSD), 거리 L</text>
+        <path d="M200 143 L200 100" class="s-dash"/><path d="M460 128 L460 90" class="s-dash"/>
+        <text x="206" y="112" class="lbl-sm">θ(x₁)</text><text x="466" y="104" class="lbl-sm">θ(x₂)</text>
+        <path d="M200 185 L460 185" class="s-acc" stroke-width="2"/><text x="330" y="198" text-anchor="middle" class="lbl-acc">주사 → 기울기 θ(x) = x/R</text>
+      </svg>
+      <figcaption><b>그림 16-6.</b> 레이저 주사 곡률 측정(개념). 웨이퍼 위 여러 위치에서 반사 빔의 각도를 재고, 위치에 대한 기울기 변화율로 곡률 \(1/R\)을 얻는다. 가열 스테이지를 붙이면 <a href="quality.html#stress">15장</a>의 응력-온도 곡선을 잴 수 있다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-bowm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>레이저 곡률 측정: 잡음·전후 차감·막 두께와 응력 오차</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bowm-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>참 막 응력 <output id="bowm-s-out"></output></span><input type="range" id="bowm-s" min="-800" max="800" step="10" value="-150"></label>
+          <label class="ctrl"><span>막 두께 <output id="bowm-h-out"></output></span><input type="range" id="bowm-h" min="10" max="2000" step="10" value="100"></label>
+          <label class="ctrl"><span><span>각도 잡음 σ<sub>θ</sub></span> <output id="bowm-n-out"></output></span><input type="range" id="bowm-n" min="0.2" max="20" step="0.2" value="2"></label>
+          <label class="ctrl"><span>측정점 수 <output id="bowm-k-out"></output></span><input type="range" id="bowm-k" min="5" max="101" step="2" value="21"></label>
+          <label class="check"><input type="checkbox" id="bowm-pre" checked> 증착 전 측정 차감</label>
+          <button class="btn" id="bowm-re">다시 측정</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">측정 응력</span><span class="v" id="bowm-o-s">—</span></div>
+        <div class="stat"><span class="k">오차</span><span class="v" id="bowm-o-e">—</span></div>
+        <div class="stat"><span class="k">불확도(1σ)</span><span class="v" id="bowm-o-u">—</span></div>
+        <div class="stat"><span class="k">판정</span><span class="v q-verdict" id="bowm-o-v">—</span></div>
+      </div>
+      <div class="sim-note">모델: 300 mm, 775 µm 웨이퍼, 주사 범위 ±140 mm. 증착 전 웨이퍼는 R₀ = +80 m(약 +140 µm 휨)의 고유 휨을 가진다. 위: 위치별 기울기(점: 증착 후, 회색: 증착 전)와 직선 맞춤. 아래: 같은 조건에서 막 두께에 따른 응력 불확도(1σ). 해볼 것: 막 두께 20 nm, 잡음 10 µrad, 측정점 11개면 응력이 ±수십 MPa 흔들린다(1 µm 막이면 ±1 MPa 수준). “증착 전 측정 차감”을 끄면 웨이퍼 고유 휨이 그대로 응력으로 둔갑한다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="grr">
+    <h2>측정 산포와 게이지 R&amp;R</h2>
+    <p>계측기 자체도 흔들린다. 같은 웨이퍼를 같은 사람이 같은 장비로 여러 번 재도 값이 조금씩 다른 것이 <strong>반복성</strong><span class="en">(repeatability, EV)</span>이고, 다른 사람·다른 장비·다른 날에 재서 생기는 차이가 <strong>재현성</strong><span class="en">(reproducibility, AV)</span>이다. 둘을 합친 측정계 산포를 공정 산포·규격 폭과 비교하는 것이 <span class="term">게이지 R&amp;R</span><span class="en">(gauge repeatability and reproducibility)</span>이다.</p>
+    <div class="formula">$$\sigma_{ms}^2 = \sigma_{EV}^2 + \sigma_{AV}^2,\qquad \sigma_{tot}^2 = \sigma_{ms}^2 + \sigma_{PV}^2,\qquad \%\text{GRR} = 100\,\frac{\sigma_{ms}}{\sigma_{tot}},\qquad \text{P/T} = \frac{6\,\sigma_{ms}}{\text{USL} - \text{LSL}}$$<div class="where">\(\sigma_{PV}\)는 부품(웨이퍼) 사이의 실제 차이. 관례상 %GRR이나 P/T가 10 % 미만이면 좋음, 10–30 %는 조건부, 30 % 초과는 쓸 수 없다. 구별 범주 수 \(\text{ndc} = 1.41\,\sigma_{PV}/\sigma_{ms} \ge 5\)도 본다.</div></div>
+    <p>막 두께가 얇아질수록 이 비교가 어려워진다. 2 nm 게이트 산화막의 규격이 ±0.1 nm면, P/T 10 %를 맞추려면 측정계 σ가 0.0017 nm, 원자 지름의 1/100보다 작아야 한다. 이 수준에서는 웨이퍼 표면의 유기물 흡착(공기 중에 둔 시간에 따라 0.1–0.3 nm)이 반복성보다 큰 재현성 오차가 된다. 그래서 측정 전 가열 세정(desorb)을 넣기도 한다.</p>
+
+    <div class="sim" id="sim-grr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>게이지 R&amp;R 연구: 10장 × 3명 × 3회</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="grr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>반복성 σ<sub>EV</sub></span> <output id="grr-e-out"></output></span><input type="range" id="grr-e" min="0.01" max="0.5" step="0.01" value="0.05"></label>
+          <label class="ctrl"><span><span>재현성 σ<sub>AV</sub>(측정자·장비 차)</span> <output id="grr-a-out"></output></span><input type="range" id="grr-a" min="0" max="0.5" step="0.01" value="0.05"></label>
+          <label class="ctrl"><span><span>웨이퍼 간 실제 σ<sub>PV</sub></span> <output id="grr-p-out"></output></span><input type="range" id="grr-p" min="0.05" max="2" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span>규격 폭(USL−LSL) <output id="grr-t-out"></output></span><input type="range" id="grr-t" min="0.5" max="10" step="0.1" value="4"></label>
+          <button class="btn" id="grr-re">다시 연구</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">추정 σ<sub>EV</sub> · σ<sub>AV</sub></span><span class="v" id="grr-o-ea">—</span></div>
+        <div class="stat"><span class="k">%GRR</span><span class="v" id="grr-o-g">—</span></div>
+        <div class="stat"><span class="k">P/T · ndc</span><span class="v" id="grr-o-pt">—</span></div>
+        <div class="stat"><span class="k">판정</span><span class="v q-verdict" id="grr-o-v">—</span></div>
+      </div>
+      <div class="sim-note">단위는 nm(예: 100 nm 산화막의 두께). 그림: 웨이퍼 10장(가로)의 측정값, 색은 측정자(장비) 3명, 각 3회. 가로 막대는 웨이퍼 참값. 추정은 분산 분석(ANOVA) 방식: 셀 안 분산 → EV, 측정자 평균의 분산 − EV²/(부품 수 × 반복) → AV, 웨이퍼 평균의 분산 → PV. 해볼 것: σ<sub>PV</sub>를 0.1로 줄이면(웨이퍼가 거의 같으면) 같은 측정계라도 %GRR이 나빠진다. 그래서 GRR 연구용 웨이퍼는 규격 범위에 걸쳐 일부러 다른 두께로 고른다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="spc">
+    <h2>SPC 관리도</h2>
+    <p>매일 모니터 웨이퍼를 재서 그래프에 찍기만 해서는 소용이 없다. 우연한 흔들림(공통 원인)과 장비에 무슨 일이 생긴 신호(특수 원인)를 구별해야 한다. <span class="term">SPC</span><span class="en">(statistical process control)</span> 관리도는 안정 구간의 데이터로 중심선과 ±3σ 관리 한계를 정하고, 새 점이 통계적으로 일어나기 어려운 패턴을 보이면 경보를 낸다. 관리 한계는 규격(고객 요구)과 다르다. 규격 안이라도 관리 한계 밖이면 장비가 변했다는 뜻이다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 220" role="img" aria-label="관리도의 구성과 웨스턴 일렉트릭 규칙">
+        <line x1="40" y1="30" x2="600" y2="30" class="s-bad" stroke-dasharray="6 4"/><text x="606" y="34" class="lbl-bad">UCL +3σ</text>
+        <line x1="40" y1="60" x2="600" y2="60" class="s-dash"/><text x="606" y="64" class="lbl-sm">+2σ</text>
+        <line x1="40" y1="90" x2="600" y2="90" class="s-dash"/><text x="606" y="94" class="lbl-sm">+1σ</text>
+        <line x1="40" y1="120" x2="600" y2="120" class="s-line"/><text x="606" y="124" class="lbl">중심선</text>
+        <line x1="40" y1="150" x2="600" y2="150" class="s-dash"/><line x1="40" y1="180" x2="600" y2="180" class="s-dash"/>
+        <line x1="40" y1="210" x2="600" y2="210" class="s-bad" stroke-dasharray="6 4"/><text x="606" y="214" class="lbl-bad">LCL −3σ</text>
+        <path d="M50 118 L70 132 L90 108 L110 128 L130 115 L150 140 L170 122 L190 100 L210 126 L230 112 L250 20 L270 118 L290 96 L310 98 L330 92 L350 100 L370 86 L390 94 L410 97 L430 88 L450 91 L470 99 L490 84 L510 95" class="s-acc" stroke-width="2"/>
+        <circle cx="250" cy="20" r="6" class="f-acc2"/><text x="258" y="18" class="lbl-acc2">규칙 1: 3σ 밖 1점</text>
+        <path d="M290 76 L510 76" class="s-ok" stroke-width="3" opacity="0.6"/><text x="330" y="70" class="lbl-ok">규칙 4: 중심선 한쪽에 8점 연속 → 평균 이동</text>
+        <text x="680" y="60" class="lbl-sm">규칙 2: 3점 중 2점이 2σ 밖(같은 쪽)</text>
+        <text x="680" y="84" class="lbl-sm">규칙 3: 5점 중 4점이 1σ 밖(같은 쪽)</text>
+        <text x="680" y="108" class="lbl-sm">추세: 6점 연속 증가·감소</text>
+      </svg>
+      <figcaption><b>그림 16-7.</b> 개별값 관리도와 대표 규칙(웨스턴 일렉트릭 규칙). 규칙 1은 큰 사건을, 규칙 2–4는 작지만 지속적인 평균 이동을 빨리 잡는다. 규칙을 많이 켤수록 민감하지만 거짓 경보도 늘어난다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-spc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>모니터 웨이퍼 관리도: 이동·추세 주입과 규칙 검출</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="spc-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>주입할 평균 이동 <output id="spc-m-out"></output></span><input type="range" id="spc-m" min="0.25" max="4" step="0.25" value="1"></label>
+          <button class="btn" id="spc-shift">평균 이동 주입</button>
+          <button class="btn" id="spc-drift">추세(표류) 주입</button>
+          <label class="check"><input type="checkbox" id="spc-r2" checked> 규칙 2–4 사용</label>
+          <button class="btn" id="spc-reset">초기화</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">점 수</span><span class="v" id="spc-o-n">—</span></div>
+        <div class="stat"><span class="k">최근 경보</span><span class="v" id="spc-o-a">—</span></div>
+        <div class="stat"><span class="k">주입 후 검출까지</span><span class="v" id="spc-o-d">—</span></div>
+        <div class="stat"><span class="k">거짓 경보(주입 전)</span><span class="v" id="spc-o-f">—</span></div>
+      </div>
+      <div class="sim-note">FX 퍼니스 건식 산화 모니터(목표 48.0 nm, σ 0.15 nm). 처음 25점으로 중심선·한계를 정한다(Phase I). 이후 매 점 규칙 1–4와 추세 규칙을 검사해 빨간 점으로 표시한다. 해볼 것: 1σ 크기 이동을 넣으면 규칙 1만으로는 평균 수십 점 뒤에야 잡히지만(ARL ≈ 44), 규칙 2–4를 켜면 10점 안쪽에서 잡힌다. 대신 이동이 없을 때의 거짓 경보가 늘어난다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="r2r">
+    <h2>런투런 EWMA 두께 제어</h2>
+    <p>PECVD 챔버는 웨이퍼를 처리할 때마다 벽과 샤워헤드에 막이 조금씩 쌓이고, 플라즈마 임피던스와 온도 분포가 변해 증착 속도가 천천히 표류한다. 주기적인 챔버 세정(in-situ clean)과 예방 정비(PM)가 상태를 되돌린다. 시간을 고정하면 두께가 속도를 따라 흘러간다. <span class="term">런투런 제어</span><span class="en">(run-to-run control)</span>는 매 웨이퍼의 측정값으로 속도 추정을 갱신하고 다음 웨이퍼의 증착 시간을 고친다. 가장 흔한 추정기는 지수 가중 이동 평균(EWMA)이다.</p>
+    <div class="formula">$$\hat r_{k+1} = \lambda\,\frac{x_k}{t_k} + (1 - \lambda)\,\hat r_k,\qquad t_{k+1} = \frac{x_{\text{target}}}{\hat r_{k+1}},\qquad e_\infty \approx \frac{\delta_r}{\lambda}\ \ (\text{표류 } \delta_r \text{ per run})$$<div class="where">\(x_k\)는 측정 두께, \(t_k\)는 증착 시간, \(\lambda\)(0–1)는 최신 측정의 가중치. \(\lambda\)가 크면 빨리 따라가지만 측정 잡음까지 따라가고, 작으면 잡음은 거르지만 표류를 늦게 따라가 정상 상태 지연 오차 \(\approx \delta_r/\lambda\)가 남는다. 측정이 \(m\)장 늦게 들어오면(계측 지연) 큰 \(\lambda\)에서 진동하며 불안정해질 수 있다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 170" role="img" aria-label="런투런 제어 루프: 레시피, 증착 장비, 계측, EWMA 추정기">
+        <defs><marker id="r2r-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker></defs>
+        <rect x="30" y="50" width="150" height="56" rx="8" class="box2"/><text x="105" y="74" text-anchor="middle" class="lbl">레시피</text><text x="105" y="94" text-anchor="middle" class="lbl-sm">t = x_target / r̂</text>
+        <rect x="250" y="50" width="170" height="56" rx="8" class="f-acc-soft"/><text x="335" y="74" text-anchor="middle" class="lbl">PE 챔버</text><text x="335" y="94" text-anchor="middle" class="lbl-sm">실제 속도 r_k(표류)</text>
+        <rect x="490" y="50" width="150" height="56" rx="8" class="box2"/><text x="565" y="74" text-anchor="middle" class="lbl">계측(SE)</text><text x="565" y="94" text-anchor="middle" class="lbl-sm">x_k + 잡음</text>
+        <rect x="490" y="122" width="320" height="40" rx="8" class="box"/><text x="650" y="147" text-anchor="middle" class="lbl">EWMA: r̂ ← λ·x/t + (1−λ)·r̂</text>
+        <path d="M180 78 L250 78" class="s-acc" stroke-width="2" marker-end="url(#r2r-arr)"/>
+        <path d="M420 78 L490 78" class="s-acc" stroke-width="2" marker-end="url(#r2r-arr)"/>
+        <path d="M640 78 L740 78 L740 122" class="s-acc" stroke-width="2" marker-end="url(#r2r-arr)"/>
+        <path d="M490 142 L105 142 L105 106" class="s-acc" stroke-width="2" marker-end="url(#r2r-arr)"/>
+        <text x="335" y="34" text-anchor="middle" class="lbl-sm">벽 퇴적·부품 노화 → r 표류, 세정·PM → 되돌림</text>
+        <text x="760" y="70" class="lbl-sm">지연 m장</text>
+      </svg>
+      <figcaption><b>그림 16-8.</b> 런투런 제어 루프. 장비 안에서 실시간으로 고치는 것이 아니라 웨이퍼(또는 로트) 단위로 레시피를 고친다. 피드포워드(앞 공정 두께를 받아 목표를 바꿈)를 더하면 앞 공정 산포도 흡수한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ewma">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>EWMA 런투런: 표류하는 PECVD 증착 속도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ewma-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>λ <output id="ewma-l-out"></output></span><input type="range" id="ewma-l" min="0.05" max="1" step="0.05" value="0.3"></label>
+          <label class="ctrl"><span>속도 표류(장당) <output id="ewma-d-out"></output></span><input type="range" id="ewma-d" min="-0.3" max="0.3" step="0.01" value="-0.08"></label>
+          <label class="ctrl"><span>측정 + 공정 잡음 <output id="ewma-n-out"></output></span><input type="range" id="ewma-n" min="0" max="2" step="0.1" value="0.5"></label>
+          <label class="ctrl"><span>계측 지연 <output id="ewma-m-out"></output></span><input type="range" id="ewma-m" min="0" max="5" step="1" value="1"></label>
+          <label class="ctrl"><span>세정·PM 주기 <output id="ewma-p-out"></output></span><input type="range" id="ewma-p" min="25" max="400" step="25" value="150"></label>
+          <label class="check"><input type="checkbox" id="ewma-rst"> PM 때 추정값을 기준으로 리셋(이벤트 피드포워드)</label>
+          <button class="btn" id="ewma-re">다시 실행</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">고정 시간 σ · 평균 오차</span><span class="v" id="ewma-o-ol">—</span></div>
+        <div class="stat"><span class="k">EWMA σ · 평균 오차</span><span class="v" id="ewma-o-cl">—</span></div>
+        <div class="stat"><span class="k">EWMA C<sub>pk</sub>(±2 %)</span><span class="v" id="ewma-o-cpk">—</span></div>
+        <div class="stat"><span class="k">판정</span><span class="v q-verdict" id="ewma-o-v">—</span></div>
+      </div>
+      <div class="sim-note">목표 500 nm PECVD 산화막, 기준 속도 300 nm/min(TF-300 PE, SiH₄/N₂O). 속도는 매 장 표류하다가 세정·PM 때 기준값으로 돌아간다(PM 직후 첫 장은 +1 % 튐). 위: 두께(회색 고정 시간, 색 EWMA)와 규격 ±2 %. 아래: 실제 속도와 EWMA 추정. 해볼 것: ① 지연 0에서 λ = 1은 안정하지만 잡음을 그대로 옮긴다. ② 지연을 3–5장으로 늘리고 λ를 0.8 이상으로 올리면 진동한다. ③ 표류가 크면 작은 λ는 뒤처져 평균 오차가 \(\delta/\lambda\)만큼 남는다. ④ PM 직후 속도가 기준으로 돌아가면 EWMA는 몇 장 동안 크게 빗나간다. 리셋을 켜면 사라진다.</div>
+    </div>
+    <p>λ를 고르는 것은 결국 표류의 크기와 잡음의 크기의 비, 그리고 계측 지연의 문제다. CMP의 종점·런투런 제어(<a href="../../cmp/chapters/endpoint.html">CMPBook 12장</a>)와 같은 수학이다. 실제 공장에서는 PM 직후 몇 장의 “첫 장 효과”를 따로 모델링하거나, 챔버 사용 시간(RF 시간)을 입력으로 하는 피드포워드를 더한다.</p>
+  </section>
+
+  <!-- ============================================================ summary -->
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>계측은 측정 신호에 물리 모델을 거꾸로 맞추는 일이다. 모델(층 구조, 분산식, 밀도)이 틀리면 정밀하게 틀린 값이 나온다.</li>
+      <li>분광 반사율은 에어리 식 \(r = (r_{01} + r_{12}e^{-2i\beta})/(1 + r_{01}r_{12}e^{-2i\beta})\)에 막·Si의 분산을 넣어 계산한다. χ² 지형은 줄무늬 주기로 출렁이므로 격자 탐색 + 국소 최적화가 필요하다.</li>
+      <li>엘립소메트리는 \(\tan\Psi e^{i\Delta} = r_p/r_s\)를 잰다. 비를 재므로 광원 변동에 둔감하고, Δ는 nm당 수 도로 극박막에 민감하지만 극박막에서는 d와 n이 상관된다.</li>
+      <li>XRR: 임계각 \(\theta_c = \sqrt{2\delta}\)는 밀도, 키에시그 간격 \(\lambda/d\)는 두께, 고각 감쇠는 거칠기. XRF는 원소 면밀도 \(\rho d\)를 준다.</li>
+      <li>4탐침 \(R_s = 4.532\,V/I\). 얇은 금속은 표면·결정립계 산란으로 비저항이 커지므로(크기 효과) \(R_s\)를 두께로 바꿀 때 주의한다. 가장자리는 거울상 보정이 필요하다.</li>
+      <li>휨 측정은 기울기 \(\theta = x/R\)의 직선 맞춤으로 곡률을 얻는다. 증착 전 측정을 빼야 하고, 곡률 불확도가 일정하므로 얇은 막일수록 응력 오차가 크다.</li>
+      <li>게이지 R&amp;R: \(\sigma_{ms}^2 = \sigma_{EV}^2 + \sigma_{AV}^2\), %GRR·P/T ≤ 10 %가 목표. 막이 얇아지면 규격 폭이 줄어 측정계가 먼저 한계에 부딪힌다.</li>
+      <li>SPC는 공통 원인과 특수 원인을 구별한다. EWMA 런투런은 \(\hat r \leftarrow \lambda x/t + (1-\lambda)\hat r\)로 표류를 따라가며, λ는 잡음·표류·계측 지연의 맞바꿈으로 고른다.</li>
+    </ol>
+  </section>
+
+  <!-- ============================================================ quiz -->
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. Si 위 1000 nm SiO₂(n ≈ 1.46)의 반사 스펙트럼에서 600 nm 근처 이웃 극대 사이 파장 간격은 대략?</p><div class="opts">
+        <button class="opt">약 5 nm</button>
+        <button class="opt" data-correct>약 120 nm</button>
+        <button class="opt">약 300 nm</button>
+        <button class="opt">약 600 nm</button>
+      </div><div class="quiz-exp">\(\Delta(1/\lambda) = 1/(2nd)\)에서 \(\Delta\lambda \approx \lambda^2/(2nd) = 600^2/(2\times1.46\times1000) \approx 123\) nm. 두께가 10 µm라면 약 12 nm로 촘촘해진다.</div></div>
+
+      <div class="quiz-q"><p>2. 스펙트럼 피팅으로 구한 두께가 웨이퍼마다 가끔 약 200 nm씩 튄다(참값은 안정). 가장 그럴듯한 원인은?</p><div class="opts">
+        <button class="opt">광원 세기가 흔들린다</button>
+        <button class="opt" data-correct>χ² 지형의 이웃 국소 최소에 빠졌다(초깃값·탐색 범위 문제)</button>
+        <button class="opt">Si 기판의 굴절률이 웨이퍼마다 다르다</button>
+        <button class="opt">막이 너무 얇아 간섭이 없다</button>
+      </div><div class="quiz-exp">χ²(d)는 줄무늬 주기(약 \(\lambda/2n\))마다 골짜기를 가진다. 초깃값이 나쁘거나 파장 범위가 좁으면 이웃 골짜기에 빠져 주기만큼 튄다. 격자 탐색을 넣거나 파장 범위를 넓힌다.</div></div>
+
+      <div class="quiz-q"><p>3. 2 nm 산화막을 엘립소메트리로 잴 때 굴절률을 보통 고정하는 이유는?</p><div class="opts">
+        <button class="opt">극박막에서는 Ψ가 측정되지 않아서</button>
+        <button class="opt" data-correct>극박막에서는 Δ 변화가 거의 n·d의 곱에만 의존해 두 값을 따로 구하기 어려워서</button>
+        <button class="opt">극박막은 굴절률이 항상 1이라서</button>
+        <button class="opt">엘립소메트리는 두께만 잴 수 있어서</button>
+      </div><div class="quiz-exp">\(d \ll \lambda\)이면 위상 두께가 작아 Δ 변화가 근사적으로 \((n^2-1)d\) 꼴의 조합에만 반응한다. n과 d가 강하게 상관되어 동시에 피팅하면 불안정하므로 n을 고정한다.</div></div>
+
+      <div class="quiz-q"><p>4. XRR에서 ALD HfO₂ 막의 첫 임계각이 기준 웨이퍼보다 낮은 각으로 옮겨 갔고 무늬 간격은 같다. 무엇이 바뀌었나?</p><div class="opts">
+        <button class="opt">두께가 두꺼워졌다</button>
+        <button class="opt" data-correct>막 밀도가 낮아졌다(두께는 같음)</button>
+        <button class="opt">표면 거칠기만 커졌다</button>
+        <button class="opt">기판이 바뀌었다</button>
+      </div><div class="quiz-exp">\(\theta_c = \sqrt{2\delta}\), \(\delta \propto \rho\)이므로 임계각이 낮아진 것은 밀도 감소다. 무늬 간격 \(\lambda/d\)가 같으니 두께는 같다.</div></div>
+
+      <div class="quiz-q"><p>5. 4탐침으로 10 nm Cu의 면저항을 쟀다. 벌크 비저항 1.68 µΩ·cm로 두께를 환산하면?</p><div class="opts">
+        <button class="opt">정확한 두께가 나온다</button>
+        <button class="opt">두께를 과대평가한다</button>
+        <button class="opt" data-correct>두께를 크게 과소평가한다(실제 비저항이 크기 효과로 더 크므로)</button>
+        <button class="opt">거울상 보정만 하면 정확하다</button>
+      </div><div class="quiz-exp">\(t = \rho/R_s\). 10 nm Cu는 표면·결정립계 산란으로 실제 비저항이 벌크의 2–3배다. 벌크 값을 쓰면 \(t\)가 그만큼 작게 계산된다. 얇은 금속은 두께에 맞는 \(\rho(t)\) 보정이나 XRF·XRR 교차 확인이 필요하다.</div></div>
+
+      <div class="quiz-q"><p>6. 같은 휨 측정기로 1 µm 막과 50 nm 막의 응력을 쟀다. 곡률 불확도가 같다면 50 nm 막의 응력 불확도는?</p><div class="opts">
+        <button class="opt">같다</button>
+        <button class="opt" data-correct>약 20배 크다</button>
+        <button class="opt">약 1/20이다</button>
+        <button class="opt">√20배 크다</button>
+      </div><div class="quiz-exp">스토니 식 \(\sigma_f \propto (1/R)/h_f\). 곡률 불확도가 같으면 응력 불확도는 \(1/h_f\)에 비례하므로 1000/50 = 20배다.</div></div>
+
+      <div class="quiz-q"><p>7. EWMA 런투런에서 속도가 매 장 0.1 nm/min씩 줄어드는데 λ = 0.2를 쓴다. 정상 상태에서 속도 추정은 대략 얼마나 뒤처지나?</p><div class="opts">
+        <button class="opt">0.02 nm/min</button>
+        <button class="opt">0.1 nm/min</button>
+        <button class="opt" data-correct>0.5 nm/min</button>
+        <button class="opt">뒤처지지 않는다</button>
+      </div><div class="quiz-exp">일정한 표류 \(\delta\)에 대한 EWMA의 정상 지연은 \(\delta/\lambda = 0.1/0.2 = 0.5\) nm/min(지연 없는 계측 기준, 계측 지연이 있으면 그만큼 더). 300 nm/min에서 약 0.17 %의 두께 오차다. 표류를 따로 모델링하는 이중 EWMA(PCC)로 없앨 수 있다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  function $(id) { return document.getElementById(id); }
+  var clamp = TF.clamp;
+  function alpha(c, a) {
+    c = (c || "").trim();
+    var h = ("0" + Math.round(clamp(a, 0, 1) * 255).toString(16)).slice(-2);
+    if (/^#[0-9a-f]{6}$/i.test(c)) return c + h;
+    if (/^#[0-9a-f]{3}$/i.test(c)) return "#" + c[1] + c[1] + c[2] + c[2] + c[3] + c[3] + h;
+    return c;
+  }
+  function rng(seed) {
+    var s = seed >>> 0;
+    return function () {
+      s = (s + 0x6D2B79F5) >>> 0;
+      var t = s;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function gauss(r) { var u = 1 - r(), v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+  function verdict(id, cls, txt) { var el = $(id); if (!el) return; el.className = "v q-verdict " + cls; el.textContent = txt; }
+
+  /* ---------- complex arithmetic ---------- */
+  function C(re, im) { return [re, im || 0]; }
+  function cadd(a, b) { return [a[0] + b[0], a[1] + b[1]]; }
+  function csub(a, b) { return [a[0] - b[0], a[1] - b[1]]; }
+  function cmul(a, b) { return [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]]; }
+  function cdiv(a, b) { var d = b[0] * b[0] + b[1] * b[1] || 1e-300; return [(a[0] * b[0] + a[1] * b[1]) / d, (a[1] * b[0] - a[0] * b[1]) / d]; }
+  function cexp(a) { var e = Math.exp(a[0]); return [e * Math.cos(a[1]), e * Math.sin(a[1])]; }
+  function csqrt(a) { var r = Math.hypot(a[0], a[1]), re = Math.sqrt(Math.max(0, (r + a[0]) / 2)), im = Math.sqrt(Math.max(0, (r - a[0]) / 2)); if (a[1] < 0) im = -im; return [re, im]; }
+  function cabs2(a) { return a[0] * a[0] + a[1] * a[1]; }
+
+  /* ---------- optical constants ---------- */
+  function nSiO2(lnm) { var l = lnm / 1000, l2 = l * l; return Math.sqrt(1 + 0.6961663 * l2 / (l2 - 0.0684043 * 0.0684043) + 0.4079426 * l2 / (l2 - 0.1162414 * 0.1162414) + 0.8974794 * l2 / (l2 - 9.896161 * 9.896161)); }
+  function nSi3N4(lnm) { var l = lnm / 1000, l2 = l * l; return Math.sqrt(1 + 3.0249 * l2 / (l2 - 0.1353406 * 0.1353406) + 40314 * l2 / (l2 - 1239.842 * 1239.842)); }
+  function nAl2O3(lnm) { var l = lnm / 1000; return 1.615 + 0.0055 / (l * l); }
+  var SI_TAB = [[400, 5.57, 0.387], [450, 4.67, 0.142], [500, 4.29, 0.073], [550, 4.08, 0.041], [600, 3.95, 0.026], [650, 3.85, 0.017], [700, 3.78, 0.012], [800, 3.68, 0.006], [900, 3.61, 0.002], [1000, 3.57, 0.0006]];
+  function nSi(lnm) {
+    var T = SI_TAB, i = 0;
+    if (lnm <= T[0][0]) return C(T[0][1], -T[0][2]);
+    if (lnm >= T[T.length - 1][0]) return C(T[T.length - 1][1], -T[T.length - 1][2]);
+    while (T[i + 1][0] < lnm) i++;
+    var f = (lnm - T[i][0]) / (T[i + 1][0] - T[i][0]);
+    return C(T[i][1] + f * (T[i + 1][1] - T[i][1]), -(T[i][2] + f * (T[i + 1][2] - T[i][2])));
+  }
+  var NFILM = { ox: nSiO2, sin: nSi3N4, alo: nAl2O3 };
+  // normal-incidence reflectance of film(n1 real) on Si
+  function reflect(n1, lnm, d) {
+    var n0 = C(1), N1 = C(n1), N2 = nSi(lnm);
+    var r01 = cdiv(csub(n0, N1), cadd(n0, N1)), r12 = cdiv(csub(N1, N2), cadd(N1, N2));
+    var ph = cexp(C(0, -4 * Math.PI * n1 * d / lnm));
+    var num = cadd(r01, cmul(r12, ph)), den = cadd(C(1), cmul(cmul(r01, r12), ph));
+    return cabs2(cdiv(num, den));
+  }
+
+  /* =============================================================
+     1) Spectral reflectance
+     ============================================================= */
+  (function () {
+    if (!$("sr-cv")) return;
+    var gF = TF.seg("sr-film", draw);
+    var gD = TF.range("sr-d", function (v) { return v + " nm"; }, draw);
+    var nd = $("sr-nd"); nd.addEventListener("change", draw);
+    var cv = TF.canvas($("sr-cv"), function (ctx, w, h) {
+      var P = TF.palette(), nf = NFILM[gF()], d = gD(), n633 = nf(633);
+      var A = [], B = [], pk = 0, p2 = null, p1 = null, rgb = [0, 0, 0], ws = 0, rs = 0;
+      for (var l = 400; l <= 1000; l += 2) {
+        var R = reflect(nf(l), l, d); A.push([l, R]);
+        if (nd.checked) B.push([l, reflect(n633, l, d)]);
+        if (p2 !== null && p1 > p2 && p1 > R) pk++;
+        p2 = p1; p1 = R;
+        if (l <= 700) { var c = TF.wl2rgbArr(l); rgb[0] += c[0] * R; rgb[1] += c[1] * R; rgb[2] += c[2] * R; ws++; rs += R; }
+      }
+      var h1 = Math.round(h * 0.72);
+      var ch = TF.chart(ctx, { x: 58, y: 12, w: w - 76, h: h1 - 46 }, {
+        x: [400, 1000], y: [0, 0.6], xLabel: "파장 λ (nm)", yLabel: "반사율 R",
+        series: [{ data: B, color: P.dim, width: 1.4, dash: [5, 4] }, { data: A, color: gF() === "ox" ? P.oxide : P.nitride, width: 2.4 }],
+        vlines: [{ x: 633, color: P.faint }]
+      });
+      for (var x = 400; x < 700; x += 4) { ctx.fillStyle = TF.wl2rgb(x, 0.8); ctx.fillRect(ch.X(x), ch.box.y + ch.box.h - 4, ch.X(x + 4) - ch.X(x) + 0.5, 4); }
+      // dispersion strip
+      var y0 = h1 + 14, hh = h - h1 - 18, nmin = nf(1000), nmax = nf(400);
+      ctx.strokeStyle = P.accent2; ctx.lineWidth = 2; ctx.beginPath();
+      for (l = 400; l <= 1000; l += 5) { var px = ch.X(l), py = y0 + hh - (nf(l) - nmin) / Math.max(1e-6, nmax - nmin) * (hh - 14) - 2; l === 400 ? ctx.moveTo(px, py) : ctx.lineTo(px, py); }
+      ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.font = "11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("막 굴절률 n(λ): " + nmax.toFixed(3) + " (400 nm) → " + nmin.toFixed(3) + " (1000 nm)", ch.X(600), y0 + 4);
+      var k = 255 / Math.max(1e-6, rgb[0], rgb[1], rgb[2]), br = clamp(rs / Math.max(1, ws) / 0.5 * 2.2, 0.25, 1);
+      var col = "rgb(" + Math.round(rgb[0] * k * br) + "," + Math.round(rgb[1] * k * br) + "," + Math.round(rgb[2] * k * br) + ")";
+      TF.stat("sr-r", (reflect(n633, 633, d) * 100).toFixed(1) + " <small>%</small>");
+      TF.stat("sr-n", n633.toFixed(3) + " · " + nf(400).toFixed(3));
+      TF.stat("sr-pk", String(pk));
+      TF.stat("sr-col", '<span style="display:inline-block;width:46px;height:18px;border-radius:4px;border:1px solid var(--border);vertical-align:middle;background:' + col + '"></span>');
+    }, { aspect: 0.66, maxHeight: 440, minHeight: 300 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     2) Fitting chi-square landscape
+     ============================================================= */
+  (function () {
+    if (!$("fit-cv")) return;
+    var st = { seed: 11, truth: 0, meas: [], fit: null, lams: [] };
+    var gG = TF.range("fit-g", function (v) { return v + " nm"; }, function () { st.fit = null; cv.redraw(); });
+    var gN = TF.range("fit-n", function (v) { return v.toFixed(1) + " %"; }, gen);
+    var gL = TF.range("fit-l", function (v) { return v + " nm"; }, gen);
+    function gen() {
+      var r = rng(st.seed);
+      st.truth = 300 + Math.round(r() * 1000);
+      st.lams = []; st.meas = [];
+      for (var l = gL(); l <= 1000; l += 5) { st.lams.push(l); st.meas.push(reflect(nSiO2(l), l, st.truth) + gN() / 100 * gauss(r)); }
+      st.fit = null; if (cv) cv.redraw();
+    }
+    function chi(d) { var s = 0; for (var i = 0; i < st.lams.length; i++) { var e = reflect(nSiO2(st.lams[i]), st.lams[i], d) - st.meas[i]; s += e * e; } return Math.sqrt(s / st.lams.length); }
+    function golden(a, b) {
+      var g = 0.618034, c = b - g * (b - a), d = a + g * (b - a), fc = chi(c), fd = chi(d);
+      for (var i = 0; i < 60; i++) { if (fc < fd) { b = d; d = c; fd = fc; c = b - g * (b - a); fc = chi(c); } else { a = c; c = d; fc = fd; d = a + g * (b - a); fd = chi(d); } }
+      return (a + b) / 2;
+    }
+    function local(d0) { // descend: move window toward lower chi until inside a basin, then golden
+      var d = d0, step = 4;
+      for (var it = 0; it < 400; it++) { var l = chi(d - step), r = chi(d + step), c = chi(d); if (c <= l && c <= r) break; d = l < r ? d - step : d + step; if (d < 0) { d = 0; break; } }
+      return golden(Math.max(0, d - step), d + step);
+    }
+    $("fit-local").addEventListener("click", function () { st.fit = local(gG()); cv.redraw(); });
+    $("fit-global").addEventListener("click", function () {
+      var best = 1e9, bd = 0;
+      for (var d = 0; d <= 1600; d += 4) { var c = chi(d); if (c < best) { best = c; bd = d; } }
+      st.fit = golden(Math.max(0, bd - 6), bd + 6); cv.redraw();
+    });
+    $("fit-new").addEventListener("click", function () { st.seed = (st.seed * 48271 + 7) % 2147483647; gen(); });
+    var cv = TF.canvas($("fit-cv"), function (ctx, w, h) {
+      var P = TF.palette();
+      if (!st.lams.length) return;
+      var h1 = Math.round(h * 0.48), M = st.lams.map(function (l, i) { return [l, st.meas[i]]; });
+      var mod = st.fit != null ? st.lams.map(function (l) { return [l, reflect(nSiO2(l), l, st.fit)]; }) : [];
+      var c1 = TF.chart(ctx, { x: 58, y: 12, w: w - 76, h: h1 - 44 }, { x: [400, 1000], y: [0, 0.6], xLabel: "파장 (nm)", yLabel: "R", series: [{ data: mod, color: P.accent, width: 2 }] });
+      ctx.fillStyle = P.oxide; M.forEach(function (p) { ctx.beginPath(); ctx.arc(c1.X(p[0]), c1.Y(clamp(p[1], 0, 0.6)), 2.2, 0, 7); ctx.fill(); });
+      var L = [], cmax = 0;
+      for (var d = 0; d <= 1600; d += 4) { var c = chi(d); L.push([d, c]); cmax = Math.max(cmax, c); }
+      var vl = [{ x: gG(), color: P.dim, label: "d₀" }];
+      if (st.fit != null) vl.push({ x: st.fit, color: P.accent, dash: [], label: "fit" });
+      TF.chart(ctx, { x: 58, y: h1 + 6, w: w - 76, h: h - h1 - 52 }, { x: [0, 1600], y: [0, Math.max(0.05, cmax * 1.05)], xLabel: "가정한 두께 d (nm)", yLabel: "χ² (RMS)", series: [{ data: L, color: P.accent2, width: 1.8 }], vlines: vl });
+      TF.stat("fit-t", st.truth + " <small>nm</small>");
+      if (st.fit != null) {
+        var err = st.fit - st.truth;
+        TF.stat("fit-d", st.fit.toFixed(1) + " <small>nm</small>");
+        TF.stat("fit-c", (chi(st.fit) * 100).toFixed(2) + " <small>%</small>");
+        if (Math.abs(err) < 3) verdict("fit-v", "ok", "참값 일치 (" + (err >= 0 ? "+" : "") + err.toFixed(1) + " nm)");
+        else verdict("fit-v", "bad", "국소 최소 (" + (err >= 0 ? "+" : "") + err.toFixed(0) + " nm)");
+      } else { TF.stat("fit-d", "—"); TF.stat("fit-c", "—"); verdict("fit-v", "", "피팅 전"); }
+    }, { aspect: 0.8, maxHeight: 480, minHeight: 340 });
+    gen();
+  })();
+
+  /* =============================================================
+     3) Ellipsometry
+     ============================================================= */
+  function ellips(n1, lnm, d, aoiDeg) {
+    var th0 = aoiDeg * Math.PI / 180, n0 = C(1), N1 = C(n1), N2 = nSi(lnm);
+    var s0 = Math.sin(th0), c0 = C(Math.cos(th0));
+    var sin1 = cdiv(C(s0), N1), cos1 = csqrt(csub(C(1), cmul(sin1, sin1)));
+    var sin2 = cdiv(C(s0), N2), cos2 = csqrt(csub(C(1), cmul(sin2, sin2)));
+    function rp(Na, ca, Nb, cb) { return cdiv(csub(cmul(Nb, ca), cmul(Na, cb)), cadd(cmul(Nb, ca), cmul(Na, cb))); }
+    function rs(Na, ca, Nb, cb) { return cdiv(csub(cmul(Na, ca), cmul(Nb, cb)), cadd(cmul(Na, ca), cmul(Nb, cb))); }
+    var beta = cmul(C(2 * Math.PI * d / lnm), cmul(N1, cos1));
+    var ph = cexp(cmul(C(0, -2), beta));
+    function tot(r01, r12) { return cdiv(cadd(r01, cmul(r12, ph)), cadd(C(1), cmul(cmul(r01, r12), ph))); }
+    var Rp = tot(rp(n0, c0, N1, cos1), rp(N1, cos1, N2, cos2));
+    var Rs = tot(rs(n0, c0, N1, cos1), rs(N1, cos1, N2, cos2));
+    var rho = cdiv(Rp, Rs);
+    var psi = Math.atan(Math.sqrt(cabs2(rho))) * 180 / Math.PI;
+    var del = Math.atan2(rho[1], rho[0]) * 180 / Math.PI; if (del < 0) del += 360;
+    return { psi: psi, del: del };
+  }
+  (function () {
+    if (!$("se-cv")) return;
+    var gF = TF.seg("se-film", draw);
+    var gD = TF.range("se-d", function (v) { return v.toFixed(1) + " nm"; }, draw);
+    var gA = TF.range("se-a", function (v) { return v.toFixed(1) + "°"; }, draw);
+    var gL = TF.range("se-l", function (v) { return v + " nm"; }, draw);
+    var cv = TF.canvas($("se-cv"), function (ctx, w, h) {
+      var P = TF.palette(), n1 = NFILM[gF()](gL()), L = gL(), A = gA(), d = gD();
+      var th1 = Math.asin(Math.sin(A * Math.PI / 180) / n1);
+      var per = L / (2 * n1 * Math.cos(th1));
+      var traj = [], dots = [];
+      for (var x = 0; x <= per * 1.001; x += per / 300) { var e = ellips(n1, L, x, A); traj.push([e.psi, e.del]); }
+      for (x = 0; x <= per; x += 10) { var e2 = ellips(n1, L, x, A); dots.push({ x: e2.psi, y: e2.del, color: P.faint, r: 2.5 }); }
+      var cur = ellips(n1, L, d % per, A), cur0 = ellips(n1, L, d, A);
+      var wide = w > 560, bx1 = wide ? { x: 58, y: 12, w: w / 2 - 80, h: h - 58 } : { x: 58, y: 12, w: w - 76, h: h * 0.55 - 50 };
+      var col = gF() === "ox" ? P.oxide : (gF() === "sin" ? P.nitride : P.highk);
+      // handle wrap in Delta: split series at jumps
+      var segs = [[]];
+      traj.forEach(function (p, i) { if (i && Math.abs(p[1] - traj[i - 1][1]) > 180) segs.push([]); segs[segs.length - 1].push(p); });
+      TF.chart(ctx, bx1, { x: [0, 90], y: [0, 360], xLabel: "Ψ (°)", yLabel: "Δ (°)", series: segs.map(function (s) { return { data: s, color: col, width: 2 }; }), points: dots.concat([{ x: cur0.psi, y: cur0.del, color: P.accent, r: 6 }]) });
+      var thin = [];
+      for (var t = 0; t <= 10; t += 0.1) thin.push([t, ellips(n1, L, t, A).del]);
+      var dmin = Math.min.apply(null, thin.map(function (p) { return p[1]; })), dmax = Math.max.apply(null, thin.map(function (p) { return p[1]; }));
+      var bx2 = wide ? { x: w / 2 + 30, y: 12, w: w / 2 - 48, h: h - 58 } : { x: 58, y: h * 0.55 + 4, w: w - 76, h: h * 0.45 - 50 };
+      var c2 = TF.chart(ctx, bx2, { x: [0, 10], y: [Math.floor(dmin - 2), Math.ceil(dmax + 2)], xLabel: "두께 0–10 nm", series: [{ data: thin, color: P.accent2, width: 2.2 }], vlines: d <= 10 ? [{ x: d, color: P.accent }] : [] });
+      ctx.save(); ctx.fillStyle = P.dim; ctx.font = "12px sans-serif"; ctx.translate(bx2.x - 40, bx2.y + bx2.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillText("Δ (°)", 0, 0); ctx.restore();
+      void c2;
+      var e1 = ellips(n1, L, d + 0.05, A), e0 = ellips(n1, L, Math.max(0, d - 0.05), A);
+      var dd = e1.del - e0.del; if (dd > 180) dd -= 360; if (dd < -180) dd += 360;
+      var sens = dd / (d + 0.05 - Math.max(0, d - 0.05));
+      TF.stat("se-psi", cur0.psi.toFixed(2) + "°");
+      TF.stat("se-del", cur0.del.toFixed(2) + "°");
+      TF.stat("se-s", sens.toFixed(2) + " <small>°/nm</small>");
+      TF.stat("se-per", per.toFixed(0) + " <small>nm</small>");
+      void cur;
+    }, { aspect: 0.55, maxHeight: 420, minHeight: 340 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     4) XRR (Parratt)
+     ============================================================= */
+  (function () {
+    if (!$("xrr-cv")) return;
+    var LAM = 0.15406, RE = 2.818e-15, NA = 6.022e23;
+    var MAT = { ox: { rho: 2.2, za: 0.4993, bd: 0.013 }, alo: { rho: 3.0, za: 0.4904, bd: 0.012 }, hfo: { rho: 9.7, za: 0.418, bd: 0.11 }, tin: { rho: 5.2, za: 0.4687, bd: 0.05 }, si: { rho: 2.33, za: 0.4985, bd: 0.023 } };
+    function delta(m, scale) { var ne = (m.rho * scale) * 1e6 * NA * m.za; return RE * Math.pow(LAM * 1e-9, 2) / (2 * Math.PI) * ne; }
+    var gF = TF.seg("xrr-film", draw);
+    var gD = TF.range("xrr-d", function (v) { return v.toFixed(1) + " nm"; }, draw);
+    var gR = TF.range("xrr-r", function (v) { return v.toFixed(1) + " %"; }, draw);
+    var gS = TF.range("xrr-s", function (v) { return v.toFixed(2) + " nm"; }, draw);
+    function refl(theta, layers) { // layers: [{d,dl,bt,sig}] top to bottom incl substrate (last), ambient implicit
+      var k0 = 2 * Math.PI / LAM, s2 = Math.sin(theta) * Math.sin(theta);
+      var kz = [C(k0 * Math.sin(theta))];
+      layers.forEach(function (L) { kz.push(cmul(C(k0), csqrt(C(s2 - 2 * L.dl, 2 * L.bt)))); });
+      var X = C(0);
+      for (var j = layers.length - 1; j >= 0; j--) {
+        var ka = kz[j], kb = kz[j + 1];
+        var r = cdiv(csub(ka, kb), cadd(ka, kb));
+        r = cmul(r, cexp(cmul(C(-2 * Math.pow(layers[j].sig, 2)), cmul(ka, kb))));
+        var ph = j < layers.length - 1 ? cexp(cmul(C(0, 2 * layers[j].d), kb)) : C(1);
+        var Xp = cmul(X, ph);
+        X = cdiv(cadd(r, Xp), cadd(C(1), cmul(r, Xp)));
+      }
+      return cabs2(X);
+    }
+    var cv = TF.canvas($("xrr-cv"), function (ctx, w, h) {
+      var P = TF.palette(), m = MAT[gF()], d = gD(), sc = gR() / 100, sig = gS();
+      var dl = delta(m, sc), ds = delta(MAT.si, 1);
+      // lay[0] = film (top roughness sig), lay[1] = Si substrate (film/Si interface roughness 0.2 nm)
+      var lay = [{ d: d, dl: dl, bt: dl * m.bd, sig: sig }, { d: 0, dl: ds, bt: ds * MAT.si.bd, sig: 0.2 }];
+      var D = [], mins = [];
+      var prev2 = null, prev1 = null;
+      for (var tt = 0.05; tt <= 4.0; tt += 0.005) {
+        var R = Math.max(1e-9, refl(tt / 2 * Math.PI / 180, lay));
+        D.push([tt, R]);
+        if (prev2 !== null && prev1[1] < prev2[1] && prev1[1] < R && tt > 2 * Math.sqrt(2 * Math.max(dl, ds)) * 180 / Math.PI * 1.15) mins.push(prev1[0]);
+        prev2 = prev1; prev1 = [tt, R];
+      }
+      var tcf = Math.sqrt(2 * dl) * 180 / Math.PI, tcs = Math.sqrt(2 * ds) * 180 / Math.PI;
+      TF.chart(ctx, null, {
+        x: [0, 4], y: [1e-8, 2], logY: true, xLabel: "2θ (°), Cu Kα", yLabel: "반사율 R",
+        series: [{ data: D, color: gF() === "ox" ? P.oxide : (gF() === "tin" ? P.metal : P.highk), width: 2 }],
+        vlines: [{ x: 2 * tcf, color: P.accent, label: "2θc 막" }, { x: 2 * tcs, color: P.faint, label: "Si" }]
+      });
+      var per = LAM / d * 180 / Math.PI;
+      var est = "—";
+      if (mins.length >= 3) {
+        var gaps = []; for (var i = 1; i < mins.length; i++) gaps.push(mins[i] - mins[i - 1]);
+        gaps.sort(function (a, b) { return a - b; });
+        var g = gaps[Math.floor(gaps.length / 2)];
+        est = (LAM / (g * Math.PI / 180)).toFixed(1) + " <small>nm</small>";
+      }
+      TF.stat("xrr-rho", (m.rho * sc).toFixed(2) + " <small>g/cm³ · δ " + (dl * 1e6).toFixed(1) + "×10⁻⁶</small>");
+      TF.stat("xrr-tc", tcf.toFixed(3) + "° · " + tcs.toFixed(3) + "°");
+      TF.stat("xrr-p", per.toFixed(3) + "°");
+      TF.stat("xrr-est", est);
+    }, { aspect: 0.6, maxHeight: 420, minHeight: 300 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     5) Four-point probe
+     ============================================================= */
+  (function () {
+    if (!$("rs-cv")) return;
+    var MET = { cu: { r0: 1.68, l: 39 }, w: { r0: 5.3, l: 19 }, al: { r0: 2.65, l: 19 }, tin: { r0: 60, l: 1.5 } };
+    var gM = TF.seg("rs-m", draw);
+    var gT = TF.range("rs-t", function (v) { return v + " nm"; }, draw);
+    var gU = TF.range("rs-u", function (v) { return (v > 0 ? "+" : "") + v.toFixed(1) + " %"; }, draw);
+    var se = $("rs-se"), ec = $("rs-ec");
+    se.addEventListener("change", draw); ec.addEventListener("change", draw);
+    function rho(m, t) { if (!se.checked) return m.r0; var a = m.l / Math.max(1, t) * 0.3 / 0.7; return m.r0 * (1 + 3 * m.l / (8 * Math.max(1, t)) + 1.5 * a); }
+    // edge factor: apparent/true for collinear probes (s=1 mm) parallel to insulating edge at distance a mm
+    function edgeFactor(a) {
+      var xs = [0, 1, 2, 3];
+      function phi(xp, yp) { // potential at probe (xp,0) from +I at x0, -I at x3, plus images at y=2a
+        var f = 0;
+        [[0, 1], [3, -1]].forEach(function (src) { var dx = xp - src[0]; var r1 = Math.max(1e-6, Math.abs(dx)), r2 = Math.sqrt(dx * dx + 4 * a * a); f += -src[1] * (Math.log(r1) + Math.log(r2)); });
+        return f;
+      }
+      var V = phi(xs[1]) - phi(xs[2]);
+      var V0 = 2 * Math.log(2);
+      return V / V0;
+    }
+    function sites() {
+      var s = [[0, 0]];
+      [[49, 8], [98, 16], [147, 24]].forEach(function (ring) { for (var i = 0; i < ring[1]; i++) { var a = 2 * Math.PI * i / ring[1]; s.push([ring[0] * Math.cos(a), ring[0] * Math.sin(a)]); } });
+      return s;
+    }
+    var SITES = sites();
+    var cv = TF.canvas($("rs-cv"), function (ctx, w, h) {
+      var P = TF.palette(), m = MET[gM()], t = gT(), u = gU() / 100;
+      var wide = w > 560;
+      var bx = wide ? { x: 62, y: 12, w: w * 0.55 - 80, h: h - 58 } : { x: 62, y: 12, w: w - 80, h: h * 0.5 - 50 };
+      var A = [], B = [];
+      for (var tt = 3; tt <= 500; tt *= 1.05) { A.push([tt, rho(m, tt) / (tt * 1e-7) * 1e-6]); B.push([tt, m.r0 / (tt * 1e-7) * 1e-6]); }
+      var rsv = rho(m, t) / (t * 1e-7) * 1e-6;
+      TF.chart(ctx, bx, { x: [3, 500], y: [Math.max(1e-3, m.r0 / 5e-5 * 1e-6 * 0.5), m.r0 * 4 / 3e-7 * 1e-6 * 2], logX: true, logY: true, xLabel: "두께 (nm)", yLabel: "Rs (Ω/□)", series: [{ data: B, color: P.dim, width: 1.4, dash: [5, 4] }, { data: A, color: P.metal, width: 2.4 }], points: [{ x: t, y: rsv, color: P.accent, r: 6 }] });
+      // wafer map
+      var cx = wide ? w * 0.78 : w / 2, cy = wide ? h / 2 - 6 : h * 0.75, R = wide ? Math.min(w * 0.2, h / 2 - 30) : Math.min(w / 2 - 30, h * 0.25 - 14);
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.stroke();
+      var vals = SITES.map(function (p) {
+        var r = Math.hypot(p[0], p[1]) / 150, tl = t * (1 + u * (1 - 2 * r * r)); // center +u, edge -u
+        var v = rho(m, tl) / (tl * 1e-7) * 1e-6;
+        if (!ec.checked) { var a = 150 - Math.hypot(p[0], p[1]); if (a < 10) v *= edgeFactor(Math.max(0.5, a)); }
+        return v;
+      });
+      var mean = vals.reduce(function (a, b) { return a + b; }, 0) / vals.length;
+      var sd = Math.sqrt(vals.reduce(function (a, b) { return a + (b - mean) * (b - mean); }, 0) / (vals.length - 1));
+      var span = Math.max(0.02, Math.max.apply(null, vals.map(function (v) { return Math.abs(v / mean - 1); })));
+      SITES.forEach(function (p, i) {
+        var dv = (vals[i] / mean - 1) / span;
+        ctx.fillStyle = dv >= 0 ? alpha(P.bad, 0.25 + 0.7 * Math.abs(dv)) : alpha(P.accent, 0.25 + 0.7 * Math.abs(dv));
+        ctx.beginPath(); ctx.arc(cx + p[0] / 150 * R * 0.97, cy - p[1] / 150 * R * 0.97, Math.max(4, R * 0.055), 0, 7); ctx.fill();
+      });
+      ctx.fillStyle = P.dim; ctx.font = "11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+      ctx.fillText("49점 Rs 지도 (빨강 높음, 범위 ±" + (span * 100).toFixed(1) + " %)", cx, cy + R + 6);
+      TF.stat("rs-rho", rho(m, t).toFixed(2) + " <small>µΩ·cm</small>");
+      TF.stat("rs-rs", (mean >= 100 ? mean.toFixed(0) : mean.toFixed(3)) + " <small>Ω/□</small>");
+      TF.stat("rs-v", (rsv * 1e-3 * Math.LN2 / Math.PI * 1000).toFixed(3) + " <small>mV</small>");
+      TF.stat("rs-u1", (sd / mean * 100).toFixed(2) + " <small>%</small>");
+    }, { aspect: 0.6, maxHeight: 440, minHeight: 360 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     6) Laser curvature measurement
+     ============================================================= */
+  (function () {
+    if (!$("bowm-cv")) return;
+    var MS = 180.5e9, HS = 775e-6, R0 = 80, seed = 3;
+    var gS = TF.range("bowm-s", function (v) { return (v > 0 ? "+" : "") + v + " MPa"; }, draw);
+    var gH = TF.range("bowm-h", function (v) { return v + " nm"; }, draw);
+    var gN = TF.range("bowm-n", function (v) { return v.toFixed(1) + " µrad"; }, draw);
+    var gK = TF.range("bowm-k", function (v) { return String(v); }, draw);
+    var pre = $("bowm-pre"); pre.addEventListener("change", draw);
+    $("bowm-re").addEventListener("click", function () { seed = (seed * 16807) % 2147483647; draw(); });
+    function kFilm(sMPa, hnm) { return 6 * sMPa * 1e6 * hnm * 1e-9 / (MS * HS * HS); }
+    function fit(xs, ys) { var n = xs.length, sx = 0, sy = 0, sxx = 0, sxy = 0; for (var i = 0; i < n; i++) { sx += xs[i]; sy += ys[i]; sxx += xs[i] * xs[i]; sxy += xs[i] * ys[i]; } var b = (n * sxy - sx * sy) / (n * sxx - sx * sx); return { b: b, a: (sy - b * sx) / n }; }
+    var cv = TF.canvas($("bowm-cv"), function (ctx, w, h) {
+      var P = TF.palette(), s = gS(), hf = gH(), sn = gN() * 1e-6, K = gK();
+      var r = rng(seed), xs = [], th0 = [], th1 = [];
+      var k0 = 1 / R0, k1 = k0 + kFilm(s, hf);
+      for (var i = 0; i < K; i++) { var x = -0.14 + 0.28 * i / (K - 1); xs.push(x); th0.push(x * k0 + 2e-5 + sn * gauss(r)); th1.push(x * k1 + 5e-5 + sn * gauss(r)); }
+      var f0 = fit(xs, th0), f1 = fit(xs, th1);
+      var dk = pre.checked ? f1.b - f0.b : f1.b;
+      var sMeas = MS * HS * HS / (6 * hf * 1e-9) * dk / 1e6;
+      var sxx = 0, xm = 0; xs.forEach(function (x) { xm += x / K; }); xs.forEach(function (x) { sxx += (x - xm) * (x - xm); });
+      var uk = sn / Math.sqrt(sxx) * (pre.checked ? Math.SQRT2 : 1);
+      var uS = MS * HS * HS / (6 * hf * 1e-9) * uk / 1e6;
+      var h1 = Math.round(h * 0.56);
+      var all = th0.concat(th1).map(function (v) { return v * 1e3; });
+      var lo = Math.min.apply(null, all), hi = Math.max.apply(null, all), pad = (hi - lo) * 0.1 + 0.01;
+      var c = TF.chart(ctx, { x: 62, y: 12, w: w - 80, h: h1 - 44 }, {
+        x: [-150, 150], y: [lo - pad, hi + pad], xLabel: "위치 x (mm)", yLabel: "기울기 θ (mrad)",
+        series: [{ data: [[-140, (f0.a - 0.14 * f0.b) * 1e3], [140, (f0.a + 0.14 * f0.b) * 1e3]], color: P.dim, width: 1.2, dash: [4, 4] }, { data: [[-140, (f1.a - 0.14 * f1.b) * 1e3], [140, (f1.a + 0.14 * f1.b) * 1e3]], color: P.accent, width: 1.8 }]
+      });
+      xs.forEach(function (x, i) { ctx.fillStyle = P.faint; ctx.beginPath(); ctx.arc(c.X(x * 1e3), c.Y(th0[i] * 1e3), 2.5, 0, 7); ctx.fill(); ctx.fillStyle = P.accent; ctx.beginPath(); ctx.arc(c.X(x * 1e3), c.Y(th1[i] * 1e3), 3, 0, 7); ctx.fill(); });
+      var U = [];
+      for (var hh = 10; hh <= 2000; hh *= 1.1) U.push([hh, MS * HS * HS / (6 * hh * 1e-9) * uk / 1e6]);
+      TF.chart(ctx, { x: 62, y: h1 + 6, w: w - 80, h: h - h1 - 52 }, { x: [10, 2000], y: [0.1, 1e4], logX: true, logY: true, xLabel: "막 두께 (nm)", yLabel: "응력 1σ (MPa)", series: [{ data: U, color: P.accent2, width: 2.2 }], points: [{ x: hf, y: Math.max(0.1, uS), color: P.accent, r: 6 }], hlines: [{ y: 10, color: P.faint, label: "10 MPa" }] });
+      var err = sMeas - s;
+      TF.stat("bowm-o-s", (sMeas >= 0 ? "+" : "") + sMeas.toFixed(0) + " <small>MPa</small>");
+      TF.stat("bowm-o-e", (err >= 0 ? "+" : "") + err.toFixed(0) + " <small>MPa</small>");
+      TF.stat("bowm-o-u", "±" + (uS < 10 ? uS.toFixed(1) : uS.toFixed(0)) + " <small>MPa</small>");
+      if (Math.abs(err) > Math.max(50, 3 * uS)) verdict("bowm-o-v", "bad", "계통 오차");
+      else if (uS > 30) verdict("bowm-o-v", "warn", "막이 너무 얇음");
+      else verdict("bowm-o-v", "ok", "신뢰할 만함");
+    }, { aspect: 0.8, maxHeight: 480, minHeight: 340 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     7) Gauge R&R
+     ============================================================= */
+  (function () {
+    if (!$("grr-cv")) return;
+    var seed = 21, NP = 10, NO = 3, NR = 3;
+    var gE = TF.range("grr-e", function (v) { return v.toFixed(2) + " nm"; }, draw);
+    var gA = TF.range("grr-a", function (v) { return v.toFixed(2) + " nm"; }, draw);
+    var gP = TF.range("grr-p", function (v) { return v.toFixed(2) + " nm"; }, draw);
+    var gT = TF.range("grr-t", function (v) { return v.toFixed(1) + " nm"; }, draw);
+    $("grr-re").addEventListener("click", function () { seed = (seed * 69069 + 1) % 2147483647; draw(); });
+    var cv = TF.canvas($("grr-cv"), function (ctx, w, h) {
+      var P = TF.palette(), r = rng(seed), se = gE(), sa = gA(), sp = gP(), tol = gT();
+      var parts = [], ops = [], X = [];
+      for (var p = 0; p < NP; p++) parts.push(100 + sp * gauss(r));
+      for (var o = 0; o < NO; o++) ops.push(sa * gauss(r));
+      for (p = 0; p < NP; p++) { X.push([]); for (o = 0; o < NO; o++) { X[p].push([]); for (var k = 0; k < NR; k++) X[p][o].push(parts[p] + ops[o] + se * gauss(r)); } }
+      // ANOVA-like estimates
+      var within = 0, cnt = 0, cellM = [], opM = [0, 0, 0], partM = [], gm = 0;
+      for (p = 0; p < NP; p++) { cellM.push([]); var pm = 0; for (o = 0; o < NO; o++) { var m = X[p][o].reduce(function (a, b) { return a + b; }, 0) / NR; cellM[p].push(m); pm += m / NO; opM[o] += m / NP; X[p][o].forEach(function (v) { within += (v - m) * (v - m); }); cnt += NR - 1; } partM.push(pm); gm += pm / NP; }
+      var ev2 = within / cnt;
+      var vo = 0; opM.forEach(function (v) { vo += (v - gm) * (v - gm); }); vo /= (NO - 1);
+      var av2 = Math.max(0, vo - ev2 / (NP * NR));
+      var vp = 0; partM.forEach(function (v) { vp += (v - gm) * (v - gm); }); vp /= (NP - 1);
+      var pv2 = Math.max(0, vp - (ev2 / (NO * NR)) - av2 / NO);
+      var ms = Math.sqrt(ev2 + av2), tot = Math.sqrt(ev2 + av2 + pv2);
+      var grr = 100 * ms / tot, pt = 100 * 6 * ms / tol, ndc = 1.41 * Math.sqrt(pv2) / ms;
+      var all = []; X.forEach(function (a) { a.forEach(function (b) { all = all.concat(b); }); });
+      var lo = Math.min.apply(null, all), hi = Math.max.apply(null, all), pad = (hi - lo) * 0.08 + 0.01;
+      var c = TF.chart(ctx, null, { x: [0.5, NP + 0.5], y: [lo - pad, hi + pad], xLabel: "웨이퍼 번호", yLabel: "측정 두께 (nm)", xTicks: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], xFmt: function (v) { return String(v); } });
+      var cols = [P.accent, P.accent2, P.warn];
+      for (p = 0; p < NP; p++) {
+        ctx.strokeStyle = P.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(c.X(p + 1 - 0.35), c.Y(parts[p])); ctx.lineTo(c.X(p + 1 + 0.35), c.Y(parts[p])); ctx.stroke();
+        for (o = 0; o < NO; o++) for (k = 0; k < NR; k++) { ctx.fillStyle = cols[o]; ctx.beginPath(); ctx.arc(c.X(p + 1 + (o - 1) * 0.22), c.Y(X[p][o][k]), 3, 0, 7); ctx.fill(); }
+      }
+      ctx.font = "12px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ["측정자 A", "B", "C"].forEach(function (s, i) { ctx.fillStyle = cols[i]; ctx.fillText("● " + s, 70 + i * 70, 18); });
+      TF.stat("grr-o-ea", Math.sqrt(ev2).toFixed(3) + " · " + Math.sqrt(av2).toFixed(3) + " <small>nm</small>");
+      TF.stat("grr-o-g", grr.toFixed(1) + " <small>%</small>");
+      TF.stat("grr-o-pt", pt.toFixed(1) + " <small>%</small> · " + (isFinite(ndc) ? Math.floor(ndc) : "—"));
+      var worst = Math.max(grr, pt);
+      if (worst < 10) verdict("grr-o-v", "ok", "좋음(< 10 %)");
+      else if (worst <= 30) verdict("grr-o-v", "warn", "조건부(10–30 %)");
+      else verdict("grr-o-v", "bad", "부적합(> 30 %)");
+    }, { aspect: 0.6, maxHeight: 400, minHeight: 300 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     8) SPC chart
+     ============================================================= */
+  (function () {
+    if (!$("spc-cv")) return;
+    var MU = 48.0, SG = 0.15, NMAX = 120, st;
+    var gM = TF.range("spc-m", function (v) { return v.toFixed(2) + " σ"; });
+    var r2 = $("spc-r2");
+    function reset() { st = { r: rng((Date.now() & 0xffff) + 1), x: [], flags: [], off: 0, drift: 0, injAt: null, det: null, fa: 0, acc: 0, mu: MU, sd: SG }; }
+    reset();
+    $("spc-reset").addEventListener("click", function () { reset(); cv.redraw(); upd(); });
+    $("spc-shift").addEventListener("click", function () { if (st.x.length < 25) return; st.off += gM() * SG; st.injAt = st.x.length; st.det = null; });
+    $("spc-drift").addEventListener("click", function () { if (st.x.length < 25) return; st.drift = gM() * SG / 20; st.injAt = st.x.length; st.det = null; });
+    function rules(i) {
+      var x = st.x, z = function (j) { return (x[j] - st.mu) / st.sd; }, out = [];
+      if (Math.abs(z(i)) > 3) out.push(1);
+      if (!r2.checked) return out;
+      if (i >= 2) { var c = 0, s = Math.sign(z(i)); for (var j = i - 2; j <= i; j++) if (Math.sign(z(j)) === s && Math.abs(z(j)) > 2) c++; if (c >= 2 && Math.abs(z(i)) > 2) out.push(2); }
+      if (i >= 4) { var c2 = 0, s2 = Math.sign(z(i)); for (j = i - 4; j <= i; j++) if (Math.sign(z(j)) === s2 && Math.abs(z(j)) > 1) c2++; if (c2 >= 4 && Math.abs(z(i)) > 1) out.push(3); }
+      if (i >= 7) { var ok = true, s3 = Math.sign(z(i)); for (j = i - 7; j <= i; j++) if (Math.sign(z(j)) !== s3) ok = false; if (ok) out.push(4); }
+      if (i >= 6) { var up = true, dn = true; for (j = i - 5; j <= i; j++) { if (!(x[j] > x[j - 1])) up = false; if (!(x[j] < x[j - 1])) dn = false; } if (up || dn) out.push(5); }
+      return out;
+    }
+    function addPoint() {
+      if (st.x.length >= NMAX) { st.x.shift(); st.flags.shift(); if (st.injAt !== null) st.injAt--; }
+      if (st.drift) st.off += st.drift;
+      var v = MU + st.off + SG * gauss(st.r);
+      st.x.push(v);
+      var i = st.x.length - 1;
+      if (i === 24) { var m = st.x.reduce(function (a, b) { return a + b; }, 0) / 25; var s = Math.sqrt(st.x.reduce(function (a, b) { return a + (b - m) * (b - m); }, 0) / 24); st.mu = m; st.sd = s; }
+      var f = i >= 25 ? rules(i) : [];
+      st.flags.push(f);
+      if (f.length) { if (st.injAt === null) st.fa++; else if (st.det === null && i >= st.injAt) st.det = i - st.injAt + 1; }
+      upd();
+    }
+    function upd() {
+      TF.stat("spc-o-n", String(st.x.length));
+      var last = null; for (var i = st.flags.length - 1; i >= 0; i--) if (st.flags[i].length) { last = st.flags[i]; break; }
+      TF.stat("spc-o-a", last ? "규칙 " + last.join(",") : "없음");
+      TF.stat("spc-o-d", st.injAt === null ? "—" : (st.det === null ? "대기 중…" : st.det + " <small>점</small>"));
+      TF.stat("spc-o-f", String(st.fa));
+    }
+    var cv = TF.canvas($("spc-cv"), function (ctx, w, h) {
+      var P = TF.palette(), n = st.x.length;
+      var D = st.x.map(function (v, i) { return [i + 1, v]; });
+      var hl = [{ y: st.mu, color: P.dim, dash: [], label: "CL" }];
+      if (n >= 25) [3, 2, 1, -1, -2, -3].forEach(function (k) { hl.push({ y: st.mu + k * st.sd, color: Math.abs(k) === 3 ? P.bad : P.faint, label: Math.abs(k) === 3 ? (k > 0 ? "UCL" : "LCL") : "" }); });
+      var c = TF.chart(ctx, null, { x: [0, NMAX], y: [MU - 6 * SG, MU + 6 * SG], xLabel: "모니터 웨이퍼 순번", yLabel: "두께 (nm)", series: [{ data: D, color: P.accent, width: 1.4 }], hlines: hl, bands: [{ x0: 0, x1: Math.min(25, n), color: alpha(P.faint, 0.12) }], vlines: st.injAt !== null ? [{ x: st.injAt + 0.5, color: P.warn, label: "주입" }] : [] });
+      D.forEach(function (p, i) { var f = st.flags[i] && st.flags[i].length; ctx.fillStyle = f ? P.bad : P.accent; ctx.beginPath(); ctx.arc(c.X(p[0]), c.Y(clamp(p[1], MU - 6 * SG, MU + 6 * SG)), f ? 4.5 : 2.6, 0, 7); ctx.fill(); });
+    }, { aspect: 0.55, maxHeight: 380, minHeight: 280 });
+    upd();
+    TF.loop($("spc-cv"), function (dt) { st.acc += dt; if (st.acc > 0.25) { st.acc = 0; addPoint(); cv.redraw(); } });
+  })();
+
+  /* =============================================================
+     9) EWMA run-to-run
+     ============================================================= */
+  (function () {
+    if (!$("ewma-cv")) return;
+    var N = 300, TGT = 500, R0 = 300, seed = 5;
+    var gL = TF.range("ewma-l", function (v) { return v.toFixed(2); }, draw);
+    var gD = TF.range("ewma-d", function (v) { return (v > 0 ? "+" : "") + v.toFixed(2) + " nm/min"; }, draw);
+    var gN = TF.range("ewma-n", function (v) { return v.toFixed(1) + " nm"; }, draw);
+    var gM = TF.range("ewma-m", function (v) { return v + " 장"; }, draw);
+    var gP = TF.range("ewma-p", function (v) { return v + " 장"; }, draw);
+    $("ewma-re").addEventListener("click", function () { seed = (seed * 48271) % 2147483647; draw(); });
+    var rst = $("ewma-rst"); rst.addEventListener("change", draw);
+    function stats(a) { var m = a.reduce(function (s, v) { return s + v; }, 0) / a.length; var sd = Math.sqrt(a.reduce(function (s, v) { return s + (v - m) * (v - m); }, 0) / (a.length - 1)); return { m: m, sd: sd }; }
+    var cv = TF.canvas($("ewma-cv"), function (ctx, w, h) {
+      var P = TF.palette(), lam = gL(), dr = gD(), sn = gN(), md = gM(), pm = gP(), r = rng(seed);
+      var rate = [], ol = [], cl = [], est = [], rh = R0, meas = [];
+      for (var k = 0; k < N; k++) {
+        var since = k % pm, rk = R0 + dr * since + (since === 0 && k > 0 ? 0.01 * R0 : 0);
+        rk = Math.max(30, rk);
+        if (rst.checked && since === 0 && k > 0) rh = R0;
+        rate.push([k + 1, rk]);
+        var e1 = sn * gauss(r), e2 = sn * gauss(r);
+        var tOL = TGT / R0, tCL = TGT / rh;
+        ol.push([k + 1, rk * tOL + e1]);
+        var x = rk * tCL + e2; cl.push([k + 1, x]); meas.push({ x: x, t: tCL });
+        est.push([k + 1, rh]);
+        var j = k - md;
+        if (j >= 0) rh = Math.max(30, lam * meas[j].x / meas[j].t + (1 - lam) * rh);
+      }
+      var h1 = Math.round(h * 0.58), lo = TGT * 0.94, hi = TGT * 1.06;
+      TF.chart(ctx, { x: 58, y: 12, w: w - 76, h: h1 - 44 }, {
+        x: [0, N], y: [lo, hi], xLabel: "웨이퍼 순번", yLabel: "두께 (nm)",
+        series: [{ data: ol.map(function (p) { return [p[0], clamp(p[1], lo, hi)]; }), color: P.faint, width: 1.2 }, { data: cl.map(function (p) { return [p[0], clamp(p[1], lo, hi)]; }), color: P.accent, width: 1.6 }],
+        hlines: [{ y: TGT * 1.02, color: P.bad, label: "+2 %" }, { y: TGT * 0.98, color: P.bad, label: "−2 %" }, { y: TGT, color: P.dim, dash: [] }]
+      });
+      var rv = rate.map(function (p) { return p[1]; }).concat(est.map(function (p) { return p[1]; }));
+      TF.chart(ctx, { x: 58, y: h1 + 6, w: w - 76, h: h - h1 - 52 }, {
+        x: [0, N], y: [Math.min.apply(null, rv) - 2, Math.max.apply(null, rv) + 2], xLabel: "웨이퍼 순번", yLabel: "속도 (nm/min)",
+        series: [{ data: rate, color: P.dim, width: 1.4 }, { data: est, color: P.accent2, width: 1.8 }]
+      });
+      var so = stats(ol.map(function (p) { return p[1]; })), sc = stats(cl.slice(10).map(function (p) { return p[1]; }));
+      var cpk = Math.min(TGT * 1.02 - sc.m, sc.m - TGT * 0.98) / (3 * Math.max(1e-6, sc.sd));
+      var unstable = sc.sd > so.sd * 1.5 && sc.sd > 3 * sn + 1;
+      TF.stat("ewma-o-ol", so.sd.toFixed(2) + " · " + (so.m - TGT >= 0 ? "+" : "") + (so.m - TGT).toFixed(2) + " <small>nm</small>");
+      TF.stat("ewma-o-cl", sc.sd.toFixed(2) + " · " + (sc.m - TGT >= 0 ? "+" : "") + (sc.m - TGT).toFixed(2) + " <small>nm</small>");
+      TF.stat("ewma-o-cpk", cpk.toFixed(2));
+      if (unstable) verdict("ewma-o-v", "bad", "진동·불안정");
+      else if (cpk >= 1.33) verdict("ewma-o-v", "ok", "Cpk ≥ 1.33");
+      else verdict("ewma-o-v", "warn", "Cpk 부족");
+    }, { aspect: 0.8, maxHeight: 480, minHeight: 340 });
+    function draw() { cv.redraw(); }
+  })();
+})();
+</script>
+</body>
+</html>

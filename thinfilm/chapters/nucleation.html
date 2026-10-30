@@ -1,0 +1,1251 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and ThinFilmBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>흡착·핵생성·성장 모드 · ThinFilmBook</title>
+<meta name="description" content="흡착 에너지와 체류 시간, 표면 확산 길이, 고전 핵생성의 임계 반지름과 장벽, 섬 밀도와 합체, 볼머-베버·프랑크-반 데어 메르베·스트란스키-크라스타노프 성장, 잠복기, 구조 영역 모델과 결정립 성장을 기판 온도·증착 속도·압력과 연결해 시뮬레이터로 계산한다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .lb { fill: var(--text); font-family: var(--font); font-size: 14px; }
+  svg .lb-b { fill: var(--text); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .lb-s { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .lb-w { fill: #fff; font-family: var(--font); font-size: 12px; font-weight: 600; }
+  svg .arr { stroke: var(--text); stroke-width: 1.8; fill: none; }
+  svg .arr-a { stroke: var(--accent); stroke-width: 2.2; fill: none; }
+  svg .arr-b { stroke: var(--bad); stroke-width: 2; fill: none; }
+  svg .dash { stroke: var(--text-faint); stroke-width: 1.2; fill: none; stroke-dasharray: 4 4; }
+  svg .atom-g { fill: var(--m-gas); }
+  svg .atom-m { fill: var(--m-metal); stroke: var(--canvas-bg); stroke-width: 1; }
+  svg .atom-c { fill: var(--m-cu); stroke: var(--canvas-bg); stroke-width: 1; }
+  svg .sub { fill: var(--m-oxide); opacity: .85; }
+  .nu-v.ok { color: var(--ok); } .nu-v.warn { color: var(--warn); } .nu-v.bad { color: var(--bad); }
+  .nu-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .nu-btns .btn { font-size: 13px; padding: 6px 10px; }
+  p.small { font-size: 14px; color: var(--text-dim); }
+</style>
+</head>
+<body data-chapter="nucleation">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 06</div>
+    <h1>흡착·핵생성·성장 모드</h1>
+    <p class="lead">막은 처음부터 막이 아니다. 기상에서 날아온 원자는 먼저 표면에 붙고(흡착), 떨어지기 전까지 표면을 돌아다니다(확산), 다른 원자를 만나 작은 덩어리를 만들고(핵생성), 그 덩어리가 자라 서로 닿은 뒤에야(합체) 연속된 막이 된다. 이 첫 몇 나노미터에서 정해진 섬 밀도·결정립·기공이 막 전체의 저항, 응력, 거칠기, 연속성을 좌우한다. 이 장에서는 기판 온도·증착 속도·압력·이온 에너지라는 장비의 손잡이가 이 원자 수준의 사건들을 어떻게 바꾸는지 계산해 본다.</p>
+    <ul class="objectives">
+      <li>물리 흡착과 화학 흡착을 에너지로 구분하고, 체류 시간 \(\tau = \nu^{-1}e^{E_a/kT}\)와 표면 확산 길이 \(X = \sqrt{D\tau}\)를 온도로 계산할 수 있다.</li>
+      <li>고전 핵생성 이론으로 임계 반지름 \(r^*\)와 장벽 \(\Delta G^*\)를 구하고, 과포화도와 접촉각(젖음)이 장벽을 어떻게 바꾸는지 설명할 수 있다.</li>
+      <li>섬 밀도의 스케일링 \(N \propto (D/F)^{-i/(i+2)}\)으로 기판 온도와 증착 속도가 연속막 두께를 어떻게 정하는지 예측할 수 있다.</li>
+      <li>표면 에너지와 격자 불일치로 볼머-베버, 프랑크-반 데어 메르베, 스트란스키-크라스타노프 성장을 판정할 수 있다.</li>
+      <li>잠복기를 JMAK 피복 모델로 해석하고, 구조 영역 모델로 \(T/T_m\)·압력·이온 에너지에서 미세구조를 예측할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="adsorption">
+    <h2>표면에 내려앉기: 물리 흡착과 화학 흡착</h2>
+    <p>진공에서 날아온 원자·분자가 기판에 닿으면 세 가지 중 하나가 일어난다. 튕겨 나가거나(반사), 잠시 붙었다 다시 떠나거나(<span class="term">탈착</span><span class="en">(desorption)</span>), 자리를 잡고 막의 일부가 된다. 표면에 붙은 원자를 <span class="term">흡착 원자</span><span class="en">(adatom)</span>라 한다. 붙는 힘의 종류에 따라 반데르발스 힘으로 약하게 붙는 <span class="term">물리 흡착</span><span class="en">(physisorption, 약 0.05–0.5 eV)</span>과 화학 결합을 만드는 <span class="term">화학 흡착</span><span class="en">(chemisorption, 약 1–8 eV)</span>으로 나눈다. 금속 PVD 원자는 대부분 기판에 바로 화학 흡착하고, CVD·ALD 전구체(<a href="cvd.html">9장</a>)는 물리 흡착한 전구 상태(precursor state)를 거쳐 화학 흡착으로 넘어가는 경우가 많다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="박막 성장 초기 표면에서 일어나는 원자 과정: 입사, 흡착, 표면 확산, 재증발, 핵생성, 섬 성장, 계단 부착">
+        <defs><marker id="f61-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text)"/></marker>
+        <marker id="f61-aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker></defs>
+        <rect x="20" y="220" width="820" height="60" class="sub"/>
+        <text x="760" y="262" class="lb-w">기판</text>
+        <g class="atom-m"><circle cx="560" cy="210" r="10"/><circle cx="580" cy="210" r="10"/><circle cx="600" cy="210" r="10"/><circle cx="620" cy="210" r="10"/><circle cx="570" cy="192" r="10"/><circle cx="590" cy="192" r="10"/><circle cx="610" cy="192" r="10"/><circle cx="590" cy="174" r="10"/></g>
+        <g class="atom-m"><circle cx="330" cy="210" r="10"/><circle cx="350" cy="210" r="10"/><circle cx="340" cy="192" r="10"/></g>
+        <g class="atom-m"><circle cx="720" cy="210" r="10"/><circle cx="740" cy="210" r="10"/><circle cx="760" cy="210" r="10"/><circle cx="780" cy="210" r="10"/><circle cx="800" cy="210" r="10"/></g>
+        <circle cx="90" cy="40" r="10" class="atom-g"/><line x1="96" y1="52" x2="128" y2="190" class="arr" marker-end="url(#f61-ar)"/>
+        <text x="40" y="24" class="lb-b">① 입사 F</text>
+        <circle cx="140" cy="210" r="10" class="atom-g"/>
+        <text x="110" y="244" class="lb-w">② 흡착</text>
+        <circle cx="210" cy="210" r="10" class="atom-g"/>
+        <path d="M150 196 Q 175 170 200 196" class="arr-a" marker-end="url(#f61-aa)"/>
+        <path d="M220 196 Q 245 170 270 196" class="arr-a" marker-end="url(#f61-aa)"/>
+        <text x="170" y="160" class="lb">③ 표면 확산 D</text>
+        <circle cx="250" cy="90" r="10" class="atom-g" opacity=".55"/>
+        <line x1="214" y1="196" x2="244" y2="104" class="arr" stroke-dasharray="5 4" marker-end="url(#f61-ar)"/>
+        <text x="262" y="88" class="lb">④ 재증발 τ</text>
+        <text x="300" y="150" class="lb">⑤ 핵생성</text>
+        <text x="306" y="168" class="lb-s">(원자 몇 개가 안정)</text>
+        <circle cx="500" cy="210" r="10" class="atom-g"/>
+        <path d="M506 198 Q 525 176 546 198" class="arr-a" marker-end="url(#f61-aa)"/>
+        <text x="455" y="160" class="lb">⑥ 섬에 부착 → 성장</text>
+        <circle cx="660" cy="80" r="10" class="atom-g"/>
+        <line x1="652" y1="92" x2="602" y2="160" class="arr" marker-end="url(#f61-ar)"/>
+        <text x="672" y="76" class="lb">⑦ 섬 위 직접 입사</text>
+        <text x="700" y="160" class="lb">⑧ 젖음(층) 성장</text>
+        <text x="380" y="40" class="lb-s">흡착 원자 밀도 n₁ ≈ F·τ (재증발 지배) 또는 섬 포획 지배</text>
+      </svg>
+      <figcaption><b>그림 6-1.</b> 성장 초기의 원자 과정. 증착 플럭스 \(F\)로 도착한 원자는 흡착 → 확산 → (재증발 또는 다른 원자와 만나 핵생성·섬 부착)을 겪는다. 핵생성은 ③(확산 속도)과 ①(도착 속도)의 경주이고, 장비 조건으로는 기판 온도와 증착 속도가 이 경주의 심판이다.</figcaption>
+    </figure>
+
+    <p>흡착 에너지 \(E_a\)는 원자를 표면에서 떼어 내는 데 드는 에너지다. 흡착 원자는 표면 퍼텐셜 우물 안에서 진동수 \(\nu \approx 10^{12}\)–\(10^{13}\) Hz로 떨고, 매 진동마다 \(e^{-E_a/kT}\)의 확률로 우물을 넘어 탈착한다. 그래서 평균 <span class="term">체류 시간</span><span class="en">(residence time)</span>은 아레니우스 꼴이다.</p>
+    <div class="formula">$$\tau_a = \frac{1}{\nu}\,\exp\!\left(\frac{E_a}{kT}\right),\qquad n_1 \approx F\,\tau_a\quad(\text{재증발이 지배할 때})$$<div class="where">여기서 \(\nu \approx 10^{13}\) s⁻¹, \(k = 8.617\times10^{-5}\) eV/K, \(F\)는 도착 플럭스(원자 cm⁻² s⁻¹), \(n_1\)은 흡착 원자 면밀도. 예: \(E_a\) = 0.3 eV, 300 K → \(\tau \approx 10^{-8}\) s(물리 흡착은 상온에서 거의 즉시 떠난다). \(E_a\) = 2 eV → \(\tau \approx 10^{20}\) s(사실상 영원히 붙어 있다: 완전 응축).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 280" role="img" aria-label="표면으로부터 거리에 따른 퍼텐셜 에너지: 얕고 먼 물리 흡착 우물과 깊고 가까운 화학 흡착 우물, 두 곡선의 교차점이 활성화 장벽">
+        <line x1="70" y1="30" x2="70" y2="250" class="s-axis"/><line x1="70" y1="120" x2="820" y2="120" class="s-axis"/>
+        <text x="20" y="40" class="lb-s">E</text><text x="790" y="140" class="lb-s">거리 z</text>
+        <path d="M110 30 C 150 100, 175 135, 230 140 C 300 146, 420 126, 820 121" class="s-line" style="stroke:var(--m-gas);stroke-width:2.5"/>
+        <path d="M85 30 C 100 200, 120 240, 150 240 C 190 240, 230 160, 300 80 C 340 40, 360 30, 380 26" class="s-line" style="stroke:var(--m-metal);stroke-width:2.5"/>
+        <line x1="230" y1="120" x2="230" y2="140" class="arr-a"/><text x="238" y="160" class="lb" style="fill:var(--m-gas)">물리 흡착 우물 (0.05–0.5 eV)</text>
+        <line x1="150" y1="120" x2="150" y2="240" class="arr-b"/><text x="160" y="232" class="lb" style="fill:var(--m-metal)">화학 흡착 우물 E_a (1–8 eV)</text>
+        <circle cx="262" cy="134" r="5" class="f-acc"/><text x="290" y="112" class="lb-s">교차점: 전구 상태 → 화학 흡착의 활성화 장벽 E‡</text>
+        <text x="560" y="106" class="lb-s">기상(무한 거리) = 0</text>
+        <text x="420" y="200" class="lb-s">PVD 금속 원자: E‡ ≈ 0 → 닿자마자 화학 흡착 (부착 계수 ≈ 1)</text>
+        <text x="420" y="222" class="lb-s">CVD/ALD 전구체: E‡ &gt; 0 → 부착 계수가 온도에 따라 변함 (9·11장)</text>
+      </svg>
+      <figcaption><b>그림 6-2.</b> 레너드-존스 그림. 물리 흡착 곡선(먼 곳의 얕은 우물)과 화학 흡착 곡선(가까운 곳의 깊은 우물)이 만나는 점이 화학 흡착의 활성화 장벽이 된다. 교차점이 기상 에너지(0)보다 낮으면 비활성 흡착, 높으면 활성 흡착이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-res">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>흡착 에너지·기판 온도 → 체류 시간과 피복률</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rs-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>흡착 에너지 E<sub>a</sub></span> <output id="rs-ea-out"></output></span><input type="range" id="rs-ea" min="0.1" max="3" step="0.02" value="0.9"></label>
+          <label class="ctrl"><span>기판 온도 <output id="rs-t-out"></output></span><input type="range" id="rs-t" min="-100" max="800" step="5" value="25"></label>
+          <label class="ctrl"><span>증착 속도 <output id="rs-r-out"></output></span><input type="range" id="rs-r" min="0" max="3" step="0.02" value="2"></label>
+          <div class="ctrl"><span>프리셋</span><div class="nu-btns">
+            <button class="btn" data-rs="0.25,25">Ar 물리 흡착</button>
+            <button class="btn" data-rs="0.6,300">H₂O on SiO₂</button>
+            <button class="btn" data-rs="2.5,400">Ti on SiO₂</button>
+          </div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">체류 시간 τ</span><span class="v" id="rs-o-tau">—</span></div>
+        <div class="stat"><span class="k">도착 플럭스 F</span><span class="v" id="rs-o-f">—</span></div>
+        <div class="stat"><span class="k">정상 피복률 θ</span><span class="v" id="rs-o-th">—</span></div>
+        <div class="stat"><span class="k">판정</span><span class="v nu-v" id="rs-o-j">—</span></div>
+      </div>
+      <div class="sim-note">모델: \(\tau = \nu^{-1}e^{E_a/kT}\), \(\nu = 10^{13}\) s⁻¹. 정상 상태 랭뮤어 피복률 \(\theta = F\tau/(n_0 + F\tau)\), 자리 밀도 \(n_0 = 1.5\times10^{15}\) cm⁻². 증착 속도는 Ti 원자 밀도(5.67 × 10²² cm⁻³)로 플럭스로 바꾼다. 해볼 것: ① E<sub>a</sub> = 0.9 eV에서 온도를 25 → 400 °C로 올리면 τ가 몇 자리 줄어드는가? ② 그래프의 1 s 선을 넘는 영역이 "붙어 있는" 영역이다. 증착 속도를 바꾸면 θ는 바뀌지만 τ는 그대로다.</div>
+    </div>
+
+    <div class="callout fab"><strong>PVD 모듈의 도착 플럭스</strong>Ti 약 100 nm/min은 \(F = 5.67\times10^{22}\,\text{cm}^{-3}\times 1.67\times10^{-7}\,\text{cm/s} \approx 9.4\times10^{15}\) cm⁻² s⁻¹, 곧 초당 약 6 단원자층(ML)이다. Cu 시드 400 nm/min은 \(8.5\times10^{22}\times 6.7\times10^{-7} \approx 5.7\times10^{16}\) cm⁻² s⁻¹(약 38 ML/s). 한 층이 0.03–0.2 s마다 덮이므로, 흡착 원자가 확산할 시간은 그보다 짧다. 금속 원자는 산화막 위 \(E_a\)가 2 eV를 넘어 재증발은 무시할 수 있고, 성장을 정하는 것은 다음 절의 확산이다.</div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="diffusion">
+    <h2>표면 확산과 확산 길이</h2>
+    <p>흡착 원자는 표면의 퍼텐셜 골짜기 사이를 뛰어다닌다. 옆 자리로 넘어가는 장벽이 <span class="term">표면 확산</span> 활성화 에너지 \(E_d\)이고, 보통 \(E_d \approx (0.1\)–\(0.3)\,E_a\)로 탈착보다 훨씬 쉽다. 한 번 뛰는 거리를 격자 간격 \(a\)라 하면 2차원 무작위 행보의 확산 계수와, 탈착 전까지 이동하는 평균 거리(<span class="term">확산 길이</span>)는 다음과 같다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="표면을 따라 주기적으로 오르내리는 퍼텐셜 에너지. 골짜기 사이 장벽 E_d, 우물 바닥에서 기상까지 E_a">
+        <defs><marker id="f63-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker></defs>
+        <line x1="40" y1="40" x2="820" y2="40" class="dash"/><text x="660" y="32" class="lb-s">기상 (탈착)</text>
+        <path d="M40 160 C 70 160 80 120 110 120 C 140 120 150 160 180 160 C 210 160 220 120 250 120 C 280 120 290 160 320 160 C 350 160 360 120 390 120 C 420 120 430 160 460 160 C 490 160 500 120 530 120 C 560 120 570 160 600 160 C 630 160 640 120 670 120 C 700 120 710 160 740 160 C 770 160 780 120 810 120" class="s-acc"/>
+        <circle cx="180" cy="148" r="11" class="atom-g"/>
+        <path d="M190 140 Q 250 92 310 140" class="arr-a" marker-end="url(#f63-ar)"/>
+        <text x="215" y="88" class="t-acc">hop: Γ = ν·e^(−E_d/kT)</text>
+        <line x1="470" y1="160" x2="470" y2="120" class="arr-b"/><text x="478" y="146" class="lb">E_d</text>
+        <line x1="600" y1="160" x2="600" y2="40" class="arr-b"/><text x="608" y="100" class="lb">E_a</text>
+        <text x="40" y="200" class="lb-s">격자 간격 a ≈ 0.25–0.3 nm. 탈착 전까지 평균 hop 수 = Γ·τ = exp[(E_a − E_d)/kT] → 확산 길이 X ≈ a·√(hop 수)</text>
+      </svg>
+      <figcaption><b>그림 6-3.</b> 표면 위 흡착 원자의 에너지 지형. 골짜기 사이 장벽 \(E_d\)는 작고 기상으로 나가는 장벽 \(E_a\)는 크다. 두 장벽의 차이가 클수록 원자는 떠나기 전에 멀리 돌아다닌다.</figcaption>
+    </figure>
+
+    <div class="formula">$$D = \frac{a^2\nu}{4}\,e^{-E_d/kT},\qquad X = \sqrt{D\,\tau_a} \approx \frac{a}{2}\,\exp\!\left(\frac{E_a - E_d}{2kT}\right)$$<div class="where">재증발이 없는 금속 성장에서는 \(\tau_a\) 대신 "다른 원자나 섬을 만나기까지의 시간"이 확산을 끊는다. 그래서 \(D\)와 도착 속도 \(F\)의 비 \(R = D/F\)가 섬 밀도를 정하는 핵심 무차원수가 된다(4절). \(E_d\) = 0.5 eV, 300 K이면 \(\nu e^{-E_d/kT} \approx 4\times10^{4}\) hop/s로, 한 층이 덮이는 0.03–0.2 s 동안 수천 번 뛴다.</div></div>
+
+    <div class="sim" id="sim-walk">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>흡착 원자의 무작위 행보와 재증발</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="wk-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>기판 온도 <output id="wk-t-out"></output></span><input type="range" id="wk-t" min="100" max="900" step="10" value="500"></label>
+          <label class="ctrl"><span><span>확산 장벽 E<sub>d</sub></span> <output id="wk-ed-out"></output></span><input type="range" id="wk-ed" min="0.1" max="1.0" step="0.01" value="0.35"></label>
+          <label class="ctrl"><span><span>흡착 에너지 E<sub>a</sub></span> <output id="wk-ea-out"></output></span><input type="range" id="wk-ea" min="0.4" max="2.0" step="0.01" value="0.75"></label>
+          <div class="ctrl"><div class="nu-btns"><button class="btn primary" id="wk-run">일시정지</button><button class="btn" id="wk-clear">궤적 지우기</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">hop 빈도</span><span class="v" id="wk-o-g">—</span></div>
+        <div class="stat"><span class="k">체류 시간 τ</span><span class="v" id="wk-o-tau">—</span></div>
+        <div class="stat"><span class="k">탈착 전 hop 수</span><span class="v" id="wk-o-n">—</span></div>
+        <div class="stat"><span class="k">확산 길이 X</span><span class="v" id="wk-o-x">—</span></div>
+      </div>
+      <div class="sim-note">원자 8개가 정사각 격자(주기 경계)에서 뛰고, 매 hop마다 확률 \(p = \Gamma_a/(\Gamma_a+\Gamma_d)\)로 탈착(빨간 고리)한 뒤 새 자리에 다시 도착한다. 화면은 hop 수를 세는 '사건 시계'로 돌아가므로 실제 시간은 readout을 본다. 해볼 것: E<sub>a</sub> − E<sub>d</sub>를 0.4 eV로 두고 온도를 내리면 궤적이 길어진다(저온에서 탈착이 더 크게 억제되므로). 이것이 "기판을 식히면 응축이 잘 된다"의 원자 그림이다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="classical">
+    <h2>고전 핵생성: 임계 반지름과 장벽</h2>
+    <p>원자 몇 개가 모인 작은 덩어리는 부피가 주는 에너지 이득(응축)과 표면이 드는 에너지 비용의 싸움에 놓인다. 작은 덩어리는 표면 비용이 커서 다시 흩어지기 쉽고, 어떤 크기 \(r^*\)를 넘으면 자랄수록 에너지가 내려가 안정해진다. 이 경계가 <span class="term">임계 핵</span><span class="en">(critical nucleus)</span>이고, 그때의 자유 에너지 언덕이 <span class="term">핵생성 장벽</span> \(\Delta G^*\)다. 기판 위의 핵은 구의 일부(구관, spherical cap)로 생각하고, 접촉각 \(\theta\)는 영의 식으로 표면 에너지들의 균형에서 정해진다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 280" role="img" aria-label="기판 위 구관 모양 핵과 세 표면 에너지의 균형(영의 식), 오른쪽에 반지름에 따른 자유 에너지 곡선과 임계 반지름">
+        <rect x="20" y="190" width="380" height="60" class="sub"/>
+        <path d="M110 190 A 110 110 0 0 1 310 190 Z" style="fill:var(--m-cu);opacity:.85"/>
+        <circle cx="210" cy="232" r="110" class="dash"/>
+        <line x1="310" y1="190" x2="380" y2="190" class="arr-a"/><text x="340" y="182" class="lb-s">γ_sv</text>
+        <line x1="310" y1="190" x2="250" y2="190" class="arr-b"/><text x="248" y="210" class="lb-w">γ_fs</text>
+        <line x1="310" y1="190" x2="345" y2="124" class="arr"/><text x="350" y="124" class="lb-s">γ_vf</text>
+        <path d="M335 190 A 25 25 0 0 0 322 168" class="s-line"/><text x="336" y="170" class="lb-s">θ</text>
+        <text x="196" y="160" class="lb-w">핵 (반지름 r)</text>
+        <text x="30" y="30" class="lb-b">영의 식: γ_sv = γ_fs + γ_vf·cos θ</text>
+        <text x="30" y="52" class="lb-s">θ → 0: 완전 젖음(층 성장) · θ → 180°: 젖지 않음(구형 섬)</text>
+        <line x1="470" y1="40" x2="470" y2="250" class="s-axis"/><line x1="470" y1="150" x2="840" y2="150" class="s-axis"/>
+        <text x="440" y="50" class="lb-s">ΔG</text><text x="800" y="170" class="lb-s">r</text>
+        <path d="M470 150 C 520 95, 560 70, 600 70 C 650 70, 700 110, 760 200 C 780 230, 790 245, 800 252" class="s-acc"/>
+        <path d="M470 150 C 560 110, 700 60, 830 35" class="s-line" style="stroke-dasharray:5 4"/><text x="700" y="44" class="lb-s">표면 항 +r²</text>
+        <path d="M470 150 C 560 156, 700 200, 800 268" class="s-line" style="stroke-dasharray:5 4"/><text x="690" y="236" class="lb-s">부피 항 −r³</text>
+        <line x1="600" y1="70" x2="600" y2="150" class="dash"/><text x="586" y="168" class="t-acc">r*</text>
+        <text x="610" y="62" class="t-acc">ΔG*</text>
+      </svg>
+      <figcaption><b>그림 6-4.</b> 왼쪽: 기판 위 구관 핵과 세 계면 에너지(기판-기상 \(\gamma_{sv}\), 막-기판 \(\gamma_{fs}\), 기상-막 \(\gamma_{vf}\)). 오른쪽: 표면 항(\(+r^2\))과 부피 항(\(-r^3\))의 합이 \(r^*\)에서 최대 \(\Delta G^*\)를 갖는다.</figcaption>
+    </figure>
+
+    <div class="formula">$$\Delta G(r) = \left(-\tfrac{4}{3}\pi r^3\,\Delta G_v + 4\pi r^2\gamma_{vf}\right) f(\theta),\qquad f(\theta) = \frac{(2+\cos\theta)(1-\cos\theta)^2}{4}$$
+    $$r^* = \frac{2\gamma_{vf}}{\Delta G_v},\qquad \Delta G^* = \frac{16\pi\gamma_{vf}^3}{3\,\Delta G_v^2}\,f(\theta),\qquad \Delta G_v = \frac{kT}{\Omega}\ln S,\quad S = \frac{F}{F_{eq}(T)}$$<div class="where">\(\Delta G_v\)는 응축의 부피당 자유 에너지 이득, \(\Omega\)는 원자 부피(Cu 1.18 × 10⁻²⁹ m³), \(S\)는 과포화도(도착 플럭스 ÷ 그 온도의 평형 증발 플럭스). 핵생성 속도는 \(\dot N \propto \exp(-\Delta G^*/kT)\). \(f(\theta)\)는 0(완전 젖음)에서 1(구형 핵, 기판 무관)까지 변하므로 <strong>잘 젖는 기판일수록 장벽이 낮다</strong>(불균일 핵생성).</div></div>
+
+    <div class="sim" id="sim-dg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>ΔG(r) 곡선: 과포화도·접촉각·표면 에너지</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="dg-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>과포화도 입력</span><div class="seg" id="dg-mode"><button data-value="man" class="on">ln S 직접</button><button data-value="cu">Cu PVD 조건</button></div></div>
+          <label class="ctrl"><span>ln S <output id="dg-s-out"></output></span><input type="range" id="dg-s" min="0.3" max="10" step="0.05" value="2.5"></label>
+          <label class="ctrl"><span>기판 온도 <output id="dg-t-out"></output></span><input type="range" id="dg-t" min="300" max="1200" step="10" value="700"></label>
+          <label class="ctrl"><span>증착 속도(Cu 모드) <output id="dg-r-out"></output></span><input type="range" id="dg-r" min="0" max="3" step="0.05" value="2.6"></label>
+          <label class="ctrl"><span><span>표면 에너지 γ<sub>vf</sub></span> <output id="dg-g-out"></output></span><input type="range" id="dg-g" min="0.2" max="2.5" step="0.05" value="1.0"></label>
+          <label class="ctrl"><span>접촉각 θ <output id="dg-th-out"></output></span><input type="range" id="dg-th" min="5" max="180" step="1" value="90"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">ΔG<sub>v</sub></span><span class="v" id="dg-o-gv">—</span></div>
+        <div class="stat"><span class="k">임계 반지름 r*</span><span class="v" id="dg-o-r">—</span></div>
+        <div class="stat"><span class="k">장벽 ΔG*</span><span class="v" id="dg-o-g">—</span></div>
+        <div class="stat"><span class="k">임계 핵 원자 수</span><span class="v nu-v" id="dg-o-n">—</span></div>
+        <div class="stat"><span class="k">exp(−ΔG*/kT)</span><span class="v" id="dg-o-rate">—</span></div>
+      </div>
+      <div class="sim-note">Cu PVD 모드는 평형 증기압 \(\log_{10}P_{eq}[\text{Pa}] = 10.35 - 15670/T\)와 헤르츠-크누센 식으로 \(F_{eq}\)를 구해 \(S = F/F_{eq}\)를 계산한다. 해볼 것: ① 직접 모드에서 ln S를 1 → 3으로 올리면 \(r^*\)는 1/3, \(\Delta G^*\)는 1/9로 준다. ② Cu PVD 모드로 바꾸면 300 K에서 ln S가 90을 넘어 임계 핵이 원자 1개보다 작아진다. 금속 PVD에서 고전 이론이 '원자 하나도 안정 핵'이라는 결론을 주는 이유이며, 그래서 다음 절의 원자론적 섬 밀도 모델을 쓴다. ③ 접촉각을 180° → 30°로 낮추면 장벽이 약 1/80로 준다.</div>
+    </div>
+
+    <div class="callout deep"><strong>고전 이론은 언제 맞는가</strong>고전 핵생성 이론은 표면 에너지 같은 거시 물성을 원자 몇 개짜리 덩어리에 적용하므로, 임계 핵이 수십 원자 이상일 때(낮은 과포화: 고온 CVD, 에피 성장, 용액 성장) 의미가 있다. 저온 PVD처럼 \(S\)가 천문학적으로 크면 임계 핵이 원자 1–3개가 되고, 이때는 "원자 \(i\)개 덩어리의 결합 에너지 \(E_i\)"로 쓰는 원자론적(Walton–Venables) 모델이 정확하다. 두 모델 모두 "온도↑·과포화↓ → 장벽↑ → 핵이 적고 크다"는 같은 방향을 준다.</div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="islands">
+    <h2>섬 밀도, 성장, 합체</h2>
+    <p>금속 PVD의 성장 초기는 다음 순서로 진행된다. 흡착 원자가 서로 만나 핵이 생기고(핵생성 단계), 섬의 수가 늘다가 새로 온 원자가 새 핵을 만들기보다 기존 섬에 잡히는 쪽이 빨라지면 섬 수가 포화된다(포화 단계, 보통 0.1–0.2 ML). 그 뒤로는 섬이 자라고(성장), 서로 닿아 붙고(<span class="term">합체</span><span class="en">(coalescence)</span>), 빈 통로가 메워져 연속막이 된다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 210" role="img" aria-label="박막 형성 다섯 단계를 위에서 본 그림: 핵생성, 섬 성장, 합체, 통로망, 연속막">
+        <g>
+          <rect x="10" y="20" width="160" height="140" class="sub"/>
+          <g class="atom-c"><circle cx="40" cy="50" r="3"/><circle cx="95" cy="40" r="3"/><circle cx="140" cy="70" r="3"/><circle cx="60" cy="110" r="3"/><circle cx="120" cy="130" r="3"/><circle cx="30" cy="145" r="3"/><circle cx="150" cy="140" r="3"/><circle cx="90" cy="88" r="3"/></g>
+          <text x="90" y="185" text-anchor="middle" class="lb">① 핵생성</text><text x="90" y="202" text-anchor="middle" class="lb-s">θ ≈ 0.01–0.1 ML</text>
+        </g>
+        <g>
+          <rect x="182" y="20" width="160" height="140" class="sub"/>
+          <g class="atom-c"><circle cx="212" cy="50" r="10"/><circle cx="267" cy="40" r="11"/><circle cx="312" cy="70" r="10"/><circle cx="232" cy="110" r="12"/><circle cx="292" cy="130" r="10"/><circle cx="202" cy="145" r="9"/><circle cx="322" cy="140" r="9"/><circle cx="262" cy="88" r="11"/></g>
+          <text x="262" y="185" text-anchor="middle" class="lb">② 섬 성장</text><text x="262" y="202" text-anchor="middle" class="lb-s">섬 수 포화 N_sat</text>
+        </g>
+        <g>
+          <rect x="354" y="20" width="160" height="140" class="sub"/>
+          <g style="fill:var(--m-cu)"><ellipse cx="392" cy="48" rx="26" ry="20"/><ellipse cx="440" cy="62" rx="22" ry="24"/><circle cx="486" cy="72" r="20"/><ellipse cx="404" cy="112" rx="24" ry="22"/><circle cx="466" cy="130" r="20"/><circle cx="376" cy="148" r="12"/><circle cx="500" cy="142" r="12"/></g>
+          <text x="434" y="185" text-anchor="middle" class="lb">③ 합체</text><text x="434" y="202" text-anchor="middle" class="lb-s">닿은 섬이 하나로</text>
+        </g>
+        <g>
+          <rect x="526" y="20" width="160" height="140" style="fill:var(--m-cu)"/>
+          <g class="sub"><path d="M540 40 q 20 8 30 30 q -18 6 -30 -30z"/><path d="M600 90 q 30 -10 50 6 q -10 20 -50 -6z"/><path d="M560 125 q 20 -6 34 20 q -28 0 -34 -20z"/><path d="M640 40 q 20 10 30 0 q -6 22 -30 0z"/></g>
+          <text x="606" y="185" text-anchor="middle" class="lb">④ 통로망</text><text x="606" y="202" text-anchor="middle" class="lb-s">빈 통로가 남음</text>
+        </g>
+        <g>
+          <rect x="698" y="20" width="160" height="140" style="fill:var(--m-cu)"/>
+          <path d="M698 70 L 740 64 L 760 20 M 740 64 L 780 110 L 858 96 M 780 110 L 760 160 M 820 20 L 812 102" class="s-line" style="stroke:#fff;opacity:.55"/>
+          <text x="778" y="185" text-anchor="middle" class="lb">⑤ 연속막</text><text x="778" y="202" text-anchor="middle" class="lb-s">결정립계가 남음</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 6-5.</b> 볼머-베버형 막의 형성 단계(위에서 본 모습). 섬 수가 포화되는 밀도 \(N_{sat}\)가 크면 섬 사이 간격이 좁아 더 얇은 두께에서 연속막이 된다. 합체 지점의 결정립계는 막이 두꺼워져도 대부분 남아 막의 결정립 크기와 응력(<a href="quality.html">15장</a>)을 정한다.</figcaption>
+    </figure>
+
+    <p>아래 시뮬레이터는 이 과정을 격자 위 <span class="term">동역학 몬테카를로</span><span class="en">(kinetic Monte Carlo, KMC)</span>로 직접 돌린다. 규칙은 단 세 가지다. ① 격자의 임의 자리에 플럭스 \(F\)로 원자가 떨어진다. ② 홀로 있는 원자(단량체)는 \(D\)의 빈도로 이웃 자리로 뛴다. ③ 다른 원자와 이웃하면 그 자리에 고정된다(임계 핵 크기 \(i = 1\), 비가역 응집). 사건은 빈도에 비례하는 확률로 고르므로, 결과는 \(R = D/F\) 하나로 정해진다.</p>
+
+    <div class="sim" id="sim-kmc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>KMC: 확산·핵생성·섬 성장·합체</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="km-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>기판 온도 <output id="km-t-out"></output></span><input type="range" id="km-t" min="150" max="600" step="5" value="300"></label>
+          <label class="ctrl"><span>증착 속도 <output id="km-r-out"></output></span><input type="range" id="km-r" min="1" max="3.3" step="0.05" value="2.6"></label>
+          <label class="ctrl"><span><span>확산 장벽 E<sub>d</sub></span> <output id="km-ed-out"></output></span><input type="range" id="km-ed" min="0.3" max="0.9" step="0.01" value="0.5"></label>
+          <label class="ctrl"><span>멈출 피복률 <output id="km-cmax-out"></output></span><input type="range" id="km-cmax" min="0.05" max="1" step="0.01" value="0.6"></label>
+          <div class="ctrl"><div class="nu-btns"><button class="btn primary" id="km-run">일시정지</button><button class="btn" id="km-reset">초기화</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">R = D/F</span><span class="v" id="km-o-r">—</span></div>
+        <div class="stat"><span class="k">피복률 θ</span><span class="v" id="km-o-th">—</span></div>
+        <div class="stat"><span class="k">섬 밀도</span><span class="v" id="km-o-n">—</span></div>
+        <div class="stat"><span class="k">평균 섬 크기</span><span class="v" id="km-o-s">—</span></div>
+        <div class="stat"><span class="k">단량체 밀도</span><span class="v" id="km-o-m">—</span></div>
+      </div>
+      <div class="sim-note">격자 128 × 128(Cu 격자 간격 0.256 nm로 약 33 nm 정사각형). \(D = \nu e^{-E_d/kT}\)(hop/s, \(\nu = 10^{13}\)), \(F\)는 증착 속도에서 구한 ML/s. 계산량 때문에 \(R\)은 10–3 × 10⁶에서 자른다(잘리면 표시). 오른쪽 위 작은 그래프는 섬 밀도의 \(\theta\) 변화. 해볼 것: ① 300 K → 400 K로 올리고 다시 돌리면 섬 수가 몇 배 줄어드는가? ② 증착 속도를 10배 높이면 섬 수는 약 \(10^{1/3} \approx 2.2\)배 늘어난다. ③ 피복률 1 ML까지 돌려 섬이 합체하는 모습을 보자.</div>
+    </div>
+
+    <p>KMC를 많이 돌려 보면 포화 섬 밀도가 거듭제곱 법칙을 따른다는 것을 알 수 있다. 이것을 속도식(rate equation)으로 정리한 결과가 원자론적 핵생성 이론의 핵심 식이다.</p>
+    <div class="formula">$$\frac{N_{sat}}{n_0} \approx \eta\,\left(\frac{F}{\nu\,n_0}\right)^{\chi} \exp\!\left(\frac{E_i + i\,E_d}{(i+2)\,kT}\right),\qquad \chi = \frac{i}{i+2}$$<div class="where">\(i\)는 임계 핵 크기(안정 핵이 되려면 \(i+1\)개 필요), \(E_i\)는 임계 핵의 결합 에너지, \(\eta \approx 0.2\)–0.3. 저온·강한 결합에서는 \(i = 1\)(\(\chi = 1/3\)), 고온에서는 작은 덩어리가 깨지며 \(i\)가 2, 3으로 커져 지수가 \(1/2, 3/5\)로 바뀐다. 섬 사이 평균 간격 \(L = N_{sat}^{-1/2}\), 반구 섬이 서로 닿는 두께는 \(h_c \approx (\pi/12)\,L\)(부피 보존).</div></div>
+
+    <div class="sim" id="sim-nsat">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>조건 → 섬 밀도 → 연속막이 되는 두께</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ns-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>기판 온도 <output id="ns-t-out"></output></span><input type="range" id="ns-t" min="150" max="900" step="5" value="300"></label>
+          <label class="ctrl"><span>증착 속도 <output id="ns-r-out"></output></span><input type="range" id="ns-r" min="0" max="3.3" step="0.05" value="2.6"></label>
+          <label class="ctrl"><span><span>확산 장벽 E<sub>d</sub></span> <output id="ns-ed-out"></output></span><input type="range" id="ns-ed" min="0.2" max="1.2" step="0.01" value="0.5"></label>
+          <label class="ctrl"><span><span>이량체 결합 E<sub>b</sub></span> <output id="ns-eb-out"></output></span><input type="range" id="ns-eb" min="0.1" max="1.5" step="0.01" value="0.6"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">임계 핵 i</span><span class="v" id="ns-o-i">—</span></div>
+        <div class="stat"><span class="k">섬 밀도 N<sub>sat</sub></span><span class="v" id="ns-o-n">—</span></div>
+        <div class="stat"><span class="k">섬 간격 L</span><span class="v" id="ns-o-l">—</span></div>
+        <div class="stat"><span class="k">연속막 두께 h<sub>c</sub></span><span class="v nu-v" id="ns-o-h">—</span></div>
+      </div>
+      <div class="sim-note">곡선은 세 가지 증착 속도(현재, ×1/10, ×10)에서 \(N_{sat}(T)\). \(i\)는 \(i = 1\)과 \(i = 2\) 식 중 작은 \(N\)을 주는 쪽(덩어리가 깨지기 시작하면 \(i\)가 커진다)으로 고른다: \(E_2 = E_b\). 해볼 것: ① 기판 온도를 300 K → 500 K로 올리면 \(h_c\)가 몇 배가 되는가? 얇은 Cu 시드·배리어가 연속이 되려면 저온·고속 증착이 유리하다. ② \(E_b\)를 낮추면 꺾임점(i = 1 → 2)이 저온 쪽으로 온다.</div>
+    </div>
+
+    <div class="callout fab"><strong>Cu 시드의 연속성</strong>Cu 400 nm/min(약 38 ML/s), 산화막 위 \(E_d \approx 0.5\) eV, 실온(약 300 K, 정전척 냉각)이면 \(R \approx 10^{3}\)으로 \(N_{sat} \approx 4\times10^{13}\) cm⁻², 섬 간격 약 1.6 nm, 반구 섬이 닿는 두께가 약 0.4 nm다. 실제로는 합체한 섬이 다시 둥글게 뭉치고 작은 섬이 큰 섬에 흡수되어(오스트발트 숙성) SiO₂ 위 Cu가 연속이 되는 두께는 수 nm로 이보다 훨씬 두껍다. 실제 Cu는 TaN/Ta 위에 증착되고 거기서 더 잘 젖어 연속성이 더 좋다. 반대로 웨이퍼가 플라즈마 열로 100 °C 이상 데워지면 Cu가 뭉쳐(응집, agglomeration) 시드가 끊긴다. 그래서 PVD 모듈은 Cu 시드를 냉각 척(−30 ~ 0 °C)에서 증착하는 경우가 많다.</div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="modes">
+    <h2>세 가지 성장 모드</h2>
+    <p>막 원자끼리의 결합이 기판과의 결합보다 강하면 원자는 뭉쳐서 섬을 만들고, 기판과의 결합이 강하면 기판을 적시며 한 층씩 덮는다. 이 차이를 표면 에너지로 쓴 것이 바우어(Bauer) 판정이다.</p>
+    <div class="formula">$$\Delta\gamma = \gamma_{f} + \gamma_{i} - \gamma_{s}\quad\begin{cases}\Delta\gamma \gt 0 & \text{볼머-베버(섬)}\\ \Delta\gamma \le 0 & \text{프랑크-반 데어 메르베(층)}\\ \Delta\gamma \le 0,\ \text{변형 에너지 누적} & \text{스트란스키-크라스타노프(층 + 섬)}\end{cases}$$<div class="where">\(\gamma_f\): 막 표면 에너지, \(\gamma_i\): 계면 에너지, \(\gamma_s\): 기판 표면 에너지. 층 성장이라도 격자 불일치 \(\varepsilon\)가 있으면 층마다 변형 에너지 \(M\varepsilon^2 a\)(\(M\): 이축 탄성률, \(a\): 층 두께)가 쌓여, 누적 변형 에너지가 젖음 이득 \(|\Delta\gamma|\)를 넘는 두께 \(h_{SK} \approx |\Delta\gamma|/(M\varepsilon^2)\)부터 섬이 솟는다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 220" role="img" aria-label="세 성장 모드의 단면: 볼머-베버 섬 성장, 프랑크-반 데어 메르베 층 성장, 스트란스키-크라스타노프 층 후 섬 성장">
+        <rect x="10" y="140" width="270" height="40" class="sub"/>
+        <path d="M30 140 A 34 30 0 0 1 98 140 Z M120 140 A 26 26 0 0 1 172 140 Z M196 140 A 34 36 0 0 1 264 140 Z" style="fill:var(--m-cu)"/>
+        <text x="145" y="30" text-anchor="middle" class="lb-b">볼머-베버 (VW)</text>
+        <text x="145" y="50" text-anchor="middle" class="lb-s">γ_s &lt; γ_f + γ_i · 섬</text>
+        <text x="145" y="205" text-anchor="middle" class="lb-s">Cu·Ag·Au on SiO₂, 금속 on 고분자</text>
+        <rect x="295" y="140" width="270" height="40" class="sub"/>
+        <rect x="295" y="126" width="270" height="14" style="fill:var(--m-cu)"/><rect x="295" y="112" width="270" height="14" style="fill:var(--m-cu);opacity:.8"/><rect x="295" y="98" width="200" height="14" style="fill:var(--m-cu);opacity:.65"/>
+        <text x="430" y="30" text-anchor="middle" class="lb-b">프랑크-반 데어 메르베 (FM)</text>
+        <text x="430" y="50" text-anchor="middle" class="lb-s">γ_s ≥ γ_f + γ_i · 층</text>
+        <text x="430" y="205" text-anchor="middle" class="lb-s">Si on Si(호모에피), Cu on Ru·Co 라이너</text>
+        <rect x="580" y="140" width="270" height="40" class="sub"/>
+        <rect x="580" y="126" width="270" height="14" style="fill:var(--m-cu)"/><rect x="580" y="112" width="270" height="14" style="fill:var(--m-cu);opacity:.85"/>
+        <path d="M600 112 A 30 30 0 0 1 660 112 Z M700 112 A 24 24 0 0 1 748 112 Z M780 112 A 30 32 0 0 1 840 112 Z" style="fill:var(--m-cu)"/>
+        <text x="715" y="30" text-anchor="middle" class="lb-b">스트란스키-크라스타노프 (SK)</text>
+        <text x="715" y="50" text-anchor="middle" class="lb-s">젖음층 몇 ML 후 변형 해소 섬</text>
+        <text x="715" y="205" text-anchor="middle" class="lb-s">Ge on Si (불일치 4.2 %), InAs on GaAs</text>
+      </svg>
+      <figcaption><b>그림 6-6.</b> 세 성장 모드. 반도체 배선에서 Cu가 SiO₂ 위에서 섬을 만들고(VW) 탄탈럼·루테늄 라이너 위에서는 잘 젖는(FM에 가까움) 차이가, 배리어·라이너를 먼저 까는 이유 중 하나다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-mode">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>표면 에너지·격자 불일치 → 성장 모드</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="md-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>기판 γ<sub>s</sub></span> <output id="md-gs-out"></output></span><input type="range" id="md-gs" min="0.2" max="3.5" step="0.05" value="0.3"></label>
+          <label class="ctrl"><span><span>막 γ<sub>f</sub></span> <output id="md-gf-out"></output></span><input type="range" id="md-gf" min="0.2" max="3.0" step="0.05" value="1.8"></label>
+          <label class="ctrl"><span><span>계면 γ<sub>i</sub></span> <output id="md-gi-out"></output></span><input type="range" id="md-gi" min="0" max="1.5" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span>격자 불일치 ε <output id="md-e-out"></output></span><input type="range" id="md-e" min="0" max="8" step="0.1" value="0"></label>
+          <label class="ctrl"><span>평균 두께 <output id="md-h-out"></output></span><input type="range" id="md-h" min="0.2" max="12" step="0.1" value="4"></label>
+          <div class="ctrl"><span>프리셋</span><div class="nu-btns">
+            <button class="btn" data-md="0.3,1.8,0.5,0">Cu/SiO₂</button>
+            <button class="btn" data-md="3.0,1.8,0.3,0">Cu/Ru</button>
+            <button class="btn" data-md="1.3,1.06,0.05,4.2">Ge/Si</button>
+            <button class="btn" data-md="1.3,1.3,0,0">Si/Si</button>
+          </div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Δγ</span><span class="v" id="md-o-dg">—</span></div>
+        <div class="stat"><span class="k">접촉각 θ</span><span class="v" id="md-o-th">—</span></div>
+        <div class="stat"><span class="k">젖음층 한계 h<sub>SK</sub></span><span class="v" id="md-o-hsk">—</span></div>
+        <div class="stat"><span class="k">성장 모드</span><span class="v nu-v" id="md-o-m">—</span></div>
+      </div>
+      <div class="sim-note">모델: 영의 식 \(\cos\theta = (\gamma_s - \gamma_i)/\gamma_f\)(−1~1로 자름), \(h_{SK} = |\Delta\gamma|/(M\varepsilon^2 a)\) 층(\(M\) = 150 GPa, \(a\) = 0.25 nm). 단면은 같은 부피를 모드에 맞게 배치한 개략도다. 해볼 것: Ge/Si 프리셋에서 두께를 1 → 6 ML로 올리면 약 3 ML의 젖음층 위에 섬이 솟는다. ε를 2 %로 줄이면 \(h_{SK}\)는 \((4.2/2)^2 \approx 4.4\)배 두꺼워진다.</div>
+    </div>
+    <p class="small">표면 에너지 값(J/m², 약): SiO₂ 0.3, Si 1.2–1.3, Ge 1.0, Cu 1.8, Ag 1.2, Ta 2.9, Ru 3.0. 다만 실제 성장은 평형이 아니라 동역학의 지배도 받는다. 젖지 않는 조합이라도 저온·고속 증착으로 섬을 촘촘하게 만들면(4절) 얇은 연속막을 얻을 수 있고, 반대로 잘 젖는 조합도 고온에서 어닐하면 응집해 섬으로 갈라질 수 있다(디웨팅).</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="incubation">
+    <h2>잠복기: 핵이 늦게 생기는 기판</h2>
+    <p>같은 조건으로 증착해도 기판에 따라 막이 늦게 자라기 시작하는 경우가 있다. 처음에는 핵생성 속도가 낮아 섬이 드물고, 섬이 충분히 퍼져 표면을 덮은 뒤에야 막이 정상 속도로 자란다. 두께-시간 그래프에서 정상 직선을 거꾸로 연장해 시간축을 만나는 점이 <span class="term">잠복기</span><span class="en">(incubation time, nucleation delay)</span>다. W CVD는 Si 위에서는 바로 자라지만 SiO₂ 위에서는 수십 초 이상 늦고, ALD도 수소 종단 Si처럼 반응 자리가 없는 표면에서는 수십 사이클 늦게 시작한다(<a href="ald.html">11장</a>·<a href="aldadv.html">12장</a>). 이 차이를 일부러 키운 것이 영역 선택 증착이다.</p>
+    <div class="formula">$$\theta_{cov}(t) = 1 - \exp\!\left(-\frac{\pi}{3}\,I\,G^2\,t^3\right),\qquad h(t) = R_v\int_0^t \theta_{cov}(t')\,dt'$$<div class="where">존슨-멜-아브라미-콜모고로프(JMAK) 피복 모델. \(I\)는 단위 면적·시간당 핵생성 속도(cm⁻² s⁻¹), \(G\)는 섬의 옆 방향 성장 속도, \(R_v\)는 덮인 곳의 수직 성장 속도. 늦게 덮이면 \(h(t)\) 곡선이 처음에 휘어져 있다가 직선이 되고, 그 직선의 절편이 겉보기 잠복기 \(t_{inc} \propto (I G^2)^{-1/3}\)이다.</div></div>
+
+    <div class="sim" id="sim-incub">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>JMAK 잠복기와 선택 증착 창</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ic-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>성장 표면 A의 핵생성 I<sub>A</sub></span> <output id="ic-ia-out"></output></span><input type="range" id="ic-ia" min="8" max="14" step="0.1" value="12"></label>
+          <label class="ctrl"><span><span>억제 표면 B의 핵생성 I<sub>B</sub></span> <output id="ic-ib-out"></output></span><input type="range" id="ic-ib" min="4" max="12" step="0.1" value="7"></label>
+          <label class="ctrl"><span>옆 성장 속도 G <output id="ic-g-out"></output></span><input type="range" id="ic-g" min="0.02" max="1" step="0.01" value="0.2"></label>
+          <label class="ctrl"><span><span>수직 성장 속도 R<sub>v</sub></span> <output id="ic-rv-out"></output></span><input type="range" id="ic-rv" min="0.05" max="2" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span>B의 허용 두께 <output id="ic-tol-out"></output></span><input type="range" id="ic-tol" min="0.2" max="3" step="0.1" value="1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">t<sub>inc</sub> (A)</span><span class="v" id="ic-o-ta">—</span></div>
+        <div class="stat"><span class="k">t<sub>inc</sub> (B)</span><span class="v" id="ic-o-tb">—</span></div>
+        <div class="stat"><span class="k">선택 창 끝</span><span class="v" id="ic-o-tw">—</span></div>
+        <div class="stat"><span class="k">그때 A 두께</span><span class="v nu-v" id="ic-o-ha">—</span></div>
+      </div>
+      <div class="sim-note">I는 log₁₀(cm⁻² s⁻¹). 점선은 정상 직선의 연장, 아래 띠는 각 표면의 피복률 \(\theta_{cov}\). '선택 창'은 B의 평균 두께가 허용치를 넘기 전까지의 시간이다. 해볼 것: I<sub>B</sub>를 한 자리 낮추면 B의 잠복기는 \(10^{1/3} \approx 2.15\)배 길어진다. G를 키우면 두 표면 모두 빨리 덮여 선택 창이 줄어든다(섬이 옆으로 퍼지는 것도 선택성을 망친다).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="szm">
+    <h2>구조 영역 모델: T/T<sub>m</sub>·압력·이온 에너지</h2>
+    <p>막이 두꺼워진 뒤의 미세구조는 도착 원자가 얼마나 움직일 수 있느냐로 정해진다. 그 척도가 기판 온도를 막 재료의 녹는점으로 나눈 <span class="term">동형 온도</span><span class="en">(homologous temperature)</span> \(T/T_m\)이다. Movchan–Demchishin(1969)은 증발 막을 \(T/T_m\)으로 세 영역으로 나누었고, Thornton(1974)은 스퍼터 막(<a href="pvd.html">7장</a>)에서 Ar 압력 축을 더해 영역 1과 2 사이에 치밀한 섬유상의 영역 T를 넣었다. 오늘날은 이온 충격 에너지를 세 번째 축으로 넣은 확장 모델(Anders 2010)을 많이 쓴다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="Thornton 구조 영역 모델: 가로축 T/Tm, 깊이축 Ar 압력, 영역 1의 다공성 기둥, 영역 T의 치밀 섬유, 영역 2의 기둥 결정, 영역 3의 등축 결정">
+        <line x1="60" y1="250" x2="820" y2="250" class="s-axis"/><line x1="60" y1="30" x2="60" y2="250" class="s-axis"/>
+        <text x="780" y="276" class="lb-s">T/T_m</text><text x="10" y="40" class="lb-s">p_Ar</text>
+        <text x="66" y="44" class="lb-s">30 mTorr</text><text x="66" y="244" class="lb-s">1 mTorr</text>
+        <g class="lb-s"><text x="56" y="268">0</text><text x="203" y="268">0.2</text><text x="355" y="268">0.4</text><text x="507" y="268">0.6</text><text x="659" y="268">0.8</text><text x="805" y="268">1</text></g>
+        <path d="M60 30 L 288 30 L 156 250 L 60 250 Z" class="f-warn-soft"/>
+        <path d="M288 30 L 440 30 L 402 250 L 156 250 Z" class="f-acc-soft"/>
+        <path d="M440 30 L 630 30 L 630 250 L 402 250 Z" class="f-ok-soft"/>
+        <path d="M630 30 L 820 30 L 820 250 L 630 250 Z" class="f-acc2-soft"/>
+        <text x="110" y="200" class="lb-b">영역 1</text><text x="96" y="218" class="lb-s">다공성 기둥</text>
+        <text x="300" y="150" class="lb-b">영역 T</text><text x="276" y="168" class="lb-s">치밀 섬유상</text>
+        <text x="500" y="150" class="lb-b">영역 2</text><text x="480" y="168" class="lb-s">기둥 결정립</text>
+        <text x="690" y="150" class="lb-b">영역 3</text><text x="676" y="168" class="lb-s">재결정 등축립</text>
+        <g style="fill:var(--m-metal)"><path d="M80 120 l6 -40 l6 40z M96 120 l7 -46 l7 46z M114 120 l6 -38 l6 38z M130 120 l7 -44 l7 44z"/></g>
+        <g style="fill:var(--m-metal)"><rect x="300" y="74" width="5" height="46"/><rect x="306" y="74" width="5" height="46"/><rect x="312" y="74" width="5" height="46"/><rect x="318" y="74" width="5" height="46"/><rect x="324" y="74" width="5" height="46"/><rect x="330" y="74" width="5" height="46"/></g>
+        <g style="fill:var(--m-metal)"><path d="M486 120 v-40 l8 -6 l8 6 v40z M504 120 v-40 l9 -6 l9 6 v40z M524 120 v-40 l8 -6 l8 6 v40z M542 120 v-40 l8 -6 l8 6 v40z"/></g>
+        <g style="fill:var(--m-metal);stroke:var(--canvas-bg);stroke-width:2"><path d="M676 74 h30 v22 h-30z M706 74 h34 v26 h-34z M676 96 h24 v24 h-24z M700 100 h40 v20 h-40z"/></g>
+        <text x="80" y="292" class="lb-s">저온·고압: 그림자 효과 &gt; 표면 확산 → 기공</text>
+        <text x="470" y="292" class="lb-s">고온: 체확산·재결정 → 큰 결정립</text>
+      </svg>
+      <figcaption><b>그림 6-7.</b> Thornton 구조 영역 모델의 단면 투영. 압력이 높을수록 원자가 기체와 충돌해 비스듬히, 낮은 에너지로 도착하므로 그림자 효과가 커져 영역 1이 고온 쪽으로 넓어진다. 이온 충격(바이어스·이온화 PVD)은 반대로 영역 경계를 저온 쪽으로 끌어내린다.</figcaption>
+    </figure>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>영역</th><th>\(T/T_m\)(약)</th><th>지배 과정</th><th>미세구조</th><th>막질 경향</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>\(\lt\) 0.1–0.3 (압력 증가 시 확장)</td><td>그림자 효과, 확산 거의 없음</td><td>끝이 둥근 가는 기둥, 기둥 사이 기공</td><td>밀도↓, 저항↑, 인장 응력, 수분 흡수</td></tr>
+        <tr><td>T</td><td>0.1–0.45</td><td>표면 확산 + 고에너지 원자</td><td>치밀한 섬유상, 매끈한 표면</td><td>밀도↑, 압축 응력(저압), 낮은 거칠기</td></tr>
+        <tr><td>2</td><td>0.45–0.75</td><td>표면 확산 활발</td><td>막 전체를 관통하는 기둥 결정립, 각진 표면</td><td>밀도 ≈ 벌크, 결정립 ∝ 두께</td></tr>
+        <tr><td>3</td><td>\(\gt\) 0.75</td><td>체확산·재결정</td><td>등축 결정립</td><td>벌크 물성</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="sim" id="sim-szm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>구조 영역 탐색기: 장비 조건 → 미세구조</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sz-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>막 재료</span><div class="seg" id="sz-mat"><button data-value="al">Al</button><button data-value="cu">Cu</button><button data-value="ti" class="on">Ti</button><button data-value="tin">TiN</button><button data-value="w">W</button></div></div>
+          <label class="ctrl"><span>기판 온도 <output id="sz-t-out"></output></span><input type="range" id="sz-t" min="-30" max="900" step="5" value="200"></label>
+          <label class="ctrl"><span>Ar 압력 <output id="sz-p-out"></output></span><input type="range" id="sz-p" min="0" max="1.6" step="0.01" value="0.48"></label>
+          <label class="ctrl"><span>이온 에너지/증착 원자 <output id="sz-e-out"></output></span><input type="range" id="sz-e" min="0" max="200" step="1" value="0"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">T/T<sub>m</sub></span><span class="v" id="sz-o-h">—</span></div>
+        <div class="stat"><span class="k">유효 T*</span><span class="v" id="sz-o-ts">—</span></div>
+        <div class="stat"><span class="k">영역</span><span class="v nu-v" id="sz-o-z">—</span></div>
+        <div class="stat"><span class="k">상대 밀도(개략)</span><span class="v" id="sz-o-d">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽은 Thornton 지도(가로 \(T/T_m\), 세로 log 압력)와 현재 운전점, 오른쪽은 그 영역의 단면 개략도. 경계는 Thornton 그림을 근사한 식이고, 이온 에너지 효과는 \(T^* = T/T_m + 0.0015\,E_{ion}\)[eV/원자]로 근사했다(Anders의 일반화 온도 개념, 계수는 교육용). 해볼 것: ① TF-300 표준 Ti(200 °C, 3 mTorr)는 어느 영역인가? ② 압력을 20 mTorr로 올리면? ③ 그 상태에서 이온 에너지를 100 eV/원자로 주면(이온화 PVD + 바이어스, <a href="sputter.html">8장</a>) 다시 치밀해진다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="grain">
+    <h2>결정립: 경쟁 성장과 어닐 성장</h2>
+    <p>섬이 합체한 직후의 결정립은 섬 간격 정도(수 nm)로 작다. 막이 두꺼워지면서 빨리 자라는 방위의 결정립이 이웃을 덮어 버리는 <span class="term">진화적 선택</span><span class="en">(evolutionary selection, van der Drift)</span>이 일어나 결정립이 V자로 넓어지고 막이 특정 방향으로 정렬(우선 배향, texture)된다. 증착 후 열처리에서는 결정립계 에너지를 줄이려고 큰 결정립이 작은 결정립을 먹는 <span class="term">결정립 성장</span>이 일어난다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 240" role="img" aria-label="왼쪽: 두께 방향으로 V자로 넓어지는 기둥 결정립의 경쟁 성장. 오른쪽: 어닐 시 결정립계 이동으로 결정립이 커지고 막 두께의 2~3배에서 멈춤">
+        <rect x="20" y="200" width="380" height="24" class="sub"/>
+        <g style="fill:var(--m-cu);stroke:var(--canvas-bg);stroke-width:2">
+          <path d="M20 200 L 40 200 L 30 150 Z"/><path d="M40 200 L 70 200 L 110 40 L 20 40 L 20 120 Z" opacity=".9"/><path d="M70 200 L 92 200 L 82 130 Z"/><path d="M92 200 L 130 200 L 180 40 L 110 40 Z" opacity=".8"/><path d="M130 200 L 150 200 L 142 150 Z"/><path d="M150 200 L 190 200 L 270 40 L 180 40 Z" opacity=".95"/><path d="M190 200 L 215 200 L 205 140 Z"/><path d="M215 200 L 260 200 L 330 40 L 270 40 Z" opacity=".85"/><path d="M260 200 L 290 200 L 280 150 Z"/><path d="M290 200 L 330 200 L 400 60 L 400 40 L 330 40 Z" opacity=".9"/><path d="M330 200 L 400 200 L 400 60 Z" opacity=".75"/>
+        </g>
+        <text x="30" y="26" class="lb-b">경쟁 성장 (증착 중)</text>
+        <text x="410" y="120" class="lb-s">↑ 두께</text>
+        <rect x="470" y="200" width="370" height="24" class="sub"/>
+        <rect x="470" y="150" width="170" height="50" style="fill:var(--m-cu)"/>
+        <path d="M480 150 v50 M500 150 v50 M512 150 v50 M540 150 v50 M556 150 v50 M580 150 v50 M594 150 v50 M620 150 v50" class="s-line" style="stroke:#fff"/>
+        <rect x="670" y="150" width="170" height="50" style="fill:var(--m-cu)"/>
+        <path d="M790 150 v50 M720 150 v50" class="s-line" style="stroke:#fff"/>
+        <defs><marker id="f68-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker></defs>
+        <line x1="644" y1="175" x2="664" y2="175" class="arr-a" marker-end="url(#f68-ar)"/>
+        <text x="470" y="26" class="lb-b">어닐 성장 (증착 후)</text>
+        <text x="470" y="120" class="lb-s">증착 직후 d ≈ 수십 nm</text>
+        <text x="670" y="120" class="lb-s">어닐 후 d → (2–3) × 두께에서 멈춤</text>
+        <text x="470" y="142" class="lb-s">d² − d₀² = k₀·e^(−Q/kT)·t</text>
+      </svg>
+      <figcaption><b>그림 6-8.</b> 증착 중의 경쟁 성장(왼쪽)과 증착 후 어닐에 의한 결정립 성장(오른쪽). 얇은 막에서는 결정립계가 막을 관통하면 표면 홈(groove)에 걸려 결정립이 막 두께의 2–3배에서 멈춘다(두께 효과, Mullins).</figcaption>
+    </figure>
+
+    <div class="formula">$$d^2 - d_0^2 = k_0\,e^{-Q/kT}\,t,\qquad \rho_{gb} = \rho_0\left[1 + \frac{3}{2}\,\frac{\lambda}{d}\,\frac{R}{1-R}\right]$$<div class="where">왼쪽은 포물선 결정립 성장(결정립계 곡률이 구동력), \(Q\)는 결정립계 이동 활성화 에너지(Cu 약 0.9–1.2 eV). 오른쪽은 메이야다스-샤츠케스(Mayadas–Shatzkes) 결정립계 산란의 근사식(\(\alpha\) 작을 때): Cu 전자 평균 자유 행로 \(\lambda\) = 39 nm, 결정립계 반사 계수 \(R \approx 0.3\)–0.4. 결정립이 클수록 저항이 벌크 1.7 µΩ·cm에 가까워진다.</div></div>
+
+    <div class="sim" id="sim-grain">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>Cu 어닐: 결정립 성장과 비저항</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>어닐 온도 <output id="gr-t-out"></output></span><input type="range" id="gr-t" min="20" max="450" step="5" value="25"></label>
+          <label class="ctrl"><span>막 두께 <output id="gr-h-out"></output></span><input type="range" id="gr-h" min="20" max="1000" step="10" value="200"></label>
+          <label class="ctrl"><span>활성화 에너지 Q <output id="gr-q-out"></output></span><input type="range" id="gr-q" min="0.6" max="1.4" step="0.01" value="0.9"></label>
+          <label class="ctrl"><span><span>증착 직후 결정립 d<sub>0</sub></span> <output id="gr-d0-out"></output></span><input type="range" id="gr-d0" min="5" max="80" step="1" value="30"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">30 min 후 d</span><span class="v" id="gr-o-d">—</span></div>
+        <div class="stat"><span class="k">포화(두께 효과)까지</span><span class="v" id="gr-o-ts">—</span></div>
+        <div class="stat"><span class="k">비저항 (전·후)</span><span class="v" id="gr-o-rho">—</span></div>
+      </div>
+      <div class="sim-note">\(k_0 = 2\times10^{16}\) nm²/s(상온 자기 어닐이 수 시간 걸리도록 맞춘 교육용 값), 두께 효과는 \(d_{max} = 2.5h\)로 부드럽게 포화시켰다. 가로축은 log 시간(1 s – 1년). 해볼 것: ① 20 °C에서도 몇 시간–며칠이면 결정립이 커진다: 전해 도금 Cu의 상온 자기 어닐(self-annealing)이다. ② 막을 50 nm로 얇게 하면 결정립이 125 nm에서 멈추고 비저항이 덜 내려간다. 미세 배선의 저항이 오르는 이유 중 하나다.</div>
+    </div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>흡착 원자의 체류 시간 \(\tau = \nu^{-1}e^{E_a/kT}\): 물리 흡착(0.05–0.5 eV)은 상온에서도 순식간에 떠나고, 금속 원자의 화학 흡착(\(\gt\) 2 eV)은 사실상 재증발이 없다. TF-300의 Ti 100 nm/min은 약 6 ML/s, Cu 400 nm/min은 약 38 ML/s의 도착 플럭스다.</li>
+      <li>표면 확산 \(D = (a^2\nu/4)e^{-E_d/kT}\)는 탈착보다 쉽다(\(E_d \approx 0.1\)–\(0.3\,E_a\)). 성장을 정하는 무차원수는 확산 빈도와 도착 빈도의 비 \(R = D/F\)다.</li>
+      <li>고전 핵생성: \(r^* = 2\gamma/\Delta G_v\), \(\Delta G^* = 16\pi\gamma^3 f(\theta)/3\Delta G_v^2\), \(\Delta G_v = (kT/\Omega)\ln S\). 젖음이 좋을수록(\(\theta\) 작을수록) 장벽이 낮다. 금속 PVD는 과포화가 매우 커서 임계 핵이 원자 1–3개이므로 원자론 모델을 쓴다.</li>
+      <li>포화 섬 밀도 \(N \propto (F/D)^{i/(i+2)}\): 기판 온도↓·증착 속도↑ → 섬 밀도↑ → 섬 간격↓ → 더 얇은 두께에서 연속막(\(h_c \approx (\pi/12)N^{-1/2}\)). 얇은 시드·배리어를 저온·고속으로 증착하는 이유다.</li>
+      <li>바우어 판정 \(\Delta\gamma = \gamma_f + \gamma_i - \gamma_s\): 양수면 볼머-베버(섬), 음수면 층 성장, 불일치 변형이 쌓이면 \(h_{SK} \approx |\Delta\gamma|/M\varepsilon^2\) 이후 스트란스키-크라스타노프 섬.</li>
+      <li>잠복기는 낮은 핵생성 속도가 만든 피복 지연이며 JMAK로 \(t_{inc} \propto (IG^2)^{-1/3}\). 기판 사이 잠복기 차이가 영역 선택 증착의 창이 된다.</li>
+      <li>구조 영역 모델: \(T/T_m\)이 오르면 영역 1(다공성) → T(치밀 섬유) → 2(기둥) → 3(등축). 압력↑은 영역 1을 넓히고, 이온 충격은 치밀화 쪽으로 민다. 어닐 결정립 성장 \(d^2 - d_0^2 = k t\)는 두께의 2–3배에서 멈추고, 결정립이 클수록 비저항이 낮아진다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 흡착 에너지 1.0 eV인 분자의 체류 시간은 300 K에서 약 얼마인가? (\(\nu = 10^{13}\) s⁻¹)</p><div class="opts">
+        <button class="opt">약 10⁻⁸ s</button>
+        <button class="opt">약 1 ms</button>
+        <button class="opt" data-correct>약 6 × 10³ s (약 1.7시간)</button>
+        <button class="opt">약 10²⁰ s</button>
+      </div><div class="quiz-exp">\(kT\) = 0.02585 eV, \(E_a/kT\) = 38.7, \(e^{38.7} \approx 6\times10^{16}\). \(\tau = 6\times10^{16}/10^{13} \approx 6\times10^{3}\) s. 0.1 eV 차이마다 300 K에서는 약 50배씩 바뀌므로 흡착 에너지가 조금만 달라도 체류 시간은 자릿수로 달라진다.</div></div>
+
+      <div class="quiz-q"><p>2. 과포화도의 로그 \(\ln S\)를 두 배로 키우면 고전 핵생성 이론의 임계 반지름과 장벽은 각각 어떻게 되는가?</p><div class="opts">
+        <button class="opt">r*는 1/2, ΔG*는 1/2</button>
+        <button class="opt" data-correct>r*는 1/2, ΔG*는 1/4</button>
+        <button class="opt">r*는 1/4, ΔG*는 1/2</button>
+        <button class="opt">둘 다 변하지 않는다</button>
+      </div><div class="quiz-exp">\(\Delta G_v \propto \ln S\)이므로 \(r^* = 2\gamma/\Delta G_v\)는 \(1/\ln S\), \(\Delta G^* \propto 1/\Delta G_v^2\)는 \(1/(\ln S)^2\)로 줄어든다. 장벽이 지수 안에 들어가므로 핵생성 속도는 매우 크게 늘어난다.</div></div>
+
+      <div class="quiz-q"><p>3. 임계 핵 크기 \(i = 1\)인 금속 PVD에서 증착 속도를 8배로 높이면 포화 섬 밀도는 몇 배가 되는가?</p><div class="opts">
+        <button class="opt">변하지 않는다</button>
+        <button class="opt" data-correct>약 2배</button>
+        <button class="opt">약 8배</button>
+        <button class="opt">약 1/2배</button>
+      </div><div class="quiz-exp">\(N \propto (F/D)^{i/(i+2)} = (F/D)^{1/3}\). \(8^{1/3} = 2\). 섬 간격은 \(1/\sqrt{2}\)로 줄고 연속막이 되는 두께도 약 0.7배가 된다.</div></div>
+
+      <div class="quiz-q"><p>4. 기판 표면 에너지 0.3 J/m²인 SiO₂ 위에 표면 에너지 1.8 J/m²인 Cu를 증착한다. 계면 에너지를 0.5 J/m²라 할 때 예상되는 성장 모드는?</p><div class="opts">
+        <button class="opt" data-correct>볼머-베버(섬) 성장</button>
+        <button class="opt">프랑크-반 데어 메르베(층) 성장</button>
+        <button class="opt">스트란스키-크라스타노프 성장</button>
+        <button class="opt">표면 에너지와 무관하게 결정된다</button>
+      </div><div class="quiz-exp">\(\Delta\gamma = 1.8 + 0.5 - 0.3 = 2.0 \gt 0\)이므로 젖지 않는다. 영의 식으로 \(\cos\theta = (0.3-0.5)/1.8 = -0.11\), 접촉각 약 96°. Cu를 SiO₂ 위에 바로 올리지 않고 Ta/TaN 같은 라이너를 먼저 까는 이유 중 하나다.</div></div>
+
+      <div class="quiz-q"><p>5. 3 mTorr, 실온에서 치밀한 Ti 막을 얻던 공정을 20 mTorr로 바꿨더니 막의 비저항이 오르고 대기 노출 뒤 저항이 서서히 변했다. 구조 영역 모델로 본 원인은?</p><div class="opts">
+        <button class="opt">영역 3으로 재결정되어 결정립이 커졌다</button>
+        <button class="opt">이온 충격이 늘어 압축 응력이 커졌다</button>
+        <button class="opt" data-correct>원자가 기체 충돌로 열평형화·비스듬히 도착해 영역 1(기둥 사이 기공)로 옮겨 갔다</button>
+        <button class="opt">흡착 에너지가 커져 체류 시간이 늘었다</button>
+      </div><div class="quiz-exp">압력이 오르면 스퍼터 원자가 기체와 충돌해 에너지를 잃고(열평형화) 넓은 각도로 도착하므로 그림자 효과가 커진다. Thornton 지도에서 영역 1의 경계가 고온 쪽으로 이동해 기공이 많은 기둥 구조가 되고, 기공으로 산소·수분이 들어가 저항이 변한다.</div></div>
+
+      <div class="quiz-q"><p>6. JMAK 모델에서 억제 표면의 핵생성 속도 \(I\)가 1/1000로 줄면 잠복기는 몇 배가 되는가? (옆 성장 속도는 같다)</p><div class="opts">
+        <button class="opt">1000배</button>
+        <button class="opt">약 32배</button>
+        <button class="opt" data-correct>10배</button>
+        <button class="opt">변하지 않는다</button>
+      </div><div class="quiz-exp">\(\theta_{cov} = 1 - \exp(-\tfrac{\pi}{3}IG^2t^3)\)에서 같은 피복에 이르는 시간은 \(t \propto (IG^2)^{-1/3}\). \((10^{-3})^{-1/3} = 10\). 억제제가 핵생성을 천 배 줄여도 선택 창은 열 배밖에 늘지 않는다는 점이 영역 선택 증착을 어렵게 만든다.</div></div>
+
+      <div class="quiz-q"><p>7. 200 nm Cu 막을 어닐해 결정립이 30 nm에서 300 nm로 커졌다. 메이야다스-샤츠케스 근사(\(\lambda\) = 39 nm, \(R\) = 0.3)로 본 결정립계 비저항 기여의 변화로 옳은 것은?</p><div class="opts">
+        <button class="opt">변하지 않는다</button>
+        <button class="opt" data-correct>약 1.8ρ₀에서 약 1.1ρ₀로 줄어든다</button>
+        <button class="opt">약 10배 커진다</button>
+        <button class="opt">결정립이 커지면 산란이 늘어 저항이 오른다</button>
+      </div><div class="quiz-exp">\(\rho/\rho_0 = 1 + 1.5\,(\lambda/d)\,R/(1-R)\). d = 30 nm: 1 + 1.5 × 1.3 × 0.43 = 1.84. d = 300 nm: 1 + 1.5 × 0.13 × 0.43 = 1.08. 증착 후 어닐이 Cu 배선 저항을 크게 낮추는 이유다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  function $(id) { return document.getElementById(id); }
+  var kB = 8.617e-5, NU = 1e13, N0 = 1.5e15;
+  var clamp = TF.clamp;
+  function font(px) { return px + "px " + getComputedStyle(document.body).getPropertyValue("--font"); }
+  function mono(px) { return px + "px " + getComputedStyle(document.body).getPropertyValue("--mono"); }
+  function sci(x, d) {
+    if (!isFinite(x)) return "—";
+    if (x === 0) return "0";
+    var e = Math.floor(Math.log10(Math.abs(x))), m = x / Math.pow(10, e);
+    if (Math.abs(m) >= 9.995) { m /= 10; e++; }
+    return m.toFixed(d == null ? 2 : d) + "×10<sup>" + e + "</sup>";
+  }
+  function sciTxt(x, d) {
+    if (!isFinite(x)) return "—";
+    if (x === 0) return "0";
+    var e = Math.floor(Math.log10(Math.abs(x))), m = x / Math.pow(10, e);
+    if (Math.abs(m) >= 9.995) { m /= 10; e++; }
+    return m.toFixed(d == null ? 1 : d) + "e" + e;
+  }
+  function fmtTime(s) {
+    if (!isFinite(s)) return "—";
+    if (s < 1e-9) return sci(s, 1) + " s";
+    if (s < 1e-6) return (s * 1e9).toPrecision(3) + " ns";
+    if (s < 1e-3) return (s * 1e6).toPrecision(3) + " µs";
+    if (s < 1) return (s * 1e3).toPrecision(3) + " ms";
+    if (s < 120) return s.toPrecision(3) + " s";
+    if (s < 7200) return (s / 60).toPrecision(3) + " min";
+    if (s < 172800) return (s / 3600).toPrecision(3) + " h";
+    if (s < 3.15e7 * 3) return (s / 86400).toPrecision(3) + " 일";
+    return sci(s / 3.15e7, 1) + " 년";
+  }
+  function setV(id, cls, html) { var el = $(id); if (!el) return; el.className = "v nu-v " + (cls || ""); el.innerHTML = html; }
+  function presets(attr, fn) {
+    Array.prototype.forEach.call(document.querySelectorAll("[" + attr + "]"), function (b) {
+      b.addEventListener("click", function () { fn(b.getAttribute(attr).split(",").map(Number)); });
+    });
+  }
+  /* CSS 색 문자열 → [r,g,b] */
+  var _cc = document.createElement("canvas").getContext("2d");
+  function rgb(c) {
+    _cc.fillStyle = "#000"; _cc.fillStyle = c;
+    var s = _cc.fillStyle;
+    if (s[0] === "#") return [parseInt(s.substr(1, 2), 16), parseInt(s.substr(3, 2), 16), parseInt(s.substr(5, 2), 16)];
+    var m = s.match(/[\d.]+/g) || [0, 0, 0];
+    return [+m[0], +m[1], +m[2]];
+  }
+  /* 결정적 난수 (그림이 다시 그려져도 같은 모양) */
+  function rng(seed) { var s = seed >>> 0; return function () { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
+
+  /* =============================================================
+     1) 흡착 에너지·온도 → 체류 시간
+     ============================================================= */
+  (function () {
+    if (!$("rs-cv")) return;
+    var gEa = TF.range("rs-ea", function (v) { return v.toFixed(2) + " eV"; }, draw);
+    var gT = TF.range("rs-t", function (v) { return v + " °C"; }, draw);
+    var gR = TF.range("rs-r", function (v) { return TF.fmt(Math.pow(10, v), 3) + " nm/min"; }, draw);
+    var cv = TF.canvas($("rs-cv"), function (ctx, w, h) {
+      var P = TF.palette(), Ea = gEa(), TK = gT() + 273.15;
+      var F = Math.pow(10, gR()) * 9.45e13;           // cm^-2 s^-1 (Ti 원자 밀도)
+      var tML = N0 / F;
+      var tau = function (E, T) { return Math.exp(E / (kB * T)) / NU; };
+      var mk = function (E) { var d = []; for (var T = 150; T <= 1100; T += 5) d.push([T, tau(E, T)]); return d; };
+      var series = [
+        { data: mk(Math.max(0.05, Ea - 0.3)), color: P.faint, width: 1.2, dash: [4, 4] },
+        { data: mk(Ea + 0.3), color: P.faint, width: 1.2, dash: [4, 4] },
+        { data: mk(Ea), color: P.accent, width: 2.4 }
+      ];
+      var t0 = tau(Ea, TK);
+      var c = TF.chart(ctx, null, {
+        x: [150, 1100], y: [1e-12, 1e20], logY: true, xLabel: "기판 온도 (K)", yLabel: "체류 시간 τ (s)",
+        yTicks: [1e-12, 1e-8, 1e-4, 1, 1e4, 1e8, 1e12, 1e16, 1e20],
+        series: series,
+        hlines: [{ y: tML, color: P.warn, label: "한 층 덮이는 시간 " + fmtTime(tML).replace(/<[^>]+>/g, "") }, { y: 1, color: P.faint, label: "1 s" }],
+        vlines: [{ x: 298, color: P.faint, label: "실온" }],
+        points: [{ x: TK, y: clamp(t0, 1e-12, 1e20), color: P.bad, r: 6 }]
+      });
+      ctx.font = mono(11); ctx.fillStyle = P.dim; ctx.textAlign = "right"; ctx.textBaseline = "bottom";
+      ctx.fillText("점선: Ea ± 0.3 eV", c.box.x + c.box.w - 6, c.box.y + c.box.h - 6);
+      var theta = F * t0 / (N0 + F * t0);
+      TF.stat("rs-o-tau", fmtTime(t0));
+      TF.stat("rs-o-f", sci(F, 2) + " cm⁻²s⁻¹ (" + TF.fmt(F / N0, 3) + " ML/s)");
+      TF.stat("rs-o-th", theta < 1e-4 ? sci(theta, 1) : TF.fmt(theta, 3));
+      if (t0 < 0.01 * tML) setV("rs-o-j", "bad", "재증발 우세: 거의 안 붙음");
+      else if (t0 > 100 * tML) setV("rs-o-j", "ok", "완전 응축");
+      else setV("rs-o-j", "warn", "부분 응축");
+    }, { aspect: 0.58, maxHeight: 420, minHeight: 260 });
+    function draw() { cv.redraw(); }
+    presets("data-rs", function (a) { gEa.set(a[0]); gT.set(a[1]); });
+  })();
+
+  /* =============================================================
+     2) 무작위 행보와 재증발
+     ============================================================= */
+  (function () {
+    if (!$("wk-cv")) return;
+    var gT = TF.range("wk-t", function (v) { return v + " K"; }, stats);
+    var gEd = TF.range("wk-ed", function (v) { return v.toFixed(2) + " eV"; }, stats);
+    var gEa = TF.range("wk-ea", function (v) { return v.toFixed(2) + " eV"; }, stats);
+    var CELL = 9, cols = 60, rows = 30, walkers = [], rings = [], nDes = 0, nHop = 0, running = true;
+    function pdes() { var T = gT(); return 1 / (1 + Math.exp((gEa() - gEd()) / (kB * T))); }
+    function spawn(wk) {
+      wk.x = Math.floor(Math.random() * cols); wk.y = Math.floor(Math.random() * rows);
+      wk.path = [[wk.x, wk.y]]; wk.hops = 0;
+    }
+    for (var i = 0; i < 8; i++) { var wk = {}; spawn(wk); walkers.push(wk); }
+    function stats() {
+      var T = gT(), Ed = gEd(), Ea = gEa();
+      var G = NU * Math.exp(-Ed / (kB * T)), tau = Math.exp(Ea / (kB * T)) / NU, N = G * tau;
+      TF.stat("wk-o-g", sci(G, 2) + " s⁻¹");
+      TF.stat("wk-o-tau", fmtTime(tau));
+      TF.stat("wk-o-n", N < 1e5 ? TF.fmt(N, 3) : sci(N, 2));
+      var X = 0.13 * Math.sqrt(N);          // (a/2)·√N, a = 0.26 nm
+      TF.stat("wk-o-x", X < 1000 ? TF.fmt(X, 3) + " nm" : TF.si(X * 1e-9, "m", 3));
+      nDes = 0; nHop = 0;
+    }
+    stats();
+    $("wk-run").addEventListener("click", function () { running = !running; this.textContent = running ? "일시정지" : "계속"; });
+    $("wk-clear").addEventListener("click", function () { walkers.forEach(function (w) { w.path = [[w.x, w.y]]; }); rings = []; });
+    var cv = TF.canvas($("wk-cv"), function (ctx, w, h) {
+      var P = TF.palette();
+      cols = Math.max(20, Math.floor(w / CELL)); rows = Math.max(12, Math.floor(h / CELL));
+      ctx.fillStyle = P.grid;
+      for (var x = 0; x < cols; x++) for (var y = 0; y < rows; y++) ctx.fillRect(x * CELL + CELL / 2 - 1, y * CELL + CELL / 2 - 1, 2, 2);
+      walkers.forEach(function (wk, k) {
+        ctx.strokeStyle = P.series[k % 4]; ctx.globalAlpha = 0.55; ctx.lineWidth = 1.6;
+        ctx.beginPath(); var started = false;
+        wk.path.forEach(function (p) {
+          if (!p) { started = false; return; }
+          var px = p[0] * CELL + CELL / 2, py = p[1] * CELL + CELL / 2;
+          if (started) ctx.lineTo(px, py); else { ctx.moveTo(px, py); started = true; }
+        });
+        ctx.stroke(); ctx.globalAlpha = 1;
+        ctx.fillStyle = P.gas; ctx.beginPath(); ctx.arc(wk.x * CELL + CELL / 2, wk.y * CELL + CELL / 2, 3.8, 0, 6.283); ctx.fill();
+      });
+      rings.forEach(function (r) {
+        ctx.strokeStyle = P.bad; ctx.globalAlpha = r.a; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(r.x * CELL + CELL / 2, r.y * CELL + CELL / 2, 6 + (1 - r.a) * 10, 0, 6.283); ctx.stroke();
+      });
+      ctx.globalAlpha = 1;
+      ctx.font = mono(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.text;
+      var txt = "탈착 " + nDes + "회";
+      if (nDes > 0) txt += " · 측정 평균 hop/체류 " + TF.fmt(nHop / nDes, 3) + " (이론 " + TF.fmt(1 / pdes() - 1, 3) + ")";
+      ctx.fillStyle = P.bg; ctx.fillRect(4, 4, ctx.measureText(txt).width + 8, 16);
+      ctx.fillStyle = P.text; ctx.fillText(txt, 8, 6);
+    }, { aspect: 0.5, maxHeight: 360, minHeight: 220 });
+    var acc = 0;
+    TF.loop($("wk-cv"), function (dt) {
+      rings.forEach(function (r) { r.a -= dt * 0.8; }); rings = rings.filter(function (r) { return r.a > 0; });
+      if (running) {
+        acc += dt * 40;                  // 초당 약 40 hop/원자
+        var steps = Math.floor(acc); acc -= steps;
+        var pd = pdes();
+        for (var s = 0; s < steps; s++) walkers.forEach(function (wk) {
+          if (Math.random() < pd) {
+            nDes++; nHop += wk.hops; rings.push({ x: wk.x, y: wk.y, a: 1 });
+            spawn(wk); return;
+          }
+          var d = Math.floor(Math.random() * 4), nx = wk.x + [1, -1, 0, 0][d], ny = wk.y + [0, 0, 1, -1][d], wrap = false;
+          if (nx < 0) { nx = cols - 1; wrap = true; } else if (nx >= cols) { nx = 0; wrap = true; }
+          if (ny < 0) { ny = rows - 1; wrap = true; } else if (ny >= rows) { ny = 0; wrap = true; }
+          wk.x = nx; wk.y = ny; wk.hops++;
+          if (wrap) wk.path.push(null);
+          wk.path.push([nx, ny]);
+          if (wk.path.length > 600) wk.path.shift();
+        });
+      }
+      cv.redraw();
+    });
+  })();
+
+  /* =============================================================
+     3) ΔG(r) 곡선
+     ============================================================= */
+  (function () {
+    if (!$("dg-cv")) return;
+    var OM = 1.18e-29, MCU = 1.055e-25, kJ = 1.380649e-23, EV = 1.602e-19;
+    var mode = TF.seg("dg-mode", draw);
+    var gS = TF.range("dg-s", function (v) { return v.toFixed(2); }, draw);
+    var gT = TF.range("dg-t", function (v) { return v + " K"; }, draw);
+    var gR = TF.range("dg-r", function (v) { return TF.fmt(Math.pow(10, v), 3) + " nm/min"; }, draw);
+    var gG = TF.range("dg-g", function (v) { return v.toFixed(2) + " J/m²"; }, draw);
+    var gTh = TF.range("dg-th", function (v) { return v + "°"; }, draw);
+    function lnS() {
+      if (mode() === "man") return gS();
+      var T = gT();
+      var lnPeq = Math.LN10 * (10.35 - 15670 / T);                         // Pa
+      var lnFeq = lnPeq - 0.5 * Math.log(2 * Math.PI * MCU * kJ * T);     // m^-2 s^-1
+      var F = Math.pow(10, gR()) * 8.49e28 * 1e-9 / 60;                   // m^-2 s^-1
+      return Math.log(F) - lnFeq;
+    }
+    var cv = TF.canvas($("dg-cv"), function (ctx, w, h) {
+      var P = TF.palette(), T = gT(), g = gG(), th = gTh() * Math.PI / 180;
+      var f = (2 + Math.cos(th)) * Math.pow(1 - Math.cos(th), 2) / 4;
+      var L = lnS(), kT = kJ * T;
+      var Gv = kT * L / OM;                         // J/m^3 (L>0일 때 이득)
+      var rAt = Math.cbrt(3 * OM / (4 * Math.PI)) * 1e9;
+      var rs = L > 0 ? 2 * g / Gv * 1e9 : NaN;      // nm
+      var dGs = L > 0 ? 16 * Math.PI * Math.pow(g, 3) / (3 * Gv * Gv) * f / EV : NaN; // eV
+      var rmax = L > 0 ? clamp(3 * rs, 0.4, 20) : 2;
+      var dG = function (rn) { var r = rn * 1e-9; return (-(4 / 3) * Math.PI * r * r * r * Gv + 4 * Math.PI * r * r * g) * f / EV; };
+      var surf = function (rn) { var r = rn * 1e-9; return 4 * Math.PI * r * r * g * f / EV; };
+      var vol = function (rn) { var r = rn * 1e-9; return -(4 / 3) * Math.PI * r * r * r * Gv * f / EV; };
+      var d1 = [], d2 = [], d3 = [];
+      for (var i = 0; i <= 200; i++) { var r = rmax * i / 200; d1.push([r, dG(r)]); d2.push([r, surf(r)]); d3.push([r, vol(r)]); }
+      var ytop = L > 0 ? Math.max(dGs * 1.5, 1e-3) : surf(rmax) * 1.1;
+      if (!(ytop > 0)) ytop = 1;
+      var ybot = -ytop * 1.1;
+      TF.chart(ctx, null, {
+        x: [0, rmax], y: [ybot, ytop], xLabel: "핵 반지름 r (nm)", yLabel: "ΔG (eV)",
+        series: [{ data: d2, color: P.faint, width: 1.2, dash: [5, 4] }, { data: d3, color: P.faint, width: 1.2, dash: [2, 3] }, { data: d1, color: P.accent, width: 2.6 }],
+        hlines: [{ y: 0, color: P.axis, dash: [] }],
+        vlines: [{ x: rAt, color: P.dim, label: "원자 1개" }].concat(L > 0 && rs < rmax ? [{ x: rs, color: P.bad, label: "r*" }] : []),
+        points: L > 0 && rs < rmax ? [{ x: rs, y: dGs, color: P.bad, r: 5, label: "ΔG* " + TF.fmt(dGs, 3) + " eV" }] : []
+      });
+      if (L > 0) {
+        TF.stat("dg-o-gv", sci(Gv, 2) + " J/m³ (ln S = " + TF.fmt(L, 3) + ")");
+        TF.stat("dg-o-r", TF.fmt(rs, 3) + " nm");
+        TF.stat("dg-o-g", TF.fmt(dGs, 3) + " eV");
+        var n = (4 / 3) * Math.PI * Math.pow(rs * 1e-9, 3) * f / OM;
+        if (n < 1) setV("dg-o-n", "warn", TF.fmt(n, 2) + " (원자 1개 미만 → 원자론 영역)");
+        else setV("dg-o-n", n < 20 ? "warn" : "ok", TF.fmt(n, 3));
+        var ex = -dGs / (kB * T);
+        TF.stat("dg-o-rate", ex < -700 ? "≈ 0" : sci(Math.exp(ex), 2));
+      } else {
+        TF.stat("dg-o-gv", "≤ 0 (ln S = " + TF.fmt(L, 3) + ")");
+        TF.stat("dg-o-r", "—"); TF.stat("dg-o-g", "∞");
+        setV("dg-o-n", "bad", "과포화 아님: 재증발, 핵생성 없음");
+        TF.stat("dg-o-rate", "0");
+      }
+    }, { aspect: 0.58, maxHeight: 420, minHeight: 260 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     4) KMC: 확산·핵생성·섬 성장
+     ============================================================= */
+  (function () {
+    if (!$("km-cv")) return;
+    var L = 128, NS = L * L;
+    var occ = new Uint8Array(NS), idx = new Int32Array(NS).fill(-1), mon = new Int32Array(NS), nm = 0;
+    var nDep = 0, running = true, hist = [], frame = 0, islands = 0, meanSize = 0;
+    var lab = new Int32Array(NS), stack = new Int32Array(NS);
+    var gT = TF.range("km-t", function (v) { return v + " K"; }, reset);
+    var gR = TF.range("km-r", function (v) { return TF.fmt(Math.pow(10, v), 3) + " nm/min"; }, reset);
+    var gEd = TF.range("km-ed", function (v) { return v.toFixed(2) + " eV"; }, reset);
+    var gC = TF.range("km-cmax", function (v) { return v.toFixed(2) + " ML"; });
+    function Rreal() {
+      var D = NU * Math.exp(-gEd() / (kB * gT()));
+      var F = Math.pow(10, gR()) * 0.0925;          // Cu ML/s
+      return D / F;
+    }
+    function Rsim() { return clamp(Rreal(), 10, 1e7); }
+    function nb(p, d) {
+      var x = p % L, y = (p / L) | 0;
+      if (d === 0) return y * L + (x + 1) % L;
+      if (d === 1) return y * L + (x + L - 1) % L;
+      if (d === 2) return ((y + 1) % L) * L + x;
+      return ((y + L - 1) % L) * L + x;
+    }
+    function addMon(p) { idx[p] = nm; mon[nm++] = p; }
+    function remMon(p) { var i = idx[p]; if (i < 0) return; var last = mon[--nm]; mon[i] = last; idx[last] = i; idx[p] = -1; }
+    function touching(p) { for (var d = 0; d < 4; d++) if (occ[nb(p, d)]) return true; return false; }
+    function fix(p) {
+      if (occ[p] === 1) remMon(p);
+      occ[p] = 2;
+      for (var d = 0; d < 4; d++) { var q = nb(p, d); if (occ[q] === 1) { remMon(q); occ[q] = 2; } }
+    }
+    function emptyNb(p) {
+      var s = Math.floor(Math.random() * 4);
+      for (var k = 0; k < 4; k++) { var q = nb(p, (s + k) % 4); if (!occ[q]) return q; }
+      return -1;
+    }
+    function deposit() {
+      var p = Math.floor(Math.random() * NS);
+      if (occ[p]) {
+        var q = -1, cur = p;
+        for (var t = 0; t < 40 && q < 0; t++) { q = emptyNb(cur); if (q < 0) cur = nb(cur, Math.floor(Math.random() * 4)); }
+        if (q < 0) return;
+        if (occ[p] === 1) fix(p);
+        occ[q] = 1; fix(q); nDep++; return;
+      }
+      occ[p] = 1; nDep++;
+      if (touching(p)) fix(p); else addMon(p);
+    }
+    function hop() {
+      var p = mon[Math.floor(Math.random() * nm)], q = nb(p, Math.floor(Math.random() * 4));
+      if (occ[q]) { fix(p); return; }
+      remMon(p); occ[p] = 0; occ[q] = 1;
+      if (touching(q)) fix(q); else addMon(q);
+    }
+    function count() {
+      lab.fill(0); var n = 0, tot = 0;
+      for (var p = 0; p < NS; p++) {
+        if (occ[p] !== 2 || lab[p]) continue;
+        n++; var sp = 0; stack[sp++] = p; lab[p] = n;
+        while (sp) { var c = stack[--sp]; tot++; for (var d = 0; d < 4; d++) { var q = nb(c, d); if (occ[q] === 2 && !lab[q]) { lab[q] = n; stack[sp++] = q; } } }
+      }
+      islands = n; meanSize = n ? tot / n : 0;
+    }
+    function reset() {
+      occ.fill(0); idx.fill(-1); nm = 0; nDep = 0; hist = []; islands = 0; meanSize = 0;
+      running = true; $("km-run").textContent = "일시정지"; stats(); if (cv) cv.redraw();
+    }
+    $("km-run").addEventListener("click", function () {
+      if (nDep / NS >= gC() - 1e-9) { reset(); return; }
+      running = !running; this.textContent = running ? "일시정지" : "계속";
+    });
+    $("km-reset").addEventListener("click", function () { reset(); running = false; $("km-run").textContent = "증착 시작"; });
+    function stats() {
+      var R = Rreal(), Rs = Rsim();
+      TF.stat("km-o-r", sci(R, 2) + (R !== Rs ? " (계산 " + sci(Rs, 0) + ")" : ""));
+      TF.stat("km-o-th", (nDep / NS).toFixed(3) + " ML");
+      TF.stat("km-o-n", sci(islands / NS * 1.53e15, 2) + " cm⁻²");
+      TF.stat("km-o-s", TF.fmt(meanSize, 3) + " 원자");
+      TF.stat("km-o-m", (nm ? sci(nm / NS, 1) : "0") + " /자리");
+    }
+    var img = null, ictx = null, off = document.createElement("canvas");
+    off.width = L; off.height = L; ictx = off.getContext("2d"); img = ictx.createImageData(L, L);
+    var cv = TF.canvas($("km-cv"), function (ctx, w, h) {
+      var P = TF.palette(), cb = rgb(P.bg), cm = rgb(P.gas), cf = rgb(P.cu), d = img.data;
+      for (var p = 0; p < NS; p++) {
+        var c = occ[p] === 2 ? cf : occ[p] === 1 ? cm : cb;
+        d[p * 4] = c[0]; d[p * 4 + 1] = c[1]; d[p * 4 + 2] = c[2]; d[p * 4 + 3] = 255;
+      }
+      ictx.putImageData(img, 0, 0);
+      var S = Math.min(h - 8, w * 0.6);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(off, 4, 4, S, S);
+      ctx.strokeStyle = P.border; ctx.strokeRect(4, 4, S, S);
+      // 섬 밀도 이력
+      var bx = S + 50, bw = w - bx - 12;
+      if (bw > 90) {
+        var box = { x: bx, y: 14, w: bw, h: h - 70 };
+        TF.chart(ctx, box, {
+          x: [0, Math.max(0.1, gC())], y: [1e-4, 1e-1], logY: true, xLabel: "θ (ML)", yLabel: "",
+          yTicks: [1e-4, 1e-3, 1e-2, 1e-1],
+          series: [{ data: hist, color: P.accent, width: 2 }]
+        });
+        ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "right"; ctx.textBaseline = "top"; ctx.fillText("섬 수 / 자리", box.x + box.w - 4, box.y + 4);
+      }
+      ctx.font = mono(11); ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.bg; ctx.fillRect(8, 8, 132, 16); ctx.fillStyle = P.text;
+      ctx.fillText("θ = " + (nDep / NS).toFixed(3) + " ML  섬 " + islands, 10, 10);
+    }, { aspect: 0.58, maxHeight: 440, minHeight: 240 });
+    stats();
+    TF.loop($("km-cv"), function () {
+      if (!running) return;
+      var R = Rsim(), budget = 400000, goal = gC() * NS, depCap = nDep + Math.ceil(NS * 0.004);
+      while (budget-- > 0 && nDep < depCap) {
+        if (nDep >= goal) { running = false; $("km-run").textContent = "다시 시작"; break; }
+        var tot = NS + R * nm;
+        if (Math.random() * tot < NS) deposit(); else hop();
+      }
+      frame++;
+      if (frame % 2 === 0 || !running) {
+        count();
+        var th = nDep / NS;
+        if (th > 0 && islands > 0) hist.push([th, islands / NS]);
+        stats();
+      }
+      cv.redraw();
+    });
+  })();
+
+  /* =============================================================
+     5) 조건 → 섬 밀도 → 연속막 두께
+     ============================================================= */
+  (function () {
+    if (!$("ns-cv")) return;
+    var gT = TF.range("ns-t", function (v) { return v + " K"; }, draw);
+    var gR = TF.range("ns-r", function (v) { return TF.fmt(Math.pow(10, v), 3) + " nm/min"; }, draw);
+    var gEd = TF.range("ns-ed", function (v) { return v.toFixed(2) + " eV"; }, draw);
+    var gEb = TF.range("ns-eb", function (v) { return v.toFixed(2) + " eV"; }, draw);
+    var ETA = 0.25, NC = 1.53e15;
+    function Nsat(T, Fml) {
+      var kT = kB * T, x = Fml / NU, Ed = gEd(), Eb = gEb();
+      var n1 = ETA * Math.pow(x, 1 / 3) * Math.exp(Ed / (3 * kT));
+      var n2 = ETA * Math.pow(x, 1 / 2) * Math.exp((Eb + 2 * Ed) / (4 * kT));
+      var i = n1 <= n2 ? 1 : 2, n = Math.min(n1, n2, 0.2);
+      return { n: n * NC, i: i };
+    }
+    var cv = TF.canvas($("ns-cv"), function (ctx, w, h) {
+      var P = TF.palette(), F = Math.pow(10, gR()) * 0.0925, T = gT();
+      var mk = function (Fm) { var d = []; for (var t = 150; t <= 900; t += 5) d.push([t, Nsat(t, Fm).n]); return d; };
+      var cur = Nsat(T, F);
+      TF.chart(ctx, null, {
+        x: [150, 900], y: [1e8, 1e15], logY: true, xLabel: "기판 온도 (K)", yLabel: "포화 섬 밀도 (cm⁻²)",
+        series: [{ data: mk(F / 10), color: P.accent2, width: 1.5, dash: [5, 4] }, { data: mk(F * 10), color: P.warn, width: 1.5, dash: [5, 4] }, { data: mk(F), color: P.accent, width: 2.6 }],
+        vlines: [{ x: 298, color: P.faint, label: "실온" }],
+        points: [{ x: T, y: clamp(cur.n, 1e8, 1e15), color: P.bad, r: 6 }]
+      });
+      ctx.font = mono(11); ctx.textAlign = "right"; ctx.textBaseline = "top";
+      ctx.fillStyle = P.warn; ctx.fillText("속도 ×10", w - 24, 22);
+      ctx.fillStyle = P.accent; ctx.fillText("현재 속도", w - 24, 36);
+      ctx.fillStyle = P.accent2; ctx.fillText("속도 ×1/10", w - 24, 50);
+      var Lnm = 1e7 / Math.sqrt(cur.n), hc = Math.PI / 12 * Lnm;
+      TF.stat("ns-o-i", cur.i + (cur.i === 1 ? " (χ = 1/3)" : " (χ = 1/2)"));
+      TF.stat("ns-o-n", sci(cur.n, 2) + " cm⁻²");
+      TF.stat("ns-o-l", TF.fmt(Lnm, 3) + " nm");
+      setV("ns-o-h", hc < 2 ? "ok" : hc < 10 ? "warn" : "bad", TF.fmt(hc, 3) + " nm");
+    }, { aspect: 0.58, maxHeight: 420, minHeight: 260 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     6) 성장 모드
+     ============================================================= */
+  (function () {
+    if (!$("md-cv")) return;
+    var M = 150e9, A = 0.25e-9;
+    var gS = TF.range("md-gs", function (v) { return v.toFixed(2) + " J/m²"; }, draw);
+    var gF = TF.range("md-gf", function (v) { return v.toFixed(2) + " J/m²"; }, draw);
+    var gI = TF.range("md-gi", function (v) { return v.toFixed(2) + " J/m²"; }, draw);
+    var gE = TF.range("md-e", function (v) { return v.toFixed(1) + " %"; }, draw);
+    var gH = TF.range("md-h", function (v) { return v.toFixed(1) + " ML"; }, draw);
+    function cap(ctx, cx, base, area, th, maxB) {
+      th = clamp(th, 0.05, Math.PI - 0.02);
+      var s = Math.sin(th), k = (th - s * Math.cos(th)) / (s * s);
+      var b = Math.sqrt(area / k);
+      if (b > maxB) b = maxB;
+      var rho = b / s, cy = base + rho * Math.cos(th);
+      ctx.beginPath();
+      for (var i = 0; i <= 40; i++) { var ph = -th + 2 * th * i / 40; var x = cx + rho * Math.sin(ph), y = cy - rho * Math.cos(ph); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }
+      ctx.closePath(); ctx.fill();
+    }
+    var cv = TF.canvas($("md-cv"), function (ctx, w, h) {
+      var P = TF.palette(), gs = gS(), gf = gF(), gi = gI(), eps = gE() / 100, hML = gH();
+      var dg = gf + gi - gs;
+      var cth = clamp((gs - gi) / gf, -1, 1), th = Math.acos(cth);
+      var lay = 9, base = h - 46, X0 = 10, W = w - 20;
+      ctx.fillStyle = P.oxide; ctx.globalAlpha = 0.85; ctx.fillRect(X0, base, W, 36); ctx.globalAlpha = 1;
+      ctx.fillStyle = "#fff"; ctx.font = font(12); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText("기판", X0 + 8, base + 18);
+      ctx.fillStyle = P.cu;
+      var mode, hsk = NaN, cls;
+      var area = hML * lay * W;
+      var nI = Math.max(3, Math.floor(W / 110)), sp = W / nI;
+      if (dg > 0) {
+        mode = "볼머-베버 (섬)"; cls = "warn";
+        for (var i = 0; i < nI; i++) cap(ctx, X0 + sp * (i + 0.5), base, area / nI, th, sp / 2);
+      } else {
+        hsk = eps > 1e-4 ? Math.abs(dg) / (M * eps * eps * A) : Infinity;
+        var wet = Math.min(hML, hsk), full = Math.floor(wet), frac = wet - full;
+        for (var l = 0; l < full; l++) ctx.fillRect(X0, base - (l + 1) * lay, W, lay - 1);
+        if (frac > 0) {
+          var nseg = 6, segW = W / nseg;
+          for (var s2 = 0; s2 < nseg; s2++) ctx.fillRect(X0 + s2 * segW + segW * (1 - frac) / 2, base - (full + 1) * lay, segW * frac, lay - 1);
+        }
+        if (hML > hsk) {
+          mode = "스트란스키-크라스타노프"; cls = "ok";
+          var rest = (hML - hsk) * lay * W, top = base - hsk * lay;
+          for (var j = 0; j < nI; j++) cap(ctx, X0 + sp * (j + 0.5), top, rest / nI, 40 * Math.PI / 180, sp / 2);
+          ctx.strokeStyle = P.bad; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(X0, top); ctx.lineTo(X0 + W, top); ctx.stroke(); ctx.setLineDash([]);
+          ctx.fillStyle = P.bad; ctx.textAlign = "right"; ctx.textBaseline = "bottom"; ctx.fillText("h_SK", X0 + W - 4, top - 2);
+        } else { mode = isFinite(hsk) ? "층 성장 (h_SK 전)" : "프랑크-반 데어 메르베 (층)"; cls = "ok"; }
+      }
+      ctx.fillStyle = P.dim; ctx.font = font(12); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("단면 개략도 · 같은 부피 " + hML.toFixed(1) + " ML", X0, 8);
+      TF.stat("md-o-dg", (dg >= 0 ? "+" : "") + dg.toFixed(2) + " J/m²");
+      TF.stat("md-o-th", (th * 180 / Math.PI).toFixed(0) + "°");
+      TF.stat("md-o-hsk", dg > 0 ? "— (섬)" : isFinite(hsk) ? TF.fmt(hsk, 3) + " ML" : "∞ (불일치 0)");
+      setV("md-o-m", cls, mode);
+    }, { aspect: 0.42, maxHeight: 320, minHeight: 200 });
+    function draw() { cv.redraw(); }
+    presets("data-md", function (a) { gS.set(a[0]); gF.set(a[1]); gI.set(a[2]); gE.set(a[3]); });
+  })();
+
+  /* =============================================================
+     7) JMAK 잠복기
+     ============================================================= */
+  (function () {
+    if (!$("ic-cv")) return;
+    var gIA = TF.range("ic-ia", function (v) { return "10^" + v.toFixed(1); }, draw);
+    var gIB = TF.range("ic-ib", function (v) { return "10^" + v.toFixed(1); }, draw);
+    var gG = TF.range("ic-g", function (v) { return v.toFixed(2) + " nm/s"; }, draw);
+    var gRv = TF.range("ic-rv", function (v) { return v.toFixed(2) + " nm/s"; }, draw);
+    var gTol = TF.range("ic-tol", function (v) { return v.toFixed(1) + " nm"; }, draw);
+    var G43 = 0.8929795;
+    var cv = TF.canvas($("ic-cv"), function (ctx, w, h) {
+      var P = TF.palette(), G = gG(), Rv = gRv(), tol = gTol();
+      var cA = Math.PI / 3 * Math.pow(10, gIA() - 14) * G * G, cB = Math.PI / 3 * Math.pow(10, gIB() - 14) * G * G;
+      var tiA = G43 * Math.pow(cA, -1 / 3), tiB = G43 * Math.pow(cB, -1 / 3);
+      var tmax = 2.4 * Math.max(tiA, tiB);
+      var N = 600, dt = tmax / N, dA = [[0, 0]], dB = [[0, 0]], hA = 0, hB = 0, thA = [], thB = [], tw = NaN;
+      for (var i = 1; i <= N; i++) {
+        var t = i * dt, tm = t - dt / 2;
+        hA += Rv * (1 - Math.exp(-cA * tm * tm * tm)) * dt;
+        var hBprev = hB;
+        hB += Rv * (1 - Math.exp(-cB * tm * tm * tm)) * dt;
+        if (isNaN(tw) && hB >= tol) tw = t - dt + dt * (tol - hBprev) / Math.max(1e-12, hB - hBprev);
+        dA.push([t, hA]); dB.push([t, hB]);
+        thA.push(1 - Math.exp(-cA * t * t * t)); thB.push(1 - Math.exp(-cB * t * t * t));
+      }
+      var ymax = Math.max(hA, 1e-3) * 1.05;
+      var box = { x: 58, y: 14, w: w - 76, h: h - 92 };
+      var c = TF.chart(ctx, box, {
+        x: [0, tmax], y: [0, ymax], xLabel: "", yLabel: "평균 두께 (nm)",
+        series: [
+          { data: [[tiA, 0], [tmax, Rv * (tmax - tiA)]], color: P.accent, width: 1, dash: [4, 4] },
+          { data: [[tiB, 0], [tmax, Rv * (tmax - tiB)]], color: P.warn, width: 1, dash: [4, 4] },
+          { data: dA, color: P.accent, width: 2.4 }, { data: dB, color: P.warn, width: 2.4 }
+        ],
+        hlines: [{ y: tol, color: P.bad, label: "B 허용 " + tol.toFixed(1) + " nm" }],
+        vlines: isFinite(tw) ? [{ x: tw, color: P.bad, label: "선택 창 끝" }] : []
+      });
+      // 피복률 띠
+      var y1 = box.y + box.h + 22, bh = 10;
+      for (var k = 0; k < N; k++) {
+        var x = box.x + box.w * k / N, ww = box.w / N + 0.6;
+        ctx.globalAlpha = 0.1 + 0.9 * thA[k]; ctx.fillStyle = P.accent; ctx.fillRect(x, y1, ww, bh);
+        ctx.globalAlpha = 0.1 + 0.9 * thB[k]; ctx.fillStyle = P.warn; ctx.fillRect(x, y1 + bh + 4, ww, bh);
+      }
+      ctx.globalAlpha = 1;
+      ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      ctx.fillText("θ A", box.x - 6, y1 + bh / 2); ctx.fillText("θ B", box.x - 6, y1 + bh * 1.5 + 4);
+      ctx.textAlign = "center"; ctx.textBaseline = "top";
+      ctx.fillText("시간 (s)  ·  아래 띠: 피복률(진할수록 덮임)", box.x + box.w / 2, y1 + 2 * bh + 8);
+      ctx.textAlign = "left"; ctx.fillStyle = P.accent; ctx.fillText("A: 성장 표면", box.x + 8, box.y + 6);
+      ctx.fillStyle = P.warn; ctx.fillText("B: 억제 표면", box.x + 8, box.y + 20);
+      TF.stat("ic-o-ta", fmtTime(tiA));
+      TF.stat("ic-o-tb", fmtTime(tiB));
+      TF.stat("ic-o-tw", isFinite(tw) ? fmtTime(tw) : "> " + fmtTime(tmax));
+      var hAw = isFinite(tw) ? Rv * Math.max(0, tw - tiA) + 0 : NaN;
+      if (isFinite(tw)) {
+        // 정확한 값: 그 시점까지 적분
+        var hh = 0, n2 = 400, d2 = tw / n2;
+        for (var j = 0; j < n2; j++) { var tt = (j + 0.5) * d2; hh += Rv * (1 - Math.exp(-cA * tt * tt * tt)) * d2; }
+        hAw = hh;
+        setV("ic-o-ha", hAw > 5 * tol ? "ok" : hAw > tol ? "warn" : "bad", TF.fmt(hAw, 3) + " nm");
+      } else setV("ic-o-ha", "ok", "> " + TF.fmt(hA, 3) + " nm");
+    }, { aspect: 0.58, maxHeight: 430, minHeight: 280 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     8) 구조 영역 탐색기
+     ============================================================= */
+  (function () {
+    if (!$("sz-cv")) return;
+    var TM = { al: 933, cu: 1358, ti: 1941, tin: 3203, w: 3695 };
+    var NAME = { al: "Al", cu: "Cu", ti: "Ti", tin: "TiN", w: "W" };
+    var mat = TF.seg("sz-mat", draw);
+    var gT = TF.range("sz-t", function (v) { return v + " °C"; }, draw);
+    var gP = TF.range("sz-p", function (v) { return TF.fmt(Math.pow(10, v), 3) + " mTorr"; }, draw);
+    var gE = TF.range("sz-e", function (v) { return v + " eV"; }, draw);
+    function lp(p) { return clamp(Math.log10(p) / Math.log10(30), 0, 1.2); }
+    function b1(p) { return 0.12 + 0.18 * lp(p); }
+    function b2(p) { return 0.45 + 0.05 * lp(p); }
+    var B3 = 0.75;
+    function zone(ts, p) { return ts < b1(p) ? 1 : ts < b2(p) ? "T" : ts < B3 ? 2 : 3; }
+    var cv = TF.canvas($("sz-cv"), function (ctx, w, h) {
+      var P = TF.palette(), Tm = TM[mat()], p = Math.pow(10, gP()), E = gE();
+      var hT = (gT() + 273.15) / Tm, ts = hT + 0.0015 * E, z = zone(ts, p);
+      var mapW = Math.max(200, Math.min(w * 0.5, w - 190));
+      var box = { x: 50, y: 12, w: mapW - 60, h: h - 56 };
+      var X = function (v) { return box.x + v * box.w; };
+      var Y = function (pp) { return box.y + box.h - (Math.log10(pp) / 1.6) * box.h; };
+      var cols = { 1: P.warn, T: P.accent, 2: P.ok, 3: P.accent2 };
+      var bnd = [function () { return 0; }, b1, b2, function () { return B3; }, function () { return 1; }];
+      var keys = [1, "T", 2, 3];
+      for (var k = 0; k < 4; k++) {
+        ctx.beginPath();
+        for (var i = 0; i <= 40; i++) { var pp = Math.pow(10, 1.6 * i / 40); var x = X(bnd[k](pp)); if (i) ctx.lineTo(x, Y(pp)); else ctx.moveTo(x, Y(pp)); }
+        for (var j = 40; j >= 0; j--) { var pq = Math.pow(10, 1.6 * j / 40); ctx.lineTo(X(bnd[k + 1](pq)), Y(pq)); }
+        ctx.closePath(); ctx.globalAlpha = 0.22; ctx.fillStyle = cols[keys[k]]; ctx.fill(); ctx.globalAlpha = 1;
+      }
+      TF.chart(ctx, box, { x: [0, 1], y: [1, 39.8], logY: true, xLabel: "T/Tm (점선 → 이온 효과)", yLabel: "Ar 압력 (mTorr)", yTicks: [1, 3, 10, 30], series: [] });
+      ctx.font = font(12); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = P.text;
+      ctx.fillText("1", X(0.07), Y(2)); ctx.fillText("T", X(0.32), Y(2)); ctx.fillText("2", X(0.6), Y(2)); ctx.fillText("3", X(0.87), Y(2));
+      var px = X(clamp(hT, 0, 1)), py = Y(p);
+      if (E > 0) {
+        ctx.strokeStyle = P.bad; ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(X(clamp(ts, 0, 1)), py); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = P.bad; ctx.beginPath(); ctx.arc(X(clamp(ts, 0, 1)), py, 4, 0, 6.283); ctx.fill();
+      }
+      ctx.fillStyle = P.text; ctx.beginPath(); ctx.arc(px, py, 6, 0, 6.283); ctx.fill();
+      // 단면 개략도
+      var sx = mapW + 10, sw = w - sx - 10, sy = 22, sh = h - 60;
+      if (sw > 80) {
+        ctx.fillStyle = P.oxide; ctx.globalAlpha = 0.8; ctx.fillRect(sx, sy + sh, sw, 18); ctx.globalAlpha = 1;
+        ctx.save(); ctx.beginPath(); ctx.rect(sx, sy - 10, sw, sh + 10); ctx.clip();
+        var r = rng(7), metal = mat() === "cu" ? P.cu : P.metal;
+        ctx.fillStyle = metal; ctx.strokeStyle = P.bg; ctx.lineWidth = 1.2;
+        if (z === 1) {
+          var cw = 9;
+          for (var x0 = sx; x0 < sx + sw; x0 += cw) {
+            var top = sy + 10 + r() * 22, half = cw * (0.32 + r() * 0.12);
+            ctx.beginPath(); ctx.moveTo(x0 + cw / 2 - half * 0.5, sy + sh); ctx.lineTo(x0 + cw / 2 - half, top + half);
+            ctx.arc(x0 + cw / 2, top + half, half, Math.PI, 0); ctx.lineTo(x0 + cw / 2 + half * 0.5, sy + sh); ctx.closePath(); ctx.fill();
+          }
+        } else if (z === "T") {
+          ctx.fillRect(sx, sy + 6, sw, sh - 6);
+          ctx.strokeStyle = P.bg; ctx.globalAlpha = 0.5;
+          for (var x1 = sx + 4; x1 < sx + sw; x1 += 4 + r() * 3) { ctx.beginPath(); ctx.moveTo(x1, sy + sh); ctx.lineTo(x1 + (r() - 0.5) * 3, sy + 6); ctx.stroke(); }
+          ctx.globalAlpha = 1;
+        } else if (z === 2) {
+          var cw2 = 14 + 70 * clamp((ts - b2(p)) / (B3 - b2(p)), 0, 1);
+          for (var x2 = sx; x2 < sx + sw; x2 += cw2 * (0.8 + r() * 0.4)) {
+            var ww = cw2 * (0.8 + r() * 0.4);
+            ctx.beginPath(); ctx.moveTo(x2, sy + sh); ctx.lineTo(x2, sy + 18); ctx.lineTo(x2 + ww / 2, sy + 18 - ww * 0.25); ctx.lineTo(x2 + ww, sy + 18); ctx.lineTo(x2 + ww, sy + sh); ctx.closePath(); ctx.fill(); ctx.stroke();
+          }
+        } else {
+          ctx.fillRect(sx, sy + 8, sw, sh - 8);
+          ctx.strokeStyle = P.bg; ctx.lineWidth = 1.6;
+          var gy = sy + 8, rowH = 34;
+          while (gy < sy + sh) {
+            var gx = sx + (r() - 1) * 20;
+            while (gx < sx + sw) { gx += 26 + r() * 30; ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx + (r() - 0.5) * 10, Math.min(sy + sh, gy + rowH)); ctx.stroke(); }
+            gy += rowH; ctx.beginPath(); ctx.moveTo(sx, gy + (r() - 0.5) * 6); ctx.lineTo(sx + sw, gy + (r() - 0.5) * 6); ctx.stroke();
+          }
+        }
+        ctx.restore();
+        ctx.font = font(12); ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.textBaseline = "top";
+        ctx.fillText(NAME[mat()] + " 단면 · 영역 " + z, sx, 2);
+      }
+      var dens = z === 1 ? 0.75 + 0.2 * clamp(ts / b1(p), 0, 1) : z === "T" ? 0.97 : z === 2 ? 0.99 : 1.0;
+      TF.stat("sz-o-h", hT.toFixed(3) + " (T<sub>m</sub> " + Tm + " K)");
+      TF.stat("sz-o-ts", ts.toFixed(3));
+      var desc = { 1: "영역 1 · 다공성 기둥", T: "영역 T · 치밀 섬유", 2: "영역 2 · 기둥 결정립", 3: "영역 3 · 등축 결정립" };
+      setV("sz-o-z", z === 1 ? "bad" : z === "T" ? "ok" : "ok", desc[z]);
+      TF.stat("sz-o-d", "약 " + Math.round(dens * 100) + " %");
+    }, { aspect: 0.55, maxHeight: 400, minHeight: 260 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     9) Cu 결정립 성장과 비저항
+     ============================================================= */
+  (function () {
+    if (!$("gr-cv")) return;
+    var K0 = 2e16, RHO0 = 1.7, LAM = 39, RR = 0.3;
+    var gT = TF.range("gr-t", function (v) { return v + " °C"; }, draw);
+    var gH = TF.range("gr-h", function (v) { return v + " nm"; }, draw);
+    var gQ = TF.range("gr-q", function (v) { return v.toFixed(2) + " eV"; }, draw);
+    var gD0 = TF.range("gr-d0", function (v) { return v + " nm"; }, draw);
+    function rho(d) { return RHO0 * (1 + 1.5 * (LAM / d) * RR / (1 - RR)); }
+    var cv = TF.canvas($("gr-cv"), function (ctx, w, h) {
+      var P = TF.palette(), T = gT() + 273.15, hf = gH(), d0 = gD0();
+      var k = K0 * Math.exp(-gQ() / (kB * T)), dmax = 2.5 * hf;
+      var dAt = function (t) { var df = Math.sqrt(d0 * d0 + k * t); var dd = Math.pow(Math.pow(df, -4) + Math.pow(dmax, -4), -0.25); return Math.max(Math.min(d0, df), dd); };
+      var dd = [], rr = [];
+      for (var i = 0; i <= 200; i++) { var t = Math.pow(10, 7.5 * i / 200); var d = dAt(t); dd.push([t, d]); rr.push([t, rho(d)]); }
+      var vl = [{ x: 1800, color: P.faint, label: "30 min" }, { x: 86400, color: P.faint, label: "1일" }];
+      var hh = (h - 20) / 2;
+      TF.chart(ctx, { x: 58, y: 10, w: w - 76, h: hh - 34 }, {
+        x: [1, 3.16e7], y: [1, 3000], logX: true, logY: true, xLabel: "", yLabel: "결정립 d (nm)",
+        xFmt: function () { return ""; },
+        series: [{ data: dd, color: P.cu, width: 2.6 }],
+        hlines: [{ y: dmax, color: P.bad, label: "2.5 × 두께" }], vlines: vl
+      });
+      TF.chart(ctx, { x: 58, y: hh + 10, w: w - 76, h: hh - 34 }, {
+        x: [1, 3.16e7], y: [1.5, Math.max(4.5, rho(Math.min(d0, dmax)) * 1.1)], logX: true, xLabel: "어닐 시간 (s)", yLabel: "ρ (µΩ·cm)",
+        series: [{ data: rr, color: P.accent, width: 2.4 }],
+        hlines: [{ y: RHO0, color: P.faint, label: "벌크 1.7" }], vlines: vl
+      });
+      var d30 = dAt(1800);
+      TF.stat("gr-o-d", TF.fmt(d30, 3) + " nm");
+      var tt = (Math.pow(0.9 * dmax, 2) - d0 * d0) / k;
+      TF.stat("gr-o-ts", tt <= 0 ? "이미 포화" : fmtTime(tt));
+      TF.stat("gr-o-rho", rho(d0).toFixed(2) + " → " + rho(d30).toFixed(2) + " µΩ·cm");
+    }, { aspect: 0.7, maxHeight: 480, minHeight: 320 });
+    function draw() { cv.redraw(); }
+  })();
+})();
+</script>
+</body>
+</html>
