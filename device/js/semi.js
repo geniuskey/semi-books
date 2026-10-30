@@ -266,7 +266,8 @@
     // 속도 포화: 유효 Vds 감소 (간단 보정)
     if (p.vsat) {
       const Ec = (2 * p.vsat) / mu;
-      const VdsatLong = Math.max(Vt, Vov / n);
+      // 긴 채널 Vdsat: 강반전에서 Vov/n, 문턱 이하에서 약 Vt. max() 대신 매끄럽게 이어 gm에 꺾임이 생기지 않게 한다.
+      const VdsatLong = Vt * (1 + 2 * Math.log(1 + Math.exp(Math.min(40, Vov / (2 * n * Vt)))));
       const Vdsat = (VdsatLong * Ec * p.L) / (VdsatLong + Ec * p.L);
       const Vdeff = Vds / Math.pow(1 + Math.pow(Vds / Vdsat, 4), 0.25);
       Id = (Ispec * (If - Fi((Vov - n * Vdeff) / (n * Vt)))) / (1 + Vdeff / (Ec * p.L));

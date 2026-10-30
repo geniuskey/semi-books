@@ -1,7 +1,7 @@
 # DeviceBook — 인터랙티브 반도체 소자 물리 교과서
 
 전자와 정공에서 트랜지스터까지. 공대 학부생을 위한 한국어 반도체 소자 물리 학습 사이트입니다.
-14개 챕터, 90여 개의 시뮬레이터·애니메이션·챌린지, 그리고 포아송·드리프트–확산 방정식을 실제로 푸는 1차원 소자 솔버(`js/semi.js`)로 구성됩니다.
+18개 챕터, 120여 개의 시뮬레이터·애니메이션·챌린지, 그리고 포아송·드리프트–확산 방정식을 실제로 푸는 1차원 소자 솔버(`js/semi.js`)로 구성됩니다.
 도핑·온도·바이어스를 바꾸면 밴드 다이어그램, 캐리어 농도, 전기장, 전류가 어떻게 변하는지 보고, 마지막에는 직접 소자를 설계해 봅니다.
 
 배포 주소: https://semi.euiyun.com/device/ · 자매 교과서: [ProcessBook (반도체 제조 공정)](https://semi.euiyun.com/process/)
@@ -29,8 +29,12 @@ python3 -m http.server 8000   # → http://localhost:8000
 | 10 | chapters/scaling.html | 데너드 스케일링, 자연 길이, DIBL·롤오프, 누설, FinFET·GAA(3D) |
 | 11 | chapters/bjt.html | 동작 영역, 소수 캐리어 분포, 전류 이득, 거멜 플롯, 얼리 효과, 에버스–몰, HBT |
 | 12 | chapters/opto.html | 흡수와 광 생성, 포토다이오드, 태양 전지 I–V, LED 추출 효율, 레이저 기초 |
-| 13 | chapters/lab.html | 소자 실험실(샌드박스): 도핑 영역을 쌓고 바이어스·빛을 걸어 1D 수치 해를 보고 링크로 공유 |
-| 14 | chapters/glossary.html | 용어집, 종합 퀴즈(문제 은행에서 20문항) |
+| 13 | chapters/hetero.html | 이종 접합과 밴드 공학: 밴드 오프셋, 2차원 전자 가스, 양자 우물, 변형 SiGe |
+| 14 | chapters/power.html | 전력 반도체 소자: 항복과 온저항, 전력 MOSFET·슈퍼정션·IGBT, SiC·GaN, 스위칭 손실 |
+| 15 | chapters/rf.html | 고주파 소자와 잡음: 소신호 모델, f_T·f_max, 열·산탄·1/f 잡음과 잡음 지수 |
+| 16 | chapters/reliability.html | 소자 신뢰성: HCI, BTI, TDDB와 와이블 통계, 가속 시험, ESD, 자가 발열 |
+| 17 | chapters/lab.html | 소자 실험실(샌드박스): 도핑 영역을 쌓고 바이어스·빛을 걸어 1D 수치 해를 보고 링크로 공유 |
+| 18 | chapters/glossary.html | 용어집, 종합 퀴즈(문제 은행에서 20문항) |
 
 공통 코드
 - `css/style.css` — 디자인 토큰(라이트/다크), 전자·정공·밴드 색

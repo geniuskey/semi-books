@@ -1,0 +1,1169 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and DeviceBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>소자 신뢰성 · DeviceBook</title>
+<meta name="description" content="트랜지스터는 어떻게 늙고 죽는가. 고장률·욕조 곡선·FIT, 핫 캐리어 주입과 행운 전자 모형, NBTI·PBTI와 회복, 산화막 TDDB와 와이블 통계·퍼콜레이션, 가속 시험과 10년 수명 외삽, ESD 보호 소자와 설계 창, 자가 발열과 변동성 가드밴드를 시뮬레이터로 익힌다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/semi.js"></script>
+<style>
+.cv2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.cv2 > div { min-width: 0; position: relative; }
+.pred { padding: 14px 18px; border-top: 1px solid var(--border); display: grid; gap: 10px; }
+.pred p { margin: 0; }
+.pred .btn-row .btn.right { border-color: var(--ok); color: var(--ok); font-weight: 700; }
+.pred .btn-row .btn.wrong { border-color: var(--bad); color: var(--bad); text-decoration: line-through; }
+.verdict { font-size: 14px; line-height: 1.6; color: var(--text-dim); min-height: 1.6em; }
+.verdict b { color: var(--text); }
+.win { border: 1px solid var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); border-radius: 8px; padding: 8px 12px; color: var(--text); }
+.lock { position: relative; }
+.lock.locked canvas { filter: blur(5px); opacity: .45; }
+.lock .veil { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; font-weight: 700; color: var(--text-dim); text-align: center; padding: 20px; }
+.lock.locked .veil { display: flex; }
+.ctrl[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="device"></script>
+</head>
+<body data-chapter="reliability">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 16</div>
+    <h1>소자 신뢰성</h1>
+    <p class="lead">지금까지의 장은 갓 만든 트랜지스터를 다뤘다. 그러나 칩은 출하 순간이 아니라 10년, 자동차라면 15년 넘게 제 성능을 내야 한다. 그 사이 채널의 뜨거운 전자는 계면을 두드려 결함을 만들고, 게이트 전압은 산화막 속 수소 결합을 끊어 문턱 전압을 밀어 올리며, 수 nm 산화막 안에는 트랩이 하나둘 쌓이다가 어느 순간 전류 길이 뚫린다. 사람 손에서 튄 정전기 수 kV가 단 100 ns 만에 소자를 녹이기도 한다. 이 장은 소자가 늙고 죽는 물리를 기구별로 정리하고, 몇 주짜리 가속 시험 데이터에서 '10년 동안 100만 개 중 몇 개'라는 약속을 끌어내는 통계와 외삽을 익힌다.</p>
+    <ul class="objectives">
+      <li>고장률·누적 고장 확률·FIT·MTTF를 정의하고, 욕조 곡선의 세 구간과 번인의 역할을 와이블 분포로 설명한다.</li>
+      <li>핫 캐리어 주입의 행운 전자 모형으로 기판 전류의 V<sub>DS</sub>·V<sub>GS</sub> 의존성과 열화의 시간 멱 법칙을 이해하고, LDD가 왜 효과적인지 안다.</li>
+      <li>NBTI·PBTI의 반응–확산 모형과 회복 현상, 측정 지연과 AC 스트레스가 결과를 바꾸는 이유를 설명한다.</li>
+      <li>TDDB의 E·1/E·전압 멱 모형, 와이블 기울기와 면적 스케일링, 퍼콜레이션 그림을 이해하고 가속 시험 데이터를 사용 조건의 ppm 수명으로 외삽한다.</li>
+      <li>HBM·CDM 정전기 파형과 다이오드·GGNMOS 보호 소자의 설계 창, 자가 발열과 변동성을 고려한 전압·온도 가드밴드를 계산한다.</li>
+    </ul>
+  </header>
+
+  <section id="basics">
+    <h2>신뢰성의 언어: 고장률과 욕조 곡선</h2>
+    <p>신뢰성은 확률의 언어로 말한다. 같은 공정으로 만든 소자 \(N_0\)개를 동시에 동작시킬 때 시간 \(t\)까지 살아 있는 비율이 <span class="term">신뢰도 함수</span><span class="en">(Reliability function)</span> \(R(t)\), 죽은 비율이 <span class="term">누적 고장 확률</span><span class="en">(Cumulative distribution function)</span> \(F(t)=1-R(t)\)다. 더 직관적인 양은 <span class="term">순간 고장률</span><span class="en">(Hazard rate, failure rate)</span> \(h(t)\)로, '지금까지 살아남은 소자가 다음 순간 고장 날 확률'이다.</p>
+    <div class="formula">$$h(t) = \frac{f(t)}{R(t)} = -\frac{d\ln R}{dt},\qquad R(t) = \exp\!\left[-\int_0^t h(t')\,dt'\right],\qquad \text{MTTF} = \int_0^\infty R(t)\,dt$$
+      <div class="where">\(f=dF/dt\)는 고장 시간의 확률 밀도. 고장률이 일정(\(h=\lambda\))하면 \(R=e^{-\lambda t}\), \(\text{MTTF}=1/\lambda\). 반도체 고장률의 단위는 <span class="term">FIT</span><span class="en">(Failures In Time)</span>: 1 FIT = 10⁹ 소자·시간당 고장 1건. 100 FIT 칩 1만 개를 1년(8,766 h) 쓰면 약 8.8개가 고장 난다.</div>
+    </div>
+    <p>실제 제품의 고장률을 시간에 대해 그리면 <span class="term">욕조 곡선</span><span class="en">(Bathtub curve)</span>이 된다. 초기에는 공정 결함(파티클, 얇아진 산화막, 약한 콘택)을 가진 소자가 빨리 죽어 고장률이 높다가 줄어드는 <b>초기 고장</b><span class="en">(Infant mortality)</span>, 그 뒤 낮고 거의 일정한 <b>우발 고장</b><span class="en">(Random failure)</span>, 마지막으로 이 장에서 다룰 열화 기구가 누적되어 고장률이 다시 치솟는 <b>마모 고장</b><span class="en">(Wear-out)</span>이다. 세 구간은 모두 <span class="term">와이블 분포</span><span class="en">(Weibull distribution)</span> 하나로 표현된다.</p>
+    <div class="formula">$$F(t) = 1-\exp\!\left[-\left(\frac{t}{\eta}\right)^{\beta}\right],\qquad h(t) = \frac{\beta}{\eta}\left(\frac{t}{\eta}\right)^{\beta-1}$$
+      <div class="where">\(\eta\)는 특성 수명(63.2 %가 고장 나는 시간), \(\beta\)는 형상 계수. \(\beta\lt 1\)이면 고장률이 줄고(초기 고장), \(\beta=1\)이면 일정(지수 분포), \(\beta\gt 1\)이면 늘어난다(마모).</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 270" role="img" aria-label="욕조 곡선: 초기 고장, 우발 고장, 마모 고장 구간">
+        <g transform="translate(64,20)">
+          <rect x="0" y="0" width="660" height="200" class="f-surface"/>
+          <rect x="0" y="0" width="150" height="200" class="f-warn-soft"/>
+          <rect x="510" y="0" width="150" height="200" class="f-bad-soft"/>
+          <path d="M0 200 H660 M0 0 V200" class="s-axis"/>
+          <path d="M6 18 C40 110 90 150 150 158 L510 160 C570 158 610 120 650 20" fill="none" stroke="var(--accent)" stroke-width="3"/>
+          <path d="M6 18 C40 110 90 160 160 190 L300 198" fill="none" stroke="var(--warn)" stroke-width="1.6" stroke-dasharray="6 4"/>
+          <path d="M0 165 H660" fill="none" stroke="var(--text-faint)" stroke-width="1.4" stroke-dasharray="3 4"/>
+          <path d="M380 198 C470 196 570 150 650 30" fill="none" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="6 4"/>
+          <text x="75" y="40" text-anchor="middle" class="t">초기 고장</text><text x="75" y="58" text-anchor="middle" class="lbl-dim">β &lt; 1, 공정 결함</text>
+          <text x="330" y="140" text-anchor="middle" class="t">우발 고장 (β ≈ 1)</text><text x="330" y="182" text-anchor="middle" class="lbl-dim">외부 서지·우주선 등, 수~수십 FIT</text>
+          <text x="585" y="40" text-anchor="middle" class="t">마모 고장</text><text x="585" y="58" text-anchor="middle" class="lbl-dim">β &gt; 1, HCI·BTI·TDDB·EM</text>
+          <path d="M150 210 V218 M150 214 H40" class="s-line" marker-end="url(#r16-a1)"/><text x="96" y="232" text-anchor="middle" class="lbl-dim">번인으로 제거</text>
+          <path d="M510 210 V218 M510 214 H600" class="s-line" marker-end="url(#r16-a1)"/><text x="560" y="232" text-anchor="middle" class="lbl-dim">설계 수명 뒤로 밀어낸다</text>
+          <text x="-10" y="100" text-anchor="middle" transform="rotate(-90 -10 100)" class="lbl-dim">고장률 h(t)</text>
+          <text x="330" y="250" text-anchor="middle" class="lbl-dim">시간 (로그)</text>
+        </g>
+        <defs><marker id="r16-a1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--text-dim)"/></marker></defs>
+      </svg>
+      <figcaption><b>그림 16-1.</b> 욕조 곡선. 굵은 선이 전체 고장률이고, 점선은 초기·우발·마모 성분이다(경쟁 위험이므로 고장률이 더해진다). 신뢰성 공학의 목표는 번인과 스크리닝으로 왼쪽 벽을 깎고, 소자 설계와 사용 조건으로 오른쪽 벽을 제품 수명(예: 10년) 너머로 밀어내는 것이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-bt">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>욕조 곡선 만들기와 번인 효과</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bt-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>초기 고장 크기 (1 h 시점)</span> <output id="bt-e-out"></output></span><input type="range" id="bt-e" min="2" max="6" step="0.1" value="4.5"></label>
+          <label class="ctrl"><span><span>초기 고장 β<sub>1</sub></span> <output id="bt-b-out"></output></span><input type="range" id="bt-b" min="0.2" max="0.9" step="0.05" value="0.4"></label>
+          <label class="ctrl"><span><span>우발 고장률</span> <output id="bt-r-out"></output></span><input type="range" id="bt-r" min="0" max="3" step="0.1" value="1.3"></label>
+          <label class="ctrl"><span><span>마모 특성 수명 η<sub>3</sub></span> <output id="bt-w-out"></output></span><input type="range" id="bt-w" min="5" max="60" step="1" value="25"></label>
+          <label class="ctrl"><span><span>마모 β<sub>3</sub></span> <output id="bt-k-out"></output></span><input type="range" id="bt-k" min="1.5" max="8" step="0.1" value="4"></label>
+          <label class="ctrl"><span><span>번인 시간 (125 °C, AF = 40)</span> <output id="bt-bi-out"></output></span><input type="range" id="bt-bi" min="0" max="168" step="1" value="0"></label>
+          <div class="legend"><span><i style="background:var(--accent)"></i>전체 (현장)</span><span><i style="background:var(--warn)"></i>초기</span><span><i style="background:var(--text-dim)"></i>우발</span><span><i style="background:var(--bad)"></i>마모</span></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">첫해 평균 고장률</span><span class="v" id="bt-o-y">—</span></div>
+        <div class="stat"><span class="k">10년 누적 고장</span><span class="v" id="bt-o-c">—</span></div>
+        <div class="stat"><span class="k">번인 탈락</span><span class="v" id="bt-o-b">—</span></div>
+        <div class="stat"><span class="k">MTTF</span><span class="v" id="bt-o-m">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 번인 0 h에서 첫해 고장률은 초기 고장이 지배한다. 번인을 24~48 h로 늘리면(현장 기준 약 1,000~2,000 h를 미리 소모) 첫해 FIT가 크게 떨어지고 그만큼이 공장 안에서 '탈락'한다. 168 h까지 늘려도 추가 이득은 작다. ② β<sub>1</sub>을 0.8로 올리면 초기 고장이 느리게 줄어 번인 효과가 약해진다. ③ η<sub>3</sub>을 10년 아래로 내리면 10년 누적 고장이 수 %로 폭증한다. MTTF가 수십 년이어도 10년 ppm은 나쁠 수 있다. 신뢰성 사양을 MTTF가 아니라 '수명 내 누적 ppm'으로 쓰는 이유다. (경쟁 위험 모형 h = h₁ + h₂ + h₃, 번인 후 현장 고장률은 h(t + AF·t<sub>BI</sub>))</div>
+    </div>
+    <p>MTTF는 직관적이지만 위험한 숫자다. 고장률 100 FIT 칩의 MTTF는 \(10^7\) h, 즉 1,100년이 넘지만 그것이 '칩이 1,000년 간다'는 뜻은 아니다. 우발 고장 구간에서 MTTF는 단지 \(1/\lambda\)일 뿐이고, 실제 제품은 수십 년 안에 마모로 죽는다. 그래서 반도체 신뢰성 사양은 보통 "사용 조건에서 10년(자동차는 15년 이상) 동안 누적 고장 X ppm 이하"처럼 쓴다. 출하 전 스크리닝과 번인의 실무는 <a href="../../test/chapters/burnin.html">TestBook의 번인 장</a>, 고장 난 칩의 원인 분석은 <a href="../../failure/chapters/mechanisms.html">FailureBook의 고장 메커니즘 장</a>에서 이어진다.</p>
+  </section>
+
+  <section id="hci">
+    <h2>핫 캐리어 주입</h2>
+    <p>포화 영역 MOSFET의 드레인 근처에는 핀치오프 영역이 있고, \(V_{DS}-V_{D,sat}\)의 전압이 수십 nm 안에 떨어진다(<a href="mosfet.html#pinchoff">9장</a>). 이 영역의 전계는 \(10^5\sim10^6\) V/cm에 이르러 전자가 격자와 열평형을 이루지 못하고 열에너지보다 훨씬 큰 운동 에너지를 갖는다. 이런 전자를 <span class="term">핫 캐리어</span><span class="en">(Hot carrier)</span>라 한다. 핫 전자는 두 가지 일을 저지른다. 에너지가 약 1.3 eV(유효 이온화 문턱 \(\phi_i\))를 넘으면 <b>충돌 이온화</b>로 전자–정공 쌍을 만들고, 정공은 기판으로 흘러 <span class="term">기판 전류</span><span class="en">(Substrate current)</span> \(I_{sub}\)가 된다. 에너지가 Si/SiO₂ 장벽 3.1 eV에 가까워지면 일부는 산화막으로 뛰어들어 게이트 전류가 되거나 갇히고, 계면의 Si–H 결합을 끊어 <b>계면 트랩</b>을 만든다. 이것이 <span class="term">핫 캐리어 주입</span><span class="en">(HCI, Hot-Carrier Injection)</span> 열화다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 290" role="img" aria-label="핫 캐리어 주입: 드레인 근처 고전계 영역에서 충돌 이온화와 산화막 주입">
+        <rect x="30" y="80" width="700" height="190" class="f-p" stroke="var(--border)"/>
+        <path d="M30 80 H190 V118 Q190 140 168 140 H30 Z" class="f-n" stroke="var(--electron)"/>
+        <path d="M730 80 H560 V118 Q560 140 582 140 H730 Z" class="f-n" stroke="var(--electron)"/>
+        <path d="M560 80 H500 V92 Q500 100 508 100 H560 Z" class="f-n" stroke="var(--electron)" stroke-dasharray="3 2"/>
+        <rect x="185" y="38" width="380" height="32" class="f-metal"/><rect x="185" y="70" width="380" height="10" class="f-ox"/>
+        <path d="M190 84 H470" stroke="var(--electron)" stroke-width="5" opacity=".6"/>
+        <path d="M470 84 Q510 86 560 100 L560 160 Q500 150 470 84 Z" class="f-warn-soft" stroke="var(--warn)" stroke-dasharray="4 3"/>
+        <text x="375" y="58" text-anchor="middle" class="t">게이트</text>
+        <text x="110" y="112" text-anchor="middle" class="lbl-e">n⁺ 소스</text><text x="650" y="112" text-anchor="middle" class="lbl-e">n⁺ 드레인</text>
+        <text x="320" y="104" text-anchor="middle" class="lbl-dim">반전 채널</text>
+        <text x="520" y="176" text-anchor="middle" class="lbl-dim">핀치오프 · 고전계</text>
+                <circle cx="505" cy="96" r="6" fill="var(--electron)"/>
+        <path d="M505 90 Q500 78 492 74" fill="none" stroke="var(--bad)" stroke-width="2" marker-end="url(#r16-a2)"/>
+        <text x="420" y="30" class="lbl-acc">③ 산화막 주입 (E &gt; 3.1 eV) → 계면 트랩·전하</text>
+        <path d="M455 34 Q480 50 490 70" fill="none" stroke="var(--text-faint)" stroke-dasharray="2 3"/>
+        <circle cx="530" cy="118" r="6" fill="var(--electron)"/><circle cx="545" cy="128" r="6" fill="none" stroke="var(--hole)" stroke-width="2"/>
+        <path d="M545 136 Q560 190 540 250" fill="none" stroke="var(--hole)" stroke-width="2" marker-end="url(#r16-a3)"/>
+        <text x="590" y="200" class="lbl-h">② 정공 → 기판 전류 I_sub</text>
+        <text x="726" y="168" text-anchor="end" class="lbl-dim">① 충돌 이온화 (E &gt; φᵢ ≈ 1.3 eV)</text>
+        <rect x="510" y="256" width="60" height="10" class="f-metal"/><text x="580" y="265" class="t-dim">기판 접지</text>
+        <text x="200" y="230" class="lbl-h">p 기판</text>
+        <defs>
+          <marker id="r16-a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker>
+          <marker id="r16-a3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--hole)"/></marker>
+        </defs>
+      </svg>
+      <figcaption><b>그림 16-2.</b> nMOS의 핫 캐리어 열화. 드레인 끝 고전계 영역(주황)에서 전자가 에너지를 얻어 충돌 이온화를 일으키고, 정공은 기판 전류가 된다. 드물게 장벽을 넘을 만큼 '운 좋은' 전자는 산화막과 계면을 손상시켜 \(V_{th}\) 증가, 이동도·\(g_m\) 감소를 남긴다. 점선의 얕은 n 영역이 LDD다.</figcaption>
+    </figure>
+    <p>쇼클리가 제안하고 후(C. Hu) 그룹이 정리한 <span class="term">행운 전자 모형</span><span class="en">(Lucky-electron model)</span>은 이 과정을 놀랍도록 단순하게 설명한다. 전자가 평균 자유 행로 \(\lambda\)(핫 전자에서 약 7~8 nm)마다 에너지를 잃는 충돌을 겪는다면, 전계 \(\mathcal{E}\)에서 에너지 \(\phi\)를 모으려면 거리 \(\phi/q\mathcal{E}\)를 충돌 없이 날아야 하고, 그 확률은 \(e^{-\phi/q\lambda\mathcal{E}}\)다.</p>
+    <div class="formula">$$\frac{I_{sub}}{I_D} = C_1\,(V_{DS}-V_{D,sat})\exp\!\left(-\frac{\phi_i}{q\lambda\mathcal{E}_m}\right),\qquad \mathcal{E}_m \approx \frac{V_{DS}-V_{D,sat}}{l},\quad l\approx 0.22\,t_{ox}^{1/3}x_j^{1/2}$$
+      <div class="where">\(\mathcal{E}_m\)은 드레인 끝 최대 전계, \(l\)은 핀치오프 영역의 특성 길이(cm 단위 경험식, \(t_{ox}=4\) nm·\(x_j=100\) nm에서 약 50 nm). 같은 식에 \(\phi_i\) 대신 \(\phi_b\approx3.1\) eV를 넣으면 게이트 주입 전류가 나온다. 둘 다 \(\mathcal{E}_m\)에 지수적으로 민감하다.</div>
+    </div>
+
+    <div class="sim" id="sim-lk">
+      <div class="sim-head"><span class="sim-tag">ANIMATION</span><h3>행운 전자: 드레인 근처에서 에너지를 모으는 전자들</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="lk-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>드레인 전압 V<sub>DS</sub></span> <output id="lk-vd-out"></output></span><input type="range" id="lk-vd" min="1" max="4" step="0.05" value="3"></label>
+          <label class="ctrl"><span><span>게이트 전압 V<sub>GS</sub></span> <output id="lk-vg-out"></output></span><input type="range" id="lk-vg" min="0.8" max="3.3" step="0.05" value="1.5"></label>
+          <label class="check"><input type="checkbox" id="lk-ldd"> <span>LDD (드레인 전계 완화)</span></label>
+          <div class="btn-row"><button class="btn" id="lk-r">카운터 초기화</button></div>
+          <div class="legend"><span><i style="background:var(--electron);border-radius:50%"></i>전자</span><span><i style="background:var(--warn);border-radius:50%"></i>E &gt; 0.6 eV</span><span><i style="background:var(--bad);border-radius:50%"></i>E &gt; φᵢ</span><span><i style="border:2px solid var(--hole);border-radius:50%"></i>정공(I<sub>sub</sub>)</span></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최대 전계 ℰ<sub>m</sub></span><span class="v" id="lk-o-e">—</span></div>
+        <div class="stat"><span class="k">이론 e<sup>−φᵢ/qλℰ</sup></span><span class="v" id="lk-o-p">—</span></div>
+        <div class="stat"><span class="k">충돌 이온화 / 도착 전자</span><span class="v" id="lk-o-i">—</span></div>
+        <div class="stat"><span class="k">산화막 주입 (누적)</span><span class="v" id="lk-o-g">—</span></div>
+      </div>
+      <div class="sim-note">위: 채널 단면(L = 180 nm). 아래: 각 전자의 위치와 운동 에너지, 회색 영역은 전계 분포(상대), 점선은 충돌이 전혀 없을 때 얻을 수 있는 최대 에너지 qV(x). 해볼 것: ① V<sub>DS</sub> = 3 V에서 대부분의 전자는 충돌로 에너지를 잃어 1 eV 아래에 머물지만, 몇몇 '운 좋은' 전자가 φᵢ 선을 넘어 정공을 만든다. ② V<sub>DS</sub>를 2 V로 내리면 이온화가 급감한다. 전압 1 V 차이에 지수적이다. ③ LDD를 켜면 같은 전압에서 전계가 약 25 % 낮아지고 이온화가 몇 분의 1로 준다. ④ V<sub>GS</sub>를 올리면 V<sub>D,sat</sub>가 커져 핀치오프 전압이 줄어든다. (λ = 7.8 nm, 충돌 시 에너지의 65 % 손실로 단순화한 몬테카를로, 이온화·주입 확률은 문턱 위 에너지에 비례)</div>
+    </div>
+
+    <p>기판 전류는 HCI의 '체온계'다. \(V_{GS}\)를 올리면 \(I_D\)는 커지지만 \(V_{D,sat}\)도 커져 \(\mathcal{E}_m\)이 줄어든다. 두 효과가 겹쳐 \(I_{sub}\)–\(V_{GS}\) 곡선은 종 모양이 되고, 고전적인 장채널 소자에서 정점은 \(V_{GS}\approx V_{DS}/2\) 부근이다. 열화는 계면 트랩 생성(에너지 \(\phi_{it}\approx3.7\) eV)에 비례한다고 보면 수명은 기판 전류로 쓸 수 있다.</p>
+    <div class="formula">$$\tau = H\,\frac{W}{I_D}\left(\frac{I_{sub}}{I_D}\right)^{-m},\quad m=\frac{\phi_{it}}{\phi_i}\approx2.9;\qquad \frac{\Delta I_D}{I_D}\ \text{또는}\ \Delta V_{th} \propto t^{\,n},\quad n\approx0.4\sim0.7$$
+      <div class="where">수명 기준은 보통 \(\Delta I_{D,sat}/I_{D,sat}=10\%\) 또는 \(\Delta V_{th}=50\) mV. 높은 \(V_{DS}\)에서 몇 시간~며칠 스트레스한 뒤 \(\tau\)–\(I_{sub}/I_D\) 직선을 사용 전압(대개 \(1.1V_{DD}\))까지 외삽한다.</div>
+    </div>
+
+    <div class="sim" id="sim-hci">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>기판 전류와 HCI 열화 수명</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view cv2"><div><canvas id="hci-cv1"></canvas></div><div><canvas id="hci-cv2"></canvas></div></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>스트레스 V<sub>DS</sub></span> <output id="hci-vd-out"></output></span><input type="range" id="hci-vd" min="1.8" max="3.6" step="0.05" value="2.7"></label>
+          <label class="ctrl"><span><span>스트레스 V<sub>GS</sub></span> <output id="hci-vg-out"></output></span><input type="range" id="hci-vg" min="0.6" max="3.3" step="0.05" value="1.3"></label>
+          <label class="check"><input type="checkbox" id="hci-ldd"> <span>LDD 적용 (l × 1.3)</span></label>
+          <div class="btn-row"><button class="btn" id="hci-pk">V<sub>GS</sub>를 I<sub>sub</sub> 정점으로</button></div>
+          <div class="legend"><span><i style="background:var(--accent)"></i>현재 V<sub>DS</sub></span><span><i style="background:var(--text-faint)"></i>다른 V<sub>DS</sub></span><span><i style="background:var(--warn)"></i>사용 조건 1.98 V</span></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">I<sub>sub</sub> / I<sub>D</sub></span><span class="v" id="hci-o-r">—</span></div>
+        <div class="stat"><span class="k">ℰ<sub>m</sub></span><span class="v" id="hci-o-e">—</span></div>
+        <div class="stat"><span class="k">스트레스 수명 (ΔI<sub>D</sub> 10 %)</span><span class="v" id="hci-o-t">—</span></div>
+        <div class="stat"><span class="k">사용 조건 외삽 수명</span><span class="v" id="hci-o-u">—</span></div>
+      </div>
+      <div class="sim-note">0.18 µm급 nMOS(W = 10 µm, t<sub>ox</sub> = 4 nm, V<sub>DD</sub> = 1.8 V)를 가정. 왼쪽: I<sub>sub</sub>–V<sub>GS</sub>(V<sub>DS</sub> = 2.0, 2.4, 2.8, 3.2 V 회색). 오른쪽: ΔI<sub>D</sub>/I<sub>D</sub> 시간 곡선(로그–로그, 기울기 n = 0.5). 해볼 것: ① 정점 버튼을 눌러 최악 조건을 찾는다. ② V<sub>DS</sub>를 3.3 V → 2.4 V로 낮추면 수명이 몇 자릿수 늘어난다. 가속 시험은 이렇게 수 시간 안에 끝낸다. ③ LDD 없이 사용 조건 수명이 10년에 못 미치면 LDD를 켜 보라. 1980~90년대 5 V → 3.3 V 시대에 LDD가 표준이 된 이유다. (Chan–Hu형 I<sub>sub</sub> 모형 A<sub>i</sub> = 2×10⁶ cm⁻¹, B<sub>i</sub> = 1.7×10⁶ V/cm, 속도 포화 I<sub>D</sub>, 후 수명식 m = 2.9, 열화 포화 40 %)</div>
+    </div>
+    <div class="callout deep"><strong>나노 소자의 HCI는 다르다</strong><p>전원 전압이 1 V 아래로 내려오자 '전계가 만든 단일 행운 전자' 그림만으로는 열화를 설명할 수 없게 되었다. 전자–전자 산란으로 꼬리 분포가 채워지고, 여러 개의 비교적 차가운 전자가 Si–H 결합을 진동 단계별로 들뜨게 하는 <b>다중 진동 여기</b><span class="en">(Multiple-vibrational excitation)</span>가 중요해졌다. 그 결과 최신 소자에서는 최악 조건이 \(V_{GS}\approx V_{DS}\) 쪽으로 옮겨 가고, 고전 소자와 달리 <b>온도가 높을수록</b> HCI가 심해지는 경우가 많다. 좁은 핀·시트에서 자가 발열(아래 절)이 겹치면 더하다. 이른바 '에너지 구동' HCI다.</p></div>
+  </section>
+
+  <section id="bti">
+    <h2>바이어스 온도 불안정성 (NBTI·PBTI)</h2>
+    <p>pMOS 게이트에 음전압을 걸고(반전 상태) 온도를 100 °C 이상으로 올려 두면, 드레인 전압이 0이어도 \(|V_{th}|\)가 서서히 커지고 구동 전류가 준다. 이것이 <span class="term">음 바이어스 온도 불안정성</span><span class="en">(NBTI, Negative Bias Temperature Instability)</span>이다. 전류가 흐를 필요가 없으므로 HCI와 달리 꺼져 있지 않은 모든 pMOS(예: SRAM의 풀업, 클록 게이팅으로 멈춘 회로)가 노출된다. high-k/금속 게이트 도입 뒤에는 nMOS에서도 양전압 스트레스로 전자가 HfO₂ 결함에 갇히는 <span class="term">PBTI</span><span class="en">(Positive BTI)</span>가 커졌다. 둘을 합쳐 <span class="term">BTI</span><span class="en">(Bias Temperature Instability)</span>라 한다. 이동 이온에 의한 고전적 BTS 측정(<a href="mos.html#oxcharge">8장</a>)과 이름은 비슷하지만 기구가 다르다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="NBTI 반응-확산 모형: 계면 Si-H 결합 해리와 수소 확산, 산화막 정공 포획">
+        <rect x="40" y="30" width="680" height="40" class="f-metal"/><text x="380" y="55" text-anchor="middle" class="t">게이트 (V_G &lt; 0)</text>
+        <rect x="40" y="70" width="680" height="90" class="f-ox"/>
+        <rect x="40" y="160" width="680" height="70" class="f-si"/>
+        <path d="M40 160 H720" stroke="var(--accent)" stroke-width="2"/>
+        <text x="728" y="120" class="t-dim" text-anchor="end">SiO₂ / high-k</text><text x="728" y="222" class="t-dim" text-anchor="end">n 기판 (pMOS)</text>
+        <g>
+          <circle cx="90" cy="172" r="7" fill="none" stroke="var(--hole)" stroke-width="2"/><circle cx="125" cy="180" r="7" fill="none" stroke="var(--hole)" stroke-width="2"/><circle cx="160" cy="171" r="7" fill="none" stroke="var(--hole)" stroke-width="2"/>
+          <text x="120" y="205" text-anchor="middle" class="lbl-h">반전층 정공</text>
+        </g>
+        <g>
+          <path d="M240 175 V160" stroke="var(--text-dim)" stroke-width="2"/><circle cx="240" cy="154" r="5" class="f-acc2"/><text x="240" y="196" text-anchor="middle" class="t-dim">Si–H</text>
+          <path d="M300 175 V162" stroke="var(--text-dim)" stroke-width="2"/><text x="300" y="196" text-anchor="middle" class="lbl-acc">Si· (계면 트랩)</text>
+          <circle cx="306" cy="140" r="5" class="f-acc2"/><path d="M310 136 Q340 110 370 104" fill="none" stroke="var(--accent-2)" stroke-dasharray="3 3" marker-end="url(#r16-a4)"/>
+          <circle cx="380" cy="101" r="5" class="f-acc2"/><circle cx="430" cy="92" r="5" class="f-acc2"/><circle cx="470" cy="84" r="5" class="f-acc2"/>
+          <text x="420" y="124" text-anchor="middle" class="lbl-acc2">H / H₂ 확산 (∝ √Dt)</text>
+          <path d="M300 160 Q300 130 380 101" fill="none" stroke="none"/>
+        </g>
+        <g>
+          <circle cx="590" cy="110" r="9" fill="none" stroke="var(--warn)" stroke-width="2" stroke-dasharray="3 2"/><circle cx="590" cy="110" r="5" fill="none" stroke="var(--hole)" stroke-width="2"/>
+          <circle cx="640" cy="128" r="9" fill="none" stroke="var(--warn)" stroke-width="2" stroke-dasharray="3 2"/>
+          <path d="M600 165 Q596 140 592 120" fill="none" stroke="var(--hole)" marker-end="url(#r16-a5)"/>
+          <text x="615" y="88" text-anchor="middle" class="t-dim">산화막 결함의 정공 포획</text><text x="615" y="150" text-anchor="middle" class="lbl-dim">(회복 가능 성분)</text>
+        </g>
+        <text x="270" y="92" text-anchor="middle" class="lbl-dim">반응: Si–H + h⁺ → Si· + H</text>
+        <defs>
+          <marker id="r16-a4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent-2)"/></marker>
+          <marker id="r16-a5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--hole)"/></marker>
+        </defs>
+      </svg>
+      <figcaption><b>그림 16-3.</b> NBTI의 두 성분. 반전층 정공과 전계가 계면 Si–H 결합을 끊어 계면 트랩을 만들고, 풀려난 수소가 산화막으로 확산한다(반응–확산, 대부분 영구 성분). 동시에 산화막 속 기존 결함이 정공을 포획한다(빠르게 회복되는 성분). 두 성분 모두 양전하라 pMOS의 \(|V_{th}|\)를 키운다.</figcaption>
+    </figure>
+    <p><span class="term">반응–확산 모형</span><span class="en">(Reaction–Diffusion model)</span>에서는 계면 결합의 해리(반응)가 빠르게 평형에 이르고, 생성 속도는 수소가 산화막 속으로 빠져나가는 확산이 제한한다. 확산 전선이 \(\sqrt{Dt}\)로 나아가므로 계면 트랩은 시간의 분수 멱으로 는다.</p>
+    <div class="formula">$$\Delta V_{th}(t) = A\,E_{ox}^{\,\gamma}\,e^{-E_a/kT}\,t^{\,n},\qquad n=\tfrac14\ (\text{원자 H 확산}),\ \ n=\tfrac16\ (\text{H}_2\ \text{확산})$$
+      <div class="where">측정되는 \(n\)은 약 0.1~0.25, \(\Delta V_{th}\)의 활성화 에너지는 약 0.1 eV 내외(이 값은 \(n\)과 시간 상수의 활성화 에너지 곱에 해당), 전계 지수 \(\gamma\)는 약 2~4(지수형 \(e^{\gamma' E_{ox}}\)로도 쓴다). 10년 기준 허용 \(\Delta V_{th}\)는 보통 30~50 mV.</div>
+    </div>
+    <p>BTI를 까다롭게 만드는 것은 <span class="term">회복</span><span class="en">(Recovery)</span>이다. 스트레스를 멈추면 \(\Delta V_{th}\)의 상당 부분이 µs~초 단위로 빠르게 사라지고, 나머지는 log 시간으로 천천히 줄어든다. 그래서 스트레스를 끝내고 1 µs 뒤에 측정하느냐 1 s 뒤에 측정하느냐에 따라 같은 소자의 열화량이 수십 % 달라지고, 초 단위로 느린 옛 측정법은 열화를 과소평가했다. 실험적으로는 회복 비율이 스트레스·회복 시간의 비 \(\xi=t_r/t_s\)만의 함수로 잘 정리된다.</p>
+    <div class="formula">$$\frac{\Delta V_{th}(t_s+t_r)}{\Delta V_{th}(t_s)} \approx \frac{1}{1+B\,\xi^{\beta}},\qquad \xi = \frac{t_r}{t_s}$$
+      <div class="where">'보편 회복' 근사(\(B\), \(\beta\)는 맞춤 상수). 미시적으로는 포획 시간 \(\tau_c\)와 방출 시간 \(\tau_e\)가 수 µs~수 년에 넓게 퍼진 결함 집단(CET 지도, Grasser)으로 이해한다. 회로의 pMOS는 클록마다 켜지고 꺼지므로 AC 스트레스의 열화는 같은 시간 DC보다 작다(50 % 듀티에서 약 0.5~0.7배).</div>
+    </div>
+
+    <div class="sim" id="sim-bti">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>NBTI 스트레스와 회복: 결함 집단 모형</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bti-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>스트레스 파형</span><div class="seg" id="bti-m"><button data-value="dc" class="on">DC</button><button data-value="ac">AC (듀티)</button></div></div>
+          <label class="ctrl"><span><span>게이트 전압 |V<sub>G</sub>|</span> <output id="bti-v-out"></output></span><input type="range" id="bti-v" min="0.8" max="2" step="0.02" value="1.2"></label>
+          <label class="ctrl"><span><span>온도</span> <output id="bti-t-out"></output></span><input type="range" id="bti-t" min="25" max="150" step="5" value="125"></label>
+          <label class="ctrl"><span><span>스트레스 시간 t<sub>s</sub></span> <output id="bti-s-out"></output></span><input type="range" id="bti-s" min="0" max="6" step="0.1" value="4"></label>
+          <label class="ctrl" id="bti-d-c"><span><span>듀티 비</span> <output id="bti-d-out"></output></span><input type="range" id="bti-d" min="0.1" max="0.9" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span><span>측정 지연</span> <output id="bti-md-out"></output></span><input type="range" id="bti-md" min="-6" max="1" step="0.1" value="-3"></label>
+          <div class="legend"><span><i style="background:var(--accent)"></i>DC 전체</span><span><i style="background:var(--accent-2)"></i>AC</span><span><i style="background:var(--text-dim)"></i>영구 성분</span><span><i style="background:var(--warn)"></i>측정값</span></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">ΔV<sub>th</sub> (스트레스 직후)</span><span class="v" id="bti-o-0">—</span></div>
+        <div class="stat"><span class="k">측정값 (지연 후)</span><span class="v" id="bti-o-m">—</span></div>
+        <div class="stat"><span class="k">AC / DC</span><span class="v" id="bti-o-a">—</span></div>
+        <div class="stat"><span class="k">10년 ΔV<sub>th</sub> (이 조건 DC)</span><span class="v" id="bti-o-y">—</span></div>
+      </div>
+      <div class="sim-note">위: 스트레스 시간에 따른 ΔV<sub>th</sub>(로그 시간). 아래: t<sub>s</sub> 뒤 스트레스를 끊었을 때의 회복(회복 시간 로그 축), 주황 세로선이 측정 지연. 해볼 것: ① 측정 지연을 1 µs → 1 s로 늘리면 '측정된' 열화가 약 20 % 준다. 같은 소자라도 측정법에 따라 다른 숫자가 나오는 이유. ② 온도를 125 → 25 °C로 내리면 열화가 줄고, 전압 1.2 → 1.6 V는 훨씬 큰 가속을 준다(전압이 더 강력한 가속 인자). ③ AC로 바꾸고 듀티를 0.5로 두면 같은 시간 DC의 약 0.6배. 듀티가 0.9에 가까워지면 DC에 접근한다. ④ 1.2 V·125 °C는 가속 조건이다. |V<sub>G</sub>|를 0.9 V, 온도를 105 °C로 내려 10년 값이 50 mV 기준 근처로 내려오는지 확인하라. (포획 τ<sub>c</sub> 10⁻⁶~10⁹ s, 방출 τ<sub>e</sub>가 넓게 분포한 결함 352군의 1차 반응 합 + t<sup>1/6</sup> 영구 성분. 125 °C·1.2 V·10⁴ s에서 약 30 mV가 되도록 맞춘 개념 모형)</div>
+    </div>
+  </section>
+
+  <section id="tddb">
+    <h2>산화막 경시 파괴 (TDDB)</h2>
+    <p>게이트 산화막에 순간 파괴 전계(SiO₂에서 약 10~15 MV/cm)보다 훨씬 낮은 전계를 걸어 두어도, 충분히 오래 기다리면 결국 파괴된다. 이것이 <span class="term">경시 절연 파괴</span><span class="en">(TDDB, Time-Dependent Dielectric Breakdown)</span>다. 터널링으로 흐르는 전자(<a href="mos.html#highk">8장</a>의 게이트 누설)가 산화막 속에 결함(전자 트랩)을 조금씩 만들고, 결함 밀도가 임계값에 이르면 게이트와 기판 사이에 결함을 징검다리 삼은 전도 경로가 생긴다. 파괴 순간 누설 전류가 계단처럼 뛰고, 얇은 막에서는 작은 계단의 <b>소프트 파괴</b><span class="en">(SBD)</span>가 먼저 오고 이어서 <b>하드 파괴</b><span class="en">(HBD)</span>로 진행하는 경우가 많다.</p>
+    <p>사용 전계는 스트레스 전계보다 훨씬 낮으므로 어떤 모형으로 외삽하느냐가 결정적이다. 경쟁하는 두 모형이 있다.</p>
+    <div class="formula">$$\text{E 모형: } \tau_{BD} = \tau_0\,e^{-\gamma E_{ox}}\qquad \text{1/E 모형: } \tau_{BD} = \tau_0\,e^{\,G/E_{ox}}\qquad \text{전압 멱 모형: } \tau_{BD}\propto V_G^{-N}$$
+      <div class="where">E 모형(열화학, McPherson): 전계가 약해진 Si–O 결합의 열적 해리를 돕는다. \(\gamma\) 약 1~4 dec/(MV/cm)의 크기. 1/E 모형(양극 정공 주입, Chen–Hu): FN 터널링 전자가 양극에서 정공을 만든다, \(G\) 약 350 MV/cm. 두께 약 5 nm 아래 직접 터널링 영역에서는 \(N\approx40\sim48\)의 전압 멱 모형이 데이터와 가장 잘 맞는다고 보고된다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 700 270" role="img" aria-label="E 모형과 1/E 모형의 외삽 차이">
+        <g transform="translate(70,16)">
+          <rect x="0" y="0" width="590" height="200" class="f-surface"/>
+          <path d="M0 200 H590 M0 0 V200" class="s-axis"/>
+          <rect x="430" y="0" width="160" height="200" class="f-acc-soft"/>
+          <text x="510" y="16" text-anchor="middle" class="lbl-acc">가속 시험 구간</text>
+          <circle cx="455" cy="87" r="5" class="f-acc"/><circle cx="495" cy="76" r="5" class="f-acc"/><circle cx="535" cy="65" r="5" class="f-acc"/><circle cx="570" cy="55" r="5" class="f-acc"/>
+          <path d="M40 200 L590 50" fill="none" stroke="var(--bad)" stroke-width="2.4"/>
+          <path d="M95 -6 C220 70 340 100 455 87 C510 80 560 62 590 50" fill="none" stroke="var(--accent-2)" stroke-width="2.4"/>
+          <path d="M120 0 V200" class="s-dash"/><text x="126" y="190" class="lbl-dim">사용 전계</text>
+          <circle cx="120" cy="178" r="5" fill="var(--bad)"/><circle cx="120" cy="8" r="5" fill="var(--accent-2)"/>
+          <text x="210" y="160" class="t" fill="var(--bad)">E 모형 (보수적)</text>
+          <text x="200" y="40" class="t" fill="var(--accent-2)">1/E 모형 (낙관적)</text>
+          <path d="M132 24 V168" class="s-line" marker-start="url(#r16-a6)" marker-end="url(#r16-a6)"/><text x="140" y="100" class="lbl-dim">수 자릿수 차이</text>
+          <text x="295" y="226" text-anchor="middle" class="lbl-dim">산화막 전계 E_ox →</text>
+          <text x="-14" y="100" text-anchor="middle" transform="rotate(-90 -14 100)" class="lbl-dim">log τ_BD</text>
+        </g>
+        <defs><marker id="r16-a6" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--text-dim)"/></marker></defs>
+      </svg>
+      <figcaption><b>그림 16-4.</b> 같은 고전계 데이터(점)를 E 모형(직선)과 1/E 모형(곡선)으로 외삽하면 사용 전계에서 수명이 몇 자릿수 차이 난다. 높은 전계에서는 두 모형이 모두 데이터를 잘 맞추므로 실험만으로 가리기 어렵다. 업계는 오랫동안 보수적인 E 모형을 써 왔다.</figcaption>
+    </figure>
+    <p>파괴는 본질적으로 통계적이다. 같은 웨이퍼의 커패시터 수십 개를 같은 조건으로 스트레스하면 파괴 시간이 한두 자릿수에 걸쳐 흩어진다. 이 분포는 와이블을 따르며, 와이블 축 \(W=\ln[-\ln(1-F)]\)에 그리면 직선이 된다.</p>
+    <div class="formula">$$\ln[-\ln(1-F)] = \beta\ln t - \beta\ln\eta,\qquad \eta_{2} = \eta_{1}\left(\frac{A_1}{A_2}\right)^{1/\beta},\qquad t_F \approx \eta\,F^{1/\beta}\ (F\ll1)$$
+      <div class="where">두 번째 식이 <span class="term">면적 스케일링</span><span class="en">(Area scaling)</span>: 산화막을 작은 조각 여러 개의 직렬 '최약 고리'로 보면, 면적이 \(A_2/A_1\)배인 칩은 가장 약한 조각이 먼저 죽는다. \(\beta\)가 작을수록 면적 벌점이 크다. 세 번째 식은 낮은 누적 고장(예: 100 ppm)에서의 수명.</div>
+    </div>
+    <p>와이블 기울기 \(\beta\)는 어디서 오는가? 산화막을 결함 크기 \(a_0\)(약 0.9 nm)의 셀로 나눈 <span class="term">퍼콜레이션 모형</span><span class="en">(Percolation model, Degraeve·Stathis)</span>에서는 결함이 무작위로 생기다 셀 기둥 하나가 게이트에서 기판까지 결함으로 이어지면 파괴된다. 기둥 하나가 이어질 확률은 결함 확률 \(p\)의 \(n=t_{ox}/a_0\) 제곱이고, 그 기둥이 면적 전체에 많으므로 와이블 기울기는 두께에 비례한다: \(\beta \approx \alpha\,t_{ox}/a_0\)(\(\alpha\)는 결함 생성의 시간 지수). 두꺼운 막은 \(\beta\)가 10 이상으로 날카롭지만, 2 nm 안팎의 막은 \(\beta\approx1\sim1.5\)로 분포가 넓어져 면적 벌점과 ppm 외삽이 가혹해진다. 산화막을 얇게 만드는 일이 신뢰성 측면에서 이중으로 손해인 이유다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 252" role="img" aria-label="퍼콜레이션 모형: 산화막 셀에 결함이 쌓여 전도 경로 형성">
+        <g transform="translate(30,20)">
+          <rect x="0" y="0" width="300" height="22" class="f-metal"/><rect x="0" y="22" width="300" height="120" class="f-ox"/><rect x="0" y="142" width="300" height="26" class="f-si"/>
+          <g fill="var(--warn)"><circle cx="30" cy="40" r="7"/><circle cx="90" cy="100" r="7"/><circle cx="150" cy="62" r="7"/><circle cx="210" cy="122" r="7"/><circle cx="270" cy="82" r="7"/><circle cx="50" cy="122" r="7"/></g>
+          <text x="150" y="190" text-anchor="middle" class="t">초기: 결함이 드문드문</text>
+        </g>
+        <g transform="translate(400,20)">
+          <rect x="0" y="0" width="300" height="22" class="f-metal"/><rect x="0" y="22" width="300" height="120" class="f-ox"/><rect x="0" y="142" width="300" height="26" class="f-si"/>
+          <g fill="var(--warn)"><circle cx="30" cy="40" r="7"/><circle cx="90" cy="100" r="7"/><circle cx="150" cy="62" r="7"/><circle cx="210" cy="122" r="7"/><circle cx="270" cy="82" r="7"/><circle cx="50" cy="122" r="7"/><circle cx="30" cy="82" r="7"/><circle cx="110" cy="40" r="7"/><circle cx="250" cy="40" r="7"/><circle cx="190" cy="82" r="7"/><circle cx="70" cy="62" r="7"/><circle cx="230" cy="100" r="7"/></g>
+          <g fill="var(--bad)"><circle cx="170" cy="40" r="7"/><circle cx="170" cy="62" r="7"/><circle cx="170" cy="82" r="7"/><circle cx="170" cy="102" r="7"/><circle cx="170" cy="122" r="7"/></g>
+          <path d="M170 22 V142" stroke="var(--bad)" stroke-width="3" opacity=".5"/>
+          <text x="150" y="190" text-anchor="middle" class="t">파괴: 기둥 하나가 이어짐</text>
+        </g>
+        <text x="365" y="88" text-anchor="middle" class="lbl-dim">→</text>
+        <text x="380" y="244" text-anchor="middle" class="lbl-dim">셀 크기 a₀ ≈ 0.9 nm, 층 수 n = t_ox / a₀ · 얇을수록 적은 결함으로 경로가 완성된다</text>
+      </svg>
+      <figcaption><b>그림 16-5.</b> TDDB의 퍼콜레이션 그림. 스트레스 동안 산화막 속에 결함(주황)이 무작위로 생기다가 게이트와 기판을 잇는 경로(빨강)가 처음 완성되는 순간 파괴된다. 층 수가 적은 얇은 막은 우연히 경로가 일찍 생길 확률이 커서 파괴 시간 분포가 넓다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-pc">
+      <div class="sim-head"><span class="sim-tag">ANIMATION</span><h3>퍼콜레이션 몬테카를로: 커패시터를 하나씩 터뜨려 와이블 그리기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view cv2"><div><canvas id="pc-cv1"></canvas></div><div><canvas id="pc-cv2"></canvas></div></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>산화막 두께 t<sub>ox</sub></span> <output id="pc-t-out"></output></span><input type="range" id="pc-t" min="0.9" max="6.3" step="0.9" value="2.7"></label>
+          <div class="btn-row"><button class="btn primary" id="pc-run">하나 스트레스</button><button class="btn" id="pc-b">50개 한꺼번에</button><button class="btn" id="pc-c">지우기</button></div>
+          <div class="step-desc" id="pc-d"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">층 수 n</span><span class="v" id="pc-o-n">—</span></div>
+        <div class="stat"><span class="k">표본 수</span><span class="v" id="pc-o-s">—</span></div>
+        <div class="stat"><span class="k">측정 β (최소제곱)</span><span class="v" id="pc-o-b">—</span></div>
+        <div class="stat"><span class="k">이론 β ≈ α·n</span><span class="v" id="pc-o-t">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 커패시터 하나의 단면(셀 기둥 40개 × n층). 스트레스 시간이 로그로 흐르며 결함이 생기고, 기둥 하나가 꽉 차면 파괴. 오른쪽: 파괴 시간의 와이블 도표(중앙 순위). 해볼 것: ① 2.7 nm(3층)에서 50개를 모아 β를 읽는다. ② 0.9 nm(1층)로 바꾸면 결함 하나만 생겨도 파괴되어 β가 결함 생성 지수 α 자체가 되고, 6.3 nm(7층)이면 β가 4 이상으로 날카로워진다. ③ 두께가 두꺼울수록 파괴 시간 자체도 길어진다. (셀 결함 확률 p = 1 − exp(−t<sup>α</sup>), α = 0.6, 정규화 시간)</div>
+    </div>
+
+    <div class="sim" id="sim-wb">
+      <div class="sim-head"><span class="sim-tag">PREDICT</span><h3>와이블 면적 스케일링과 ppm 수명</h3></div>
+      <div class="pred">
+        <p>시험용 커패시터(면적 10⁻⁴ cm²)의 TDDB 특성 수명이 η = 1,000 h, 와이블 기울기 β = 1.4였다. 같은 산화막으로 만든 칩의 전체 게이트 면적이 0.1 cm²(1,000배)라면 칩의 특성 수명은?</p>
+        <div class="btn-row" id="wb-opts"><button class="btn" data-v="a">그대로 1,000 h</button><button class="btn" data-v="b">약 140 h</button><button class="btn" data-v="c">약 7 h</button><button class="btn" data-v="d">1 h (1/1,000)</button></div>
+        <div class="verdict" id="wb-v">답을 고르면 시뮬레이터가 열린다.</div>
+      </div>
+      <div class="sim-body side">
+        <div class="sim-view lock locked" id="wb-lock"><canvas id="wb-cv"></canvas><div class="veil">먼저 위의 질문에 답하자</div></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>와이블 기울기 β</span> <output id="wb-b-out"></output></span><input type="range" id="wb-b" min="0.8" max="4" step="0.05" value="1.4"></label>
+          <label class="ctrl"><span><span>면적비 A<sub>칩</sub>/A<sub>시험</sub></span> <output id="wb-a-out"></output></span><input type="range" id="wb-a" min="0" max="5" step="0.1" value="3"></label>
+          <label class="ctrl"><span><span>목표 누적 고장</span> <output id="wb-p-out"></output></span><input type="range" id="wb-p" min="0" max="3" step="0.1" value="2"></label>
+          <div class="legend"><span><i style="background:var(--accent)"></i>시험 구조</span><span><i style="background:var(--bad)"></i>칩 (면적 환산)</span><span><i style="background:var(--warn)"></i>목표 ppm</span></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">칩 η</span><span class="v" id="wb-o-e">—</span></div>
+        <div class="stat"><span class="k">칩 ppm 수명</span><span class="v" id="wb-o-t">—</span></div>
+        <div class="stat"><span class="k">η 대비 ppm 수명</span><span class="v" id="wb-o-r">—</span></div>
+      </div>
+      <div class="sim-note">점은 시험 구조 30개를 표본 추출한 가상 데이터(η = 1,000 h, 현재 β). 해볼 것: ① β = 1.4, 면적비 1,000에서 칩의 100 ppm 수명은 시험 구조 η의 약 10만분의 1(약 0.01 h)이다. ② β를 3으로 올리면(두꺼운 막) 같은 면적비·ppm에서 벌점이 수백 배 줄어든다. ③ 목표를 1,000 ppm에서 1 ppm으로 엄격하게 하면 β가 작을수록 수명이 가파르게 줄어든다. 얇은 산화막의 ppm 외삽이 어려운 이유다.</div>
+    </div>
+  </section>
+
+  <section id="accel">
+    <h2>가속 시험과 수명 외삽</h2>
+    <p>10년을 기다려 10년 수명을 확인할 수는 없다. 그래서 전압과 온도를 높여 열화를 앞당기는 <span class="term">가속 시험</span><span class="en">(Accelerated life test)</span>을 하고, 물리 모형으로 사용 조건까지 외삽한다. 온도 가속은 대부분 열활성 과정이므로 아레니우스 식을 쓴다.</p>
+    <div class="formula">$$AF_T = \exp\!\left[\frac{E_a}{k}\left(\frac{1}{T_{use}}-\frac{1}{T_{stress}}\right)\right],\qquad AF_V = e^{\gamma(V_{stress}-V_{use})}\ \text{또는}\ \left(\frac{V_{stress}}{V_{use}}\right)^{N},\qquad \tau_{use} = \tau_{stress}\,AF_T\,AF_V$$
+      <div class="where">온도는 켈빈. \(E_a\)는 기구마다 다르다: TDDB 약 0.5~0.9 eV, 전자 이동(EM) 약 0.7~0.9 eV, BTI 수명 기준 약 0.5 eV 안팎, 일반 HTOL 계산의 관례값 0.7 eV. 125 °C → 55 °C, \(E_a\)=0.7 eV이면 \(AF_T\approx 78\).</div>
+    </div>
+    <p>제품 수준에서는 JEDEC JESD47류의 <span class="term">HTOL</span><span class="en">(High-Temperature Operating Life)</span>이 대표적이다. 예를 들어 3개 로트에서 77개씩 231개를 125 °C, 최대 동작 전압에서 1,000 h 돌려 고장이 0개면, 카이제곱 분포로 고장률 상한을 구한다.</p>
+    <div class="formula">$$\lambda_{U} = \frac{\chi^2_{CL}(2f+2)}{2\,N\,t\,AF}\qquad\text{예: } f=0,\ CL=60\%\ (\chi^2=1.83),\ N=231,\ t=1000\ \text{h},\ AF=78\ \Rightarrow\ \lambda_U\approx 51\ \text{FIT}$$
+      <div class="where">\(f\)는 고장 수, \(N\)은 시료 수, \(t\)는 시험 시간. 고장 0개여도 '0 FIT'이 아니라 통계적 상한을 말한다. 시료를 늘리거나 가속 계수를 키워야 상한이 내려간다.</div>
+    </div>
+
+    <div class="sim" id="sim-ac">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>TDDB 가속 데이터에서 10년·ppm 수명 외삽</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ac-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>외삽 모형</span><div class="seg" id="ac-m"><button data-value="E">E (V 선형)</button><button data-value="P" class="on">전압 멱</button><button data-value="R">1/E</button></div></div>
+          <label class="ctrl"><span><span>사용 전압 V<sub>use</sub></span> <output id="ac-v-out"></output></span><input type="range" id="ac-v" min="0.8" max="1.6" step="0.01" value="1.1"></label>
+          <label class="ctrl"><span><span>사용 온도</span> <output id="ac-t-out"></output></span><input type="range" id="ac-t" min="25" max="125" step="5" value="105"></label>
+          <label class="ctrl"><span><span>활성화 에너지 E<sub>a</sub></span> <output id="ac-ea-out"></output></span><input type="range" id="ac-ea" min="0.3" max="1" step="0.05" value="0.6"></label>
+          <label class="ctrl"><span><span>목표 누적 고장</span> <output id="ac-p-out"></output></span><input type="range" id="ac-p" min="0" max="3" step="0.1" value="2"></label>
+          <div class="verdict" id="ac-vd"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">온도 가속 AF<sub>T</sub></span><span class="v" id="ac-o-a">—</span></div>
+        <div class="stat"><span class="k">t<sub>63</sub> (시험 면적, 사용 조건)</span><span class="v" id="ac-o-6">—</span></div>
+        <div class="stat"><span class="k">칩 ppm 수명</span><span class="v" id="ac-o-c">—</span></div>
+        <div class="stat"><span class="k">1/E ÷ E 모형 예측</span><span class="v" id="ac-o-s">—</span></div>
+      </div>
+      <div class="sim-note">가상의 약 2 nm 게이트 산화막. 점: 125 °C에서 V<sub>G</sub> = 2.0~2.6 V로 스트레스한 시험 구조(10⁻⁵ cm²)의 63 % 파괴 시간. 세 모형으로 맞춘 곡선(가는 선)과, 선택한 모형을 칩 면적(0.1 cm², 면적비 10⁴)·목표 ppm·사용 온도로 환산한 곡선(굵은 빨강)을 10년 선과 비교한다. 해볼 것: ① 전압 멱 모형으로 10년을 지키는 최대 V<sub>use</sub>를 찾는다. ② 같은 데이터에 E 모형을 쓰면 허용 전압이 크게 낮아지고, 1/E 모형은 훨씬 낙관적이다. 모형 선택 하나가 수십 자릿수를 좌우한다. ③ 사용 온도를 125 → 55 °C로 내리면 E<sub>a</sub> = 0.6 eV에서 수명이 약 40배 는다. (β = 1.3 고정, t<sub>ppm</sub> = t<sub>63</sub>·(A<sub>칩</sub>/A<sub>시험</sub>)<sup>−1/β</sup>·[−ln(1−F)]<sup>1/β</sup>)</div>
+    </div>
+  </section>
+
+  <section id="esd">
+    <h2>정전기 방전 (ESD)과 보호 소자</h2>
+    <p>건조한 날 카펫 위를 걸은 사람의 몸은 수 kV까지 대전된다. 그 손이 칩 핀에 닿으면 수십~수백 ns 동안 1 A가 넘는 전류가 흐른다. 두께 2 nm 산화막은 수 V에서 파괴되므로, 보호 회로 없이 이 에너지를 받으면 즉사한다. <span class="term">정전기 방전</span><span class="en">(ESD, Electrostatic Discharge)</span> 시험은 모델로 표준화되어 있다. 사람 손을 흉내 낸 <span class="term">HBM</span><span class="en">(Human Body Model)</span>은 100 pF 커패시터를 1.5 kΩ을 통해 방전시키며(상승 약 2~10 ns, 감쇠 시상수 약 150 ns, 2 kV에서 정점 약 1.33 A), 패키지 자체가 대전되었다가 한 핀으로 순식간에 방전되는 <span class="term">CDM</span><span class="en">(Charged Device Model)</span>은 폭 약 1 ns, 정점 수 A의 훨씬 빠른 펄스다. 업계 권장 목표는 대략 HBM 1 kV, CDM 250 V 수준이다(JEDEC JEP155·JEP157, 2020년대 기준).</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 260" role="img" aria-label="HBM 시험 회로와 입력 핀 ESD 보호 회로">
+        <g transform="translate(20,20)">
+          <text x="110" y="0" text-anchor="middle" class="lbl-b" dy="10">HBM 모델</text>
+          <path d="M20 60 V180 M20 60 H90 M150 60 H230" class="s-line"/>
+          <rect x="90" y="50" width="60" height="20" fill="none" stroke="var(--text-dim)"/><text x="120" y="44" text-anchor="middle" class="t-dim">1.5 kΩ</text>
+          <path d="M5 110 H35 M5 122 H35" stroke="var(--text)" stroke-width="2"/><path d="M20 60 V110 M20 122 V180" class="s-line"/>
+          <text x="42" y="120" class="t-dim">100 pF</text><text x="42" y="138" class="lbl-dim">수 kV 충전</text>
+          <path d="M20 180 H230" class="s-line"/><path d="M220 190 H240 M224 196 H236" class="s-line"/>
+          <circle cx="230" cy="60" r="5" class="f-acc"/><text x="230" y="40" text-anchor="middle" class="lbl-acc">핀</text>
+        </g>
+        <g transform="translate(300,20)">
+          <rect x="0" y="10" width="460" height="220" class="f-surface" rx="10"/>
+          <text x="230" y="30" text-anchor="middle" class="lbl-b">칩 안의 보호 네트워크</text>
+          <path d="M-50 100 H120 M120 100 H300" class="s-line"/>
+          <rect x="300" y="88" width="16" height="24" class="f-metal"/><rect x="316" y="88" width="4" height="24" class="f-ox"/><rect x="320" y="84" width="40" height="32" class="f-si"/>
+          <text x="340" y="134" text-anchor="middle" class="t-dim">보호 대상 게이트</text>
+          <path d="M120 100 V60 M120 100 V140" class="s-line"/>
+          <path d="M108 78 H132 L120 62 Z" class="f-acc2"/><path d="M108 62 H132" stroke="var(--accent-2)" stroke-width="2"/>
+          <path d="M108 138 H132 L120 122 Z" class="f-acc2"/><path d="M108 122 H132" stroke="var(--accent-2)" stroke-width="2"/>
+          <path d="M40 50 H440 M40 190 H440" stroke="var(--text)" stroke-width="2"/><text x="44" y="46" class="t">V_DD</text><text x="44" y="206" class="t">V_SS</text>
+          <path d="M120 60 V50 M120 140 V190" class="s-line"/>
+          <rect x="392" y="80" width="46" height="80" fill="none" stroke="var(--warn)" stroke-width="2" rx="4"/><text x="415" y="124" text-anchor="middle" class="t" font-size="11">클램프</text>
+          <path d="M415 50 V80 M415 160 V190" class="s-line"/>
+          <text x="150" y="74" class="lbl-dim">D1 (→V_DD)</text><text x="150" y="150" class="lbl-dim">D2 (V_SS→)</text>
+          <text x="250" y="216" text-anchor="middle" class="lbl-dim">양(+)의 펄스: 핀 → D1 → V_DD → 레일 클램프 → V_SS</text>
+          <path d="M140 92 Q260 66 392 82" fill="none" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#r16-a7)"/>
+        </g>
+        <defs><marker id="r16-a7" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker></defs>
+      </svg>
+      <figcaption><b>그림 16-6.</b> HBM 시험 회로(왼쪽)와 전형적인 입력 핀 보호(오른쪽). 다이오드 두 개가 핀 전압을 \(V_{DD}+0.7\) V와 \(V_{SS}-0.7\) V 사이로 묶고, 전원 사이의 큰 레일 클램프가 ESD 전류를 받아낸다. 보호 대상 게이트 산화막에 걸리는 전압은 다이오드와 클램프의 전압 강하 합이다.</figcaption>
+    </figure>
+    <p>보호 소자는 <b>설계 창</b><span class="en">(ESD design window)</span> 안에서 동작해야 한다. 정상 동작 전압(여유 포함, 약 \(1.1V_{DD}\))에서는 절대 켜지면 안 되고, ESD 전류가 흐르는 동안 핀 전압은 보호 대상 산화막의 파괴 전압(ns 펄스 기준)과 접합 파괴 전압보다 낮게 유지해야 한다. I/O에서 많이 쓰는 <span class="term">GGNMOS</span><span class="en">(Grounded-Gate NMOS)</span>는 드레인 접합의 애벌런치로 기생 npn 바이폴라를 켜는 <span class="term">스냅백</span><span class="en">(Snapback)</span> 소자다. 트리거 전압 \(V_{t1}\)에서 켜진 뒤 유지 전압 \(V_h\)로 떨어져 큰 전류를 낮은 전압에 흘리고, 전류가 \(I_{t2}\)(약 수 mA/µm)를 넘으면 열적으로 파괴된다. 유지 전압이 \(V_{DD}\)보다 낮으면 ESD가 아닌 잡음에 켜진 뒤 꺼지지 않는 래치업 위험이 있다.</p>
+
+    <div class="sim" id="sim-esd">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>ESD 펄스와 보호 소자 설계 창</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view cv2"><div><canvas id="esd-cv1"></canvas></div><div><canvas id="esd-cv2"></canvas></div></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>보호 대상</span><div class="seg" id="esd-dm"><button data-value="core" class="on">코어 0.75 V</button><button data-value="io">I/O 1.8 V</button></div></div>
+          <div class="ctrl"><span>보호 소자</span><div class="seg" id="esd-c"><button data-value="none">없음</button><button data-value="dio" class="on">다이오드+클램프</button><button data-value="gg">GGNMOS</button></div></div>
+          <div class="ctrl"><span>시험 모델</span><div class="seg" id="esd-s"><button data-value="hbm" class="on">HBM</button><button data-value="cdm">CDM</button></div></div>
+          <label class="ctrl"><span><span>방전 전압</span> <output id="esd-v-out"></output></span><input type="range" id="esd-v" min="2" max="3.9" step="0.02" value="3.3"></label>
+          <label class="ctrl"><span><span>보호 소자 폭 W</span> <output id="esd-w-out"></output></span><input type="range" id="esd-w" min="50" max="1000" step="10" value="200"></label>
+          <div class="verdict" id="esd-vd"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">정점 전류 I<sub>p</sub></span><span class="v" id="esd-o-i">—</span></div>
+        <div class="stat"><span class="k">핀 최대 전압 / 산화막 BV</span><span class="v" id="esd-o-v">—</span></div>
+        <div class="stat"><span class="k">I<sub>p</sub> / I<sub>t2</sub></span><span class="v" id="esd-o-t">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 방전 전류 I(t)(위)와 핀 전압 V(t)(아래). 오른쪽: 보호 소자 I–V와 설계 창(초록). 해볼 것: ① HBM 2 kV, 코어 + 다이오드+클램프 W = 200 µm에서 핀 전압이 산화막 BV 아래인지 확인하고, W를 줄여 실패하는 경계를 찾는다. ② 코어 영역에 GGNMOS를 쓰면 트리거 전압이 이미 산화막 BV보다 높아 실패한다. 얇은 코어 산화막은 다이오드와 능동 클램프로 지킨다. ③ I/O 1.8 V에 GGNMOS를 고르고 W를 키워 핀 전압과 I<sub>t2</sub> 조건을 모두 만족시켜 보라. ④ CDM으로 바꾸면 같은 전압에서 정점 전류가 훨씬 크고 펄스가 ns 이하다. (HBM: I<sub>p</sub> = V/1.5 kΩ, 상승 τ 4 ns·감쇠 150 ns. CDM: I<sub>p</sub> ≈ V/100 Ω, 폭 약 1 ns로 근사. BV: 코어 약 4 V, I/O 약 8 V의 ns 펄스 값. R<sub>on</sub>·W: 다이오드 경로 400 Ω·µm, GGNMOS 800 Ω·µm, I<sub>t2</sub>: 다이오드 20 mA/µm, GGNMOS 6 mA/µm로 가정한 대략값)</div>
+    </div>
+    <p>전하를 띤 도구·플라스마 공정 중 게이트에 쌓이는 전하도 같은 산화막을 공격한다. 식각 중 긴 배선이 안테나처럼 전하를 모아 게이트를 손상시키는 플라스마 대전 손상은 <a href="../../plasma/chapters/surface.html">PlasmaBook의 표면 상호작용 장</a>을 참고하라.</p>
+  </section>
+
+  <section id="heat">
+    <h2>자가 발열과 온도 가속 노화</h2>
+    <p>트랜지스터가 소모하는 전력 \(P=I_DV_{DS}\)는 채널, 특히 드레인 쪽 핀치오프 영역에서 열로 바뀐다. 평면 벌크 소자에서는 이 열이 바로 아래 넓은 실리콘 기판으로 퍼져 나가지만, FinFET의 핀은 폭 약 5~7 nm, GAA 나노시트는 두께 약 5 nm에 위아래가 열전도율 낮은 산화막·high-k로 둘러싸여 있다. 게다가 실리콘의 열전도율은 수 nm 구조에서 포논 경계 산란으로 벌크(약 150 W/m·K)의 몇 분의 1로 떨어진다. 결과적으로 소자의 <span class="term">열저항</span><span class="en">(Thermal resistance)</span> \(R_{th}\)가 커지고 채널 온도가 주변보다 수십 K 높아지는 <span class="term">자가 발열</span><span class="en">(Self-heating)</span>이 생긴다.</p>
+    <div class="formula">$$T_{ch} = T_{amb} + P\,R_{th}\left(1-e^{-t/\tau_{th}}\right),\qquad \tau_{life}(T_{ch}) = \tau_{life}(T_{amb})\,\exp\!\left[\frac{E_a}{k}\left(\frac{1}{T_{ch}}-\frac{1}{T_{amb}}\right)\right]$$
+      <div class="where">\(\tau_{th}\)는 열 시상수(소자 수준 약 수십~수백 ns). DC 측정에서는 수십 K(FinFET·GAA 보고값 약 20~50 K)까지 오르지만, GHz로 스위칭하는 논리 회로에서는 평균 전력으로 데워지므로 상승폭이 훨씬 작다. 반면 아날로그 바이어스·I/O 드라이버·DC에 가까운 회로는 전체 효과를 받는다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="평면 소자와 FinFET, GAA의 열 경로 비교">
+        <g transform="translate(20,10)">
+          <rect x="20" y="40" width="180" height="20" class="f-metal"/><rect x="20" y="60" width="180" height="6" class="f-ox"/>
+          <rect x="0" y="66" width="220" height="130" class="f-si"/>
+          <ellipse cx="150" cy="72" rx="16" ry="7" fill="var(--bad)" opacity=".8"/>
+          <path d="M150 80 L110 180 M150 80 L150 185 M150 80 L190 180 M150 80 L70 160" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="4 3" opacity=".7"/>
+          <text x="110" y="222" text-anchor="middle" class="lbl-b">평면 벌크</text><text x="110" y="240" text-anchor="middle" class="t-dim">열이 기판으로 넓게 퍼짐 · R<tspan baseline-shift="sub" font-size="9">th</tspan> 작음</text>
+        </g>
+        <g transform="translate(270,10)">
+          <rect x="0" y="150" width="220" height="46" class="f-si"/><rect x="0" y="128" width="220" height="22" class="f-ox"/>
+          <rect x="96" y="40" width="28" height="110" class="f-si"/>
+          <path d="M60 196 V30 H160 V128" fill="none" stroke="none"/>
+          <path d="M70 128 V28 H150 V128 H130 V36 H90 V128 Z" class="f-metal" opacity=".85"/>
+          <ellipse cx="110" cy="60" rx="10" ry="16" fill="var(--bad)" opacity=".8"/>
+          <path d="M110 80 V170" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="4 3"/>
+          <text x="110" y="222" text-anchor="middle" class="lbl-b">FinFET</text><text x="110" y="240" text-anchor="middle" class="t-dim">좁은 핀 하나로 빠져나감 · R<tspan baseline-shift="sub" font-size="9">th</tspan> 큼</text>
+        </g>
+        <g transform="translate(530,10)">
+          <rect x="0" y="150" width="220" height="46" class="f-si"/><rect x="0" y="136" width="220" height="14" class="f-ox"/>
+          <rect x="40" y="26" width="140" height="110" class="f-metal" opacity=".85"/>
+          <rect x="60" y="44" width="100" height="14" class="f-si"/><rect x="60" y="76" width="100" height="14" class="f-si"/><rect x="60" y="108" width="100" height="14" class="f-si"/>
+          <ellipse cx="110" cy="51" rx="14" ry="6" fill="var(--bad)" opacity=".9"/><ellipse cx="110" cy="83" rx="14" ry="6" fill="var(--bad)" opacity=".7"/>
+          <path d="M110 58 Q130 100 110 170" fill="none" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="4 3"/>
+          <text x="110" y="222" text-anchor="middle" class="lbl-b">GAA 나노시트</text><text x="110" y="240" text-anchor="middle" class="t-dim">위쪽 시트일수록 경로가 길고 뜨거움</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 16-7.</b> 구조별 열 경로(빨간 점선). 3차원 소자는 정전기 제어(<a href="scaling.html#finfet">10장</a>)를 얻는 대신 열이 빠져나갈 길이 좁아졌다. 열은 금속 게이트·콘택·배선 쪽으로도 빠지므로 실제 \(R_{th}\)는 레이아웃과 BEOL 설계에도 좌우된다.</figcaption>
+    </figure>
+    <p>자가 발열은 신뢰성에 이중으로 작용한다. 채널 온도가 올라가면 BTI·TDDB·에너지 구동 HCI가 모두 아레니우스로 가속되고, 금속 배선의 전자 이동(EM)까지 빨라진다. 활성화 에너지 0.6 eV에서 105 °C 대비 20 K 높은 채널은 수명이 약 2.5배 짧다. 그래서 신뢰성 평가에는 주변(접합) 온도 \(T_j\)에 자가 발열분을 더한 <b>온도 가드밴드</b>를 얹는다. 이 장 끝의 챌린지에서 직접 다룬다.</p>
+  </section>
+
+  <section id="var">
+    <h2>변동성과 신뢰성: 가드밴드</h2>
+    <p>칩 안 수십억 개 트랜지스터의 \(V_{th}\)는 같지 않다. 랜덤 도펀트, 금속 게이트 결정립, 선폭 거칠기 때문에 \(\sigma_{V_{th}}\)는 수십 mV에 이른다(펠그롬 \(\sigma=A_{VT}/\sqrt{WL}\), \(A_{VT}\) 약 1~1.5 mV·µm). 회로는 평균이 아니라 <b>가장 느린 경로의 가장 나쁜 소자</b>로 동작 속도가 정해진다. 여기에 노화가 겹치면 분포 전체가 오른쪽으로 이동할 뿐 아니라 <b>넓어진다</b>. 작은 소자의 BTI는 결함 몇 개가 하나씩 전하를 포획하는 이산 사건이고, 결함 하나가 만드는 \(V_{th}\) 계단의 크기가 지수 분포를 따르기 때문이다.</p>
+    <div class="formula">$$\sigma^2_{V_{th}}(t) = \sigma^2_{0} + 2\,\eta\,\langle\Delta V_{th}(t)\rangle,\qquad \eta\approx\frac{q}{C_{ox}WL}\ (\text{결함 하나의 평균 계단})$$
+      <div class="where">결함 수가 푸아송, 계단 크기가 평균 \(\eta\)인 지수 분포라고 하면 노화 성분의 분산은 \(2\eta\langle\Delta V_{th}\rangle\)이다(Kaczer 등). 나노시트급 소자에서 \(\eta\)는 약 1~5 mV. 가장 나쁜 소자의 \(V_{th}\)는 \(\mu+\Delta V_{th}+k\sigma(t)\)(SRAM처럼 소자가 많으면 \(k\approx5\sim6\)).</div>
+    </div>
+    <p>설계자는 수명 말기(EOL) 최악 소자로도 목표 속도가 나오도록 \(V_{DD}\)를 미리 높여 두거나 타이밍 여유를 남긴다. 이것이 <span class="term">가드밴드</span><span class="en">(Guard band)</span>다. 가드밴드는 공짜가 아니다. 동적 전력은 \(V_{DD}^2\)에 비례하고, 높은 전압은 다시 노화를 가속한다. 칩 전체의 수율·통계 관점은 <a href="../../yield/chapters/statistics.html">YieldBook의 통계 장</a>에서 다룬다.</p>
+
+    <div class="sim" id="sim-gb">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>노화로 이동하고 퍼지는 V<sub>th</sub> 분포와 전압 가드밴드</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gb-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>초기 산포 σ<sub>0</sub></span> <output id="gb-s-out"></output></span><input type="range" id="gb-s" min="10" max="40" step="1" value="22"></label>
+          <label class="ctrl"><span><span>사용 기간</span> <output id="gb-y-out"></output></span><input type="range" id="gb-y" min="0" max="10" step="0.5" value="10"></label>
+          <label class="ctrl"><span><span>10년 평균 ΔV<sub>th</sub></span> <output id="gb-d-out"></output></span><input type="range" id="gb-d" min="10" max="80" step="1" value="40"></label>
+          <label class="ctrl"><span><span>결함당 평균 계단 η</span> <output id="gb-e-out"></output></span><input type="range" id="gb-e" min="0.5" max="8" step="0.1" value="3"></label>
+          <label class="ctrl"><span><span>설계 기준 kσ</span> <output id="gb-k-out"></output></span><input type="range" id="gb-k" min="3" max="6" step="0.1" value="4.5"></label>
+          <div class="legend"><span><i style="background:var(--text-faint)"></i>초기</span><span><i style="background:var(--accent)"></i>노화 후 (몬테카를로)</span><span><i style="background:var(--bad)"></i>최악 소자 기준</span></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">σ (노화 후)</span><span class="v" id="gb-o-s">—</span></div>
+        <div class="stat"><span class="k">최악 V<sub>th</sub> 이동</span><span class="v" id="gb-o-w">—</span></div>
+        <div class="stat"><span class="k">필요 V<sub>DD</sub> 가드밴드</span><span class="v" id="gb-o-g">—</span></div>
+        <div class="stat"><span class="k">동적 전력 증가</span><span class="v" id="gb-o-p">—</span></div>
+      </div>
+      <div class="sim-note">V<sub>DD</sub> = 0.75 V, 평균 V<sub>th</sub> = 0.30 V, 지연 ∝ V<sub>DD</sub>/(V<sub>DD</sub> − V<sub>th</sub>)<sup>1.3</sup>(알파 멱). 소자 6,000개 각각에 푸아송 개수의 결함과 지수 분포 계단을 더한 몬테카를로. 가드밴드는 노화 후 최악 소자가 초기 최악 소자와 같은 지연을 내도록 올려야 하는 전압. 해볼 것: ① η를 0.5 → 6 mV로 키우면(작은 소자) 평균 이동이 같아도 분포 꼬리가 길어져 가드밴드가 커진다. ② 사용 기간을 1년으로 줄여도 ΔV<sub>th</sub> ∝ t<sup>1/6</sup>라 이미 10년 값의 약 70 %다. 노화는 초반에 빠르다. ③ kσ를 3 → 6으로 올리면(큰 SRAM 배열) 최악 소자 기준이 훨씬 오른쪽으로 간다.</div>
+    </div>
+  </section>
+
+  <section id="challenge">
+    <h2>설계 챌린지: 10년을 버티는 전압과 온도 가드밴드</h2>
+    <p>지금까지의 기구를 한 칩에 모아 보자. GAA 공정의 코어 회로가 접합 온도 \(T_j=105\) °C에서 10년 동안 동작해야 한다. 설계자가 정하는 것은 두 가지다. 전원 전압 \(V_{DD}\), 그리고 신뢰성 평가에 쓸 <b>온도 가드밴드</b> \(\Delta T_{GB}\)(평가 온도 \(=T_j+\Delta T_{GB}\)). 전압이 높으면 빠르지만 HCI·TDDB 수명이 줄고 BTI가 커진다. 전압이 낮으면 노화 뒤 속도가 목표에 못 미친다. 가드밴드를 실제 자가 발열보다 작게 잡으면 평가는 통과해도 현장에서 칩이 일찍 죽는다. 너무 크게 잡으면 평가가 지나치게 가혹해져 쓸 수 있는 전압 창이 사라진다.</p>
+
+    <div class="sim" id="sim-ch">
+      <div class="sim-head"><span class="sim-tag">CHALLENGE</span><h3>V<sub>DD</sub>와 온도 가드밴드를 골라 10년 수명과 속도를 동시에</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ch-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>전원 전압 V<sub>DD</sub></span> <output id="ch-v-out"></output></span><input type="range" id="ch-v" min="0.6" max="1" step="0.005" value="0.75"></label>
+          <label class="ctrl"><span><span>온도 가드밴드 ΔT<sub>GB</sub></span> <output id="ch-g-out"></output></span><input type="range" id="ch-g" min="0" max="40" step="1" value="0"></label>
+          <div class="verdict" id="ch-vd"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">실제 자가 발열 ΔT</span><span class="v" id="ch-o-h">—</span></div>
+        <div class="stat"><span class="k">수명 말기 속도 / 목표</span><span class="v" id="ch-o-f">—</span></div>
+        <div class="stat"><span class="k">HCI 수명 (평가 온도)</span><span class="v" id="ch-o-c">—</span></div>
+        <div class="stat"><span class="k">TDDB 100 ppm 수명</span><span class="v" id="ch-o-t">—</span></div>
+      </div>
+      <div class="sim-note">조건: ① 수명 말기 속도 ≥ 목표(0.75 V 새 소자의 95 %), ② HCI(ΔI<sub>D</sub> 10 %)·TDDB(100 ppm) 수명이 평가 온도에서 모두 ≥ 10년, ③ ΔT<sub>GB</sub> ≥ 실제 자가 발열. 위 그래프: 노화 후 속도 대 V<sub>DD</sub>. 아래: 평가 온도에서의 수명 대 V<sub>DD</sub>, 초록 띠는 현재 가드밴드에서 모든 조건을 지키는 V<sub>DD</sub> 창. 가장 낮은 전압(최소 전력)으로 통과하면 최고 점수. (BTI 10년 ΔV<sub>th</sub> = 40 mV·(V/0.75)<sup>3.5</sup>, E<sub>a</sub> 0.1 eV. HCI τ ∝ V<sup>−14</sup>, E<sub>a</sub> 0.15 eV(고온에서 악화하는 에너지 구동형). TDDB τ ∝ V<sup>−40</sup>, E<sub>a</sub> 0.6 eV. 자가 발열 ΔT = 15 K·(V/0.75)<sup>2.5</sup>. 모든 수치는 교육용 개념 모형)</div>
+    </div>
+    <div class="callout tip"><strong>현실의 신뢰성 설계 흐름</strong><p>실제 공정 개발에서는 소자 수준 가속 시험(HCI·BTI·TDDB·EM·SM)으로 기구별 모형 변수를 뽑고, 이를 회로 시뮬레이터의 노화 모형(MOSRA·RelXpert류)에 넣어 실제 동작 파형(듀티·주파수·온도 이력)으로 각 트랜지스터의 열화를 계산한다. 그 결과로 \(V_{DD}\)·주파수 가드밴드와 최대 \(T_j\) 사양을 정하고, 제품 HTOL·번인으로 최종 확인한다. 최근에는 칩 안에 링 발진기·노화 센서를 넣어 현장에서 열화를 감시하고 전압을 적응적으로 올리는 방식도 쓰인다.</p></div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>신뢰도 \(R(t)\), 고장률 \(h(t)\), FIT(10⁹ 소자·시간당 고장), MTTF. 욕조 곡선은 초기(\(\beta\lt1\))·우발(\(\beta=1\))·마모(\(\beta\gt1\)) 와이블 성분의 합이며, 사양은 MTTF보다 '수명 내 누적 ppm'으로 쓴다.</li>
+      <li>HCI: 드레인 끝 고전계 \(\mathcal{E}_m\approx(V_{DS}-V_{D,sat})/l\)에서 행운 전자가 \(\phi_i\)를 넘으면 기판 전류, \(\phi_b\)를 넘으면 산화막 손상. \(I_{sub}/I_D\propto e^{-\phi_i/q\lambda\mathcal{E}_m}\), 수명 \(\propto (I_{sub}/I_D)^{-2.9}\). LDD가 전계를 낮춘다.</li>
+      <li>BTI: 반응–확산으로 \(\Delta V_{th}\propto t^{n}\)(\(n\approx\)1/6~1/4)이고 전압·온도로 가속된다. 상당 부분이 회복되므로 측정 지연과 AC 듀티가 결과를 바꾼다.</li>
+      <li>TDDB: 결함이 쌓여 퍼콜레이션 경로가 생기면 파괴. 와이블 \(\beta\approx\alpha t_{ox}/a_0\)라 얇은 막일수록 분포가 넓고, 면적 스케일링 \(\eta\propto A^{-1/\beta}\)와 ppm 외삽 \(t_F\approx\eta F^{1/\beta}\)가 가혹해진다. E·1/E·전압 멱 모형 선택이 외삽 결과를 자릿수 단위로 바꾼다.</li>
+      <li>가속 시험은 아레니우스 \(AF_T\)와 전압 가속 \(AF_V\)로 사용 조건에 외삽하고, 고장 0개 HTOL도 카이제곱 상한으로 FIT를 말한다.</li>
+      <li>ESD(HBM 1.5 kΩ·100 pF, CDM ns 펄스) 보호 소자는 \(1.1V_{DD}\) 위에서 켜지고 산화막 BV 아래로 핀 전압을 묶으며 \(I_{t2}\)를 견뎌야 한다(설계 창). 얇은 코어는 다이오드+레일 클램프, I/O는 GGNMOS 스냅백도 쓴다.</li>
+      <li>FinFET·GAA는 자가 발열로 채널 온도가 오르고 노화가 가속된다. 노화는 \(V_{th}\) 분포를 이동시키고 넓혀(\(\sigma^2=\sigma_0^2+2\eta\Delta V\)) 전압·온도 가드밴드가 필요하다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>고장률이 50 FIT로 일정한 칩 2만 개를 1년(8,766 h) 동안 쓰면 예상 고장 수는?</p><div class="opts">
+        <button class="opt">약 0.9개</button><button class="opt" data-correct>약 8.8개</button><button class="opt">약 88개</button><button class="opt">약 438개</button>
+      </div><div class="quiz-exp">50×10⁻⁹ /h × 20,000개 × 8,766 h ≈ 8.8개. 1 FIT는 10⁹ 소자·시간당 고장 1건이다.</div></div>
+      <div class="quiz-q"><p>고전적인 장채널 nMOS에서 V<sub>DS</sub>를 고정하고 V<sub>GS</sub>를 올리면 기판 전류는?</p><div class="opts">
+        <button class="opt">단조롭게 증가한다</button><button class="opt">단조롭게 감소한다</button><button class="opt" data-correct>증가하다가 감소하는 종 모양(대략 V<sub>GS</sub> ≈ V<sub>DS</sub>/2에서 정점)</button><button class="opt">V<sub>GS</sub>와 무관하다</button>
+      </div><div class="quiz-exp">I<sub>D</sub>는 늘지만 V<sub>D,sat</sub>가 커져 핀치오프 전압 V<sub>DS</sub> − V<sub>D,sat</sub>와 최대 전계가 줄어 이온화 확률이 지수적으로 떨어진다. 두 효과가 겹쳐 종 모양이 된다.</div></div>
+      <div class="quiz-q"><p>NBTI 스트레스 뒤 측정 지연을 1 µs에서 1 s로 늘렸더니 ΔV<sub>th</sub>가 크게 줄었다. 가장 알맞은 설명은?</p><div class="opts">
+        <button class="opt">측정 장비의 잡음 때문이다</button><button class="opt" data-correct>스트레스를 끊은 동안 포획된 전하가 방출되어 열화의 일부가 회복되기 때문이다</button><button class="opt">온도가 측정 중 올라가기 때문이다</button><button class="opt">계면 트랩이 측정 중 새로 생기기 때문이다</button>
+      </div><div class="quiz-exp">BTI의 회복 성분은 방출 시간이 µs~수 년에 넓게 퍼져 있어 스트레스를 끊자마자 log 시간으로 사라진다. 빠른 측정(on-the-fly, 초고속 측정)이 개발된 이유다.</div></div>
+      <div class="quiz-q"><p>TDDB 와이블 기울기 β = 2인 산화막에서 칩 면적을 100배로 키우면 특성 수명 η는?</p><div class="opts">
+        <button class="opt">변하지 않는다</button><button class="opt">1/100</button><button class="opt" data-correct>1/10</button><button class="opt">1/√10 ≈ 0.32배</button>
+      </div><div class="quiz-exp">η<sub>2</sub> = η<sub>1</sub>·(A<sub>1</sub>/A<sub>2</sub>)<sup>1/β</sup> = η<sub>1</sub>·100<sup>−1/2</sup> = η<sub>1</sub>/10. β가 작을수록 면적 벌점이 커진다.</div></div>
+      <div class="quiz-q"><p>E<sub>a</sub> = 0.7 eV일 때 125 °C 스트레스의 55 °C 사용 대비 온도 가속 계수는 대략?</p><div class="opts">
+        <button class="opt">약 2.3</button><button class="opt">약 10</button><button class="opt" data-correct>약 80</button><button class="opt">약 2,000</button>
+      </div><div class="quiz-exp">AF = exp[(0.7/8.617×10⁻⁵)(1/328 − 1/398)] = exp(8,123 × 5.36×10⁻⁴) ≈ exp(4.36) ≈ 78.</div></div>
+      <div class="quiz-q"><p>I/O용 GGNMOS ESD 보호 소자의 유지 전압 V<sub>h</sub>가 V<sub>DD</sub>보다 낮으면 생기는 문제는?</p><div class="opts">
+        <button class="opt">ESD 전류를 흘리지 못한다</button><button class="opt">트리거 전압이 올라간다</button><button class="opt" data-correct>정상 동작 중 잡음으로 켜진 뒤 전원에 의해 계속 켜진 상태로 남는 래치업 위험이 있다</button><button class="opt">게이트 산화막 BV가 낮아진다</button>
+      </div><div class="quiz-exp">스냅백 뒤 소자는 V<sub>h</sub> 이상만 걸려 있으면 켜진 상태를 유지한다. V<sub>DD</sub> &gt; V<sub>h</sub>이면 전원이 유지 조건을 계속 공급해 과전류로 이어진다. 설계 창은 V<sub>h</sub> &gt; 1.1V<sub>DD</sub>를 요구한다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const kB = 8.617333e-5, YR = 3.15576e7;
+  const small = (v, u) => v + "<small>" + u + "</small>";
+  const logspace = (a, b, n) => { const o = []; for (let i = 0; i <= n; i++) o.push(Math.pow(10, a + ((b - a) * i) / n)); return o; };
+  const lgFmt = (v) => { const e = Math.round(Math.log10(v)); return e >= -2 && e <= 3 ? String(Number(v.toPrecision(2))) : "1e" + e; };
+  /** 초 → 사람이 읽는 시간 */
+  function fT(s) {
+    if (!isFinite(s)) return "∞";
+    if (s < 1e-6) return small((s * 1e9).toPrecision(2), " ns");
+    if (s < 1e-3) return small((s * 1e6).toPrecision(2), " µs");
+    if (s < 1) return small((s * 1e3).toPrecision(2), " ms");
+    if (s < 120) return small(s.toPrecision(2), " s");
+    if (s < 7200) return small((s / 60).toPrecision(2), " 분");
+    if (s < 172800) return small((s / 3600).toPrecision(2), " 시간");
+    if (s < 0.5 * YR) return small((s / 86400).toPrecision(2), " 일");
+    const y = s / YR;
+    if (y < 1e4) return small(Number(y.toPrecision(2)).toLocaleString("en-US"), " 년");
+    return SC.sciH(y, 1) + "<small> 년</small>";
+  }
+  const fTt = (s) => fT(s).replace(/<[^>]+>/g, "");
+  function lsq(xs, ys) {
+    const n = xs.length; let sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (let i = 0; i < n; i++) { sx += xs[i]; sy += ys[i]; sxx += xs[i] * xs[i]; sxy += xs[i] * ys[i]; }
+    const b = (n * sxy - sx * sy) / (n * sxx - sx * sx || 1e-30); return { a: (sy - b * sx) / n, b };
+  }
+  const Wb = (F) => Math.log(-Math.log(1 - F));
+  const Fw = (W) => 1 - Math.exp(-Math.exp(W));
+  const fF = (F) => (F < 1e-3 ? Number((F * 1e6).toPrecision(2)) + " ppm" : Number((F * 100).toPrecision(2)) + "%");
+  function ctrlOff(id, off) { const c = document.getElementById(id); if (c) c.setAttribute("aria-disabled", off ? "true" : "false"); }
+
+  /* ================================================== 1. 욕조 곡선 */
+  (function () {
+    let cv; const rr = () => cv && cv.redraw();
+    const gE = PB.range("bt-e", (v) => PB.fmt(Math.pow(10, v), 2) + " FIT", rr);
+    const gB = PB.range("bt-b", (v) => v.toFixed(2), rr);
+    const gR = PB.range("bt-r", (v) => PB.fmt(Math.pow(10, v), 2) + " FIT", rr);
+    const gW = PB.range("bt-w", (v) => v + " 년", rr);
+    const gK = PB.range("bt-k", (v) => v.toFixed(1), rr);
+    const gBI = PB.range("bt-bi", (v) => v + " h", rr);
+    const AF = 40;
+    cv = PB.canvas("#bt-cv", (ctx, w, h) => {
+      const P = PB.palette();
+      const E = Math.pow(10, gE()) * 1e-9, b1 = gB(), R = Math.pow(10, gR()) * 1e-9, eta = gW() * 8766, b3 = gK(), te = AF * gBI();
+      const h1 = (t) => E * Math.pow(t, b1 - 1), h3 = (t) => (b3 / eta) * Math.pow(t / eta, b3 - 1);
+      const H = (t) => (E * Math.pow(t, b1)) / b1 + R * t + Math.pow(t / eta, b3);
+      const s0 = [], s1 = [], s2 = [], s3 = [], sf = [];
+      logspace(0, 6, 220).forEach((t) => {
+        const a = h1(t), c = h3(t);
+        s1.push([t, a * 1e9]); s2.push([t, R * 1e9]); s3.push([t, c * 1e9]); s0.push([t, (a + R + c) * 1e9]);
+        const tt = t + te; sf.push([t, (h1(tt) + R + h3(tt)) * 1e9]);
+      });
+      const series = [{ data: s1, color: P.warn, width: 1.5, dash: [5, 4] }, { data: s2, color: P.dim, width: 1.5, dash: [5, 4] }, { data: s3, color: P.bad, width: 1.5, dash: [5, 4] }];
+      if (te > 0) series.push({ data: s0, color: P.faint, width: 2, dash: [2, 3] });
+      series.push({ data: sf, color: P.accent, width: 3 });
+      PB.chart(ctx, null, { x: [1, 1e6], y: [0.1, 1e6], logX: true, logY: true, xLabel: "현장 사용 시간 (h)", yLabel: "고장률 (FIT)",
+        xFmt: (v) => (v >= 1e3 ? v / 1e3 + "k" : String(v)), yFmt: lgFmt, series, vlines: [{ x: 8766, label: "1년" }, { x: 87660, label: "10년" }] });
+      const dH = (t) => H(t + te) - H(te);
+      PB.stat("bt-o-y", small(PB.fmt((dH(8766) / 8766) * 1e9, 3), " FIT"));
+      const F10 = 1 - Math.exp(-dH(87660));
+      PB.stat("bt-o-c", F10 < 1e-3 ? small(PB.fmt(F10 * 1e6, 3), " ppm") : small(PB.fmt(F10 * 100, 3), " %"));
+      PB.stat("bt-o-b", te > 0 ? small(PB.fmt((1 - Math.exp(-H(te))) * 1e6, 3), " ppm") : "—");
+      let m = 1, prev = 1, tp = 1; // 0~1 h: R ≈ 1
+      logspace(0, 8, 800).slice(1).forEach((t) => { const r = Math.exp(-dH(t)); m += 0.5 * (r + prev) * (t - tp); prev = r; tp = t; });
+      PB.stat("bt-o-m", small(PB.fmt(m / 8766, 3), " 년"));
+    }, { aspect: 0.6, minHeight: 300, maxHeight: 430 });
+  })();
+
+  /* ================================================== 공통: 0.18 µm급 nMOS HCI 모형 */
+  const HC = (function () {
+    const W = 1e-3, COX = (3.9 * SC.eps0) / 4e-7, VSAT = 1e7, VTH = 0.45, ESL = 3.0, nVt = 1.4 * SC.Vt(300), L0 = 5.1e-6;
+    const vov = (vg) => 2 * nVt * Math.log(1 + Math.exp((vg - VTH) / (2 * nVt)));
+    function dev(vg, vd, ldd) {
+      const o = vov(vg), vs = (o * ESL) / (o + ESL);
+      let Id = (W * COX * VSAT * o * o) / (o + ESL);
+      if (vd < vs) { const r = 1 - vd / vs; Id *= 1 - r * r; }
+      const l = (ldd ? 1.3 : 1) * L0, dv = vd - vs;
+      const ratio = dv > 0 ? (2e6 / 1.7e6) * dv * Math.exp((-1.7e6 * l) / dv) : 0;
+      return { Id, Isub: ratio * Id, ratio, vs, Em: dv > 0 ? dv / l : 0 };
+    }
+    const raw = (d) => (d.ratio > 1e-30 ? (10 / d.Id) * Math.pow(d.ratio, -2.9) : Infinity);
+    function worst(vd, ldd) { let b = -1, bv = 1; for (let vg = 0.6; vg <= 3.3001; vg += 0.01) { const d = dev(vg, vd, ldd); if (d.Isub > b) { b = d.Isub; bv = vg; } } return bv; }
+    const H = 9.5e7 / raw(dev(worst(1.98, false), 1.98, false)); // LDD 없는 소자의 사용 조건 수명 ≈ 3년
+    return { dev, worst, tau: (d) => H * raw(d), VTH, ESL };
+  })();
+
+  /* ================================================== 2. 행운 전자 애니메이션 */
+  (function () {
+    const L = 180, LAM = 7.8, PHI = 1.3, PHB = 3.1;
+    let st = {}, ion = 0, inj = 0, arr = 0, holes = [], flashes = [], cv, acc = 0;
+    const gVd = PB.range("lk-vd", (v) => v.toFixed(2) + " V", upd), gVg = PB.range("lk-vg", (v) => v.toFixed(2) + " V", upd);
+    const ldd = document.getElementById("lk-ldd"); ldd.addEventListener("change", upd);
+    document.getElementById("lk-r").addEventListener("click", () => { ion = inj = arr = 0; stats(); });
+    function upd() {
+      const o = Math.max(0.05, gVg() - HC.VTH), vds = gVd(), vs = (o * HC.ESL) / (o + HC.ESL);
+      const l = ldd.checked ? 64 : 49;
+      st = { vds, vs, l, Em: Math.max(0, vds - vs) / l, Elin: Math.min(vds, vs) / L };
+      ion = inj = arr = 0; stats();
+    }
+    const Ef = (x) => st.Elin + st.Em * Math.exp((x - L) / st.l);
+    const Vx = (x) => st.Elin * x + st.Em * st.l * (Math.exp((x - L) / st.l) - Math.exp(-L / st.l));
+    const parts = [];
+    const spawn = (p, x) => { p.x = x || 0; p.y = 0.15 + Math.random() * 0.7; p.e = 0.03; return p; };
+    for (let i = 0; i < 80; i++) parts.push(spawn({}, Math.random() * L));
+    function stats() {
+      PB.stat("lk-o-e", small((st.Em * 10).toFixed(2), " MV/cm"));
+      const q = LAM * st.Em;
+      PB.stat("lk-o-p", q > 0 ? small(PB.fmt(100 * Math.exp(-PHI / q), 2), " %") + " <small>/ 산화막 " + PB.fmt(100 * Math.exp(-PHB / q), 2) + "%</small>" : "0");
+      PB.stat("lk-o-i", arr > 0 ? small((100 * ion / arr).toFixed(2), " %") + " <small>(" + ion + "/" + arr + ")</small>" : "…");
+      PB.stat("lk-o-g", String(inj));
+    }
+    upd();
+    cv = PB.canvas("#lk-cv", (ctx, w, h) => {
+      const P = PB.palette();
+      const topH = Math.round(h * 0.42), x0 = 46, x1 = w - 16, X = (x) => x0 + (x / L) * (x1 - x0);
+      const gy = 18, oy = gy + 16, cy = oy + 6, ch = 30;
+      // 단면
+      ctx.fillStyle = P.surface; ctx.fillRect(x0 - 40, cy, x1 - x0 + 56, topH - cy);
+      ctx.fillStyle = P.dim; ctx.globalAlpha = 0.85; ctx.fillRect(X(0), gy, X(L) - X(0), 16); ctx.globalAlpha = 1;
+      ctx.fillStyle = PB.color("blue"); ctx.globalAlpha = 0.35; ctx.fillRect(X(0), oy, X(L) - X(0), 6); ctx.globalAlpha = 1;
+      ctx.globalAlpha = 0.25; ctx.fillStyle = P.e; ctx.fillRect(x0 - 40, cy, 40, 40); ctx.fillRect(X(L), cy, 16, 40);
+      if (ldd.checked) { ctx.fillRect(X(L) - 22, cy, 22, 12); }
+      ctx.globalAlpha = 0.18; ctx.fillStyle = P.warn;
+      const lp = (st.l / L) * (x1 - x0) * 1.6; ctx.fillRect(X(L) - lp, cy, lp, ch + 8); ctx.globalAlpha = 1;
+      ctx.font = PB.font(11, false, 700); ctx.textBaseline = "middle"; ctx.textAlign = "center";
+      ctx.fillStyle = P.text; ctx.fillText("게이트", (X(0) + X(L)) / 2, gy + 8);
+      ctx.fillStyle = P.e; ctx.fillText("S", x0 - 20, cy + 22); ctx.fillText("D", X(L) + 8, cy + 52);
+      ctx.fillStyle = P.dim; ctx.font = PB.font(10.5); ctx.textAlign = "right"; ctx.fillText("p 기판 → I_sub", x1, topH - 10);
+      // 정공
+      holes.forEach((p) => { ctx.globalAlpha = Math.max(0, Math.min(1, 1.6 - p.t)); SC.dot(ctx, X(p.x), p.y, "h", 3.4); });
+      ctx.globalAlpha = 1;
+      flashes.forEach((f) => { ctx.globalAlpha = Math.max(0, 1 - f.t); ctx.strokeStyle = P.bad; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(X(f.x), cy + 4); ctx.lineTo(X(f.x) - 4, oy - 2); ctx.stroke(); ctx.beginPath(); ctx.arc(X(f.x) - 4, oy + 2, 5 + 8 * f.t, 0, 7); ctx.stroke(); });
+      ctx.globalAlpha = 1;
+      const col = (e) => (e > PHI ? P.bad : e > 0.6 ? P.warn : P.e);
+      parts.forEach((p) => { ctx.fillStyle = col(p.e); ctx.beginPath(); ctx.arc(X(p.x), cy + 4 + p.y * ch, p.e > 0.6 ? 3.6 : 2.8, 0, 7); ctx.fill(); });
+      // 아래 차트: 에너지 대 위치
+      const box = { x: x0, y: topH + 12, w: x1 - x0, h: h - topH - 56 };
+      const Emax = Math.max(Ef(L), 0.004), sE = [], sV = [];
+      for (let i = 0; i <= 160; i++) { const x = (L * i) / 160; sE.push([x, (3.0 * Ef(x)) / Math.max(Emax, 0.06)]); sV.push([x, Vx(x)]); }
+      const c = PB.chart(ctx, box, { x: [0, L], y: [0, 3.6], xLabel: "채널 위치 x (nm), 드레인 →", yLabel: "운동 에너지 (eV)",
+        series: [{ data: sE, color: P.faint, width: 1, fill: P.grid }, { data: sV, color: P.dim, width: 1.4, dash: [4, 4] }],
+        hlines: [{ y: PHI, color: P.warn, label: "φᵢ ≈ 1.3 eV" }, { y: PHB, color: P.bad, label: "φ_b ≈ 3.1 eV (Si/SiO₂)" }] });
+      parts.forEach((p) => { ctx.fillStyle = col(p.e); ctx.beginPath(); ctx.arc(c.X(p.x), c.Y(Math.min(3.55, p.e)), 2.6, 0, 7); ctx.fill(); });
+      ctx.fillStyle = P.dim; ctx.font = PB.font(10.5); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      if (w > 520) ctx.fillText("회색: 전계(상대) · 점선: 무충돌 최대 qV(x)", c.box.x + 6, c.box.y + 4);
+      st.topH = topH; st.cy = cy;
+    }, { aspect: 0.82, minHeight: 380, maxHeight: 540 });
+    PB.loop(cv.canvas, (dt) => {
+      const speed = 70; // nm/s (표시용)
+      parts.forEach((p) => {
+        let dist = speed * dt;
+        while (dist > 0) {
+          const d = Math.min(0.5, dist); dist -= d;
+          p.e += Ef(p.x) * d; p.x += d;
+          if (Math.random() < d / LAM) p.e = p.e * 0.35 + 0.02;
+          if (p.e > PHB && Math.random() < 0.05 * d) { inj++; flashes.push({ x: p.x, t: 0 }); p.e = 0.1; }
+          else if (p.e > PHI && Math.random() < Math.min(0.3, 0.06 * (p.e - PHI)) * d) { ion++; holes.push({ x: p.x, y: (st.cy || 40) + 10, t: 0 }); p.e = Math.max(0.05, p.e - PHI - 0.2); }
+          if (p.x >= L) { arr++; spawn(p); break; }
+        }
+      });
+      holes.forEach((p) => { p.t += dt; p.y += 45 * dt; }); holes = holes.filter((p) => p.t < 1.6 && p.y < (st.topH || 200) - 4);
+      flashes.forEach((f) => (f.t += dt * 0.8)); flashes = flashes.filter((f) => f.t < 1);
+      acc += dt; if (acc > 0.3) { acc = 0; stats(); }
+      cv.redraw();
+    });
+  })();
+
+  /* ================================================== 3. 기판 전류와 HCI 수명 */
+  (function () {
+    let c1, c2;
+    const rr = () => { c1 && c1.redraw(); c2 && c2.redraw(); };
+    const gVd = PB.range("hci-vd", (v) => v.toFixed(2) + " V", rr), gVg = PB.range("hci-vg", (v) => v.toFixed(2) + " V", rr);
+    const ldd = document.getElementById("hci-ldd"); ldd.addEventListener("change", rr);
+    document.getElementById("hci-pk").addEventListener("click", () => gVg.set(Math.round(HC.worst(gVd(), ldd.checked) * 20) / 20));
+    const DSAT = 40, Dof = (t, tau) => { const z = Math.pow(t / (9 * tau), 0.5); return (DSAT * z) / (1 + z); }; // t = τ에서 10 %
+    c1 = PB.canvas("#hci-cv1", (ctx, w, h) => {
+      const P = PB.palette(), vd = gVd(), vg = gVg(), L = ldd.checked;
+      const curve = (v) => { const d = []; for (let x = 0.6; x <= 3.3001; x += 0.02) d.push([x, HC.dev(x, v, L).Isub * 1e6]); return d; };
+      const series = [2.0, 2.4, 2.8, 3.2].map((v) => ({ data: curve(v), color: P.faint, width: 1.3 }));
+      series.push({ data: curve(1.98), color: P.warn, width: 1.8, dash: [5, 4] });
+      series.push({ data: curve(vd), color: P.accent, width: 3 });
+      const d = HC.dev(vg, vd, L);
+      PB.chart(ctx, { x: 58, y: 14, w: w - 72, h: h - 60 }, { x: [0.6, 3.3], y: [1e-2, 1e4], logY: true, xLabel: "V_GS (V)", yLabel: "I_sub (µA)", yFmt: lgFmt,
+        series, points: [{ x: vg, y: Math.max(1.1e-2, d.Isub * 1e6), color: P.text, r: 5 }] });
+      PB.stat("hci-o-r", SC.sciH(d.ratio, 2) + " <small>(" + PB.fmt(d.Isub * 1e6, 2) + " µA)</small>");
+      PB.stat("hci-o-e", small((d.Em / 1e6).toFixed(2), " MV/cm"));
+    }, { aspect: 0.8, minHeight: 260, maxHeight: 380 });
+    c2 = PB.canvas("#hci-cv2", (ctx, w, h) => {
+      const P = PB.palette(), vd = gVd(), vg = gVg(), L = ldd.checked;
+      const tS = HC.tau(HC.dev(vg, vd, L)), uv = HC.worst(1.98, L), tU = HC.tau(HC.dev(uv, 1.98, L));
+      const s1 = [], s2 = [];
+      logspace(0, 10, 160).forEach((t) => { s1.push([t, Dof(t, tS)]); s2.push([t, Dof(t, tU)]); });
+      PB.chart(ctx, { x: 58, y: 14, w: w - 72, h: h - 60 }, { x: [1, 1e10], y: [0.1, 100], logX: true, logY: true, xLabel: "스트레스 시간 (s)", yLabel: "ΔI_D / I_D (%)", xFmt: lgFmt, yFmt: lgFmt, xTicks: [1, 1e2, 1e4, 1e6, 1e8, 1e10],
+        series: [{ data: s2, color: P.warn, width: 2, dash: [5, 4] }, { data: s1, color: P.accent, width: 3 }],
+        hlines: [{ y: 10, color: P.bad, label: "수명 기준 10 %" }], vlines: [{ x: 10 * YR, label: "10년" }] });
+      PB.stat("hci-o-t", fT(tS));
+      PB.stat("hci-o-u", fT(tU) + (tU >= 10 * YR ? " <span class='ok-t'>✓</span>" : " <span class='bad-t'>✗</span>") + " <small>(V<sub>GS</sub> " + uv.toFixed(2) + " V)</small>");
+    }, { aspect: 0.8, minHeight: 260, maxHeight: 380 });
+  })();
+
+  /* ================================================== 4. NBTI 스트레스·회복 (CET 결함 집단) */
+  (function () {
+    const N = 1 / 6, LC = [], LE = [], WT = [];
+    for (let k = 0; k <= 21; k++) for (let j = 0; j <= 15; j++) {
+      const lc = -6 + (15 * k) / 21, d = -5 + (10 * j) / 15; // log τc, log(τe/τc)
+      LC.push(Math.pow(10, lc)); LE.push(Math.pow(10, lc + d)); WT.push(Math.pow(10, 0.15 * lc) * Math.exp(-(d * d) / (2 * 2 * 2)));
+    }
+    const G = LC.length;
+    let S = 0; for (let i = 0; i < G; i++) S += WT[i] * (1 - Math.exp(-1e4 / LC[i]));
+    const SR = 22 / S, PREF = 8;
+    let cv;
+    const rr = () => cv && cv.redraw();
+    const gM = PB.seg("bti-m", () => { ctrlOff("bti-d-c", gM() !== "ac"); rr(); });
+    const gV = PB.range("bti-v", (v) => v.toFixed(2) + " V", rr), gT = PB.range("bti-t", (v) => v + " °C", rr);
+    const gS = PB.range("bti-s", (v) => fTt(Math.pow(10, v)), rr), gD = PB.range("bti-d", (v) => v.toFixed(2), rr);
+    const gMD = PB.range("bti-md", (v) => fTt(Math.pow(10, v)), rr);
+    ctrlOff("bti-d-c", true);
+    function acc() {
+      const T = gT() + 273.15, V = gV(), ar = Math.exp((0.6 / kB) * (1 / 398.15 - 1 / T));
+      return { afc: Math.pow(V / 1.2, 12) * ar, afe: ar, amp: Math.pow(V / 1.2, 1.5) };
+    }
+    const perm = (a, t) => { const p = a.amp * PREF * Math.pow((a.afc * t) / 1e4, N); return p / (1 + p / 150); };
+    function dc(a, t) { let s = 0; for (let i = 0; i < G; i++) s += WT[i] * (1 - Math.exp((-t * a.afc) / LC[i])); return a.amp * SR * s + perm(a, t); }
+    function relax(a, ts, tr) { let s = 0; for (let i = 0; i < G; i++) s += WT[i] * (1 - Math.exp((-ts * a.afc) / LC[i])) * Math.exp((-tr * a.afe) / LE[i]); return a.amp * SR * s + perm(a, ts); }
+    function ac(a, t, D) {
+      let s = 0;
+      for (let i = 0; i < G; i++) { const kc = (D * a.afc) / LC[i], k = kc + ((1 - D) * a.afe) / LE[i]; s += WT[i] * (kc / k) * (1 - Math.exp(-k * t)); }
+      return a.amp * SR * s + perm(a, D * t);
+    }
+    cv = PB.canvas("#bti-cv", (ctx, w, h) => {
+      const P = PB.palette(), a = acc(), ts = Math.pow(10, gS()), md = Math.pow(10, gMD()), isAC = gM() === "ac", D = gD();
+      const ts10 = dc(a, 10 * YR);
+      const top = { x: 58, y: 12, w: w - 74, h: (h - 110) * 0.55 }, bot = { x: 58, y: top.y + top.h + 52, w: w - 74, h: (h - 110) * 0.45 };
+      const sD = [], sP = [], sM = [], sA = [];
+      logspace(-2, 9, 110).forEach((t) => { sD.push([t, dc(a, t)]); sP.push([t, perm(a, t)]); sM.push([t, relax(a, t, md)]); if (isAC) sA.push([t, ac(a, t, D)]); });
+      const ymax = Math.max(10, ts10 * 1.12);
+      const series = [{ data: sP, color: P.dim, width: 1.5, dash: [5, 4] }, { data: sM, color: P.warn, width: 2 }, { data: sD, color: P.accent, width: 3 }];
+      if (isAC) series.push({ data: sA, color: P.accent2, width: 2.6 });
+      PB.chart(ctx, top, { x: [1e-2, 1e9], y: [0, ymax], logX: true, xLabel: "스트레스 시간 (s)", yLabel: "ΔV_th (mV)", xFmt: lgFmt, xTicks: [1e-2, 1, 1e2, 1e4, 1e6, 1e8],
+        series, vlines: [{ x: ts, color: P.text, label: "t_s" }, { x: 10 * YR, label: "10년" }] });
+      const d0 = dc(a, ts), sR = [];
+      logspace(-6, 5, 110).forEach((tr) => sR.push([tr, relax(a, ts, tr)]));
+      const pm = perm(a, ts);
+      PB.chart(ctx, bot, { x: [1e-6, 1e5], y: [0, Math.max(1, d0 * 1.1)], logX: true, xLabel: "스트레스 제거 후 회복 시간 (s)", yLabel: "ΔV_th (mV)", xFmt: lgFmt, xTicks: [1e-6, 1e-4, 1e-2, 1, 1e2, 1e4],
+        series: [{ data: sR, color: P.accent, width: 3 }], hlines: [{ y: pm, color: P.dim, label: "영구 성분" }, { y: d0, color: P.faint, label: "스트레스 직후" }],
+        vlines: [{ x: md, color: P.warn, label: "측정" }] });
+      const mv = relax(a, ts, md);
+      PB.stat("bti-o-0", small(d0.toFixed(1), " mV"));
+      PB.stat("bti-o-m", small(mv.toFixed(1), " mV") + " <small>(" + (100 * mv / d0).toFixed(0) + "%)</small>");
+      PB.stat("bti-o-a", isAC ? small((ac(a, ts, D) / d0).toFixed(2), "") + " <small>(듀티 " + D.toFixed(2) + ")</small>" : "<small>AC 모드에서</small>");
+      PB.stat("bti-o-y", small(ts10.toFixed(0), " mV") + (ts10 > 50 ? " <span class='bad-t'>&gt; 50</span>" : ""));
+    }, { aspect: 0.95, minHeight: 440, maxHeight: 600 });
+  })();
+
+  /* ================================================== 5. 퍼콜레이션 몬테카를로 */
+  (function () {
+    const NC = 40, ALPHA = 0.6;
+    let n = 3, caps = [], cur = null, logt = -6, running = false, hold = 0, c1, c2;
+    const gT = PB.range("pc-t", (v) => v.toFixed(1) + " nm (" + Math.round(v / 0.9) + "층)", (v) => { n = Math.round(v / 0.9); caps = []; cur = null; running = false; draw(); });
+    n = Math.round(gT() / 0.9);
+    function newCap() {
+      const T = [];
+      for (let c = 0; c < NC; c++) { const col = []; for (let r = 0; r < n; r++) col.push(Math.pow(-Math.log(1 - Math.random()), 1 / ALPHA)); T.push(col); }
+      let bd = Infinity, bc = 0;
+      T.forEach((col, c) => { const m = Math.max(...col); if (m < bd) { bd = m; bc = c; } });
+      let mn = Infinity; T.forEach((col) => col.forEach((v) => (mn = Math.min(mn, v))));
+      return { T, bd, bc, mn };
+    }
+    const Fth = (t) => { const p = 1 - Math.exp(-Math.pow(t, ALPHA)); return 1 - Math.pow(1 - Math.pow(p, n), NC); };
+    function fit() {
+      if (caps.length < 5) return null;
+      const s = caps.slice().sort((a, b) => a - b), m = s.length;
+      return lsq(s.map((t) => Math.log(t)), s.map((t, i) => Wb((i + 1 - 0.3) / (m + 0.4)))).b;
+    }
+    function stats() {
+      PB.stat("pc-o-n", String(n)); PB.stat("pc-o-s", String(caps.length));
+      const b = fit(); PB.stat("pc-o-b", b ? b.toFixed(2) : "<small>표본 5개 이상</small>");
+      PB.stat("pc-o-t", (ALPHA * n).toFixed(1));
+      const d = document.getElementById("pc-d");
+      d.innerHTML = cur ? (cur.broken ? "<b>파괴!</b> 기둥 " + (cur.bc + 1) + "번이 " + n + "개 결함으로 이어졌다. 정규화 시간 t = " + PB.fmt(cur.bd, 3) : "스트레스 중… t = " + PB.fmt(Math.pow(10, logt), 3) + ", 결함 " + cur.T.flat().filter((v) => v <= Math.pow(10, logt)).length + "개")
+        : "버튼을 눌러 커패시터에 전압 스트레스를 건다. 결함은 무작위 위치에 생긴다.";
+    }
+    function record(cp) { caps.push(cp.bd); }
+    document.getElementById("pc-run").addEventListener("click", () => { cur = newCap(); logt = Math.log10(cur.mn) - 0.4; running = true; hold = 0; cur.broken = false; stats(); });
+    document.getElementById("pc-b").addEventListener("click", () => { let last; for (let i = 0; i < 50; i++) { last = newCap(); record(last); } cur = last; cur.broken = true; logt = Math.log10(cur.bd); running = false; draw(); });
+    document.getElementById("pc-c").addEventListener("click", () => { caps = []; cur = null; running = false; draw(); });
+    function draw() { c1 && c1.redraw(); c2 && c2.redraw(); stats(); }
+    c1 = PB.canvas("#pc-cv1", (ctx, w, h) => {
+      const P = PB.palette(), pad = 12, cw = (w - 2 * pad) / NC, rh = Math.min(cw * 3.2, (h - 100) / Math.max(n, 1)), oh = rh * n;
+      const y0 = 40, gx = pad;
+      ctx.fillStyle = P.dim; ctx.fillRect(gx, y0 - 16, w - 2 * pad, 16);
+      ctx.fillStyle = PB.color("blue"); ctx.globalAlpha = 0.18; ctx.fillRect(gx, y0, w - 2 * pad, oh); ctx.globalAlpha = 1;
+      ctx.fillStyle = P.faint; ctx.globalAlpha = 0.5; ctx.fillRect(gx, y0 + oh, w - 2 * pad, 18); ctx.globalAlpha = 1;
+      ctx.font = PB.font(10.5, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillStyle = P.bg; ctx.fillText("게이트", gx + 4, y0 - 8); ctx.fillStyle = P.text; ctx.fillText("Si 기판", gx + 4, y0 + oh + 9);
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 0.6;
+      for (let c = 0; c <= NC; c++) { ctx.beginPath(); ctx.moveTo(gx + c * cw, y0); ctx.lineTo(gx + c * cw, y0 + oh); ctx.stroke(); }
+      for (let r = 0; r <= n; r++) { ctx.beginPath(); ctx.moveTo(gx, y0 + r * rh); ctx.lineTo(w - pad, y0 + r * rh); ctx.stroke(); }
+      if (cur) {
+        const t = Math.pow(10, logt), rad = Math.max(1.5, Math.min(cw, rh) * 0.36);
+        cur.T.forEach((col, c) => col.forEach((v, r) => {
+          if (v > t) return;
+          ctx.fillStyle = cur.broken && c === cur.bc ? P.bad : P.warn;
+          ctx.beginPath(); ctx.arc(gx + (c + 0.5) * cw, y0 + (r + 0.5) * rh, rad, 0, 7); ctx.fill();
+        }));
+        if (cur.broken) { ctx.strokeStyle = P.bad; ctx.lineWidth = 3; ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.moveTo(gx + (cur.bc + 0.5) * cw, y0 - 14); ctx.lineTo(gx + (cur.bc + 0.5) * cw, y0 + oh + 16); ctx.stroke(); ctx.globalAlpha = 1; }
+      }
+      ctx.fillStyle = P.dim; ctx.font = PB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("기둥 " + NC + "개 × " + n + "층 (셀 a₀ ≈ 0.9 nm)", pad, y0 + oh + 26);
+      if (cur) ctx.fillText("정규화 스트레스 시간 t = " + PB.fmt(Math.pow(10, logt), 3), pad, y0 + oh + 44);
+    }, { aspect: 0.75, minHeight: 240, maxHeight: 340 });
+    c2 = PB.canvas("#pc-cv2", (ctx, w, h) => {
+      const P = PB.palette();
+      let lo = -8, hi = 3;
+      for (let e = -10; e <= 3; e += 0.05) { if (Fth(Math.pow(10, e)) > 5e-4) { lo = e - 0.3; break; } }
+      for (let e = lo; e <= 4; e += 0.05) { if (Fth(Math.pow(10, e)) > 0.995) { hi = e + 0.2; break; } }
+      const th = []; logspace(lo, hi, 120).forEach((t) => { const F = Fth(t); if (F > 1e-6 && F < 0.9999) th.push([t, Wb(F)]); });
+      const s = caps.slice().sort((a, b) => a - b), m = s.length;
+      const pts = s.map((t, i) => ({ x: t, y: Wb((i + 1 - 0.3) / (m + 0.4)), color: P.accent, r: 3.5 }));
+      const FT = [0.001, 0.01, 0.1, 0.5, 0.9, 0.99];
+      PB.chart(ctx, { x: 58, y: 14, w: w - 72, h: h - 60 }, { x: [Math.pow(10, lo), Math.pow(10, hi)], y: [Wb(0.0005), Wb(0.995)], logX: true, xLabel: "파괴 시간 (정규화)", yLabel: "누적 고장 F (와이블 축)",
+        xFmt: lgFmt, yTicks: FT.map(Wb), yFmt: (v) => fF(Fw(v)), series: [{ data: th, color: P.faint, width: 2, dash: [5, 4] }], points: pts.filter((p) => p.x > Math.pow(10, lo) && p.x < Math.pow(10, hi)) });
+    }, { aspect: 0.75, minHeight: 240, maxHeight: 340 });
+    PB.loop(c1.canvas, (dt) => {
+      if (!cur || (!running && hold <= 0)) return;
+      if (running) {
+        logt += 0.7 * dt;
+        if (Math.pow(10, logt) >= cur.bd) { logt = Math.log10(cur.bd); running = false; cur.broken = true; record(cur); hold = 0.01; draw(); return; }
+        c1.redraw(); stats();
+      }
+    });
+    draw();
+  })();
+
+  /* ================================================== 6. 와이블 PREDICT */
+  (function () {
+    let answered = false, cv;
+    const ETA = 1000, lock = document.getElementById("wb-lock"), opts = [...document.querySelectorAll("#wb-opts .btn")];
+    opts.forEach((b) => b.addEventListener("click", () => {
+      if (answered) return; answered = true;
+      opts.forEach((o) => { o.disabled = true; if (o.dataset.v === "c") o.classList.add("right"); });
+      const ok = b.dataset.v === "c"; if (!ok) b.classList.add("wrong");
+      document.getElementById("wb-v").innerHTML = (ok ? "<span class='ok-t'><b>정답!</b></span> " : "<span class='bad-t'><b>아쉽다.</b></span> ") + "η<sub>칩</sub> = 1,000 h × 1,000<sup>−1/1.4</sup> = 1,000 × 10<sup>−2.14</sup> ≈ <b>7 h</b>. 면적이 1,000배면 '가장 약한 곳'이 훨씬 일찍 나타난다. 1/1,000이 되려면 β = 1이어야 하고, β가 클수록 벌점은 작아진다.";
+      lock.classList.remove("locked"); cv.redraw();
+    }));
+    const rr = () => cv && cv.redraw();
+    const gB = PB.range("wb-b", (v) => v.toFixed(2), rr), gA = PB.range("wb-a", (v) => PB.fmt(Math.pow(10, v), 3) + "×", rr), gP = PB.range("wb-p", (v) => PB.fmt(Math.pow(10, v), 2) + " ppm", rr);
+    const rng = PB.rng(16), U = []; for (let i = 0; i < 30; i++) U.push(rng());
+    cv = PB.canvas("#wb-cv", (ctx, w, h) => {
+      const P = PB.palette(), b = gB(), A = Math.pow(10, gA()), F = Math.pow(10, gP()) * 1e-6;
+      const ec = ETA * Math.pow(A, -1 / b), tp = ec * Math.pow(-Math.log(1 - F), 1 / b);
+      const line = (eta) => [[1e-4, b * Math.log(1e-4 / eta)], [1e6, b * Math.log(1e6 / eta)]];
+      const s = U.map((u) => ETA * Math.pow(-Math.log(1 - u), 1 / b)).sort((x, y) => x - y);
+      const pts = s.map((t, i) => ({ x: t, y: Wb((i + 1 - 0.3) / 30.4), color: P.accent, r: 3.5 }));
+      pts.push({ x: tp, y: Wb(F), color: P.bad, r: 6 });
+      const FT = [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 0.1, 0.632, 0.99];
+      PB.chart(ctx, null, { x: [1e-4, 1e6], y: [Wb(3e-7), Wb(0.999)], logX: true, xLabel: "스트레스 시간 (h)", yLabel: "누적 고장 F", xFmt: lgFmt, xTicks: [1e-4, 1e-2, 1, 1e2, 1e4, 1e6],
+        yTicks: FT.map(Wb), yFmt: (v) => fF(Fw(v)),
+        series: [{ data: line(ETA), color: P.accent, width: 2.4 }, { data: line(ec), color: P.bad, width: 2.8 }],
+        hlines: [{ y: Wb(F), color: P.warn, label: "목표 " + fF(F) }, { y: Wb(0.632), color: P.faint, label: "63.2 % (η)" }], points: pts });
+      PB.stat("wb-o-e", fT(ec * 3600));
+      PB.stat("wb-o-t", fT(tp * 3600));
+      PB.stat("wb-o-r", SC.sciH(tp / ETA, 2) + "<small> × η<sub>시험</sub></small>");
+    }, { aspect: 0.62, minHeight: 300, maxHeight: 440 });
+  })();
+
+  /* ================================================== 7. 가속 시험 외삽 */
+  (function () {
+    const VS = [2.0, 2.15, 2.3, 2.45, 2.6], NOISE = [0.12, -0.1, 0.05, -0.08, 0.1];
+    const LT = VS.map((v, i) => 3 + 44 * Math.log10(2.3 / v) + NOISE[i]);
+    const BETA = 1.3, AR = 1e4, TS = 398.15;
+    const FITS = {
+      E: { f: lsq(VS, LT), x: (v) => v, name: "E 모형" },
+      P: { f: lsq(VS.map(Math.log10), LT), x: Math.log10, name: "전압 멱 모형" },
+      R: { f: lsq(VS.map((v) => 1 / v), LT), x: (v) => 1 / v, name: "1/E 모형" },
+    };
+    const lt = (m, v) => FITS[m].f.a + FITS[m].f.b * FITS[m].x(v);
+    let cv; const rr = () => cv && cv.redraw();
+    const gM = PB.seg("ac-m", rr);
+    const gV = PB.range("ac-v", (v) => v.toFixed(2) + " V", rr), gT = PB.range("ac-t", (v) => v + " °C", rr);
+    const gE = PB.range("ac-ea", (v) => v.toFixed(2) + " eV", rr), gP = PB.range("ac-p", (v) => PB.fmt(Math.pow(10, v), 2) + " ppm", rr);
+    cv = PB.canvas("#ac-cv", (ctx, w, h) => {
+      const P = PB.palette(), m = gM(), Vu = gV(), Tu = gT() + 273.15, Ea = gE(), F = Math.pow(10, gP()) * 1e-6;
+      const AFT = Math.exp((Ea / kB) * (1 / Tu - 1 / TS));
+      const shift = Math.log10(AFT) + (-1 / BETA) * Math.log10(AR) + (1 / BETA) * Math.log10(-Math.log(1 - F));
+      const cur = (mm, sh) => { const d = []; for (let v = 0.8; v <= 2.8001; v += 0.02) d.push([v, Math.pow(10, Math.min(45, lt(mm, v) + sh))]); return d; };
+      const col = { E: P.warn, P: P.accent, R: P.accent2 };
+      const series = ["E", "P", "R"].map((k) => ({ data: cur(k, 0), color: col[k], width: k === m ? 2.4 : 1.2, dash: k === m ? [] : [5, 4] }));
+      series.push({ data: cur(m, shift), color: P.bad, width: 3 });
+      const ch = PB.chart(ctx, null, { x: [0.8, 2.8], y: [1, 1e40], logY: true, xLabel: "게이트 전압 V_G (V)", yLabel: "파괴 시간 (s)",
+        yTicks: [1, 1e5, 1e10, 1e15, 1e20, 1e25, 1e30, 1e35, 1e40], yFmt: (v) => "1e" + Math.round(Math.log10(v)),
+        series, hlines: [{ y: 10 * YR, color: P.text, label: "10년" }], vlines: [{ x: Vu, color: P.text, label: "V_use" }],
+        points: VS.map((v, i) => ({ x: v, y: Math.pow(10, LT[i]), color: P.text, r: 4.5 })) });
+      ctx.font = PB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      [["E", "E", 1.0], ["P", "멱", 1.25], ["R", "1/E", 1.5]].forEach(([k, lab, v]) => { const y = lt(k, v); if (y < 40 && y > 0) { ctx.fillStyle = col[k]; ctx.fillText(lab, ch.X(v) + 4, ch.Y(Math.pow(10, y)) - 2); } });
+      ctx.fillStyle = P.bad; ctx.textAlign = "right"; const vb = 2.2, yb = lt(m, vb) + shift; if (yb > 0.5 && yb < 39) ctx.fillText("칩·ppm·사용 온도 환산", ch.X(vb) - 4, ch.Y(Math.pow(10, yb)) - 2);
+      const t63 = Math.pow(10, lt(m, Vu)) * AFT, tc = Math.pow(10, lt(m, Vu) + shift);
+      PB.stat("ac-o-a", small(PB.fmt(AFT, 3), "×"));
+      PB.stat("ac-o-6", fT(t63));
+      PB.stat("ac-o-c", fT(tc) + (tc >= 10 * YR ? " <span class='ok-t'>✓</span>" : " <span class='bad-t'>✗</span>"));
+      PB.stat("ac-o-s", "10<sup>" + (lt("R", Vu) - lt("E", Vu)).toFixed(0) + "</sup>배");
+      let lo = 0.5, hi = 2.6; const ok = (v) => lt(m, v) + shift >= Math.log10(10 * YR);
+      if (ok(hi)) lo = hi; else if (!ok(lo)) hi = lo; else for (let i = 0; i < 50; i++) { const md = (lo + hi) / 2; if (ok(md)) lo = md; else hi = md; }
+      document.getElementById("ac-vd").innerHTML = "<b>" + FITS[m].name + "</b>으로 10년·" + fF(F) + "을 지키는 최대 사용 전압: <b>" + lo.toFixed(2) + " V</b>" + (tc >= 10 * YR ? " — 현재 V<sub>use</sub> <span class='ok-t'>통과</span>" : " — 현재 V<sub>use</sub> <span class='bad-t'>미달</span>");
+    }, { aspect: 0.62, minHeight: 320, maxHeight: 460 });
+  })();
+
+  /* ================================================== 8. ESD 펄스와 설계 창 */
+  (function () {
+    const DOM = { core: { vdd: 0.75, bv: 4.0, vt1: 5.0, vh: 3.2 }, io: { vdd: 1.8, bv: 8.0, vt1: 7.0, vh: 4.5 } };
+    let c1, c2;
+    const rr = () => { c1 && c1.redraw(); c2 && c2.redraw(); };
+    const gD = PB.seg("esd-dm", rr), gC = PB.seg("esd-c", rr), gS = PB.seg("esd-s", rr);
+    const gV = PB.range("esd-v", (v) => { const x = Math.pow(10, v); return x >= 1000 ? (x / 1000).toFixed(2) + " kV" : x.toFixed(0) + " V"; }, rr);
+    const gW = PB.range("esd-w", (v) => v + " µm", rr);
+    function setup() {
+      const d = DOM[gD()], c = gC(), s = gS(), V = Math.pow(10, gV()), W = gW();
+      const wf = s === "hbm" ? { tr: 4, td: 150, tmax: 500, R: 1500 } : { tr: 0.12, td: 0.45, tmax: 3, R: 100 };
+      const tpk = (Math.log(wf.td / wf.tr) * wf.tr * wf.td) / (wf.td - wf.tr), nrm = Math.exp(-tpk / wf.td) - Math.exp(-tpk / wf.tr);
+      const Ip = V / wf.R, I = (t) => (Ip * (Math.exp(-t / wf.td) - Math.exp(-t / wf.tr))) / nrm;
+      const R = c === "dio" ? 400 / W : 800 / W, It2 = c === "dio" ? 0.02 * W : c === "gg" ? 0.006 * W : 0;
+      let trig = false;
+      const Vof = (i) => {
+        if (c === "none") return Math.min(d.bv * 1.02, i * 1e4);
+        if (c === "dio") return 0.75 * (1 - Math.exp(-i / 0.01)) + i * R;
+        if (!trig && i < 0.005) return Math.min(d.vt1, d.vt1 * Math.pow(Math.max(i, 1e-9) / 0.005, 0.25));
+        trig = true; return d.vh + i * R;
+      };
+      const tr = [];
+      for (let k = 0; k <= 300; k++) { const t = (wf.tmax * k) / 300, i = I(t); tr.push([t, i, Vof(i)]); }
+      const Vpk = Math.max(...tr.map((p) => p[2]));
+      return { d, c, s, V, W, wf, Ip, R, It2, tr, Vpk };
+    }
+    function verdict(o) {
+      const el = document.getElementById("esd-vd"), d = o.d; let msg;
+      if (o.c === "none") msg = "<span class='bad-t'><b>파괴.</b></span> 보호 소자가 없으면 핀 전압이 그대로 게이트 산화막 BV에 이른다.";
+      else if (o.c === "gg" && d.vt1 >= d.bv) msg = "<span class='bad-t'><b>파괴.</b></span> GGNMOS 트리거 전압 " + d.vt1 + " V가 산화막 BV " + d.bv + " V보다 높다. 클램프가 켜지기 전에 산화막이 먼저 깨진다.";
+      else if (o.Vpk >= d.bv) msg = "<span class='bad-t'><b>산화막 파괴.</b></span> 핀 전압 정점이 BV를 넘었다. 보호 소자 폭을 키워 R<sub>on</sub>을 줄여라.";
+      else if (o.Ip > o.It2) msg = "<span class='bad-t'><b>보호 소자 열 파괴.</b></span> 정점 전류가 I<sub>t2</sub>를 넘었다. 폭을 키워라.";
+      else if (o.c === "gg" && d.vh < 1.1 * d.vdd) msg = "<span class='warn-t'><b>래치업 위험.</b></span> 유지 전압이 1.1 V<sub>DD</sub>보다 낮다.";
+      else if (o.Vpk > 0.9 * d.bv) msg = "<span class='warn-t'><b>통과(여유 부족).</b></span> 핀 전압이 BV의 90 %를 넘는다.";
+      else msg = "<span class='ok-t'><b>통과.</b></span> 핀 전압 " + o.Vpk.toFixed(2) + " V가 설계 창 안이고 전류도 I<sub>t2</sub> 아래다.";
+      el.innerHTML = msg;
+      PB.stat("esd-o-i", small(PB.fmt(o.Ip, 3), " A"));
+      PB.stat("esd-o-v", small(o.Vpk.toFixed(2), " V") + " <small>/ " + d.bv + " V</small>");
+      PB.stat("esd-o-t", o.c === "none" ? "—" : small((o.Ip / o.It2).toFixed(2), "") + " <small>(I<sub>t2</sub> " + PB.fmt(o.It2, 2) + " A)</small>");
+    }
+    c1 = PB.canvas("#esd-cv1", (ctx, w, h) => {
+      const P = PB.palette(), o = setup(), hh = (h - 30) / 2;
+            PB.chart(ctx, { x: 58, y: 10, w: w - 72, h: hh - 34 }, { x: [0, o.wf.tmax], y: [0, Math.max(0.01, o.Ip * 1.15)], yLabel: "I (A)", xTicks: [],
+        series: [{ data: o.tr.map((p) => [p[0], p[1]]), color: P.accent, width: 2.6 }] });
+      const vmax = o.d.bv * 1.35;
+      PB.chart(ctx, { x: 58, y: hh + 6, w: w - 72, h: hh - 30 }, { x: [0, o.wf.tmax], y: [0, vmax], xLabel: "시간 (ns)", yLabel: "V_pin (V)",
+        series: [{ data: o.tr.map((p) => [p[0], p[2]]), color: o.Vpk >= o.d.bv ? P.bad : P.warn, width: 2.6 }],
+        hlines: [{ y: o.d.bv, color: P.bad, label: "산화막 BV" }, { y: 1.1 * o.d.vdd, color: P.faint, label: "1.1 V_DD" }] });
+      verdict(o);
+    }, { aspect: 0.8, minHeight: 280, maxHeight: 380 });
+    c2 = PB.canvas("#esd-cv2", (ctx, w, h) => {
+      const P = PB.palette(), o = setup(), d = o.d, vx = d.bv * 1.35, imax = Math.max(0.5, o.Ip * 1.25, o.It2 * 1.1);
+      const curve = [];
+      if (o.c === "dio") { for (let i = 0; i <= 120; i++) { const I = (imax * i) / 120; curve.push([0.75 * (1 - Math.exp(-I / 0.01)) + I * o.R, I]); } }
+      else if (o.c === "gg") { curve.push([0, 0], [d.vt1 * 0.97, 0.002], [d.vt1, 0.005], [d.vh, 0.012], [d.vh + imax * o.R, imax]); }
+      else curve.push([0, 0], [d.bv, 0.002]);
+      const ch = PB.chart(ctx, { x: 58, y: 14, w: w - 72, h: h - 60 }, { x: [0, vx], y: [0, imax], xLabel: "핀 전압 (V)", yLabel: "보호 소자 전류 (A)",
+        series: [{ data: curve, color: P.accent, width: 2.8 }],
+        hlines: o.It2 ? [{ y: o.It2, color: P.bad, label: "I_t2" }] : [], vlines: [{ x: d.bv, color: P.bad }],
+        points: o.c === "none" ? [] : [{ x: Math.min(o.Vpk, vx), y: Math.min(o.Ip, imax), color: P.text, r: 5, label: "정점" }] });
+      const b = ch.box;
+      ctx.save(); ctx.globalAlpha = 0.13;
+      ctx.fillStyle = P.bad; ctx.fillRect(b.x, b.y, ch.X(1.1 * d.vdd) - b.x, b.h); ctx.fillRect(ch.X(0.9 * d.bv), b.y, b.x + b.w - ch.X(0.9 * d.bv), b.h);
+      ctx.fillStyle = P.ok; ctx.fillRect(ch.X(1.1 * d.vdd), b.y, ch.X(0.9 * d.bv) - ch.X(1.1 * d.vdd), b.h);
+      ctx.restore();
+      ctx.fillStyle = P.ok; ctx.font = PB.font(11, false, 700); ctx.textAlign = "center"; ctx.textBaseline = "top";
+      ctx.fillText("설계 창", (ch.X(1.1 * d.vdd) + ch.X(0.9 * d.bv)) / 2, b.y + 22);
+      ctx.fillStyle = P.bad; ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText("BV", ch.X(d.bv) + 4, b.y + b.h - 4);
+    }, { aspect: 0.8, minHeight: 280, maxHeight: 380 });
+  })();
+
+  /* ================================================== 9. 변동성과 가드밴드 */
+  (function () {
+    const ND = 6000, VDD = 0.75, VT0 = 0.30, ALP = 1.3;
+    let cv; const rr = () => cv && cv.redraw();
+    const gS = PB.range("gb-s", (v) => v + " mV", rr), gY = PB.range("gb-y", (v) => v + " 년", rr), gD = PB.range("gb-d", (v) => v + " mV", rr);
+    const gE = PB.range("gb-e", (v) => v.toFixed(1) + " mV", rr), gK = PB.range("gb-k", (v) => v.toFixed(1) + "σ", rr);
+    const delay = (V, vt) => V / Math.pow(Math.max(V - vt, 1e-3), ALP);
+    cv = PB.canvas("#gb-cv", (ctx, w, h) => {
+      const P = PB.palette(), s0 = gS() / 1000, yrs = gY(), eta = gE() / 1000, k = gK();
+      const dV = yrs > 0 ? (gD() / 1000) * Math.pow(yrs / 10, 1 / 6) : 0;
+      const rng = PB.rng(7), nrm = () => Math.sqrt(-2 * Math.log(1 - rng())) * Math.cos(2 * Math.PI * rng());
+      const lo = 0.1, hi = 0.7, NB = 120, bw = (hi - lo) / NB, hf = new Array(NB).fill(0), ha = new Array(NB).fill(0);
+      const mean = dV / eta;
+      for (let i = 0; i < ND; i++) {
+        const v0 = VT0 + s0 * nrm();
+        let nT;
+        if (mean < 30) { const L = Math.exp(-mean); let p = 1; nT = -1; do { nT++; p *= rng(); } while (p > L && nT < 500); }
+        else nT = Math.max(0, Math.round(mean + Math.sqrt(mean) * nrm()));
+        let s = 0; for (let j = 0; j < nT; j++) s += -eta * Math.log(1 - rng());
+        const b0 = Math.floor((v0 - lo) / bw), b1 = Math.floor((v0 + s - lo) / bw);
+        if (b0 >= 0 && b0 < NB) hf[b0]++; if (b1 >= 0 && b1 < NB) ha[b1]++;
+      }
+      const pdf = (c) => c / (ND * bw);
+      const ymax = Math.max(...hf.map(pdf), ...ha.map(pdf)) * 1.12;
+      const sa = Math.sqrt(s0 * s0 + 2 * eta * dV), wf = VT0 + k * s0, wa = VT0 + dV + k * sa;
+      const ch = PB.chart(ctx, null, { x: [lo, hi], y: [0, ymax], xLabel: "V_th (V)", yLabel: "확률 밀도 (1/V)",
+        vlines: [{ x: wf, color: P.faint, label: "초기 최악" }, { x: wa, color: P.bad, label: "노화 후 최악" }] });
+      const bars = (arr, color, a) => { ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = color; arr.forEach((c, i) => { if (!c) return; const x = ch.X(lo + i * bw), y = ch.Y(pdf(c)); ctx.fillRect(x, y, ch.X(lo + (i + 1) * bw) - x + 0.5, ch.box.y + ch.box.h - y); }); ctx.restore(); };
+      bars(hf, P.faint, 0.45); bars(ha, P.accent, 0.55);
+      const g = (x, m, s) => Math.exp(-((x - m) * (x - m)) / (2 * s * s)) / (s * Math.sqrt(2 * Math.PI));
+      ctx.strokeStyle = P.accent; ctx.lineWidth = 1.6; ctx.setLineDash([4, 3]); ctx.beginPath();
+      for (let i = 0; i <= 200; i++) { const x = lo + ((hi - lo) * i) / 200, y = g(x, VT0 + dV, sa); i ? ctx.lineTo(ch.X(x), ch.Y(Math.min(y, ymax))) : ctx.moveTo(ch.X(x), ch.Y(Math.min(y, ymax))); }
+      ctx.stroke(); ctx.setLineDash([]);
+      const target = delay(VDD, wf); let a = 0, b = 0.6;
+      for (let i = 0; i < 60; i++) { const m = (a + b) / 2; if (delay(VDD + m, wa) > target) a = m; else b = m; }
+      const gb = (a + b) / 2;
+      PB.stat("gb-o-s", small((sa * 1000).toFixed(1), " mV") + " <small>(초기 " + (s0 * 1000).toFixed(0) + ")</small>");
+      PB.stat("gb-o-w", small(((wa - wf) * 1000).toFixed(0), " mV"));
+      PB.stat("gb-o-g", small((gb * 1000).toFixed(0), " mV"));
+      PB.stat("gb-o-p", small((100 * (Math.pow((VDD + gb) / VDD, 2) - 1)).toFixed(1), " %"));
+    }, { aspect: 0.58, minHeight: 280, maxHeight: 420 });
+  })();
+
+  /* ================================================== 10. CHALLENGE */
+  (function () {
+    const TJ = 378.15, T0 = 398.15;
+    const Vth = (T) => 0.30 - 0.0008 * (T - 300);
+    const fr = (V, vt, T) => (Math.pow(Math.max(V - vt, 1e-3), 1.3) / V) * Math.pow(378 / T, 0.6);
+    const FT = 0.95 * fr(0.75, Vth(TJ), TJ);
+    const sh = (V) => 15 * Math.pow(V / 0.75, 2.5);
+    function ev(V, gb) {
+      const T = TJ + gb, Tt = TJ + sh(V);
+      const dv = 0.04 * Math.pow(V / 0.75, 3.5) * Math.exp(-(0.1 / kB) * (1 / Tt - 1 / T0));
+      const f = fr(V, Vth(Tt) + dv, Tt) / FT;
+      const hci = 10 * Math.pow(0.84 / V, 14) * Math.exp((0.15 / kB) * (1 / T - 1 / T0));
+      const td = 10 * Math.pow(0.9 / V, 40) * Math.exp((0.6 / kB) * (1 / T - 1 / T0));
+      const hciT = 10 * Math.pow(0.84 / V, 14) * Math.exp((0.15 / kB) * (1 / Tt - 1 / T0));
+      const tdT = 10 * Math.pow(0.9 / V, 40) * Math.exp((0.6 / kB) * (1 / Tt - 1 / T0));
+      return { f, hci, td, hciT, tdT, dT: sh(V), okF: f >= 1, okL: hci >= 10 && td >= 10, okG: gb >= sh(V) - 1e-9 };
+    }
+    let vmin = 1; for (let V = 0.6; V <= 1.0001; V += 0.005) { const r = ev(V, Math.ceil(sh(V))); if (r.okF && r.okL && r.okG) { vmin = V; break; } }
+    let cv; const rr = () => cv && cv.redraw();
+    const gV = PB.range("ch-v", (v) => v.toFixed(3) + " V", rr), gG = PB.range("ch-g", (v) => v + " K", rr);
+    cv = PB.canvas("#ch-cv", (ctx, w, h) => {
+      const P = PB.palette(), V = gV(), gb = gG(), r = ev(V, gb);
+      const top = { x: 58, y: 12, w: w - 74, h: (h - 100) * 0.42 }, bot = { x: 58, y: top.y + top.h + 30, w: w - 74, h: (h - 100) * 0.58 };
+      const sf = [], sh1 = [], st1 = [], ok = [];
+      for (let v = 0.6; v <= 1.0001; v += 0.005) { const e = ev(v, gb); sf.push([v, e.f]); sh1.push([v, Math.max(1e-3, e.hci)]); st1.push([v, Math.max(1e-3, Math.min(1e9, e.td))]); ok.push([v, e.okF && e.okL && e.okG]); }
+      const bands = [];
+      ok.forEach(([v, o]) => { if (o) bands.push({ x0: v - 0.0025, x1: v + 0.0025, color: PB.color("ok") }); });
+      const drawBands = (c) => { ctx.save(); ctx.globalAlpha = 0.16; ctx.fillStyle = P.ok; bands.forEach((b) => ctx.fillRect(c.X(b.x0), c.box.y, c.X(b.x1) - c.X(b.x0) + 0.6, c.box.h)); ctx.restore(); };
+      const c1 = PB.chart(ctx, top, { x: [0.6, 1.0], y: [0.6, 1.4], yLabel: "속도 / 목표", xTicks: [], series: [{ data: sf, color: P.accent, width: 2.6 }],
+        hlines: [{ y: 1, color: P.text, label: "목표" }], vlines: [{ x: V, color: P.text }], points: [{ x: V, y: Math.max(0.6, Math.min(1.4, r.f)), color: r.okF ? P.ok : P.bad, r: 5 }] });
+      drawBands(c1);
+      const c2 = PB.chart(ctx, bot, { x: [0.6, 1.0], y: [0.1, 1e5], logY: true, xLabel: "V_DD (V)", yLabel: "수명 @ 평가 온도 (년)", yFmt: lgFmt,
+        series: [{ data: sh1, color: P.warn, width: 2.6 }, { data: st1, color: P.accent2, width: 2.6 }],
+        hlines: [{ y: 10, color: P.text, label: "10년" }], vlines: [{ x: V, color: P.text }] });
+      drawBands(c2);
+      ctx.font = PB.font(11, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      ctx.fillStyle = P.warn; ctx.fillText("HCI", c2.X(0.62), c2.Y(Math.min(9e4, ev(0.62, gb).hci)) - 2);
+      ctx.fillStyle = P.accent2; ctx.fillText("TDDB 100 ppm", c2.X(0.9), c2.Y(Math.min(9e4, Math.max(0.2, ev(0.9, gb).td))) - 2);
+      PB.stat("ch-o-h", small(r.dT.toFixed(1), " K") + (r.okG ? " <span class='ok-t'>≤ GB</span>" : " <span class='bad-t'>&gt; GB</span>"));
+      PB.stat("ch-o-f", small(r.f.toFixed(3), "") + (r.okF ? " <span class='ok-t'>✓</span>" : " <span class='bad-t'>✗</span>"));
+      PB.stat("ch-o-c", small(PB.fmt(r.hci, 3), " 년") + (r.hci >= 10 ? " <span class='ok-t'>✓</span>" : " <span class='bad-t'>✗</span>"));
+      PB.stat("ch-o-t", (r.td > 1e6 ? "&gt; 10<sup>6</sup><small> 년</small>" : small(PB.fmt(r.td, 3), " 년")) + (r.td >= 10 ? " <span class='ok-t'>✓</span>" : " <span class='bad-t'>✗</span>"));
+      const el = document.getElementById("ch-vd");
+      if (r.okF && r.okL && r.okG) {
+        const best = V <= vmin + 0.0051;
+        el.innerHTML = "<div class='win'><b>" + (best ? "최적 통과!" : "통과!") + "</b> V<sub>DD</sub> " + V.toFixed(3) + " V, ΔT<sub>GB</sub> " + gb + " K. " + (best ? "가장 낮은 전압으로 모든 조건을 지켰다(최소 전력)." : "더 낮은 전압(약 " + vmin.toFixed(3) + " V)으로도 가능하다. 전력을 줄여 보자.") + "</div>";
+      } else {
+        const why = [];
+        if (!r.okG) why.push("가드밴드가 실제 자가 발열 " + r.dT.toFixed(1) + " K보다 작다. 이대로면 현장 수명은 HCI " + PB.fmt(r.hciT, 2) + "년, TDDB " + PB.fmt(Math.min(r.tdT, 1e6), 2) + "년");
+        if (!r.okF) why.push("노화 후 속도가 목표에 못 미친다(V<sub>DD</sub>↑ 필요)");
+        if (!r.okL) why.push("평가 온도에서 10년 수명 미달(V<sub>DD</sub>↓ 또는 과도한 가드밴드 확인)");
+        el.innerHTML = "<span class='bad-t'><b>미달.</b></span> " + why.join(" · ");
+      }
+    }, { aspect: 0.78, minHeight: 380, maxHeight: 540 });
+  })();
+})();
+</script>
+</body>
+</html>

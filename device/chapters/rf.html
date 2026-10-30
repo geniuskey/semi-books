@@ -1,0 +1,1427 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and DeviceBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>고주파 소자와 잡음 · DeviceBook</title>
+<meta name="description" content="준정적·비준정적 동작, MOSFET·BJT 소신호 등가 회로, y·S 파라미터와 2단자쌍 계산기, 차단 주파수 f_T와 최대 발진 주파수 f_max, 게이트 저항과 핑거 레이아웃, 열·산탄·1/f 잡음과 최소 잡음 지수, RF CMOS·SiGe HBT·III-V HEMT 비교를 시뮬레이터로 익힌다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/semi.js"></script>
+<style>
+  .cv2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+  .cv2 > div { min-width: 0; position: relative; }
+  .ctrl output { white-space: nowrap; }
+  .pred-opts { display: grid; gap: 8px; }
+  .pred-opts .btn { text-align: left; }
+  .pred-opts .btn.right { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); font-weight: 600; }
+  .pred-opts .btn.wrong { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+  .fb { font-size: 14px; line-height: 1.6; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .fb b { color: var(--text); }
+  .fb.win { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+  .ctrl input[type="range"]:disabled { opacity: .4; cursor: default; }
+  .pick-cv { touch-action: none; cursor: pointer; }
+  .ok-t { color: var(--ok); font-weight: 700; } .bad-t { color: var(--bad); font-weight: 700; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="device"></script>
+</head>
+<body data-chapter="rf">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 15</div>
+    <h1>고주파 소자와 잡음</h1>
+    <p class="lead">휴대폰 한 대에는 1~6 GHz 셀룰러, 2.4·5·6 GHz Wi-Fi, 28·39 GHz 5G 밀리미터파를 다루는 트랜지스터가 수백 개 들어 있다. 차량 레이더는 77 GHz, 6G 연구는 100~300 GHz를 노린다. 이런 주파수에서 트랜지스터는 더 이상 '전압이 전류를 정하는 스위치'가 아니다. 채널 전하가 신호를 미처 따라가지 못하고, 수 fF의 커패시턴스와 수 Ω의 게이트 저항이 이득을 정하며, 전자 하나하나의 무작위 운동이 받을 수 있는 가장 약한 신호를 정한다. 이 장에서는 소자를 <strong>소신호 등가 회로</strong>로 바꿔 \(f_T\)와 \(f_{max}\)를 계산하고, <strong>잡음</strong>이 어디서 오는지 따져 최소 잡음 지수를 구한 뒤, 직접 저잡음 증폭기(LNA)의 입력 트랜지스터를 설계해 본다.</p>
+    <ul class="objectives">
+      <li>준정적 근사가 언제 깨지는지 채널 통과 시간으로 판단하고, 비준정적 효과를 분포 RC로 설명한다.</li>
+      <li>DC 동작점에서 MOSFET(\(g_m, g_{ds}, C_{gs}, C_{gd}\))과 BJT(\(r_\pi, C_\pi, C_\mu, r_b\)) 소신호 등가 회로를 뽑는다.</li>
+      <li>y·S 파라미터를 정의하고, 등가 회로에서 \(h_{21}\)과 메이슨 이득 \(U\)를 계산해 \(f_T\)·\(f_{max}\)를 추출한다.</li>
+      <li>\(f_T\)의 채널 길이·바이어스 의존성(속도 포화, 피크 전류 밀도)과 게이트 저항·핑거 레이아웃이 \(f_{max}\)에 주는 영향을 정량화한다.</li>
+      <li>열잡음·산탄 잡음·1/f 잡음과 유도 게이트 잡음을 구분하고, 잡음 파라미터로 \(NF_{min}\)과 50 Ω 잡음 지수를 계산한다.</li>
+      <li>RF CMOS, SiGe HBT, GaAs·InP·GaN HEMT를 \(f_T\)–항복 전압 지도(존슨 한계) 위에서 비교한다.</li>
+    </ul>
+  </header>
+
+  <!-- ================================================================ 1 -->
+  <section id="qs">
+    <h2>준정적 근사와 그 한계</h2>
+    <p>지금까지 MOSFET과 BJT의 전하는 모두 그 순간의 단자 전압만으로 정해진다고 가정했다. 게이트 전압이 바뀌면 채널 전하가 <b>즉시</b> 새 평형 분포로 옮겨 간다는 이 가정을 <span class="term">준정적 근사</span><span class="en">(Quasi-static approximation, QS)</span>라 한다. 이 가정 덕분에 커패시턴스를 \(C_{ij} = \partial Q_i/\partial V_j\)로 정의할 수 있다. 하지만 채널에 전자를 채우려면 전자가 소스에서 들어와 채널을 따라 퍼져야 하고, 여기에는 시간이 걸린다.</p>
+    <p>채널은 길이 방향으로 저항(반전층)이 이어지고 그 위에 게이트로 가는 커패시턴스가 분포한 <b>RC 전송선</b>이다(그림 15-1). 게이트 신호는 소스·드레인 끝에서부터 확산처럼 스며들고, 채널 중앙은 늦게 반응한다. 신호 주기가 이 확산 시간보다 충분히 길면 준정적 근사가 맞고, 비슷해지면 전하가 뒤처지는 <span class="term">비준정적 효과</span><span class="en">(Non-quasi-static, NQS)</span>가 나타난다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 292" role="img" aria-label="채널을 분포 RC 전송선으로 본 MOSFET 단면">
+        <rect x="150" y="30" width="520" height="34" class="f-metal"/>
+        <rect x="150" y="64" width="520" height="12" class="f-ox"/>
+        <text x="410" y="52" text-anchor="middle" class="lbl-b">게이트 (v_g)</text>
+        <rect x="40" y="76" width="120" height="70" class="f-n" stroke="var(--electron)"/>
+        <rect x="660" y="76" width="120" height="70" class="f-n" stroke="var(--electron)"/>
+        <rect x="160" y="76" width="500" height="120" class="f-p"/>
+        <text x="100" y="116" text-anchor="middle" class="lbl-e">S (n⁺)</text>
+        <text x="720" y="116" text-anchor="middle" class="lbl-e">D (n⁺)</text>
+        <!-- RC ladder -->
+        <path d="M160 160 h20 l6 -6 l8 12 l8 -12 l8 12 l8 -12 l8 12 l6 -6 h20 l6 -6 l8 12 l8 -12 l8 12 l8 -12 l8 12 l6 -6 h20 l6 -6 l8 12 l8 -12 l8 12 l8 -12 l8 12 l6 -6 h20 l6 -6 l8 12 l8 -12 l8 12 l8 -12 l8 12 l6 -6 h20 l6 -6 l8 12 l8 -12 l8 12 l8 -12 l8 12 l6 -6 h20 l6 -6 l8 12 l8 -12 l8 12 l8 -12 l8 12 l6 -6 h16" fill="none" stroke="var(--electron)" stroke-width="1.6"/>
+        <g stroke="var(--text-dim)" stroke-width="1.5">
+          <path d="M252 160 V112 M240 112 H264 M240 104 H264 M252 104 V76"/>
+          <path d="M324 160 V112 M312 112 H336 M312 104 H336 M324 104 V76"/>
+          <path d="M396 160 V112 M384 112 H408 M384 104 H408 M396 104 V76"/>
+          <path d="M468 160 V112 M456 112 H480 M456 104 H480 M468 104 V76"/>
+          <path d="M540 160 V112 M528 112 H552 M528 104 H552 M540 104 V76"/>
+          <path d="M612 160 V112 M600 112 H624 M600 104 H624 M612 104 V76"/>
+        </g>
+        <text x="210" y="186" text-anchor="middle" class="t-mono">r·dx</text>
+        <text x="282" y="98" class="t-mono">c·dx</text>
+        <text x="410" y="214" text-anchor="middle" class="t-dim">반전층 = 분포 저항 r (Ω/cm), 게이트–채널 = 분포 용량 c (F/cm)</text>
+        <!-- delay sketch -->
+        <path d="M60 282 H760" class="s-axis"/>
+        <path d="M160 282 C230 270 300 260 410 256 C520 260 590 270 660 282" class="s-acc"/>
+        <text x="410" y="244" text-anchor="middle" class="lbl-acc" font-size="12">채널 중앙이 가장 늦게 반응: τ ~ rc·L² ∝ L²/(μV_ov)</text>
+      </svg>
+      <figcaption><b>그림 15-1.</b> 채널을 분포 RC 전송선으로 본 MOSFET. 게이트 전압이 바뀌면 소스(와 선형 영역에선 드레인)에서 전자가 들어와 반전층 저항을 거쳐 분포 용량을 충전한다. 충전은 확산 방정식을 따르며, 그 시간 상수가 채널 통과 시간 \(\tau_{tr}\)다. 신호 주기가 이보다 짧으면 채널 전하는 게이트를 따라가지 못한다.</figcaption>
+    </figure>
+    <div class="formula">$$\tau_{tr} \approx \frac{L^2}{\mu V_{ov}}\ \ (\text{긴 채널}),\qquad \tau_{tr}\approx \frac{L}{v_{sat}}\ \ (\text{속도 포화}),\qquad f_T^{\text{(긴 채널)}} = \frac{3\,\mu V_{ov}}{4\pi L^2}$$
+      <div class="where">\(V_{ov} = V_{GS}-V_{th}\): 과구동 전압. 긴 채널에서 \(f_T\)는 통과 시간의 역수와 같은 차수다. 실무 기준으로 \(f \lesssim f_T/5\)이면 준정적 모델이 잘 맞고, 그 이상에서는 게이트에 직렬로 들어가는 채널 저항 \(R_{nqs}\approx 1/(5g_m)\)과 트랜스컨덕턴스 지연 \(g_m e^{-j\omega\tau_m}\)을 더해 보정한다(BSIM의 NQS 옵션).</div>
+    </div>
+    <p>65 nm 소자(\(L\approx 50\) nm, \(v_{sat}\approx 10^7\) cm/s)의 통과 시간은 약 0.5 ps라 수십 GHz까지는 준정적 근사가 꽤 정확하다. 반대로 같은 회로에 쓰는 \(L = 1\) µm 아날로그 소자는 \(\tau_{tr}\)가 수십 ps여서 수 GHz에서 이미 NQS 영역에 들어간다. 아래 애니메이션은 채널 전하의 비선형 확산 방정식 \(\partial Q/\partial t = (\mu/C_{ox})\,\partial^2(Q^2/2)/\partial x^2\)를 직접 풀어, 게이트에 사인파를 걸었을 때 채널 전하와 단자 전류가 어떻게 뒤처지는지 보여 준다.</p>
+
+    <div class="sim" id="sim-nqs">
+      <div class="sim-head"><span class="sim-tag">ANIMATION</span><h3>채널 전하가 게이트를 따라가지 못할 때</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="nq-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>신호 주파수 f / f<sub>T</sub></span> <output id="nq-f-out"></output></span><input type="range" id="nq-f" min="-1.5" max="0.6" step="0.01" value="-1"></label>
+          <label class="ctrl"><span><span>게이트 신호 진폭 v<sub>g</sub>/V<sub>ov</sub></span> <output id="nq-a-out"></output></span><input type="range" id="nq-a" min="0.05" max="0.4" step="0.01" value="0.2"></label>
+          <label class="check"><input type="checkbox" id="nq-qs" checked> 준정적 분포(점선) 겹쳐 보기</label>
+          <div class="btn-row"><button class="btn sm" id="nq-play">일시정지</button><button class="btn sm" id="nq-reset">처음부터</button></div>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--electron)"></i>채널 전하 Q(x,t)</span><span><i style="background:var(--text-faint)"></i>준정적 Q(x)</span><span><i style="background:var(--text-dim)"></i>v<sub>g</sub></span><span><i style="background:var(--accent)"></i>드레인 전류</span><span><i style="background:var(--warn)"></i>소스 전류</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">드레인 전류 진폭 / 준정적</span><span class="v" id="nq-o-amp">—</span></div>
+        <div class="stat"><span class="k">드레인 전류 위상 지연</span><span class="v" id="nq-o-ph">—</span></div>
+        <div class="stat"><span class="k">소스 전류 진폭 / 준정적</span><span class="v" id="nq-o-is">—</span></div>
+      </div>
+      <div class="sim-note">긴 채널 포화 영역을 정규화해 풀었다(소스 Q = C<sub>ox</sub>v<sub>g</sub>, 드레인 Q = 0). 해볼 것: ① f/f<sub>T</sub> = 0.03에서 드레인 전류가 v<sub>g</sub>와 같은 위상으로 움직이는지 확인한다. ② f/f<sub>T</sub>를 1~3으로 올리면 드레인 전류는 줄고 뒤처지지만(f<sub>T</sub>에서 약 20°, 3f<sub>T</sub>에서 약 65°), 소스 전류는 채널 충전 전류 때문에 오히려 커진다. 이 차이가 곧 게이트 쪽으로 흐르는 변위 전류다.</div>
+    </div>
+  </section>
+
+  <!-- ================================================================ 2 -->
+  <section id="smallsignal">
+    <h2>소신호 등가 회로</h2>
+    <p>RF 신호는 바이어스에 비해 아주 작다(수 µV~수십 mV). 그래서 DC 동작점 근처에서 전류·전하를 1차 테일러 전개한 <span class="term">소신호 등가 회로</span><span class="en">(Small-signal equivalent circuit)</span>로 소자를 대신한다. 드레인 전류와 게이트 전하를 전압으로 미분하면 컨덕턴스와 커패시턴스가 나온다.</p>
+    <div class="formula">$$g_m = \left.\frac{\partial I_D}{\partial V_{GS}}\right|_{V_{DS}},\quad g_{ds} = \left.\frac{\partial I_D}{\partial V_{DS}}\right|_{V_{GS}},\quad C_{gs}\approx \tfrac23 WLC_{ox} + WC_{ov},\quad C_{gd}\approx WC_{ov}\ \ (\text{포화})$$
+      <div class="where">\(C_{ov}\): 게이트–소스/드레인 겹침·프린지 용량(현대 공정에서 약 0.2~0.4 fF/µm). 포화 영역에서는 드레인 끝이 핀치오프되어 채널 전하가 드레인 전압에 거의 반응하지 않으므로 \(C_{gd}\)는 겹침 성분만 남는다. 시뮬레이터에서는 엔진의 <code>SC.mosfet</code>을 \(\pm1\) mV로 흔들어 중앙 차분 \(g_m \approx [I_D(V+\delta)-I_D(V-\delta)]/2\delta\)로 계산한다. 회로 시뮬레이터(SPICE)가 동작점에서 하는 일과 같다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 290" role="img" aria-label="MOSFET 고주파 소신호 등가 회로">
+        <defs><marker id="rf-ar1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker></defs>
+        <g class="s-line">
+          <path d="M40 90 H80"/>
+          <path d="M80 90 l6 -6 l8 12 l8 -12 l8 12 l8 -12 l8 12 l6 -6"/>
+          <path d="M132 90 H340"/>
+          <!-- Cgs vertical -->
+          <path d="M220 90 V146 M204 146 H236 M204 156 H236 M220 156 V230"/>
+          <!-- Cgd horizontal -->
+          <path d="M340 90 H392 M392 74 V106 M402 74 V106 M402 90 H520"/>
+          <path d="M520 90 V130"/><circle cx="520" cy="160" r="26"/><path d="M520 186 V230"/>
+          <path d="M520 90 H760"/>
+          <!-- gds -->
+          <path d="M620 90 V126 l-6 4 l12 8 l-12 8 l12 8 l-12 8 l12 8 l-6 4 V230"/>
+          <!-- Cdb -->
+          <path d="M700 90 V150 M684 150 H716 M684 160 H716 M700 160 V230"/>
+          <path d="M760 90 H790"/>
+          <path d="M140 230 H720"/>
+          <!-- Rs -->
+          <path d="M420 230 V246 l-6 4 l12 6 l-12 6 l12 6 l-6 4 V282"/>
+        </g>
+        <path d="M520 176 V146" stroke="var(--accent)" stroke-width="2" marker-end="url(#rf-ar1)"/>
+        <circle cx="40" cy="90" r="4" class="f-acc"/><circle cx="790" cy="90" r="4" class="f-acc"/><circle cx="420" cy="282" r="4" class="f-acc"/>
+        <circle cx="220" cy="90" r="3" fill="var(--text-dim)"/><circle cx="520" cy="90" r="3" fill="var(--text-dim)"/><circle cx="220" cy="230" r="3" fill="var(--text-dim)"/>
+        <text x="30" y="76" class="lbl-b">G</text><text x="784" y="76" class="lbl-b">D</text><text x="436" y="286" class="lbl-b">S</text>
+        <text x="106" y="72" text-anchor="middle" class="t-mono">R_g</text>
+        <text x="244" y="156" class="t-mono">C_gs</text>
+        <text x="397" y="64" text-anchor="middle" class="t-mono">C_gd</text>
+        <text x="488" y="164" text-anchor="end" class="t-mono">g_m·v_gs</text>
+        <text x="634" y="164" class="t-mono">g_ds</text>
+        <text x="712" y="140" class="t-mono">C_db</text>
+        <text x="436" y="262" class="t-mono">R_s</text>
+        <text x="226" y="82" class="t-mono">g′</text><text x="526" y="82" class="t-mono">d′</text><text x="226" y="248" class="t-mono">s′</text>
+        <text x="152" y="196" class="t-mono" fill="var(--accent)">+ v_gs −</text>
+        <text x="410" y="20" text-anchor="middle" class="lbl-dim">진성 소자(g′–d′–s′) + 외부 기생 저항(R_g, R_s, R_d는 생략)</text>
+      </svg>
+      <figcaption><b>그림 15-2.</b> 포화 영역 MOSFET의 고주파 소신호 등가 회로. 진성 부분은 전압 제어 전류원 \(g_m v_{gs}\)와 출력 컨덕턴스 \(g_{ds}\), 게이트 커패시턴스 \(C_{gs}\)·\(C_{gd}\), 드레인–바디 접합 용량 \(C_{db}\)다. 외부에는 게이트 전극 저항 \(R_g\)와 소스·드레인 직렬 저항이 붙는다. \(g_m\)과 \(C_{gs}\)는 \(f_T\)를, \(R_g\)와 \(C_{gd}\)는 \(f_{max}\)를 정한다. \(v_{gs}\)는 진성 노드 g′–s′ 사이 전압이다.</figcaption>
+    </figure>
+    <p>BJT는 <span class="term">하이브리드-π 모델</span><span class="en">(Hybrid-π model)</span>로 나타낸다(그림 15-3). 컬렉터 전류가 \(V_{BE}\)의 지수 함수이므로 \(g_m = I_C/V_t\)이고, 같은 전류에서 MOSFET보다 훨씬 크다(1 mA에서 38.7 mS). 베이스로 들어가는 소신호 전류는 \(r_\pi = \beta/g_m\)를 지난다. \(C_\pi\)는 베이스에 저장된 소수 캐리어 전하가 만드는 확산 용량 \(g_m\tau_F\)와 E–B 접합 용량 \(C_{je}\)의 합이고, \(C_\mu\)는 B–C 접합 용량이다. 여기서 \(\tau_F\)는 이미터에서 컬렉터까지의 순방향 통과 시간이다(<a href="bjt.html#speed">11장의 f<sub>T</sub> 절</a>).</p>
+    <div class="formula">$$g_m = \frac{I_C}{V_t},\quad r_\pi = \frac{\beta}{g_m},\quad C_\pi = g_m\tau_F + C_{je},\quad r_o = \frac{V_A}{I_C},\qquad f_T = \frac{g_m}{2\pi(C_\pi + C_\mu)} = \frac{1}{2\pi\left[\tau_F + (C_{je}+C_\mu)V_t/I_C\right]}$$
+      <div class="where">낮은 전류에서는 접합 용량을 충전하는 시간 \((C_{je}+C_\mu)V_t/I_C\)가 \(f_T\)를 정하고, 전류가 커지면 \(\tau_F\)에서 포화한다. 더 올리면 커크 효과로 \(\tau_F\)가 늘어 \(f_T\)가 떨어진다. 현대 SiGe HBT는 \(\tau_F\approx 0.3\sim0.5\) ps로 \(f_T\) 300~500 GHz에 이른다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 260" role="img" aria-label="BJT 하이브리드-π 소신호 등가 회로">
+        <defs><marker id="rf-ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent-2)"/></marker></defs>
+        <g class="s-line">
+          <path d="M40 80 H80 l6 -6 l8 12 l8 -12 l8 12 l8 -12 l8 12 l6 -6 H400"/>
+          <path d="M190 80 V110 l-6 4 l12 8 l-12 8 l12 8 l-12 8 l12 8 l-6 4 V210"/>
+          <path d="M290 80 V136 M274 136 H306 M274 146 H306 M290 146 V210"/>
+          <path d="M400 80 H452 M452 64 V96 M462 64 V96 M462 80 H560"/>
+          <path d="M560 80 V118"/><circle cx="560" cy="146" r="26"/><path d="M560 172 V210"/>
+          <path d="M560 80 H780"/>
+          <path d="M670 80 V110 l-6 4 l12 8 l-12 8 l12 8 l-12 8 l12 8 l-6 4 V210"/>
+          <path d="M150 210 H720"/>
+          <path d="M440 210 V244"/>
+        </g>
+        <path d="M560 162 V132" stroke="var(--accent-2)" stroke-width="2" marker-end="url(#rf-ar2)"/>
+        <circle cx="40" cy="80" r="4" class="f-acc"/><circle cx="780" cy="80" r="4" class="f-acc"/><circle cx="440" cy="244" r="4" class="f-acc"/>
+        <text x="30" y="66" class="lbl-b">B</text><text x="774" y="66" class="lbl-b">C</text><text x="454" y="250" class="lbl-b">E</text>
+        <text x="106" y="62" text-anchor="middle" class="t-mono">r_b</text>
+        <text x="204" y="150" class="t-mono">r_π</text>
+        <text x="314" y="146" class="t-mono">C_π = g_mτ_F + C_je</text>
+        <text x="457" y="54" text-anchor="middle" class="t-mono">C_μ</text>
+        <text x="596" y="150" class="t-mono">g_m·v_π</text>
+        <text x="684" y="150" class="t-mono">r_o</text>
+        <text x="196" y="72" class="t-mono">b′</text>
+        <text x="410" y="20" text-anchor="middle" class="lbl-dim">r_b: 베이스 확산 저항 · C_μ: B–C 접합 · (C_cs 기판 용량 생략)</text>
+      </svg>
+      <figcaption><b>그림 15-3.</b> BJT 하이브리드-π 모델. MOSFET 회로와 모양이 같지만 입력에 \(r_\pi\)가 있어 직류 입력 전류가 흐르고, 게이트 저항 자리에 베이스 저항 \(r_b\)(수십 Ω)가 온다. \(r_b C_\mu\)가 \(f_{max}\)를 정하는 핵심 곱이므로, HBT는 진한 베이스와 자기 정렬 구조로 \(r_b\)를 줄인다.</figcaption>
+    </figure>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>소자 (대표값, 약)</th><th>\(g_m\)</th><th>\(C_{gs}\) 또는 \(C_\pi\)</th><th>\(C_{gd}\) 또는 \(C_\mu\)</th><th>\(R_g\) 또는 \(r_b\)</th><th>\(f_T\) / \(f_{max}\)</th></tr></thead>
+        <tbody>
+          <tr><td>65 nm nMOS, W = 1 µm, 0.3 mA</td><td>~1.3 mS</td><td>~1.2 fF</td><td>~0.3 fF</td><td>레이아웃 의존</td><td>~150 / ~250 GHz</td></tr>
+          <tr><td>SiGe HBT, 0.1×1 µm², 1 mA</td><td>38.7 mS</td><td>~25 fF</td><td>~3 fF</td><td>~40 Ω</td><td>~250 / ~350 GHz</td></tr>
+          <tr><td>GaN HEMT, 0.15 µm, W = 100 µm</td><td>~40 mS</td><td>~100 fF</td><td>~15 fF</td><td>~2 Ω</td><td>~40 / ~90 GHz</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="sim" id="sim-ss">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>동작점에서 소신호 파라미터 뽑기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ss-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>소자</span><div class="seg" id="ss-dev"><button data-value="mos" class="on">MOSFET</button><button data-value="bjt">SiGe HBT</button></div></div>
+          <div id="ss-gm">
+            <label class="ctrl"><span><span>채널 길이 L</span> <output id="ss-L-out"></output></span><input type="range" id="ss-L" min="30" max="500" step="5" value="65"></label>
+            <label class="ctrl"><span><span>채널 폭 W</span> <output id="ss-W-out"></output></span><input type="range" id="ss-W" min="1" max="100" step="1" value="10"></label>
+            <label class="ctrl"><span><span>V<sub>GS</sub></span> <output id="ss-vgs-out"></output></span><input type="range" id="ss-vgs" min="0.2" max="1.2" step="0.01" value="0.65"></label>
+            <label class="ctrl"><span><span>V<sub>DS</sub></span> <output id="ss-vds-out"></output></span><input type="range" id="ss-vds" min="0.1" max="1.2" step="0.01" value="1.0"></label>
+          </div>
+          <div id="ss-gb" style="display:none">
+            <label class="ctrl"><span><span>컬렉터 전류 I<sub>C</sub></span> <output id="ss-ic-out"></output></span><input type="range" id="ss-ic" min="-5" max="-1.7" step="0.01" value="-3"></label>
+            <label class="ctrl"><span><span>순방향 통과 시간 τ<sub>F</sub></span> <output id="ss-tf-out"></output></span><input type="range" id="ss-tf" min="0.3" max="5" step="0.05" value="0.6"></label>
+            <label class="ctrl"><span><span>베이스 저항 r<sub>b</sub></span> <output id="ss-rb-out"></output></span><input type="range" id="ss-rb" min="10" max="200" step="1" value="40"></label>
+          </div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k" id="ss-k1">g<sub>m</sub></span><span class="v" id="ss-v1">—</span></div>
+        <div class="stat"><span class="k" id="ss-k2">—</span><span class="v" id="ss-v2">—</span></div>
+        <div class="stat"><span class="k" id="ss-k3">—</span><span class="v" id="ss-v3">—</span></div>
+        <div class="stat"><span class="k" id="ss-k4">—</span><span class="v" id="ss-v4">—</span></div>
+        <div class="stat"><span class="k" id="ss-k5">—</span><span class="v" id="ss-v5">—</span></div>
+        <div class="stat"><span class="k" id="ss-k6">—</span><span class="v" id="ss-v6">—</span></div>
+        <div class="stat"><span class="k" id="ss-k7">f<sub>T</sub></span><span class="v" id="ss-v7">—</span></div>
+      </div>
+      <div class="sim-note">MOSFET: 엔진의 <code>SC.mosfet</code>(EKV형)에 소스·드레인 저항 120 Ω·µm와 수직 전계 이동도 열화를 더하고, 중앙 차분으로 g<sub>m</sub>·g<sub>ds</sub>를 구했다(L은 유효 채널 길이, t<sub>ox,inv</sub> = 1.5 nm, C<sub>ov</sub> = 0.25 fF/µm). HBT: β = 250, V<sub>A</sub> = 80 V, C<sub>je</sub> = 6 fF, C<sub>μ</sub> = 3 fF, 커크 전류 4 mA. 해볼 것: ① MOSFET에서 V<sub>GS</sub>를 올리며 g<sub>m</sub>/I<sub>D</sub>가 약반전의 ~25 V⁻¹에서 강반전의 ~3 V⁻¹로 떨어지는 것을 본다. ② HBT에서 I<sub>C</sub>를 쓸며 f<sub>T</sub>가 오르다 커크 효과로 꺾이는 점을 찾는다.</div>
+    </div>
+  </section>
+
+  <!-- ================================================================ 3 -->
+  <section id="twoport">
+    <h2>2단자쌍 망: y·S 파라미터</h2>
+    <p>소신호 트랜지스터는 입력 포트(게이트–소스)와 출력 포트(드레인–소스)를 가진 선형 <span class="term">2단자쌍 망</span><span class="en">(Two-port network)</span>이다. 포트 전압과 전류의 관계를 행렬 하나로 적을 수 있다. 등가 회로에서 계산하기 쉬운 것은 단락 조건으로 정의한 <span class="term">y 파라미터</span><span class="en">(Admittance parameters)</span>다.</p>
+    <div class="formula">$$\begin{pmatrix} I_1\\ I_2\end{pmatrix} = \begin{pmatrix} y_{11} &amp; y_{12}\\ y_{21} &amp; y_{22}\end{pmatrix}\begin{pmatrix} V_1\\ V_2\end{pmatrix},\qquad \begin{aligned} y_{11} &amp;= j\omega(C_{gs}+C_{gd}), &amp; y_{12} &amp;= -j\omega C_{gd},\\ y_{21} &amp;= g_m - j\omega C_{gd}, &amp; y_{22} &amp;= g_{ds} + j\omega(C_{gd}+C_{db})\end{aligned}$$
+      <div class="where">오른쪽은 그림 15-2의 진성 소자(\(R_g=R_s=0\))의 y 파라미터다. 외부 저항은 y를 z로 바꿔(\(Z=Y^{-1}\)) 직렬로 더한 뒤 다시 뒤집어 넣는다: \(Z' = Z + \begin{pmatrix}R_g+R_s &amp; R_s\\ R_s &amp; R_d+R_s\end{pmatrix}\).</div>
+    </div>
+    <p>하지만 수십 GHz에서 포트를 '단락'하거나 '개방'하는 것은 불가능하다. 짧은 도선도 인덕터이고, 소자가 발진해 버리기도 한다. 그래서 측정은 50 Ω 선로에서 들어가는 파동 \(a\)와 반사되어 나오는 파동 \(b\)의 비, 즉 <span class="term">S 파라미터</span><span class="en">(Scattering parameters)</span>로 한다. 벡터 네트워크 분석기(VNA)가 재는 양이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 230" role="img" aria-label="2단자쌍 망과 입사파·반사파">
+        <defs>
+          <marker id="rf-ar3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker>
+          <marker id="rf-ar4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent-2)"/></marker>
+        </defs>
+        <rect x="310" y="50" width="200" height="120" rx="10" class="f-acc-soft"/>
+        <text x="410" y="100" text-anchor="middle" class="lbl-b">2단자쌍 (DUT)</text>
+        <text x="410" y="124" text-anchor="middle" class="t-mono">[S] 또는 [y]</text>
+        <path d="M80 70 H310 M80 150 H310 M510 70 H740 M510 150 H740" class="s-line"/>
+        <rect x="40" y="88" width="40" height="44" rx="6" class="f-surface"/><text x="60" y="114" text-anchor="middle" class="t-mono">50Ω</text>
+        <rect x="740" y="88" width="40" height="44" rx="6" class="f-surface"/><text x="760" y="114" text-anchor="middle" class="t-mono">50Ω</text>
+        <path d="M150 52 H260" stroke="var(--accent)" stroke-width="2" marker-end="url(#rf-ar3)"/><text x="205" y="44" text-anchor="middle" class="lbl-acc">a₁ (입사)</text>
+        <path d="M260 92 H150" stroke="var(--accent-2)" stroke-width="2" marker-end="url(#rf-ar4)"/><text x="205" y="112" text-anchor="middle" class="lbl-acc2">b₁ (반사)</text>
+        <path d="M670 52 H560" stroke="var(--accent)" stroke-width="2" marker-end="url(#rf-ar3)"/><text x="615" y="44" text-anchor="middle" class="lbl-acc">a₂</text>
+        <path d="M560 92 H670" stroke="var(--accent-2)" stroke-width="2" marker-end="url(#rf-ar4)"/><text x="615" y="112" text-anchor="middle" class="lbl-acc2">b₂ (투과)</text>
+        <text x="290" y="140" text-anchor="end" class="t-mono">V₁, I₁ →</text><text x="530" y="140" class="t-mono">← I₂, V₂</text>
+        <text x="410" y="200" text-anchor="middle" class="lbl-dim">b₁ = S₁₁a₁ + S₁₂a₂ · b₂ = S₂₁a₁ + S₂₂a₂ · a = (V + Z₀I)/(2√Z₀), b = (V − Z₀I)/(2√Z₀)</text>
+        <text x="410" y="222" text-anchor="middle" class="t-dim">S₁₁: 입력 반사 계수 · S₂₁: 순방향 전달(이득) · S₁₂: 역방향 격리 · S₂₂: 출력 반사 계수</text>
+      </svg>
+      <figcaption><b>그림 15-4.</b> S 파라미터의 정의. 각 포트를 기준 임피던스 \(Z_0 = 50\) Ω으로 끝맺고, 들어가는 파동과 나오는 파동의 비를 잰다. 예컨대 \(|S_{21}|^2\)은 50 Ω 신호원과 부하 사이에 소자를 넣었을 때의 전력 이득이다. y와 S는 \(S = (I - Z_0Y)(I+Z_0Y)^{-1}\)로 서로 바뀐다.</figcaption>
+    </figure>
+    <p>측정한 S를 y로 바꾸면 두 가지 이득으로 소자의 속도를 정의한다. 출력을 단락하고 입력에 전류를 넣었을 때의 <span class="term">전류 이득</span><span class="en">(Short-circuit current gain)</span> \(h_{21} = y_{21}/y_{11}\)의 크기가 1이 되는 주파수가 <b>차단 주파수</b> \(f_T\)다. 입·출력에 손실 없는 정합과 귀환 상쇄(단방향화)를 모두 했을 때의 전력 이득이 <span class="term">메이슨 단방향 이득</span><span class="en">(Mason's unilateral gain)</span> \(U\)이고, \(U = 1\)이 되는 주파수가 <span class="term">최대 발진 주파수</span><span class="en">(Maximum oscillation frequency)</span> \(f_{max}\)다. 그 위에서는 어떤 수동 회로를 붙여도 전력 이득을 얻을 수 없다.</p>
+    <div class="formula">$$h_{21} = \frac{y_{21}}{y_{11}},\qquad U = \frac{|y_{21}-y_{12}|^2}{4\left[\operatorname{Re}(y_{11})\operatorname{Re}(y_{22}) - \operatorname{Re}(y_{12})\operatorname{Re}(y_{21})\right]},\qquad |h_{21}(f_T)| = 1,\ \ U(f_{max}) = 1$$
+      <div class="where">\(U\)는 손실 없는 가역 회로를 덧붙여도 변하지 않는 소자 고유의 양이라 \(f_{max}\) 정의에 쓴다. \(|h_{21}|^2\)과 \(U\)는 둘 다 높은 주파수에서 −20 dB/decade로 떨어지므로, 측정 장비 한계(약 110 GHz) 위의 \(f_T\)·\(f_{max}\)는 이 기울기로 외삽한다.</div>
+    </div>
+
+    <div class="sim" id="sim-tp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2단자쌍 계산기: h<sub>21</sub>, U, 스미스 차트</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><div class="cv2"><div><canvas id="tp-cv"></canvas></div><div><canvas id="tp-sm"></canvas></div></div></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>채널 길이 L</span> <output id="tp-L-out"></output></span><input type="range" id="tp-L" min="30" max="250" step="5" value="65"></label>
+          <label class="ctrl"><span><span>폭 W (핑거 1 µm × n)</span> <output id="tp-W-out"></output></span><input type="range" id="tp-W" min="2" max="100" step="1" value="20"></label>
+          <label class="ctrl"><span><span>V<sub>GS</sub> (V<sub>DS</sub> = 1 V)</span> <output id="tp-vgs-out"></output></span><input type="range" id="tp-vgs" min="0.3" max="1.2" step="0.01" value="0.66"></label>
+          <label class="ctrl"><span><span>게이트 면저항 R<sub>□</sub></span> <output id="tp-rsh-out"></output></span><input type="range" id="tp-rsh" min="1" max="60" step="1" value="10"></label>
+          <label class="check"><input type="checkbox" id="tp-nqs" checked> <span>NQS 보정 (R<sub>nqs</sub> = 1/5g<sub>m</sub>, g<sub>m</sub> 지연)</span></label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>|h<sub>21</sub>|² · S<sub>11</sub></span><span><i style="background:var(--accent-2)"></i>U · S<sub>22</sub></span><span><i style="background:var(--text-faint)"></i>−20 dB/dec 외삽선</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">f<sub>T</sub> (|h<sub>21</sub>| = 1)</span><span class="v" id="tp-o-ft">—</span></div>
+        <div class="stat"><span class="k">g<sub>m</sub>/2π(C<sub>gs</sub>+C<sub>gd</sub>)</span><span class="v" id="tp-o-ftf">—</span></div>
+        <div class="stat"><span class="k">f<sub>max</sub> (U = 1)</span><span class="v" id="tp-o-fm">—</span></div>
+        <div class="stat"><span class="k">f<sub>max</sub> 근사식</span><span class="v" id="tp-o-fmf">—</span></div>
+        <div class="stat"><span class="k">R<sub>g</sub></span><span class="v" id="tp-o-rg">—</span></div>
+        <div class="stat"><span class="k">|S<sub>21</sub>| @ 10 GHz</span><span class="v" id="tp-o-s21">—</span></div>
+      </div>
+      <div class="sim-note">등가 회로(그림 15-2)의 y 행렬에 R<sub>g</sub>·R<sub>s</sub>·R<sub>d</sub>를 z 영역에서 더해 0.1 GHz~3 THz를 계산했다. 스미스 차트는 0.1~200 GHz의 S<sub>11</sub>(입력)과 S<sub>22</sub>(출력) 궤적이며 점은 1, 10, 100 GHz다. 해볼 것: ① R<sub>□</sub>를 올리면 f<sub>T</sub>는 그대로인데 f<sub>max</sub>만 떨어진다. ② W를 키우면 S<sub>11</sub> 궤적이 차트 왼쪽(작은 임피던스)으로 빨려 들어간다. 큰 소자는 50 Ω과 정합하기 어렵다.</div>
+    </div>
+    <div class="callout warn"><strong>측정값에는 패드가 섞여 있다</strong><p>웨이퍼에서 S 파라미터를 잴 때는 소자 양쪽의 프로브 패드와 배선이 수십 fF, 수십 pH를 더한다. 그래서 같은 레이아웃에서 소자만 뺀 '개방', 단자를 이은 '단락' 더미를 함께 재서 빼는 <span class="term">디임베딩</span><span class="en">(De-embedding)</span>을 거친다. 디임베딩 방법과 어떤 기생을 소자에 포함했는지에 따라 보고된 \(f_T\)·\(f_{max}\)가 10~30% 달라지므로 논문 수치를 비교할 때 주의해야 한다.</p></div>
+  </section>
+
+  <!-- ================================================================ 4 -->
+  <section id="ft">
+    <h2>차단 주파수 f<sub>T</sub></h2>
+    <p>출력을 교류 단락하면 \(i_{out} = (g_m - j\omega C_{gd})v_{gs}\), \(i_{in} = j\omega(C_{gs}+C_{gd})v_{gs}\)다. \(\omega C_{gd} \ll g_m\)인 주파수에서 \(|h_{21}| = g_m/[\omega(C_{gs}+C_{gd})]\)이므로 다음을 얻는다.</p>
+    <div class="formula">$$f_T \simeq \frac{g_m}{2\pi(C_{gs}+C_{gd})}\ \ \xrightarrow{\ \text{긴 채널}\ }\ \ \frac{3\mu V_{ov}}{4\pi L^2},\qquad \xrightarrow{\ \text{속도 포화}\ }\ \ \frac{3\,v_{sat}}{4\pi L}\cdot\frac{1}{1 + C_{par}/C_{gs,i}}$$
+      <div class="where">긴 채널에서는 \(g_m = \mu C_{ox}(W/L)V_{ov}\)와 \(C_{gs} = \tfrac23WLC_{ox}\)를 넣어 \(f_T\propto 1/L^2\)이다. 짧은 채널에서 캐리어가 \(v_{sat}\)에 이르면 \(g_m \to WC_{ox}v_{sat}\)으로 L과 무관해져 \(f_T\propto 1/L\)이 된다. 여기에 L로 줄지 않는 겹침·프린지 용량 \(C_{par}\)과 소스 저항이 \(f_T\)를 더 깎는다.</div>
+    </div>
+    <p>\(f_T\)는 '전류 이득 1' 주파수일 뿐이지만 소자의 속도를 비교하는 표준 지표다. 해석적으로는 캐리어가 소스에서 드레인까지 가는 총 지연 \(\tau = 1/(2\pi f_T)\)로 읽을 수 있다. 공정 세대마다 대략 \(f_T\)는 130 nm 약 100 GHz, 90 nm 약 130 GHz, 65 nm 약 170~200 GHz, 45 nm SOI 약 250~300 GHz, 22 nm FD-SOI 약 350 GHz(nMOS, 문헌값)로 올랐다. FinFET 세대에서는 핀 사이의 기생 용량이 늘어 \(f_T\)가 오히려 정체된 편이다(\(f_T\) 약 300 GHz 수준).</p>
+
+    <div class="sim" id="sim-pr">
+      <div class="sim-head"><span class="sim-tag">PREDICT</span><h3>채널 길이를 절반으로 줄이면 f<sub>T</sub>는?</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pr-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span><span>같은 과구동 전압(V<sub>ov</sub> = 0.3 V)에서 유효 채널 길이를 <b>65 nm → 32 nm</b>로 줄였다. f<sub>T</sub>는? (긴 채널 식은 f<sub>T</sub> ∝ 1/L²)</span></span></div>
+          <div class="pred-opts" id="pr-opts">
+            <button class="btn" data-k="4">약 4배 (1/L² 그대로)</button>
+            <button class="btn" data-k="2">약 2배</button>
+            <button class="btn" data-k="1.2">약 1.2배</button>
+            <button class="btn" data-k="1">거의 변하지 않는다</button>
+          </div>
+          <div class="fb" id="pr-fb">먼저 하나를 고르면 f<sub>T</sub>–L 그래프가 나타난다.</div>
+          <label class="ctrl"><span><span>과구동 전압 V<sub>ov</sub></span> <output id="pr-vov-out"></output></span><input type="range" id="pr-vov" min="0.1" max="0.6" step="0.01" value="0.3" disabled></label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>이 장의 모델 (기생 포함)</span><span><i style="background:var(--warn)"></i>긴 채널 3μV<sub>ov</sub>/4πL²</span><span><i style="background:var(--accent-2)"></i>속도 포화 3v<sub>sat</sub>/4πL</span></div>
+      <div class="sim-note">로그–로그 그래프에서 기울기 −2(긴 채널)가 짧은 채널에서 −1로 눕는다. 실제로는 기생 용량 때문에 그보다도 더 완만하다. 답을 고른 뒤 V<sub>ov</sub>를 줄여 보자. 과구동이 작으면 전계가 약해 속도 포화가 늦게 오고, 꺾이는 길이가 짧아진다.</div>
+    </div>
+
+    <p>\(f_T\)는 바이어스에도 강하게 의존한다. 약반전에서는 \(g_m\)이 전류에 비례해 작고, 강반전으로 갈수록 \(g_m\)이 포화한다. 더 높은 \(V_{GS}\)에서는 수직 전계에 의한 이동도 열화와 소스 저항 때문에 \(g_m\)이 오히려 줄어 \(f_T\)가 피크를 이룬다. 놀랍게도 nMOS의 피크 \(f_T\) 전류 밀도는 공정 세대와 거의 무관하게 <b>약 0.3 mA/µm</b>, 피크 \(f_{max}\)와 최소 잡음은 각각 약 0.2, 0.15 mA/µm 근처다. 그래서 RF 설계자는 \(V_{GS}\)가 아니라 <span class="term">전류 밀도</span><span class="en">(Current density, mA/µm)</span>로 바이어스를 정하고 W로 전류를 맞춘다(Dickson·Voinigescu, 2005).</p>
+
+    <div class="sim" id="sim-bias">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>f<sub>T</sub>·f<sub>max</sub>의 전류 밀도 의존성</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bi-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>채널 길이 L</span> <output id="bi-L-out"></output></span><input type="range" id="bi-L" min="30" max="250" step="5" value="65"></label>
+          <label class="ctrl"><span><span>V<sub>DS</sub></span> <output id="bi-vds-out"></output></span><input type="range" id="bi-vds" min="0.3" max="1.2" step="0.01" value="1.0"></label>
+          <label class="ctrl"><span><span>게이트 면저항 R<sub>□</sub></span> <output id="bi-rsh-out"></output></span><input type="range" id="bi-rsh" min="1" max="60" step="1" value="10"></label>
+          <label class="check"><input type="checkbox" id="bi-cmp" checked> 다른 L 두 개 겹쳐 보기</label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>f<sub>T</sub></span><span><i style="background:var(--accent-2)"></i>f<sub>max</sub></span><span><i style="background:var(--text-faint)"></i>L/2, 2L의 f<sub>T</sub></span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">피크 f<sub>T</sub></span><span class="v" id="bi-o-ft">—</span></div>
+        <div class="stat"><span class="k">피크 f<sub>T</sub> 전류 밀도</span><span class="v" id="bi-o-jt">—</span></div>
+        <div class="stat"><span class="k">피크 f<sub>max</sub></span><span class="v" id="bi-o-fm">—</span></div>
+        <div class="stat"><span class="k">피크 f<sub>max</sub> 전류 밀도</span><span class="v" id="bi-o-jm">—</span></div>
+      </div>
+      <div class="sim-note">W = 1 µm(핑거 1 µm, 양쪽 게이트 접촉)로 정규화했다. 모든 양이 W에 비례하므로 곡선은 W와 무관하다. 해볼 것: ① L을 30 nm에서 250 nm까지 바꿔도 피크 f<sub>T</sub>의 전류 밀도가 0.2~0.4 mA/µm 근처에 머무는지 확인한다. ② V<sub>DS</sub>를 0.3 V까지 낮추면 선형 영역에 가까워져 g<sub>ds</sub>가 커지고 f<sub>max</sub>가 먼저 무너진다.</div>
+    </div>
+  </section>
+
+  <!-- ================================================================ 5 -->
+  <section id="fmax">
+    <h2>최대 발진 주파수와 게이트 레이아웃</h2>
+    <p>\(f_T\)는 출력을 단락한 전류 이득이라 게이트 저항도, 출력 컨덕턴스도 보지 않는다. 그러나 실제 증폭기와 발진기는 <b>전력</b> 이득이 필요하다. 그림 15-2의 회로로 \(U\)를 계산하면 다음 근사식을 얻는다.</p>
+    <div class="formula">$$f_{max} \simeq \frac{f_T}{2\sqrt{g_{ds}(R_g+R_s) + 2\pi f_T R_g C_{gd}}}\ \ \approx\ \ \sqrt{\frac{f_T}{8\pi R_g C_{gd}}}\quad (g_{ds}\to 0)$$
+      <div class="where">\(f_{max}\)를 올리려면 \(f_T\)를 높이고 \(R_g C_{gd}\)와 \(g_{ds}R_g\)를 줄여야 한다. BJT에서는 같은 식에서 \(R_g\to r_b\), \(C_{gd}\to C_\mu\)다. 게이트 저항이 0이면 이 식은 발산하지만, 실제로는 채널의 분포 저항(NQS, 약 \(1/5g_m\))이 항상 남는다.</div>
+    </div>
+    <p>게이트 저항의 대부분은 레이아웃이 정한다. 폭이 \(W_f\)인 게이트 핑거 한 줄은 면저항 \(R_\square\)인 얇은 띠이고, 그 아래로 채널에 전류가 고르게 빠져나가는 분포 RC다. 한쪽 끝에서 접촉하면 실효 저항은 전체 띠 저항의 1/3, 양쪽에서 접촉하면 1/12이 된다. 같은 총 폭 W를 \(n_f\)개 핑거로 나누면 핑거 하나의 저항이 \(1/n_f\)로 줄고 이것이 \(n_f\)개 병렬이므로 \(1/n_f^2\)로 준다.</p>
+    <div class="formula">$$R_g = \frac{R_\square\,W_f}{k\,L\,n_f} + \frac{R_{con}}{n_f} + \frac{1}{5g_m},\qquad k = \begin{cases}3 &amp; \text{한쪽 접촉}\\ 12 &amp; \text{양쪽 접촉}\end{cases},\qquad W = n_f W_f$$
+      <div class="where">\(R_\square\): 실리사이드 폴리 약 5~10 Ω/□, HKMG 금속 게이트 스택은 더 높은 경우가 많다. \(R_{con}\): 핑거당 게이트 콘택·비아 저항. 핑거를 너무 잘게 나누면 핑거 끝의 프린지 용량과 배선 용량이 늘어 \(f_T\)가 떨어지므로, 65 nm에서는 \(W_f\approx\) 1~2 µm가 흔한 최적이다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 300" role="img" aria-label="다중 핑거 MOSFET 레이아웃: 한쪽 접촉과 양쪽 접촉">
+        <text x="200" y="22" text-anchor="middle" class="lbl-b">(a) 핑거 1개, 한쪽 접촉</text>
+        <rect x="140" y="60" width="120" height="190" class="f-n" stroke="var(--electron)"/>
+        <rect x="192" y="44" width="16" height="216" fill="var(--accent)" opacity=".85"/>
+        <rect x="186" y="34" width="28" height="18" rx="3" class="f-metal"/>
+        <text x="230" y="40" class="t-mono">게이트 콘택</text>
+        <text x="160" y="160" text-anchor="middle" class="lbl-e" font-size="13">S</text><text x="240" y="160" text-anchor="middle" class="lbl-e" font-size="13">D</text>
+        <path d="M100 60 V250" class="s-line"/><path d="M95 60 H105 M95 250 H105" class="s-line"/><text x="92" y="160" text-anchor="end" class="t-mono">W</text>
+        <text x="200" y="282" text-anchor="middle" class="t-dim">R_g ≈ R□·W/(3L)</text>
+        <text x="610" y="22" text-anchor="middle" class="lbl-b">(b) 핑거 n_f개, 양쪽 접촉</text>
+        <rect x="440" y="80" width="340" height="150" class="f-n" stroke="var(--electron)"/>
+        <path d="M440 60 H780 V68 H440 Z M440 242 H780 V250 H440 Z" fill="var(--accent)" opacity=".85"/>
+        <g fill="var(--accent)" opacity=".85">
+          <rect x="482" y="64" width="12" height="182"/><rect x="546" y="64" width="12" height="182"/><rect x="610" y="64" width="12" height="182"/><rect x="674" y="64" width="12" height="182"/><rect x="738" y="64" width="12" height="182"/>
+        </g>
+        <g class="lbl-e" font-size="12" text-anchor="middle">
+          <text x="460" y="160">S</text><text x="520" y="160">D</text><text x="584" y="160">S</text><text x="648" y="160">D</text><text x="712" y="160">S</text><text x="768" y="160">D</text>
+        </g>
+        <path d="M792 80 V230" class="s-line"/><path d="M787 80 H797 M787 230 H797" class="s-line"/><text x="797" y="140" class="t-mono">W_f</text>
+        <text x="610" y="282" text-anchor="middle" class="t-dim">R_g ≈ R□·W_f/(12 L n_f): 같은 W에서 수백 배 작다</text>
+        <text x="610" y="52" text-anchor="middle" class="t-mono">위·아래 게이트 버스 (금속 1)</text>
+      </svg>
+      <figcaption><b>그림 15-5.</b> RF MOSFET 레이아웃. (a) 넓은 게이트 한 줄을 한쪽 끝에서만 접촉하면 게이트 저항이 매우 크다. (b) 같은 W를 \(W_f\)짜리 핑거 여러 개로 나누고 위·아래 버스로 양쪽 접촉하면 \(R_g\)는 \(1/(4n_f^2)\)로 준다. 소스·드레인을 핑거 사이에서 공유하므로 드레인 접합 면적과 \(C_{db}\)도 줄어든다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-fg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>핑거를 몇 개로 나눌까: R<sub>g</sub>와 f<sub>max</sub></h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><div class="cv2"><div><canvas id="fg-lay"></canvas></div><div><canvas id="fg-cv"></canvas></div></div></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>총 폭 W</span> <output id="fg-W-out"></output></span><input type="range" id="fg-W" min="10" max="200" step="2" value="40"></label>
+          <label class="ctrl"><span><span>핑거 수 n<sub>f</sub></span> <output id="fg-nf-out"></output></span><input type="range" id="fg-nf" min="0" max="7" step="0.02" value="1.5"></label>
+          <div class="ctrl"><span>게이트 접촉</span><div class="seg" id="fg-side"><button data-value="1">한쪽</button><button data-value="2" class="on">양쪽</button></div></div>
+          <label class="ctrl"><span><span>게이트 면저항 R<sub>□</sub></span> <output id="fg-rsh-out"></output></span><input type="range" id="fg-rsh" min="1" max="60" step="1" value="10"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">핑거 폭 W<sub>f</sub></span><span class="v" id="fg-o-wf">—</span></div>
+        <div class="stat"><span class="k">R<sub>g</sub> = 폴리 + 콘택 + NQS</span><span class="v" id="fg-o-rg">—</span></div>
+        <div class="stat"><span class="k">f<sub>T</sub></span><span class="v" id="fg-o-ft">—</span></div>
+        <div class="stat"><span class="k">f<sub>max</sub></span><span class="v" id="fg-o-fm">—</span></div>
+      </div>
+      <div class="sim-note">L = 65 nm, V<sub>GS</sub> = 0.66 V(피크 f<sub>max</sub> 부근), 핑거당 콘택 10 Ω, 핑거당 기생 용량 0.1 fF(끝 프린지·배선, 절반씩 C<sub>gs</sub>·C<sub>gd</sub>). 해볼 것: ① 핑거 1개로 W = 40 µm를 만들면 f<sub>max</sub>가 f<sub>T</sub>보다 낮아진다. ② 핑거를 늘려 f<sub>max</sub>의 최댓값을 찾고, 그때의 W<sub>f</sub>를 읽는다. ③ 한쪽 접촉으로 바꾸면 최적 핑거 수가 어떻게 바뀌는가?</div>
+    </div>
+    <div class="callout deep"><strong>밀리미터파에서는 배선이 소자다</strong><p>100 GHz 이상에서는 트랜지스터 위의 금속 배선과 비아가 만드는 수 fF·수 pH가 진성 소자만큼 중요하다. 그래서 파운드리는 '첫 번째 금속까지' 또는 '최상위 금속까지' 포함한 \(f_{max}\)를 따로 제시하며, 두 값은 30% 이상 차이 나기도 한다. FinFET은 핀 위를 덮는 얇은 금속 게이트의 저항과 핀 사이 기생 용량 때문에 같은 노드의 평면 소자보다 \(f_{max}\)를 얻기 어렵고, 이것이 22 nm FD-SOI 같은 평면 공정이 밀리미터파 시장에서 강세인 이유 중 하나다.</p></div>
+  </section>
+
+  <!-- ================================================================ 6 -->
+  <section id="noise">
+    <h2>소자 잡음</h2>
+    <p>아무 신호가 없어도 소자의 단자 전류는 평균값 주위에서 무작위로 흔들린다. 이 <span class="term">잡음</span><span class="en">(Noise)</span>이 수신기가 알아들을 수 있는 가장 약한 신호를 정한다. 잡음은 주파수당 평균 제곱값, 즉 <span class="term">전력 스펙트럼 밀도</span><span class="en">(Power spectral density)</span> \(\overline{i_n^2}/\Delta f\) (A²/Hz)로 표시한다. 반도체 소자의 잡음은 기원에 따라 세 가지다.</p>
+    <ul>
+      <li><b>열잡음</b><span class="en">(Thermal noise, Johnson–Nyquist)</span>: 저항 속 캐리어의 열운동. \(\overline{v_n^2} = 4kTR\,\Delta f\). 50 Ω은 상온에서 0.91 nV/√Hz. 주파수와 무관한 백색 잡음이며, 평형 상태의 모든 손실 소자가 낸다.</li>
+      <li><b>산탄 잡음</b><span class="en">(Shot noise)</span>: 장벽을 넘는 전하 하나하나가 독립적으로 도착해 생기는 요동. \(\overline{i_n^2} = 2qI\,\Delta f\). pn 접합 다이오드와 BJT의 \(I_C\)·\(I_B\)가 대표적이다. 1 mA면 18 pA/√Hz.</li>
+      <li><b>1/f 잡음</b><span class="en">(Flicker noise)</span>: 산화막 계면 근처 트랩이 전자를 잡았다 놓으며 채널 전하와 이동도를 흔든다(맥호터 모델). 트랩마다 시간 상수가 넓게 퍼져 있어 스펙트럼이 \(1/f\)를 따른다. 백색 잡음과 같아지는 주파수를 <span class="term">1/f 코너 주파수</span><span class="en">(Flicker corner frequency)</span> \(f_c\)라 한다.</li>
+    </ul>
+    <div class="formula">$$\frac{\overline{i_{nd}^2}}{\Delta f} = 4kT\gamma\, g_{d0} + \frac{K}{C_{ox}WL}\cdot\frac{g_m^2}{f},\qquad \frac{\overline{i_{ng}^2}}{\Delta f} = 4kT\delta\frac{\omega^2 C_{gs}^2}{5g_{d0}},\qquad c = \frac{\overline{i_{ng}i_{nd}^*}}{\sqrt{\overline{i_{ng}^2}\cdot\overline{i_{nd}^2}}}\approx 0.395j$$
+      <div class="where">\(g_{d0}\): \(V_{DS}=0\)일 때의 채널 컨덕턴스, \(\gamma\): 과잉 잡음 계수(긴 채널 포화 2/3, 짧은 채널은 실측 약 1~2), \(K\): 공정 상수(nMOS 약 \(10^{-25}\) V²·F, pMOS는 보통 몇 배 작다). 둘째 식은 채널 열잡음이 \(C_{gs}\)를 통해 게이트로 결합된 <span class="term">유도 게이트 잡음</span><span class="en">(Induced gate noise)</span>으로, 드레인 잡음과 부분적으로 상관되어 있다(긴 채널 \(\delta = 4/3\)).</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 270" role="img" aria-label="MOSFET 잡음원 등가 회로와 1/f 코너가 있는 잡음 스펙트럼">
+        <g class="s-line">
+          <path d="M30 90 H60 l6 -6 l8 12 l8 -12 l8 12 l8 -12 l8 12 l6 -6 H130"/>
+          <circle cx="150" cy="90" r="16"/>
+          <path d="M166 90 H350"/>
+          <path d="M210 90 V130 M196 130 H224 M196 138 H224 M210 138 V210"/>
+          <path d="M270 90 V118"/><circle cx="270" cy="140" r="20"/><path d="M270 160 V210"/>
+          <path d="M350 90 V118"/><circle cx="350" cy="140" r="20"/><path d="M350 160 V210"/>
+          <path d="M430 90 V118"/><circle cx="430" cy="140" r="20"/><path d="M430 160 V210"/>
+          <path d="M350 90 H470"/>
+          <path d="M120 210 H450"/>
+        </g>
+        <text x="150" y="95" text-anchor="middle" class="t-mono">±</text>
+        <path d="M270 152 V128 M264 134 L270 128 L276 134" stroke="var(--warn)" stroke-width="1.8" fill="none"/>
+        <path d="M350 152 V128 M344 134 L350 128 L356 134" stroke="var(--accent)" stroke-width="1.8" fill="none"/>
+        <path d="M430 152 V128 M424 134 L430 128 L436 134" stroke="var(--accent-2)" stroke-width="1.8" fill="none"/>
+        <text x="84" y="74" text-anchor="middle" class="t-mono">R_g</text>
+        <text x="150" y="124" text-anchor="middle" class="t-mono">4kTR_g</text>
+        <text x="228" y="176" class="t-mono">C_gs</text>
+        <text x="270" y="190" text-anchor="middle" class="t-mono" fill="var(--warn)">i_ng</text>
+        <text x="350" y="190" text-anchor="middle" class="t-mono">g_m v_gs</text>
+        <text x="430" y="190" text-anchor="middle" class="t-mono" fill="var(--accent-2)">i_nd</text>
+        <path d="M290 60 Q350 40 410 60" stroke="var(--text-faint)" stroke-dasharray="3 3" fill="none"/>
+        <text x="350" y="40" text-anchor="middle" class="t-mono">상관 c ≈ 0.395j</text>
+        <text x="240" y="244" text-anchor="middle" class="t-dim">게이트 저항 열잡음 · 유도 게이트 잡음 · 드레인 열·1/f 잡음</text>
+        <!-- spectrum -->
+        <path d="M530 30 V220 H800" class="s-axis"/>
+        <text x="665" y="252" text-anchor="middle" class="lbl-dim">log f</text>
+        <text x="520" y="120" text-anchor="end" class="lbl-dim" transform="rotate(-90 512 120)">log S</text>
+        <path d="M540 50 L680 150" stroke="var(--warn)" stroke-width="2" stroke-dasharray="6 4"/>
+        <path d="M540 150 H790" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 4"/>
+        <path d="M540 48 C620 104 650 136 690 146 C720 150 760 150 790 149" stroke="var(--text)" stroke-width="2.4" fill="none"/>
+        <path d="M660 150 V220" class="s-dash"/>
+        <text x="660" y="236" text-anchor="middle" class="t-mono">f_c</text>
+        <text x="600" y="70" class="t-mono" fill="var(--warn)">∝ 1/f (기울기 −10 dB/dec)</text>
+        <text x="730" y="140" text-anchor="middle" class="t-mono" fill="var(--accent)">백색 (열·산탄)</text>
+      </svg>
+      <figcaption><b>그림 15-6.</b> 왼쪽: MOSFET의 잡음원. 게이트 저항의 열잡음 전압, 채널 열잡음이 게이트로 유도된 전류 \(i_{ng}\), 드레인 잡음 전류 \(i_{nd}\)(열 + 1/f)가 있고, \(i_{ng}\)와 \(i_{nd}\)는 같은 채널 요동에서 나오므로 일부 상관되어 있다. 오른쪽: 잡음 스펙트럼은 낮은 주파수에서 1/f 잡음이, 높은 주파수에서 백색 잡음이 지배하며, 그 경계가 코너 주파수 \(f_c\)다.</figcaption>
+    </figure>
+    <p>1/f 잡음은 RF 증폭 대역(GHz)에서는 보이지 않지만, 발진기와 믹서의 비선형성이 이를 반송파 주변으로 끌어올려 <span class="term">위상 잡음</span><span class="en">(Phase noise)</span>이 된다. 짧은 채널 MOSFET의 \(f_c\)는 수 MHz~수십 MHz인 반면 BJT·HBT는 수백 Hz~수 kHz다. 계면 트랩이 전류 경로에 없는 수직 소자이기 때문이다. 저잡음 발진기에 SiGe HBT가 여전히 쓰이는 이유다. 회로 관점의 잡음 해석은 <a href="../../analog/chapters/noise.html">AnalogBook의 잡음 장</a>을 참고하자.</p>
+
+    <div class="sim" id="sim-nz">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>잡음 스펙트럼과 시간 파형</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="nz-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>잡음원</span><div class="seg" id="nz-dev"><button data-value="mos" class="on">MOSFET</button><button data-value="bjt">SiGe HBT</button><button data-value="res">저항</button></div></div>
+          <label class="ctrl" id="nz-c-id"><span><span>바이어스 전류</span> <output id="nz-id-out"></output></span><input type="range" id="nz-id" min="-1.3" max="1.3" step="0.01" value="0"></label>
+          <div id="nz-gm">
+            <label class="ctrl"><span><span>폭 W</span> <output id="nz-W-out"></output></span><input type="range" id="nz-W" min="1" max="200" step="1" value="20"></label>
+            <label class="ctrl"><span><span>길이 L</span> <output id="nz-L-out"></output></span><input type="range" id="nz-L" min="30" max="1000" step="5" value="65"></label>
+            <label class="ctrl"><span><span>과잉 잡음 계수 γ</span> <output id="nz-g-out"></output></span><input type="range" id="nz-g" min="0.67" max="2.5" step="0.01" value="1"></label>
+          </div>
+          <div id="nz-gb" style="display:none">
+            <label class="ctrl"><span><span>베이스 저항 r<sub>b</sub></span> <output id="nz-rb-out"></output></span><input type="range" id="nz-rb" min="5" max="200" step="1" value="40"></label>
+          </div>
+          <div id="nz-gr" style="display:none">
+            <label class="ctrl"><span><span>저항 R</span> <output id="nz-R-out"></output></span><input type="range" id="nz-R" min="0" max="5" step="0.01" value="1.7"></label>
+          </div>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--text)"></i>합계</span><span><i style="background:var(--accent)"></i>백색(열·산탄)</span><span><i style="background:var(--warn)"></i>1/f</span><span><i style="background:var(--text-faint)"></i>시간 파형: 백색 성분만</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">백색 바닥 (입력 환산)</span><span class="v" id="nz-o-w">—</span></div>
+        <div class="stat"><span class="k">1/f 코너 f<sub>c</sub></span><span class="v" id="nz-o-fc">—</span></div>
+        <div class="stat"><span class="k">rms (10 Hz–10 MHz)</span><span class="v" id="nz-o-rms">—</span></div>
+        <div class="stat"><span class="k">g<sub>m</sub></span><span class="v" id="nz-o-gm">—</span></div>
+      </div>
+      <div class="sim-note">입력 환산 잡음 전압 밀도 √S<sub>v</sub>다. MOSFET: 4kTγ/(αg<sub>m</sub>) + K/(C<sub>ox</sub>WLf), K = 10⁻²⁵ V²·F. HBT: 4kT(r<sub>b</sub> + 1/2g<sub>m</sub>) + 베이스 전류 잡음(2qI<sub>B</sub> + 1/f 성분)이 r<sub>b</sub> + 50 Ω에 흐르는 몫. 시간 파형은 이 스펙트럼으로 합성한 잡음(백색 + 로그 간격 1차 저역 과정의 합)이며 표본화 주파수를 8f<sub>c</sub>로 잡아 1/f 요동이 보이게 했다. 해볼 것: ① MOSFET의 W·L을 키워 f<sub>c</sub>를 낮춘다(면적에 반비례). ② 같은 전류의 HBT와 코너 주파수를 비교한다.</div>
+    </div>
+  </section>
+
+  <!-- ================================================================ 7 -->
+  <section id="nf">
+    <h2>잡음 지수와 최소 잡음 지수</h2>
+    <p>증폭기가 얼마나 잡음을 더하는지는 <span class="term">잡음 지수</span><span class="en">(Noise figure, NF)</span>로 표시한다. 신호원 저항이 표준 온도 \(T_0 = 290\) K에서 내는 열잡음을 기준으로, 출력 잡음 중 증폭기가 더한 몫을 따진다.</p>
+    <div class="formula">$$F = \frac{\text{SNR}_{in}}{\text{SNR}_{out}} = 1 + \frac{T_e}{T_0},\quad NF = 10\log_{10}F,\qquad F_{tot} = F_1 + \frac{F_2-1}{G_1} + \frac{F_3-1}{G_1G_2} + \cdots\ (\text{프리스})$$
+      <div class="where">\(T_e\): 등가 잡음 온도. NF 1 dB는 \(T_e\approx 75\) K다. 프리스 식이 말하듯 첫 단의 이득 \(G_1\)이 크면 뒷단의 잡음은 \(G_1\)로 나뉘어 작아진다. 그래서 수신기의 감도는 안테나 바로 뒤 <span class="term">저잡음 증폭기</span><span class="en">(Low-noise amplifier, LNA)</span>의 첫 트랜지스터가 거의 결정한다.</div>
+    </div>
+    <p>2단자쌍의 내부 잡음원은 모두 입력 쪽의 직렬 잡음 전압 \(e_n\)과 병렬 잡음 전류 \(i_n\)(부분 상관)으로 옮길 수 있다. 그러면 잡음 지수는 신호원 어드미턴스 \(Y_s = G_s + jB_s\)만의 함수가 되고, 최솟값 \(F_{min}\)을 주는 최적 어드미턴스 \(Y_{opt}\)가 존재한다.</p>
+    <div class="formula">$$F = F_{min} + \frac{R_n}{G_s}\left|Y_s - Y_{opt}\right|^2,\qquad F_{min} \approx 1 + \frac{2}{\sqrt5}\,\frac{f}{f_T}\sqrt{\gamma\delta\,(1-|c|^2)}\ \ (R_g = 0),\qquad W_{opt} \approx \frac{1}{3\omega L C_{ox} R_s}$$
+      <div class="where">\(R_n\): 잡음 저항(\(F\)가 정합 오차에 얼마나 민감한지), \(F_{min}\): 잡음 정합 시의 잡음 지수. 둘째 식은 리(T. H. Lee)의 결과로, \(F_{min}-1\)이 \(f/f_T\)에 비례한다. 셋째 식은 50 Ω(\(R_s\)) 신호원에 직접 잡음 정합되는 '전력 제한' 최적 폭이다. 게이트 저항이 있으면 \(F_{min}\)에 대략 \(2(f/f_T)\sqrt{g_m R_g}\) 꼴의 항이 더해진다(후쿠이 식과 같은 꼴).</div>
+    </div>
+    <p>즉 잡음 지수를 낮추는 길도 결국 높은 \(f_T\)다. \(f_T\)가 동작 주파수의 20배면 \(NF_{min}\)은 0.5 dB 안팎, 5배면 1.5 dB를 넘는다. 아래 시뮬레이터는 드레인 열잡음, 상관된 유도 게이트 잡음, 게이트 저항 열잡음을 등가 회로에 넣고 입력 환산 \(e_n\)·\(i_n\)과 그 상관을 계산해 잡음 파라미터 \((F_{min}, R_n, Y_{opt})\)를 구한다.</p>
+
+    <div class="sim" id="sim-nf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>MOSFET의 최소 잡음 지수 vs 주파수</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="nf-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>채널 길이 L</span> <output id="nf-L-out"></output></span><input type="range" id="nf-L" min="30" max="250" step="5" value="65"></label>
+          <label class="ctrl"><span><span>폭 W</span> <output id="nf-W-out"></output></span><input type="range" id="nf-W" min="5" max="300" step="1" value="60"></label>
+          <label class="ctrl"><span><span>V<sub>GS</sub></span> <output id="nf-vgs-out"></output></span><input type="range" id="nf-vgs" min="0.3" max="1.1" step="0.01" value="0.55"></label>
+          <label class="ctrl"><span><span>γ (δ = 2γ)</span> <output id="nf-g-out"></output></span><input type="range" id="nf-g" min="0.67" max="2.5" step="0.01" value="1"></label>
+          <label class="ctrl"><span><span>관심 주파수 f<sub>0</sub></span> <output id="nf-f0-out"></output></span><input type="range" id="nf-f0" min="0" max="2" step="0.01" value="0.7"></label>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>NF<sub>min</sub> (R<sub>g</sub> 포함)</span><span><i style="background:var(--warn)"></i>리의 식 (R<sub>g</sub> = 0)</span><span><i style="background:var(--accent-2)"></i>50 Ω 신호원 + 최적 리액턴스</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">f<sub>T</sub> / I<sub>D</sub></span><span class="v" id="nf-o-ft">—</span></div>
+        <div class="stat"><span class="k">NF<sub>min</sub> @ f<sub>0</sub></span><span class="v" id="nf-o-nf">—</span></div>
+        <div class="stat"><span class="k">NF (50 Ω) @ f<sub>0</sub></span><span class="v" id="nf-o-n50">—</span></div>
+        <div class="stat"><span class="k">R<sub>n</sub></span><span class="v" id="nf-o-rn">—</span></div>
+        <div class="stat"><span class="k">Z<sub>opt</sub> @ f<sub>0</sub></span><span class="v" id="nf-o-z">—</span></div>
+      </div>
+      <div class="sim-note">레이아웃은 핑거 1 µm, 양쪽 접촉, R<sub>□</sub> = 10 Ω/□, 핑거당 콘택 10 Ω. 해볼 것: ① W를 바꿔도 NF<sub>min</sub>은 거의 그대로이고(g<sub>m</sub>R<sub>g</sub>가 일정) 50 Ω 잡음 지수만 크게 움직인다. R<sub>opt</sub>가 50 Ω에 가까워지는 W를 찾아라. ② γ를 2/3에서 2로 올리면 NF<sub>min</sub>이 얼마나 나빠지는가? 짧은 채널의 γ 논쟁이 왜 중요한지 느껴 보자.</div>
+    </div>
+    <div class="callout tip"><strong>잡음 정합과 전력 정합은 다르다</strong><p>\(Y_{opt}\)는 입력 임피던스의 켤레와 일반적으로 다르다. 잡음 정합을 하면 반사가 생기고, 전력 정합을 하면 NF가 나빠진다. 인덕터 소스 디제너레이션 LNA는 소스 인덕터 \(L_s\)로 입력 임피던스의 실수부 \(\omega_T L_s\)를 '잡음 없이' 만들어 두 조건을 동시에 근사한다. 입력 트랜지스터 폭을 \(W_{opt}\) 근처로 잡는 것이 출발점이다.</p></div>
+  </section>
+
+  <!-- ================================================================ 8 -->
+  <section id="compare">
+    <h2>RF 소자 비교: CMOS, SiGe HBT, III-V HEMT</h2>
+    <p>속도를 올리려면 소자를 짧게(얇게) 만들어야 하는데, 같은 전압이 짧은 거리에 걸리면 전계가 커져 항복한다. 1965년 존슨(E. O. Johnson)은 이 트레이드오프를 재료의 항복 전계 \(E_{br}\)와 포화 속도 \(v_{sat}\)만으로 묶었다.</p>
+    <div class="formula">$$f_T\cdot BV \lesssim \frac{E_{br}\,v_{sat}}{2\pi}\qquad (\text{존슨 한계})$$
+      <div class="where">통과 시간 \(\tau = L/v_{sat}\), 항복 전압 \(BV = E_{br}L\)에서 \(L\)을 지우면 얻는다. Si는 약 0.5 THz·V, GaAs 약 0.5 THz·V, GaN은 \(E_{br}\)가 10배 커서 약 13 THz·V다. 실제 소자는 전계가 균일하지 않고 기생이 있어 이 한계보다 아래에 놓인다(SiGe HBT는 \(BV_{CEO}\)가 \(BV_{CBO}\)보다 작아 정의에 따라 위로 보이기도 한다).</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 280" role="img" aria-label="SiGe HBT와 GaN HEMT 단면 비교">
+        <text x="200" y="22" text-anchor="middle" class="lbl-b">(a) SiGe HBT (수직 소자)</text>
+        <rect x="60" y="200" width="280" height="50" class="f-n" stroke="var(--electron)"/><text x="200" y="230" text-anchor="middle" class="t-mono">n⁺ 매몰 컬렉터</text>
+        <rect x="60" y="130" width="280" height="70" class="f-n"/><text x="200" y="172" text-anchor="middle" class="t-mono">n 컬렉터 (SIC)</text>
+        <rect x="60" y="110" width="280" height="20" class="f-p" stroke="var(--hole)"/><text x="66" y="124" class="t-mono">SiGe 베이스 ~20 nm</text>
+        <rect x="160" y="70" width="80" height="40" class="f-n" stroke="var(--electron)"/><text x="200" y="94" text-anchor="middle" class="t-mono">n⁺ 폴리 E</text>
+        <rect x="70" y="86" width="80" height="24" class="f-p" stroke="var(--hole)"/><rect x="250" y="86" width="80" height="24" class="f-p" stroke="var(--hole)"/>
+        <text x="110" y="80" text-anchor="middle" class="t-mono">p⁺ 외부 B</text><text x="290" y="80" text-anchor="middle" class="t-mono">p⁺ 외부 B</text>
+        <path d="M200 110 V196" stroke="var(--electron)" stroke-width="2" stroke-dasharray="5 4"/>
+        <path d="M40 112 L40 128 L22 128 Z" fill="var(--accent-2)" opacity=".8"/><text x="30" y="148" text-anchor="middle" class="t-mono">Ge%</text>
+        <text x="200" y="270" text-anchor="middle" class="t-dim">전자는 수직으로 W_B만 지나간다 · 1/f 작음 · g_m = I_C/V_t</text>
+        <text x="610" y="22" text-anchor="middle" class="lbl-b">(b) AlGaN/GaN HEMT (수평 소자)</text>
+        <rect x="460" y="200" width="300" height="50" class="f-surface"/><text x="610" y="230" text-anchor="middle" class="t-mono">SiC 또는 Si 기판</text>
+        <rect x="460" y="130" width="300" height="70" class="f-n"/><text x="610" y="192" text-anchor="middle" class="t-mono">GaN 버퍼·채널</text>
+        <rect x="460" y="112" width="300" height="18" class="f-acc2-soft"/><text x="610" y="125" text-anchor="middle" class="t-mono">AlGaN 장벽 ~20 nm</text>
+        <path d="M460 134 H760" stroke="var(--electron)" stroke-width="2.5" stroke-dasharray="6 3"/>
+        <text x="468" y="150" class="lbl-e" font-size="12">2DEG ~10¹³ cm⁻²</text>
+        <rect x="470" y="88" width="60" height="24" class="f-metal"/><rect x="690" y="88" width="60" height="24" class="f-metal"/>
+        <text x="500" y="80" text-anchor="middle" class="t-mono">S (오믹)</text><text x="720" y="80" text-anchor="middle" class="t-mono">D (오믹)</text>
+        <path d="M585 112 V96 H570 V70 H620 V96 H605 V112 Z" class="f-metal"/>
+        <text x="595" y="62" text-anchor="middle" class="t-mono">T형 게이트 (쇼트키)</text>
+        <path d="M620 140 C650 150 670 150 690 140" stroke="var(--bad)" stroke-width="1.6" fill="none"/><text x="655" y="164" text-anchor="middle" class="t-mono" fill="var(--bad)">고전계 영역</text>
+        <text x="610" y="270" text-anchor="middle" class="t-dim">도핑 없는 2DEG: 높은 이동도·전하 · 넓은 밴드갭: 높은 BV</text>
+      </svg>
+      <figcaption><b>그림 15-7.</b> (a) SiGe HBT: 얇은 SiGe 베이스를 수직으로 지나는 전자의 통과 시간이 짧고, Ge 그레이딩이 만드는 내장 전계가 전자를 가속한다. (b) GaN HEMT: AlGaN/GaN 계면의 분극 전하가 도핑 없이 고농도 2차원 전자 가스를 만든다. T형 게이트는 짧은 게이트 길이(\(f_T\))와 낮은 게이트 저항(\(f_{max}\))을 함께 얻는 구조다. 밴드 오프셋과 2DEG의 원리는 <a href="hetero.html">13장</a>, 고전압 동작은 <a href="power.html">14장</a>에서 다룬다.</figcaption>
+    </figure>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>기술 (대표값, 약)</th><th>\(f_T\) / \(f_{max}\)</th><th>항복 전압</th><th>강점</th><th>주 용도</th></tr></thead>
+        <tbody>
+          <tr><td>RF CMOS (22 nm FD-SOI, 2020년대)</td><td>~350 / ~400 GHz</td><td>~1.5 V</td><td>디지털과 한 칩, 낮은 원가</td><td>Wi-Fi·5G 트랜시버, 밀리미터파 위상 배열</td></tr>
+          <tr><td>SiGe HBT (130 nm BiCMOS)</td><td>~300~500 / ~500~700 GHz</td><td>BV<sub>CEO</sub> ~1.5~2 V</td><td>높은 g<sub>m</sub>/I, 낮은 1/f, 균일성</td><td>77 GHz 차량 레이더, 광통신, 계측기</td></tr>
+          <tr><td>GaAs pHEMT / HBT</td><td>~100 / ~200 GHz</td><td>~10~15 V</td><td>낮은 잡음, 효율 좋은 PA</td><td>휴대폰 PA·스위치, 위성 LNA</td></tr>
+          <tr><td>InP HEMT / HBT</td><td>~600 / ~1000 GHz 이상</td><td>~2~4 V</td><td>가장 빠름, 극저온 최저 잡음</td><td>서브 THz, 전파 천문, 양자 컴퓨터 판독</td></tr>
+          <tr><td>GaN HEMT (0.15~0.25 µm)</td><td>~30~100 / ~60~200 GHz</td><td>~50~150 V</td><td>높은 전력 밀도(수 W/mm)</td><td>기지국·레이더 PA</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="sim" id="sim-map">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>f<sub>T</sub>–항복 전압 지도와 존슨 한계</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="mp-cv" class="pick-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span><span>존슨 한계선 E<sub>br</sub>v<sub>sat</sub>/2π</span></span></div>
+          <label class="check"><input type="checkbox" id="mp-si" checked> Si (3×10⁵ V/cm, 1.07×10⁷ cm/s)</label>
+          <label class="check"><input type="checkbox" id="mp-gaas" checked> GaAs (4×10⁵, 1×10⁷)</label>
+          <label class="check"><input type="checkbox" id="mp-inp"> InP (5×10⁵, 1×10⁷)</label>
+          <label class="check"><input type="checkbox" id="mp-sic"> 4H-SiC (2.5×10⁶, 2.2×10⁷)</label>
+          <label class="check"><input type="checkbox" id="mp-gan" checked> GaN (3.3×10⁶, 2.5×10⁷)</label>
+          <div class="fb" id="mp-fb">점을 누르면 소자 정보가 나온다.</div>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>Si CMOS·LDMOS</span><span><i style="background:var(--accent-2)"></i>SiGe HBT</span><span><i style="background:var(--warn)"></i>GaAs·InP</span><span><i style="background:var(--bad)"></i>GaN</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">선택 소자</span><span class="v" id="mp-o-n">—</span></div>
+        <div class="stat"><span class="k">f<sub>T</sub>·BV</span><span class="v" id="mp-o-p">—</span></div>
+        <div class="stat"><span class="k">자기 재료 한계 대비</span><span class="v" id="mp-o-r">—</span></div>
+      </div>
+      <div class="sim-note">점은 공개 문헌의 대략값(2010~2024년)이며 소자·정의(BV<sub>CEO</sub>, 오프 상태 BV, 2×V<sub>DD</sub> 등)마다 다르다. 선은 E<sub>br</sub>v<sub>sat</sub>/(2π·BV). 해볼 것: ① 같은 재료 안에서 점들이 존슨 선과 평행하게 늘어서는지 본다. ② GaN 선이 Si 선보다 약 25배 위에 있다. 같은 f<sub>T</sub>에서 견딜 수 있는 전압, 곧 출력 전력이 다르다.</div>
+    </div>
+  </section>
+
+  <!-- ================================================================ 9 -->
+  <section id="design">
+    <h2>설계 챌린지: LNA 입력 트랜지스터</h2>
+    <p>이제 모든 조각을 모아 보자. 5 GHz Wi-Fi LNA의 입력 트랜지스터를 고른다고 하자. 요구 조건은 두 가지다. 첫째, 이득을 얻고 \(F_{min}\)을 낮추려면 \(f_T\)가 충분히 높아야 한다. 둘째, 50 Ω 안테나에 손실 큰 정합 회로 없이 붙이려면 50 Ω 신호원에서(리액턴스만 최적으로 조정해) 잡음 지수가 목표 이하여야 한다. 그리고 배터리를 위해 전류는 최소로 쓴다. L, W, \(V_{GS}\)를 바꾸면 \(f_T\)와 NF가 어떻게 엇갈리는지가 이 장의 요약이다.</p>
+    <div class="sim" id="sim-ch">
+      <div class="sim-head"><span class="sim-tag">CHALLENGE</span><h3>최소 전류로 f<sub>T</sub>와 NF 목표 맞추기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ch-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span><span>목표 (f<sub>0</sub>, f<sub>T</sub> 하한, NF<sub>50</sub> 상한)</span></span><div class="seg" id="ch-t"><button data-value="0" class="on">2.4 GHz</button><button data-value="1">5 GHz</button><button data-value="2">10 GHz</button><button data-value="3">28 GHz</button></div></div>
+          <label class="ctrl"><span><span>채널 길이 L</span> <output id="ch-L-out"></output></span><input type="range" id="ch-L" min="30" max="180" step="5" value="130"></label>
+          <label class="ctrl"><span><span>폭 W</span> <output id="ch-W-out"></output></span><input type="range" id="ch-W" min="0.5" max="3" step="0.005" value="1.5"></label>
+          <label class="ctrl"><span><span>V<sub>GS</sub> (V<sub>DS</sub> = 1 V)</span> <output id="ch-vgs-out"></output></span><input type="range" id="ch-vgs" min="0.2" max="1.0" step="0.01" value="0.8"></label>
+          <div class="fb" id="ch-fb">목표를 고르고 L, W, V<sub>GS</sub>를 조정하자.</div>
+          <div class="btn-row"><button class="btn sm" id="ch-show">모범 답 보기</button></div>
+        </div>
+      </div>
+      <div class="legend"><span><i style="background:var(--accent-2)"></i>NF<sub>50</sub> vs W (현재 L, V<sub>GS</sub>)</span><span><i style="background:var(--accent)"></i>NF<sub>min</sub></span><span><i style="background:var(--bad)"></i>목표 NF</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">I<sub>D</sub></span><span class="v" id="ch-o-id">—</span></div>
+        <div class="stat"><span class="k">f<sub>T</sub></span><span class="v" id="ch-o-ft">—</span></div>
+        <div class="stat"><span class="k">NF<sub>50</sub> @ f<sub>0</sub></span><span class="v" id="ch-o-nf">—</span></div>
+        <div class="stat"><span class="k">이론 최소 전류</span><span class="v" id="ch-o-best">—</span></div>
+      </div>
+      <div class="sim-note">γ = 1, δ = 2, 핑거 1 µm 양쪽 접촉, R<sub>□</sub> = 10 Ω/□. NF<sub>50</sub>는 신호원 저항 50 Ω에 최적 직렬 리액턴스(인덕터)를 붙였을 때의 잡음 지수다. '이론 최소 전류'는 L 5 nm, V<sub>GS</sub> 10 mV, W 3% 간격(3~1000 µm)의 전수 탐색 결과다. 최소 전류의 1.15배 이내면 ★★★. 힌트: 짧은 L은 같은 전류에서 f<sub>T</sub>가 높고, 낮은 V<sub>GS</sub>(중간 반전)는 g<sub>m</sub>/I<sub>D</sub>가 크다. W는 R<sub>opt</sub>를 50 Ω 근처로 맞추는 손잡이다.</div>
+    </div>
+    <p>모범 답을 보면 대개 가장 짧은 L, \(V_{GS}\)는 문턱 근처의 <span class="term">중간 반전</span><span class="en">(Moderate inversion)</span>, 그리고 꽤 넓은 W가 나온다. 중간 반전은 \(g_m/I_D\)가 커서 전류당 \(f_T\)·잡음 효율이 가장 좋고, 넓은 W는 \(C_{gs}\)를 키워 \(R_{opt}\)를 50 Ω 쪽으로 끌어내린다. 주파수가 올라갈수록 \(f_T\) 요구가 커져 더 높은 전류 밀도로 밀려 올라가는 것도 확인할 수 있다. 이것이 리의 '전력 제한 잡음 최적화'의 실체이며, 실제 LNA는 여기에 선형성과 이득 요구를 더해 바이어스를 정한다. 회로 쪽 설계는 <a href="../../analog/chapters/frequency.html">AnalogBook의 주파수 응답 장</a>과 이어진다.</p>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>준정적 근사는 신호 주기가 채널 통과 시간(\(L^2/\mu V_{ov}\) 또는 \(L/v_{sat}\))보다 충분히 길 때만 맞다. 채널은 분포 RC 전송선이고, 그 이상의 주파수에서는 전하가 뒤처진다(\(R_{nqs}\approx 1/5g_m\), \(g_m\) 지연).</li>
+      <li>소신호 등가 회로: MOSFET은 \(g_m, g_{ds}, C_{gs}\approx\tfrac23WLC_{ox}+WC_{ov}, C_{gd}\approx WC_{ov}, R_g\), BJT는 \(g_m = I_C/V_t, r_\pi=\beta/g_m, C_\pi = g_m\tau_F + C_{je}, C_\mu, r_b\). 동작점에서 수치 미분으로 얻는다.</li>
+      <li>고주파에서는 50 Ω 기준의 S 파라미터를 재고 y로 바꾼다. \(|h_{21}| = 1\)인 주파수가 \(f_T\), 메이슨 이득 \(U = 1\)인 주파수가 \(f_{max}\)이며 둘 다 −20 dB/dec로 외삽한다.</li>
+      <li>\(f_T \approx g_m/2\pi(C_{gs}+C_{gd})\)는 긴 채널에서 \(1/L^2\), 속도 포화에서 \(1/L\)에 비례하고, 기생 용량 때문에 더 완만하다. nMOS의 피크 \(f_T\)는 노드와 무관하게 약 0.3 mA/µm에서 나온다.</li>
+      <li>\(f_{max}\approx f_T/(2\sqrt{g_{ds}(R_g+R_s) + 2\pi f_T R_gC_{gd}})\). 게이트 저항은 핑거 분할(\(1/n_f^2\))과 양쪽 접촉(1/12 대 1/3)으로 줄이며, 핑거가 너무 많으면 기생 용량이 늘어 최적점이 있다.</li>
+      <li>잡음: 열잡음 \(4kTR\), 산탄 잡음 \(2qI\), 1/f 잡음 \(K/(C_{ox}WLf)\). MOSFET 드레인 잡음 \(4kT\gamma g_{d0}\)와 상관된 유도 게이트 잡음이 있다. MOSFET의 1/f 코너는 MHz 대, HBT는 kHz 대다.</li>
+      <li>\(F = F_{min} + (R_n/G_s)|Y_s - Y_{opt}|^2\), \(F_{min}-1\propto f/f_T\). 프리스 식에 따라 LNA 첫 트랜지스터가 감도를 정하며, 50 Ω 잡음 정합에는 W(곧 \(C_{gs}\))가 핵심 손잡이다.</li>
+      <li>존슨 한계 \(f_T\cdot BV\lesssim E_{br}v_{sat}/2\pi\): CMOS·SiGe는 집적도와 속도, GaAs·InP는 최저 잡음과 최고 속도, GaN은 높은 전압·전력에서 강하다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>Q1. 긴 채널 MOSFET에서 같은 과구동 전압으로 L을 절반으로 줄이면 f<sub>T</sub>는? 또 완전히 속도 포화된 짧은 채널이라면?</p>
+        <div class="opts"><button class="opt">둘 다 2배</button><button class="opt" data-correct>긴 채널 4배, 속도 포화 약 2배</button><button class="opt">긴 채널 2배, 속도 포화 4배</button><button class="opt">둘 다 4배</button></div>
+        <div class="quiz-exp">긴 채널 f<sub>T</sub> = 3μV<sub>ov</sub>/(4πL²) ∝ 1/L². 속도 포화에서는 g<sub>m</sub> → WC<sub>ox</sub>v<sub>sat</sub>로 L과 무관해지고 C<sub>gs</sub> ∝ L이라 f<sub>T</sub> ∝ 1/L이다. 실제로는 L로 줄지 않는 기생 용량 때문에 2배에도 못 미친다.</div></div>
+      <div class="quiz-q"><p>Q2. 게이트 핑거 폭 W<sub>f</sub>를 그대로 두고 한쪽 접촉을 양쪽 접촉으로 바꿨다. 게이트 전극의 분포 저항 성분은?</p>
+        <div class="opts"><button class="opt">1/2로 준다</button><button class="opt">그대로다</button><button class="opt" data-correct>1/4로 준다 (R/3 → R/12)</button><button class="opt">2배가 된다</button></div>
+        <div class="quiz-exp">한쪽에서 먹이는 분포 RC 띠의 실효 저항은 전체 띠 저항의 1/3, 양쪽에서 먹이면 길이가 반인 띠 두 개가 병렬이 되어 1/12이다. f<sub>max</sub> ≈ √(f<sub>T</sub>/8πR<sub>g</sub>C<sub>gd</sub>)이므로 이 성분이 R<sub>g</sub>를 지배할 때 f<sub>max</sub>는 최대 2배 가까이 오른다.</div></div>
+      <div class="quiz-q"><p>Q3. 측정한 |h<sub>21</sub>|²이 40 GHz에서 10 dB였다. −20 dB/dec 외삽으로 구한 f<sub>T</sub>는?</p>
+        <div class="opts"><button class="opt">약 80 GHz</button><button class="opt" data-correct>약 126 GHz</button><button class="opt">약 400 GHz</button><button class="opt">약 50 GHz</button></div>
+        <div class="quiz-exp">|h<sub>21</sub>|가 1/f로 줄므로 f<sub>T</sub> = f × |h<sub>21</sub>| = 40 GHz × 10<sup>10/20</sup> ≈ 40 × 3.16 ≈ 126 GHz. 이처럼 측정 대역 위의 f<sub>T</sub>·f<sub>max</sub>는 외삽값이라, 기울기가 정확히 −20 dB/dec인 구간에서 읽어야 한다.</div></div>
+      <div class="quiz-q"><p>Q4. MOSFET의 1/f 잡음 코너 주파수를 낮추는 가장 직접적인 방법은?</p>
+        <div class="opts"><button class="opt">L을 줄여 f<sub>T</sub>를 높인다</button><button class="opt" data-correct>게이트 면적 WL을 키운다 (또는 pMOS·매몰 채널을 쓴다)</button><button class="opt">V<sub>DS</sub>를 높인다</button><button class="opt">게이트 저항을 줄인다</button></div>
+        <div class="quiz-exp">입력 환산 1/f 잡음 K/(C<sub>ox</sub>WLf)는 면적에 반비례한다. 트랩 수가 면적에 비례해도 그 효과가 더 많은 채널 전하로 평균되기 때문이다. 대신 C<sub>gs</sub>가 커져 f<sub>T</sub>가 떨어지므로 발진기 설계는 위상 잡음과 속도 사이의 절충이다.</div></div>
+      <div class="quiz-q"><p>Q5. 이득 15 dB, NF 1 dB인 LNA 뒤에 NF 10 dB인 믹서를 붙였다. 전체 NF에 가장 가까운 값은?</p>
+        <div class="opts"><button class="opt">11 dB</button><button class="opt">5.5 dB</button><button class="opt" data-correct>약 1.9 dB</button><button class="opt">1.0 dB</button></div>
+        <div class="quiz-exp">F<sub>1</sub> = 1.26, F<sub>2</sub> = 10, G<sub>1</sub> = 31.6. 프리스 식으로 F = 1.26 + 9/31.6 ≈ 1.54, 곧 약 1.9 dB다. 믹서의 NF 10 dB가 첫 단 이득 31.6배로 나뉘어 0.9 dB만 더한다. 뒷단이 아무리 시끄러워도 첫 단의 이득이 크면 전체 잡음은 첫 단이 정한다.</div></div>
+      <div class="quiz-q"><p>Q6. 같은 f<sub>T</sub>에서 GaN HEMT가 GaAs pHEMT보다 훨씬 큰 출력 전력을 내는 근본 이유는?</p>
+        <div class="opts"><button class="opt">전자 이동도가 훨씬 높아서</button><button class="opt" data-correct>항복 전계가 약 8배 커서 존슨 한계 f<sub>T</sub>·BV가 크고, 같은 속도에서 더 높은 전압을 견디므로</button><button class="opt">밴드갭이 작아 전자가 많아서</button><button class="opt">1/f 잡음이 작아서</button></div>
+        <div class="quiz-exp">출력 전력은 대략 V<sub>max</sub>·I<sub>max</sub>/8에 비례한다. GaN은 E<sub>br</sub> ≈ 3.3 MV/cm(GaAs 0.4 MV/cm)라 같은 게이트 길이에서 BV가 훨씬 높고, 분극 2DEG로 전류 밀도도 크다. 이동도는 오히려 GaAs가 높다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  /* ================= 공통: 소자 모델 ================= */
+  const T = 300, Vt = SC.Vt(T), q = SC.q, kT4 = 4 * SC.kB * T, TWO_PI = 2 * Math.PI;
+  const TOX = 1.5e-7, COX = (3.9 * SC.eps0) / TOX;   // F/cm² (반전 상태 EOT 1.5 nm)
+  const COV = 0.25e-11, CDB = 0.5e-11;               // F/cm = 0.25, 0.5 fF/µm
+  const RSW = 120e-4;                                // 소스·드레인 저항 120 Ω·µm (Ω·cm)
+  const MU0 = 450, TA = 1, TB = 2;                   // μ = MU0/(1 + TA·v + TB·v²)
+  const RSH0 = 10, RCON = 10;                        // 게이트 면저항 Ω/□, 핑거당 콘택 Ω
+  const C_CORR = { re: 0, im: 0.395 };               // 유도 게이트 잡음 상관 계수
+
+  /** 유효 채널 길이 Lnm(nm), 폭 Wum(µm)의 SC.mosfet 매개변수 (L은 cm) */
+  function devP(Lnm, Wum) {
+    const s = Math.min(1, 45 / Lnm);
+    return { W: Wum * 1e-4, L: Lnm * 1e-7, tox: TOX, mu0: MU0, Vth0: 0.40 - 0.06 * s, Nsub: 3e18, theta: 0, vsat: 1.3e7, lambda: 0.08 * s, dibl: 0.07 * s * s };
+  }
+  /** 수직 전계 이동도 열화: 게이트 과구동(매끈한 softplus)으로 μ0를 줄인다 */
+  function muP(p, Vg) { const v = 0.05 * Math.log(1 + Math.exp(Math.min(60, (Vg - p.Vth0) / 0.05))); return Object.assign({}, p, { mu0: MU0 / (1 + TA * v + TB * v * v) }); }
+  /**
+   * 진성 전류: 엔진의 SC.mosfet(EKV)을 쓰되 속도 포화는 매끈한 식으로 바꿔 넣는다.
+   * V_Dsat = V_sL·E_cL/(V_sL + E_cL), V_sL = 4V_t + V_ov,eff/n, V_Deff = V_DS와 V_Dsat의 매끈한 최솟값,
+   * I_D = I_EKV(V_Deff)/(1 + V_Deff/E_cL)·(1 + λV_DS), E_c = 2v_sat/μ.  DIBL은 실제 V_DS로 계산.
+   */
+  function idInt(p, Vg, Vd) {
+    const pm = muP(p, Vg), Vth = p.Vth0 - p.dibl * Vd;
+    const pe = Object.assign(pm, { vsat: 0, lambda: 0, dibl: 0, Vth0: Vth });
+    const n = SC.mosfet(pe, Vg, 0.1).n, s = 2 * n * Vt, x = (Vg - Vth) / s, VovE = s * (x > 40 ? x : Math.log(1 + Math.exp(x)));
+    const EcL = ((2 * p.vsat) / pm.mu0) * p.L, VsL = 4 * Vt + VovE / n, Vdsat = (VsL * EcL) / (VsL + EcL);
+    const Vde = Vd / Math.pow(1 + Math.pow(Vd / Vdsat, 4), 0.25);
+    const Id = (Math.max(0, SC.mosfet(pe, Vg, Vde).Id) / (1 + Vde / EcL)) * (1 + p.lambda * Vd);
+    return { Id, Vth, n, mu: pm.mu0, EcL };
+  }
+  /** 소스·드레인 저항 포함 단자 전류: I = Iint(Vgs − I·Rs, Vds − 2I·Rs) 이분법 */
+  function idExt(p, Vgs, Vds) {
+    const Rs = RSW / p.W;
+    const f = (I) => idInt(p, Vgs - I * Rs, Math.max(0, Vds - 2 * I * Rs)).Id;
+    let lo = 0, hi = f(0);
+    for (let k = 0; k < 44; k++) { const m = 0.5 * (lo + hi); if (f(m) > m) lo = m; else hi = m; }
+    return 0.5 * (lo + hi);
+  }
+  /** 동작점과 소신호 파라미터 (중앙 차분) */
+  function op(Lnm, Wum, Vgs, Vds) {
+    const p = devP(Lnm, Wum), d = 1e-3;
+    const Id = Math.max(idExt(p, Vgs, Vds), 1e-15);
+    const gm = Math.max((idExt(p, Vgs + d, Vds) - idExt(p, Vgs - d, Vds)) / (2 * d), 1e-12);
+    const gds = Math.max((idExt(p, Vgs, Vds + d) - idExt(p, Vgs, Vds - d)) / (2 * d), 1e-12);
+    const Vgi = Vgs - (Id * RSW) / p.W, r = idInt(p, Vgi, Math.max(0, Vds - (2 * Id * RSW) / p.W));
+    const Vov = Vgi - r.Vth, x = Vov / (2 * r.n * Vt);
+    const sig = x > 40 ? 1 : 1 / (1 + Math.exp(-x));
+    const Cgs = (2 / 3) * p.W * p.L * COX * sig + COV * p.W, Cgd = COV * p.W, Cdb = CDB * p.W;
+    const rho = Math.max(0, Vov) / r.EcL;
+    const alpha = Math.max(0.45, (1 + rho / 2) / ((1 + rho) * (1 + rho)));   // g_m/g_d0
+    const regime = Vov < -2 * r.n * Vt ? "문턱 이하" : Vds < Vov / r.n ? "선형" : "포화";
+    return { Id, gm, gds, Cgs, Cgd, Cdb, Vth: r.Vth, n: r.n, Vov, alpha, gd0: gm / alpha, Rs: RSW / p.W, regime, fT: gm / (TWO_PI * (Cgs + Cgd)) };
+  }
+  /** W=1 µm 동작점을 W배로 (레이아웃 핑거 1 µm 고정이면 모든 양이 W에 비례) */
+  function scaleOp(o, W) { return Object.assign({}, o, { Id: o.Id * W, gm: o.gm * W, gds: o.gds * W, Cgs: o.Cgs * W, Cgd: o.Cgd * W, Cdb: o.Cdb * W, gd0: o.gd0 * W, Rs: o.Rs / W }); }
+  /** 게이트 저항: 폴리 분포(1/3 또는 1/12) + 콘택 + NQS 채널 저항 */
+  function gateR(o, Lnm, Wf, nf, both, Rsh, Rcon) {
+    const Rpoly = (Rsh * Wf) / ((both ? 12 : 3) * (Lnm * 1e-3) * nf), Rc = Rcon / (nf * (both ? 2 : 1)), Rnqs = 1 / (5 * o.gm);
+    return { Rpoly, Rc, Rnqs, Rg: Rpoly + Rc + Rnqs };
+  }
+  function fmaxOf(o, Rg) { return o.fT / (2 * Math.sqrt(o.gds * (Rg + o.Rs) + TWO_PI * o.fT * Rg * o.Cgd)); }
+
+  /* ---- 복소수와 2×2 행렬 ---- */
+  const cx = (re, im) => ({ re, im: im || 0 });
+  const cadd = (a, b) => cx(a.re + b.re, a.im + b.im), csub = (a, b) => cx(a.re - b.re, a.im - b.im);
+  const cmul = (a, b) => cx(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re);
+  const cdiv = (a, b) => { const d = b.re * b.re + b.im * b.im; return cx((a.re * b.re + a.im * b.im) / d, (a.im * b.re - a.re * b.im) / d); };
+  const cabs2 = (a) => a.re * a.re + a.im * a.im, cconj = (a) => cx(a.re, -a.im), csc = (a, s) => cx(a.re * s, a.im * s);
+  function inv2(m) {
+    const det = csub(cmul(m[0][0], m[1][1]), cmul(m[0][1], m[1][0]));
+    return [[cdiv(m[1][1], det), cdiv(csc(m[0][1], -1), det)], [cdiv(csc(m[1][0], -1), det), cdiv(m[0][0], det)]];
+  }
+  function mmul(a, b) {
+    const e = (i, j) => cadd(cmul(a[i][0], b[0][j]), cmul(a[i][1], b[1][j]));
+    return [[e(0, 0), e(0, 1)], [e(1, 0), e(1, 1)]];
+  }
+  /** 등가 회로 → y, h21, U, S (Z0 = 50 Ω). tau: g_m 지연 */
+  function twoPort(o, Rg, f, tau) {
+    const w = TWO_PI * f, ph = cx(Math.cos(w * tau), -Math.sin(w * tau));
+    const Yi = [[cx(0, w * (o.Cgs + o.Cgd)), cx(0, -w * o.Cgd)], [cadd(csc(ph, o.gm), cx(0, -w * o.Cgd)), cx(o.gds, w * (o.Cgd + o.Cdb))]];
+    const Z = inv2(Yi), Rs = o.Rs, Rd = o.Rs;
+    Z[0][0] = cadd(Z[0][0], cx(Rg + Rs)); Z[0][1] = cadd(Z[0][1], cx(Rs)); Z[1][0] = cadd(Z[1][0], cx(Rs)); Z[1][1] = cadd(Z[1][1], cx(Rs + Rd));
+    const Y = inv2(Z);
+    const h21 = cdiv(Y[1][0], Y[0][0]);
+    const den = 4 * (Y[0][0].re * Y[1][1].re - Y[0][1].re * Y[1][0].re);
+    const U = den > 0 ? cabs2(csub(Y[1][0], Y[0][1])) / den : NaN;
+    const A = Y.map((r) => r.map((v) => csc(v, 50)));
+    const IpA = [[cadd(cx(1), A[0][0]), A[0][1]], [A[1][0], cadd(cx(1), A[1][1])]];
+    const ImA = [[csub(cx(1), A[0][0]), csc(A[0][1], -1)], [csc(A[1][0], -1), csub(cx(1), A[1][1])]];
+    return { Y, h21, U, S: mmul(ImA, inv2(IpA)) };
+  }
+  /**
+   * 잡음 파라미터 (출력 단락 기준 입력 환산 e_n, i_n과 상관).
+   * 잡음원: 드레인 4kTγg_d0, 유도 게이트 4kTδω²Cgs²/(5g_d0) (상관 c), R_g 열잡음.
+   */
+  function noiseParams(e, f) {
+    const w = TWO_PI * f;
+    const Yin = cx(0, w * (e.Cgs + e.Cgd)), gmx = cx(e.gm, -w * e.Cgd);
+    const Gv = cdiv(gmx, cadd(cx(1), csc(Yin, e.Rg)));
+    const Sd = kT4 * e.gamma * e.gd0, Sg = (kT4 * e.delta * w * w * e.Cgs * e.Cgs) / (5 * e.gd0), Sr = kT4 * e.Rg;
+    const cr = Math.sqrt(Math.max(0, 1 - cabs2(C_CORR)));
+    const ind = [cx(Math.sqrt(Sd)), cx(0), cx(0)];
+    const ing = [csc(C_CORR, Math.sqrt(Sg)), cx(Math.sqrt(Sg) * cr), cx(0)];
+    const erg = [cx(0), cx(0), cx(Math.sqrt(Sr))];
+    let ee = 0, ii = 0, ie = cx(0);
+    for (let k = 0; k < 3; k++) {
+      const en = cadd(cadd(erg[k], csc(ing[k], e.Rg)), cdiv(ind[k], Gv));
+      const inn = cadd(ing[k], cdiv(cmul(ind[k], Yin), gmx));
+      ee += cabs2(en); ii += cabs2(inn); ie = cadd(ie, cmul(inn, cconj(en)));
+    }
+    const Rn = ee / kT4, Yc = csc(ie, 1 / ee), Gu = Math.max(0, (ii - cabs2(Yc) * ee) / kT4);
+    const Gopt = Math.sqrt(Gu / Rn + Yc.re * Yc.re), Bopt = -Yc.im;
+    const Fmin = 1 + 2 * Rn * (Yc.re + Gopt);
+    const F = (Gs, Bs) => 1 + (Gu + Rn * ((Gs + Yc.re) * (Gs + Yc.re) + (Bs + Yc.im) * (Bs + Yc.im))) / Gs;
+    return { Rn, Gu, Yc, Gopt, Bopt, Fmin, F };
+  }
+  const noiseOf = (o, Rg, gamma) => ({ gm: o.gm, Cgs: o.Cgs, Cgd: o.Cgd, Rg, gd0: o.gd0, gamma, delta: 2 * gamma });
+  const dB = (x) => 10 * Math.log10(x);
+
+  /* ---- 표시 도우미 ---- */
+  const sm = (v, u) => v + "<small>" + u + "</small>";
+  const ghz = (f) => (!isFinite(f) ? "—" : f >= 1e12 ? sm(Number((f / 1e12).toPrecision(3)), " THz") : f >= 1e9 ? sm(Number((f / 1e9).toPrecision(3)), " GHz") : sm(Number((f / 1e6).toPrecision(3)), " MHz"));
+  const siH = (x, u, d) => { const s = PB.si(x, u, d || 3); const i = s.lastIndexOf(" "); return sm(s.slice(0, i), s.slice(i)); };
+  function label(ctx, txt, x, y, color, align, px, w) { ctx.fillStyle = color; ctx.font = PB.font(px || 12, false, w || 600); ctx.textAlign = align || "left"; ctx.textBaseline = "middle"; ctx.fillText(txt, x, y); }
+  const logspace = (a, b, n) => Array.from({ length: n }, (_, i) => Math.pow(10, Math.log10(a) + ((Math.log10(b) - Math.log10(a)) * i) / (n - 1)));
+  /** dB 곡선이 0을 지나는 주파수 (로그 보간). 범위 위면 −20 dB/dec 외삽 */
+  function cross(fs, dbs) {
+    for (let i = 1; i < fs.length; i++) {
+      if (isFinite(dbs[i - 1]) && isFinite(dbs[i]) && dbs[i - 1] > 0 && dbs[i] <= 0) {
+        const t = dbs[i - 1] / (dbs[i - 1] - dbs[i]);
+        return { f: Math.pow(10, Math.log10(fs[i - 1]) + t * (Math.log10(fs[i]) - Math.log10(fs[i - 1]))), ext: false };
+      }
+    }
+    for (let i = fs.length - 1; i >= 0; i--) if (isFinite(dbs[i])) return dbs[i] > 0 ? { f: fs[i] * Math.pow(10, dbs[i] / 20), ext: true } : { f: NaN, ext: false };
+    return { f: NaN, ext: false };
+  }
+  function drag(canvas, cb) {
+    canvas.addEventListener("pointerdown", (e) => { const r = canvas.getBoundingClientRect(); cb(e.clientX - r.left, e.clientY - r.top); });
+  }
+
+  /* ================= 1. ANIMATION: 비준정적 채널 ================= */
+  (function () {
+    const el = document.getElementById("nq-cv");
+    const N = 33, dx = 1 / (N - 1);
+    const qv = new Float64Array(N), fl = new Float64Array(N);
+    let t = 0, paused = false, hist = [], acc, res, lastCyc;
+    const gF = PB.range("nq-f", (v) => PB.fmt(Math.pow(10, v), 2), reset);
+    const gA = PB.range("nq-a", (v) => v.toFixed(2), reset);
+    const qsChk = document.getElementById("nq-qs");
+    qsChk.addEventListener("change", () => cv.redraw());
+    const fN = () => (Math.pow(10, gF()) * 3) / (4 * Math.PI);  // f_T(긴 채널) = 3/(4π τ0)
+    function reset() {
+      for (let i = 0; i < N; i++) qv[i] = Math.sqrt(Math.max(0, 1 - i * dx));
+      t = 0; hist = []; res = null; lastCyc = 0;
+      acc = { si: 0, ci: 0, ss: 0, cs: 0, T: 0 };
+      ["nq-o-amp", "nq-o-ph", "nq-o-is"].forEach((id) => PB.stat(id, "계산 중…"));
+    }
+    const U2 = (k) => (qv[k] * qv[k]) / 2;
+    const iDrain = () => -(3 * U2(N - 1) - 4 * U2(N - 2) + U2(N - 3)) / (2 * dx);
+    const iSrc = () => -(-3 * U2(0) + 4 * U2(1) - U2(2)) / (2 * dx);
+    function advance(dtWant) {
+      const a = gA(), f = fN(), dtMax = (0.4 * dx * dx) / (1 + a);
+      let n = Math.ceil(dtWant / dtMax);
+      if (n > 3000) n = 3000;
+      const dt = Math.min(dtWant / n, dtMax), rec = 1 / (f * 260);
+      let nextRec = hist.length ? hist[hist.length - 1].t + rec : 0;
+      for (let s = 0; s < n; s++) {
+        t += dt;
+        const phs = TWO_PI * f * t, vg = 1 + a * Math.sin(phs);
+        qv[0] = vg; qv[N - 1] = 0;
+        for (let i = 0; i < N - 1; i++) fl[i] = (qv[i + 1] * qv[i + 1] - qv[i] * qv[i]) / (2 * dx);
+        for (let i = 1; i < N - 1; i++) qv[i] = Math.max(0, qv[i] + (dt * (fl[i] - fl[i - 1])) / dx);
+        const id = iDrain(), is = iSrc(), sn = Math.sin(phs), cs = Math.cos(phs);
+        acc.si += id * sn * dt; acc.ci += id * cs * dt; acc.ss += is * sn * dt; acc.cs += is * cs * dt; acc.T += dt;
+        const cyc = Math.floor(t * f);
+        if (cyc > lastCyc) {
+          if (cyc >= 2) {
+            const k = 2 / acc.T;
+            res = { amp: (k * Math.hypot(acc.si, acc.ci)) / a, lag: (Math.atan2(-acc.ci, acc.si) * 180) / Math.PI, is: (k * Math.hypot(acc.ss, acc.cs)) / a };
+          }
+          lastCyc = cyc; acc = { si: 0, ci: 0, ss: 0, cs: 0, T: 0 };
+        }
+        if (t >= nextRec) { hist.push({ t, vg, id, is }); nextRec = t + rec; }
+      }
+      const tmin = t - 2.2 / f;
+      while (hist.length && hist[0].t < tmin) hist.shift();
+    }
+    const cv = PB.canvas(el, draw, { aspect: 0.68, minHeight: 300, maxHeight: 460 });
+    function draw(ctx, w, h) {
+      const P = PB.palette(), a = gA(), f = fN();
+      const vgNow = 1 + a * Math.sin(TWO_PI * f * t);
+      // 위: 소자 단면과 채널 전하
+      const x0 = 70, x1 = w - 70, yTop = 18, gH = 18, yCh = yTop + gH + 8, chH = Math.min(80, h * 0.2);
+      ctx.fillStyle = P.dim; ctx.globalAlpha = 0.12 + 0.3 * PB.clamp((vgNow - 1 + 0.4) / 0.8, 0, 1);
+      ctx.fillRect(x0, yTop, x1 - x0, gH); ctx.globalAlpha = 1;
+      label(ctx, "게이트 v_g = V_ov(1 + " + a.toFixed(2) + "·sin ωt)", (x0 + x1) / 2, yTop + gH / 2, P.text, "center", 11, 700);
+      ctx.fillStyle = P.border; ctx.fillRect(x0, yTop + gH, x1 - x0, 6);
+      ctx.fillStyle = P.e; ctx.globalAlpha = 0.18; ctx.fillRect(10, yCh, x0 - 14, chH); ctx.fillRect(x1 + 4, yCh, w - x1 - 14, chH); ctx.globalAlpha = 1;
+      label(ctx, "S", 10 + (x0 - 14) / 2, yCh + chH / 2, P.e, "center", 13, 700);
+      label(ctx, "D", x1 + 4 + (w - x1 - 14) / 2, yCh + chH / 2, P.e, "center", 13, 700);
+      const X = (u) => x0 + u * (x1 - x0), Hq = (v) => (v / 1.45) * chH;
+      ctx.beginPath(); ctx.moveTo(X(0), yCh);
+      for (let i = 0; i < N; i++) ctx.lineTo(X(i * dx), yCh + Hq(qv[i]));
+      ctx.lineTo(X(1), yCh); ctx.closePath();
+      ctx.fillStyle = P.e; ctx.globalAlpha = 0.35; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = P.e; ctx.lineWidth = 2; ctx.stroke();
+      if (qsChk.checked) {
+        ctx.beginPath();
+        for (let i = 0; i <= 60; i++) { const u = i / 60; const yy = yCh + Hq(vgNow * Math.sqrt(1 - u)); i ? ctx.lineTo(X(u), yy) : ctx.moveTo(X(u), yy); }
+        ctx.strokeStyle = P.faint; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.6; ctx.stroke(); ctx.setLineDash([]);
+      }
+      label(ctx, "반전층 전하 Q(x) (아래로 두께)", x0, yCh + chH + 12, P.dim, "left", 11, 500);
+      // 아래: 시간 파형
+      const by = yCh + chH + 26, box = { x: 58, y: by, w: w - 76, h: h - by - 40 };
+      let ymax = 1.3;
+      hist.forEach((s) => { ymax = Math.max(ymax, Math.abs(s.is - 0.5) / a, Math.abs(s.id - 0.5) / a); });
+      ymax = Math.min(12, ymax * 1.1);
+      const tn = (s) => (s.t - t) * f;
+      PB.chart(ctx, box, {
+        x: [-2, 0], y: [-ymax, ymax], xLabel: "시간 (주기, 0 = 지금)", yLabel: "교류 성분 / (V_ov·v̂)",
+        series: [
+          { data: hist.map((s) => [tn(s), (s.vg - 1) / a]), color: P.dim, width: 1.4, dash: [4, 3] },
+          { data: hist.map((s) => [tn(s), (s.is - 0.5) / a]), color: P.warn, width: 2 },
+          { data: hist.map((s) => [tn(s), (s.id - 0.5) / a]), color: P.accent, width: 2.4 },
+        ],
+      });
+    }
+    function readout() {
+      if (!res) return;
+      PB.stat("nq-o-amp", res.amp.toFixed(2));
+      PB.stat("nq-o-ph", sm(Math.max(0, res.lag).toFixed(0), "°"));
+      PB.stat("nq-o-is", res.is.toFixed(2));
+    }
+    reset();
+    let frame = 0;
+    PB.loop(el, (dt) => {
+      if (paused) return;
+      advance((dt / 3) / fN());     // 한 주기를 약 3초에
+      cv.redraw();
+      if (++frame % 10 === 0) readout();
+    });
+    document.getElementById("nq-play").addEventListener("click", (e) => { paused = !paused; e.target.textContent = paused ? "재생" : "일시정지"; });
+    document.getElementById("nq-reset").addEventListener("click", () => { reset(); cv.redraw(); });
+  })();
+
+  /* ================= 2. 소신호 파라미터 ================= */
+  (function () {
+    const el = document.getElementById("ss-cv");
+    const dev = PB.seg("ss-dev", () => { document.getElementById("ss-gm").style.display = dev() === "mos" ? "" : "none"; document.getElementById("ss-gb").style.display = dev() === "bjt" ? "" : "none"; cv.redraw(); });
+    const gL = PB.range("ss-L", (v) => v + " nm", () => cv.redraw());
+    const gW = PB.range("ss-W", (v) => v + " µm", () => cv.redraw());
+    const gV = PB.range("ss-vgs", (v) => v.toFixed(2) + " V", () => cv.redraw());
+    const gD = PB.range("ss-vds", (v) => v.toFixed(2) + " V", () => cv.redraw());
+    const gI = PB.range("ss-ic", (v) => PB.si(Math.pow(10, v), "A", 2), () => cv.redraw());
+    const gT = PB.range("ss-tf", (v) => v.toFixed(2) + " ps", () => cv.redraw());
+    const gR = PB.range("ss-rb", (v) => v + " Ω", () => cv.redraw());
+    const HBT = { beta: 250, VA: 80, Cje: 6e-15, Cmu: 3e-15, IK: 4e-3, IS: 1e-18 };
+    function hbt(Ic, tauF, rb) {
+      const gm = Ic / Vt, tf = tauF * (1 + (Ic / HBT.IK) * (Ic / HBT.IK));
+      const Cpi = gm * tf + HBT.Cje, fT = gm / (TWO_PI * (Cpi + HBT.Cmu));
+      return { gm, rpi: HBT.beta / gm, Cpi, ro: HBT.VA / Ic, fT, fmax: Math.sqrt(fT / (8 * Math.PI * rb * HBT.Cmu)) };
+    }
+    function set(i, k, v) { PB.stat("ss-k" + i, k); PB.stat("ss-v" + i, v); }
+    const cv = PB.canvas(el, (ctx) => {
+      const P = PB.palette();
+      if (dev() === "mos") {
+        const L = gL(), W = gW(), V = gV(), D = gD(), p = devP(L, W);
+        const o = op(L, W, V, D);
+        const data = []; let imax = 0;
+        for (let v = 0; v <= 1.2001; v += 0.02) { const I = idExt(p, v, D) * 1e3; data.push([v, I]); imax = Math.max(imax, I); }
+        const I0 = o.Id * 1e3, s = o.gm * 1e3;
+        PB.chart(ctx, null, {
+          x: [0, 1.2], y: [0, imax * 1.12 || 1], xLabel: "V_GS (V)", yLabel: "I_D (mA)",
+          series: [{ data, color: P.accent, width: 2.4 }, { data: [[V - 0.2, I0 - 0.2 * s], [V + 0.2, I0 + 0.2 * s]], color: P.warn, width: 2, dash: [6, 4] }],
+          points: [{ x: V, y: I0, color: P.warn, r: 5, label: "기울기 = g_m" }],
+          vlines: [{ x: o.Vth, color: P.faint, label: "V_th" }],
+        });
+        set(1, "g<sub>m</sub>", siH(o.gm, "S"));
+        set(2, "g<sub>ds</sub>", siH(o.gds, "S") + " <small>r<sub>o</sub> " + PB.si(1 / o.gds, "Ω", 2) + "</small>");
+        set(3, "C<sub>gs</sub>", siH(o.Cgs, "F"));
+        set(4, "C<sub>gd</sub>", siH(o.Cgd, "F"));
+        set(5, "g<sub>m</sub>/I<sub>D</sub>", sm((o.gm / o.Id).toFixed(1), " V⁻¹"));
+        set(6, "고유 이득 g<sub>m</sub>/g<sub>ds</sub>", PB.fmt(o.gm / o.gds, 3) + " <small>(" + o.regime + ")</small>");
+        set(7, "f<sub>T</sub>", ghz(o.fT));
+      } else {
+        const Ic = Math.pow(10, gI()), tf = gT() * 1e-12, rb = gR();
+        const b = hbt(Ic, tf, rb);
+        const data = [], dataM = [];
+        logspace(1e-5, 2e-2, 120).forEach((I) => { const r = hbt(I, tf, rb); data.push([I * 1e3, r.fT / 1e9]); dataM.push([I * 1e3, r.fmax / 1e9]); });
+        const ym = Math.max(...data.map((d) => d[1]), ...dataM.map((d) => d[1]));
+        PB.chart(ctx, null, {
+          x: [1e-2, 20], y: [0, ym * 1.12], logX: true, xLabel: "I_C (mA)", yLabel: "f_T, f_max (GHz)",
+          series: [{ data, color: P.accent, width: 2.4 }, { data: dataM, color: P.accent2, width: 2, dash: [6, 4] }],
+          points: [{ x: Ic * 1e3, y: b.fT / 1e9, color: P.warn, r: 5, label: "f_T" }],
+        });
+        set(1, "g<sub>m</sub> = I<sub>C</sub>/V<sub>t</sub>", siH(b.gm, "S"));
+        set(2, "r<sub>π</sub> = β/g<sub>m</sub>", siH(b.rpi, "Ω"));
+        set(3, "C<sub>π</sub> = g<sub>m</sub>τ<sub>F</sub> + C<sub>je</sub>", siH(b.Cpi, "F"));
+        set(4, "C<sub>μ</sub>", siH(HBT.Cmu, "F"));
+        set(5, "r<sub>o</sub> = V<sub>A</sub>/I<sub>C</sub>", siH(b.ro, "Ω"));
+        set(6, "f<sub>max</sub> (점선)", ghz(b.fmax));
+        set(7, "f<sub>T</sub>", ghz(b.fT));
+      }
+    }, { aspect: 0.62, minHeight: 260, maxHeight: 400 });
+  })();
+
+  /* ================= 3. 2단자쌍 계산기 ================= */
+  (function () {
+    const gL = PB.range("tp-L", (v) => v + " nm", upd), gW = PB.range("tp-W", (v) => v + " µm", upd);
+    const gV = PB.range("tp-vgs", (v) => v.toFixed(2) + " V", upd), gR = PB.range("tp-rsh", (v) => v + " Ω/□", upd);
+    const nqs = document.getElementById("tp-nqs"); nqs.addEventListener("change", upd);
+    const FS = logspace(1e8, 3e12, 170);
+    let R = null;
+    function compute() {
+      const L = gL(), W = gW(), o = op(L, W, gV(), 1.0), g = gateR(o, L, 1, W, true, gR(), RCON);
+      const on = nqs.checked, Rg = on ? g.Rg : g.Rpoly + g.Rc, tau = on ? o.Cgs / (5 * o.gm) : 0;
+      const h = [], u = [];
+      FS.forEach((f) => { const t = twoPort(o, Rg, f, tau); h.push(20 * Math.log10(Math.sqrt(cabs2(t.h21)))); u.push(dB(t.U)); });
+      const sm11 = [], sm22 = [];
+      logspace(1e8, 2e11, 120).forEach((f) => { const S = twoPort(o, Rg, f, tau).S; sm11.push(S[0][0]); sm22.push(S[1][1]); });
+      const marks = [1e9, 1e10, 1e11].map((f) => twoPort(o, Rg, f, tau).S);
+      R = { o, Rg, h, u, sm11, sm22, marks, ft: cross(FS, h), fm: cross(FS, u), s21: twoPort(o, Rg, 1e10, tau).S[1][0] };
+    }
+    function upd() {
+      compute(); cvA.redraw(); cvB.redraw();
+      PB.stat("tp-o-ft", ghz(R.ft.f) + (R.ft.ext ? " <small>(외삽)</small>" : ""));
+      PB.stat("tp-o-ftf", ghz(R.o.fT));
+      PB.stat("tp-o-fm", ghz(R.fm.f) + (R.fm.ext ? " <small>(외삽)</small>" : ""));
+      PB.stat("tp-o-fmf", ghz(fmaxOf(R.o, R.Rg)));
+      PB.stat("tp-o-rg", siH(R.Rg, "Ω"));
+      PB.stat("tp-o-s21", sm((20 * Math.log10(Math.sqrt(cabs2(R.s21)))).toFixed(1), " dB"));
+    }
+    const cvA = PB.canvas(document.getElementById("tp-cv"), (ctx, w, h) => {
+      if (!R) return;
+      const P = PB.palette(), G = (f) => f / 1e9;
+      const ref = (fx) => [[G(fx / 30), 20 * Math.log10(30)], [G(fx * 3), -20 * Math.log10(3)]];
+      const ch = PB.chart(ctx, { x: 52, y: 14, w: w - 66, h: h - 58 }, {
+        x: [0.1, 3000], y: [-10, 60], logX: true, xLabel: "주파수 (GHz)", yLabel: "이득 (dB)",
+        xFmt: (v) => (v >= 1 ? String(v) : v.toFixed(1)),
+        series: [
+          ...(isFinite(R.ft.f) ? [{ data: ref(R.ft.f), color: P.faint, width: 1, dash: [3, 3] }] : []),
+          ...(isFinite(R.fm.f) ? [{ data: ref(R.fm.f), color: P.faint, width: 1, dash: [3, 3] }] : []),
+          { data: FS.map((f, i) => [G(f), R.h[i]]), color: P.accent, width: 2.4 },
+          { data: FS.map((f, i) => [G(f), R.u[i]]), color: P.accent2, width: 2.4 },
+        ],
+        hlines: [{ y: 0, color: P.dim, dash: [2, 2] }],
+        points: [
+          ...(isFinite(R.ft.f) && R.ft.f < 3e12 ? [{ x: G(R.ft.f), y: 0, color: P.accent, r: 4.5 }] : []),
+          ...(isFinite(R.fm.f) && R.fm.f < 3e12 ? [{ x: G(R.fm.f), y: 0, color: P.accent2, r: 4.5 }] : []),
+        ],
+      });
+      if (isFinite(R.ft.f) && R.ft.f < 3e12) label(ctx, "f_T", ch.X(G(R.ft.f)) - 6, ch.Y(0) - 12, P.accent, "right", 11, 700);
+      if (isFinite(R.fm.f) && R.fm.f < 3e12) label(ctx, "f_max", ch.X(G(R.fm.f)) + 6, ch.Y(0) + 12, P.accent2, "left", 11, 700);
+    }, { aspect: 0.75, minHeight: 240, maxHeight: 360 });
+    const cvB = PB.canvas(document.getElementById("tp-sm"), (ctx, w, h) => {
+      if (!R) return;
+      const P = PB.palette(), rad = Math.min(w, h) / 2 - 18, cxp = w / 2, cyp = h / 2;
+      const X = (re) => cxp + re * rad, Y = (im) => cyp - im * rad;
+      ctx.save();
+      ctx.beginPath(); ctx.arc(cxp, cyp, rad, 0, TWO_PI); ctx.strokeStyle = P.axis; ctx.lineWidth = 1.2; ctx.stroke();
+      ctx.clip();
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+      [0.2, 0.5, 1, 2, 5].forEach((r) => { ctx.beginPath(); ctx.arc(X(r / (1 + r)), cyp, rad / (1 + r), 0, TWO_PI); ctx.stroke(); });
+      [0.2, 0.5, 1, 2, 5].forEach((x) => { [1, -1].forEach((sg) => { ctx.beginPath(); ctx.arc(X(1), Y(sg / x), rad / x, 0, TWO_PI); ctx.stroke(); }); });
+      ctx.beginPath(); ctx.moveTo(X(-1), cyp); ctx.lineTo(X(1), cyp); ctx.stroke();
+      const path = (arr, col) => { ctx.beginPath(); arr.forEach((s, i) => (i ? ctx.lineTo(X(s.re), Y(s.im)) : ctx.moveTo(X(s.re), Y(s.im)))); ctx.strokeStyle = col; ctx.lineWidth = 2.4; ctx.stroke(); };
+      path(R.sm11, P.accent); path(R.sm22, P.accent2);
+      ctx.restore();
+      R.marks.forEach((S, i) => {
+        [[S[0][0], P.accent], [S[1][1], P.accent2]].forEach(([s, col]) => { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(X(s.re), Y(s.im), 3.5, 0, TWO_PI); ctx.fill(); });
+        label(ctx, ["1G", "10G", "100G"][i], X(S[0][0].re) + 6, Y(S[0][0].im) - 8, P.dim, "left", 10, 500);
+      });
+      label(ctx, "S₁₁", X(R.sm11[0].re) - 4, Y(R.sm11[0].im) - 10, P.accent, "right", 12, 700);
+      label(ctx, "S₂₂", X(R.sm22[0].re) - 4, Y(R.sm22[0].im) + 12, P.accent2, "right", 12, 700);
+      label(ctx, "스미스 차트 (Z₀ = 50 Ω, 0.1–200 GHz)", 8, 10, P.dim, "left", 11, 500);
+    }, { aspect: 1, minHeight: 240, maxHeight: 360 });
+    upd();
+  })();
+
+  /* ================= 4. PREDICT: f_T vs L ================= */
+  (function () {
+    const el = document.getElementById("pr-cv");
+    let answered = false;
+    const gO = PB.range("pr-vov", (v) => v.toFixed(2) + " V", () => cv.redraw());
+    function fTat(L, vov) { const p = devP(L, 1); return op(L, 1, p.Vth0 - p.dibl + vov, 1.0).fT; }
+    const btns = [...document.querySelectorAll("#pr-opts .btn")];
+    btns.forEach((b) => b.addEventListener("click", () => {
+      if (answered) return;
+      answered = true;
+      const r = fTat(32, 0.3) / fTat(65, 0.3);
+      btns.forEach((x) => { x.disabled = true; if (x.dataset.k === "2") x.classList.add("right"); });
+      const ok = b.dataset.k === "2";
+      if (!ok) b.classList.add("wrong");
+      const fb = document.getElementById("pr-fb");
+      fb.classList.toggle("win", ok);
+      fb.innerHTML = (ok ? "<b>정답!</b> " : "<b>아쉽다.</b> ") + "모델에서 f<sub>T</sub>는 <b>" + r.toFixed(2) + "배</b>가 된다. 65 nm에서 이미 채널 전계가 커서 전자 속도가 v<sub>sat</sub> 근처라 g<sub>m</sub>은 거의 늘지 않고, C<sub>gs</sub>의 진성 부분만 절반이 된다. L로 줄지 않는 겹침 용량이 남아 있어 2배에도 살짝 못 미치는 경우가 많다.";
+      document.getElementById("pr-vov").disabled = false;
+      cv.redraw();
+    }));
+    const cv = PB.canvas(el, (ctx, w, h) => {
+      const P = PB.palette();
+      if (!answered) {
+        label(ctx, "답을 고르면 f_T–L 그래프가 나타납니다", w / 2, h / 2, P.faint, "center", 14, 600);
+        return;
+      }
+      const vov = gO(), Ls = logspace(20, 2000, 50);
+      const mu = MU0 / (1 + TA * vov + TB * vov * vov);
+      const model = Ls.map((L) => [L, fTat(L, vov) / 1e9]);
+      const lc = Ls.map((L) => [L, (3 * mu * vov) / (4 * Math.PI * Math.pow(L * 1e-7, 2)) / 1e9]);
+      const vs = Ls.map((L) => [L, (3 * 1.3e7) / (4 * Math.PI * L * 1e-7) / 1e9]);
+      PB.chart(ctx, null, {
+        x: [20, 2000], y: [0.3, 3000], logX: true, logY: true, xLabel: "유효 채널 길이 L (nm)", yLabel: "f_T (GHz)",
+        series: [{ data: lc, color: P.warn, width: 1.6, dash: [6, 4] }, { data: vs, color: P.accent2, width: 1.6, dash: [6, 4] }, { data: model, color: P.accent, width: 2.6 }],
+        points: [{ x: 65, y: fTat(65, vov) / 1e9, color: P.accent, r: 5, label: "65 nm" }, { x: 32, y: fTat(32, vov) / 1e9, color: P.accent, r: 5, label: "32 nm" }],
+      });
+    }, { aspect: 0.62, minHeight: 260, maxHeight: 400 });
+  })();
+
+  /* ================= 5. f_T·f_max vs 전류 밀도 ================= */
+  (function () {
+    const gL = PB.range("bi-L", (v) => v + " nm", () => cv.redraw());
+    const gD = PB.range("bi-vds", (v) => v.toFixed(2) + " V", () => cv.redraw());
+    const gR = PB.range("bi-rsh", (v) => v + " Ω/□", () => cv.redraw());
+    const cmp = document.getElementById("bi-cmp"); cmp.addEventListener("change", () => cv.redraw());
+    function sweep(L, Vds, Rsh) {
+      const ft = [], fm = []; let pT = { f: 0 }, pM = { f: 0 };
+      for (let v = 0.2; v <= 1.2001; v += 0.01) {
+        const o = op(L, 1, v, Vds), J = o.Id * 1e3;
+        if (J < 1e-3) continue;
+        const g = gateR(o, L, 1, 1, true, Rsh, RCON), fmx = fmaxOf(o, g.Rg);
+        ft.push([J, o.fT / 1e9]); fm.push([J, fmx / 1e9]);
+        if (o.fT > pT.f) pT = { f: o.fT, J }; if (fmx > pM.f) pM = { f: fmx, J };
+      }
+      return { ft, fm, pT, pM };
+    }
+    const cv = PB.canvas(document.getElementById("bi-cv"), (ctx) => {
+      const P = PB.palette(), L = gL(), s = sweep(L, gD(), gR());
+      const extra = [];
+      if (cmp.checked) [Math.max(20, L / 2), Math.min(500, L * 2)].forEach((L2) => extra.push({ data: sweep(L2, gD(), gR()).ft, color: P.faint, width: 1.4, dash: [5, 4] }));
+      const ym = Math.max(s.pM.f, s.pT.f, ...extra.map((e) => Math.max(0, ...e.data.map((d) => d[1] * 1e9)))) / 1e9;
+      const ch = PB.chart(ctx, null, {
+        x: [1e-3, 2], y: [0, ym * 1.12], logX: true, xLabel: "드레인 전류 밀도 I_D/W (mA/µm)", yLabel: "주파수 (GHz)",
+        series: [...extra, { data: s.ft, color: P.accent, width: 2.6 }, { data: s.fm, color: P.accent2, width: 2.6 }],
+        points: [{ x: s.pT.J, y: s.pT.f / 1e9, color: P.accent, r: 5 }, { x: s.pM.J, y: s.pM.f / 1e9, color: P.accent2, r: 5 }],
+      });
+      ctx.save(); ctx.globalAlpha = 0.1; ctx.fillStyle = P.ok; ctx.fillRect(ch.X(0.15), ch.box.y, ch.X(0.45) - ch.X(0.15), ch.box.h); ctx.restore();
+      label(ctx, "0.15–0.45 mA/µm", ch.X(0.26), ch.box.y + 10, P.ok, "center", 10, 600);
+      PB.stat("bi-o-ft", ghz(s.pT.f)); PB.stat("bi-o-jt", sm(s.pT.J.toFixed(2), " mA/µm"));
+      PB.stat("bi-o-fm", ghz(s.pM.f)); PB.stat("bi-o-jm", sm(s.pM.J.toFixed(2), " mA/µm"));
+    }, { aspect: 0.6, minHeight: 260, maxHeight: 400 });
+  })();
+
+  /* ================= 6. 핑거 레이아웃과 f_max ================= */
+  (function () {
+    const LG = 65, VG = 0.66, CFING = 0.1e-15, PITCH = 0.25;
+    const gW = PB.range("fg-W", (v) => v + " µm", upd);
+    const nfOf = () => Math.max(1, Math.round(Math.pow(2, gNf())));
+    const gNf = PB.range("fg-nf", (v) => String(Math.max(1, Math.round(Math.pow(2, v)))), upd);
+    const side = PB.seg("fg-side", upd);
+    const gR = PB.range("fg-rsh", (v) => v + " Ω/□", upd);
+    let o0 = null, oW = -1;
+    function calc(nf, both) {
+      const W = gW();
+      if (oW !== W) { o0 = op(LG, W, VG, 1.0); oW = W; }
+      const Cf = CFING * nf, o = Object.assign({}, o0, { Cgs: o0.Cgs + Cf / 2, Cgd: o0.Cgd + Cf / 2 });
+      o.fT = o.gm / (TWO_PI * (o.Cgs + o.Cgd));
+      const g = gateR(o, LG, W / nf, nf, both, gR(), RCON);
+      return { o, g, fmax: fmaxOf(o, g.Rg), Wf: W / nf };
+    }
+    function upd() {
+      lay.redraw(); cv.redraw();
+      const r = calc(nfOf(), side() === "2");
+      PB.stat("fg-o-wf", sm(PB.fmt(r.Wf, 3), " µm"));
+      PB.stat("fg-o-rg", sm(PB.fmt(r.g.Rg, 3), " Ω") + " <small>= " + PB.fmt(r.g.Rpoly, 2) + " + " + PB.fmt(r.g.Rc, 2) + " + " + PB.fmt(r.g.Rnqs, 2) + "</small>");
+      PB.stat("fg-o-ft", ghz(r.o.fT));
+      PB.stat("fg-o-fm", ghz(r.fmax) + (r.fmax < r.o.fT ? " <small class='bad-t'>&lt; f<sub>T</sub></small>" : ""));
+    }
+    const lay = PB.canvas(document.getElementById("fg-lay"), (ctx, w, h) => {
+      const P = PB.palette(), nf = nfOf(), W = gW(), Wf = W / nf, both = side() === "2";
+      const bw = w - 40, bh = h - 70, wUm = (nf + 1) * PITCH * 2, s = Math.min(bw / wUm, bh / Wf);
+      const aw = wUm * s, ah = Wf * s, ax = (w - aw) / 2, ay = 34 + (bh - ah) / 2;
+      ctx.fillStyle = P.e; ctx.globalAlpha = 0.16; ctx.fillRect(ax, ay, aw, ah); ctx.globalAlpha = 1;
+      ctx.strokeStyle = P.e; ctx.lineWidth = 1; ctx.strokeRect(ax, ay, aw, ah);
+      const fw = Math.max(1, PITCH * 0.5 * s);
+      ctx.fillStyle = P.accent;
+      if (2 * PITCH * s >= 2.5) for (let i = 0; i < nf; i++) ctx.fillRect(ax + (2 * i + 1.5) * PITCH * s - fw / 2, ay - 6, fw, ah + (both ? 12 : 6));
+      else { ctx.globalAlpha = 0.5; ctx.fillRect(ax + PITCH * s, ay - 6, aw - 2 * PITCH * s, ah + (both ? 12 : 6)); ctx.globalAlpha = 1; }
+      ctx.fillRect(ax, ay - 12, aw, 6); if (both) ctx.fillRect(ax, ay + ah + 6, aw, 6);
+      ctx.fillStyle = P.dim;
+      ctx.fillRect(ax - 10, ay - 15, 10, 12); if (both) ctx.fillRect(ax + aw, ay + ah + 3, 10, 12);
+      label(ctx, "n_f = " + nf + ", W_f = " + PB.fmt(Wf, 3) + " µm", w / 2, 14, P.text, "center", 12, 700);
+      label(ctx, both ? "게이트 버스 위·아래 (양쪽 접촉)" : "게이트 버스 위쪽만 (한쪽 접촉)", w / 2, h - 14, P.dim, "center", 11, 500);
+    }, { aspect: 0.75, minHeight: 230, maxHeight: 340 });
+    const cv = PB.canvas(document.getElementById("fg-cv"), (ctx, w, h) => {
+      const P = PB.palette(), both = side() === "2", nfs = [];
+      for (let k = 0; k <= 7.0001; k += 0.1) nfs.push(Math.pow(2, k));
+      const cur = nfs.map((n) => [n, calc(n, both).fmax / 1e9]), oth = nfs.map((n) => [n, calc(n, !both).fmax / 1e9]);
+      const ft = nfs.map((n) => [n, calc(n, both).o.fT / 1e9]);
+      const r = calc(nfOf(), both), ym = Math.max(...cur.map((d) => d[1]), ...oth.map((d) => d[1]), ...ft.map((d) => d[1]));
+      PB.chart(ctx, { x: 52, y: 14, w: w - 66, h: h - 58 }, {
+        x: [1, 128], y: [0, ym * 1.1], logX: true, xTicks: [1, 2, 4, 8, 16, 32, 64, 128], xFmt: (v) => String(v), xLabel: "핑거 수 n_f", yLabel: "GHz",
+        series: [{ data: ft, color: P.faint, width: 1.4, dash: [4, 3] }, { data: oth, color: P.accent2, width: 1.4, dash: [6, 4] }, { data: cur, color: P.accent2, width: 2.6 }],
+        points: [{ x: nfOf(), y: r.fmax / 1e9, color: P.warn, r: 5, label: "f_max" }],
+      });
+      label(ctx, "점선: f_T · 가는 선: " + (both ? "한쪽" : "양쪽") + " 접촉", 58, 22, P.dim, "left", 10, 500);
+    }, { aspect: 0.75, minHeight: 230, maxHeight: 340 });
+    upd();
+  })();
+
+  /* ================= 7. 잡음 스펙트럼과 시간 파형 ================= */
+  (function () {
+    const el = document.getElementById("nz-cv");
+    const KF_MOS = 1e-25, KF_BJT = 2e-14, BETA = 250, NW = 480;
+    const dev = PB.seg("nz-dev", () => { ["mos", "bjt", "res"].forEach((k, i) => (document.getElementById(["nz-gm", "nz-gb", "nz-gr"][i]).style.display = dev() === k ? "" : "none")); document.getElementById("nz-c-id").style.display = dev() === "res" ? "none" : ""; upd(); });
+    const gI = PB.range("nz-id", (v) => PB.si(Math.pow(10, v) * 1e-3, "A", 2), upd);
+    const gW = PB.range("nz-W", (v) => v + " µm", upd), gL = PB.range("nz-L", (v) => v + " nm", upd);
+    const gG = PB.range("nz-g", (v) => v.toFixed(2), upd), gRb = PB.range("nz-rb", (v) => v + " Ω", upd);
+    const gR = PB.range("nz-R", (v) => PB.si(Math.pow(10, v), "Ω", 3), upd);
+    let M = null, tr = null;
+    function model() {
+      const kind = dev(), I = Math.pow(10, gI()) * 1e-3;
+      if (kind === "mos") {
+        const L = gL(), W = gW(), p = devP(L, W);
+        let lo = 0, hi = 1.5, clip = false;
+        if (idExt(p, hi, 1) < I) clip = true;
+        else for (let k = 0; k < 30; k++) { const m = 0.5 * (lo + hi); if (idExt(p, m, 1) < I) lo = m; else hi = m; }
+        const o = op(L, W, clip ? 1.5 : 0.5 * (lo + hi), 1.0);
+        const A = (kT4 * gG()) / (o.alpha * o.gm), B = KF_MOS / (COX * 1e4 * W * 1e-6 * L * 1e-9);
+        return { A, B, gm: o.gm, note: clip ? "W가 작아 이 전류를 못 낸다 (V<sub>GS</sub> = 1.5 V)" : "", I: o.Id };
+      }
+      if (kind === "bjt") {
+        const rb = gRb(), gm = I / Vt, Ib = I / BETA, Rt = rb + 50;
+        return { A: kT4 * (rb + 1 / (2 * gm)) + 2 * q * Ib * Rt * Rt, B: KF_BJT * Ib * Rt * Rt, gm, note: "", I };
+      }
+      const R = Math.pow(10, gR());
+      return { A: kT4 * R, B: 0, gm: NaN, note: "", I: 0 };
+    }
+    /** 스펙트럼 A + B/f로 시간 파형 합성: 백색 + 로그 간격 1차 저역 과정(OU)의 합 */
+    function synth() {
+      const fc = M.B > 0 ? M.B / M.A : 0, fs = fc > 0 ? 8 * fc : 1e6;
+      const fkMin = fs / (NW * 10), ratio = Math.sqrt(10), procs = [];
+      if (M.B > 0) for (let fk = fkMin; fk < fs / 2; fk *= ratio) { const s = Math.sqrt(M.B * Math.log(ratio)); procs.push({ rho: Math.exp((-TWO_PI * fk) / fs), s, x: s * PB.randn() }); }
+      const sw = Math.sqrt((M.A * fs) / 2);
+      tr = { fs, procs, sw, tot: [], wht: [], sig: Math.sqrt(sw * sw + procs.reduce((a, p) => a + p.s * p.s, 0)) };
+      for (let i = 0; i < NW; i++) push();
+    }
+    function push() {
+      const wv = tr.sw * PB.randn();
+      let pink = 0;
+      tr.procs.forEach((p) => { p.x = p.rho * p.x + Math.sqrt(1 - p.rho * p.rho) * p.s * PB.randn(); pink += p.x; });
+      tr.tot.push(wv + pink); tr.wht.push(wv);
+      if (tr.tot.length > NW) { tr.tot.shift(); tr.wht.shift(); }
+    }
+    function upd() {
+      M = model(); synth(); cv.redraw();
+      const fc = M.B / M.A;
+      PB.stat("nz-o-w", sm((Math.sqrt(M.A) * 1e9).toPrecision(3), " nV/√Hz"));
+      PB.stat("nz-o-fc", M.B > 0 ? siH(fc, "Hz") : "없음 (백색만)");
+      const rms = Math.sqrt(M.A * (1e7 - 10) + M.B * Math.log(1e6));
+      PB.stat("nz-o-rms", siH(rms, "V") + (M.note ? " <small class='bad-t'>" + M.note + "</small>" : ""));
+      PB.stat("nz-o-gm", isFinite(M.gm) ? siH(M.gm, "S") : "—");
+    }
+    const cv = PB.canvas(el, (ctx, w, h) => {
+      if (!M) return;
+      const P = PB.palette(), h1 = Math.round(h * 0.56);
+      const fs = logspace(1, 1e10, 120), sv = (f) => Math.sqrt(M.A + M.B / f) * 1e9;
+      const lo = Math.sqrt(M.A) * 1e9, hiV = sv(1);
+      const y0 = Math.pow(10, Math.floor(Math.log10(lo) - 0.3)), y1 = Math.pow(10, Math.ceil(Math.log10(Math.max(hiV, lo * 10)) + 0.1));
+      const fc = M.B > 0 ? M.B / M.A : NaN;
+      PB.chart(ctx, { x: 58, y: 12, w: w - 76, h: h1 - 52 }, {
+        x: [1, 1e10], y: [y0, y1], logX: true, logY: true, xLabel: "주파수 (Hz)", yLabel: "√S_v (nV/√Hz)",
+        xTicks: [1, 1e2, 1e4, 1e6, 1e8, 1e10], xFmt: (v) => "10^" + Math.round(Math.log10(v)),
+        series: [
+          { data: fs.map((f) => [f, Math.sqrt(M.A) * 1e9]), color: P.accent, width: 1.6, dash: [6, 4] },
+          ...(M.B > 0 ? [{ data: fs.map((f) => [f, Math.sqrt(M.B / f) * 1e9]), color: P.warn, width: 1.6, dash: [6, 4] }] : []),
+          { data: fs.map((f) => [f, sv(f)]), color: P.text, width: 2.4 },
+        ],
+        vlines: isFinite(fc) && fc > 1 && fc < 1e10 ? [{ x: fc, color: P.warn, label: "f_c" }] : [],
+      });
+      // 시간 파형
+      const uk = 4 * tr.sig > 2e-6 ? 1e6 : 1e9, un = uk === 1e6 ? "µV" : "nV";
+      const box = { x: 58, y: h1 + 6, w: w - 76, h: h - h1 - 34 }, ym = 4 * tr.sig * uk;
+      const win = NW / tr.fs;
+      PB.chart(ctx, box, {
+        x: [0, NW], y: [-ym, ym], xTicks: [], yLabel: "v_n (" + un + ")",
+        series: [{ data: tr.wht.map((v, i) => [i, v * uk]), color: P.faint, width: 1 }, { data: tr.tot.map((v, i) => [i, v * uk]), color: P.text, width: 1.4 }],
+      });
+      label(ctx, "시간 창 " + PB.si(win, "s", 2) + " (표본화 " + PB.si(tr.fs, "Hz", 2) + ")", box.x + box.w / 2, box.y + box.h + 14, P.dim, "center", 11, 500);
+    }, { aspect: 0.8, minHeight: 360, maxHeight: 520 });
+    upd();
+    let fr = 0;
+    PB.loop(el, () => { if (!tr) return; if (++fr % 2) return; for (let i = 0; i < 4; i++) push(); cv.redraw(); });
+  })();
+
+  /* ================= 8. NF_min vs 주파수 ================= */
+  (function () {
+    const gL = PB.range("nf-L", (v) => v + " nm", () => cv.redraw()), gW = PB.range("nf-W", (v) => v + " µm", () => cv.redraw());
+    const gV = PB.range("nf-vgs", (v) => v.toFixed(2) + " V", () => cv.redraw()), gG = PB.range("nf-g", (v) => v.toFixed(2), () => cv.redraw());
+    const gF = PB.range("nf-f0", (v) => PB.fmt(Math.pow(10, v), 3) + " GHz", () => cv.redraw());
+    const cv = PB.canvas(document.getElementById("nf-cv"), (ctx) => {
+      const P = PB.palette(), L = gL(), W = gW(), gam = gG(), f0 = Math.pow(10, gF()) * 1e9;
+      const o = op(L, W, gV(), 1.0), Rg = gateR(o, L, 1, W, true, RSH0, RCON).Rg;
+      const leeK = (2 / Math.sqrt(5)) * Math.sqrt(gam * 2 * gam * (1 - cabs2(C_CORR)));
+      const fs = logspace(0.5e9, 100e9, 90), a = [], b = [], c = [];
+      let ymax = 4;
+      fs.forEach((f) => {
+        const r = noiseParams(noiseOf(o, Rg, gam), f);
+        const n1 = dB(r.Fmin), n2 = dB(1 + leeK * (f / o.fT)), n3 = dB(r.F(1 / 50, r.Bopt));
+        a.push([f / 1e9, n1]); b.push([f / 1e9, n2]); c.push([f / 1e9, n3]);
+        ymax = Math.max(ymax, Math.min(12, n1 * 1.15));
+      });
+      const r0 = noiseParams(noiseOf(o, Rg, gam), f0), Yo = cx(r0.Gopt, r0.Bopt), Zo = cdiv(cx(1), Yo);
+      PB.chart(ctx, null, {
+        x: [0.5, 100], y: [0, ymax], logX: true, xLabel: "주파수 (GHz)", yLabel: "잡음 지수 (dB)",
+        xFmt: (v) => (v >= 1 ? String(v) : v.toFixed(1)),
+        series: [{ data: b, color: P.warn, width: 1.6, dash: [6, 4] }, { data: c, color: P.accent2, width: 2, dash: [3, 3] }, { data: a, color: P.accent, width: 2.6 }],
+        vlines: [{ x: f0 / 1e9, color: P.faint, label: "f₀" }],
+        points: [{ x: f0 / 1e9, y: dB(r0.Fmin), color: P.accent, r: 5 }],
+      });
+      PB.stat("nf-o-ft", ghz(o.fT) + " / " + siH(o.Id, "A", 2));
+      PB.stat("nf-o-nf", sm(dB(r0.Fmin).toFixed(2), " dB"));
+      PB.stat("nf-o-n50", sm(dB(r0.F(1 / 50, r0.Bopt)).toFixed(2), " dB"));
+      PB.stat("nf-o-rn", siH(r0.Rn, "Ω"));
+      PB.stat("nf-o-z", sm(PB.fmt(Zo.re, 3) + (Zo.im >= 0 ? " + j" : " − j") + PB.fmt(Math.abs(Zo.im), 3), " Ω"));
+    }, { aspect: 0.6, minHeight: 260, maxHeight: 400 });
+  })();
+
+  /* ================= 9. f_T–BV 지도 ================= */
+  (function () {
+    const el = document.getElementById("mp-cv");
+    const MATS = [
+      { id: "mp-si", name: "Si", E: 3e5, v: 1.07e7, c: "accent", lf: 8 },
+      { id: "mp-gaas", name: "GaAs", E: 4e5, v: 1e7, c: "warn", lf: 30 },
+      { id: "mp-inp", name: "InP", E: 5e5, v: 1e7, c: "warn", lf: 90 },
+      { id: "mp-sic", name: "SiC", E: 2.5e6, v: 2.2e7, c: "dim", lf: 12 },
+      { id: "mp-gan", name: "GaN", E: 3.3e6, v: 2.5e7, c: "bad", lf: 40 },
+    ];
+    const DEVS = [
+      { n: "130 nm RF CMOS", ft: 100, bv: 3, c: "accent", m: "Si" },
+      { n: "65 nm RF CMOS", ft: 180, bv: 2, c: "accent", m: "Si" },
+      { n: "22 nm FD-SOI nMOS", ft: 350, bv: 1.5, c: "accent", m: "Si" },
+      { n: "Si LDMOS (기지국)", ft: 8, bv: 70, c: "accent", m: "Si" },
+      { n: "SiGe HBT 130 nm (고속)", ft: 300, bv: 1.7, c: "accent2", m: "Si" },
+      { n: "SiGe HBT 최신 연구 (~2023)", ft: 470, bv: 1.5, c: "accent2", m: "Si" },
+      { n: "SiGe HBT (고전압형)", ft: 45, bv: 6, c: "accent2", m: "Si" },
+      { n: "GaAs pHEMT 0.15 µm", ft: 90, bv: 10, c: "warn", m: "GaAs" },
+      { n: "InGaP/GaAs HBT (PA)", ft: 45, bv: 15, c: "warn", m: "GaAs" },
+      { n: "InP HEMT (~30 nm)", ft: 600, bv: 1.5, c: "warn", m: "InP" },
+      { n: "InP HBT (~250 nm)", ft: 400, bv: 4, c: "warn", m: "InP" },
+      { n: "GaN HEMT 0.25 µm", ft: 25, bv: 120, c: "bad", m: "GaN" },
+      { n: "GaN HEMT 0.15 µm", ft: 40, bv: 60, c: "bad", m: "GaN" },
+      { n: "GaN HEMT ~50 nm (W밴드)", ft: 200, bv: 15, c: "bad", m: "GaN" },
+    ];
+    let sel = -1, ch = null;
+    MATS.forEach((m) => document.getElementById(m.id).addEventListener("change", () => cv.redraw()));
+    const cv = PB.canvas(el, (ctx) => {
+      const P = PB.palette(), bvs = logspace(0.5, 1000, 40);
+      const series = MATS.filter((m) => document.getElementById(m.id).checked).map((m) => ({ data: bvs.map((b) => [b, (m.E * m.v) / (TWO_PI * b) / 1e9]), color: P[m.c], width: 1.6, dash: [6, 4] }));
+      ch = PB.chart(ctx, null, {
+        x: [0.5, 1000], y: [1, 2000], logX: true, logY: true, xLabel: "항복 전압 BV (V)", yLabel: "f_T (GHz)", series,
+        points: DEVS.map((d, i) => ({ x: d.bv, y: d.ft, color: P[d.c], r: i === sel ? 7 : 4.5, label: i === sel ? d.n : "" })),
+      });
+      MATS.filter((m) => document.getElementById(m.id).checked).forEach((m) => {
+        const b = (m.E * m.v) / (TWO_PI * m.lf * 1e9);
+        label(ctx, m.name + " 한계", ch.X(b) + 4, ch.Y(m.lf) - 9, P[m.c], "left", 11, 700);
+      });
+    }, { aspect: 0.62, minHeight: 280, maxHeight: 420 });
+    drag(el, (x, y) => {
+      if (!ch) return;
+      let best = -1, bd = 400;
+      DEVS.forEach((d, i) => { const dd = (ch.X(d.bv) - x) ** 2 + (ch.Y(d.ft) - y) ** 2; if (dd < bd) { bd = dd; best = i; } });
+      if (best < 0) return;
+      sel = best; cv.redraw();
+      const d = DEVS[best], m = MATS.find((k) => k.name === d.m), lim = (m.E * m.v) / TWO_PI;
+      PB.stat("mp-o-n", d.n);
+      PB.stat("mp-o-p", sm(PB.fmt((d.ft * d.bv) / 1000, 3), " THz·V"));
+      PB.stat("mp-o-r", sm(Math.round((d.ft * 1e9 * d.bv * 100) / lim), "%") + " <small>(" + d.m + " " + PB.fmt(lim / 1e12, 2) + " THz·V)</small>");
+      document.getElementById("mp-fb").innerHTML = "<b>" + d.n + "</b>: f<sub>T</sub> 약 " + d.ft + " GHz, BV 약 " + d.bv + " V (대략값).";
+    });
+  })();
+
+  /* ================= 10. CHALLENGE: LNA 입력 트랜지스터 ================= */
+  (function () {
+    const TG = [{ f0: 2.4e9, ft: 40e9, nf: 0.8 }, { f0: 5e9, ft: 60e9, nf: 1.0 }, { f0: 10e9, ft: 100e9, nf: 1.4 }, { f0: 28e9, ft: 150e9, nf: 2.2 }];
+    const GAM = 1;
+    const tSel = PB.seg("ch-t", () => { best = null; upd(); });
+    const gL = PB.range("ch-L", (v) => v + " nm", upd), gW0 = PB.range("ch-W", (v) => PB.fmt(Math.pow(10, v), 3) + " µm", upd), gV = PB.range("ch-vgs", (v) => v.toFixed(2) + " V", upd);
+    const gW = () => Math.pow(10, gW0());
+    const cache = new Map();
+    const op1 = (L, v) => { const k = L + ":" + v.toFixed(2); if (!cache.has(k)) cache.set(k, op(L, 1, Math.round(v * 100) / 100, 1.0)); return cache.get(k); };
+    function evalW(o1, L, W, f0) {
+      const o = scaleOp(o1, W), Rg = gateR(o, L, 1, W, true, RSH0, RCON).Rg, r = noiseParams(noiseOf(o, Rg, GAM), f0);
+      return { o, nf50: dB(r.F(1 / 50, r.Bopt)), nfmin: dB(r.Fmin) };
+    }
+    let best = null, seen = false;
+    // 전수 탐색(첫 회 약 1초)은 시뮬레이터가 화면에 들어왔을 때 시작한다
+    if (window.IntersectionObserver) new IntersectionObserver((es) => { if (es[0].isIntersecting && !seen) { seen = true; upd(); } }).observe(document.getElementById("sim-ch"));
+    else seen = true;
+    function search(t) {
+      let b = null;
+      for (let L = 30; L <= 180; L += 5) for (let k = 20; k <= 100; k++) {
+        const v = k / 100, o1 = op1(L, v);
+        if (o1.fT < t.ft) continue;
+        for (let W = 3; W <= 1000; W *= 1.03) {
+          if (b && o1.Id * W >= b.Id) break;
+          const e = evalW(o1, L, W, t.f0);
+          if (e.nf50 <= t.nf) { b = { L, v, W, Id: o1.Id * W }; break; }
+        }
+      }
+      return b;
+    }
+    function upd() {
+      const t = TG[+tSel()], L = gL(), W = gW(), v = gV(), o1 = op1(L, v), e = evalW(o1, L, W, t.f0);
+      cv.redraw();
+      const okT = o1.fT >= t.ft, okN = e.nf50 <= t.nf;
+      PB.stat("ch-o-id", siH(e.o.Id, "A"));
+      PB.stat("ch-o-ft", ghz(o1.fT) + (okT ? " <span class='ok-t'>✓</span>" : " <span class='bad-t'>✗</span>"));
+      PB.stat("ch-o-nf", sm(e.nf50.toFixed(2), " dB") + (okN ? " <span class='ok-t'>✓</span>" : " <span class='bad-t'>✗</span>"));
+      const fb = document.getElementById("ch-fb"), head = "목표: f<sub>0</sub> = " + t.f0 / 1e9 + " GHz, f<sub>T</sub> ≥ " + t.ft / 1e9 + " GHz, NF<sub>50</sub> ≤ " + t.nf + " dB. ";
+      if (!best) { PB.stat("ch-o-best", seen ? "계산 중…" : "—"); if (seen) setTimeout(() => { if (!best) { best = search(t); upd(); } }, 30); fb.classList.remove("win"); fb.innerHTML = head; return; }
+      PB.stat("ch-o-best", siH(best.Id, "A"));
+      if (okT && okN) {
+        const r = e.o.Id / best.Id, stars = r <= 1.15 ? "★★★" : r <= 1.5 ? "★★☆" : "★☆☆";
+        fb.classList.add("win");
+        fb.innerHTML = head + "<b>성공 " + stars + "</b> 전류는 이론 최소의 " + r.toFixed(2) + "배. " + (r > 1.15 ? "V<sub>GS</sub>를 낮추거나 L을 줄여 전류를 더 아껴 보자." : "거의 최적이다!");
+      } else {
+        fb.classList.remove("win");
+        const why = [];
+        if (!okT) why.push("f<sub>T</sub>가 모자란다(L을 줄이거나 V<sub>GS</sub>를 올린다)");
+        if (!okN) why.push(e.nfmin > t.nf ? "NF<sub>min</sub>부터 목표보다 높다(f<sub>T</sub>를 더 올려야 한다)" : "NF<sub>min</sub>은 충분하지만 50 Ω과 잡음 정합이 안 된다(W로 R<sub>opt</sub>를 맞춘다)");
+        fb.innerHTML = head + why.join(" · ") + ".";
+      }
+    }
+    document.getElementById("ch-show").addEventListener("click", () => {
+      if (!best) best = search(TG[+tSel()]);
+      if (!best) return;
+      gL.set(best.L); gV.set(best.v); gW0.set(Math.log10(best.W));
+    });
+    const cv = PB.canvas(document.getElementById("ch-cv"), (ctx) => {
+      const P = PB.palette(), t = TG[+tSel()], L = gL(), v = gV(), o1 = op1(L, v);
+      const Ws = logspace(3, 1000, 80), a = [], b = [];
+      Ws.forEach((W) => { const e = evalW(o1, L, W, t.f0); a.push([W, e.nf50]); b.push([W, e.nfmin]); });
+      const e = evalW(o1, L, gW(), t.f0);
+      PB.chart(ctx, null, {
+        x: [3, 1000], y: [0, 6], logX: true, xLabel: "폭 W (µm)", yLabel: "잡음 지수 @ f₀ (dB)", xTicks: [3, 10, 30, 100, 300, 1000], xFmt: (x) => String(x),
+        series: [{ data: b, color: P.accent, width: 1.8, dash: [5, 4] }, { data: a, color: P.accent2, width: 2.6 }],
+        hlines: [{ y: t.nf, color: P.bad, label: "목표 " + t.nf + " dB" }],
+        vlines: best && best.L === L && Math.abs(best.v - v) < 0.005 ? [{ x: best.W, color: P.ok, label: "최적 W" }] : [],
+        points: [{ x: gW(), y: Math.min(6, e.nf50), color: P.warn, r: 6, label: "I_D = " + PB.si(e.o.Id, "A", 2) }],
+      });
+    }, { aspect: 0.6, minHeight: 260, maxHeight: 400 });
+    upd();
+  })();
+})();
+</script>
+</body>
+</html>
