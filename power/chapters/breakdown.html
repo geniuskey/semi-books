@@ -1,0 +1,1199 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and PowerBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>항복과 드리프트층 · PowerBook</title>
+<meta name="description" content="전력 소자가 전압을 막는 곳, 드리프트층을 계산한다. 충돌 이온화 계수와 이온화 적분, 1D 포아송으로 구한 삼각형·사다리꼴 전계, 평행 평면 접합의 항복 전압, 비펀치스루·펀치스루 최적화, 드리프트 저항과 단극 한계, 온도 계수와 애벌런치 견고성, 누설 전류를 시뮬레이터로 다룬다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .bd-l { fill: var(--text); font-family: var(--font); font-size: 14px; }
+  svg .bd-lb { fill: var(--text); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .bd-s { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .bd-e { fill: var(--m-electron); font-family: var(--font); font-size: 13px; font-weight: 600; }
+  svg .bd-h { fill: var(--m-hole); font-family: var(--font); font-size: 13px; font-weight: 600; }
+  svg .bd-f { fill: var(--m-field); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .bd-dash { stroke: var(--text-dim); stroke-dasharray: 5 4; fill: none; stroke-width: 1.3; }
+  svg .bd-box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .bd-n { fill: color-mix(in srgb, var(--m-electron) 14%, transparent); stroke: var(--border); }
+  svg .bd-nn { fill: color-mix(in srgb, var(--m-electron) 38%, transparent); stroke: var(--border); }
+  svg .bd-p { fill: color-mix(in srgb, var(--m-hole) 38%, transparent); stroke: var(--border); }
+  svg .bd-fz { fill: color-mix(in srgb, var(--m-field) 30%, transparent); stroke: var(--m-field); stroke-width: 2; }
+  svg .bd-ox { fill: color-mix(in srgb, var(--m-oxide) 35%, transparent); stroke: var(--border); }
+  svg .bd-met { fill: color-mix(in srgb, var(--m-metal) 70%, transparent); stroke: var(--border); }
+  svg .bd-heat { fill: color-mix(in srgb, var(--m-heat) 22%, transparent); stroke: var(--m-heat); }
+  .bd-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .bd-v.ok { color: var(--ok); } .bd-v.warn { color: var(--warn); } .bd-v.bad { color: var(--bad); }
+</style>
+</head>
+<body data-chapter="breakdown">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 03</div>
+    <h1>항복과 드리프트층</h1>
+    <p class="lead">전력 스위치가 꺼져 있을 때 800 V를 막는 것은 칩 두께의 몇 %도 안 되는 옅은 n⁻층, 곧 <span class="term">드리프트층</span><span class="en">(drift region)</span>이다. 켜지면 같은 층으로 수백 A가 흐른다. 층을 두껍고 옅게 하면 더 높은 전압을 막지만 저항이 커지고, 얇고 진하게 하면 저항은 줄지만 전계가 임계값에 먼저 닿아 <span class="term">애벌런치 항복</span><span class="en">(avalanche breakdown)</span>이 온다. 이 장은 충돌 이온화 계수에서 출발해 이온화 적분, 1D 포아송 방정식, 펀치스루 최적화를 거쳐 \(R_{on,sp} \propto BV^{2.5}\)라는 단극 한계를 직접 유도하고, PW-800 1200 V SiC 다이의 10 µm 드리프트층이 왜 그 두께와 도핑인지 계산한다.</p>
+    <ul class="objectives">
+      <li>충돌 이온화 계수의 체이노웨스 식과 풀롭 멱법칙을 쓰고, Si와 4H-SiC가 같은 이온화율에 이르는 전계가 6–8배 다른 이유를 설명할 수 있다.</li>
+      <li>이온화 적분 = 1 조건과 증배율 \(M = 1/(1-I)\)을 이해하고, 1D 포아송 풀이로 삼각형(NPT)·사다리꼴(PT) 전계와 항복 전압을 계산할 수 있다.</li>
+      <li>평행 평면 접합의 \(BV \propto N_D^{-3/4}\), \(W \propto N_D^{-7/8}\), \(E_c \propto N_D^{1/8}\)을 유도하고 재료별 계수를 쓸 수 있다.</li>
+      <li>목표 BV에서 드리프트 두께와 도핑을 함께 최적화해 펀치스루 설계가 온저항을 약 12 % 줄이는 이유를 보일 수 있다.</li>
+      <li>\(R_{drift} = W/(q\mu N_D)\)에서 단극 한계 \(R_{on,sp} = 4BV^2/(\varepsilon\mu E_c^3)\)와 \(BV^{2.5}\) 법칙을 유도할 수 있다.</li>
+      <li>항복 전압의 양의 온도 계수가 애벌런치 견고성에 주는 의미, 생성·확산 누설 전류의 온도 의존성을 Si·SiC로 비교할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="role">
+    <h2>전압은 드리프트층이 막는다</h2>
+    <p>수직형 전력 소자(다이오드, MOSFET, IGBT, SiC MOSFET)의 단면은 거의 같은 뼈대를 갖는다. 위쪽 표면에 p 영역(애노드 또는 p 바디)과 전극, 그 아래에 옅게 도핑된 n⁻ 드리프트층, 맨 아래에 진한 n⁺ 기판과 드레인(캐소드) 전극이 있다. 소자가 꺼져 역바이어스가 걸리면 p/n⁻ 접합의 <span class="term">공핍층</span>이 거의 전부 n⁻ 쪽으로 퍼진다(p 쪽이 수천 배 진하므로). 그 공핍층의 전계 아래 면적이 곧 막고 있는 전압이다. 켜지면 전자는 같은 n⁻층을 수직으로 지나 드레인으로 간다. 그래서 드리프트층의 두께 \(W\)와 도핑 \(N_D\)는 <em>막을 수 있는 전압</em>과 <em>켜졌을 때의 저항</em>을 동시에 정하는 단 두 개의 손잡이다. DeviceBook의 <a href="../../device/chapters/power.html#drift">전력 소자 개관</a>이 이 구조를 한 절로 훑었다면, 이 장은 그 두 손잡이를 끝까지 계산한다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 300" role="img" aria-label="PW-800 1200 V SiC 다이 단면: 드리프트층 10 마이크로미터, 기판 150 마이크로미터, 역바이어스 시 공핍층과 전계, 순방향 시 저항 성분">
+        <rect x="40" y="30" width="300" height="18" class="bd-met"/>
+        <rect x="40" y="48" width="300" height="20" class="bd-p"/>
+        <rect x="40" y="68" width="300" height="80" class="bd-n"/>
+        <rect x="40" y="148" width="300" height="110" class="bd-nn"/>
+        <rect x="40" y="258" width="300" height="14" class="bd-met"/>
+        <text x="350" y="44" class="bd-s">소스·애노드 금속</text>
+        <text x="350" y="62" class="bd-s">p 바디 / p⁺ (~1 µm)</text>
+        <text x="350" y="104" class="bd-lb">n⁻ 드리프트층</text>
+        <text x="350" y="122" class="bd-s">W ≈ 10 µm, N<tspan baseline-shift="sub" font-size="75%">D</tspan> ≈ 8×10¹⁵ cm⁻³</text>
+        <text x="350" y="206" class="bd-lb">n⁺ 4H-SiC 기판</text>
+        <text x="350" y="224" class="bd-s">~150 µm (350 µm에서 연마), ~0.02 Ω·cm</text>
+        <text x="350" y="270" class="bd-s">드레인 금속 (+800 V)</text>
+        <text x="190" y="22" text-anchor="middle" class="bd-s">두께 비율은 과장 없이 축척 1 : 1이 아님(드리프트층 확대)</text>
+        <!-- field triangle/trapezoid -->
+        <line x1="560" y1="68" x2="560" y2="160" class="s-axis"/>
+        <line x1="560" y1="68" x2="850" y2="68" class="bd-dash"/>
+        <line x1="560" y1="148" x2="850" y2="148" class="bd-dash"/>
+        <path d="M560 68 L 830 68 L 640 148 L 560 148 Z" class="bd-fz"/>
+        <text x="836" y="64" class="bd-f">E<tspan baseline-shift="sub" font-size="75%">m</tspan></text>
+        <text x="648" y="144" class="bd-f">E<tspan baseline-shift="sub" font-size="75%">1</tspan></text>
+        <text x="690" y="112" class="bd-s">면적 = 막는 전압</text>
+        <text x="560" y="182" class="bd-lb">꺼짐: 공핍층이 드리프트층을 채움</text>
+        <text x="560" y="200" class="bd-s">800 V에서 이미 펀치스루(사다리꼴)</text>
+        <text x="560" y="232" class="bd-lb">켜짐: R<tspan baseline-shift="sub" font-size="75%">on,sp</tspan> ≈ 2.5 mΩ·cm²</text>
+        <text x="560" y="250" class="bd-s">드리프트 ≈ 0.9, 기판 ≈ 0.3, 나머지는 채널·JFET</text>
+        <text x="560" y="268" class="bd-s">(성분 분해는 8장)</text>
+      </svg>
+      <figcaption><b>그림 3-1.</b> PW-800 트랙션 인버터용 1200 V SiC MOSFET 다이의 수직 단면(드리프트층을 확대해 그림). 꺼졌을 때 드리프트층의 공핍 전계가 전압을 막고, 켜졌을 때 같은 층이 직렬 저항이 된다. 오른쪽의 사다리꼴 전계는 공핍층이 n⁺ 기판에 닿은 <a href="#pt">펀치스루</a> 설계를 뜻한다.</figcaption>
+    </figure>
+
+    <p>이 장의 계산은 모두 무한히 넓은 <span class="term">평행 평면 접합</span><span class="en">(parallel-plane junction)</span>을 가정한다. 실제 칩의 가장자리에서는 접합이 휘어 전계가 몰리고 항복이 먼저 온다. 그 손실을 되찾는 기술은 <a href="termination.html">4장 에지 종단</a>에서 다룬다. 재료별 임계 전계가 왜 그렇게 다른지는 <a href="materials.html">2장</a>이 밴드갭으로 설명했고, 여기서는 그 임계 전계가 <em>어디서 나오는지</em> — 이온화 계수와 적분 조건 — 부터 시작한다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="impact">
+    <h2>충돌 이온화 계수</h2>
+    <p>공핍층의 강한 전계에서 전자는 산란과 산란 사이에 에너지를 얻는다. 얻은 운동 에너지가 문턱(대략 \(1.5E_g\))을 넘으면 격자의 원자가 전자를 하나 쳐서 전도대로 올리고, 새 전자-정공 쌍이 생긴다. 이것이 <span class="term">충돌 이온화</span><span class="en">(impact ionization)</span>다. 캐리어 하나가 단위 길이를 가는 동안 일으키는 이온화 횟수를 <span class="term">이온화 계수</span> \(\alpha_n, \alpha_p\) (cm⁻¹)라 한다. 문턱 에너지까지 산란 없이 가속될 확률은 "평균 자유 행로 동안 얻는 에너지 \(qE\lambda\)"에 지수적으로 민감하므로 계수는 전계에 대해 극도로 가파르다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="전계로 기울어진 밴드 다이어그램에서 전자가 가속되어 문턱 에너지를 넘고 새 전자-정공 쌍을 만드는 충돌 이온화">
+        <defs><marker id="f31-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text)"/></marker></defs>
+        <path d="M40 50 L 520 170" class="s-line" stroke-width="2.4"/>
+        <path d="M40 110 L 520 230" class="s-line" stroke-width="2.4"/>
+        <text x="44" y="42" class="bd-s">E<tspan baseline-shift="sub" font-size="75%">C</tspan> (전도대 바닥)</text>
+        <text x="44" y="130" class="bd-s">E<tspan baseline-shift="sub" font-size="75%">V</tspan></text>
+        <circle cx="90" cy="62" r="7" fill="var(--m-electron)"/>
+        <path d="M98 62 L 300 62" stroke="var(--m-electron)" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#f31-a)" fill="none"/>
+        <text x="130" y="56" class="bd-e">가속: 산란 없이 qEλ씩 에너지 획득</text>
+        <line x1="300" y1="62" x2="300" y2="112" stroke="var(--text-dim)" stroke-width="1.2"/>
+        <text x="306" y="92" class="bd-s">≈1.5E<tspan baseline-shift="sub" font-size="75%">g</tspan> 위</text>
+        <circle cx="310" cy="62" r="7" fill="var(--m-electron)"/>
+        <path d="M316 66 L 360 128" stroke="var(--m-electron)" stroke-width="2" marker-end="url(#f31-a)" fill="none"/>
+        <circle cx="366" cy="135" r="7" fill="var(--m-electron)"/>
+        <circle cx="380" cy="135" r="7" fill="var(--m-electron)"/>
+        <circle cx="372" cy="193" r="7" fill="none" stroke="var(--m-hole)" stroke-width="2.4"/>
+        <path d="M372 186 L 372 146" stroke="var(--text-dim)" stroke-width="1.4" stroke-dasharray="3 3"/>
+        <text x="392" y="140" class="bd-e">전자 2개</text>
+        <text x="388" y="206" class="bd-h">정공 1개 (반대로 이동)</text>
+        <rect x="560" y="20" width="300" height="210" rx="8" class="bd-box"/>
+        <text x="575" y="44" class="bd-lb">이온화 계수 α(E) (로그)</text>
+        <line x1="590" y1="200" x2="845" y2="200" class="s-axis"/><line x1="590" y1="200" x2="590" y2="60" class="s-axis"/>
+        <path d="M600 196 C 640 150, 660 110, 700 70" stroke="var(--m-si)" stroke-width="3" fill="none"/>
+        <path d="M700 196 C 750 160, 780 110, 830 72" stroke="var(--m-sic)" stroke-width="3" fill="none"/>
+        <text x="640" y="104" class="bd-s" style="fill:var(--m-si)">Si</text>
+        <text x="760" y="104" class="bd-s" style="fill:var(--m-sic)">4H-SiC</text>
+        <text x="595" y="220" class="bd-s">0.3 MV/cm</text><text x="760" y="220" class="bd-s">2.5 MV/cm</text>
+        <text x="830" y="196" text-anchor="end" class="bd-s">E</text>
+      </svg>
+      <figcaption><b>그림 3-2.</b> 충돌 이온화. 전계로 기울어진 밴드에서 전자가 산란 없이 충분히 가속되면 원자가 전자를 쳐 전자-정공 쌍을 만든다. 넓은 밴드갭은 문턱 에너지를 키우고, 그래서 같은 이온화율을 얻는 전계가 SiC에서 6–8배 높다. 오른쪽 축은 로그다 — 전계가 20 % 오르면 계수는 수 배에서 수십 배 오른다.</figcaption>
+    </figure>
+
+    <p>측정된 계수는 <span class="term">체이노웨스 식</span><span class="en">(Chynoweth law)</span>으로 맞춘다. 닫힌 식 해석에는 바리가 교재가 쓰는 풀롭<span class="en">(Fulop)</span> 멱법칙 근사가 편하다. 전자와 정공 계수를 하나의 유효 계수로 묶고 7제곱으로 근사한 것이다.</p>
+    <div class="formula">$$\alpha_{n,p}(E) = a_{n,p}\exp\!\left(-\frac{b_{n,p}}{E}\right), \qquad \alpha_{\text{eff}}(E) \approx C\,E^{7}$$<div class="where">\(E\)는 V/cm. Si(반 오버스트라텐–드 만, \(E \lt 4\times10^5\) V/cm): \(a_n = 7.03\times10^5\), \(b_n = 1.231\times10^6\), \(a_p = 1.582\times10^6\), \(b_p = 2.036\times10^6\). 4H-SiC(0001)(하타케야마): \(a_n = 1.76\times10^8\), \(b_n = 3.30\times10^7\), \(a_p = 3.41\times10^8\), \(b_p = 2.50\times10^7\). 멱법칙: Si \(C = 1.8\times10^{-35}\), 4H-SiC \(C = 3.9\times10^{-42}\) cm⁶V⁻⁷. SiC에서는 정공 계수가 전자보다 수십 배 크고, Si에서는 반대로 전자가 크다.</div></div>
+    <p>온도가 오르면 격자 진동(광학 포논)이 많아져 캐리어가 문턱에 닿기 전에 더 자주 에너지를 잃는다. 반 오버스트라텐 모델은 이를 \(\gamma(T) = \tanh(\hbar\omega/2kT_0)/\tanh(\hbar\omega/2kT)\)로 \(a, b\)에 곱해 넣는다(\(\hbar\omega\): Si 약 0.063 eV, SiC는 약 0.19 eV로 둔다). \(b\)가 커지면 같은 전계에서 계수가 작아지므로 항복 전압이 오른다 — 이 <em>양의 온도 계수</em>가 <a href="#temp">8절</a>의 애벌런치 견고성의 뿌리다.</p>
+
+    <div class="sim" id="sim-alpha">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>이온화 계수 탐색기: Si vs 4H-SiC, 온도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="al-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>전계 E</span> <output id="al-E-out"></output></span><input type="range" id="al-E" min="5" max="6.7" step="0.005" value="5.5"></label>
+          <label class="ctrl"><span><span>온도 T</span> <output id="al-T-out"></output></span><input type="range" id="al-T" min="250" max="475" step="5" value="300"></label>
+          <label class="check"><input type="checkbox" id="al-pl" checked> 멱법칙 Cℰ⁷ 겹치기</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Si α<sub>n</sub> / α<sub>p</sub></span><span class="v" id="al-si">—</span></div>
+        <div class="stat"><span class="k">SiC α<sub>n</sub> / α<sub>p</sub></span><span class="v" id="al-sic">—</span></div>
+        <div class="stat"><span class="k">α<sub>p</sub>=10⁴ cm⁻¹ 전계 Si / SiC</span><span class="v" id="al-e4">—</span></div>
+        <div class="stat"><span class="k">BV(T): Si 1×10¹⁵ NPT</span><span class="v" id="al-bsi">—</span></div>
+        <div class="stat"><span class="k">BV(T): SiC 8×10¹⁵, 10 µm</span><span class="v" id="al-bsic">—</span></div>
+      </div>
+      <div class="sim-note">로그-로그 축에 체이노웨스 계수(실선: 전자, 점선: 정공)와 멱법칙 유효 계수(가는 선)를 그렸다. 오른쪽 두 칸은 이 장의 1D 솔버(<a href="#poisson">4절</a>)로 그 온도의 계수를 넣어 구한 항복 전압이다. 해볼 것: ① 같은 α = 10⁴ cm⁻¹에 이르는 전계가 Si 약 0.4 MV/cm, SiC 약 2.4 MV/cm로 약 6배 차이 난다(체이노웨스 정공 계수 기준, 전자 계수로 보면 더 벌어진다). ② 300 → 450 K에서 Si BV는 약 +35–40 %(이 모델 기준, 실측은 모델·도핑에 따라 더 작다), SiC는 +1–2 %에 그친다 — SiC의 포논 에너지가 커서 실온 근처에선 포논이 덜 들뜨기 때문이다. ③ 멱법칙은 Si에서 0.2–0.4 MV/cm, SiC에서 1.5–3 MV/cm 범위에서만 맞는 근사다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="integral">
+    <h2>이온화 적분과 애벌런치 증배</h2>
+    <p>이온화 하나로는 항복이 아니다. 공핍층 왼쪽에서 들어온 전자가 쌍을 만들면, 새 정공은 반대 방향으로 가면서 또 쌍을 만들고, 그 전자가 또… 이 되먹임이 스스로 유지되는 순간이 항복이다. 공핍층 \(0 \le x \le W\)를 지나는 동안의 증배를 세면 다음 조건이 나온다.</p>
+    <div class="formula">$$1 - \frac{1}{M_n} = \int_0^{x_d}\alpha_n(x)\exp\!\left[-\int_0^{x}\big(\alpha_n - \alpha_p\big)\,dx'\right]dx \;\equiv\; I_{ion}, \qquad M = \frac{1}{1 - I_{ion}}, \qquad \text{항복: } I_{ion} = 1$$<div class="where">\(M_n\)은 \(x = 0\)에서 들어온 전자 하나가 만드는 전체 전자 수(증배율), \(x_d\)는 공핍층 폭. \(\alpha_n = \alpha_p = \alpha\)이면 조건은 \(\int_0^{x_d}\alpha\,dx = 1\)로 단순해진다(멱법칙 근사가 이 경우다). 항복 직전의 증배는 경험식 \(M \approx 1/[1-(V/BV)^n]\)(밀러 식, \(n\) ≈ 3–6)으로도 쓴다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 240" role="img" aria-label="공핍층 안에서 전자와 정공이 서로 반대로 이동하며 이온화를 되먹임하는 연쇄 반응">
+        <defs><marker id="f33-e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-electron)"/></marker>
+        <marker id="f33-h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-hole)"/></marker></defs>
+        <rect x="40" y="30" width="40" height="180" class="bd-p"/>
+        <rect x="80" y="30" width="560" height="180" class="bd-n"/>
+        <rect x="640" y="30" width="40" height="180" class="bd-nn"/>
+        <path d="M80 40 L 600 200 L 80 200 Z" fill="color-mix(in srgb, var(--m-field) 16%, transparent)"/>
+        <text x="60" y="226" text-anchor="middle" class="bd-s">p⁺</text><text x="360" y="226" text-anchor="middle" class="bd-s">공핍된 n⁻ (전계 삼각형)</text><text x="660" y="226" text-anchor="middle" class="bd-s">n⁺</text>
+        <line x1="90" y1="70" x2="250" y2="70" stroke="var(--m-electron)" stroke-width="2.4" marker-end="url(#f33-e)"/>
+        <circle cx="258" cy="70" r="5" fill="var(--text)"/>
+        <line x1="262" y1="76" x2="430" y2="96" stroke="var(--m-electron)" stroke-width="2.4" marker-end="url(#f33-e)"/>
+        <line x1="252" y1="78" x2="110" y2="118" stroke="var(--m-hole)" stroke-width="2.4" marker-end="url(#f33-h)"/>
+        <circle cx="140" cy="110" r="5" fill="var(--text)"/>
+        <line x1="146" y1="114" x2="330" y2="140" stroke="var(--m-electron)" stroke-width="2.4" marker-end="url(#f33-e)"/>
+        <line x1="138" y1="118" x2="96" y2="150" stroke="var(--m-hole)" stroke-width="2.4" marker-end="url(#f33-h)"/>
+        <circle cx="300" cy="136" r="5" fill="var(--text)"/>
+        <line x1="296" y1="142" x2="110" y2="180" stroke="var(--m-hole)" stroke-width="2.4" marker-end="url(#f33-h)"/>
+        <text x="100" y="60" class="bd-e">주입 전자</text>
+        <text x="270" y="62" class="bd-s">이온화(●)</text>
+        <text x="440" y="100" class="bd-e">→ n⁺로</text>
+        <text x="100" y="200" class="bd-h">← p⁺로</text>
+        <rect x="700" y="30" width="170" height="180" rx="8" class="bd-box"/>
+        <text x="785" y="56" text-anchor="middle" class="bd-lb">되먹임 고리</text>
+        <text x="785" y="86" text-anchor="middle" class="bd-s">전자 → 쌍 생성</text>
+        <text x="785" y="106" text-anchor="middle" class="bd-s">정공이 거슬러 와서</text>
+        <text x="785" y="126" text-anchor="middle" class="bd-s">또 쌍 생성</text>
+        <text x="785" y="156" text-anchor="middle" class="bd-f">I = 1 이면</text>
+        <text x="785" y="176" text-anchor="middle" class="bd-f">스스로 유지 → M → ∞</text>
+      </svg>
+      <figcaption><b>그림 3-3.</b> 애벌런치의 되먹임. 전자는 n⁺ 쪽으로, 정공은 p⁺ 쪽으로 서로 반대로 달리며 각자 이온화한다. 이온화는 전계가 가장 센 접합 근처에서 집중적으로 일어난다. 한 번 주입된 캐리어가 평균 1개 이상의 "다음 세대"를 만들면 전류는 외부 회로가 제한할 때까지 커진다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-mc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>애벌런치 몬테카를로: 캐리어 연쇄를 하나씩 세기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="mc-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>재료 (NPT 접합)</span><div class="seg" id="mc-m"><button data-value="Si" class="on">Si 1×10¹⁵</button><button data-value="SiC">SiC 8×10¹⁵</button></div></div>
+          <label class="ctrl"><span><span>역전압 V / BV</span> <output id="mc-v-out"></output></span><input type="range" id="mc-v" min="0.5" max="1.03" step="0.005" value="0.9"></label>
+          <div class="ctrl bd-btns"><button class="btn primary" id="mc-run">일시정지</button><button class="btn" id="mc-reset">통계 초기화</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">이온화 적분 I (정공 주입)</span><span class="v" id="mc-I">—</span></div>
+        <div class="stat"><span class="k">이론 M = 1/(1−I)</span><span class="v" id="mc-Mt">—</span></div>
+        <div class="stat"><span class="k">몬테카를로 평균 M</span><span class="v" id="mc-Mm">—</span></div>
+        <div class="stat"><span class="k">주입 횟수 / 진행 중 캐리어</span><span class="v" id="mc-n">—</span></div>
+      </div>
+      <div class="sim-note">n⁻ 쪽 공핍 가장자리에서 정공(빨강)을 하나씩 주입한다(n⁻ 중성 영역에서 확산해 오는 누설 정공에 해당). 모든 캐리어는 포화 속도로 달리고, 길이 dx마다 확률 α(E(x))·dx로 쌍을 만든다(체이노웨스 계수). 전자(파랑)는 n⁺ 쪽으로, 정공은 p⁺ 쪽으로 빠져나간다. 한 주입의 후손이 모두 빠져나가면 그 연쇄의 크기가 M 하나다. 해볼 것: ① V/BV = 0.9에서 M은 대부분 1–2지만 가끔 큰 연쇄가 터진다 — 애벌런치 잡음의 근원이다. ② 0.98로 올리면 평균 M이 약 6으로 뛰고 연쇄 크기의 분산이 훨씬 커진다(SiC는 0.95에서 이미 약 30). ③ 1을 넘기면 일부 연쇄는 운 좋게 꺼지지만 일부는 끝나지 않는다(진행 중 캐리어 3000개에서 "발산"으로 끊는다). 통계는 끝난 연쇄만 세므로 큰 연쇄가 덜 잡혀 평균이 이론보다 약간 낮게 나온다. ④ SiC는 α<sub>p</sub> ≫ α<sub>n</sub>이라 정공이 거의 모든 이온화를 한다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="poisson">
+    <h2>1D 포아송: 삼각형과 사다리꼴 전계</h2>
+    <p>p⁺n⁻n⁺ 구조에서 공핍된 n⁻ 영역의 공간 전하는 \(+qN_D\)로 균일하다. 포아송 방정식 \(dE/dx = \rho/\varepsilon_s\)를 접합(\(x = 0\))에서 적분하면 전계는 직선으로 줄어든다. 공핍층이 드리프트층 안에서 끝나면 삼각형, n⁺ 기판에 닿으면 잘린 사다리꼴이다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 280" role="img" aria-label="p+ n- n+ 구조의 공간 전하, 전계, 전위 분포: 포아송 방정식을 두 번 적분">
+        <rect x="40" y="20" width="30" height="240" class="bd-p"/><rect x="70" y="20" width="250" height="240" class="bd-n"/><rect x="320" y="20" width="40" height="240" class="bd-nn"/>
+        <text x="55" y="275" text-anchor="middle" class="bd-s">p⁺</text><text x="195" y="275" text-anchor="middle" class="bd-s">n⁻ (W)</text><text x="340" y="275" text-anchor="middle" class="bd-s">n⁺</text>
+        <!-- rho -->
+        <text x="380" y="40" class="bd-lb">ρ(x)</text>
+        <line x1="420" y1="70" x2="860" y2="70" class="s-axis"/>
+        <rect x="430" y="70" width="12" height="28" fill="var(--m-hole)" opacity=".7"/>
+        <rect x="442" y="48" width="250" height="22" fill="var(--m-electron)" opacity=".5"/>
+        <text x="700" y="62" class="bd-s">+qN<tspan baseline-shift="sub" font-size="75%">D</tspan> (이온화된 도너)</text>
+        <text x="446" y="112" class="bd-s">−qN<tspan baseline-shift="sub" font-size="75%">A</tspan>x<tspan baseline-shift="sub" font-size="75%">p</tspan> (얇은 p⁺ 공핍)</text>
+        <!-- E -->
+        <text x="380" y="140" class="bd-lb">E(x)</text>
+        <line x1="420" y1="200" x2="860" y2="200" class="s-axis"/>
+        <path d="M430 200 L 442 130 L 692 200 Z" class="bd-fz"/>
+        <path d="M442 130 L 620 180 L 620 200" stroke="var(--m-field)" stroke-width="2" stroke-dasharray="5 3" fill="none"/>
+        <text x="448" y="126" class="bd-f">E<tspan baseline-shift="sub" font-size="75%">m</tspan></text>
+        <text x="560" y="150" class="bd-s">기울기 −qN<tspan baseline-shift="sub" font-size="75%">D</tspan>/ε</text>
+        <text x="626" y="178" class="bd-s">PT: n⁺에서 잘림</text>
+        <!-- V -->
+        <text x="380" y="232" class="bd-lb">V(x)</text>
+        <path d="M430 262 C 520 258, 600 236, 692 226 L 860 226" class="s-acc" stroke-width="2.4"/>
+        <text x="700" y="220" class="t-acc">V<tspan baseline-shift="sub" font-size="75%">R</tspan> = ∫E dx</text>
+      </svg>
+      <figcaption><b>그림 3-4.</b> 포아송 방정식을 한 번 적분하면 전계(삼각형), 한 번 더 적분하면 전위다. 실선 삼각형은 비펀치스루, 점선은 공핍층이 n⁺에 닿은 펀치스루. p⁺ 쪽 공핍은 \(N_A/N_D\)배 얇아 무시한다(한쪽 계단 접합).</figcaption>
+    </figure>
+
+    <div class="formula">$$E(x) = E_m - \frac{qN_D}{\varepsilon_s}x,\quad
+    \begin{cases} x_d = \sqrt{\dfrac{2\varepsilon_s V_R}{qN_D}} \le W: & E_m = \dfrac{qN_D x_d}{\varepsilon_s},\; V_R = \tfrac12 E_m x_d \quad(\text{NPT})\\[2ex]
+    x_d \gt W: & E_m = \dfrac{V_R}{W} + \dfrac{qN_D W}{2\varepsilon_s},\; E_1 = E_m - \dfrac{qN_D W}{\varepsilon_s} \quad(\text{PT}) \end{cases}$$<div class="where">\(V_{pt} = qN_DW^2/(2\varepsilon_s)\)가 공핍층이 n⁺에 닿는 <span class="term">펀치스루 전압</span>이다. PW-800 다이(SiC, \(8\times10^{15}\) cm⁻³, 10 µm)에서 \(V_{pt}\) ≈ 750 V이므로, 800 V DC 링크에서 이미 펀치스루 상태다. 멱법칙이면 이온화 적분이 닫힌 식이 된다: \(I_{ion} = \dfrac{C\varepsilon_s}{8qN_D}\left(E_m^8 - E_1^8\right)\).</div></div>
+
+    <p>아래 솔버는 이 전계를 그대로 풀고, 그 위에서 이온화 적분을 수치 적분한 뒤, 이분법으로 \(I_{ion} = 1\)이 되는 전압을 찾는다. 이것이 이 장 전체의 계산 엔진이다(다음 절들의 시뮬레이터도 같은 함수를 쓴다).</p>
+
+    <div class="sim" id="sim-solver">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>1D 포아송 + 이온화 적분 솔버</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sv-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>재료</span><div class="seg" id="sv-m"><button data-value="Si">Si</button><button data-value="SiC" class="on">4H-SiC</button></div></div>
+          <div class="ctrl"><span>이온화 모델</span><div class="seg" id="sv-k"><button data-value="ch" class="on">체이노웨스 α<sub>n</sub>≠α<sub>p</sub></button><button data-value="pl">멱법칙 Cℰ⁷</button></div></div>
+          <label class="ctrl"><span><span>드리프트 도핑 N<sub>D</sub></span> <output id="sv-N-out"></output></span><input type="range" id="sv-N" min="13" max="17.5" step="0.001" value="15.903"></label>
+          <label class="ctrl"><span><span>드리프트 두께 W</span> <output id="sv-W-out"></output></span><input type="range" id="sv-W" min="0" max="2.6" step="0.005" value="1"></label>
+          <label class="ctrl"><span><span>역전압 V<sub>R</sub></span> <output id="sv-V-out"></output></span><input type="range" id="sv-V" min="1" max="4.4" step="0.002" value="2.903"></label>
+          <div class="ctrl bd-btns"><button class="btn primary" id="sv-bv">V를 0.99 BV로</button><button class="btn" id="sv-pw">PW-800 다이</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">상태</span><span class="v bd-v" id="sv-st">—</span></div>
+        <div class="stat"><span class="k">최대 전계 E<sub>m</sub></span><span class="v" id="sv-em">—</span></div>
+        <div class="stat"><span class="k">공핍 x<sub>d</sub> / V<sub>pt</sub></span><span class="v" id="sv-xd">—</span></div>
+        <div class="stat"><span class="k">이온화 적분 I / M</span><span class="v" id="sv-I">—</span></div>
+        <div class="stat"><span class="k">항복 전압 BV / E<sub>c</sub></span><span class="v" id="sv-bvo">—</span></div>
+        <div class="stat"><span class="k">R<sub>drift</sub> = W/qμN</span><span class="v" id="sv-r">—</span></div>
+      </div>
+      <div class="sim-note">위: 현재 V<sub>R</sub>에서의 전계 E(x)(노랑 면)와 이온화 적분의 피적분 함수(초록, 상대 크기). 파란 띠는 n⁺ 기판. 아래 막대: 전계 아래 면적이 V<sub>R</sub>, 이온화 적분 I의 0–1 게이지. 해볼 것: ① PW-800 프리셋(SiC, 8×10¹⁵, 10 µm, 800 V)에서 E<sub>m</sub> ≈ 1.5 MV/cm, I ≈ 4×10⁻⁶ — 800 V는 BV ≈ 1.9 kV에 한참 못 미친다. ② "0.99 BV"를 누르면 피적분 함수가 접합 쪽 1–2 µm에 몰려 있다. 항복은 전계 꼭대기에서 정해진다. ③ W를 30 µm 이상으로 두면 BV가 W와 무관해진다(NPT). 줄이면 사다리꼴이 되며 BV가 떨어진다. ④ 같은 설정에서 모델을 바꾸면 Si는 체이노웨스 쪽이 약 15 % 낮게, SiC는 두 모델이 수 % 안에서 맞는다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="bvn">
+    <h2>평행 평면 접합의 항복 전압</h2>
+    <p>멱법칙을 쓰면 NPT 접합의 항복 조건을 손으로 풀 수 있다. \(E_1 = 0\)에서 \(I_{ion} = C\varepsilon_s E_m^8/(8qN_D) = 1\)이므로 항복 순간의 최대 전계, 곧 <span class="term">임계 전계</span> \(E_c\)가 도핑의 1/8제곱으로 정해진다. 나머지는 삼각형의 기하다.</p>
+    <div class="formula">$$E_c = \left(\frac{8qN_D}{C\varepsilon_s}\right)^{1/8},\qquad BV_{pp} = \frac{\varepsilon_s E_c^2}{2qN_D} \propto N_D^{-3/4},\qquad W_{pp} = \frac{2BV_{pp}}{E_c} \propto N_D^{-7/8}$$<div class="where">Si(\(C = 1.8\times10^{-35}\)): \(E_c \approx 4010\,N_D^{1/8}\) V/cm, \(BV_{pp} \approx 5.3\times10^{13}N_D^{-3/4}\) V, \(W_{pp} \approx 2.67\times10^{10}N_D^{-7/8}\) cm. 4H-SiC(\(C = 3.9\times10^{-42}\)): \(E_c \approx 2.8\times10^4 N_D^{1/8}\), \(BV_{pp} \approx 2.1\times10^{15}N_D^{-3/4}\), \(W_{pp} \approx 1.5\times10^{11}N_D^{-7/8}\). 바리가 교재의 SiC 식 \(3.0\times10^{15}N_D^{-3/4}\)은 이보다 \(E_c\)를 약 18 % 높게 잡은 계수 맞춤에 해당하고, 하타케야마 체이노웨스 계수로 직접 적분한 값은 \(2.1\times10^{15}\) 쪽과 수 % 안에서 맞는다. 이 책의 수치 예는 적분값을 쓴다.</div></div>
+    <p>세 지수를 기억해 두자. 도핑을 10배 낮추면 BV는 \(10^{3/4} \approx 5.6\)배, 필요한 두께는 \(10^{7/8} \approx 7.5\)배 늘고, 임계 전계는 \(10^{1/8} \approx 1.33\)배 낮아진다. 임계 전계가 상수가 아닌 이유는 공핍층이 넓을수록 캐리어가 이온화할 거리가 길어, 더 낮은 전계에서도 적분이 1에 닿기 때문이다. "Si 0.3 MV/cm, SiC 2.5 MV/cm"는 각자 쓰는 도핑 범위의 대표값일 뿐이다.</p>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>설계</th><th class="num">N<sub>D</sub> (cm⁻³)</th><th class="num">BV<sub>pp</sub> (적분)</th><th class="num">W<sub>pp</sub></th><th class="num">E<sub>c</sub></th><th>쓰임</th></tr></thead>
+      <tbody>
+        <tr><td>Si</td><td class="num">1×10¹⁶</td><td class="num">~53 V</td><td class="num">~2.6 µm</td><td class="num">~0.40 MV/cm</td><td>저전압 트렌치 MOSFET</td></tr>
+        <tr><td>Si</td><td class="num">1×10¹⁵</td><td class="num">~250–300 V</td><td class="num">~18 µm</td><td class="num">~0.30 MV/cm</td><td>200–250 V급</td></tr>
+        <tr><td>Si</td><td class="num">1.5×10¹⁴</td><td class="num">~1.2 kV</td><td class="num">~100 µm</td><td class="num">~0.24 MV/cm</td><td>1200 V IGBT(필드 스톱으로 더 얇게)</td></tr>
+        <tr><td>4H-SiC</td><td class="num">8×10¹⁵</td><td class="num">~2.4–2.5 kV</td><td class="num">~18 µm</td><td class="num">~2.7 MV/cm</td><td>NPT로 두면 과설계 → PW-800은 10 µm PT</td></tr>
+        <tr><td>4H-SiC</td><td class="num">2×10¹⁶</td><td class="num">~1.2 kV</td><td class="num">~8 µm</td><td class="num">~3.0 MV/cm</td><td>NPT 1200 V 최소 설계</td></tr>
+        <tr><td>4H-SiC</td><td class="num">3×10¹⁵</td><td class="num">~5 kV</td><td class="num">~42 µm</td><td class="num">~2.4 MV/cm</td><td>3.3 kV 철도·계통용(PT 약 30 µm)</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="sim" id="sim-bvn">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>BV, W<sub>pp</sub>, E<sub>c</sub> 대 도핑: 수치 적분 vs 닫힌 식</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bn-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>세로축</span><div class="seg" id="bn-y"><button data-value="bv" class="on">BV</button><button data-value="w">W<sub>pp</sub></button><button data-value="ec">E<sub>c</sub></button></div></div>
+          <label class="ctrl"><span><span>도핑 커서 N<sub>D</sub></span> <output id="bn-N-out"></output></span><input type="range" id="bn-N" min="13" max="18" step="0.01" value="15"></label>
+          <div class="legend" style="padding:0"><span class="m-key si">Si</span><span class="m-key sic">4H-SiC</span></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Si BV 체이노웨스 / 멱법칙</span><span class="v" id="bn-si">—</span></div>
+        <div class="stat"><span class="k">SiC BV 체이노웨스 / 멱법칙</span><span class="v" id="bn-sic">—</span></div>
+        <div class="stat"><span class="k">W<sub>pp</sub> Si / SiC</span><span class="v" id="bn-w">—</span></div>
+        <div class="stat"><span class="k">E<sub>c</sub> Si / SiC</span><span class="v" id="bn-ec">—</span></div>
+        <div class="stat"><span class="k">같은 N에서 BV 비 SiC/Si</span><span class="v" id="bn-r">—</span></div>
+      </div>
+      <div class="sim-note">실선: 체이노웨스 계수로 이온화 적분을 풀어 찾은 NPT 항복. 점선: 멱법칙 닫힌 식. 가는 점선(SiC): 바리가 교재식 3.0×10¹⁵N<sup>−3/4</sup>. 해볼 것: ① 로그-로그에서 BV는 기울기 −3/4, W<sub>pp</sub>는 −7/8, E<sub>c</sub>는 +1/8의 직선에 가깝다. ② 같은 도핑이면 SiC BV가 Si의 수십 배(\(BV \propto \varepsilon E_c^2\)) — 그런데 실제 설계는 "같은 BV에서 SiC를 100배 진하게" 쓴다. ③ N<sub>D</sub> > 10¹⁷에서는 공핍층이 1 µm 아래로 얇아져 실제로는 터널링(제너)이 끼어든다 — 이 솔버는 애벌런치만 계산한다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="pt">
+    <h2>비펀치스루 vs 펀치스루: 두께와 도핑의 동시 최적화</h2>
+    <p>NPT 설계는 BV를 도핑만으로 정하고, 두께는 공핍층이 다 들어갈 만큼 \(W \ge W_{pp}\)로 둔다. 그런데 전계 삼각형의 끝부분(전계가 낮은 꼬리)은 전압에 거의 기여하지 않으면서 켜졌을 때 저항만 더한다. 층을 얇게 잘라 공핍층이 n⁺에 닿게 하면(PT) 같은 전압을 더 짧은 거리에 담을 수 있다. 대신 같은 BV를 지키려면 도핑을 조금 낮춰야 한다. 저항 \(\propto W/N_D\)에서 두 효과의 균형점이 최적 PT다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="같은 항복 전압에서 NPT 삼각형, 최적 PT 사다리꼴, 너무 얇은 PT 직사각형 전계 비교">
+        <g transform="translate(20,0)">
+          <text x="130" y="22" text-anchor="middle" class="bd-lb">NPT</text>
+          <line x1="20" y1="200" x2="260" y2="200" class="s-axis"/><line x1="20" y1="40" x2="20" y2="200" class="s-axis"/>
+          <path d="M20 50 L 240 200 L 20 200 Z" class="bd-fz"/>
+          <text x="26" y="46" class="bd-f">E<tspan baseline-shift="sub" font-size="75%">c</tspan></text>
+          <text x="130" y="226" text-anchor="middle" class="bd-s">W = W<tspan baseline-shift="sub" font-size="75%">pp</tspan>, N = N<tspan baseline-shift="sub" font-size="75%">pp</tspan></text>
+          <text x="130" y="244" text-anchor="middle" class="bd-s">R = 1 (기준)</text>
+        </g>
+        <g transform="translate(310,0)">
+          <text x="130" y="22" text-anchor="middle" class="bd-lb">최적 PT</text>
+          <line x1="20" y1="200" x2="260" y2="200" class="s-axis"/><line x1="20" y1="40" x2="20" y2="200" class="s-axis"/>
+          <path d="M20 50 L 196 152 L 196 200 L 20 200 Z" class="bd-fz"/>
+          <rect x="196" y="40" width="60" height="160" fill="color-mix(in srgb, var(--m-electron) 25%, transparent)"/>
+          <text x="226" y="120" text-anchor="middle" class="bd-s">n⁺</text>
+          <text x="130" y="226" text-anchor="middle" class="bd-s">W ≈ 0.75–0.8 W<tspan baseline-shift="sub" font-size="75%">pp</tspan>, N ≈ 0.9 N<tspan baseline-shift="sub" font-size="75%">pp</tspan></text>
+          <text x="130" y="244" text-anchor="middle" class="bd-s">R ≈ 0.84–0.88</text>
+        </g>
+        <g transform="translate(600,0)">
+          <text x="130" y="22" text-anchor="middle" class="bd-lb">너무 얇은 PT</text>
+          <line x1="20" y1="200" x2="260" y2="200" class="s-axis"/><line x1="20" y1="40" x2="20" y2="200" class="s-axis"/>
+          <path d="M20 44 L 130 56 L 130 200 L 20 200 Z" class="bd-fz"/>
+          <rect x="130" y="40" width="60" height="160" fill="color-mix(in srgb, var(--m-electron) 25%, transparent)"/>
+          <text x="160" y="120" text-anchor="middle" class="bd-s">n⁺</text>
+          <text x="130" y="226" text-anchor="middle" class="bd-s">W = 0.5 W<tspan baseline-shift="sub" font-size="75%">pp</tspan>, N ≪ N<tspan baseline-shift="sub" font-size="75%">pp</tspan></text>
+          <text x="130" y="244" text-anchor="middle" class="bd-s">R 다시 증가 (도핑이 너무 옅음)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 3-5.</b> 같은 BV(면적)를 담는 세 드리프트층. 전계 꼭대기는 이온화 적분 때문에 셋 다 비슷한 \(E_c\) 근처다. 최적 PT는 전계가 낮은 꼬리를 잘라 내 두께를 20–25 % 줄이고 도핑은 약 10 %만 낮춘다. 더 얇게 하면 전계가 거의 평평해지고(직사각형), BV를 지키려면 도핑을 크게 낮춰야 해서 저항이 다시 오른다.</figcaption>
+    </figure>
+
+    <p>임계 전계를 상수로 두면 손으로 풀린다. 사다리꼴 면적 \(BV = E_cW - qN_DW^2/(2\varepsilon_s)\)에서 \(N_D\)를 풀어 \(R = W/(q\mu N_D)\)에 넣으면 \(R = W^3/[2\varepsilon_s\mu(E_cW - BV)]\)이고, \(dR/dW = 0\)에서</p>
+    <div class="formula">$$W_{opt} = \frac{3}{2}\frac{BV}{E_c} = 0.75\,W_{pp},\qquad N_{opt} = \frac{8}{9}N_{pp},\qquad R_{opt} = \frac{27}{32}R_{pp} \approx 0.84\,R_{pp}$$<div class="where">\(W_{pp} = 2BV/E_c\), \(N_{pp} = \varepsilon_sE_c^2/(2qBV)\). 실제로는 사다리꼴에서 전계가 덜 떨어지는 만큼 이온화 길이가 길어져 \(E_c\)가 조금 낮아지고, 도핑 의존 이동도도 끼어든다. 이온화 적분으로 직접 최적화하면 \(W_{opt} \approx 0.8\,W_{pp}\), \(N_{opt} \approx 0.91\,N_{pp}\), \(R_{opt} \approx 0.88\,R_{pp}\)이다(아래 시뮬레이터). IGBT의 <span class="term">필드 스톱</span><span class="en">(field stop)</span>층은 n⁺ 기판 대신 얇은 n 버퍼로 전계를 잘라 같은 이득을 얻는다(<a href="igbt.html">7장</a>).</div></div>
+
+    <div class="sim" id="sim-pt">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>드리프트층 최적화기: 목표 BV에서 W와 N<sub>D</sub> 고르기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pt-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>재료</span><div class="seg" id="pt-m"><button data-value="Si">Si</button><button data-value="SiC" class="on">4H-SiC</button></div></div>
+          <label class="ctrl"><span><span>목표 BV</span> <output id="pt-B-out"></output></span><input type="range" id="pt-B" min="2" max="4" step="0.005" value="3.279"></label>
+          <label class="ctrl"><span><span>두께 W / W<sub>pp</sub></span> <output id="pt-w-out"></output></span><input type="range" id="pt-w" min="0.35" max="1.4" step="0.005" value="0.75"></label>
+          <div class="ctrl bd-btns"><button class="btn primary" id="pt-opt">최적 두께로</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">NPT: W<sub>pp</sub> / N<sub>pp</sub></span><span class="v" id="pt-npt">—</span></div>
+        <div class="stat"><span class="k">선택: W / 필요 N<sub>D</sub></span><span class="v" id="pt-sel">—</span></div>
+        <div class="stat"><span class="k">선택 R<sub>drift</sub> (NPT 대비)</span><span class="v" id="pt-r">—</span></div>
+        <div class="stat"><span class="k">최적: W/W<sub>pp</sub>, N/N<sub>pp</sub>, R/R<sub>pp</sub></span><span class="v" id="pt-o">—</span></div>
+        <div class="stat"><span class="k">펀치스루 전압 V<sub>pt</sub></span><span class="v" id="pt-vpt">—</span></div>
+      </div>
+      <div class="sim-note">각 두께 W마다 이온화 적분(멱법칙, 사다리꼴 닫힌 식)이 목표 BV에서 정확히 1이 되는 도핑을 이분법으로 찾고, 도핑 의존 이동도로 R = W/(qμN)을 계산했다. 위: 정규화 저항 R/R<sub>pp</sub>(주황)와 필요한 N/N<sub>pp</sub>(파랑). 아래: 선택한 두께에서 항복 순간의 전계. 해볼 것: ① 최솟값은 W ≈ 0.8 W<sub>pp</sub>, 저항 약 12 % 감소 — 손 계산(0.75, 16 %)보다 이득이 약간 작다. ② W > W<sub>pp</sub>면 공핍되지 않는 꼬리가 생겨 저항만 선형으로 는다. ③ W를 0.4 W<sub>pp</sub> 아래로 내리면 어떤 도핑으로도 목표 BV에 닿지 못한다(전계를 평평하게 해도 면적이 모자람). ④ 목표 1.9 kV SiC에서 최적은 약 10.7 µm·1.05×10¹⁶ — PW-800 다이(10 µm, 8×10¹⁵)는 이 근처에서 도핑을 조금 낮춰 마진을 둔 설계다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="limit">
+    <h2>드리프트 저항과 단극 한계</h2>
+    <p>켜진 단극 소자(MOSFET, 쇼트키)에서 전자는 드리프트층을 다수 캐리어로만 지나므로, 단위 면적 저항은 단순한 도체 저항이다. NPT 최적 설계(\(W = W_{pp}\), \(N_D = N_{pp}\))를 넣으면 재료 상수만 남는다. 이것이 <span class="term">단극 한계</span><span class="en">(unipolar limit)</span>, Si에 대해서는 흔히 "실리콘 한계"라 부르는 선이다.</p>
+    <div class="formula">$$R_{drift} = \frac{W}{q\mu_n N_D} \;\xrightarrow{\;W = 2BV/E_c,\;N_D = \varepsilon_sE_c^2/2qBV\;}\; R_{on,sp}^{ideal} = \frac{4\,BV^2}{\varepsilon_s\,\mu_n\,E_c^3},\qquad E_c \propto N_D^{1/8} \propto BV^{-1/6} \;\Rightarrow\; R_{on,sp} \propto BV^{2.5}$$<div class="where">분모 \(\varepsilon_s\mu_nE_c^3\)가 <a href="materials.html">2장</a>의 <span class="term">바리가 성능 지수</span>(BFOM)다. 바리가 교재의 닫힌 식은 Si \(5.93\times10^{-9}BV^{2.5}\), 4H-SiC \(2.97\times10^{-12}BV^{2.5}\) Ω·cm²(고정 이동도). 이 장의 적분 계수와 도핑 의존 이동도로 다시 풀면 SiC는 약 \(5\times10^{-12}BV^{2.5}\)로 1.5배 정도 높게 나온다 — \(E_c^3\)이 계수 선택에 그만큼 민감하다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="항복 전압을 두 배로 올릴 때 두께는 2.2배, 도핑은 2.5배 감소해 저항이 5.7배가 되는 스케일링">
+        <rect x="20" y="20" width="400" height="215" rx="8" class="bd-box"/>
+        <text x="40" y="44" class="bd-lb">BV × 2 일 때 (NPT, 같은 재료)</text>
+        <text x="40" y="76" class="bd-l">두께 W ∝ BV<tspan baseline-shift="super" font-size="75%">7/6</tspan></text><text x="300" y="76" class="bd-f">× 2.24</text>
+        <text x="40" y="106" class="bd-l">도핑 N<tspan baseline-shift="sub" font-size="75%">D</tspan> ∝ BV<tspan baseline-shift="super" font-size="75%">−4/3</tspan></text><text x="300" y="106" class="bd-e">× 0.40</text>
+        <text x="40" y="136" class="bd-l">임계 전계 E<tspan baseline-shift="sub" font-size="75%">c</tspan> ∝ BV<tspan baseline-shift="super" font-size="75%">−1/6</tspan></text><text x="300" y="136" class="bd-s">× 0.89</text>
+        <line x1="40" y1="152" x2="400" y2="152" class="s-line"/>
+        <text x="40" y="180" class="bd-lb">R ∝ W/N<tspan baseline-shift="sub" font-size="75%">D</tspan> ∝ BV<tspan baseline-shift="super" font-size="75%">2.5</tspan></text><text x="300" y="180" class="bd-h">× 5.66</text>
+        <text x="40" y="210" class="bd-s">E<tspan baseline-shift="sub" font-size="75%">c</tspan>가 상수라면 × 4 (BV²) — 그 차이가 0.5제곱</text>
+        <rect x="450" y="20" width="410" height="215" rx="8" class="bd-box"/>
+        <text x="470" y="44" class="bd-lb">같은 BV = 1200 V에서 Si vs SiC</text>
+        <rect x="480" y="64" width="40" height="150" fill="var(--m-si)" opacity=".8"/>
+        <rect x="560" y="200" width="40" height="14" fill="var(--m-sic)" opacity=".9"/>
+        <text x="500" y="230" text-anchor="middle" class="bd-s">Si</text><text x="580" y="230" text-anchor="middle" class="bd-s">SiC</text>
+        <text x="620" y="80" class="bd-l">W: ~100 µm vs ~8 µm</text>
+        <text x="620" y="108" class="bd-l">N<tspan baseline-shift="sub" font-size="75%">D</tspan>: ~1.5×10¹⁴ vs ~2×10¹⁶</text>
+        <text x="620" y="136" class="bd-l">R<tspan baseline-shift="sub" font-size="75%">drift</tspan>: ~300 vs ~0.28 mΩ·cm²</text>
+        <text x="620" y="170" class="bd-f">약 1000배</text>
+        <text x="620" y="196" class="bd-s">Si가 1200 V에서 IGBT(전도도</text>
+        <text x="620" y="214" class="bd-s">변조)로 가는 이유</text>
+      </svg>
+      <figcaption><b>그림 3-6.</b> 단극 한계의 스케일링. 왼쪽: BV를 두 배로 올리면 층은 두꺼워지고 도핑은 옅어져 저항은 \(2^{2.5} \approx 5.7\)배가 된다. 오른쪽: 같은 1200 V를 막는 NPT 드리프트층을 Si와 SiC로 만들면 두께는 1/12, 도핑은 100배 이상, 저항은 약 1/1000이다. 막대 높이는 두께 비례.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-limit">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>R<sub>on,sp</sub> 대 BV: 단극 한계선 그리기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="lm-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>항복 전압 커서 BV</span> <output id="lm-B-out"></output></span><input type="range" id="lm-B" min="1.5" max="4.2" step="0.005" value="3.079"></label>
+          <label class="check"><input type="checkbox" id="lm-pt" checked> 최적 PT 한계선</label>
+          <label class="check"><input type="checkbox" id="lm-cf" checked> 바리가 닫힌 식(점선)</label>
+          <label class="check"><input type="checkbox" id="lm-pts" checked> 대표 소자 대략값</label>
+          <div class="legend" style="padding:0"><span class="m-key si">Si</span><span class="m-key sic">4H-SiC</span><span class="m-key gan">GaN (Ec 고정)</span></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Si 한계 NPT / PT</span><span class="v" id="lm-si">—</span></div>
+        <div class="stat"><span class="k">SiC 한계 NPT / PT</span><span class="v" id="lm-sic">—</span></div>
+        <div class="stat"><span class="k">Si/SiC 비</span><span class="v" id="lm-r">—</span></div>
+        <div class="stat"><span class="k">SiC 최적 W / N<sub>D</sub></span><span class="v" id="lm-wn">—</span></div>
+        <div class="stat"><span class="k">로그 기울기 (Si, SiC)</span><span class="v" id="lm-k">—</span></div>
+      </div>
+      <div class="sim-note">각 BV마다 멱법칙 적분으로 NPT 도핑·두께를 구하고(실선), 두께를 황금 분할 탐색으로 최적화한 PT 한계(가는 실선)를 그렸다. 이동도는 도핑 의존(Si 최대 1340, SiC 최대 950 cm²/V·s). 점(대략값, '약'): PW-800 SiC 다이 활성 영역 2.5 mΩ·cm²(1200 V 정격), 650 V Si 슈퍼정션 약 10 mΩ·cm², 650 V SiC MOSFET 약 2 mΩ·cm², 3.3 kV SiC 약 10 mΩ·cm². 해볼 것: ① 기울기가 2.5에 가깝다(이동도의 도핑 의존 때문에 저전압에서 약간 작다). ② PW-800 점은 SiC 한계(1200 V 정격이지만 BV 약 1.9 kV 설계)의 몇 배 위다 — 나머지는 채널·JFET·기판 저항이다(<a href="sic.html">8장</a>). ③ Si 슈퍼정션 점은 Si 한계선 <em>아래</em>에 있다. 전하 균형으로 1D 가정을 깬 결과다(<a href="mosfet.html">6장</a>).</div>
+    </div>
+
+    <div class="callout fab"><strong>1200 V 다이의 드리프트 예산</strong>PW-800 SiC 다이(10 µm, 8×10¹⁵ cm⁻³)의 드리프트 저항은 이동도 약 880 cm²/V·s에서 \(R = 10^{-3}/(1.6\times10^{-19}\times880\times8\times10^{15})\) ≈ 0.9 mΩ·cm², 활성 영역 전체 2.5 mΩ·cm²의 약 35 %다. 같은 층의 평행 평면 BV는 약 1.9–2.0 kV(체이노웨스 1.90, 멱법칙 1.98 kV)로 정격 1200 V보다 60 % 높다. 이 마진은 ① 에지 종단 효율(약 85 %, <a href="termination.html">4장</a>) → 약 1.6 kV, ② 에피 두께·도핑 산포(±10 % 안팎), ③ 800 V DC 링크(최대 850 V) + 턴오프 오버슈트 75–150 V ≈ 1 kV 피크, ④ 우주선 고장률 10 FIT 미만을 위한 전압 디레이팅(<a href="reliability.html">16장</a>)이 나눠 쓴다. Si로 같은 일을 하려면 약 100 µm·300 mΩ·cm²이 필요하다 — 그래서 Si 1200 V는 IGBT다.</div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="temp">
+    <h2>온도와 항복: 애벌런치 견고성</h2>
+    <p>앞 절의 \(\gamma(T)\)에서 보았듯 충돌 이온화 계수는 온도가 오르면 줄어든다. 그래서 애벌런치 항복 전압은 <em>양의 온도 계수</em>를 갖는다(Si 수백 V급에서 대략 +0.1–0.3 %/K, SiC는 그보다 훨씬 작다). 반대로 터널링(제너) 항복은 밴드갭이 줄어 음의 계수다 — 두 기구를 가르는 실험적 지문이다.</p>
+    <p>양의 계수는 소자를 지킨다. 유도성 부하를 갑자기 끊어 소자가 애벌런치로 에너지를 흡수하는 <span class="term">비클램프 유도성 스위칭</span><span class="en">(UIS)</span>을 생각하자. 칩의 한 곳이 조금 먼저 항복해 전류가 몰리면 그곳이 뜨거워지고, BV가 올라 전류를 이웃에 넘긴다. 계수가 음이었다면 뜨거운 곳의 BV가 더 낮아져 전류가 더 몰리는 <span class="term">전류 필라멘트</span>가 생기고 순식간에 녹는다. 실제 MOSFET의 애벌런치 파괴는 대개 이 1D 물리가 아니라 기생 BJT의 턴온(<a href="mosfet.html">6장</a>)이나 금속 용융에서 온다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="애벌런치 중 국부 가열: 양의 온도 계수는 전류를 펼치고 음의 계수는 필라멘트로 모은다">
+        <rect x="20" y="20" width="410" height="195" rx="8" class="bd-box"/>
+        <text x="40" y="44" class="bd-lb">양의 계수 (실제 애벌런치)</text>
+        <g>
+          <rect x="50" y="70" width="350" height="40" class="bd-n"/>
+          <rect x="170" y="70" width="60" height="40" class="bd-heat"/>
+          <path d="M90 130 L 90 112 M130 130 L130 112 M170 130 L170 112 M200 130 L200 112 M230 130 L230 112 M270 130 L270 112 M310 130 L310 112 M350 130 L350 112" stroke="var(--m-amp)" stroke-width="3"/>
+        </g>
+        <text x="200" y="62" text-anchor="middle" class="bd-s">뜨거운 곳: BV↑</text>
+        <text x="40" y="160" class="bd-s">T↑ → α↓ → BV↑ → 전류가 이웃으로</text>
+        <text x="40" y="182" class="bd-s">→ 온도가 평평해짐 (자기 안정)</text>
+        <text x="40" y="204" class="bd-s">흡수 가능 에너지 E<tspan baseline-shift="sub" font-size="75%">AS</tspan> = ½LI² 커짐</text>
+        <rect x="450" y="20" width="410" height="195" rx="8" class="bd-box"/>
+        <text x="470" y="44" class="bd-lb">음의 계수 (가정, 또는 기생 BJT)</text>
+        <rect x="480" y="70" width="350" height="40" class="bd-n"/>
+        <rect x="620" y="70" width="30" height="40" fill="color-mix(in srgb, var(--m-heat) 70%, transparent)"/>
+        <path d="M635 140 L 635 112" stroke="var(--m-amp)" stroke-width="10"/>
+        <text x="635" y="62" text-anchor="middle" class="bd-s">뜨거운 곳: BV↓</text>
+        <text x="470" y="160" class="bd-s">T↑ → BV↓ → 전류가 더 몰림 → T↑↑</text>
+        <text x="470" y="182" class="bd-s">→ 필라멘트 → 국부 용융</text>
+        <text x="470" y="204" class="bd-s">면적이 넓어도 견고성이 늘지 않음</text>
+      </svg>
+      <figcaption><b>그림 3-7.</b> 애벌런치 중 온도 되먹임. 항복 전압의 온도 계수 부호가 전류가 퍼질지 모일지를 정한다. 주황 선 굵기는 전류 밀도. 애벌런치 등급(\(E_{AS}\))은 <a href="mosfet.html">6장</a>, 단락·애벌런치 신뢰성 시험은 <a href="reliability.html">16장</a>에서 다룬다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-uis">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>UIS 애벌런치: 12셀 병렬 칩의 전류·온도 되먹임</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ui-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>BV 온도 계수 β</span> <output id="ui-b-out"></output></span><input type="range" id="ui-b" min="-0.1" max="0.25" step="0.005" value="0.1"></label>
+          <label class="ctrl"><span><span>애벌런치 시작 전류 I<sub>0</sub></span> <output id="ui-I-out"></output></span><input type="range" id="ui-I" min="5" max="60" step="1" value="20"></label>
+          <label class="ctrl"><span><span>약한 셀의 BV 결함</span> <output id="ui-d-out"></output></span><input type="range" id="ui-d" min="0" max="3" step="0.1" value="1"></label>
+          <div class="ctrl bd-btns"><button class="btn primary" id="ui-go">UIS 펄스</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">흡수 에너지 ½LI²</span><span class="v" id="ui-E">—</span></div>
+        <div class="stat"><span class="k">애벌런치 시간</span><span class="v" id="ui-t">—</span></div>
+        <div class="stat"><span class="k">최고 온도 (셀)</span><span class="v" id="ui-T">—</span></div>
+        <div class="stat"><span class="k">약한 셀 에너지 몫 (평균 8 %)</span><span class="v" id="ui-sh">—</span></div>
+        <div class="stat"><span class="k">결과</span><span class="v bd-v" id="ui-res">—</span></div>
+      </div>
+      <div class="sim-note">L = 1 mH, V<sub>DD</sub> = 800 V, 칩 BV<sub>0</sub> = 1.7 kV(종단 포함, 25 °C). 칩을 12개 셀로 나누고, 셀 i의 BV<sub>i</sub> = BV<sub>0</sub>(1 + β(T<sub>i</sub> − T<sub>0</sub>)) − δ<sub>i</sub>, 셀 전류 I<sub>i</sub> = max(0, V − BV<sub>i</sub>)/r<sub>av</sub>(애벌런치 동저항)로 두고 매 순간 ΣI<sub>i</sub> = I<sub>L</sub>(t)가 되는 칩 전압 V를 이분법으로 푼다. 인덕터 전류는 dI<sub>L</sub>/dt = −(V − V<sub>DD</sub>)/L로 줄고, 셀 온도는 열용량(칩 전체 약 3 mJ/K: 애벌런치 수–수십 µs 동안 열이 퍼지는 수십 µm 두께의 SiC와 상부 금속)과 이웃 셀 열전도로 적분한다. 600 °C에 닿으면 "소손"(금속 용융 근처로 가정). 해볼 것: ① β = +0.1 %/K에서 약한 셀(가운데)이 먼저 켜지지만 뜨거워지며 전류를 넘긴다. ② β = 0이면 약한 셀이 전류를 놓지 못해 최고 온도가 약 두 배로 오르고, 음으로 두면 전류를 독차지하고 타 버린다. ③ I<sub>0</sub>를 올리며 견디는 최대 에너지를 β = +0.1과 +0.2 %/K에서 비교해 보자. 소자가 흡수하는 에너지는 ½LI²보다 크다(V<sub>DD</sub>도 애벌런치 동안 에너지를 넣는다: E = ½LI²·V/(V − V<sub>DD</sub>)).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="leak">
+    <h2>누설 전류: 생성과 확산</h2>
+    <p>항복 아래에서도 역바이어스 접합에는 작은 전류가 흐른다. 공핍층 안에서 결함 준위를 통한 열생성(쇼클리-리드-홀)으로 생긴 쌍이 전계에 쓸려 나가는 <span class="term">생성 전류</span>, 그리고 공핍층 가장자리 중성 영역의 소수 캐리어가 확산해 들어오는 <span class="term">확산 전류</span>다. 둘 다 진성 캐리어 밀도 \(n_i\)에 묶여 있고, 항복 근처에서는 증배율 \(M\)이 곱해진다.</p>
+    <div class="formula">$$J_R = M(V)\left[\frac{q\,n_i\,x_d}{\tau_g} + \frac{q\,n_i^2}{N_D}\sqrt{\frac{D_p}{\tau_p}}\right],\qquad n_i(T) \propto T^{3/2}\exp\!\left(-\frac{E_g(T)}{2kT}\right)$$<div class="where">\(\tau_g\)는 생성 수명, \(\tau_p\)는 소수 캐리어 수명(여기선 같게 둔다). 생성 항은 \(n_i\)(활성화 에너지 \(E_g/2\)), 확산 항은 \(n_i^2\)(활성화 \(E_g\))에 비례하므로 저온은 생성, 고온은 확산이 지배한다. 실온 \(n_i\): Si 약 10¹⁰ cm⁻³, 4H-SiC 약 5×10⁻⁹ cm⁻³ — 18자릿수 차이.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 220" role="img" aria-label="역바이어스 누설의 두 성분: 공핍층 안의 열생성과 중성 영역에서의 확산">
+        <rect x="40" y="30" width="40" height="150" class="bd-p"/>
+        <rect x="80" y="30" width="300" height="150" fill="color-mix(in srgb, var(--m-field) 14%, transparent)" stroke="var(--border)"/>
+        <rect x="380" y="30" width="200" height="150" class="bd-n"/>
+        <text x="230" y="22" text-anchor="middle" class="bd-s">공핍층 x<tspan baseline-shift="sub" font-size="75%">d</tspan> (전계 있음)</text>
+        <text x="480" y="22" text-anchor="middle" class="bd-s">n⁻ 중성 영역</text>
+        <g><circle cx="180" cy="90" r="6" fill="var(--m-electron)"/><circle cx="180" cy="120" r="6" fill="none" stroke="var(--m-hole)" stroke-width="2.2"/>
+        <line x1="150" y1="105" x2="210" y2="105" stroke="var(--text-dim)" stroke-dasharray="3 3"/>
+        <path d="M188 90 L 300 90" stroke="var(--m-electron)" stroke-width="2"/><path d="M172 120 L 90 120" stroke="var(--m-hole)" stroke-width="2"/></g>
+        <text x="200" y="150" class="bd-s">SRH 열생성 ∝ n<tspan baseline-shift="sub" font-size="75%">i</tspan>/τ<tspan baseline-shift="sub" font-size="75%">g</tspan></text>
+        <circle cx="480" cy="100" r="6" fill="none" stroke="var(--m-hole)" stroke-width="2.2"/>
+        <path d="M472 100 C 440 104, 410 96, 386 100" stroke="var(--m-hole)" stroke-width="2" stroke-dasharray="4 3" fill="none"/>
+        <text x="420" y="140" class="bd-s">소수 정공 확산 ∝ n<tspan baseline-shift="sub" font-size="75%">i</tspan>²</text>
+        <rect x="610" y="30" width="250" height="150" rx="8" class="bd-box"/>
+        <text x="625" y="54" class="bd-lb">온도에 따른 지배 성분</text>
+        <line x1="640" y1="160" x2="845" y2="160" class="s-axis"/><line x1="640" y1="160" x2="640" y2="64" class="s-axis"/>
+        <path d="M645 140 L 840 90" stroke="var(--m-field)" stroke-width="2.4"/>
+        <path d="M645 158 L 840 66" stroke="var(--m-hole)" stroke-width="2.4"/>
+        <text x="700" y="148" class="bd-s">생성 (E<tspan baseline-shift="sub" font-size="75%">g</tspan>/2)</text>
+        <text x="760" y="76" class="bd-s">확산 (E<tspan baseline-shift="sub" font-size="75%">g</tspan>)</text>
+        <text x="742" y="176" text-anchor="middle" class="bd-s">온도 →  (세로: log J)</text>
+      </svg>
+      <figcaption><b>그림 3-8.</b> 역방향 누설의 두 기구. 생성 전류는 공핍층 부피(\(x_d\))에 비례해 전압에 따라 \(\sqrt{V}\)처럼 늘고, 확산 전류는 전압과 거의 무관하다. 아레니우스 그래프에서 기울기가 \(E_g/2\)에서 \(E_g\)로 바뀌는 온도가 둘의 교차점이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-leak">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>누설 전류 대 온도: 1200 V Si vs SiC 드리프트층</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="lk-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>접합 온도 T<sub>j</sub></span> <output id="lk-T-out"></output></span><input type="range" id="lk-T" min="25" max="250" step="1" value="150"></label>
+          <label class="ctrl"><span><span>역전압 V / BV</span> <output id="lk-v-out"></output></span><input type="range" id="lk-v" min="0.1" max="0.995" step="0.005" value="0.6"></label>
+          <label class="ctrl"><span><span>수명 τ<sub>g</sub> = τ<sub>p</sub></span> <output id="lk-tau-out"></output></span><input type="range" id="lk-tau" min="-8" max="-4" step="0.05" value="-6"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Si: 생성 / 확산</span><span class="v" id="lk-si">—</span></div>
+        <div class="stat"><span class="k">SiC: 생성 / 확산</span><span class="v" id="lk-sic">—</span></div>
+        <div class="stat"><span class="k">n<sub>i</sub> Si / SiC</span><span class="v" id="lk-ni">—</span></div>
+        <div class="stat"><span class="k">증배율 M Si / SiC</span><span class="v" id="lk-M">—</span></div>
+        <div class="stat"><span class="k">Si 다이 1 cm² 누설 × V</span><span class="v" id="lk-p">—</span></div>
+      </div>
+      <div class="sim-note">Si: NPT 1.5×10¹⁴ cm⁻³(BV 약 1.2 kV), SiC: PW-800 드리프트층(8×10¹⁵, 10 µm). 공핍 폭과 M은 이 장의 솔버로 계산한다. Eg(T)는 바시니 식, n<sub>i</sub>는 실온 값(Si 1×10¹⁰, SiC 5×10⁻⁹)에서 T<sup>3/2</sup>e<sup>−Eg/2kT</sup>로 외삽. 해볼 것: ① 150 °C에서 Si 누설은 25 °C보다 천 배 이상 크다 — Si 소자 최대 접합 온도가 150–175 °C에 묶이는 이유 중 하나다. 이 옅고 넓은 드리프트층(공핍 약 80 µm)에서는 생성 성분이 250 °C 근처까지 지배한다. 수명을 10 µs 이상으로 늘리면 생성이 줄어 확산과의 교차가 낮은 온도로 내려온다. ② SiC의 이론 누설은 250 °C에서도 10⁻¹⁸ A/cm² 아래다. 실제 SiC 소자의 누설(nA–µA)은 이 기구가 아니라 쇼트키 장벽 터널링, 표면·종단, 결정 결함에서 온다(<a href="diodes.html">5장</a>). ③ V/BV를 0.99로 올리면 M이 곱해져 누설이 다시 늘어난다 — 항복 직전의 "무릎"이다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="design">
+    <h2>설계 손잡이 정리: 조건 → 결과</h2>
+    <p>드리프트층 설계는 결국 네 개의 손잡이(재료, \(N_D\), \(W\), 동작 온도)와 네 개의 결과(BV, \(R_{drift}\), 누설, 견고성)의 표로 요약된다. 아래 표의 화살표는 다른 손잡이를 고정했을 때의 방향이다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>손잡이</th><th>BV</th><th>R<sub>drift</sub></th><th>누설</th><th>메모</th></tr></thead>
+      <tbody>
+        <tr><td>N<sub>D</sub> ↓ (NPT)</td><td>↑ (∝ N<sup>−3/4</sup>)</td><td>↑↑ (두께도 늘려야 함)</td><td>↑ (공핍 부피)</td><td>BV를 올리는 가장 직접적인 방법</td></tr>
+        <tr><td>W ↓ (PT로)</td><td>↓ (W &lt; W<sub>pp</sub>부터)</td><td>↓ (최적점까지)</td><td>≈</td><td>최적 W ≈ 0.8 W<sub>pp</sub>, 저항 약 −12 %</td></tr>
+        <tr><td>Si → 4H-SiC</td><td>같은 N에서 수십 배</td><td>같은 BV에서 수백~1000분의 1</td><td>이론상 10¹⁸분의 1</td><td>E<sub>c</sub> 약 8배, BFOM ∝ E<sub>c</sub>³</td></tr>
+        <tr><td>T<sub>j</sub> ↑</td><td>↑ (작은 양의 계수)</td><td>↑ (μ ∝ T<sup>−2</sup> 안팎)</td><td>↑↑ (지수)</td><td>양의 BV 계수 = 애벌런치 자기 안정</td></tr>
+        <tr><td>에피 산포 ±10 %</td><td>∓ 수 %–8 %</td><td>± 수 %</td><td>—</td><td>정격 대비 BV 마진의 한 몫</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout fab"><strong>왜 800 V 시스템에 1200 V 소자인가</strong>800 V 트랙션 인버터의 DC 링크 최대 850 V에 턴오프 오버슈트(\(L_\sigma\) 15 nH × 5–10 A/ns ≈ 75–150 V, <a href="switching.html">10장</a>)를 더하면 소자는 약 1 kV를 본다. 여기에 우주선에 의한 단일 사건 소손 고장률이 DC 전압/정격 비에 지수적으로 민감하므로(<a href="reliability.html">16장</a>) 800 V 시스템은 1200 V급, 400 V 시스템은 650–750 V급을 쓴다. 이 "정격 = 1.5 × 버스 전압" 규칙의 물리적 바닥이 이 장의 BV 계산이다.</div>
+    <div class="callout tip"><strong>설계 순서 요약</strong>① 시스템 피크 전압 + 디레이팅으로 정격, ② 종단 효율과 공정 산포로 필요한 평행 평면 BV(정격의 약 1.3–1.6배), ③ 그 BV에서 최적 PT의 \(W, N_D\)(이 장의 최적화기), ④ \(R_{drift}\)를 채널·기판 저항과 합해 다이 면적 결정(<a href="mosfet.html">6장</a>, <a href="sic.html">8장</a>), ⑤ 종단 폭과 다이 면적 비율 확인(<a href="termination.html#area">4장</a>).</div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>충돌 이온화 계수는 \(\alpha = a\,e^{-b/E}\)(체이노웨스)로 전계에 극도로 민감하다. 같은 α에 이르는 전계가 SiC에서 Si의 약 6–8배다. 근사로 \(\alpha_{\text{eff}} = CE^7\)(Si \(1.8\times10^{-35}\), SiC \(3.9\times10^{-42}\)).</li>
+      <li>항복 조건은 이온화 적분 \(I_{ion} = 1\), 그 아래에서 증배율은 \(M = 1/(1-I_{ion})\). 이온화는 전계 꼭대기 근처 좁은 영역에서 일어난다.</li>
+      <li>1D 포아송: 공핍된 드리프트층의 전계는 기울기 \(qN_D/\varepsilon\)의 직선. \(x_d \le W\)면 삼각형(NPT), 넘으면 사다리꼴(PT), \(V_{pt} = qN_DW^2/2\varepsilon\).</li>
+      <li>평행 평면 접합: \(E_c \propto N_D^{1/8}\), \(BV \propto N_D^{-3/4}\), \(W_{pp} \propto N_D^{-7/8}\). Si \(5.3\times10^{13}N_D^{-3/4}\), SiC(적분) 약 \(2.1\times10^{15}N_D^{-3/4}\) V.</li>
+      <li>최적 PT는 \(W \approx 0.75\)–\(0.8\,W_{pp}\), \(N \approx 0.9\,N_{pp}\)로 드리프트 저항을 12–16 % 줄인다.</li>
+      <li>단극 한계 \(R_{on,sp} = 4BV^2/(\varepsilon\mu E_c^3) \propto BV^{2.5}\). 1200 V에서 Si 약 300, SiC 약 0.3 mΩ·cm². PW-800 다이는 BV 약 1.9 kV 드리프트로 0.9 mΩ·cm²(전체의 35 %)를 쓴다.</li>
+      <li>애벌런치 BV는 양의 온도 계수 → 전류가 퍼지는 자기 안정. 누설은 생성(\(\propto n_i\))과 확산(\(\propto n_i^2\))이며 Si는 150–200 °C에서 급증, SiC의 이론 누설은 무시할 만하고 실제 누설은 결함·표면이 정한다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. Si 평행 평면 NPT 접합의 도핑을 1×10¹⁵에서 1×10¹⁴ cm⁻³로 낮추면 항복 전압은 대략 몇 배가 되는가?</p><div class="opts">
+        <button class="opt">10배</button>
+        <button class="opt" data-correct>약 5.6배</button>
+        <button class="opt">약 3.2배</button>
+        <button class="opt">약 7.5배</button>
+      </div><div class="quiz-exp">\(BV \propto N_D^{-3/4}\)이므로 \(10^{3/4} \approx 5.6\)배(약 300 V → 약 1.7 kV). 7.5배(\(10^{7/8}\))는 필요한 두께의 증가 비다.</div></div>
+
+      <div class="quiz-q"><p>2. 이온화 적분 \(I_{ion}\)이 0.9인 역바이어스 상태에서 증배율 M은?</p><div class="opts">
+        <button class="opt">0.9</button>
+        <button class="opt">1.9</button>
+        <button class="opt" data-correct>10</button>
+        <button class="opt">무한대</button>
+      </div><div class="quiz-exp">\(M = 1/(1 - I_{ion}) = 1/0.1 = 10\). \(I_{ion} = 1\)이 되어야 M이 발산(항복)한다.</div></div>
+
+      <div class="quiz-q"><p>3. PW-800 SiC 다이(8×10¹⁵ cm⁻³, 10 µm)의 펀치스루 전압은 약 750 V다. 800 V DC 링크에서 드리프트층 전계의 모양은?</p><div class="opts">
+        <button class="opt">삼각형, 공핍층이 드리프트층 중간에서 끝남</button>
+        <button class="opt" data-correct>사다리꼴, n⁺ 기판 경계에서 전계가 0이 아닌 값으로 잘림</button>
+        <button class="opt">직사각형, 전계가 균일</button>
+        <button class="opt">공핍층이 p 쪽으로만 퍼짐</button>
+      </div><div class="quiz-exp">\(V_R \gt V_{pt}\)이면 공핍층이 W 전체를 채우고 n⁺에 닿아 \(E_1 = E_m - qN_DW/\varepsilon \gt 0\)인 사다리꼴이 된다. 800 V에서 \(E_1\)은 아직 작다.</div></div>
+
+      <div class="quiz-q"><p>4. 목표 BV를 고정하고 드리프트 두께를 NPT 값에서 줄여 갈 때 드리프트 저항은?</p><div class="opts">
+        <button class="opt">계속 줄어든다</button>
+        <button class="opt">계속 늘어난다</button>
+        <button class="opt" data-correct>약 0.75–0.8 W<sub>pp</sub>에서 최소가 되고 더 얇으면 다시 늘어난다</button>
+        <button class="opt">두께와 무관하다</button>
+      </div><div class="quiz-exp">얇게 하면 W가 줄지만 BV를 지키려면 N<sub>D</sub>를 낮춰야 한다. \(R \propto W/N_D\)는 \(W_{opt} = 1.5BV/E_c\)(상수 \(E_c\) 근사)에서 최소, 적분으로는 약 0.8 W<sub>pp</sub>.</div></div>
+
+      <div class="quiz-q"><p>5. 단극 한계가 \(BV^2\)이 아니라 \(BV^{2.5}\)에 비례하는 이유는?</p><div class="opts">
+        <button class="opt">이동도가 도핑에 따라 변해서</button>
+        <button class="opt" data-correct>임계 전계가 도핑(따라서 BV)에 따라 \(BV^{-1/6}\)로 줄어서</button>
+        <button class="opt">기판 저항이 더해져서</button>
+        <button class="opt">공핍층이 p 쪽으로도 퍼져서</button>
+      </div><div class="quiz-exp">\(R = 4BV^2/(\varepsilon\mu E_c^3)\)에서 \(E_c \propto BV^{-1/6}\)이면 \(E_c^{-3} \propto BV^{1/2}\). 넓은 공핍층에서는 이온화 거리가 길어 더 낮은 전계에서 항복한다.</div></div>
+
+      <div class="quiz-q"><p>6. 애벌런치 항복 전압의 온도 계수가 양(+)인 것이 UIS 견고성에 유리한 이유는?</p><div class="opts">
+        <button class="opt">온도가 오르면 누설 전류가 줄어서</button>
+        <button class="opt">온도가 오르면 이동도가 늘어서</button>
+        <button class="opt" data-correct>뜨거워진 곳의 BV가 올라 전류가 이웃 영역으로 퍼져서</button>
+        <button class="opt">온도가 오르면 공핍층이 얇아져서</button>
+      </div><div class="quiz-exp">국부 가열 → 이온화 계수 감소 → 그 자리 BV 상승 → 같은 칩 전압에서 전류가 덜 흐름. 음의 계수였다면 전류가 한 곳에 몰리는 필라멘트가 생긴다.</div></div>
+
+      <div class="quiz-q"><p>7. 1200 V를 막는 NPT 드리프트층을 Si와 4H-SiC로 만들 때 이상적 드리프트 저항의 비(Si/SiC)에 가장 가까운 것은?</p><div class="opts">
+        <button class="opt">약 10</button>
+        <button class="opt">약 50</button>
+        <button class="opt" data-correct>약 1000</button>
+        <button class="opt">약 10⁶</button>
+      </div><div class="quiz-exp">Si 약 300 mΩ·cm²(100 µm, 1.5×10¹⁴), SiC 약 0.28 mΩ·cm²(8 µm, 2×10¹⁶). BFOM의 \(E_c^3\) 비(약 500)와 이동도·유전율 차이가 합쳐진 결과다.</div></div>
+
+      <div class="quiz-q"><p>8. 온도를 계속 올릴 때 결국 역방향 누설 전류를 지배하게 되는 성분과 그 활성화 에너지는?</p><div class="opts">
+        <button class="opt">생성 전류, E<sub>g</sub>/2</button>
+        <button class="opt" data-correct>확산 전류, 약 E<sub>g</sub></button>
+        <button class="opt">터널링 전류, 0</button>
+        <button class="opt">애벌런치 전류, E<sub>g</sub>/2</button>
+      </div><div class="quiz-exp">확산 전류는 \(n_i^2 \propto e^{-E_g/kT}\)에 비례해 온도에 더 가파르므로 고온에서 생성 전류(\(\propto n_i\))를 추월한다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const font = (px) => px + "px " + getComputedStyle(document.body).getPropertyValue("--font");
+  const SUP = { "-": "⁻", "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹" };
+  const sci = (x, d) => { if (!isFinite(x)) return "—"; if (x === 0) return "0"; const e = Math.floor(Math.log10(Math.abs(x)) + 1e-9); const m = x / Math.pow(10, e); return m.toFixed(d == null ? 1 : d) + "×10" + String(e).split("").map((c) => SUP[c]).join(""); };
+  const fV = (v) => (v >= 1000 ? (v / 1000).toPrecision(3) + " kV" : v.toPrecision(3) + " V");
+  const fE = (E) => (E / 1e6).toFixed(E < 1e6 ? 3 : 2) + " MV/cm";
+  const fL = (cm) => { const um = cm * 1e4; return um >= 100 ? um.toFixed(0) + " µm" : um >= 10 ? um.toFixed(1) + " µm" : um.toFixed(2) + " µm"; };
+  const fR = (r) => { const m = r * 1e3; return m >= 100 ? m.toFixed(0) + " mΩ·cm²" : m >= 1 ? m.toPrecision(3) + " mΩ·cm²" : m.toFixed(3) + " mΩ·cm²"; };
+  function rgba(c, a) {
+    c = (c || "").trim();
+    if (c[0] === "#") { let h = c.slice(1); if (h.length === 3) h = h.split("").map((x) => x + x).join(""); const n = parseInt(h, 16); return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")"; }
+    const m = c.match(/rgba?\(([^)]+)\)/); if (m) { const p = m[1].split(",").slice(0, 3).join(","); return "rgba(" + p + "," + a + ")"; }
+    return c;
+  }
+
+  /* ============================================================
+     공통 물리 엔진: 재료, 이온화 계수, 1D 포아송, 이온화 적분, BV
+     ============================================================ */
+  const Q = 1.602176634e-19, EPS0 = 8.8541878128e-14, KB = 8.617333e-5;
+  const MAT = {
+    Si: { key: "Si", er: 11.7, C: 1.8e-35, an: 7.03e5, bn: 1.231e6, ap: 1.582e6, bp: 2.036e6, hw: 0.063, mu: (N) => 88 + 1252 / (1 + Math.pow(N / 1.26e17, 0.88)) },
+    SiC: { key: "SiC", er: 9.7, C: 3.9e-42, an: 1.76e8, bn: 3.3e7, ap: 3.41e8, bp: 2.5e7, hw: 0.19, mu: (N) => 40 + 910 / (1 + Math.pow(N / 2e17, 0.76)) },
+  };
+  const eps = (m) => m.er * EPS0;
+  const gam = (m, T) => Math.tanh(m.hw / (2 * KB * 300)) / Math.tanh(m.hw / (2 * KB * T));
+  function alph(m, E, model, g) {
+    g = g || 1;
+    if (!(E > 0)) return [0, 0];
+    if (model === "pl") { const a = m.C * Math.pow(E, 7); return [a, a]; }
+    return [g * m.an * Math.exp(-g * m.bn / E), g * m.ap * Math.exp(-g * m.bp / E)];
+  }
+  function field(m, N, W, V) {
+    const s = (Q * N) / eps(m);
+    const xd = Math.sqrt((2 * eps(m) * V) / (Q * N));
+    if (xd <= W) return { s, Em: s * xd, E1: 0, xd, pt: false };
+    const Em = V / W + (s * W) / 2;
+    return { s, Em, E1: Em - s * W, xd: W, pt: true };
+  }
+  // 전자 주입형 이온화 적분 (Sze). 멱법칙이면 닫힌 식.
+  function ionI(m, N, W, V, model, g) {
+    const f = field(m, N, W, V);
+    if (model === "pl") { const a = f.Em, b = f.E1; return (m.C / 8) * f.xd * (a + b) * (a * a + b * b) * (a * a * a * a + b * b * b * b); }
+    const n = 240, dx = f.xd / n;
+    let acc = 0, I = 0;
+    for (let i = 0; i < n; i++) {
+      const E = f.Em - f.s * (i + 0.5) * dx, al = alph(m, E, model, g), d = (al[0] - al[1]) * dx;
+      acc += d / 2; I += al[0] * Math.exp(-acc) * dx; acc += d / 2;
+    }
+    return isFinite(I) ? I : Infinity;
+  }
+  // 정공 주입형 (x = x_d에서 들어와 x = 0으로)
+  function ionIp(m, N, W, V, model, g) {
+    const f = field(m, N, W, V);
+    const n = 240, dx = f.xd / n;
+    let acc = 0, I = 0;
+    for (let i = n - 1; i >= 0; i--) {
+      const E = f.Em - f.s * (i + 0.5) * dx, al = alph(m, E, model, g), d = (al[1] - al[0]) * dx;
+      acc += d / 2; I += al[1] * Math.exp(-acc) * dx; acc += d / 2;
+    }
+    return isFinite(I) ? I : Infinity;
+  }
+  function BV(m, N, W, model, g) {
+    let lo = Math.log(0.5), hi = Math.log(3e6);
+    for (let k = 0; k < 46; k++) { const mid = (lo + hi) / 2; if (ionI(m, N, W, Math.exp(mid), model, g) >= 1) hi = mid; else lo = mid; }
+    return Math.exp((lo + hi) / 2);
+  }
+  // 멱법칙 닫힌 식 BV(N, W): NPT 또는 사다리꼴
+  function bvPL(m, N, W) {
+    const s = (Q * N) / eps(m), EmN = Math.pow((8 * s) / m.C, 1 / 8);
+    if (EmN / s <= W) return { bv: (EmN * EmN) / (2 * s), Em: EmN, pt: false, xd: EmN / s };
+    const g = (a) => { const b = a - s * W; return W * (a + b) * (a * a + b * b) * (a * a * a * a + b * b * b * b) - 8 / m.C; };
+    let lo = s * W, hi = Math.max(2 * s * W, 2 * Math.pow(1 / (m.C * W), 1 / 7));
+    let guard = 0; while (g(hi) < 0 && guard++ < 60) hi *= 2;
+    for (let k = 0; k < 64; k++) { const mid = 0.5 * (lo + hi); if (g(mid) < 0) lo = mid; else hi = mid; }
+    const a = 0.5 * (lo + hi);
+    return { bv: (a - (s * W) / 2) * W, Em: a, pt: true, xd: W };
+  }
+  // 목표 BV를 주는 도핑 (W 고정). 불가능하면 null.
+  function reqN(m, W, target) {
+    if (bvPL(m, 1e10, W).bv < target) return null;
+    let lo = Math.log(1e10), hi = Math.log(1e19);
+    for (let k = 0; k < 56; k++) { const mid = 0.5 * (lo + hi); if (bvPL(m, Math.exp(mid), W).bv > target) lo = mid; else hi = mid; }
+    return Math.exp(0.5 * (lo + hi));
+  }
+  // NPT 닫힌 식(멱법칙): BV → N, W
+  function nptOf(m, bv) {
+    const K = Math.pow((8 * Q) / (m.C * eps(m)), 1 / 8), kbv = (eps(m) * K * K) / (2 * Q);
+    const N = Math.pow(kbv / bv, 4 / 3), Ec = K * Math.pow(N, 1 / 8);
+    return { N, W: (2 * bv) / Ec, Ec };
+  }
+  const rDrift = (m, N, W) => W / (Q * m.mu(N) * N);
+  // 최적 PT (황금 분할: W/Wpp ∈ [0.42, 1])
+  function ptOpt(m, bv) {
+    const npt = nptOf(m, bv);
+    const R = (x) => { const N = reqN(m, x * npt.W, bv); return N ? rDrift(m, N, x * npt.W) : Infinity; };
+    let a = 0.42, b = 1.0, gr = 0.618034, c = b - gr * (b - a), d = a + gr * (b - a), fc = R(c), fd = R(d);
+    for (let k = 0; k < 28; k++) { if (fc < fd) { b = d; d = c; fd = fc; c = b - gr * (b - a); fc = R(c); } else { a = c; c = d; fc = fd; d = a + gr * (b - a); fd = R(d); } }
+    const x = 0.5 * (a + b), W = x * npt.W, N = reqN(m, W, bv);
+    return { x, W, N, R: rDrift(m, N, W), npt, Rnpt: rDrift(m, npt.N, npt.W) };
+  }
+
+  /* ============================================================
+     1) 이온화 계수 탐색기
+     ============================================================ */
+  (function () {
+    if (!$("al-cv")) return;
+    const gE = PW.range("al-E", (v) => fE(Math.pow(10, v)), draw);
+    const gT = PW.range("al-T", (v) => v + " K (" + (v - 273) + " °C)", calc);
+    const cPL = $("al-pl"); cPL.addEventListener("change", draw);
+    let bsi = 0, bsic = 0, bsi0 = 0, bsic0 = 0;
+    function calc() {
+      const T = gT();
+      bsi = BV(MAT.Si, 1e15, 1, "ch", gam(MAT.Si, T)); bsic = BV(MAT.SiC, 8e15, 10e-4, "ch", gam(MAT.SiC, T));
+      if (!bsi0) { bsi0 = BV(MAT.Si, 1e15, 1, "ch", 1); bsic0 = BV(MAT.SiC, 8e15, 10e-4, "ch", 1); }
+      draw();
+    }
+    function e4(m, g) { let lo = 1e4, hi = 1e8; for (let k = 0; k < 60; k++) { const mid = Math.sqrt(lo * hi); if (alph(m, mid, "ch", g)[1] > 1e4) hi = mid; else lo = mid; } return lo; }
+    const cv = PW.canvas($("al-cv"), (ctx, w, h) => {
+      const P = PW.palette(), T = gT(), E = Math.pow(10, gE());
+      const gS = gam(MAT.Si, T), gC = gam(MAT.SiC, T);
+      const mk = (m, idx, g, model) => { const d = []; for (let k = 0; k <= 160; k++) { const x = Math.pow(10, 5 + (1.7 * k) / 160); d.push([x, alph(m, x, model, g)[idx]]); } return d; };
+      const series = [
+        { data: mk(MAT.Si, 0, gS, "ch"), color: P.si, width: 2.6 },
+        { data: mk(MAT.Si, 1, gS, "ch"), color: P.si, width: 2.2, dash: [6, 4] },
+        { data: mk(MAT.SiC, 0, gC, "ch"), color: P.sic, width: 2.6 },
+        { data: mk(MAT.SiC, 1, gC, "ch"), color: P.sic, width: 2.2, dash: [6, 4] },
+      ];
+      if (cPL.checked) { series.push({ data: mk(MAT.Si, 0, 1, "pl"), color: P.si, width: 1.2, dash: [2, 3] }); series.push({ data: mk(MAT.SiC, 0, 1, "pl"), color: P.sic, width: 1.2, dash: [2, 3] }); }
+      PW.chart(ctx, { x: 62, y: 14, w: w - 80, h: h - 60 }, {
+        x: [1e5, Math.pow(10, 6.7)], y: [1e-2, 1e7], logX: true, logY: true, xLabel: "전계 E (V/cm)", yLabel: "α (cm⁻¹)",
+        series, vlines: [{ x: E, color: P.field, label: fE(E) }], hlines: [{ y: 1e4, color: P.faint, label: "10⁴ cm⁻¹" }],
+      });
+      ctx.font = font(12); ctx.textAlign = "left";
+      ctx.fillStyle = P.si; ctx.fillText("Si 실선 αn · 점선 αp", 72, 30);
+      ctx.fillStyle = P.sic; ctx.fillText("4H-SiC 실선 αn · 점선 αp", 72, 46);
+      const aS = alph(MAT.Si, E, "ch", gS), aC = alph(MAT.SiC, E, "ch", gC);
+      PW.stat("al-si", sci(aS[0]) + " / " + sci(aS[1]));
+      PW.stat("al-sic", sci(aC[0]) + " / " + sci(aC[1]));
+      PW.stat("al-e4", fE(e4(MAT.Si, gS)) + " / " + fE(e4(MAT.SiC, gC)));
+      if (bsi) {
+        PW.stat("al-bsi", fV(bsi) + " (" + (bsi / bsi0 >= 1 ? "+" : "") + ((bsi / bsi0 - 1) * 100).toFixed(1) + " %)");
+        PW.stat("al-bsic", fV(bsic) + " (" + (bsic / bsic0 >= 1 ? "+" : "") + ((bsic / bsic0 - 1) * 100).toFixed(1) + " %)");
+      }
+    }, { aspect: 0.58, minHeight: 280, maxHeight: 420 });
+    function draw() { cv.redraw(); }
+    calc();
+  })();
+
+  /* ============================================================
+     2) 애벌런치 몬테카를로 (주입별 연쇄 추적)
+     ============================================================ */
+  (function () {
+    if (!$("mc-cv")) return;
+    const gM = PW.seg("mc-m", setup), gV = PW.range("mc-v", (v) => v.toFixed(3), setup);
+    const NMAX = 3000, NB = 30;
+    let S = null, parts = [], chains = new Map(), nextId = 0, sumM = 0, done = 0, nDiv = 0, divShow = 0, injT = 0, running = true, hist = new Array(NB).fill(0), flashes = [];
+    function setup() {
+      const m = MAT[gM()], N = m.key === "Si" ? 1e15 : 8e15, bv = BV(m, N, 1, "ch"), V = gV() * bv, f = field(m, N, 1, V);
+      S = { m, N, bv, V, f, Ip: ionIp(m, N, 1, V, "ch") };
+      parts = []; chains = new Map(); sumM = 0; done = 0; nDiv = 0; divShow = 0; hist = new Array(NB).fill(0); flashes = [];
+      stats();
+    }
+    $("mc-reset").addEventListener("click", setup);
+    $("mc-run").addEventListener("click", () => { running = !running; $("mc-run").textContent = running ? "일시정지" : "재생"; });
+    function stats() {
+      const I = S.Ip;
+      PW.stat("mc-I", I < 1 ? I.toFixed(3) : "≥ 1 (항복)");
+      PW.stat("mc-Mt", I < 1 ? (1 / (1 - I)).toFixed(2) : "∞");
+      PW.stat("mc-Mm", (done ? (sumM / done).toFixed(2) + " (" + done + "회)" : "—") + (nDiv ? " · 발산 " + nDiv + "회" : ""));
+      PW.stat("mc-n", (done + nDiv + chains.size) + " / " + parts.length);
+    }
+    function inject() { const id = nextId++; chains.set(id, { M: 1, alive: 1 }); parts.push({ x: S.f.xd * 0.999, h: true, c: id }); }
+    const cv = PW.canvas($("mc-cv"), (ctx, w, h) => {
+      if (!S) return;
+      const P = PW.palette(), bx = 50, by = 16, bw = w - 70, bh = h * 0.58, xd = S.f.xd;
+      const X = (x) => bx + (x / xd) * bw;
+      ctx.fillStyle = rgba(P.hole, 0.35); ctx.fillRect(bx - 18, by, 18, bh);
+      ctx.fillStyle = rgba(P.electron, 0.3); ctx.fillRect(bx + bw, by, 14, bh);
+      ctx.fillStyle = rgba(P.field, 0.22); ctx.beginPath(); ctx.moveTo(bx, by + bh); ctx.lineTo(bx, by + 6); ctx.lineTo(bx + bw, by + bh); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = P.field; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(bx, by + 6); ctx.lineTo(bx + bw, by + bh); ctx.stroke();
+      ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "left";
+      ctx.fillText("p⁺", bx - 16, by + bh + 14); ctx.fillText("공핍층 " + fL(xd) + "  E_m = " + fE(S.f.Em), bx + 6, by + bh + 14);
+      ctx.textAlign = "right"; ctx.fillText("n⁻", bx + bw + 14, by + bh + 14);
+      const n = Math.min(parts.length, 1500);
+      for (let i = 0; i < n; i++) { const p = parts[i]; const yy = by + 8 + (((p.c * 53 + i * 37) % 97) / 97) * (bh - 16); ctx.fillStyle = p.h ? P.hole : P.electron; ctx.beginPath(); ctx.arc(X(p.x), yy, 2.6, 0, 7); ctx.fill(); }
+      flashes.forEach((f) => { ctx.strokeStyle = rgba(P.warn, Math.max(0, f.a)); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(X(f.x), by + 8 + f.y * (bh - 16), 6 + (1 - f.a) * 8, 0, 7); ctx.stroke(); });
+      const hy = by + bh + 26, hh = h - hy - 22, mx = Math.max(1, ...hist);
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(bx, hy); ctx.lineTo(bx, hy + hh); ctx.lineTo(bx + bw, hy + hh); ctx.stroke();
+      ctx.fillStyle = P.accent;
+      hist.forEach((c, i) => { const bh2 = (Math.log1p(c) / Math.log1p(mx)) * (hh - 4); ctx.fillRect(bx + (i * bw) / NB + 1, hy + hh - bh2, bw / NB - 2, bh2); });
+      ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.fillText("연쇄 크기 M 분포 (log 높이): 1, 2, 3 … " + NB + "+", bx + 4, hy + 10);
+      if (divShow > 0) { ctx.fillStyle = P.bad; ctx.font = font(14); ctx.textAlign = "center"; ctx.fillText("연쇄가 끝나지 않음 → 애벌런치 항복", bx + bw / 2, by + bh / 2); }
+    }, { aspect: 0.55, minHeight: 280, maxHeight: 400 });
+    setup();
+    PW.loop($("mc-cv"), (dt) => {
+      if (!running || !S) return;
+      const xd = S.f.xd, tCross = 0.9, nsub = 6, dx = (xd / tCross) * (dt / nsub);
+      for (let s = 0; s < nsub; s++) {
+        const add = [];
+        for (let i = 0; i < parts.length; i++) {
+          const p = parts[i]; p.x += p.h ? -dx : dx;
+          if (p.x <= 0 || p.x >= xd) { p.dead = true; const c = chains.get(p.c); if (c) c.alive--; continue; }
+          const E = S.f.Em - S.f.s * p.x, a = alph(S.m, E, "ch")[p.h ? 1 : 0];
+          if (Math.random() < a * dx) {
+            add.push({ x: p.x, h: false, c: p.c }, { x: p.x, h: true, c: p.c });
+            const c = chains.get(p.c); if (c) { c.M++; c.alive += 2; }
+            if (flashes.length < 40) flashes.push({ x: p.x, y: Math.random(), a: 1 });
+          }
+        }
+        parts = parts.filter((p) => !p.dead).concat(add);
+        if (parts.length > NMAX) { nDiv += chains.size; chains.clear(); parts = []; divShow = 1.5; break; }
+      }
+      chains.forEach((c, id) => { if (c.alive <= 0) { sumM += c.M; done++; hist[Math.min(NB - 1, c.M - 1)]++; chains.delete(id); } });
+      injT += dt; divShow -= dt;
+      if (injT > 0.12 && chains.size < 12) { injT = 0; inject(); }
+      flashes.forEach((f) => (f.a -= dt * 1.5)); flashes = flashes.filter((f) => f.a > 0);
+      stats(); cv.redraw();
+    });
+  })();
+
+  /* ============================================================
+     3) 1D 포아송 + 이온화 적분 솔버
+     ============================================================ */
+  (function () {
+    if (!$("sv-cv")) return;
+    const gM = PW.seg("sv-m", calc), gK = PW.seg("sv-k", calc);
+    const gN = PW.range("sv-N", (v) => sci(Math.pow(10, v)) + " cm⁻³", calc);
+    const gW = PW.range("sv-W", (v) => fL(Math.pow(10, v) * 1e-4), calc);
+    const gV = PW.range("sv-V", (v) => fV(Math.pow(10, v)), calc);
+    let R = null;
+    $("sv-bv").addEventListener("click", () => { if (R) gV.set(Math.log10(Math.min(Math.pow(10, 4.4), 0.99 * R.bv))); });
+    $("sv-pw").addEventListener("click", () => { gM.set("SiC", false); gK.set("ch", false); gN.set(Math.log10(8e15)); gW.set(1); gV.set(Math.log10(800)); });
+    function calc() {
+      const m = MAT[gM()], model = gK(), N = Math.pow(10, gN()), W = Math.pow(10, gW()) * 1e-4, V = Math.pow(10, gV());
+      const bv = BV(m, N, W, model), I = ionI(m, N, W, V, model), f = field(m, N, W, V), fb = field(m, N, W, bv);
+      R = { m, model, N, W, V, bv, I, f, Ec: fb.Em, vpt: (Q * N * W * W) / (2 * eps(m)), r: rDrift(m, N, W) };
+      cv.redraw();
+    }
+    const cv = PW.canvas($("sv-cv"), (ctx, w, h) => {
+      if (!R) return;
+      const P = PW.palette(), f = R.f, xmax = Math.min(R.W * 1.15, Math.max(f.xd * 1.25, R.W * 0.05)) || R.W;
+      const emax = Math.max(f.Em, R.Ec) * 1.15, h1 = Math.round(h * 0.7);
+      const box = { x: 62, y: 14, w: w - 80, h: h1 - 52 };
+      const n = 200, data = [], integ = [];
+      let acc = 0, imax = 0; const dx = f.xd / n;
+      for (let i = 0; i <= n; i++) { const x = (i * f.xd) / n, E = f.Em - f.s * x; data.push([x * 1e4, E]); }
+      for (let i = 0; i < n; i++) {
+        const x = (i + 0.5) * dx, E = f.Em - f.s * x, al = alph(R.m, E, R.model);
+        const d = (al[0] - al[1]) * dx; acc += d / 2; const v = al[0] * Math.exp(-acc); acc += d / 2; integ.push([x * 1e4, v]); if (isFinite(v)) imax = Math.max(imax, v);
+      }
+      const ch = PW.chart(ctx, box, {
+        x: [0, xmax * 1e4], y: [0, emax], xLabel: "접합에서 거리 x (µm)", yLabel: "E (MV/cm)", yFmt: (v) => (v / 1e6).toFixed(v < 1e6 ? 2 : 1),
+        bands: R.W < xmax ? [{ x0: R.W * 1e4, x1: xmax * 1e4, color: rgba(P.electron, 0.16) }] : [],
+        series: [{ data: data.concat([[f.xd * 1e4, 0], [0, 0]]), color: P.field, width: 2.4, fill: rgba(P.field, 0.25) }],
+        hlines: [{ y: R.Ec, color: P.bad, label: "항복 시 E_m = " + fE(R.Ec) }],
+      });
+      if (imax > 0) {
+        ctx.save(); ctx.beginPath(); ctx.rect(box.x, box.y, box.w, box.h); ctx.clip();
+        ctx.strokeStyle = P.sic; ctx.lineWidth = 2; ctx.beginPath();
+        integ.forEach(([x, v], i) => { const px = ch.X(x), py = ch.Y((v / imax) * emax * 0.8); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+        ctx.stroke(); ctx.restore();
+        ctx.fillStyle = P.sic; ctx.font = font(11); ctx.textAlign = "right"; ctx.fillText("초록: 이온화 피적분 함수 (상대)", box.x + box.w - 4, box.y + 40);
+      }
+      if (R.W < xmax) { ctx.fillStyle = P.dim; ctx.font = font(11); ctx.textAlign = "left"; ctx.fillText("n⁺ 기판", ch.X(R.W * 1e4) + 4, box.y + box.h - 6); }
+      // bars
+      const y2 = h1 + 4, bw = w - 200;
+      ctx.font = font(12); ctx.textAlign = "left"; ctx.fillStyle = P.dim;
+      ctx.fillText("V_R / BV", 10, y2 + 13); ctx.fillText("이온화 적분 I", 10, y2 + 41);
+      const bar = (y, frac, col) => { ctx.fillStyle = rgba(P.dim, 0.15); ctx.fillRect(110, y, bw, 16); ctx.fillStyle = col; ctx.fillRect(110, y, bw * PW.clamp(frac, 0, 1), 16); ctx.strokeStyle = P.bad; ctx.beginPath(); ctx.moveTo(110 + bw, y - 3); ctx.lineTo(110 + bw, y + 19); ctx.stroke(); };
+      bar(y2, R.V / R.bv, R.V > R.bv ? P.bad : P.volt); bar(y2 + 28, R.I, R.I >= 1 ? P.bad : P.sic);
+      ctx.fillStyle = P.text; ctx.textAlign = "right";
+      ctx.fillText((R.V / R.bv).toFixed(3), w - 8, y2 + 13); ctx.fillText(R.I < 1e-3 ? sci(R.I) : R.I < 1e3 ? R.I.toPrecision(3) : "≫1", w - 8, y2 + 41);
+      if (R.V > R.bv) { ctx.fillStyle = P.bad; ctx.textAlign = "center"; ctx.font = font(13); ctx.fillText("V_R > BV — 실제로는 애벌런치가 전압을 BV에 묶는다", box.x + box.w / 2, box.y + 18); }
+      // stats
+      const st = $("sv-st");
+      st.className = "v bd-v " + (R.V > R.bv ? "bad" : R.V > 0.9 * R.bv ? "warn" : "ok");
+      st.textContent = (R.V > R.bv ? "항복 초과" : f.pt ? "펀치스루(사다리꼴)" : "NPT(삼각형)");
+      PW.stat("sv-em", fE(f.Em));
+      PW.stat("sv-xd", fL(f.xd) + " / " + fV(R.vpt));
+      PW.stat("sv-I", (R.I < 1e-3 ? sci(R.I) : R.I < 1e3 ? R.I.toPrecision(3) : "≫1") + " / " + (R.I < 1 ? (1 / (1 - R.I)).toPrecision(3) : "∞"));
+      PW.stat("sv-bvo", fV(R.bv) + " / " + fE(R.Ec));
+      PW.stat("sv-r", fR(R.r) + " (μ " + R.m.mu(R.N).toFixed(0) + ")");
+    }, { aspect: 0.62, minHeight: 320, maxHeight: 460 });
+    calc();
+  })();
+
+  /* ============================================================
+     4) BV, Wpp, Ec 대 도핑
+     ============================================================ */
+  (function () {
+    if (!$("bn-cv")) return;
+    const gY = PW.seg("bn-y", draw), gN = PW.range("bn-N", (v) => sci(Math.pow(10, v)) + " cm⁻³", draw);
+    const pts = [];
+    for (let k = 0; k <= 50; k++) {
+      const lg = 13 + (5 * k) / 50, N = Math.pow(10, lg), o = { N };
+      ["Si", "SiC"].forEach((key) => {
+        const m = MAT[key], b = BV(m, N, 1, "ch"), bp = bvPL(m, N, 1);
+        o[key] = { bv: b, w: field(m, N, 1, b).xd, ec: field(m, N, 1, b).Em, bvp: bp.bv, wp: bp.xd, ecp: bp.Em };
+      });
+      pts.push(o);
+    }
+    const cv = PW.canvas($("bn-cv"), (ctx, w, h) => {
+      const P = PW.palette(), y = gY(), N = Math.pow(10, gN());
+      const key = y === "bv" ? ["bv", "bvp"] : y === "w" ? ["w", "wp"] : ["ec", "ecp"];
+      const sc = y === "w" ? 1e4 : 1;
+      const ser = (mat, k, col, dash, wd) => ({ data: pts.map((p) => [p.N, p[mat][k] * sc]), color: col, dash, width: wd || 2.4 });
+      const series = [ser("Si", key[0], P.si), ser("Si", key[1], P.si, [6, 4], 1.6), ser("SiC", key[0], P.sic), ser("SiC", key[1], P.sic, [6, 4], 1.6)];
+      if (y === "bv") series.push({ data: pts.map((p) => [p.N, 3.0e15 * Math.pow(p.N, -0.75)]), color: P.sic, dash: [2, 3], width: 1.2 });
+      const yr = y === "bv" ? [1, 1e5] : y === "w" ? [0.1, 3000] : [1e5, 5e6];
+      PW.chart(ctx, { x: 62, y: 14, w: w - 80, h: h - 60 }, {
+        x: [1e13, 1e18], y: yr, logX: true, logY: true, xLabel: "드리프트 도핑 N_D (cm⁻³)",
+        yLabel: y === "bv" ? "BV (V)" : y === "w" ? "W_pp (µm)" : "E_c (V/cm)", series, vlines: [{ x: N, color: P.field }],
+      });
+      const m1 = MAT.Si, m2 = MAT.SiC;
+      const b1 = BV(m1, N, 1, "ch"), b2 = BV(m2, N, 1, "ch"), p1 = bvPL(m1, N, 1), p2 = bvPL(m2, N, 1);
+      PW.stat("bn-si", fV(b1) + " / " + fV(p1.bv));
+      PW.stat("bn-sic", fV(b2) + " / " + fV(p2.bv));
+      PW.stat("bn-w", fL(field(m1, N, 1, b1).xd) + " / " + fL(field(m2, N, 1, b2).xd));
+      PW.stat("bn-ec", fE(field(m1, N, 1, b1).Em) + " / " + fE(field(m2, N, 1, b2).Em));
+      PW.stat("bn-r", (b2 / b1).toFixed(1) + "배");
+    }, { aspect: 0.58, minHeight: 280, maxHeight: 420 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* ============================================================
+     5) 드리프트층 최적화기
+     ============================================================ */
+  (function () {
+    if (!$("pt-cv")) return;
+    const gM = PW.seg("pt-m", calc), gB = PW.range("pt-B", (v) => fV(Math.pow(10, v)), calc), gX = PW.range("pt-w", (v) => v.toFixed(3), draw);
+    let S = null;
+    $("pt-opt").addEventListener("click", () => { if (S) gX.set(Math.round(S.opt.x / 0.005) * 0.005); });
+    function calc() {
+      const m = MAT[gM()], bv = Math.pow(10, gB()), opt = ptOpt(m, bv), npt = opt.npt, Rn = opt.Rnpt;
+      const curve = [], ncur = [];
+      for (let k = 0; k <= 140; k++) {
+        const x = 0.35 + (1.05 * k) / 140, W = x * npt.W;
+        const N = x >= 1 ? npt.N : reqN(m, W, bv);
+        if (N) { curve.push([x, rDrift(m, N, W) / Rn]); ncur.push([x, N / npt.N]); } else { curve.push([x, NaN]); ncur.push([x, NaN]); }
+      }
+      S = { m, bv, opt, npt, Rn, curve, ncur };
+      draw();
+    }
+    const cv = PW.canvas($("pt-cv"), (ctx, w, h) => {
+      if (!S) return;
+      const P = PW.palette(), x = gX(), npt = S.npt, W = x * npt.W, N = x >= 1 ? npt.N : reqN(S.m, W, S.bv);
+      const h1 = Math.round(h * 0.6);
+      const ch = PW.chart(ctx, { x: 58, y: 14, w: w - 76, h: h1 - 50 }, {
+        x: [0.35, 1.4], y: [0, 2.2], xLabel: "드리프트 두께 W / W_pp", yLabel: "상대값",
+        series: [{ data: S.curve, color: P.amp, width: 2.6 }, { data: S.ncur, color: P.electron, width: 2, dash: [6, 4] }],
+        vlines: [{ x: 1, color: P.faint, label: "NPT" }, { x: S.opt.x, color: P.ok, label: "최적" }],
+        hlines: [{ y: 1, color: P.faint }],
+        points: N ? [{ x, y: rDrift(S.m, N, W) / S.Rn, color: P.bad, r: 5 }] : [],
+      });
+      ctx.font = font(11); ctx.textAlign = "left"; ctx.fillStyle = P.amp; ctx.fillText("R_drift / R_pp", ch.box.x + 6, ch.box.y + 26);
+      ctx.fillStyle = P.electron; ctx.fillText("필요 N_D / N_pp", ch.box.x + 6, ch.box.y + 42);
+      // field at breakdown for selected W
+      const by = h1 + 6, bh = h - by - 26, bx = 58, bw = w - 76;
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.stroke();
+      if (N) {
+        const r = bvPL(S.m, N, W), s = (Q * N) / eps(S.m), xd = r.xd, Em = r.Em, xm = 1.4 * npt.W, Emax = Math.max(Em, npt.Ec) * 1.1;
+        const X = (xx) => bx + (xx / xm) * bw, Y = (E) => by + bh - (E / Emax) * bh;
+        ctx.fillStyle = rgba(P.electron, 0.16); ctx.fillRect(X(W), by, bx + bw - X(W), bh);
+        ctx.fillStyle = rgba(P.field, 0.3); ctx.strokeStyle = P.field; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(X(0), Y(0)); ctx.lineTo(X(0), Y(Em)); ctx.lineTo(X(xd), Y(Math.max(0, Em - s * xd))); ctx.lineTo(X(xd), Y(0)); ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.setLineDash([4, 4]); ctx.strokeStyle = P.dim; ctx.beginPath(); ctx.moveTo(X(0), Y(npt.Ec)); ctx.lineTo(X(npt.W), Y(0)); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.fillText("항복 순간 E(x): 선택 W(면) vs NPT(점선), 파란 띠 = n⁺", bx + 6, by + 12);
+        ctx.textAlign = "right"; ctx.fillText(fL(xm) + " →", bx + bw, by + bh + 14);
+      } else { ctx.fillStyle = P.bad; ctx.textAlign = "center"; ctx.fillText("이 두께로는 목표 BV 불가 (도핑 0이어도 면적 부족)", bx + bw / 2, by + bh / 2); }
+      PW.stat("pt-npt", fL(npt.W) + " / " + sci(npt.N));
+      PW.stat("pt-sel", N ? fL(W) + " / " + sci(N) : fL(W) + " / 불가");
+      PW.stat("pt-r", N ? fR(rDrift(S.m, N, W)) + " (" + ((rDrift(S.m, N, W) / S.Rn) * 100).toFixed(1) + " %)" : "—");
+      PW.stat("pt-o", S.opt.x.toFixed(3) + ", " + (S.opt.N / npt.N).toFixed(3) + ", " + (S.opt.R / S.Rn).toFixed(3));
+      PW.stat("pt-vpt", N ? fV((Q * N * W * W) / (2 * eps(S.m))) : "—");
+    }, { aspect: 0.68, minHeight: 340, maxHeight: 480 });
+    function draw() { cv.redraw(); }
+    calc();
+  })();
+
+  /* ============================================================
+     6) Ron,sp 대 BV 단극 한계
+     ============================================================ */
+  (function () {
+    if (!$("lm-cv")) return;
+    const gB = PW.range("lm-B", (v) => fV(Math.pow(10, v)), draw);
+    ["lm-pt", "lm-cf", "lm-pts"].forEach((id) => $(id).addEventListener("change", draw));
+    const tab = { Si: [], SiC: [] };
+    for (let k = 0; k <= 36; k++) {
+      const bv = Math.pow(10, 1.3 + (3.1 * k) / 36);
+      ["Si", "SiC"].forEach((key) => { const m = MAT[key], o = ptOpt(m, bv); tab[key].push({ bv, npt: o.Rnpt, pt: o.R, W: o.W, N: o.N }); });
+    }
+    const interp = (arr, bv, k) => { const lb = Math.log10(bv); for (let i = 1; i < arr.length; i++) if (Math.log10(arr[i].bv) >= lb) { const a = arr[i - 1], b = arr[i], t = (lb - Math.log10(a.bv)) / (Math.log10(b.bv) - Math.log10(a.bv)); return Math.pow(10, PW.lerp(Math.log10(a[k]), Math.log10(b[k]), t)); } return arr[arr.length - 1][k]; };
+    const ganR = (bv) => (4 * bv * bv) / (9.0 * EPS0 * 1200 * Math.pow(3.3e6, 3));
+    const cv = PW.canvas($("lm-cv"), (ctx, w, h) => {
+      const P = PW.palette(), bv = Math.pow(10, gB());
+      const series = [
+        { data: tab.Si.map((o) => [o.bv, o.npt]), color: P.si, width: 2.6 },
+        { data: tab.SiC.map((o) => [o.bv, o.npt]), color: P.sic, width: 2.6 },
+        { data: tab.Si.map((o) => [o.bv, ganR(o.bv)]), color: P.gan, width: 1.6, dash: [3, 3] },
+      ];
+      if ($("lm-pt").checked) { series.push({ data: tab.Si.map((o) => [o.bv, o.pt]), color: P.si, width: 1.2 }); series.push({ data: tab.SiC.map((o) => [o.bv, o.pt]), color: P.sic, width: 1.2 }); }
+      if ($("lm-cf").checked) { series.push({ data: tab.Si.map((o) => [o.bv, 5.93e-9 * Math.pow(o.bv, 2.5)]), color: P.si, width: 1.4, dash: [7, 4] }); series.push({ data: tab.SiC.map((o) => [o.bv, 2.97e-12 * Math.pow(o.bv, 2.5)]), color: P.sic, width: 1.4, dash: [7, 4] }); }
+      const points = [];
+      if ($("lm-pts").checked) {
+        points.push({ x: 1200, y: 2.5e-3, color: P.sic, r: 5, label: "PW-800" });
+        points.push({ x: 650, y: 1e-2, color: P.si, r: 5, label: "Si SJ 650 V" });
+        points.push({ x: 650, y: 2e-3, color: P.sic, r: 4, label: "SiC 650" });
+        points.push({ x: 3300, y: 1e-2, color: P.sic, r: 4, label: "SiC 3.3 kV" });
+      }
+      points.push({ x: bv, y: interp(tab.Si, bv, "npt"), color: P.bad, r: 4 }, { x: bv, y: interp(tab.SiC, bv, "npt"), color: P.bad, r: 4 });
+      PW.chart(ctx, { x: 64, y: 14, w: w - 82, h: h - 60 }, {
+        x: [20, 2.5e4], y: [1e-6, 10], logX: true, logY: true, xLabel: "항복 전압 BV (V)", yLabel: "R_on,sp (Ω·cm²)",
+        series, points, vlines: [{ x: bv, color: P.field }],
+      });
+      const sN = interp(tab.Si, bv, "npt"), sP = interp(tab.Si, bv, "pt"), cN = interp(tab.SiC, bv, "npt"), cP = interp(tab.SiC, bv, "pt");
+      PW.stat("lm-si", fR(sN) + " / " + fR(sP));
+      PW.stat("lm-sic", fR(cN) + " / " + fR(cP));
+      PW.stat("lm-r", Math.round(sN / cN) + "배");
+      PW.stat("lm-wn", fL(interp(tab.SiC, bv, "W")) + " / " + sci(interp(tab.SiC, bv, "N")));
+      const sl = (arr) => (Math.log10(interp(arr, bv * 1.2, "npt")) - Math.log10(interp(arr, bv / 1.2, "npt"))) / (2 * Math.log10(1.2));
+      PW.stat("lm-k", sl(tab.Si).toFixed(2) + ", " + sl(tab.SiC).toFixed(2));
+    }, { aspect: 0.62, minHeight: 300, maxHeight: 440 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* ============================================================
+     7) UIS 애벌런치 12셀
+     ============================================================ */
+  (function () {
+    if (!$("ui-cv")) return;
+    const gB = PW.range("ui-b", (v) => (v >= 0 ? "+" : "") + v.toFixed(3) + " %/K", reset);
+    const gI = PW.range("ui-I", (v) => v + " A", reset);
+    const gD = PW.range("ui-d", (v) => "−" + v.toFixed(1) + " %", reset);
+    const NC = 12, L = 1e-3, VDD = 800, BV0 = 1700, T0 = 298, CTH = 3.0e-3 / NC, GN = 0.004, GS = 0.0015, TFAIL = 873, WEAK = 5;
+    let S = null, run = false;
+    $("ui-go").addEventListener("click", () => { reset(); run = true; });
+    function reset() {
+      const I0 = gI();
+      const rav = (0.03 * BV0) / (40 / NC);
+      const dl = []; for (let i = 0; i < NC; i++) dl.push(i === WEAK ? (gD() / 100) * BV0 : BV0 * 0.0015 * Math.sin(i * 2.3 + 0.7));
+      S = { t: 0, IL: I0, I0, rav, dl, T: new Array(NC).fill(T0), Ii: new Array(NC).fill(0), V: BV0, hist: [], Tmax: T0, share: 0, Ew: 0, Et: 0, failed: false, done: false, E: 0.5 * L * I0 * I0 };
+      run = false; solveV(); cv.redraw(); stats();
+    }
+    function bvi(i) { return BV0 * (1 + (gB() / 100) * (S.T[i] - T0)) - S.dl[i]; }
+    function solveV() {
+      if (S.IL <= 0) { S.Ii.fill(0); return; }
+      let lo = 0, hi = 3 * BV0;
+      for (let k = 0; k < 50; k++) { const V = 0.5 * (lo + hi); let s = 0; for (let i = 0; i < NC; i++) s += Math.max(0, V - bvi(i)) / S.rav; if (s > S.IL) hi = V; else lo = V; }
+      S.V = 0.5 * (lo + hi); for (let i = 0; i < NC; i++) S.Ii[i] = Math.max(0, S.V - bvi(i)) / S.rav;
+    }
+    function stats() {
+      PW.stat("ui-E", (S.E * 1e3).toFixed(0) + " mJ" + (S.Et > 0 ? " (소자 흡수 " + (S.Et * 1e3).toFixed(0) + ")" : ""));
+      PW.stat("ui-t", (S.t * 1e6).toFixed(1) + " µs");
+      PW.stat("ui-T", (S.Tmax - 273).toFixed(0) + " °C");
+      PW.stat("ui-sh", (S.share * 100).toFixed(0) + " %");
+      const r = $("ui-res"); r.className = "v bd-v " + (S.failed ? "bad" : S.done ? "ok" : "warn");
+      r.textContent = S.failed ? "소손 (필라멘트)" : S.done ? "견딤" : run ? "애벌런치 중" : "대기";
+    }
+    function step(dt) {
+      solveV();
+      const Tn = S.T.slice();
+      for (let i = 0; i < NC; i++) {
+        const P = S.V * S.Ii[i], l = i > 0 ? S.T[i - 1] : S.T[i], r = i < NC - 1 ? S.T[i + 1] : S.T[i];
+        Tn[i] = S.T[i] + (dt / CTH) * (P - GN * (2 * S.T[i] - l - r) - GS * (S.T[i] - T0));
+      }
+      S.T = Tn; S.IL -= (dt * (S.V - VDD)) / L; S.t += dt;
+      const tot = S.Ii.reduce((a, b) => a + b, 0);
+      S.Ew += S.V * S.Ii[WEAK] * dt; S.Et += S.V * tot * dt; S.share = S.Et > 0 ? S.Ew / S.Et : 0;
+      S.Tmax = Math.max(S.Tmax, ...S.T);
+      if (S.Tmax > TFAIL) { S.failed = true; run = false; }
+      if (S.IL <= 0) { S.IL = 0; S.Ii.fill(0); S.done = true; run = false; }
+    }
+    const cv = PW.canvas($("ui-cv"), (ctx, w, h) => {
+      if (!S) return;
+      const P = PW.palette(), h1 = Math.round(h * 0.45);
+      const bx = 50, bw = w - 70, cw = bw / NC;
+      ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.fillText("셀 온도 (막대) · 셀 전류 (주황 선)", bx, 14);
+      const Tm = Math.max(TFAIL, S.Tmax);
+      for (let i = 0; i < NC; i++) {
+        const frac = (S.T[i] - T0) / (Tm - T0), hh = Math.max(1, frac * (h1 - 30));
+        ctx.fillStyle = rgba(P.heat, 0.25 + 0.7 * PW.clamp(frac, 0, 1)); ctx.fillRect(bx + i * cw + 2, 20 + h1 - 30 - hh, cw - 4, hh);
+        ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.fillText(i === WEAK ? "약" : String(i + 1), bx + i * cw + cw / 2, 20 + h1 - 16);
+      }
+      const yT = 20 + h1 - 30 - ((TFAIL - T0) / (Tm - T0)) * (h1 - 30);
+      ctx.strokeStyle = P.bad; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(bx, yT); ctx.lineTo(bx + bw, yT); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = P.bad; ctx.textAlign = "right"; ctx.fillText("600 °C", bx + bw, yT - 3);
+      const imax = Math.max(1e-9, ...S.Ii);
+      ctx.strokeStyle = P.amp; ctx.lineWidth = 2.4; ctx.beginPath();
+      S.Ii.forEach((v, i) => { const px = bx + i * cw + cw / 2, py = 20 + (h1 - 30) * (1 - v / imax); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }); ctx.stroke();
+      const tmax = Math.max(40e-6, (L * S.I0) / (BV0 - VDD) * 1.3);
+      const hv = S.hist.map((p) => [p[0] * 1e6, p[1]]), hi = S.hist.map((p) => [p[0] * 1e6, (p[2] / Math.max(1, S.I0)) * 2000]), hT = S.hist.map((p) => [p[0] * 1e6, ((p[3] - T0) / (TFAIL - T0)) * 2000]);
+      const vtop = Math.max(2400, ...S.hist.map((p) => p[1] * 1.1));
+      PW.chart(ctx, { x: 50, y: h1 + 10, w: w - 70, h: h - h1 - 50 }, {
+        x: [0, tmax * 1e6], y: [0, vtop], xLabel: "시간 (µs)", yLabel: "V (V)",
+        series: [{ data: hv, color: P.volt, width: 2.2 }, { data: hi, color: P.amp, width: 2 }, { data: hT, color: P.heat, width: 1.6, dash: [5, 3] }],
+        hlines: [{ y: VDD, color: P.faint, label: "V_DD" }],
+      });
+      ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.font = font(11);
+      ctx.fillText("파랑 V_DS · 주황 I_L (정규화) · 빨강 점선 최고 온도 (정규화)", 56, h1 + 22);
+    }, { aspect: 0.7, minHeight: 340, maxHeight: 480 });
+    reset();
+    PW.loop($("ui-cv"), (dt) => {
+      if (!run || !S) return;
+      const tav = (L * S.I0) / (BV0 - VDD), simdt = (tav / 2.4) * dt, nsub = 60;
+      for (let k = 0; k < nsub && run; k++) step(simdt / nsub);
+      S.hist.push([S.t, S.IL > 0 ? S.V : VDD, S.IL, S.Tmax]);
+      stats(); cv.redraw();
+    });
+  })();
+
+  /* ============================================================
+     8) 누설 전류 대 온도
+     ============================================================ */
+  (function () {
+    if (!$("lk-cv")) return;
+    const gT = PW.range("lk-T", (v) => v + " °C", calc), gV = PW.range("lk-v", (v) => v.toFixed(3), calc), gTau = PW.range("lk-tau", (v) => PW.si(Math.pow(10, v), "s", 2), calc);
+    const DEV = {
+      Si: { m: MAT.Si, N: 1.5e14, W: 1, ni0: 1e10, Eg0: 1.17, va: 4.73e-4, vb: 636, Dp: 12 },
+      SiC: { m: MAT.SiC, N: 8e15, W: 10e-4, ni0: 5e-9, Eg0: 3.29, va: 6.5e-4, vb: 1300, Dp: 2.6 },
+    };
+    Object.values(DEV).forEach((d) => { d.bv = BV(d.m, d.N, d.W, "ch"); });
+    const Eg = (d, T) => d.Eg0 - (d.va * T * T) / (T + d.vb);
+    const ni = (d, T) => d.ni0 * Math.pow(T / 300, 1.5) * Math.exp(-Eg(d, T) / (2 * KB * T) + Eg(d, 300) / (2 * KB * 300));
+    function J(d, T, frac, tau) {
+      const V = frac * d.bv, f = field(d.m, d.N, d.W, V), I = ionI(d.m, d.N, d.W, V, "ch", gam(d.m, T)), M = I < 1 ? 1 / (1 - I) : 1e3;
+      const n = ni(d, T), Dp = d.Dp * Math.pow(T / 300, -1);
+      return { gen: (Q * n * f.xd) / tau, dif: ((Q * n * n) / d.N) * Math.sqrt(Dp / tau), M, n };
+    }
+    let C = null;
+    function calc() {
+      const frac = gV(), tau = Math.pow(10, gTau());
+      const cur = { Si: { g: [], d: [] }, SiC: { g: [], d: [] } };
+      for (let k = 0; k <= 60; k++) {
+        const Tc = 25 + (225 * k) / 60, T = Tc + 273.15;
+        ["Si", "SiC"].forEach((key) => { const r = J(DEV[key], T, frac, tau); cur[key].g.push([Tc, r.gen * r.M]); cur[key].d.push([Tc, r.dif * r.M]); });
+      }
+      C = { cur, frac, tau };
+      cv.redraw();
+    }
+    const cv = PW.canvas($("lk-cv"), (ctx, w, h) => {
+      if (!C) return;
+      const P = PW.palette(), Tc = gT(), T = Tc + 273.15;
+      PW.chart(ctx, { x: 64, y: 14, w: w - 82, h: h - 60 }, {
+        x: [25, 250], y: [1e-40, 1], logY: true, xLabel: "접합 온도 (°C)", yLabel: "J_R (A/cm²)",
+        yTicks: [1e-40, 1e-32, 1e-24, 1e-16, 1e-8, 1],
+        series: [
+          { data: C.cur.Si.g, color: P.si, width: 2.6 }, { data: C.cur.Si.d, color: P.si, width: 2, dash: [6, 4] },
+          { data: C.cur.SiC.g, color: P.sic, width: 2.6 }, { data: C.cur.SiC.d, color: P.sic, width: 2, dash: [6, 4] },
+        ],
+        vlines: [{ x: Tc, color: P.field }], hlines: [{ y: 1e-9, color: P.faint, label: "1 nA/cm² (실측 SiC 수준)" }],
+      });
+      ctx.font = font(11); ctx.textAlign = "right"; ctx.fillStyle = P.si; ctx.fillText("Si 실선 생성 · 점선 확산", w - 24, h - 84); ctx.fillStyle = P.sic; ctx.fillText("SiC 실선 생성 · 점선 확산", w - 24, h - 68);
+      const a = J(DEV.Si, T, C.frac, C.tau), b = J(DEV.SiC, T, C.frac, C.tau);
+      PW.stat("lk-si", sci(a.gen * a.M) + " / " + sci(a.dif * a.M) + " A/cm²");
+      PW.stat("lk-sic", sci(b.gen * b.M) + " / " + sci(b.dif * b.M) + " A/cm²");
+      PW.stat("lk-ni", sci(a.n) + " / " + sci(b.n) + " cm⁻³");
+      PW.stat("lk-M", a.M.toPrecision(3) + " / " + b.M.toPrecision(3));
+      PW.stat("lk-p", PW.si((a.gen + a.dif) * a.M * C.frac * DEV.Si.bv, "W"));
+    }, { aspect: 0.58, minHeight: 280, maxHeight: 420 });
+    calc();
+  })();
+})();
+</script>
+</body>
+</html>

@@ -10,7 +10,7 @@
     { id: "design", label: "회로·설계", stages: ["design"] },
     { id: "process", label: "제조·인프라", stages: ["process", "infra"] },
     { id: "packaging", label: "패키징·테스트", stages: ["packaging"] },
-    { id: "device", label: "메모리·센서", stages: ["device"] },
+    { id: "device", label: "메모리·센서·전력", stages: ["device"] },
     { id: "industry", label: "산업", stages: ["industry"] },
   ];
   // 세로 표지에는 books 포털처럼 짧은 이름을 쓴다.
@@ -18,7 +18,7 @@
     devicebook: "반도체 소자", digitalbook: "디지털 회로", designbook: "반도체 설계", socbook: "시스템 온 칩", analogbook: "아날로그 회로",
     processbook: "제조 공정", lithobook: "노광", etchbook: "식각", thinfilmbook: "산화·박막", plasmabook: "플라즈마", cmpbook: "CMP·세정", dopingbook: "도핑", yieldbook: "수율 분석", failurebook: "불량 분석",
     tcadbook: "소자 시뮬레이션", infrabook: "반도체 인프라", packagingbook: "패키징", testbook: "반도체 테스트", memorybook: "메모리",
-    opticsbook: "센서 광학", sensorbook: "이미지 센서", displaybook: "디스플레이", chipindustrybook: "반도체 산업",
+    opticsbook: "센서 광학", sensorbook: "이미지 센서", displaybook: "디스플레이", powerbook: "전력 반도체", chipindustrybook: "반도체 산업",
   };
   const esc = (value) => String(value || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const count = (group) => books.filter((b) => group.id === "all" || group.stages.includes(b.stage)).length;

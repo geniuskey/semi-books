@@ -1,0 +1,1201 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and PowerBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>스위칭 과도와 손실 · PowerBook</title>
+<meta name="description" content="유도성 부하 하드 스위칭을 이중 펄스 시험 시뮬레이터로 시간 적분해 턴온 4구간과 밀러 플래토, di/dt·dv/dt, 루프 인덕턴스 오버슈트와 RLC 링잉, 다이오드 역회복, Eon·Eoff·Err를 계산하고, 공통 소스 인덕턴스, Coss 손실, 주파수에 따른 스위칭 손실과 칩 면적 최적, ZVS 소프트 스위칭, 프로브 지연에 의한 측정 오차까지 다룬다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .sw-l { fill: var(--text); font-family: var(--font); font-size: 13px; }
+  svg .sw-b { fill: var(--text); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .sw-s { fill: var(--text-dim); font-family: var(--font); font-size: 11.5px; }
+  svg .sw-w { stroke: var(--text); stroke-width: 1.8; fill: none; }
+  svg .sw-thin { stroke: var(--text-dim); stroke-width: 1.2; fill: none; }
+  svg .sw-dash { stroke: var(--text-dim); stroke-dasharray: 5 4; fill: none; stroke-width: 1.2; }
+  svg .sw-v { stroke: var(--m-volt); stroke-width: 2.4; fill: none; }
+  svg .sw-i { stroke: var(--m-amp); stroke-width: 2.4; fill: none; }
+  svg .sw-g { stroke: var(--green); stroke-width: 2.2; fill: none; }
+  svg .sw-p { stroke: var(--m-heat); stroke-width: 2; fill: color-mix(in srgb, var(--m-heat) 22%, transparent); }
+  svg .sw-pf { fill: color-mix(in srgb, var(--m-heat) 22%, transparent); stroke: none; }
+  svg .sw-path { stroke: var(--m-amp); stroke-width: 3; fill: none; stroke-dasharray: 7 5; opacity: .85; }
+  svg .sw-box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .sw-band { fill: color-mix(in srgb, var(--accent) 9%, transparent); }
+  .sw-legend { padding: 8px 18px 0; }
+  .v.ok { color: var(--ok); } .v.warn { color: var(--warn); } .v.bad { color: var(--bad); }
+</style>
+</head>
+<body data-chapter="switching">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 10</div>
+    <h1>스위칭 과도와 손실</h1>
+    <p class="lead">데이터시트의 \(E_{on}\) 12 mJ라는 숫자 하나 뒤에는 수백 나노초 동안 벌어지는 일이 줄줄이 숨어 있다. 게이트가 충전되고, 전류가 다이오드에서 스위치로 넘어오고, 다이오드가 저장 전하를 토해 내고, 밀러 플래토에서 전압이 떨어지고, 15 nH 루프가 링잉한다. 이 장은 그 과정을 <strong>이중 펄스 시험 시뮬레이터 한 대</strong>로 시간 적분해 보며 시작한다. 그 다음 게이트 저항·루프 인덕턴스·공통 소스 인덕턴스·출력 커패시턴스·스위칭 주파수라는 손잡이가 손실과 오버슈트를 어떻게 바꾸는지, 소프트 스위칭이 그 손실을 어떻게 없애는지, 측정이 어떻게 우리를 속이는지까지 따라간다.</p>
+    <ul class="objectives">
+      <li>클램프된 유도성 부하에서 하드 스위칭 궤적을 그리고 \(E \approx \tfrac12 V I (t_{ri}+t_{fv})\)의 뜻을 설명할 수 있다.</li>
+      <li>이중 펄스 시험의 회로와 펄스 순서를 설명하고, 턴온 4구간과 턴오프 과정을 게이트 전하로 계산할 수 있다.</li>
+      <li>\(E_{on}, E_{off}, E_{rr}\)를 파형 적분으로 정의하고 게이트 저항·전류·전압·소자 종류에 따른 변화를 예측할 수 있다.</li>
+      <li>\(L_\sigma\,di/dt\) 오버슈트와 RLC 링잉 주파수·감쇠를 계산하고, 공통 소스 인덕턴스와 켈빈 소스의 효과를 정량화할 수 있다.</li>
+      <li>\(C_{oss}\)의 \(Q_{oss}, E_{oss}\)로 하드 스위칭 용량 손실을 구하고, ZVS 조건(데드 타임·전류)을 판단할 수 있다.</li>
+      <li>\(P_{sw} = f(E_{on}+E_{off})\)와 전도 손실의 균형으로 최적 칩 면적과 주파수를 고르고, 프로브 지연·대역폭이 만드는 측정 오차를 평가할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="hard">
+    <h2>유도성 부하 하드 스위칭</h2>
+    <p>전력 변환기의 스위치는 거의 언제나 <span class="term">유도성 부하</span><span class="en">(inductive load)</span>를 끊고 잇는다. 모터 권선, 벅·부스트의 인덕터, 변압기 누설 인덕턴스 모두 스위칭 한 번의 수백 ns 동안 전류를 거의 바꾸지 않는 <strong>전류원</strong>이다. 하프 브리지에서 아래 스위치(시험 대상, DUT)가 꺼지면 부하 전류는 위쪽 프리휠 다이오드(또는 위 스위치의 역도통)로 옮겨 가고, 켜지면 다시 아래 스위치로 돌아온다. 이 전류 이동을 <span class="term">정류</span><span class="en">(commutation)</span>라 한다.</p>
+    <p>핵심 제약은 다이오드다. 다이오드는 전류가 흐르는 동안 역전압을 막을 수 없고, 역전압이 걸리기 전에는 전류를 놓지 않는다. 그래서 턴온 때 스위치는 <strong>전압 \(V_{dc}\)를 다 받은 채로</strong> 전류를 0에서 \(I_L\)까지 올려야 하고, 전류가 다 넘어온 뒤에야 전압이 떨어진다. 턴오프는 순서가 반대다. 전압이 먼저 \(V_{dc}\)까지 올라야 다이오드가 켜지고, 그 다음에 전류가 떨어진다. 전압과 전류가 동시에 큰 구간이 생기므로 이를 <span class="term">하드 스위칭</span><span class="en">(hard switching)</span>이라 부른다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 300" role="img" aria-label="하프 브리지 클램프 유도성 부하: DC 링크, 위 다이오드, 아래 스위치, 부하 인덕터, 턴온과 턴오프 때 전류 경로">
+        <defs><marker id="f101-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-amp)"/></marker></defs>
+        <!-- DC link -->
+        <path d="M60 40 H300 M60 260 H300 M60 40 V120 M60 180 V260" class="sw-w"/>
+        <path d="M44 120 H76 M50 132 H70" class="sw-w"/><path d="M44 168 H76 M50 180 H70" class="sw-w"/>
+        <text x="20" y="152" class="sw-b">V<tspan dy="4" font-size="10">dc</tspan></text>
+        <path d="M60 132 V168" class="sw-thin"/>
+        <!-- diode (top) -->
+        <path d="M200 40 V90 M200 150 V170" class="sw-w"/>
+        <path d="M184 120 L216 120 L200 92 Z" class="sw-w" fill="var(--bg-elev)"/><path d="M184 92 H216" class="sw-w"/>
+        <text x="178" y="100" class="sw-s" text-anchor="end">위 다이오드</text><text x="178" y="115" class="sw-s" text-anchor="end">(또는 위 스위치)</text>
+        <path d="M200 120 V150" class="sw-w"/>
+        <!-- load inductor -->
+        <path d="M300 40 V70 q14 8 0 16 q14 8 0 16 q14 8 0 16 q14 8 0 16 V170 H200" class="sw-w"/>
+        <text x="316" y="100" class="sw-s">부하 L (전류원 I<tspan dy="3" font-size="9">L</tspan>)</text>
+        <circle cx="200" cy="170" r="3.5" fill="var(--text)"/><text x="148" y="174" class="sw-s">스위치 노드</text>
+        <!-- switch -->
+        <path d="M200 170 V196 M200 236 V260" class="sw-w"/>
+        <path d="M206 196 V236 M194 200 V232 M180 216 H194" class="sw-w"/><path d="M200 196 H206 M200 236 H206" class="sw-w"/>
+        <text x="216" y="222" class="sw-s">DUT (아래 스위치)</text>
+        <text x="160" y="220" class="sw-s" text-anchor="end">게이트</text>
+        <!-- paths -->
+        <path d="M290 88 V160 H214 V95" class="sw-path" marker-end="url(#f101-a)"/>
+        <text x="236" y="58" class="sw-s" style="fill:var(--m-amp)">꺼짐: I<tspan dy="3" font-size="9">L</tspan><tspan dy="-3"> → 다이오드</tspan></text>
+        <path d="M290 150 V180 H214 V250" class="sw-path" marker-end="url(#f101-a)" style="stroke:var(--m-volt)"/>
+        <text x="236" y="252" class="sw-s" style="fill:var(--m-volt)">켜짐: I<tspan dy="3" font-size="9">L</tspan><tspan dy="-3"> → DUT</tspan></text>
+        <!-- trajectory -->
+        <rect x="470" y="20" width="390" height="260" rx="8" class="sw-box"/>
+        <path d="M520 250 H840 M520 250 V40" class="sw-w"/>
+        <text x="840" y="270" class="sw-s" text-anchor="end">v<tspan dy="3" font-size="9">DS</tspan></text><text x="508" y="44" class="sw-s" text-anchor="end">i<tspan dy="3" font-size="9">D</tspan></text>
+        <path d="M522 80 L780 80 L780 248" class="sw-v"/>
+        <text x="640" y="98" class="sw-s" style="fill:var(--m-volt)">하드 턴온: ↑ 후 ←</text>
+        <path d="M780 248 L800 70 L522 70" class="sw-i" style="stroke-dasharray:6 4"/>
+        <text x="560" y="54" class="sw-s" style="fill:var(--m-amp)">턴오프: → 후 ↓ (오버슈트로 V<tspan dy="3" font-size="9">dc</tspan><tspan dy="-3"> 넘음)</tspan></text>
+        <path d="M522 248 Q 540 100 540 80" class="sw-g"/>
+        <text x="548" y="150" class="sw-s" style="fill:var(--green)">ZVS (v ≈ 0에서 전류 이동)</text>
+        <circle cx="780" cy="80" r="5" fill="var(--m-heat)"/><text x="770" y="124" class="sw-s" text-anchor="end" style="fill:var(--m-heat)">p = V<tspan dy="3" font-size="9">dc</tspan><tspan dy="-3">·I</tspan><tspan dy="3" font-size="9">L</tspan><tspan dy="-3"> 꼭짓점</tspan></text>
+        <text x="780" y="266" class="sw-s" text-anchor="middle">V<tspan dy="3" font-size="9">dc</tspan></text>
+        <text x="512" y="84" class="sw-s" text-anchor="end">I<tspan dy="3" font-size="9">L</tspan></text>
+        <text x="690" y="200" class="sw-s" text-anchor="middle">궤적 아래 면적이 클수록</text><text x="690" y="216" class="sw-s" text-anchor="middle">순간 손실이 크다</text>
+      </svg>
+      <figcaption><b>그림 10-1.</b> 클램프된 유도성 부하. 왼쪽: 부하 전류 \(I_L\)은 DUT가 꺼져 있으면 위 다이오드로, 켜져 있으면 DUT로 흐른다. 오른쪽: 스위칭 궤적(\(i_D\)–\(v_{DS}\) 평면). 하드 스위칭은 \(V_{dc}\cdot I_L\) 꼭짓점을 지나므로 순간 전력이 수백 kW(PW-800 TI: 800 V × 400 A = 320 kW)에 이른다. ZVS는 전압이 0일 때 전류를 옮긴다(11절).</figcaption>
+    </figure>
+
+    <p>궤적을 직선으로 근사하면 한 번의 스위칭에서 잃는 에너지가 바로 나온다. 턴온에서 전류가 \(t_{ri}\) 동안 직선으로 오르고(전압 \(V_{dc}\) 그대로), 이어 전압이 \(t_{fv}\) 동안 직선으로 떨어진다(전류 \(I_L\) 그대로)면</p>
+    <div class="formula">$$E_{on} \approx \tfrac12 V_{dc} I_L\,(t_{ri} + t_{fv}),\qquad E_{off} \approx \tfrac12 V_{dc} I_L\,(t_{rv} + t_{fi}),\qquad P_{sw} = f_{sw}\,(E_{on} + E_{off} + E_{rr})$$<div class="where">\(t_{ri}, t_{fi}\): 전류 상승·하강 시간, \(t_{fv}, t_{rv}\): 전압 하강·상승 시간. 저항성 부하라면 전압과 전류가 함께 움직여 계수가 1/6로 줄지만, 유도성 부하는 1/2다. 실제 파형은 직선이 아니고 역회복·오버슈트·꼬리 전류가 더해지므로 아래 이중 펄스 시험처럼 적분해야 한다.</div></div>
+    <p>PW-800 SiC 모듈로 감을 잡아 보자. 800 V·400 A에서 전류 상승 약 50 ns, 전압 하강 약 30 ns면 \(E_{on} \approx \tfrac12 \cdot 800 \cdot 400 \cdot 80\,\text{ns} \approx 13\) mJ로 표의 약 12 mJ와 같은 크기다. 같은 일을 IGBT는 수백 ns에 걸쳐 하므로 수십 mJ가 된다. 소자 물리의 개관은 <a href="../../device/chapters/power.html">DeviceBook 전력 소자 장</a>에 있고, 여기서는 회로 쪽에서 파형을 계산한다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="dpt">
+    <h2>이중 펄스 시험: 스위칭 에너지를 재는 표준 회로</h2>
+    <p>스위칭 에너지는 <span class="term">이중 펄스 시험</span><span class="en">(double-pulse test, DPT)</span>으로 잰다. 하프 브리지의 아래 스위치를 DUT로, 위 스위치는 꺼 둔 채 역도통 다이오드로 쓰고, 부하 인덕터를 위 스위치에 병렬로 단다. 게이트에 펄스를 두 번 넣는다.</p>
+    <ol>
+      <li><strong>첫 펄스</strong>(길이 \(t_1\)): 인덕터 전류가 \(di/dt = V_{dc}/L_{load}\)로 원하는 시험 전류 \(I_L\)까지 오른다. 예: 800 V, \(L_{load}\) = 50 µH, 400 A → \(t_1\) = 25 µs.</li>
+      <li><strong>첫 펄스의 끝 = 턴오프 측정</strong>: \(I_L\)을 끊는 턴오프 파형을 기록한다.</li>
+      <li><strong>쉬는 시간</strong>(수 µs): 전류가 위 다이오드로 프리휠하며 거의 그대로 유지된다(인덕터가 크고 시간이 짧다).</li>
+      <li><strong>둘째 펄스의 시작 = 턴온 측정</strong>: 다이오드에 \(I_L\)이 흐르는 상태에서 켜므로 다이오드 역회복이 함께 기록된다. 둘째 펄스는 짧게 끝낸다.</li>
+    </ol>
+    <p>펄스가 짧아 칩이 거의 데워지지 않으므로 핫 플레이트로 원하는 \(T_j\)(예: 150 °C)를 맞춰 놓고 잴 수 있다. 측정 대역과 프로브 문제는 12절에서 다룬다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 290" role="img" aria-label="이중 펄스 시험 회로와 게이트 펄스, 인덕터 전류, 드레인 전압 타이밍">
+        <path d="M40 40 H220 M40 250 H220 M40 40 V125 M40 165 V250" class="sw-w"/>
+        <path d="M24 125 H56 M30 137 H50 M24 153 H56 M30 165 H50" class="sw-w"/>
+        <text x="62" y="150" class="sw-s">C<tspan dy="3" font-size="9">dc</tspan><tspan dy="-3"> (필름)</tspan></text>
+        <path d="M150 40 V60 q10 6 0 12 q10 6 0 12 V96" class="sw-w"/><text x="160" y="72" class="sw-s">L<tspan dy="3" font-size="9">σ</tspan><tspan dy="-3"> (분산)</tspan></text>
+        <path d="M150 96 V108 M136 132 H164 L150 108 Z" class="sw-w" fill="var(--bg-elev)"/><path d="M136 108 H164" class="sw-w"/>
+        <path d="M150 132 V150" class="sw-w"/>
+        <path d="M210 40 V60 q12 8 0 16 q12 8 0 16 q12 8 0 16 V150 H150" class="sw-w"/>
+        <text x="226" y="96" class="sw-s">L<tspan dy="3" font-size="9">load</tspan></text>
+        <path d="M150 150 V176 M150 216 V250 M156 176 V216 M144 180 V212 M126 196 H144 M150 176 H156 M150 216 H156" class="sw-w"/>
+        <text x="80" y="200" class="sw-s">드라이버</text><text x="162" y="230" class="sw-s">DUT</text>
+        <text x="132" y="118" class="sw-s" text-anchor="end">위 소자</text>
+        <text x="168" y="164" class="sw-s" style="fill:var(--m-volt)">v<tspan dy="3" font-size="9">DS</tspan></text>
+        <!-- timing -->
+        <rect x="290" y="14" width="575" height="268" rx="8" class="sw-box"/>
+        <text x="300" y="42" class="sw-s">v<tspan dy="3" font-size="9">GS</tspan></text>
+        <path d="M340 50 H380 V30 H600 V50 H680 V30 H760 V50 H850" class="sw-g"/>
+        <text x="490" y="26" class="sw-s" text-anchor="middle">첫 펄스 t₁</text><text x="720" y="26" class="sw-s" text-anchor="middle">둘째 펄스</text>
+        <text x="300" y="112" class="sw-s">i<tspan dy="3" font-size="9">L</tspan></text>
+        <path d="M340 140 H380 L600 70 L680 72 L760 64 L850 66" class="sw-i" style="stroke-dasharray:5 4;stroke-width:1.6"/>
+        <text x="610" y="64" class="sw-s" style="fill:var(--m-amp)">I<tspan dy="3" font-size="9">L</tspan><tspan dy="-3"> (인덕터)</tspan></text>
+        <text x="300" y="186" class="sw-s">i<tspan dy="3" font-size="9">D</tspan></text>
+        <path d="M340 200 H380 L600 130 L604 200 H680 L684 128 L690 122 L696 134 L760 126 L764 200 H850" class="sw-i"/>
+        <text x="300" y="262" class="sw-s">v<tspan dy="3" font-size="9">DS</tspan></text>
+        <path d="M340 220 H380 V268 H600 L603 212 L607 224 L612 220 H680 L686 268 H760 L763 220 H850" class="sw-v"/>
+        <rect x="586" y="12" width="40" height="270" class="sw-band"/><rect x="668" y="12" width="40" height="270" class="sw-band"/>
+        <text x="606" y="240" class="sw-b" text-anchor="middle" style="font-size:12px">턴오프</text>
+        <text x="688" y="240" class="sw-b" text-anchor="middle" style="font-size:12px">턴온</text>
+        <text x="696" y="116" class="sw-s" style="fill:var(--m-amp)">I<tspan dy="3" font-size="9">rr</tspan><tspan dy="-3"> 피크</tspan></text>
+        <text x="612" y="206" class="sw-s" style="fill:var(--m-volt)">오버슈트</text>
+      </svg>
+      <figcaption><b>그림 10-2.</b> 이중 펄스 시험. 첫 펄스로 인덕터 전류를 쌓고, 그 끝(턴오프)과 둘째 펄스의 시작(턴온)을 같은 전류에서 잰다. 턴오프에는 \(L_\sigma\,di/dt\) 오버슈트, 턴온에는 위 소자 역회복 전류 \(I_{rr}\)가 얹힌 전류 피크가 보인다. 강조한 두 창이 아래 시뮬레이터가 계산하는 구간이다.</figcaption>
+    </figure>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>PW-800 비교 (800 V·400 A·150 °C, 표 값)</th><th class="num">\(E_{on}\) (mJ)</th><th class="num">\(E_{off}\) (mJ)</th><th class="num">\(E_{rr}\) (mJ)</th><th class="num">합 (mJ)</th><th class="num">\(f_{sw}\)</th><th class="num">피크 조건 \(P_{sw}\) (W)</th></tr></thead>
+      <tbody>
+        <tr><td>SiC MOSFET 모듈(스위치) + 바디 다이오드</td><td class="num">약 12</td><td class="num">약 8</td><td class="num">약 1</td><td class="num">약 21</td><td class="num">10 kHz</td><td class="num">약 210</td></tr>
+        <tr><td>Si IGBT 모듈 + Si 프리휠 다이오드</td><td class="num">약 40</td><td class="num">약 45</td><td class="num">약 25</td><td class="num">약 110</td><td class="num">8 kHz</td><td class="num">약 880</td></tr>
+      </tbody>
+    </table></div>
+    <p>표의 \(P_{sw}\)는 400 A를 매 스위칭마다 끊는다고 가정한 상한이다. 실제 인버터에서 상전류는 사인파이므로 평균 스위칭 손실은 대략 \(1/\pi\)배로 줄고, 그 계산은 <a href="inverter.html">13장</a>이 한다. 그래도 같은 조건에서 IGBT가 SiC의 4배 넘는 손실을 낸다는 사실, 그리고 그중 다이오드 몫(\(E_{rr}\)과 그것이 \(E_{on}\)에 얹는 몫)이 크다는 사실은 그대로다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="turnon">
+    <h2>턴온 4구간과 밀러 플래토</h2>
+    <p>게이트 드라이버는 게이트 저항 \(R_G\)(외부 + 칩 내부)를 거쳐 입력 커패시턴스를 충전한다. MOSFET(IGBT의 MOS 입력도 같다)의 턴온은 네 구간으로 나뉜다. 각 구간의 길이는 \(R_G\)와 커패시턴스, 그리고 전달 특성(문턱 \(V_{th}\), 전달 컨덕턴스 \(g_{fs}\))이 정한다. 커패시턴스와 게이트 전하 곡선 자체는 <a href="mosfet.html">6장</a>에서 다뤘다.</p>
+    <ol>
+      <li><strong>턴온 지연</strong> \(t_1\): \(v_{GS}\)가 \(V_{GS(off)}\)에서 \(V_{th}\)까지 오른다. 전류도 전압도 그대로다. 손실 없음.</li>
+      <li><strong>전류 상승</strong> \(t_2\): \(v_{GS}\)가 \(V_{th}\)에서 플래토 \(V_{pl} = V_{th} + I_L/g_{fs}\)까지 오르며 채널 전류가 0 → \(I_L\). 다이오드가 아직 도통 중이라 \(v_{DS} \approx V_{dc} - L_\sigma\,di/dt\). 큰 손실.</li>
+      <li><strong>전압 하강 = 밀러 플래토</strong> \(t_3\): 전류가 다 넘어오면 다이오드가 역회복을 끝내고 전압을 놓는다. \(v_{GS}\)는 \(V_{pl}\)에 묶이고, 게이트 전류 전부가 \(C_{gd}\)를 방전하는 데 쓰인다. \(dv_{DS}/dt = -I_G/C_{gd}\). 큰 손실.</li>
+      <li><strong>완전 충전</strong> \(t_4\): \(v_{GS}\)가 구동 전압까지 올라 \(R_{DS(on)}\)이 최소가 된다. 전도 손실만 남는다.</li>
+    </ol>
+    <div class="formula">$$t_1 = \tau\ln\frac{V_{dr}-V_{off}}{V_{dr}-V_{th}},\qquad t_2 = \tau\ln\frac{V_{dr}-V_{th}}{V_{dr}-V_{pl}},\qquad t_3 = \frac{Q_{gd}}{I_G} = \frac{Q_{gd}\,R_G}{V_{dr}-V_{pl}},\qquad \tau = R_G\,(C_{gs}+C_{gd})$$<div class="where">\(V_{dr}\): 켜짐 구동 전압(SiC +18 V, IGBT +15 V, GaN +6 V), \(V_{off}\): 꺼짐 전압(−4 V, −8 V, 0 V). \(Q_{gd} = \int C_{gd}(v)\,dv\)는 밀러 전하. \(C_{gd}\)는 낮은 전압에서 수십 배 커지므로 전압 하강은 처음엔 빠르고 끝에서 느려진다(꼬리). 턴오프는 같은 4구간을 거꾸로 밟는데, 플래토에서 게이트를 빼는 전류가 \((V_{pl}-V_{off})/R_G\)라서 턴온과 속도가 다르다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 270" role="img" aria-label="턴온 4구간 파형: 게이트 전압, 드레인 전류, 드레인 전압과 순간 손실, 밀러 플래토">
+        <path d="M60 240 H860 M60 240 V20" class="sw-thin"/>
+        <rect x="140" y="20" width="120" height="220" class="sw-band"/><rect x="380" y="20" width="160" height="220" class="sw-band"/>
+        <text x="100" y="36" class="sw-b" text-anchor="middle">① t₁</text><text x="200" y="36" class="sw-b" text-anchor="middle">② t₂</text>
+        <text x="320" y="36" class="sw-b" text-anchor="middle">③ t₃ (밀러)</text><text x="460" y="36" class="sw-b" text-anchor="middle">④ t₄</text>
+        <path d="M60 210 C 90 180 120 168 140 160 C 180 146 230 132 260 128 L 380 128 C 420 110 480 96 540 92 L 860 90" class="sw-g"/>
+        <text x="866" y="94" class="sw-s" style="fill:var(--green)">v<tspan dy="3" font-size="9">GS</tspan></text>
+        <text x="352" y="121" class="sw-s" text-anchor="middle" style="fill:var(--green)">V<tspan dy="3" font-size="9">pl</tspan><tspan dy="-3"> 플래토</tspan></text>
+        <path d="M60 160 H140" class="sw-dash"/><text x="64" y="156" class="sw-s">V<tspan dy="3" font-size="9">th</tspan></text>
+        <path d="M60 232 H140 C 180 220 230 100 260 76 L 275 64 L 290 80 L 380 74 H860" class="sw-i"/>
+        <text x="866" y="78" class="sw-s" style="fill:var(--m-amp)">i<tspan dy="3" font-size="9">D</tspan></text>
+        <text x="282" y="58" class="sw-s" style="fill:var(--m-amp)">I<tspan dy="3" font-size="9">rr</tspan></text>
+        <path d="M60 60 H140 L 260 74 L 275 78 C 300 140 330 200 350 222 C 362 232 372 236 380 237 H860" class="sw-v"/>
+        <text x="66" y="54" class="sw-s" style="fill:var(--m-volt)">v<tspan dy="3" font-size="9">DS</tspan><tspan dy="-3"> = V</tspan><tspan dy="3" font-size="9">dc</tspan></text>
+        <text x="200" y="90" class="sw-s" style="fill:var(--m-volt)" text-anchor="middle">−L<tspan dy="3" font-size="9">σ</tspan><tspan dy="-3">di/dt</tspan></text>
+        <path d="M140 240 C 190 236 230 200 260 190 C 290 180 320 210 360 236 L 380 240 Z" class="sw-pf"/>
+        <text x="270" y="232" class="sw-s" style="fill:var(--m-heat)" text-anchor="middle">p = v·i → E<tspan dy="3" font-size="9">on</tspan></text>
+        <text x="352" y="214" class="sw-s" text-anchor="start">C<tspan dy="3" font-size="9">gd</tspan><tspan dy="-3">↑ 꼬리</tspan></text>
+      </svg>
+      <figcaption><b>그림 10-3.</b> 턴온 4구간. ② 전류 상승 동안 전압은 \(V_{dc}\)에서 \(L_\sigma\,di/dt\)만큼만 처지고, 다이오드 역회복 전류 \(I_{rr}\)가 전류 피크로 얹힌다. ③ 밀러 플래토에서 \(v_{GS}\)가 멈춘 동안 전압이 떨어지며, 낮은 전압에서 \(C_{gd}\)가 커져 꼬리가 길어진다. 손실(빨간 면적)은 ②와 ③에 몰린다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ton">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>턴온 4구간 계산기: 게이트 전하로 읽는 파형</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ton-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>게이트 저항 R<sub>G</sub> (내부 포함)</span> <output id="ton-rg-out"></output></span><input type="range" id="ton-rg" min="1" max="40" step="0.5" value="10"></label>
+          <label class="ctrl"><span><span>부하 전류 I<sub>L</sub></span> <output id="ton-i-out"></output></span><input type="range" id="ton-i" min="2" max="60" step="1" value="30"></label>
+          <label class="ctrl"><span><span>전압 V<sub>dc</sub></span> <output id="ton-v-out"></output></span><input type="range" id="ton-v" min="50" max="600" step="10" value="400"></label>
+          <label class="ctrl"><span><span>전달 컨덕턴스 g<sub>fs</sub></span> <output id="ton-g-out"></output></span><input type="range" id="ton-g" min="2" max="40" step="0.5" value="8"></label>
+          <label class="ctrl"><span><span>C<sub>gd</sub> (고전압)</span> <output id="ton-cgd-out"></output></span><input type="range" id="ton-cgd" min="5" max="100" step="1" value="25"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">t₁ / t₂</span><span class="v" id="ton-t12">—</span></div>
+        <div class="stat"><span class="k">t₃ (밀러) / t₄</span><span class="v" id="ton-t34">—</span></div>
+        <div class="stat"><span class="k">V<sub>pl</sub> / I<sub>G</sub></span><span class="v" id="ton-vpl">—</span></div>
+        <div class="stat"><span class="k">di/dt / dv/dt</span><span class="v" id="ton-rate">—</span></div>
+        <div class="stat"><span class="k">Q<sub>G</sub> (전체)</span><span class="v" id="ton-qg">—</span></div>
+        <div class="stat"><span class="k">E<sub>on</sub> (②+③ 적분)</span><span class="v" id="ton-e">—</span></div>
+      </div>
+      <div class="sim-note">650 V SiC MOSFET 40 mΩ 디스크리트(\(C_{gs}\) 1.8 nF, 낮은 전압 \(C_{gd}\) 300 pF, 꺾임 40 V, \(V_{th}\) 3 V, +18/−4 V 구동). 위: 위 식으로 구한 \(v_{GS}\)(초록), \(i_D\)(주황), \(v_{DS}\)(파랑), 순간 손실(빨강, 면적이 \(E_{on}\)). 아래: 게이트 전하 곡선 \(v_{GS}(Q_G)\), 평평한 부분이 밀러 전하 \(Q_{gd}\). 역회복과 \(L_\sigma\)는 뺐다(다음 절 시뮬레이터가 넣는다). 해볼 것: ① \(R_G\)를 두 배로 하면 네 구간이 모두 두 배, \(E_{on}\)도 거의 두 배. ② 전류를 올리면 \(V_{pl}\)이 올라 \(I_G\)가 줄고 밀러 구간이 길어진다. ③ \(g_{fs}\)가 크면(GaN·Si) 플래토가 \(V_{th}\) 가까이 내려와 같은 \(R_G\)에서 더 빠르다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="turnoff">
+    <h2>턴오프: 전압이 먼저, 전류는 나중에</h2>
+    <p>턴오프에서 게이트 드라이버는 \(v_{GS}\)를 \(V_{off}\)로 끌어내린다. 먼저 \(v_{GS}\)가 구동 전압에서 \(V_{pl}\)까지 떨어지는 <strong>턴오프 지연</strong>(손실 없음), 이어 \(v_{GS}\)가 \(V_{pl}\)에 묶인 채 \(C_{gd}\)를 충전하며 <strong>전압이 오르는 밀러 구간</strong>, 전압이 \(V_{dc}\)에 닿아 다이오드가 켜지면 \(v_{GS}\)가 \(V_{th}\)로 떨어지며 <strong>전류가 하강</strong>한다. 전류 하강의 \(di/dt\)가 루프 인덕턴스에 \(L_\sigma\,di/dt\)의 전압을 만들어 \(v_{DS}\)가 \(V_{dc}\)를 넘는 <span class="term">오버슈트</span><span class="en">(voltage overshoot)</span>가 생긴다. 이것이 턴오프의 가장 큰 위험이다(6절).</p>
+    <p>단극 소자(MOSFET, HEMT)는 채널이 닫히면 전류가 곧 끝난다. 높은 전류에서는 오히려 채널이 다 닫히기 전에 \(C_{oss}\)를 충전하는 데 부하 전류가 쓰여, 채널 전류는 일찍 줄고 전압은 부하 전류가 \(C_{oss}\)를 충전하는 속도로 오른다. 이때 \(C_{oss}\)에 쌓인 에너지는 그 자리에서 손실이 아니라 다음 턴온 때 손실이 된다(9절). 반면 IGBT는 드리프트층에 쌓인 소수 캐리어(정공)가 채널이 닫힌 뒤에도 재결합하며 흘러 <span class="term">꼬리 전류</span><span class="en">(tail current)</span>를 만든다. 꼬리는 전압이 이미 \(V_{dc}\)일 때 흐르므로 \(E_{off}\)의 큰 몫이고, 온도가 오르면 수명이 길어져 더 커진다(<a href="igbt.html">7장</a>).</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="턴오프 파형 비교: SiC MOSFET은 빠른 전류 하강과 오버슈트, IGBT는 꼬리 전류">
+        <text x="210" y="20" class="sw-b" text-anchor="middle">(a) SiC MOSFET</text><text x="650" y="20" class="sw-b" text-anchor="middle">(b) Si IGBT</text>
+        <path d="M30 220 H420 M30 220 V36" class="sw-thin"/><path d="M470 220 H860 M470 220 V36" class="sw-thin"/>
+        <path d="M30 210 H120 C 150 200 170 120 190 80 C 196 60 204 52 212 50 C 222 56 232 74 244 70 C 256 66 266 76 280 74 H420" class="sw-v"/>
+        <path d="M30 80 H190 C 200 90 214 196 226 212 C 236 222 246 214 256 218 H420" class="sw-i"/>
+        <text x="216" y="44" class="sw-s" style="fill:var(--m-volt)">V<tspan dy="3" font-size="9">dc</tspan><tspan dy="-3"> + L</tspan><tspan dy="3" font-size="9">σ</tspan><tspan dy="-3">di/dt</tspan></text>
+        <path d="M120 220 C 160 216 190 150 205 140 C 220 150 226 210 240 220 Z" class="sw-pf"/>
+        <text x="330" y="66" class="sw-s" style="fill:var(--m-volt)">v<tspan dy="3" font-size="9">DS</tspan></text><text x="330" y="206" class="sw-s" style="fill:var(--m-amp)">i<tspan dy="3" font-size="9">D</tspan></text>
+        <text x="80" y="236" class="sw-s">~100 ns</text>
+        <path d="M470 210 H540 C 580 205 620 120 660 76 L 676 66 L 690 74 H860" class="sw-v"/>
+        <path d="M470 80 H650 C 664 100 676 150 690 160 C 720 172 760 196 800 208 C 820 212 840 216 860 217" class="sw-i"/>
+        <path d="M560 220 C 600 214 640 160 660 150 C 690 150 720 186 760 204 C 800 214 830 218 860 219 L 860 220 Z" class="sw-pf"/>
+        <text x="760" y="178" class="sw-s" style="fill:var(--m-amp)">꼬리 전류 (정공 재결합)</text>
+        <text x="520" y="236" class="sw-s">~1 µs</text>
+        <text x="760" y="60" class="sw-s" style="fill:var(--m-volt)">작은 오버슈트</text>
+      </svg>
+      <figcaption><b>그림 10-4.</b> 턴오프 파형. (a) SiC MOSFET: 전압 상승 수십 ns, 전류 하강 수십 ns, 빠른 \(di/dt\)가 큰 오버슈트와 링잉을 만든다. (b) Si IGBT: 전압 상승이 느리고 전류가 꼬리를 끌어 손실(빨간 면적)은 크지만 \(di/dt\)가 작아 오버슈트는 작다. 시간 축 축척이 열 배 다르다.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="energy">
+    <h2>\(E_{on}, E_{off}, E_{rr}\): 파형을 적분한다</h2>
+    <p>스위칭 에너지의 정의는 단순하다. 측정 창 안에서 소자 단자 전압과 전류의 곱을 적분한다. 표준은 창의 끝을 정한다. 흔한 약속은 턴온을 \(v_{GS}\)가 10 %를 넘은 때부터 \(v_{DS}\)가 2–3 %로 떨어질 때까지, 턴오프를 \(v_{GS}\)가 90 % 아래로 떨어진 때부터 전류가 2 % 아래로 떨어질 때까지로 잡는다. 다이오드 역회복 에너지는 다이오드 전압과 역전류의 곱이다.</p>
+    <div class="formula">$$E_{on} = \int_{t_{on}} v_{DS}\,i_D\,dt,\qquad E_{off} = \int_{t_{off}} v_{DS}\,i_D\,dt,\qquad E_{rr} = \int v_{KA}\,(-i_F)\,dt$$<div class="where">\(v_{KA}\): 다이오드 역전압, \(i_F\lt 0\)인 구간이 역회복 전류. 턴온 손실에는 DUT 자신의 \(C_{oss}\) 방전 에너지와 위 소자 \(C_{oss}\)를 충전하는 데 든 에너지, 역회복 전류 \(I_{rr}\)를 함께 흘리는 몫이 들어간다. 그래서 다이오드가 나쁘면 \(E_{rr}\)보다 \(E_{on}\)이 더 크게 는다.</div></div>
+    <p>아래 시뮬레이터는 그림 10-2의 회로를 시간 단계로 푼다. 상태는 게이트 전압 \(v_g\), 드레인 전압 \(v_{DS}\), 루프 전류 \(i_D\)(\(L_\sigma\)를 지나는 전류), 위 다이오드 전압 \(v_{KA}\), 다이오드 저장 전하 \(q\)이고, 방정식은 다음과 같다.</p>
+    <div class="formula">$$L_\sigma\frac{di_D}{dt} = V_{dc} - v_{KA} - v_{DS} - R_\ell\,i_D,\qquad \frac{v_{dr}-v_g}{R_G} = C_{gs}\frac{dv_g}{dt} + C_{gd}(v)\frac{d(v_g - v_{DS})}{dt}$$
+    $$i_D = i_{ch}(v_g, v_{DS}) + C_{ds}(v)\frac{dv_{DS}}{dt} + C_{gd}(v)\frac{d(v_{DS}-v_g)}{dt},\qquad i_{ch} = \min\!\Big[K(v_g - V_{th})^2,\ \frac{v_{DS}-V_0}{R_{on}(v_g)}\Big]$$
+    $$\frac{dq}{dt} = i_F - \frac{q}{\tau_d}\ (q \gt 0\text{에서 도통}),\qquad C_j(v)\frac{dv_{KA}}{dt} = i_{rr}(t) - i_F,\quad i_{rr} = I_{rrm}\,e^{-t/\tau_s}\ (\text{차단 후}),\quad i_F = I_L - i_D$$<div class="where">다이오드는 전하 제어 모델이다. 순방향 전류가 저장 전하 \(q\)를 만들고, 전류가 역전되어 \(q\)가 0이 되는 순간 역회복 피크 \(I_{rrm}\)에서 차단을 시작해 시정수 \(\tau_s\)로 부드럽게 회복한다(소프트 회복, 역회복 물리는 <a href="diodes.html">5장</a>). 커패시턴스는 \(C(v) = C_0/\sqrt{1+v/V_k}\) 꼴의 비선형이다. 게이트와 드레인 노드는 한 단계마다 2×2 연립방정식을 암시적으로 풀고(채널의 선형 영역은 시정수가 ps라 명시적 적분은 발산한다), \(L_\sigma\) 전류는 그 앞에 갱신한다(심플렉틱 오일러). 한 이벤트당 40,000단계, 시간 창은 \(R_G\)와 \(L_\sigma\)에 맞춰 늘어난다. 정격의 약 1.3배를 넘는 전압은 애벌런치로 잘라 표시한다. IGBT는 전압이 \(V_{dc}\)를 넘은 뒤 \(i_{tail} = 0.14\,I_L\,e^{-t/300\,\text{ns}}\)를 채널 전류의 하한으로 넣었다.</div></div>
+
+    <div class="sim" id="sim-dpt">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>이중 펄스 시험: 턴온·턴오프 파형과 스위칭 에너지</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="dpt-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>소자</span><div class="seg" id="dpt-dev"><button data-value="sic" class="on">SiC 모듈</button><button data-value="igbt">Si IGBT 모듈</button><button data-value="gan">650 V GaN</button></div></div>
+          <div class="ctrl"><span>보기</span><div class="seg" id="dpt-view"><button data-value="on" class="on">턴온</button><button data-value="off">턴오프</button></div></div>
+          <label class="ctrl"><span><span>외부 게이트 저항 R<sub>G</sub></span> <output id="dpt-rg-out"></output></span><input type="range" id="dpt-rg" min="0.5" max="20" step="0.1" value="2.5"></label>
+          <label class="ctrl"><span><span>루프 인덕턴스 L<sub>σ</sub></span> <output id="dpt-l-out"></output></span><input type="range" id="dpt-l" min="1" max="60" step="0.5" value="15"></label>
+          <label class="ctrl"><span><span>부하 전류 I<sub>L</sub></span> <output id="dpt-i-out"></output></span><input type="range" id="dpt-i" min="10" max="600" step="5" value="400"></label>
+          <label class="ctrl"><span><span>DC 링크 V<sub>dc</sub></span> <output id="dpt-v-out"></output></span><input type="range" id="dpt-v" min="50" max="900" step="10" value="800"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">E<sub>on</sub></span><span class="v" id="dpt-eon">—</span></div>
+        <div class="stat"><span class="k">E<sub>off</sub></span><span class="v" id="dpt-eoff">—</span></div>
+        <div class="stat"><span class="k">E<sub>rr</sub> (다이오드)</span><span class="v" id="dpt-err">—</span></div>
+        <div class="stat"><span class="k">턴오프 V<sub>DS</sub> 피크</span><span class="v" id="dpt-vpk">—</span></div>
+        <div class="stat"><span class="k">턴온 전류 피크</span><span class="v" id="dpt-ipk">—</span></div>
+        <div class="stat"><span class="k">di/dt · dv/dt (10–90 %)</span><span class="v" id="dpt-rate">—</span></div>
+        <div class="stat"><span class="k">P<sub>sw</sub> (f<sub>sw</sub>에서, 피크 조건)</span><span class="v" id="dpt-psw">—</span></div>
+      </div>
+      <div class="legend sw-legend"><span><i style="background:var(--m-volt)"></i>v<sub>DS</sub> (왼쪽 축)</span><span><i style="background:var(--m-amp)"></i>i<sub>D</sub> (오른쪽 축)</span><span><i style="background:var(--green)"></i>v<sub>GS</sub></span><span><i style="background:var(--m-heat)"></i>p = v·i, 누적 E</span></div>
+      <div class="sim-note">기본값은 PW-800 TI 조건(800 V·400 A, \(L_\sigma\) 15 nH, \(R_G\) 2.5 Ω, 150 °C 상당 파라미터)이다. 이 모델은 SiC 모듈에서 \(E_{on}\) 약 15 mJ, \(E_{off}\) 약 11 mJ, \(E_{rr}\) 약 0.6 mJ, IGBT에서 약 60/37/20 mJ를 준다. 표 값(12/8/1, 40/45/25 mJ)과 같은 크기이고, 차이는 단순한 커패시턴스·꼬리 모델 때문이다. 650 V GaN(50 mΩ급, \(Q_G\) 약 6 nC)을 고르면 400 V·20 A·3 nH·5 Ω으로 바뀐다. 해볼 것: ① \(R_G\)를 2.5 → 10 Ω으로 올리면 \(E_{on}\)·\(E_{off}\)가 몇 배로 크지만 오버슈트는 줄어든다. ② \(L_\sigma\)를 40 nH로 올리면 턴오프 오버슈트와 링잉이 커지고, 턴온 \(E_{on}\)은 오히려 약간 준다(전류 상승 중 전압이 \(L_\sigma\,di/dt\)만큼 처지므로). ③ IGBT로 바꾸면 턴온 전류 피크(역회복)와 턴오프 꼬리가 보인다. ④ GaN은 역회복이 없어 턴온 피크가 위 소자 \(C_{oss}\) 충전 전류뿐이다.</div>
+    </div>
+    <div class="callout fab"><strong>트랙션 인버터의 스위칭 손실 예산</strong>PW-800 TI는 SiC 모듈 스위치 하나가 피크 조건(800 V·400 A)에서 한 주기에 약 21 mJ를 잃는다. 10 kHz면 상한 210 W, 사인파 평균으로 약 70 W다. 같은 자리에 IGBT 모듈을 쓰면 8 kHz에서도 상한 880 W, 평균 약 280 W가 된다. 스위치당 전도 손실이 수십–백여 W 수준이므로, IGBT 인버터에서는 스위칭 손실이 전도 손실보다 크고, SiC 전환으로 얻는 효율 1 %포인트(약 98 → 99 %)의 대부분이 이 차이에서 나온다. 손실 → 온도 계산은 <a href="thermal.html">14장</a>이 이어받는다.</div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="overshoot">
+    <h2>루프 인덕턴스: 오버슈트와 링잉</h2>
+    <p>정류 루프는 DC 링크 커패시터 → 버스바 → 위 소자 → 아래 소자 → 버스바 → 커패시터로 닫힌다. 이 고리의 인덕턴스 \(L_\sigma\)가 <span class="term">정류 루프 인덕턴스</span><span class="en">(commutation loop inductance)</span>다. PW-800은 모듈 안 8 nH, 버스바와 커패시터 7 nH, 합 약 15 nH다. 턴오프에서 전류가 \(di/dt\)로 떨어지면 \(L_\sigma\)에 \(L_\sigma\,di/dt\)가 걸리고, 이것이 \(V_{dc}\)에 더해져 소자에 걸린다. 전류가 다 넘어간 뒤에는 \(L_\sigma\)와 꺼진 소자의 \(C_{oss}\)(그리고 위 소자의 접합 커패시턴스)가 직렬 RLC 회로를 이뤄 <span class="term">링잉</span><span class="en">(ringing)</span>한다.</p>
+    <div class="formula">$$\Delta V \approx L_\sigma\frac{di}{dt},\qquad f_{ring} = \frac{1}{2\pi\sqrt{L_\sigma C_{oss}}},\qquad \zeta = \frac{R_\ell}{2}\sqrt{\frac{C_{oss}}{L_\sigma}},\qquad Z_0 = \sqrt{\frac{L_\sigma}{C_{oss}}}$$<div class="where">PW-800: 15 nH × 5–10 A/ns = 75–150 V. \(C_{oss}\) 약 1.5 nF이면 \(f_{ring}\) ≈ 33 MHz, \(Z_0\) ≈ 3.2 Ω. 루프 저항 \(R_\ell\)(수십 mΩ, 표피 효과로 고주파에서 더 큼)이 \(Z_0\)보다 훨씬 작아 \(\zeta \ll 1\)이고 링잉이 여러 주기 이어진다. 링잉 주파수는 EMI 스펙트럼의 봉우리가 된다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="정류 루프와 인덕턴스 분배: DC 링크 커패시터, 버스바, 모듈 내부, 오버슈트 파형">
+        <defs><marker id="f105-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-amp)"/></marker></defs>
+        <rect x="30" y="60" width="90" height="130" rx="8" class="f-acc-soft"/><text x="75" y="120" class="sw-b" text-anchor="middle">C<tspan dy="3" font-size="9">dc</tspan></text><text x="75" y="140" class="sw-s" text-anchor="middle">500 µF 필름</text>
+        <rect x="140" y="50" width="150" height="22" rx="4" class="m-copper"/><rect x="140" y="178" width="150" height="22" rx="4" class="m-copper"/>
+        <text x="215" y="44" class="sw-s" text-anchor="middle">라미네이트 버스바 + 커패시터 ESL ≈ 7 nH</text>
+        <rect x="310" y="40" width="190" height="170" rx="10" class="sw-box"/>
+        <text x="405" y="60" class="sw-b" text-anchor="middle">모듈 ≈ 8 nH</text>
+        <rect x="340" y="76" width="50" height="40" rx="4" class="m-sic"/><text x="365" y="100" class="sw-s" text-anchor="middle" style="fill:#fff">위</text>
+        <rect x="340" y="140" width="50" height="40" rx="4" class="m-sic"/><text x="365" y="164" class="sw-s" text-anchor="middle" style="fill:#fff">아래</text>
+        <path d="M290 60 H320 V96 H340 M390 96 H440 V128 H365 V140 M390 160 H460 V190 H290" class="sw-thin"/>
+        <path d="M130 100 V80 H300 V110 H430 V150 H300 V170 H130 Z" class="sw-path" marker-end="url(#f105-a)" style="stroke-width:2"/>
+        <text x="215" y="125" class="sw-s" text-anchor="middle" style="fill:var(--m-amp)">정류 루프 면적 ∝ L<tspan dy="3" font-size="9">σ</tspan></text>
+        <!-- waveform -->
+        <path d="M540 220 H860 M540 220 V30" class="sw-thin"/>
+        <path d="M540 90 H860" class="sw-dash"/><text x="856" y="86" class="sw-s" text-anchor="end">V<tspan dy="3" font-size="9">dc</tspan><tspan dy="-3"> = 800 V</tspan></text>
+        <path d="M540 210 C 580 205 600 120 616 90 C 624 70 632 44 640 40 C 650 44 660 110 670 120 C 680 128 690 70 700 66 C 710 64 720 104 730 108 C 740 112 750 80 760 80 C 772 82 782 98 792 98 C 804 98 816 86 828 88 H860" class="sw-v"/>
+        <text x="646" y="36" class="sw-s" style="fill:var(--m-volt)">V<tspan dy="3" font-size="9">pk</tspan><tspan dy="-3"> ≈ 800 + L</tspan><tspan dy="3" font-size="9">σ</tspan><tspan dy="-3">di/dt + 링잉</tspan></text>
+        <path d="M640 236 H700" class="sw-thin"/><text x="670" y="248" class="sw-s" text-anchor="middle">1/f<tspan dy="3" font-size="9">ring</tspan></text>
+        <text x="740" y="200" class="sw-s" text-anchor="middle">1200 V 소자 → 여유 확인</text>
+      </svg>
+      <figcaption><b>그림 10-5.</b> 정류 루프와 오버슈트. 루프가 둘러싼 면적이 \(L_\sigma\)를 정한다. 라미네이트 버스바(+/− 판을 얇은 절연막 사이에 겹침)와 모듈 안 배치로 면적을 줄인다(<a href="packaging.html">15장</a>). 턴오프 전압은 \(L_\sigma\,di/dt\)만큼 튀고 \(L_\sigma\)–\(C_{oss}\) 공진으로 링잉한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ring">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>턴오프 오버슈트와 RLC 링잉</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ring-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>L<sub>σ</sub></span> <output id="ring-l-out"></output></span><input type="range" id="ring-l" min="2" max="60" step="0.5" value="15"></label>
+          <label class="ctrl"><span><span>전류 하강 di/dt</span> <output id="ring-d-out"></output></span><input type="range" id="ring-d" min="0.5" max="20" step="0.1" value="8"></label>
+          <label class="ctrl"><span><span>C<sub>oss</sub> + C<sub>j</sub> (실효)</span> <output id="ring-c-out"></output></span><input type="range" id="ring-c" min="0.3" max="6" step="0.05" value="1.5"></label>
+          <label class="ctrl"><span><span>루프 저항 R<sub>ℓ</sub></span> <output id="ring-r-out"></output></span><input type="range" id="ring-r" min="0.01" max="4" step="0.01" value="0.15"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">V<sub>pk</sub></span><span class="v" id="ring-vpk">—</span></div>
+        <div class="stat"><span class="k">L<sub>σ</sub>·di/dt 추정</span><span class="v" id="ring-est">—</span></div>
+        <div class="stat"><span class="k">f<sub>ring</sub></span><span class="v" id="ring-f">—</span></div>
+        <div class="stat"><span class="k">Z₀ / ζ</span><span class="v" id="ring-z">—</span></div>
+        <div class="stat"><span class="k">1200 V 대비 여유</span><span class="v" id="ring-m">—</span></div>
+      </div>
+      <div class="sim-note">800 V·400 A에서 소자 전류가 코사인 모양으로 하강할 때(최대 기울기 = 설정한 \(di/dt\)) \(L_\sigma\,di_L/dt = V_{dc} - v - R_\ell i_L\), \(C\,dv/dt = i_L - i_{dev}(t)\)를 RK4(주기의 1/200 단계, 최대 20,000단계)로 푼다. 파란선 \(v\), 주황선 루프 전류, 점선은 \(V_{dc}\)와 1200 V 정격. 해볼 것: ① \(di/dt\)를 두 배로 하면 오버슈트는 두 배 넘게 는다(\(L_\sigma\,di/dt\)에 링잉이 얹힌다). ② \(R_\ell\)을 \(Z_0\) 근처(약 2–3 Ω, 스너버 저항에 해당)까지 올리면 \(\zeta\)가 1에 가까워 링잉이 사라진다. ③ \(C\)를 키우면 공진 반주기 \(\pi\sqrt{LC}\)가 전류 하강 시간에 가까워져 \(L_\sigma\,di/dt\) 추정이 맞지 않는다. 전류가 반주기보다 훨씬 빨리 끊기면(\(t_{fi} \ll \pi\sqrt{LC}\)) 오버슈트는 \(\tfrac12 L I^2 = \tfrac12 C\Delta V^2\)에서 나오는 \(I\sqrt{L/C}\)에 다가간다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="csi">
+    <h2>공통 소스 인덕턴스와 켈빈 소스</h2>
+    <p>소스 단자의 인덕턴스 가운데 <strong>전력 루프와 게이트 루프가 함께 지나는 부분</strong>을 <span class="term">공통 소스 인덕턴스</span><span class="en">(common-source inductance, CSI)</span> \(L_s\)라 한다. 3핀 패키지(TO-247-3)에서는 소스 리드와 본드 와이어 수 nH가 그대로 \(L_s\)다. 턴온 때 전류가 오르면 \(L_s\,di/dt\)가 게이트 루프에 <strong>구동 전압을 깎는 방향으로</strong> 걸린다. 게이트에 음의 되먹임이 걸려 \(di/dt\)가 저절로 느려지고, 스위칭 시간과 손실이 는다.</p>
+    <div class="formula">$$R_G C_{iss}\frac{dv_{GS}}{dt} = V_{dr} - v_{GS} - L_s\frac{di_D}{dt},\quad \frac{di_D}{dt} = g_{fs}\frac{dv_{GS}}{dt}\ \Rightarrow\ \tau_{eff} = R_G C_{iss} + g_{fs}L_s$$<div class="where">전류 상승 구간의 게이트 시정수가 \(g_{fs}L_s\)만큼 길어진다. 650 V SiC 40 mΩ(\(g_{fs}\) 약 8 S, \(C_{iss}\) 약 1.9 nF)에 \(R_G\) 10 Ω, \(L_s\) 5 nH면 \(R_GC_{iss}\) = 19 ns에 \(g_{fs}L_s\) = 40 ns가 더해져 세 배 가깝게 느려진다. 빠른 소자일수록(큰 \(g_{fs}\), 작은 \(C_{iss}\)) CSI가 지배한다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="3핀 패키지의 공통 소스 인덕턴스와 4핀 켈빈 소스 패키지 비교">
+        <text x="210" y="20" class="sw-b" text-anchor="middle">(a) 3핀: 게이트 루프가 L<tspan dy="3" font-size="9">s</tspan><tspan dy="-3">를 공유</tspan></text>
+        <text x="650" y="20" class="sw-b" text-anchor="middle">(b) 4핀 켈빈 소스: 게이트 루프 분리</text>
+        <g>
+          <path d="M210 40 V80 M210 120 V140 M216 80 V120 M204 84 V116 M150 100 H204 M210 80 H216 M210 120 H216" class="sw-w"/>
+          <path d="M210 140 q10 6 0 12 q10 6 0 12 q10 6 0 12 V200" class="sw-w"/><text x="228" y="168" class="sw-s">L<tspan dy="3" font-size="9">s</tspan><tspan dy="-3"> (소스 리드·와이어)</tspan></text>
+          <path d="M60 100 H100 M60 100 V200 H210" class="sw-w"/><rect x="100" y="92" width="40" height="16" class="sw-box"/><text x="120" y="88" class="sw-s" text-anchor="middle">R<tspan dy="3" font-size="9">G</tspan></text>
+          <circle cx="60" cy="150" r="14" class="f-acc-soft"/><text x="60" y="154" class="sw-s" text-anchor="middle">V<tspan dy="3" font-size="8">dr</tspan></text>
+          <path d="M70 196 H200" class="sw-path" style="stroke:var(--green);stroke-width:2"/>
+          <path d="M230 40 V200" class="sw-path" style="stroke-width:2"/><text x="240" y="60" class="sw-s" style="fill:var(--m-amp)">전력 전류 i<tspan dy="3" font-size="9">D</tspan></text>
+          <text x="110" y="222" class="sw-s" text-anchor="middle" style="fill:var(--green)">게이트 귀환 → −L<tspan dy="3" font-size="9">s</tspan><tspan dy="-3">di/dt</tspan></text>
+        </g>
+        <g>
+          <path d="M650 40 V80 M650 120 V140 M656 80 V120 M644 84 V116 M590 100 H644 M650 80 H656 M650 120 H656" class="sw-w"/>
+          <path d="M650 140 q10 6 0 12 q10 6 0 12 q10 6 0 12 V200" class="sw-w"/><text x="668" y="180" class="sw-s">L<tspan dy="3" font-size="9">s</tspan><tspan dy="-3"> (전력 쪽만)</tspan></text>
+          <path d="M650 134 H600 V200 H500 M500 100 H540 M500 100 V200" class="sw-w"/><rect x="540" y="92" width="40" height="16" class="sw-box"/>
+          <circle cx="500" cy="150" r="14" class="f-acc-soft"/><text x="500" y="154" class="sw-s" text-anchor="middle">V<tspan dy="3" font-size="8">dr</tspan></text>
+          <circle cx="650" cy="134" r="3.5" fill="var(--text)"/><text x="606" y="128" class="sw-s" text-anchor="end">켈빈 소스 핀</text>
+          <path d="M670 40 V200" class="sw-path" style="stroke-width:2"/>
+          <text x="560" y="222" class="sw-s" text-anchor="middle" style="fill:var(--green)">게이트 루프에 L<tspan dy="3" font-size="9">s</tspan><tspan dy="-3"> 없음</tspan></text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-6.</b> 공통 소스 인덕턴스. (a) 3핀 패키지에서는 드라이버 귀환선이 전력 전류가 흐르는 소스 리드를 공유하므로 \(L_s\,di/dt\)가 구동 전압을 깎는다. (b) 4핀 패키지와 모듈의 보조 소스(켈빈) 단자는 다이 소스 바로 옆에서 게이트 귀환을 따로 뽑아 이 되먹임을 끊는다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-csi">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>공통 소스 인덕턴스가 늦추는 턴온</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="csi-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>패키지</span><div class="seg" id="csi-pkg"><button data-value="3" class="on">3핀 (L<sub>s</sub> 공유)</button><button data-value="4">4핀 켈빈</button></div></div>
+          <label class="ctrl"><span><span>공통 소스 인덕턴스 L<sub>s</sub></span> <output id="csi-ls-out"></output></span><input type="range" id="csi-ls" min="0" max="15" step="0.5" value="5"></label>
+          <label class="ctrl"><span><span>R<sub>G</sub></span> <output id="csi-rg-out"></output></span><input type="range" id="csi-rg" min="1" max="30" step="0.5" value="10"></label>
+          <label class="ctrl"><span><span>부하 전류</span> <output id="csi-i-out"></output></span><input type="range" id="csi-i" min="5" max="60" step="1" value="40"></label>
+          <label class="ctrl"><span><span>g<sub>fs</sub></span> <output id="csi-g-out"></output></span><input type="range" id="csi-g" min="2" max="40" step="0.5" value="8"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">τ<sub>eff</sub> = R<sub>G</sub>C<sub>iss</sub> + g<sub>fs</sub>L<sub>s</sub></span><span class="v" id="csi-tau">—</span></div>
+        <div class="stat"><span class="k">전류 상승 t<sub>ri</sub></span><span class="v" id="csi-tri">—</span></div>
+        <div class="stat"><span class="k">평균 di/dt</span><span class="v" id="csi-didt">—</span></div>
+        <div class="stat"><span class="k">L<sub>s</sub>·di/dt (게이트 깎임)</span><span class="v" id="csi-vls">—</span></div>
+        <div class="stat"><span class="k">전류 상승 손실 (켈빈 대비)</span><span class="v" id="csi-e">—</span></div>
+      </div>
+      <div class="sim-note">400 V, \(C_{iss}\) 1.9 nF, \(V_{th}\) 3 V, +18/−4 V 구동. 위 식의 닫힌 해 \(v_{GS}(t) = V_{dr} - (V_{dr}-V_{th})e^{-t/\tau_{eff}}\)로 \(i_D = g_{fs}(v_{GS}-V_{th})\)가 \(I_L\)에 닿을 때까지의 시간과 전류 상승 손실 \(\int V_{dc}\,i_D\,dt\)를 구한다. 실선은 현재 패키지, 점선은 켈빈 소스(같은 조건에서 \(L_s\) 되먹임 없음). 해볼 것: ① 3핀에서 \(L_s\)를 0 → 10 nH로 올리면 \(t_{ri}\)가 몇 배가 된다. ② \(R_G\)를 줄여도 3핀에서는 \(di/dt\)가 \(V/L_s\)급에서 포화한다(\(L_s\) 5 nH면 약 2–3 A/ns 남짓). 빠른 GaN·SiC 디스크리트에 켈빈 소스 패키지가 표준이 된 이유다. ③ 턴오프에서는 같은 되먹임이 게이트를 끌어올려 꺼짐을 늦춘다. 병렬 다이 사이에서는 서로 다른 \(L_s\)가 전류 불균형을 만든다(<a href="packaging.html">15장</a>).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="rg">
+    <h2>게이트 저항으로 속도 조절하기</h2>
+    <p>설계자가 가장 쉽게 돌릴 수 있는 손잡이는 \(R_G\)다. \(R_G\)를 키우면 모든 구간이 \(R_G\)에 비례해 길어져 \(E_{on}, E_{off}\)가 늘고, 대신 \(di/dt\)와 \(dv/dt\)가 줄어 오버슈트·링잉·EMI·모터 절연 스트레스가 준다. 실무에서는 턴온과 턴오프 저항을 다이오드로 나눠 따로 고른다. 턴온 \(R_{G,on}\)은 다이오드 역회복 피크와 \(dv/dt\)를, 턴오프 \(R_{G,off}\)는 오버슈트를 기준으로 잡는다(드라이버 회로는 <a href="gatedrive.html">11장</a>).</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>손잡이 (↑)</th><th>\(E_{on}\)</th><th>\(E_{off}\)</th><th>\(E_{rr}\)·\(I_{rr}\)</th><th>오버슈트·링잉</th><th>dv/dt·EMI</th></tr></thead>
+      <tbody>
+        <tr><td>게이트 저항 \(R_G\)</td><td>↑↑ (거의 비례)</td><td>↑↑</td><td>↓ (느린 di/dt)</td><td>↓</td><td>↓</td></tr>
+        <tr><td>루프 인덕턴스 \(L_\sigma\)</td><td>↓ 약간 (턴온 전압 처짐)</td><td>↑ (오버슈트 구간)</td><td>≈</td><td>↑↑</td><td>↑ (링잉 봉우리)</td></tr>
+        <tr><td>부하 전류 \(I_L\)</td><td>↑ (선형 이상)</td><td>↑</td><td>↑ (\(Q_{rr} \propto I\))</td><td>↑</td><td>턴온 ↓, 턴오프 ↑</td></tr>
+        <tr><td>DC 링크 \(V_{dc}\)</td><td>↑ (선형~제곱)</td><td>↑</td><td>↑</td><td>↑</td><td>≈</td></tr>
+        <tr><td>접합 온도 \(T_j\)</td><td>IGBT↑ (역회복↑) / SiC ≈</td><td>IGBT↑↑ (꼬리) / SiC ≈</td><td>Si 다이오드 ↑↑</td><td>≈</td><td>≈</td></tr>
+        <tr><td>공통 소스 인덕턴스 \(L_s\)</td><td>↑</td><td>↑</td><td>↓</td><td>↓</td><td>↓</td></tr>
+      </tbody>
+    </table></div>
+    <p>아래 시뮬레이터는 5절의 이중 펄스 엔진을 \(R_G\) 14점에 대해 돌려 트레이드오프 곡선을 그린다. 같은 그래프 위에 손실과 오버슈트가 반대로 움직이는 것을 보면, "가장 빠르게"가 아니라 "오버슈트가 정격 여유 안에 드는 범위에서 가장 빠르게"가 설계 목표라는 것을 알 수 있다.</p>
+
+    <div class="sim" id="sim-rg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>R<sub>G</sub> 스윕: 스위칭 손실 ↔ 오버슈트</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rg-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>소자</span><div class="seg" id="rg-dev"><button data-value="sic" class="on">SiC 모듈</button><button data-value="igbt">Si IGBT 모듈</button><button data-value="gan">650 V GaN</button></div></div>
+          <label class="ctrl"><span><span>루프 인덕턴스 L<sub>σ</sub></span> <output id="rg-l-out"></output></span><input type="range" id="rg-l" min="1" max="60" step="0.5" value="15"></label>
+          <label class="ctrl"><span><span>오버슈트 한계 (정격 대비)</span> <output id="rg-lim-out"></output></span><input type="range" id="rg-lim" min="0.7" max="1" step="0.01" value="0.85"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">한계를 지키는 최소 R<sub>G</sub></span><span class="v" id="rg-min">—</span></div>
+        <div class="stat"><span class="k">그때 E<sub>on</sub> + E<sub>off</sub></span><span class="v" id="rg-e">—</span></div>
+        <div class="stat"><span class="k">그때 V<sub>pk</sub></span><span class="v" id="rg-vpk">—</span></div>
+        <div class="stat"><span class="k">R<sub>G</sub> 최소↔최대 손실 비</span><span class="v" id="rg-ratio">—</span></div>
+      </div>
+      <div class="sim-note">SiC·IGBT는 800 V·400 A(정격 1200 V), GaN은 400 V·20 A(정격 650 V). \(R_G\)는 0.5–20 Ω 로그 간격 14점이며 점마다 턴온·턴오프를 각각 20,000단계로 적분한다. 실선: \(E_{on}\)(파랑 계열), \(E_{off}\)(주황), 합(빨강, 왼쪽 축). 점선: 턴오프 \(V_{pk}\)(오른쪽 축)와 한계선. 해볼 것: ① \(L_\sigma\)를 15 → 30 nH로 늘리면 같은 한계를 지키는 \(R_G\)가 커지고 손실이 는다. 루프 인덕턴스를 줄이는 일이 곧 손실을 줄이는 일이다. ② GaN 20 A에서는 오버슈트가 \(C_{oss}\) 충전 속도에 묶여 생각보다 작지만, 이중 펄스 시뮬레이터에서 전류를 40 A로 올리면 \(L_\sigma\) 20 nH 근처에서 650 V 정격을 넘는다. GaN은 애벌런치 내량이 없어 한 번의 과전압이 곧 파손이므로 PCB 루프를 1–3 nH로 만든다. ③ \(L_\sigma\)가 매우 크면 턴온 때 \(v_{DS}\)가 전류 상승 중에 무너져(\(L_\sigma\,di/dt \to V_{dc}\)) 턴온 손실이 작아진다. 대신 턴오프가 그 값을 치른다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="coss">
+    <h2>출력 커패시턴스 손실: \(Q_{oss}\)와 \(E_{oss}\)</h2>
+    <p>하드 턴온에는 전압·전류 겹침 말고도 피할 수 없는 손실이 하나 더 있다. 꺼져 있던 DUT의 \(C_{oss}\)에는 \(V_{dc}\)까지 충전된 에너지 \(E_{oss}\)가 있고, 켜지는 순간 이것이 채널을 통해 방전되며 모두 열이 된다. 동시에 위 소자의 \(C_{oss}\)는 0 V에서 \(V_{dc}\)까지 충전되어야 하는데, 이 충전 전하 \(Q_{oss}\)는 DC 링크에서 DUT 채널을 거쳐 공급된다. 전원이 내놓는 에너지는 \(Q_{oss}V_{dc}\)이고 그중 \(E_{oss}\)만 위 소자에 저장되므로 나머지 \(Q_{oss}V_{dc} - E_{oss}\)가 DUT에서 손실이 된다. 두 소자가 같다면 합은 정확히</p>
+    <div class="formula">$$E_{oss}(V) = \int_0^{V} C_{oss}(v)\,v\,dv,\qquad Q_{oss}(V) = \int_0^{V} C_{oss}(v)\,dv,\qquad E_{C,\text{hard}} = E_{oss} + (Q_{oss}V - E_{oss}) = Q_{oss}\,V$$<div class="where">\(C_{o(er)} = 2E_{oss}/V^2\)(에너지 등가), \(C_{o(tr)} = Q_{oss}/V\)(시간·전하 등가). 비선형이 강할수록 \(C_{o(tr)} \gg C_{o(er)}\)이다. 이 손실은 \(R_G\)로 줄일 수 없다(빨리 켜도 느리게 켜도 같다). 오직 ZVS(11절)로만 없앨 수 있다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 240" role="img" aria-label="Q-V 평면에서 Eoss와 Qoss V - Eoss의 면적, 그리고 소자별 Coss 곡선 모양">
+        <path d="M60 210 H400 M60 210 V30" class="sw-thin"/>
+        <text x="230" y="232" class="sw-s" text-anchor="middle">Q (전하) →</text><text x="52" y="36" class="sw-s" text-anchor="end">v</text>
+        <path d="M60 210 C 130 205 160 190 190 140 C 220 90 300 70 380 60 L 380 210 Z" class="f-acc-soft"/>
+        <path d="M60 210 C 130 205 160 190 190 140 C 220 90 300 70 380 60 L 60 60 Z" class="sw-pf"/>
+        <path d="M60 210 C 130 205 160 190 190 140 C 220 90 300 70 380 60" class="sw-v"/>
+        <path d="M60 60 H380 V210" class="sw-dash"/>
+        <text x="300" y="160" class="sw-b" text-anchor="middle">E<tspan dy="3" font-size="9">oss</tspan><tspan dy="-3"> (C</tspan><tspan dy="3" font-size="9">oss</tspan><tspan dy="-3">에 저장)</tspan></text>
+        <text x="150" y="110" class="sw-b" text-anchor="middle">Q<tspan dy="3" font-size="9">oss</tspan><tspan dy="-3">V − E</tspan><tspan dy="3" font-size="9">oss</tspan></text>
+        <text x="150" y="128" class="sw-s" text-anchor="middle">(충전 중 DUT에서 손실)</text>
+        <text x="390" y="56" class="sw-s">V<tspan dy="3" font-size="9">dc</tspan></text><text x="380" y="228" class="sw-s" text-anchor="middle">Q<tspan dy="3" font-size="9">oss</tspan></text>
+        <text x="230" y="22" class="sw-s" text-anchor="middle">전체 사각형 Q<tspan dy="3" font-size="9">oss</tspan><tspan dy="-3">·V = 하드 턴온 용량 손실</tspan></text>
+        <path d="M480 210 H860 M480 210 V30" class="sw-thin"/>
+        <text x="860" y="228" class="sw-s" text-anchor="end">v<tspan dy="3" font-size="9">DS</tspan><tspan dy="-3"> (0–400 V)</tspan></text><text x="472" y="36" class="sw-s" text-anchor="end">log C</text>
+        <path d="M482 40 C 500 40 520 44 535 120 C 545 170 560 180 600 184 L 860 188" class="sw-thin" style="stroke:var(--m-si);stroke-width:2.4"/>
+        <path d="M482 90 C 520 120 600 150 700 160 L 860 166" class="sw-thin" style="stroke:var(--m-sic);stroke-width:2.4"/>
+        <path d="M482 110 C 520 140 600 168 700 174 L 860 178" class="sw-thin" style="stroke:var(--m-gan);stroke-width:2.4"/>
+        <text x="540" y="70" class="sw-s" style="fill:var(--m-si)">Si 슈퍼정션: 수십 V에서 급락</text>
+        <text x="700" y="148" class="sw-s" style="fill:var(--m-sic)">SiC</text><text x="760" y="198" class="sw-s" style="fill:var(--m-gan)">GaN</text>
+      </svg>
+      <figcaption><b>그림 10-7.</b> 왼쪽: Q–V 평면(가로 전하, 세로 전압). 곡선 아래 면적(파랑) \(\int v\,dQ\)가 \(E_{oss}\), 곡선 위쪽(빨강)이 \(Q_{oss}V - E_{oss}\), 합은 사각형 \(Q_{oss}V\)다. 낮은 전압에서 전하가 많이 들어가는 소자일수록 빨간 면적이 커진다. 오른쪽: 650 V급 소자의 \(C_{oss}(v)\) 모양(개념도). 슈퍼정션은 p/n 기둥이 공핍되기 전 낮은 전압에서 \(C_{oss}\)가 매우 커서 \(Q_{oss}\)가 SiC·GaN의 수 배다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-coss">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>C<sub>oss</sub> 곡선 적분: Q<sub>oss</sub>, E<sub>oss</sub>와 하드 스위칭 용량 손실</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="coss-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>소자 (650 V급)</span><div class="seg" id="coss-dev"><button data-value="sj">Si 슈퍼정션 40 mΩ</button><button data-value="sic" class="on">SiC 40 mΩ</button><button data-value="gan">GaN 50 mΩ</button></div></div>
+          <label class="ctrl"><span><span>버스 전압 V</span> <output id="coss-v-out"></output></span><input type="range" id="coss-v" min="20" max="600" step="10" value="400"></label>
+          <label class="ctrl"><span><span>스위칭 주파수</span> <output id="coss-f-out"></output></span><input type="range" id="coss-f" min="4" max="6.3" step="0.01" value="5"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Q<sub>oss</sub></span><span class="v" id="coss-q">—</span></div>
+        <div class="stat"><span class="k">E<sub>oss</sub></span><span class="v" id="coss-e">—</span></div>
+        <div class="stat"><span class="k">C<sub>o(tr)</sub> / C<sub>o(er)</sub></span><span class="v" id="coss-ceq">—</span></div>
+        <div class="stat"><span class="k">하드 턴온 용량 손실 Q<sub>oss</sub>V</span><span class="v" id="coss-eh">—</span></div>
+        <div class="stat"><span class="k">P = f·Q<sub>oss</sub>V</span><span class="v" id="coss-p">—</span></div>
+      </div>
+      <div class="sim-note">모델: \(C_{oss}(v) = C_0/\sqrt{1+v/V_k}\)(SiC \(C_0\) 2 nF·\(V_k\) 3 V, GaN 1 nF·2 V), 슈퍼정션은 \(C_{hi} + C_j/(1+(v/22\,\text{V})^3)\)(\(C_j\) 16 nF, \(C_{hi}\) 60 pF). 400점 사다리꼴 적분. 왼쪽 그래프: \(C_{oss}(v)\)(로그, 세 소자), 오른쪽: 선택 소자의 \(Q\)–\(v\) 곡선과 두 면적. 해볼 것: ① 400 V에서 슈퍼정션의 \(Q_{oss}\)는 SiC의 약 3.5배, GaN의 약 8배다. 반면 \(E_{oss}\)는 차이가 작다. ② 100 kHz 하드 스위칭에서 슈퍼정션 하프 브리지는 \(C_{oss}\)만으로 약 18 W를 잃는다(SiC 약 5 W, GaN 약 2 W). ③ 전압을 반으로 줄여도 슈퍼정션의 \(Q_{oss}\)는 거의 그대로다(전하가 낮은 전압에 몰려 있다).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="psw">
+    <h2>스위칭 주파수와 손실: 칩 면적의 최적점</h2>
+    <p>스위칭 손실은 주파수에 비례한다(\(P_{sw} = f\,E_{sw}\)). 주파수를 올리는 이유는 인덕터·변압기·커패시터가 \(1/f\)로 작아지기 때문이다(<a href="converters.html">12장</a>). 같은 주파수에서도 설계자는 칩 크기를 고른다. 칩 면적을 \(a\)배로 키우면 온저항은 \(1/a\)로 줄지만, 커패시턴스와 게이트 전하(곧 \(Q_{oss}V\), \(Q_{rr}V\), \(Q_GV_{dr}\))는 \(a\)배로 는다. 전압·전류 겹침 손실은 게이트를 같은 속도로 구동하면 면적과 거의 무관하다.</p>
+    <div class="formula">$$P(a) = \frac{I_{rms}^2 R_{on}}{a} + f\big[a\,(Q_{oss}V + Q_{rr}V + Q_G V_{dr}) + E_{vi}\big],\qquad a_{opt} = \sqrt{\frac{I_{rms}^2 R_{on}}{f\,(Q_{oss}V + Q_{rr}V + Q_GV_{dr})}}$$<div class="where">최적에서 전도 손실과 면적 비례 스위칭 손실이 같아지고 \(P_{min} = 2I_{rms}\sqrt{R_{on}(Q_{oss}V + \dots)f} + fE_{vi}\)다. 곧 최소 손실은 \(\sqrt{f}\)와 성능 지수 \(R_{on}\cdot Q\)의 제곱근에 비례한다. 이것이 \(R_{DS(on)}\cdot Q_G\), \(R_{DS(on)}\cdot Q_{oss}\) 같은 FOM이 소자 비교의 기준인 이유다.</div></div>
+
+    <div class="sim" id="sim-psw">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>손실 대 칩 면적·주파수: R<sub>on</sub>·Q 성능 지수의 의미</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="psw-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>소자 (650 V급, a = 1일 때 40–50 mΩ)</span><div class="seg" id="psw-dev"><button data-value="sj">Si SJ</button><button data-value="sic" class="on">SiC</button><button data-value="gan">GaN</button></div></div>
+          <div class="ctrl"><span>회로</span><div class="seg" id="psw-top"><button data-value="boost" class="on">부스트 (SiC SBD 정류)</button><button data-value="hb">하프 브리지 (역도통 정류)</button></div></div>
+          <label class="ctrl"><span><span>스위칭 주파수</span> <output id="psw-f-out"></output></span><input type="range" id="psw-f" min="4" max="6.3" step="0.01" value="5"></label>
+          <label class="ctrl"><span><span>스위치 전류 I<sub>rms</sub></span> <output id="psw-i-out"></output></span><input type="range" id="psw-i" min="1" max="30" step="0.5" value="8"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최적 면적 a<sub>opt</sub> (R<sub>on</sub>)</span><span class="v" id="psw-a">—</span></div>
+        <div class="stat"><span class="k">최소 손실 P<sub>min</sub></span><span class="v" id="psw-p">—</span></div>
+        <div class="stat"><span class="k">a = 1에서 전도 / 스위칭</span><span class="v" id="psw-split">—</span></div>
+        <div class="stat"><span class="k">처리 전력 400 V·I 대비</span><span class="v" id="psw-eta">—</span></div>
+      </div>
+      <div class="sim-note">400 V, 100 °C 상당 온저항(Si SJ 1.8배, SiC 1.3배, GaN 1.5배). a = 1의 전하: Si SJ \(Q_{oss}\) 450 nC·\(Q_G\) 90 nC(12 V)·바디 다이오드 \(Q_{rr}\) 10 µC, SiC 130 nC·60 nC(22 V)·0.1 µC, GaN 53 nC·6 nC(6 V)·0. 겹침 시간 \(t_{vi}\)(턴온+턴오프) 40 / 20 / 6 ns, \(E_{vi} = \tfrac12 V I\,t_{vi}\). 왼쪽: 면적에 따른 전도(파랑)·스위칭(빨강)·합(굵은 선). 오른쪽: 세 소자의 \(P_{min}(f)\). 해볼 것: ① 하프 브리지로 바꾸면 슈퍼정션은 \(Q_{rr}\) 10 µC 때문에 최적 손실이 폭증한다. CCM 토템폴 PFC가 Si MOSFET으로 불가능하고 GaN·SiC를 부르는 이유다. ② 주파수를 4배로 올리면 \(P_{min}\)은 약 2배(√4)가 되고 최적 칩은 절반 크기다. ③ PW-800 DC 서버 전원이 Si 200 kHz → GaN 500 kHz로 갈 수 있는 이유를 같은 그림에서 읽어 보자.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 11 -->
+  <section id="soft">
+    <h2>소프트 스위칭: ZVS와 ZCS</h2>
+    <p>하드 스위칭 손실은 전압과 전류가 겹치기 때문이고, \(C_{oss}\) 손실은 전압이 걸린 채 켜기 때문이다. 둘 다 피하는 방법이 <span class="term">영전압 스위칭</span><span class="en">(zero-voltage switching, ZVS)</span>이다. 하프 브리지에서 한 스위치를 끈 뒤 다른 스위치를 켜기 전 <span class="term">데드 타임</span><span class="en">(dead time)</span> 동안, 인덕터 전류가 스위치 노드의 커패시턴스(꺼진 소자의 \(C_{oss}\) 충전 + 켜질 소자의 \(C_{oss}\) 방전)를 옮겨 주면, 켜질 소자의 전압이 0이 되고 역도통이 시작된 다음에 게이트를 켤 수 있다. 턴온 손실과 \(C_{oss}\) 손실이 사라지고 턴오프만 남는데, 턴오프도 \(C_{oss}\)가 전압 상승을 늦춰 주는 덕분에 손실이 작다.</p>
+    <div class="formula">$$t_{tr} = \frac{2\,Q_{oss}(V)}{I_0}\ \le\ t_{dead}\quad\Leftrightarrow\quad I_0 \ge \frac{2\,Q_{oss}(V)}{t_{dead}},\qquad E_{\text{loss}}(v_{rem}) = \text{잔여 전압 } v_{rem}\text{에서의 하드 턴온 용량 손실}$$<div class="where">\(I_0\): 데드 타임 시작 때 인덕터 전류(LLC·CLLC에서는 자화 전류, 3각 전류 모드 벅에서는 음의 리플 전류). 데드 타임 안에 전이가 끝나지 않으면 남은 전압 \(v_{rem}\)에서 하드 턴온이 일어나고 그 용량 손실은 \(v_{rem}\)의 거의 제곱으로 준다(부분 ZVS). \(Q_{oss}\)가 작은 GaN은 같은 데드 타임에 훨씬 작은 전류로 ZVS를 얻으므로 자화 전류(곧 순환 전도 손실)를 줄일 수 있다.</div></div>
+    <p><span class="term">영전류 스위칭</span><span class="en">(zero-current switching, ZCS)</span>은 공진으로 전류가 0을 지날 때 끄는 방식이다. 꼬리 전류가 있는 IGBT·사이리스터에 유리하지만, \(C_{oss}\) 에너지는 여전히 턴온 때 잃기 때문에 MOSFET에서는 ZVS가 우선이다. LLC 공진 컨버터가 공진 주파수 근처에서 1차 측 ZVS와 2차 측 정류기 ZCS를 동시에 얻는다(<a href="converters.html">12장</a>).</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="ZVS 데드 타임 파형: 위·아래 게이트 신호, 스위치 노드 전압 전이, 인덕터 전류">
+        <path d="M60 210 H860" class="sw-thin"/>
+        <text x="20" y="40" class="sw-s">Q<tspan dy="3" font-size="9">H</tspan></text><path d="M60 50 H280 V70 H860" class="sw-g"/>
+        <text x="20" y="96" class="sw-s">Q<tspan dy="3" font-size="9">L</tspan></text><path d="M60 110 H420 V90 H860" class="sw-g" style="stroke:var(--text-dim)"/>
+        <rect x="280" y="24" width="140" height="190" class="sw-band"/>
+        <text x="350" y="20" class="sw-b" text-anchor="middle">데드 타임</text>
+        <text x="20" y="150" class="sw-s">v<tspan dy="3" font-size="9">sw</tspan></text>
+        <path d="M60 130 H280 C 310 132 340 170 370 196 C 380 200 386 202 392 202 H860" class="sw-v"/>
+        <text x="272" y="150" class="sw-s" text-anchor="end" style="fill:var(--m-volt)">C<tspan dy="3" font-size="9">oss</tspan><tspan dy="-3">를 I</tspan><tspan dy="3" font-size="9">0</tspan><tspan dy="-3">가 옮김 →</tspan></text>
+        <text x="430" y="196" class="sw-s" style="fill:var(--m-volt)">v ≈ 0 (역도통) → Q<tspan dy="3" font-size="9">L</tspan><tspan dy="-3"> 켬 = ZVS</tspan></text>
+        <path d="M60 175 L280 160 L420 172 L860 205" class="sw-i" style="stroke-width:1.8"/>
+        <text x="640" y="178" class="sw-s" style="fill:var(--m-amp)">i<tspan dy="3" font-size="9">L</tspan><tspan dy="-3"> (I</tspan><tspan dy="3" font-size="9">0</tspan><tspan dy="-3">에서 감소)</tspan></text>
+        <path d="M280 130 C 320 134 360 150 420 160 L 430 202" class="sw-dash" style="stroke:var(--m-heat)"/>
+        <text x="440" y="150" class="sw-s" style="fill:var(--m-heat)">I<tspan dy="3" font-size="9">0</tspan><tspan dy="-3"> 부족 → v</tspan><tspan dy="3" font-size="9">rem</tspan><tspan dy="-3">에서 하드 턴온</tspan></text>
+      </svg>
+      <figcaption><b>그림 10-8.</b> ZVS 데드 타임. 위 스위치 \(Q_H\)가 꺼진 뒤 인덕터 전류 \(I_0\)가 스위치 노드 커패시턴스를 옮겨 \(v_{sw}\)가 0에 닿으면 아래 스위치 \(Q_L\)이 역도통하고, 그 뒤에 게이트를 켠다. 전류가 부족하면(점선) 데드 타임 끝에 잔여 전압 \(v_{rem}\)이 남아 그만큼 하드 턴온 손실이 생긴다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-zvs">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>데드 타임 ZVS 전이: 전류·데드 타임·Q<sub>oss</sub></h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="zvs-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>소자 (650 V급)</span><div class="seg" id="zvs-dev"><button data-value="sj">Si SJ</button><button data-value="sic">SiC</button><button data-value="gan" class="on">GaN</button></div></div>
+          <label class="ctrl"><span><span>전이 전류 I<sub>0</sub></span> <output id="zvs-i-out"></output></span><input type="range" id="zvs-i" min="0.2" max="20" step="0.1" value="3"></label>
+          <label class="ctrl"><span><span>데드 타임</span> <output id="zvs-t-out"></output></span><input type="range" id="zvs-t" min="5" max="300" step="1" value="50"></label>
+          <label class="ctrl"><span><span>버스 전압</span> <output id="zvs-v-out"></output></span><input type="range" id="zvs-v" min="50" max="600" step="10" value="400"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">전이 시간 t<sub>tr</sub></span><span class="v" id="zvs-ttr">—</span></div>
+        <div class="stat"><span class="k">잔여 전압 v<sub>rem</sub></span><span class="v" id="zvs-vr">—</span></div>
+        <div class="stat"><span class="k">ZVS 최소 전류 2Q<sub>oss</sub>/t<sub>dead</sub></span><span class="v" id="zvs-imin">—</span></div>
+        <div class="stat"><span class="k">턴온 용량 손실 / 하드 대비</span><span class="v" id="zvs-e">—</span></div>
+        <div class="stat"><span class="k">P (200 kHz)</span><span class="v" id="zvs-p">—</span></div>
+      </div>
+      <div class="sim-note">스위치 노드는 \(dv/dt = -I_0/[C_{oss}(v) + C_{oss}(V-v)]\)로 움직이므로 전하 균형 \(I_0 t = Q_{oss}(V) - Q_{oss}(v) + Q_{oss}(V-v)\)를 이분법으로 풀어 \(v(t)\)와 잔여 전압을 구한다(두 소자의 비선형 \(C_{oss}\)는 9절 모델, 0.5 V 간격 적분표). 데드 타임이 끝날 때 남은 전압 \(v_{rem}\)에서 켜면 손실 \(E_{oss,L}(v_{rem}) + V[Q_{oss,H}(V) - Q_{oss,H}(V-v_{rem})] - [E_{oss,H}(V) - E_{oss,H}(V-v_{rem})]\)을 잃는다. 위: 데드 타임 동안 \(v_{sw}(t)\), 아래: 데드 타임에 따른 손실 곡선(현재 전류). 해볼 것: ① GaN은 400 V·50 ns에서 약 2 A면 ZVS가 되지만, 슈퍼정션은 약 18 A가 필요하다. ② 슈퍼정션은 전압이 수십 V 아래로 내려온 뒤 \(C_{oss}\)가 폭증해 전이 끝이 매우 느리다. ③ 전류가 조금 부족한 부분 ZVS도 손실은 크게 준다(\(v_{rem}\)이 절반이면 손실은 약 1/4 이하).</div>
+    </div>
+    <div class="callout fab"><strong>OB 충전기 CLLC와 GC 충전기 ACF의 ZVS</strong>PW-800 OB의 2단 CLLC(1200 V SiC, 약 200 kHz)는 자화 전류로 1차 측 ZVS를 얻는다. 800 V에서 SiC의 \(Q_{oss}\)가 크기 때문에 데드 타임 약 100–200 ns와 자화 전류 수 A가 필요하고, 이 순환 전류가 경부하 효율을 정한다. GC 65 W 충전기는 능동 클램프 플라이백(ACF)으로 약 300 kHz에서 650 V GaN(150 mΩ급, \(Q_{oss}\) 약 15 nC)을 ZVS로 켠다. 하드 스위칭이라면 \(C_{oss}\) 손실만 \(f\,Q_{oss}V\) ≈ 300 kHz × 15 nC × 400 V ≈ 1.8 W로 65 W 출력의 약 3 %다. 이 손실을 없앤 것이 93 % 효율과 30 W/in³ 밀도의 열쇠다.</div>
+  </section>
+
+  <!-- ============================================================ 12 -->
+  <section id="measure">
+    <h2>측정의 함정: 프로브 지연과 대역폭</h2>
+    <p>스위칭 에너지는 전압과 전류의 <strong>곱</strong>을 적분하므로 두 파형의 시간 정렬에 민감하다. 전압 프로브와 전류 센서(동축 션트, 로고스키 코일, 전류 프로브)는 케이블 길이와 내부 회로가 달라 수 ns의 <span class="term">프로브 지연 차이</span><span class="en">(probe skew)</span>를 가진다. 전류 상승과 전압 하강이 수십 ns에 걸치는 IGBT에서는 1 ns가 무시할 만하지만, 전체 전이가 5 ns 안팎인 GaN에서는 1 ns 지연이 \(E_{on}\)을 수십 % 틀리게 만든다. 측정 전에 디스큐 지그(같은 신호를 두 프로브에 동시에 넣는 고정 장치)로 지연을 맞추는 이유다.</p>
+    <div class="formula">$$t_r \approx \frac{0.35}{BW},\qquad \Delta E_{on} \approx -\,V_{dc}\,I_L\,\Delta t\quad(\Delta t \gt 0:\ \text{전류가 늦게 보임})$$<div class="where">대역폭 \(BW\)인 측정 체인의 상승 시간은 약 \(0.35/BW\)다. 100 MHz 프로브는 3.5 ns보다 빠른 에지를 둔하게 만든다. 전류가 오르는 동안 전압은 거의 \(V_{dc}\)이므로, 전류 파형을 \(\Delta t\)만큼 늦게 보면 겹침 적분이 약 \(V_{dc}I_L\Delta t\)만큼 줄어든다. 이 오차는 소자 속도와 무관한 절대 오차라서 빠른 소자일수록 상대 오차가 커진다. 400 V·20 A·1 ns면 8 µJ로, GaN의 \(E_{on}\) 수십 µJ에 견주면 매우 크다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 220" role="img" aria-label="이중 펄스 측정 셋업: 고대역 차동 전압 프로브, 동축 션트, 오실로스코프, 지연 차이">
+        <rect x="30" y="50" width="200" height="130" rx="10" class="sw-box"/><text x="130" y="44" class="sw-b" text-anchor="middle">DUT 보드</text>
+        <rect x="100" y="80" width="60" height="40" rx="4" class="m-gan"/><text x="130" y="104" class="sw-s" text-anchor="middle" style="fill:#fff">DUT</text>
+        <rect x="100" y="140" width="60" height="22" rx="4" class="m-metal"/><text x="130" y="155" class="sw-s" text-anchor="middle" style="fill:#fff">동축 션트</text>
+        <path d="M160 100 H330" class="sw-v"/><text x="245" y="92" class="sw-s" text-anchor="middle" style="fill:var(--m-volt)">전압 프로브 (BW, 지연 t<tspan dy="3" font-size="9">v</tspan><tspan dy="-3">)</tspan></text>
+        <path d="M160 151 H330" class="sw-i"/><text x="245" y="172" class="sw-s" text-anchor="middle" style="fill:var(--m-amp)">전류 센서 (BW, 지연 t<tspan dy="3" font-size="9">i</tspan><tspan dy="-3">)</tspan></text>
+        <rect x="330" y="70" width="130" height="110" rx="8" class="f-acc-soft"/><text x="395" y="120" class="sw-b" text-anchor="middle">오실로스코프</text><text x="395" y="140" class="sw-s" text-anchor="middle">p = v·i 계산</text>
+        <path d="M500 190 H860 M500 190 V30" class="sw-thin"/>
+        <path d="M500 60 H620 C 640 62 660 150 680 180 H860" class="sw-v"/>
+        <path d="M500 180 H560 C 580 176 600 70 620 64 H860" class="sw-i"/>
+        <path d="M500 180 H574 C 594 176 614 70 634 64 H860" class="sw-i" style="stroke-dasharray:5 4;opacity:.7"/>
+        <path d="M560 40 H574" class="sw-thin"/><text x="566" y="34" class="sw-s" text-anchor="middle">Δt</text>
+        <text x="700" y="56" class="sw-s" style="fill:var(--m-volt)">v<tspan dy="3" font-size="9">DS</tspan></text><text x="700" y="80" class="sw-s" style="fill:var(--m-amp)">i<tspan dy="3" font-size="9">D</tspan><tspan dy="-3"> (실선 참값, 점선 지연)</tspan></text>
+        <text x="680" y="140" class="sw-s">전류가 늦게 보이면</text><text x="680" y="156" class="sw-s">겹침이 줄어 E<tspan dy="3" font-size="9">on</tspan><tspan dy="-3">을 과소평가</tspan></text>
+      </svg>
+      <figcaption><b>그림 10-9.</b> 스위칭 측정 셋업과 지연 오차. 전류 센서 쪽 지연이 길면 전압·전류 겹침이 실제보다 작게 보여 \(E_{on}\)을 과소평가하고, 반대면 과대평가한다. 전압 프로브 접지 리드의 인덕턴스와 션트의 삽입 인덕턴스도 측정 루프에 링잉을 더한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-skew">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>프로브 지연·대역폭이 만드는 E<sub>on</sub> 오차</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="skew-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>소자 속도</span><div class="seg" id="skew-dev"><button data-value="igbt">IGBT 모듈</button><button data-value="sic">SiC 모듈</button><button data-value="gan" class="on">GaN 디스크리트</button></div></div>
+          <label class="ctrl"><span><span>전류 센서 지연 − 전압 지연 Δt</span> <output id="skew-dt-out"></output></span><input type="range" id="skew-dt" min="-5" max="5" step="0.1" value="1"></label>
+          <label class="ctrl"><span><span>전압 프로브 대역폭</span> <output id="skew-bv-out"></output></span><input type="range" id="skew-bv" min="7.3" max="9.3" step="0.01" value="8.7"></label>
+          <label class="ctrl"><span><span>전류 센서 대역폭</span> <output id="skew-bi-out"></output></span><input type="range" id="skew-bi" min="7.3" max="9.3" step="0.01" value="8.3"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">참 E<sub>on</sub></span><span class="v" id="skew-et">—</span></div>
+        <div class="stat"><span class="k">측정 E<sub>on</sub></span><span class="v" id="skew-em">—</span></div>
+        <div class="stat"><span class="k">오차</span><span class="v" id="skew-err">—</span></div>
+        <div class="stat"><span class="k">측정 상승 시간 (v / i)</span><span class="v" id="skew-tr">—</span></div>
+      </div>
+      <div class="sim-note">참 파형: 전류가 \(t_{ri}\) 동안 매끈하게(코사인 에지) 오른 뒤 전압이 \(t_{fv}\) 동안 떨어진다. IGBT 모듈 800 V·400 A(\(t_{ri}\) 120 ns, \(t_{fv}\) 150 ns), SiC 모듈 800 V·400 A(50, 30 ns), GaN 400 V·20 A(2, 4 ns). 측정 파형은 지연을 준 뒤 1차 저역 통과(시정수 \(1/2\pi BW\))를 거친다. 두 곱의 적분을 전이 전후(필터 꼬리 포함)를 모두 덮는 같은 창에서 비교한다. 실선은 참값, 점선은 측정값, 빨간 면적은 측정된 p(t). 해볼 것: ① GaN에서 Δt = +1 ns면 오차가 약 −30 %(대역폭이 넉넉해도), SiC 모듈은 약 −3 %, IGBT는 1 % 미만. ② Δt = 0이어도 전류 센서 대역폭이 200 MHz면 GaN은 약 −15 %, 20 MHz면 약 −80 % 틀린다. ③ 지연과 대역폭 오차는 서로 상쇄될 수도 있어서 "그럴듯한 값"이 맞는 값이라는 보장이 없다.</div>
+    </div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>클램프된 유도성 부하의 하드 스위칭은 \(V_{dc}\cdot I_L\) 꼭짓점을 지난다. 직선 근사 \(E \approx \tfrac12 V I(t_{ri}+t_{fv})\), 손실 \(P_{sw} = f(E_{on}+E_{off}+E_{rr})\).</li>
+      <li>이중 펄스 시험은 첫 펄스로 전류를 만들고 그 끝(턴오프)과 둘째 펄스 시작(턴온, 역회복 포함)을 같은 전류·온도에서 잰다. PW-800 800 V·400 A·150 °C: SiC 약 12/8/1 mJ, IGBT 약 40/45/25 mJ.</li>
+      <li>턴온 4구간: 지연 \(t_1\) → 전류 상승 \(t_2\)(\(V_{th}\to V_{pl}\)) → 밀러 플래토 \(t_3 = Q_{gd}R_G/(V_{dr}-V_{pl})\) → 완전 충전. 손실은 ②③, 턴오프는 역순이며 IGBT는 꼬리 전류가 더해진다.</li>
+      <li>턴오프 오버슈트 \(\Delta V \approx L_\sigma\,di/dt\)(15 nH × 5–10 A/ns = 75–150 V), 링잉 \(f = 1/2\pi\sqrt{L_\sigma C_{oss}}\), 감쇠 \(\zeta = (R/2)\sqrt{C/L}\).</li>
+      <li>공통 소스 인덕턴스는 게이트 시정수를 \(R_GC_{iss} + g_{fs}L_s\)로 늘려 빠른 소자의 \(di/dt\)를 묶는다. 켈빈 소스로 끊는다.</li>
+      <li>\(R_G\)↑ → 손실↑·오버슈트↓. "정격 여유 안에서 가장 빠르게"가 목표이고, \(L_\sigma\)를 줄여야 그 범위가 넓어진다.</li>
+      <li>하드 턴온 용량 손실은 \(Q_{oss}V\)로 \(R_G\)와 무관하다. 칩 면적 최적에서 \(P_{min} \propto \sqrt{f\cdot R_{on}Q}\), 그래서 \(R_{on}\cdot Q\) FOM이 중요하다.</li>
+      <li>ZVS: 데드 타임 안에 \(I_0 \ge 2Q_{oss}/t_{dead}\)로 노드를 옮기면 턴온·\(C_{oss}\) 손실이 사라진다. 측정에서는 프로브 지연 \(\Delta t\)가 \(VI\Delta t\)급 오차를 만들어 빠른 소자일수록 치명적이다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 클램프된 유도성 부하에서 800 V·400 A를 켜는데 전류 상승 60 ns, 전압 하강 40 ns가 걸렸다. 직선 근사 \(E_{on}\)에 가장 가까운 값은?</p><div class="opts">
+        <button class="opt">약 5 mJ</button>
+        <button class="opt" data-correct>약 16 mJ</button>
+        <button class="opt">약 32 mJ</button>
+        <button class="opt">약 5.3 mJ (저항성 부하 공식)</button>
+      </div><div class="quiz-exp">\(E_{on} \approx \tfrac12 \cdot 800 \cdot 400 \cdot (60+40)\,\text{ns} = 16\) mJ. 유도성 부하에서는 전류가 오르는 동안 전압이 \(V_{dc}\)에 머물러 계수가 1/2이다. 1/6은 전압과 전류가 함께 움직이는 저항성 부하의 값이다.</div></div>
+
+      <div class="quiz-q"><p>2. 밀러 플래토 구간의 길이를 직접 정하는 조합은?</p><div class="opts">
+        <button class="opt">\(C_{gs}\)와 \(V_{th}\)</button>
+        <button class="opt" data-correct>밀러 전하 \(Q_{gd}\)와 게이트 전류 \((V_{dr}-V_{pl})/R_G\)</button>
+        <button class="opt">\(L_\sigma\)와 \(C_{oss}\)</button>
+        <button class="opt">다이오드 \(Q_{rr}\)만</button>
+      </div><div class="quiz-exp">플래토 동안 \(v_{GS}\)는 \(V_{pl}\)에 묶여 게이트 전류가 모두 \(C_{gd}\)를 충·방전한다. \(t_3 = Q_{gd}R_G/(V_{dr}-V_{pl})\)이다. 그래서 전류가 커서 \(V_{pl}\)이 오르면 게이트 전류가 줄어 전압 하강이 느려진다.</div></div>
+
+      <div class="quiz-q"><p>3. PW-800 TI의 루프 인덕턴스 15 nH에서 턴오프 di/dt가 8 A/ns, 실효 \(C_{oss}\)가 1.5 nF일 때 오버슈트와 링잉 주파수는?</p><div class="opts">
+        <button class="opt">약 12 V, 약 330 MHz</button>
+        <button class="opt" data-correct>약 120 V, 약 33 MHz</button>
+        <button class="opt">약 1.2 kV, 약 3.3 MHz</button>
+        <button class="opt">약 120 V, 약 330 kHz</button>
+      </div><div class="quiz-exp">\(\Delta V = 15\,\text{nH}\times 8\,\text{A/ns} = 120\) V. \(f = 1/(2\pi\sqrt{15\,\text{nH}\cdot 1.5\,\text{nF}}) \approx 1/(2\pi\cdot 4.74\,\text{ns}) \approx 33.5\) MHz. 1200 V 소자에 800 V + 120 V + 링잉이 걸린다.</div></div>
+
+      <div class="quiz-q"><p>4. 3핀 패키지의 GaN 소자에서 \(R_G\)를 아무리 줄여도 턴온 di/dt가 일정 값 이상 빨라지지 않았다. 가장 그럴듯한 원인과 대책은?</p><div class="opts">
+        <button class="opt">게이트 산화막 커패시턴스 한계, 대책은 구동 전압 상향</button>
+        <button class="opt" data-correct>공통 소스 인덕턴스 \(L_s\,di/dt\)가 구동 전압을 깎는다. 켈빈 소스 패키지로 게이트 귀환을 분리한다</button>
+        <button class="opt">\(C_{oss}\) 손실, 대책은 ZVS</button>
+        <button class="opt">역회복 전하, 대책은 쇼트키 다이오드 병렬</button>
+      </div><div class="quiz-exp">\(\tau_{eff} = R_GC_{iss} + g_{fs}L_s\)에서 \(R_G \to 0\)이면 \(di/dt \to (V_{dr}-V_{pl})/L_s\)로 포화한다. GaN은 \(C_{iss}\)가 작고 \(g_{fs}\)가 커서 \(L_s\) 1–2 nH만으로도 지배적이다. 4핀·켈빈 단자로 게이트 루프에서 \(L_s\)를 빼야 한다.</div></div>
+
+      <div class="quiz-q"><p>5. 400 V 하드 스위칭 하프 브리지에서 같은 두 소자의 \(Q_{oss}\)(400 V)가 각각 130 nC다. 100 kHz에서 \(C_{oss}\) 때문에 매 턴온 생기는 손실을 전력으로 쓰면?</p><div class="opts">
+        <button class="opt">약 0.5 W (\(E_{oss}\)만)</button>
+        <button class="opt" data-correct>약 5.2 W (\(f\,Q_{oss}V\))</button>
+        <button class="opt">약 10 W (\(2f\,Q_{oss}V\))</button>
+        <button class="opt">\(R_G\)를 키우면 0이 된다</button>
+      </div><div class="quiz-exp">DUT 자신의 \(E_{oss}\)와, 상대 소자를 충전하며 잃는 \(Q_{oss}V - E_{oss}\)의 합이 \(Q_{oss}V\) = 130 nC × 400 V = 52 µJ. 100 kHz면 5.2 W다. 이 손실은 켜는 속도와 무관하므로 \(R_G\)로 바꿀 수 없고, ZVS로만 없앤다.</div></div>
+
+      <div class="quiz-q"><p>6. 칩 면적을 최적으로 고른 설계에서 스위칭 주파수를 4배 올리면 최소 소자 손실은 대략?</p><div class="opts">
+        <button class="opt">그대로</button>
+        <button class="opt" data-correct>약 2배 (√4), 최적 칩은 약 절반</button>
+        <button class="opt">약 4배, 최적 칩은 그대로</button>
+        <button class="opt">약 16배</button>
+      </div><div class="quiz-exp">\(P(a) = I^2R/a + f\,a\,E_c\)의 최소는 \(2I\sqrt{R E_c f}\)이고 \(a_{opt} = \sqrt{I^2R/(fE_c)}\)다. 주파수 4배 → 손실 2배, 최적 면적 1/2배. 겹침 손실 \(fE_{vi}\)가 크면 이보다 조금 더 는다.</div></div>
+
+      <div class="quiz-q"><p>7. GaN 소자를 400 V·20 A에서 이중 펄스로 쟀더니 \(E_{on}\)이 이론보다 25 % 작게 나왔다. 가장 먼저 의심할 것은?</p><div class="opts">
+        <button class="opt">GaN의 역회복 전하</button>
+        <button class="opt">핫 플레이트 온도</button>
+        <button class="opt" data-correct>전류 센서와 전압 프로브의 지연 차이(디스큐)와 센서 대역폭</button>
+        <button class="opt">DC 링크 커패시터 용량</button>
+      </div><div class="quiz-exp">GaN의 전이 시간은 수 ns라 1 ns의 지연 차이도 겹침 면적을 크게 바꾼다(오차 \(\sim VI\Delta t\) = 8 µJ/ns). 전류가 늦게 보이면 과소평가된다. 디스큐 지그로 맞추고, 수백 MHz–GHz 대역의 동축 션트를 쓴다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const font = (px, mono) => px + "px " + getComputedStyle(document.body).getPropertyValue(mono ? "--mono" : "--font");
+  const fmtE = (J) => !isFinite(J) ? "—" : Math.abs(J) < 1e-12 ? "0" : Math.abs(J) >= 1e-3 ? (J * 1e3).toPrecision(3) + " mJ" : Math.abs(J) >= 1e-6 ? (J * 1e6).toPrecision(3) + " µJ" : (J * 1e9).toPrecision(3) + " nJ";
+  const fmtT = (s) => !isFinite(s) ? "—" : s >= 1e-6 ? (s * 1e6).toPrecision(3) + " µs" : (s * 1e9).toPrecision(3) + " ns";
+  const fmtF = (f) => f >= 1e6 ? (f / 1e6).toPrecision(3) + " MHz" : (f / 1e3).toPrecision(3) + " kHz";
+  const fmtP = (W) => !isFinite(W) ? "—" : Math.abs(W) < 1e-9 ? "0 W" : W >= 1000 ? (W / 1000).toPrecision(3) + " kW" : W >= 1 ? W.toPrecision(3) + " W" : (W * 1e3).toPrecision(3) + " mW";
+  const setCls = (id, c) => { const el = $(id); if (el) el.className = "v" + (c ? " " + c : ""); };
+  /** 오른쪽 축: box 안에 (x,y) 시리즈를 별도 y 범위로 그린다 */
+  function rightAxis(ctx, ch, xr, yr, series, label, fmt) {
+    const P = PW.palette(), b = ch.box;
+    const Y = (v) => b.y + b.h - ((v - yr[0]) / (yr[1] - yr[0])) * b.h;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(b.x, b.y - 2, b.w + 2, b.h + 4); ctx.clip();
+    series.forEach((s) => {
+      ctx.strokeStyle = s.color; ctx.lineWidth = s.width || 2; ctx.setLineDash(s.dash || []);
+      ctx.beginPath(); let st = false;
+      s.data.forEach(([x, y]) => { if (!isFinite(y)) { st = false; return; } const px = ch.X(x), py = Y(y); st ? ctx.lineTo(px, py) : ctx.moveTo(px, py); st = true; });
+      ctx.stroke(); ctx.setLineDash([]);
+    });
+    ctx.restore();
+    ctx.save(); ctx.font = font(11, true); ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    const raw = (yr[1] - yr[0]) / 4, mg = Math.pow(10, Math.floor(Math.log10(raw))), st = [1, 2, 2.5, 5, 10].map((m) => m * mg).find((x) => x >= raw) || raw;
+    for (let v = Math.ceil(yr[0] / st - 1e-9) * st; v <= yr[1] + 1e-9 * st; v += st) ctx.fillText(fmt ? fmt(Math.abs(v) < st * 1e-6 ? 0 : v) : PW.fmt(v, 3), b.x + b.w + 5, Y(v));
+    if (label) { ctx.font = font(11); ctx.textAlign = "right"; ctx.textBaseline = "top"; ctx.fillText(label, b.x + b.w - 2, b.y + 2); }
+    ctx.restore();
+    return Y;
+  }
+  const niceMax = (x) => { if (!(x > 0)) return 1; const e = Math.pow(10, Math.floor(Math.log10(x))); const m = x / e; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * e; };
+
+  /* ================================================================ 1. 턴온 4구간 */
+  (function () {
+    const cvEl = $("ton-cv"); if (!cvEl) return;
+    const Cgs = 1.8e-9, CgdLo = 300e-12, Vk = 40, Vth = 3, Vdr = 18, Voff = -4;
+    let M = null;
+    const gR = PW.range("ton-rg", (v) => v + " Ω", upd), gI = PW.range("ton-i", (v) => v + " A", upd), gV = PW.range("ton-v", (v) => v + " V", upd),
+      gG = PW.range("ton-g", (v) => v + " S", upd), gC = PW.range("ton-cgd", (v) => v + " pF", upd);
+    function calc() {
+      const R = gR(), I = gI(), V = gV(), gfs = gG(), CgdHi = gC() * 1e-12;
+      let Vpl = Vth + I / gfs, sat = false; if (Vpl > Vdr - 1) { Vpl = Vdr - 1; sat = true; }
+      const tau1 = R * (Cgs + CgdHi), tau4 = R * (Cgs + CgdLo);
+      const t1 = tau1 * Math.log((Vdr - Voff) / (Vdr - Vth)), t2 = tau1 * Math.log((Vdr - Vth) / (Vdr - Vpl));
+      const Ig = (Vdr - Vpl) / R;
+      const t3a = CgdHi * Math.max(0, V - Vk) / Ig, t3b = CgdLo * Math.min(V, Vk) / Ig, t3 = t3a + t3b;
+      const t4 = tau4 * Math.log(10);
+      const T = (t1 + t2 + t3 + t4) * 1.08, N = 700, dt = T / N;
+      const Iact = sat ? gfs * (Vpl - Vth) : I;
+      const w = []; let E = 0;
+      for (let k = 0; k <= N; k++) {
+        const t = k * dt; let vg, id, vd;
+        if (t < t1 + t2) vg = Vdr - (Vdr - Voff) * Math.exp(-t / tau1);
+        else if (t < t1 + t2 + t3) vg = Vpl;
+        else vg = Vdr - (Vdr - Vpl) * Math.exp(-(t - t1 - t2 - t3) / tau4);
+        id = t < t1 ? 0 : Math.min(Iact, gfs * Math.max(0, vg - Vth));
+        if (t < t1 + t2) vd = V;
+        else if (t < t1 + t2 + t3a) vd = V - (V - Math.min(V, Vk)) * (t - t1 - t2) / Math.max(t3a, 1e-15);
+        else if (t < t1 + t2 + t3) vd = Math.min(V, Vk) * (1 - (t - t1 - t2 - t3a) / Math.max(t3b, 1e-15));
+        else vd = 0;
+        vd = Math.max(0, vd);
+        const p = vd * id; E += p * dt;
+        w.push([t, vg, id, vd, p]);
+      }
+      const Q1 = (Cgs + CgdHi) * (Vpl - Voff), Qgd = CgdHi * Math.max(0, V - Vk) + CgdLo * Math.min(V, Vk), Q3 = (Cgs + CgdLo) * (Vdr - Vpl);
+      M = { R, I, V, Vpl, sat, t1, t2, t3, t4, Ig, Q1, Qgd, Q3, w, E, T, Iact, didt: Iact / Math.max(t2, 1e-15), dvdt: V / Math.max(t3, 1e-15) };
+    }
+    const cv = PW.canvas(cvEl, (ctx, w, h) => {
+      if (!M) return; const P = PW.palette();
+      const h1 = Math.round(h * 0.6), tu = M.T > 2e-6 ? 1e6 : 1e9, tl = tu === 1e6 ? "µs" : "ns";
+      const x = [0, M.T * tu];
+      const norm = (k, s) => M.w.map((r) => [r[0] * tu, r[k] / s]);
+      const ch = PW.chart(ctx, { x: 52, y: 14, w: w - 70, h: h1 - 50 }, { x, y: [-0.05, 1.2], xLabel: "시간 (" + tl + ")", yLabel: "정규화",
+        bands: [{ x0: M.t1 * tu, x1: (M.t1 + M.t2) * tu, color: "color-mix(in srgb, " + P.amp + " 10%, transparent)" }, { x0: (M.t1 + M.t2) * tu, x1: (M.t1 + M.t2 + M.t3) * tu, color: "color-mix(in srgb, " + P.volt + " 10%, transparent)" }],
+        series: [{ data: norm(4, M.V * M.I), color: P.heat, width: 1.5, fill: "color-mix(in srgb, " + P.heat + " 22%, transparent)" }, { data: norm(1, Vdr), color: P.green }, { data: norm(2, M.I), color: P.amp }, { data: norm(3, M.V), color: P.volt }] });
+      ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.textBaseline = "top";
+      const mids = [[M.t1 / 2, "①"], [M.t1 + M.t2 / 2, "②"], [M.t1 + M.t2 + M.t3 / 2, "③"], [M.t1 + M.t2 + M.t3 + M.t4 / 2, "④"]];
+      mids.forEach(([t, l]) => ctx.fillText(l, ch.X(t * tu), 16));
+      ctx.textAlign = "right"; ctx.fillText("v_GS/18 V · i_D/I_L · v_DS/V_dc · p/(V·I)", w - 22, 30);
+      // gate charge
+      const Qt = M.Q1 + M.Qgd + M.Q3, qd = [];
+      for (let k = 0; k <= 60; k++) { const q = M.Q1 * k / 60; qd.push([q * 1e9, Voff + q / (M.Q1) * (M.Vpl - Voff)]); }
+      qd.push([(M.Q1 + M.Qgd) * 1e9, M.Vpl]);
+      for (let k = 1; k <= 60; k++) { const q = M.Q3 * k / 60; qd.push([(M.Q1 + M.Qgd + q) * 1e9, M.Vpl + (Vdr - M.Vpl) * k / 60]); }
+      PW.chart(ctx, { x: 52, y: h1 + 8, w: w - 70, h: h - h1 - 48 }, { x: [0, niceMax(Qt * 1e9 * 1.05)], y: [Voff - 1, Vdr + 2], xLabel: "게이트 전하 Q_G (nC)", yLabel: "v_GS (V)",
+        bands: [{ x0: M.Q1 * 1e9, x1: (M.Q1 + M.Qgd) * 1e9, color: "color-mix(in srgb, " + P.volt + " 12%, transparent)" }],
+        series: [{ data: qd, color: P.green, width: 2.4 }], hlines: [{ y: M.Vpl, label: "V_pl " + M.Vpl.toFixed(1) + " V" }, { y: Vth, label: "V_th" }] });
+    }, { aspect: 0.82, maxHeight: 500, minHeight: 380 });
+    function upd() {
+      calc(); cv.redraw();
+      PW.stat("ton-t12", fmtT(M.t1) + " / " + fmtT(M.t2));
+      PW.stat("ton-t34", fmtT(M.t3) + " / " + fmtT(M.t4));
+      PW.stat("ton-vpl", M.Vpl.toFixed(1) + " V / " + M.Ig.toFixed(2) + " A" + (M.sat ? " (포화)" : ""));
+      PW.stat("ton-rate", (M.didt / 1e9).toFixed(2) + " A/ns · " + (M.dvdt / 1e9).toFixed(1) + " V/ns");
+      PW.stat("ton-qg", ((M.Q1 + M.Qgd + M.Q3) * 1e9).toFixed(1) + " nC (Q_gd " + (M.Qgd * 1e9).toFixed(1) + ")");
+      PW.stat("ton-e", fmtE(M.E));
+      setCls("ton-vpl", M.sat ? "bad" : "");
+    }
+    upd();
+  })();
+
+  /* ================================================================ 이중 펄스 엔진 (5·8절 공용) */
+  const DEV = {
+    sic:  { name: "SiC 모듈", Vth: 2.8, K: 9, Von: 18, Voff: -4, Rgi: 1.0, Cgs: 26e-9, Cgd0: 1.2e-9, Vgd: 40, Cgdmin: 60e-12, Cds0: 8e-9, Vds: 8, Ron: 2.9e-3, V0: 0, VF: 3.0, Cj0: 8e-9, tauD: 6e-9, tauS: 25e-9, Rl: 0.12, tail: 0, tauT: 1, Vbr: 1550, rating: 1200, win: 500e-9, Vdc: 800, I: 400, L: 15e-9, Rg: 2.5, Imax: 600, Vmax: 900, f: 10e3 },
+    igbt: { name: "Si IGBT 모듈", Vth: 6.0, K: 63, Von: 15, Voff: -8, Rgi: 3.5, Cgs: 72e-9, Cgd0: 0.8e-9, Vgd: 35, Cgdmin: 300e-12, Cds0: 10e-9, Vds: 10, Ron: 2.0e-3, V0: 0.9, VF: 1.5, Cj0: 8e-9, tauD: 16e-9, tauS: 550e-9, Rl: 0.08, tail: 0.14, tauT: 300e-9, Vbr: 1450, rating: 1200, win: 2000e-9, Vdc: 800, I: 400, L: 15e-9, Rg: 2.5, Imax: 600, Vmax: 900, f: 8e3 },
+    gan:  { name: "650 V GaN", Vth: 1.7, K: 12, Von: 6, Voff: 0, Rgi: 0.5, Cgs: 0.45e-9, Cgd0: 40e-12, Vgd: 10, Cgdmin: 1e-12, Cds0: 0.8e-9, Vds: 5, Ron: 75e-3, V0: 0, VF: 2.5, Cj0: 0.8e-9, tauD: 0, tauS: 1e-9, Rl: 0.3, tail: 0, tauT: 1, Vbr: 1000, rating: 650, win: 60e-9, Vdc: 400, I: 20, L: 3e-9, Rg: 5, Imax: 40, Vmax: 600, f: 65e3 },
+  };
+  const cgdF = (d, v) => d.Cgdmin + (d.Cgd0 - d.Cgdmin) / (1 + Math.max(0, v) / d.Vgd);
+  const csqrt = (C0, Vk, v) => C0 / Math.sqrt(1 + Math.max(0, v) / Vk);
+  /** 한 스위칭 이벤트를 시간 적분. mode 'on'|'off'. 반환: 에너지·피크·10–90 % 속도·다운샘플 파형 */
+  function dptRun(d, p, mode, NS, NOUT) {
+    const Vdc = p.Vdc, IL = p.I, L = p.L, R = p.Rg + d.Rgi, Rl = d.Rl;
+    const win = d.win * Math.max(1, (p.Rg + d.Rgi) / (d.Rg + d.Rgi)) * Math.max(1, Math.sqrt(p.L / d.L) / 1.5);
+    const dt = win / NS;
+    let g, vds, id, vk, q = 0, dm, tailOn = false, t0 = 0, irr0 = 0, tB = 0, aval = false;
+    const vdrv = mode === "on" ? d.Von : d.Voff;
+    if (mode === "on") { g = d.Voff; vds = Vdc + d.VF; id = 0; vk = -d.VF; q = d.tauD * IL; dm = "A"; }
+    else { g = d.Von; id = IL; vds = d.V0 + IL * d.Ron; vk = Vdc - vds - Rl * IL; dm = "B"; }
+    let E = 0, Err = 0, vpk = -1e9, ipk = -1e9, vlo = 1e9;
+    const ti = {}, tv = {}, out = [], every = Math.max(1, Math.floor(NS / NOUT));
+    for (let k = 0; k < NS; k++) {
+      const t = k * dt;
+      const idn = id + dt * (Vdc - vk - vds - Rl * id) / L;
+      const iff = IL - idn;
+      if (dm === "A") {
+        if (d.tauD > 0) { q += dt * (iff - q / d.tauD); if (q <= 0 && iff < 0) { dm = "B"; irr0 = iff; tB = t; q = 0; } }
+        else if (iff < 0) { dm = "B"; irr0 = 0; tB = t; }
+      } else {
+        const itl = irr0 * Math.exp(-(t - tB) / d.tauS);
+        Err += Math.max(0, vk) * (-itl) * dt;
+        vk += dt * (itl - iff) / csqrt(d.Cj0, d.Vds, vk);
+        if (vk < -d.VF) { vk = -d.VF; dm = "A"; q = 0; }
+      }
+      const a = d.Cgs / dt, b = cgdF(d, vds - g) / dt, c = csqrt(d.Cds0, d.Vds, vds) / dt;
+      const ov = Math.max(0, g - d.Vth);
+      let Is = d.K * ov * ov;
+      if (d.tail > 0 && mode === "off") { if (!tailOn && vds > Vdc) { tailOn = true; t0 = t; } if (tailOn) Is = Math.max(Is, d.tail * IL * Math.exp(-(t - t0) / d.tauT)); }
+      const G = ov > 0 ? (ov / (d.Von - d.Vth)) / d.Ron : 0;
+      const A11 = 1 / R + a + b, A12 = -b, B1 = (vdrv - g) / R, A21 = -b;
+      let A22 = b + c + G, B2 = idn - G * (vds - d.V0);
+      let det = A11 * A22 - A12 * A21, dg = (B1 * A22 - A12 * B2) / det, dd = (A11 * B2 - A21 * B1) / det;
+      if (!(G > 0) || G * (vds + dd - d.V0) > Is || vds + dd < d.V0) {
+        A22 = b + c; B2 = idn - Is; det = A11 * A22 - A12 * A21;
+        dg = (B1 * A22 - A12 * B2) / det; dd = (A11 * B2 - A21 * B1) / det;
+      }
+      let vn = Math.max(-3, vds + dd); if (vn > d.Vbr) { vn = d.Vbr; aval = true; }
+      g += dg; vds = vn; id = idn;
+      const P = vds * id; E += P * dt;
+      if (vds > vpk) vpk = vds; if (id > ipk) ipk = id;
+      const fi = id / IL, fv = vds / Vdc;
+      if (mode === "on" && ti.b == null && vds < vlo) vlo = vds;
+      if (mode === "on") { if (fi > 0.1 && ti.a == null) ti.a = t; if (fi > 0.9 && ti.b == null) ti.b = t; if (ti.b != null && fv < 0.9 && tv.a == null) tv.a = t; if (tv.a != null && fv < 0.1 && tv.b == null) tv.b = t; }
+      else { if (fv > 0.1 && tv.a == null) tv.a = t; if (fv > 0.9 && tv.b == null) tv.b = t; if (tv.b != null && fi < 0.9 && ti.a == null) ti.a = t; if (ti.a != null && fi < 0.1 && ti.b == null) ti.b = t; }
+      if (k % every === 0) out.push([t, vds, id, g, P, E]);
+    }
+    const rate = (o, X) => (o.a != null && o.b != null && o.b > o.a) ? 0.8 * X / (o.b - o.a) : NaN;
+    return { E: Math.max(0, E), Err: Math.max(0, Err), vpk, ipk, aval, win, out, didt: rate(ti, IL), dvdt: (mode === "on" && vlo < 0.5 * Vdc) ? NaN : rate(tv, Vdc) };
+  }
+
+  /* ================================================================ 2. 이중 펄스 시뮬레이터 */
+  (function () {
+    const cvEl = $("dpt-cv"); if (!cvEl) return;
+    let R = null, pend = 0, ready = false;
+    const gR = PW.range("dpt-rg", (v) => v.toFixed(1) + " Ω", sched), gL = PW.range("dpt-l", (v) => v + " nH", sched),
+      gI = PW.range("dpt-i", (v) => v + " A", sched), gV = PW.range("dpt-v", (v) => v + " V", sched);
+    const view = PW.seg("dpt-view", () => cv.redraw());
+    const dev = PW.seg("dpt-dev", (k) => {
+      const d = DEV[k]; ready = false;
+      gI.el.max = d.Imax; gI.el.step = k === "gan" ? 1 : 5; gI.el.min = k === "gan" ? 1 : 10;
+      gV.el.max = d.Vmax;
+      gR.set(d.Rg); gL.set(d.L * 1e9); gI.set(d.I); gV.set(d.Vdc);
+      ready = true; sched();
+    });
+    function sched() { if (!ready) return; if (pend) return; pend = requestAnimationFrame(() => { pend = 0; compute(); }); }
+    function compute() {
+      const d = DEV[dev()], p = { Vdc: gV(), I: Math.max(0.5, gI()), L: gL() * 1e-9, Rg: gR() };
+      const on = dptRun(d, p, "on", 40000, 700), off = dptRun(d, p, "off", 40000, 700);
+      R = { d, p, on, off }; cv.redraw();
+      const Et = on.E + off.E + on.Err;
+      PW.stat("dpt-eon", fmtE(on.E)); PW.stat("dpt-eoff", fmtE(off.E)); PW.stat("dpt-err", d.tauD > 0 ? fmtE(on.Err) : "0 (역회복 없음)");
+      PW.stat("dpt-vpk", off.vpk.toFixed(0) + " V" + (off.aval ? " 애벌런치!" : ""));
+      setCls("dpt-vpk", off.aval || off.vpk > d.rating ? "bad" : off.vpk > 0.85 * d.rating ? "warn" : "ok");
+      PW.stat("dpt-ipk", on.ipk.toFixed(p.I < 50 ? 1 : 0) + " A (+" + Math.max(0, (on.ipk / p.I - 1) * 100).toFixed(0) + " %)");
+      const ev = view() === "on" ? on : off;
+      PW.stat("dpt-rate", (isFinite(ev.didt) ? (ev.didt / 1e9).toFixed(1) : "—") + " A/ns · " + (isFinite(ev.dvdt) ? (ev.dvdt / 1e9).toFixed(1) : "—") + " V/ns");
+      PW.stat("dpt-psw", fmtP(d.f * Et) + " @" + fmtF(d.f));
+    }
+    const cv = PW.canvas(cvEl, (ctx, w, h) => {
+      if (!R) return; const P = PW.palette(), ev = view() === "on" ? R.on : R.off, d = R.d, p = R.p;
+      const tu = ev.win > 2.5e-6 ? 1e6 : 1e9, tl = tu === 1e6 ? "µs" : "ns", x = [0, ev.win * tu];
+      const bx = 56, bw = w - bx - 56, h1 = Math.round(h * 0.5), h2 = Math.round(h * 0.2);
+      const vmax = niceMax(Math.max(p.Vdc, ev.vpk) * 1.08);
+      const imin = Math.min(0, ...ev.out.map((r) => r[2])), imax = Math.max(p.I, ev.ipk) * 1.1;
+      const ch = PW.chart(ctx, { x: bx, y: 12, w: bw, h: h1 - 30 }, { x, y: [-0.05 * vmax, vmax], yLabel: "v_DS (V)", xFmt: () => "",
+        hlines: [{ y: d.rating, label: "정격 " + d.rating + " V", color: P.bad }, { y: p.Vdc, color: P.faint }],
+        series: [{ data: ev.out.map((r) => [r[0] * tu, r[1]]), color: P.volt, width: 2 }] });
+      const ilo = Math.min(-0.05 * imax, imin * 1.1);
+      rightAxis(ctx, ch, x, [ilo, imax], [{ data: ev.out.map((r) => [r[0] * tu, r[2]]), color: P.amp, width: 2 }], "i_D (A) →", (v) => PW.fmt(v, 3));
+      PW.chart(ctx, { x: bx, y: h1 - 6, w: bw, h: h2 - 14 }, { x, y: [d.Voff - 2, d.Von + 2], yLabel: "v_GS", xFmt: () => "",
+        series: [{ data: ev.out.map((r) => [r[0] * tu, r[3]]), color: P.green, width: 2 }], hlines: [{ y: d.Vth, label: "V_th" }] });
+      const pk = Math.max(1, ...ev.out.map((r) => r[4]));
+      const ch3 = PW.chart(ctx, { x: bx, y: h1 + h2 - 8, w: bw, h: h - h1 - h2 - 38 }, { x, y: [0, pk * 1.1 / 1e3], yLabel: "p (kW)", xLabel: "시간 (" + tl + ")",
+        series: [{ data: ev.out.map((r) => [r[0] * tu, Math.max(0, r[4]) / 1e3]), color: P.heat, width: 1.5, fill: "color-mix(in srgb, " + P.heat + " 22%, transparent)" }] });
+      const Emax = Math.max(1e-12, ...ev.out.map((r) => r[5]));
+      const eu = Emax >= 1e-3 ? 1e3 : 1e6, el = eu === 1e3 ? "mJ" : "µJ";
+      rightAxis(ctx, ch3, x, [0, Emax * 1.1 * eu], [{ data: ev.out.map((r) => [r[0] * tu, Math.max(0, r[5]) * eu]), color: P.heat, width: 2, dash: [5, 3] }], "누적 E (" + el + ") →", (v) => PW.fmt(v, 3));
+    }, { aspect: 0.95, maxHeight: 600, minHeight: 440 });
+    ready = true; compute();
+  })();
+
+  /* ================================================================ 3. RLC 링잉 */
+  (function () {
+    const cvEl = $("ring-cv"); if (!cvEl) return;
+    const V = 800, I0 = 400, RATE = 1200;
+    let M = null;
+    const gL = PW.range("ring-l", (v) => v + " nH", upd), gD = PW.range("ring-d", (v) => v.toFixed(1) + " A/ns", upd),
+      gC = PW.range("ring-c", (v) => v.toFixed(2) + " nF", upd), gRl = PW.range("ring-r", (v) => v.toFixed(2) + " Ω", upd);
+    function calc() {
+      const L = gL() * 1e-9, didt = gD() * 1e9, C = gC() * 1e-9, Rl = gRl();
+      const tf = Math.PI * I0 / (2 * didt), per = 2 * Math.PI * Math.sqrt(L * C), T = tf + 8 * per;
+      const N = Math.min(20000, Math.max(800, Math.ceil(T / Math.min(per / 200, tf / 50)))), dt = T / N;
+      const idev = (t) => t >= tf ? 0 : I0 * 0.5 * (1 + Math.cos(Math.PI * t / tf));
+      const f = (t, i, v) => [(V - v - Rl * i) / L, (i - idev(t)) / C];
+      let i = I0, v = V - Rl * I0, vpk = v; const out = [], ev = Math.max(1, Math.floor(N / 700));
+      for (let k = 0; k < N; k++) {
+        const t = k * dt;
+        const k1 = f(t, i, v), k2 = f(t + dt / 2, i + dt / 2 * k1[0], v + dt / 2 * k1[1]), k3 = f(t + dt / 2, i + dt / 2 * k2[0], v + dt / 2 * k2[1]), k4 = f(t + dt, i + dt * k3[0], v + dt * k3[1]);
+        i += dt / 6 * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]); v += dt / 6 * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
+        if (v > vpk) vpk = v;
+        if (k % ev === 0) out.push([t, v, i, idev(t)]);
+      }
+      M = { L, didt, C, Rl, tf, per, T, out, vpk, z0: Math.sqrt(L / C), zeta: Rl / 2 * Math.sqrt(C / L) };
+    }
+    const cv = PW.canvas(cvEl, (ctx, w, h) => {
+      if (!M) return; const P = PW.palette();
+      const x = [0, M.T * 1e9], vmax = niceMax(Math.max(RATE, M.vpk) * 1.08), vmin = Math.min(0, ...M.out.map((r) => r[1]));
+      const ch = PW.chart(ctx, { x: 58, y: 14, w: w - 116, h: h - 60 }, { x, y: [vmin, vmax], xLabel: "시간 (ns)", yLabel: "v_DS (V)",
+        hlines: [{ y: RATE, label: "정격 1200 V", color: P.bad }, { y: V, label: "V_dc", color: P.faint }],
+        series: [{ data: M.out.map((r) => [r[0] * 1e9, r[1]]), color: P.volt, width: 2.2 }] });
+      const ilo = Math.min(-50, ...M.out.map((r) => r[2])) * 1.1;
+      rightAxis(ctx, ch, x, [ilo, I0 * 1.15], [{ data: M.out.map((r) => [r[0] * 1e9, r[2]]), color: P.amp, width: 2 }, { data: M.out.map((r) => [r[0] * 1e9, r[3]]), color: P.amp, width: 1.2, dash: [4, 3] }], "루프 전류 / 소자 전류 (A) →", (v) => v.toFixed(0));
+    }, { aspect: 0.55, maxHeight: 420, minHeight: 280 });
+    function upd() {
+      calc(); cv.redraw();
+      PW.stat("ring-vpk", M.vpk.toFixed(0) + " V (+" + (M.vpk - V).toFixed(0) + ")");
+      PW.stat("ring-est", (M.L * M.didt).toFixed(0) + " V");
+      PW.stat("ring-f", fmtF(1 / M.per));
+      PW.stat("ring-z", M.z0.toFixed(2) + " Ω / " + M.zeta.toFixed(3));
+      const m = RATE - M.vpk; PW.stat("ring-m", m.toFixed(0) + " V"); setCls("ring-m", m < 0 ? "bad" : m < 150 ? "warn" : "ok");
+    }
+    upd();
+  })();
+
+  /* ================================================================ 4. 공통 소스 인덕턴스 */
+  (function () {
+    const cvEl = $("csi-cv"); if (!cvEl) return;
+    const Ciss = 1.9e-9, Vth = 3, Vdr = 18, Voff = -4, V = 400;
+    let M = null;
+    const pkg = PW.seg("csi-pkg", upd);
+    const gLs = PW.range("csi-ls", (v) => v + " nH", upd), gR = PW.range("csi-rg", (v) => v + " Ω", upd), gI = PW.range("csi-i", (v) => v + " A", upd), gG = PW.range("csi-g", (v) => v + " S", upd);
+    function one(Ls) {
+      const R = gR(), I = gI(), gfs = gG();
+      const tau0 = R * Ciss, tau = tau0 + gfs * Ls;
+      const tth = tau0 * Math.log((Vdr - Voff) / (Vdr - Vth));
+      let Vpl = Vth + I / gfs; const sat = Vpl > Vdr - 0.3; if (sat) Vpl = Vdr - 0.3;
+      const tri = tau * Math.log((Vdr - Vth) / (Vdr - Vpl));
+      const E = V * gfs * (Vdr - Vth) * (tri - tau * (1 - Math.exp(-tri / tau)));
+      return { tau, tth, tri, E, Vpl, sat, gfs, didt: (gfs * (Vpl - Vth)) / tri };
+    }
+    function calc() { const Ls = gLs() * 1e-9; const kel = one(0), cur = pkg() === "4" ? kel : one(Ls); M = { cur, kel, Ls }; }
+    const wave = (o, T, n) => { const a = [], b = []; for (let k = 0; k <= n; k++) { const t = T * k / n; let vg, id; if (t < o.tth) { vg = Vdr - (Vdr - Voff) * Math.exp(-t / (o.tau - (o.tau - gR() * Ciss))); id = 0; } else if (t < o.tth + o.tri) { vg = Vdr - (Vdr - Vth) * Math.exp(-(t - o.tth) / o.tau); id = o.gfs * (vg - Vth); } else { vg = o.Vpl; id = o.gfs * (o.Vpl - Vth); } a.push([t * 1e9, id]); b.push([t * 1e9, vg]); } return [a, b]; };
+    const cv = PW.canvas(cvEl, (ctx, w, h) => {
+      if (!M) return; const P = PW.palette();
+      const T = Math.max(M.cur.tth + M.cur.tri, M.kel.tth + M.kel.tri) * 1.25;
+      const [ic, vc] = wave(M.cur, T, 400), [ik, vk] = wave(M.kel, T, 400);
+      const imax = niceMax(gI() * 1.15);
+      const ch = PW.chart(ctx, { x: 56, y: 14, w: w - 110, h: h - 60 }, { x: [0, T * 1e9], y: [0, imax], xLabel: "시간 (ns)", yLabel: "i_D (A)",
+        series: [{ data: ik, color: P.amp, width: 1.6, dash: [6, 4] }, { data: ic, color: P.amp, width: 2.6 }] });
+      rightAxis(ctx, ch, [0, T * 1e9], [Voff, Vdr + 2], [{ data: vk, color: P.green, width: 1.4, dash: [6, 4] }, { data: vc, color: P.green, width: 2.2 }], "v_GS (V) →", (v) => v.toFixed(0));
+    }, { aspect: 0.55, maxHeight: 400, minHeight: 280 });
+    function upd() {
+      calc(); cv.redraw(); const c = M.cur, k = M.kel;
+      PW.stat("csi-tau", fmtT(c.tau));
+      PW.stat("csi-tri", fmtT(c.tri) + (pkg() === "3" ? " (켈빈 " + fmtT(k.tri) + ")" : ""));
+      PW.stat("csi-didt", (c.didt / 1e9).toFixed(2) + " A/ns");
+      PW.stat("csi-vls", pkg() === "3" ? (M.Ls * c.didt).toFixed(1) + " V" : "0 V (게이트 루프 밖)");
+      PW.stat("csi-e", fmtE(c.E) + (pkg() === "3" ? " (+" + ((c.E / k.E - 1) * 100).toFixed(0) + " %)" : ""));
+      setCls("csi-tri", pkg() === "3" && c.tri > 2 * k.tri ? "warn" : "");
+    }
+    upd();
+  })();
+
+  /* ================================================================ 5. R_G 스윕 */
+  (function () {
+    const cvEl = $("rg-cv"); if (!cvEl) return;
+    let M = null, tmr = 0;
+    const dev = PW.seg("rg-dev", sched);
+    const gL = PW.range("rg-l", (v) => v + " nH", sched), gLim = PW.range("rg-lim", (v) => (v * 100).toFixed(0) + " %", () => { if (M) { evalLim(); cv.redraw(); } });
+    function sched() { clearTimeout(tmr); tmr = setTimeout(compute, 60); }
+    function compute() {
+      const k = dev(), d = DEV[k]; const pts = [];
+      for (let j = 0; j < 14; j++) {
+        const Rg = 0.5 * Math.pow(40, j / 13);
+        const p = { Vdc: d.Vdc, I: d.I, L: gL() * 1e-9, Rg };
+        const on = dptRun(d, p, "on", 20000, 4), off = dptRun(d, p, "off", 20000, 4);
+        pts.push({ Rg, Eon: on.E, Eoff: off.E + on.Err, vpk: off.vpk });
+      }
+      M = { d, pts }; evalLim(); cv.redraw();
+    }
+    function evalLim() {
+      const lim = gLim() * M.d.rating, pts = M.pts; let rmin = null, idx = -1;
+      for (let j = 0; j < pts.length; j++) { if (pts[j].vpk <= lim) { if (j === 0) { rmin = pts[0].Rg; idx = 0; } else { const a = pts[j - 1], b = pts[j], fr = (a.vpk - lim) / (a.vpk - b.vpk); rmin = Math.exp(Math.log(a.Rg) + fr * (Math.log(b.Rg) - Math.log(a.Rg))); idx = j; } break; } }
+      M.rmin = rmin; M.lim = lim;
+      const Etot = (q) => q.Eon + q.Eoff;
+      if (rmin != null) {
+        const j = idx, a = pts[Math.max(0, j - 1)], b = pts[j], fr = j === 0 ? 0 : (Math.log(rmin) - Math.log(a.Rg)) / (Math.log(b.Rg) - Math.log(a.Rg));
+        M.Emin = Etot(a) + fr * (Etot(b) - Etot(a)); M.vmin = a.vpk + fr * (b.vpk - a.vpk);
+      }
+      PW.stat("rg-min", rmin != null ? rmin.toFixed(2) + " Ω" : "없음 (L_σ를 줄여야)"); setCls("rg-min", rmin == null ? "bad" : "");
+      PW.stat("rg-e", rmin != null ? fmtE(M.Emin) : "—"); PW.stat("rg-vpk", rmin != null ? M.vmin.toFixed(0) + " V" : "—");
+      PW.stat("rg-ratio", (Etot(pts[pts.length - 1]) / Etot(pts[0])).toFixed(1) + " 배");
+    }
+    const cv = PW.canvas(cvEl, (ctx, w, h) => {
+      if (!M) return; const P = PW.palette(), pts = M.pts;
+      const Emax = Math.max(...pts.map((q) => q.Eon + q.Eoff)), eu = Emax >= 1e-3 ? 1e3 : 1e6, el = eu === 1e3 ? "mJ" : "µJ";
+      const ch = PW.chart(ctx, { x: 58, y: 14, w: w - 116, h: h - 60 }, { x: [0.5, 20], logX: true, xTicks: [0.5, 1, 2, 5, 10, 20], y: [0, niceMax(Emax * eu * 1.1)], xLabel: "외부 게이트 저항 R_G (Ω)", yLabel: "에너지 (" + el + ")",
+        vlines: M.rmin != null ? [{ x: M.rmin, label: "최소 R_G", color: P.ok }] : [],
+        series: [{ data: pts.map((q) => [q.Rg, q.Eon * eu]), color: P.volt, width: 2 }, { data: pts.map((q) => [q.Rg, q.Eoff * eu]), color: P.amp, width: 2 }, { data: pts.map((q) => [q.Rg, (q.Eon + q.Eoff) * eu]), color: P.heat, width: 3 }],
+        points: pts.map((q) => ({ x: q.Rg, y: (q.Eon + q.Eoff) * eu, color: P.heat, r: 2.5 })) });
+      const vlo = M.d.Vdc * 0.95, vhi = Math.ceil(Math.max(M.d.rating, ...pts.map((q) => q.vpk)) * 1.05 / 100) * 100;
+      const Y = rightAxis(ctx, ch, [0.5, 20], [vlo, vhi], [{ data: pts.map((q) => [q.Rg, q.vpk]), color: P.dim, width: 2, dash: [5, 4] }], "V_pk (V) →", (v) => v.toFixed(0));
+      ctx.save(); ctx.strokeStyle = P.bad; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(ch.box.x, Y(M.lim)); ctx.lineTo(ch.box.x + ch.box.w, Y(M.lim)); ctx.stroke();
+      ctx.fillStyle = P.bad; ctx.font = font(11); ctx.textAlign = "left"; ctx.fillText("한계 " + M.lim.toFixed(0) + " V", ch.box.x + 4, Y(M.lim) - 4); ctx.restore();
+    }, { aspect: 0.58, maxHeight: 420, minHeight: 300 });
+    compute();
+  })();
+
+  /* ================================================================ C_oss 모델 (9·11절 공용) */
+  const CMOD = {
+    sj: (v) => 60e-12 + 16e-9 / (1 + Math.pow(Math.max(0, v) / 22, 3)),
+    sic: (v) => 2e-9 / Math.sqrt(1 + Math.max(0, v) / 3),
+    gan: (v) => 1e-9 / Math.sqrt(1 + Math.max(0, v) / 2),
+  };
+  const DV = 0.5, NV = 1400; // 0–700 V
+  const TAB = {};
+  Object.keys(CMOD).forEach((k) => {
+    const Q = new Float64Array(NV + 1), E = new Float64Array(NV + 1);
+    for (let j = 1; j <= NV; j++) { const v0 = (j - 1) * DV, v1 = j * DV, c0 = CMOD[k](v0), c1 = CMOD[k](v1); Q[j] = Q[j - 1] + 0.5 * (c0 + c1) * DV; E[j] = E[j - 1] + 0.5 * (c0 * v0 + c1 * v1) * DV; }
+    TAB[k] = { Q, E };
+  });
+  const lookup = (arr, v) => { const x = PW.clamp(v / DV, 0, NV), j = Math.min(NV - 1, Math.floor(x)), f = x - j; return arr[j] + f * (arr[j + 1] - arr[j]); };
+  const Qo = (k, v) => lookup(TAB[k].Q, v), Eo = (k, v) => lookup(TAB[k].E, v);
+
+  /* ================================================================ 6. C_oss 적분 */
+  (function () {
+    const cvEl = $("coss-cv"); if (!cvEl) return;
+    const dev = PW.seg("coss-dev", upd);
+    const gV = PW.range("coss-v", (v) => v + " V", upd), gF = PW.range("coss-f", (v) => fmtF(Math.pow(10, v)), upd);
+    const COL = () => { const P = PW.palette(); return { sj: P.si, sic: P.sic, gan: P.gan }; };
+    const NAME = { sj: "Si SJ", sic: "SiC", gan: "GaN" };
+    const cv = PW.canvas(cvEl, (ctx, w, h) => {
+      const P = PW.palette(), C = COL(), k = dev(), V = gV();
+      const side = w > 560, w1 = side ? Math.round(w * 0.5) : w, h1 = side ? h : Math.round(h * 0.5);
+      const ser = Object.keys(CMOD).map((kk) => { const d = []; for (let v = 0; v <= 600; v += 2) d.push([v, CMOD[kk](v) * 1e12]); return { data: d, color: C[kk], width: kk === k ? 3 : 1.4 }; });
+      const ch = PW.chart(ctx, { x: 60, y: 14, w: w1 - 76, h: h1 - 60 }, { x: [0, 600], y: [10, 30000], logY: true, xLabel: "v_DS (V)", yLabel: "C_oss (pF)", series: ser, vlines: [{ x: V, label: V + " V" }] });
+      ctx.font = font(11); ctx.textAlign = "right";
+      Object.keys(CMOD).forEach((kk, j) => { ctx.fillStyle = C[kk]; ctx.fillText(NAME[kk], ch.box.x + ch.box.w - 4, ch.box.y + 14 + j * 15); });
+      // Q-V
+      const ox = side ? w1 : 0, oy = side ? 0 : h1;
+      const Qv = Qo(k, V) * 1e9, pts = []; for (let j = 0; j <= 200; j++) { const v = V * j / 200; pts.push([Qo(k, v) * 1e9, v]); }
+      const qmax = niceMax(Qv * 1.1);
+      const ch2 = PW.chart(ctx, { x: ox + 60, y: oy + 14, w: (side ? w - w1 : w) - 76, h: (side ? h : h - h1) - 60 }, { x: [0, qmax], y: [0, niceMax(V * 1.1)], xLabel: "Q (nC) — " + NAME[k], yLabel: "v (V)", series: [] });
+      ctx.save(); ctx.beginPath(); ctx.moveTo(ch2.X(0), ch2.Y(0)); pts.forEach(([q, v]) => ctx.lineTo(ch2.X(q), ch2.Y(v))); ctx.lineTo(ch2.X(Qv), ch2.Y(0)); ctx.closePath();
+      ctx.fillStyle = "color-mix(in srgb, " + P.volt + " 25%, transparent)"; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(ch2.X(0), ch2.Y(0)); pts.forEach(([q, v]) => ctx.lineTo(ch2.X(q), ch2.Y(v))); ctx.lineTo(ch2.X(0), ch2.Y(V)); ctx.closePath();
+      ctx.fillStyle = "color-mix(in srgb, " + P.heat + " 25%, transparent)"; ctx.fill();
+      ctx.strokeStyle = C[k]; ctx.lineWidth = 2.6; ctx.beginPath(); pts.forEach(([q, v], j) => j ? ctx.lineTo(ch2.X(q), ch2.Y(v)) : ctx.moveTo(ch2.X(q), ch2.Y(v))); ctx.stroke();
+      ctx.font = font(11); ctx.fillStyle = P.text; ctx.textAlign = "center";
+      ctx.fillText("E_oss", ch2.X(Qv * 0.72), ch2.Y(V * 0.3)); ctx.fillText("QV − E_oss", ch2.X(Qv * 0.3), ch2.Y(V * 0.8));
+      ctx.restore();
+    }, { aspect: 0.5, maxHeight: 400, minHeight: 300 });
+    function upd() {
+      const k = dev(), V = gV(), f = Math.pow(10, gF()), Q = Qo(k, V), E = Eo(k, V);
+      cv.redraw();
+      PW.stat("coss-q", (Q * 1e9).toFixed(1) + " nC"); PW.stat("coss-e", fmtE(E));
+      PW.stat("coss-ceq", (Q / V * 1e12).toFixed(0) + " / " + (2 * E / V / V * 1e12).toFixed(0) + " pF");
+      PW.stat("coss-eh", fmtE(Q * V)); PW.stat("coss-p", fmtP(f * Q * V));
+    }
+    upd();
+  })();
+
+  /* ================================================================ 7. 면적·주파수 최적 */
+  (function () {
+    const cvEl = $("psw-cv"); if (!cvEl) return;
+    const V = 400;
+    const D = {
+      sj: { R: 0.040 * 1.8, Qoss: () => Qo("sj", V), QG: 90e-9, Vdr: 12, Qrr: 10e-6, tvi: 40e-9, name: "Si SJ" },
+      sic: { R: 0.040 * 1.3, Qoss: () => Qo("sic", V), QG: 60e-9, Vdr: 22, Qrr: 0.1e-6, tvi: 20e-9, name: "SiC" },
+      gan: { R: 0.050 * 1.5, Qoss: () => Qo("gan", V), QG: 6e-9, Vdr: 6, Qrr: 0, tvi: 6e-9, name: "GaN" },
+    };
+    const QC_SBD = 30e-9; // 부스트 정류 SiC 쇼트키 용량 전하(면적 무관)
+    const dev = PW.seg("psw-dev", upd), top = PW.seg("psw-top", upd);
+    const gF = PW.range("psw-f", (v) => fmtF(Math.pow(10, v)), upd), gI = PW.range("psw-i", (v) => v + " A", upd);
+    function model(k, f, I) {
+      const d = D[k], hb = top() === "hb";
+      const Ec = (d.Qoss() + (hb ? d.Qrr : 0)) * V + d.QG * d.Vdr;
+      const Evi = 0.5 * V * I * d.tvi + (hb ? 0 : QC_SBD * V);
+      const P = (a) => ({ c: I * I * d.R / a, s: f * (a * Ec + Evi) });
+      const aopt = Math.sqrt(I * I * d.R / (f * Ec));
+      return { d, Ec, Evi, P, aopt, Pmin: 2 * I * Math.sqrt(d.R * Ec * f) + f * Evi };
+    }
+    const COL = () => { const P = PW.palette(); return { sj: P.si, sic: P.sic, gan: P.gan }; };
+    const cv = PW.canvas(cvEl, (ctx, w, h) => {
+      const P = PW.palette(), C = COL(), k = dev(), f = Math.pow(10, gF()), I = gI(), m = model(k, f, I);
+      const h1 = Math.round(h * 0.55);
+      const A = []; for (let j = 0; j <= 120; j++) A.push(0.05 * Math.pow(400, j / 120));
+      const pc = A.map((a) => [a, m.P(a).c]), ps = A.map((a) => [a, m.P(a).s]), pt = A.map((a) => [a, m.P(a).c + m.P(a).s]);
+      const ymin = Math.pow(10, Math.floor(Math.log10(m.Pmin / 20))), ymax = Math.pow(10, Math.ceil(Math.log10(m.Pmin * 50)));
+      PW.chart(ctx, { x: 60, y: 14, w: w - 80, h: h1 - 56 }, { x: [0.05, 20], logX: true, logY: true, y: [ymin, ymax], xLabel: "칩 면적 a (a = 1: 40–50 mΩ)", yLabel: "손실 (W)",
+        series: [{ data: pc, color: P.volt, width: 1.8 }, { data: ps, color: P.heat, width: 1.8 }, { data: pt, color: P.text, width: 3 }],
+        points: [{ x: PW.clamp(m.aopt, 0.05, 20), y: m.Pmin, color: P.accent, r: 5, label: "최적" }] });
+      const F = []; for (let j = 0; j <= 80; j++) F.push(1e4 * Math.pow(200, j / 80));
+      const ser = Object.keys(D).map((kk) => ({ data: F.map((ff) => [ff / 1e3, model(kk, ff, I).Pmin]), color: C[kk], width: kk === k ? 3 : 1.5 }));
+      const all = ser.flatMap((s) => s.data.map((r) => r[1]));
+      const y2 = [Math.pow(10, Math.floor(Math.log10(Math.min(...all)))), Math.pow(10, Math.ceil(Math.log10(Math.max(...all))))];
+      const ch = PW.chart(ctx, { x: 60, y: h1 + 6, w: w - 80, h: h - h1 - 50 }, { x: [10, 2000], logX: true, logY: true, y: y2, xLabel: "스위칭 주파수 (kHz)", yLabel: "P_min (W)", series: ser, vlines: [{ x: f / 1e3 }] });
+      ctx.font = font(11); ctx.textAlign = "left";
+      Object.keys(D).forEach((kk, j) => { ctx.fillStyle = C[kk]; ctx.fillText(D[kk].name, ch.box.x + 6 + j * 54, ch.box.y + 12); });
+    }, { aspect: 0.9, maxHeight: 560, minHeight: 420 });
+    function upd() {
+      const k = dev(), f = Math.pow(10, gF()), I = gI(), m = model(k, f, I), p1 = m.P(1);
+      cv.redraw();
+      PW.stat("psw-a", m.aopt.toPrecision(2) + " (" + (m.d.R / m.aopt * 1e3).toPrecision(3) + " mΩ)");
+      PW.stat("psw-p", fmtP(m.Pmin));
+      PW.stat("psw-split", fmtP(p1.c) + " / " + fmtP(p1.s));
+      PW.stat("psw-eta", (m.Pmin / (V * I) * 100).toPrecision(2) + " %");
+      setCls("psw-eta", m.Pmin / (V * I) > 0.02 ? "bad" : m.Pmin / (V * I) > 0.005 ? "warn" : "ok");
+    }
+    upd();
+  })();
+
+  /* ================================================================ 8. ZVS 데드 타임 */
+  (function () {
+    const cvEl = $("zvs-cv"); if (!cvEl) return;
+    const FS = 200e3;
+    const dev = PW.seg("zvs-dev", upd);
+    const gI = PW.range("zvs-i", (v) => v.toFixed(1) + " A", upd), gT = PW.range("zvs-t", (v) => v + " ns", upd), gV = PW.range("zvs-v", (v) => v + " V", upd);
+    const moved = (k, V, v) => Qo(k, V) - Qo(k, v) + Qo(k, V - v); // v_sw가 V → v로 내려갈 때 옮긴 전하
+    function vrem(k, V, q) { if (q >= moved(k, V, 0)) return 0; let lo = 0, hi = V; for (let n = 0; n < 50; n++) { const mid = 0.5 * (lo + hi); if (moved(k, V, mid) > q) lo = mid; else hi = mid; } return 0.5 * (lo + hi); }
+    const Eloss = (k, V, vr) => Math.max(0, Eo(k, vr) + V * (Qo(k, V) - Qo(k, V - vr)) - (Eo(k, V) - Eo(k, V - vr)));
+    let M = null;
+    function calc() {
+      const k = dev(), I0 = gI(), td = gT() * 1e-9, V = gV();
+      const Qt = moved(k, V, 0), ttr = Qt / I0, vr = vrem(k, V, I0 * td), E = Eloss(k, V, vr), Eh = Qo(k, V) * V;
+      M = { k, I0, td, V, Qt, ttr, vr, E, Eh, Imin: Qt / td };
+    }
+    const cv = PW.canvas(cvEl, (ctx, w, h) => {
+      if (!M) return; const P = PW.palette();
+      const h1 = Math.round(h * 0.56), T = Math.max(M.td * 1.3, Math.min(M.ttr * 1.1, M.td * 4));
+      const pts = []; for (let j = 0; j <= 300; j++) { const v = M.V * (1 - j / 300); const t = moved(M.k, M.V, v) / M.I0; if (t > T) break; pts.push([t * 1e9, v]); }
+      const tz = M.ttr; if (tz <= T) pts.push([T * 1e9, 0]);
+      PW.chart(ctx, { x: 56, y: 14, w: w - 76, h: h1 - 52 }, { x: [0, T * 1e9], y: [-0.05 * M.V, M.V * 1.1], xLabel: "데드 타임 시작 후 시간 (ns)", yLabel: "v_sw (V)",
+        bands: [{ x0: 0, x1: M.td * 1e9, color: "color-mix(in srgb, " + P.accent + " 10%, transparent)" }],
+        vlines: [{ x: M.td * 1e9, label: "Q_L 켬", color: P.accent }], hlines: M.vr > 0.5 ? [{ y: M.vr, label: "v_rem " + M.vr.toFixed(0) + " V", color: P.heat }] : [],
+        series: [{ data: pts, color: P.volt, width: 2.6 }] });
+      const D = []; for (let j = 0; j <= 120; j++) { const td = 5e-9 + 295e-9 * j / 120; D.push([td * 1e9, Eloss(M.k, M.V, vrem(M.k, M.V, M.I0 * td)) * 1e6]); }
+      PW.chart(ctx, { x: 56, y: h1 + 6, w: w - 76, h: h - h1 - 50 }, { x: [5, 300], y: [0, niceMax(M.Eh * 1e6 * 1.05)], xLabel: "데드 타임 (ns)", yLabel: "턴온 손실 (µJ)",
+        hlines: [{ y: M.Eh * 1e6, label: "하드 Q_oss·V", color: P.faint }],
+        series: [{ data: D, color: P.heat, width: 2.4 }], points: [{ x: M.td * 1e9, y: M.E * 1e6, color: P.heat, r: 5 }] });
+    }, { aspect: 0.82, maxHeight: 520, minHeight: 380 });
+    function upd() {
+      calc(); cv.redraw();
+      PW.stat("zvs-ttr", fmtT(M.ttr)); setCls("zvs-ttr", M.ttr <= M.td ? "ok" : "warn");
+      PW.stat("zvs-vr", M.vr < 0.5 ? "0 V (ZVS)" : M.vr.toFixed(0) + " V"); setCls("zvs-vr", M.vr < 0.5 ? "ok" : M.vr < 0.3 * M.V ? "warn" : "bad");
+      PW.stat("zvs-imin", M.Imin.toFixed(2) + " A");
+      PW.stat("zvs-e", fmtE(M.E) + " / " + (M.E / M.Eh * 100).toFixed(0) + " %");
+      PW.stat("zvs-p", fmtP(FS * M.E));
+    }
+    upd();
+  })();
+
+  /* ================================================================ 9. 프로브 지연·대역폭 */
+  (function () {
+    const cvEl = $("skew-cv"); if (!cvEl) return;
+    const D = { igbt: { V: 800, I: 400, tri: 120e-9, tfv: 150e-9 }, sic: { V: 800, I: 400, tri: 50e-9, tfv: 30e-9 }, gan: { V: 400, I: 20, tri: 2e-9, tfv: 4e-9 } };
+    const dev = PW.seg("skew-dev", upd);
+    const gD = PW.range("skew-dt", (v) => (v > 0 ? "+" : "") + v.toFixed(1) + " ns", upd), gBv = PW.range("skew-bv", (v) => fmtF(Math.pow(10, v)), upd), gBi = PW.range("skew-bi", (v) => fmtF(Math.pow(10, v)), upd);
+    let M = null;
+    function calc() {
+      const d = D[dev()], dly = gD() * 1e-9, tv = 1 / (2 * Math.PI * Math.pow(10, gBv())), tc = 1 / (2 * Math.PI * Math.pow(10, gBi()));
+      const mg = 6 * Math.max(tv, tc) + Math.abs(dly) + 1e-9;
+      const t0 = -Math.max(0.5 * d.tri, mg), t1 = d.tri + d.tfv + Math.max(d.tfv, mg), N = 4000, dt = (t1 - t0) / N;
+      const iT = (t) => t <= 0 ? 0 : t >= d.tri ? d.I : d.I * 0.5 * (1 - Math.cos(Math.PI * t / d.tri));
+      const vT = (t) => t <= d.tri ? d.V : t >= d.tri + d.tfv ? 0 : d.V * 0.5 * (1 + Math.cos(Math.PI * (t - d.tri) / d.tfv));
+      let vm = vT(t0), im = iT(t0 - dly), Et = 0, Em = 0; const out = [];
+      const av = dt / (tv + dt), ai = dt / (tc + dt);
+      const cr = {};
+      for (let j = 0; j <= N; j++) {
+        const t = t0 + j * dt, v = vT(t), i = iT(t);
+        vm += av * (v - vm); im += ai * (iT(t - dly) - im);
+        Et += v * i * dt; Em += vm * im * dt;
+        if (cr.i1 == null && im > 0.1 * d.I) cr.i1 = t; if (cr.i2 == null && im > 0.9 * d.I) cr.i2 = t;
+        if (t > d.tri * 0.5 && cr.v1 == null && vm < 0.9 * d.V) cr.v1 = t; if (cr.v1 != null && cr.v2 == null && vm < 0.1 * d.V) cr.v2 = t;
+        if (j % 5 === 0) out.push([t, v, i, vm, im]);
+      }
+      M = { d, out, Et, Em, t0, t1, trv: cr.v2 - cr.v1, tri: cr.i2 - cr.i1 };
+    }
+    const cv = PW.canvas(cvEl, (ctx, w, h) => {
+      if (!M) return; const P = PW.palette(), d = M.d;
+      const tu = 1e9, x = [M.t0 * tu, M.t1 * tu], h1 = Math.round(h * 0.6);
+      const ch = PW.chart(ctx, { x: 56, y: 14, w: w - 110, h: h1 - 34 }, { x, y: [-0.05 * d.V, d.V * 1.1], yLabel: "v (V)", xFmt: () => "",
+        series: [{ data: M.out.map((r) => [r[0] * tu, r[1]]), color: P.volt, width: 2 }, { data: M.out.map((r) => [r[0] * tu, r[3]]), color: P.volt, width: 1.6, dash: [5, 4] }] });
+      rightAxis(ctx, ch, x, [-0.05 * d.I, d.I * 1.1], [{ data: M.out.map((r) => [r[0] * tu, r[2]]), color: P.amp, width: 2 }, { data: M.out.map((r) => [r[0] * tu, r[4]]), color: P.amp, width: 1.6, dash: [5, 4] }], "i (A) →", (v) => PW.fmt(v, 3));
+      const pt = M.out.map((r) => [r[0] * tu, r[1] * r[2] / 1e3]), pm = M.out.map((r) => [r[0] * tu, r[3] * r[4] / 1e3]);
+      const pk = Math.max(...pt.map((r) => r[1]), ...pm.map((r) => r[1]));
+      PW.chart(ctx, { x: 56, y: h1 - 8, w: w - 110, h: h - h1 - 34 }, { x, y: [0, pk * 1.15], xLabel: "시간 (ns)", yLabel: "p (kW)",
+        series: [{ data: pm, color: P.heat, width: 1.5, dash: [5, 4], fill: "color-mix(in srgb, " + P.heat + " 22%, transparent)" }, { data: pt, color: P.heat, width: 2 }] });
+    }, { aspect: 0.72, maxHeight: 480, minHeight: 340 });
+    function upd() {
+      calc(); cv.redraw();
+      PW.stat("skew-et", fmtE(M.Et)); PW.stat("skew-em", fmtE(M.Em));
+      const e = (M.Em / M.Et - 1) * 100; PW.stat("skew-err", (e > 0 ? "+" : "") + e.toFixed(1) + " %"); setCls("skew-err", Math.abs(e) < 5 ? "ok" : Math.abs(e) < 15 ? "warn" : "bad");
+      PW.stat("skew-tr", fmtT(M.trv) + " / " + fmtT(M.tri));
+    }
+    upd();
+  })();
+})();
+</script>
+</body>
+</html>

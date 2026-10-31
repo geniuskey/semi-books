@@ -1,0 +1,1097 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and PowerBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DC-DC 변환과 PFC · PowerBook</title>
+<meta name="description" content="벅·부스트·벅-부스트의 볼트-초 균형과 변환비, 인덕터·커패시터 리플과 CCM·DCM 경계, 동기 정류와 데드 타임, 48→12 V GaN 벅의 손실 분해와 효율 곡선, 최적 스위칭 주파수, 인터리빙, LLC 이득 곡선과 ZVS, 역률·THD와 부스트 PFC, 토템폴 PFC와 역회복을 시뮬레이터로 계산한다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .lbl { fill: var(--text); font-family: var(--font); font-size: 13px; }
+  svg .lbl-b { fill: var(--text); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-sm { fill: var(--text-dim); font-family: var(--font); font-size: 11px; }
+  svg .lbl-acc { fill: var(--accent); font-family: var(--font); font-size: 12px; font-weight: 700; }
+  svg .lbl-bad { fill: var(--bad); font-family: var(--font); font-size: 12px; font-weight: 700; }
+  svg .lbl-v { fill: var(--m-volt); font-family: var(--font); font-size: 12px; font-weight: 700; }
+  svg .lbl-i { fill: var(--m-amp); font-family: var(--font); font-size: 12px; font-weight: 700; }
+  svg .lbl-h { fill: var(--m-heat); font-family: var(--font); font-size: 12px; font-weight: 700; }
+  svg .sub { font-size: 9px; }
+  svg .box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .box2 { fill: var(--surface); stroke: var(--text-faint); }
+  svg .wire { stroke: var(--text); stroke-width: 1.8; fill: none; }
+  svg .wire-t { stroke: var(--text-dim); stroke-width: 1.2; fill: none; }
+  svg .dash { stroke: var(--text-dim); stroke-dasharray: 5 4; fill: none; stroke-width: 1.2; }
+  svg .wv { stroke: var(--m-volt); stroke-width: 2.2; fill: none; }
+  svg .wi { stroke: var(--m-amp); stroke-width: 2.2; fill: none; }
+  svg .path-i { stroke: var(--m-amp); stroke-width: 3; fill: none; opacity: .55; }
+  svg .path-i2 { stroke: var(--accent-2); stroke-width: 3; fill: none; opacity: .55; stroke-dasharray: 7 4; }
+  svg .dot { fill: var(--text); }
+  .v.ok { color: var(--ok); } .v.warn { color: var(--warn); } .v.bad { color: var(--bad); }
+</style>
+</head>
+<body data-chapter="converters">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 12</div>
+    <h1>DC-DC 변환과 PFC</h1>
+    <p class="lead">스위치 하나, 인덕터 하나, 커패시터 하나면 48 V를 12 V로 97 % 넘는 효율로 바꿀 수 있다. 저항으로 떨어뜨리면 75 %가 열이 될 일을 스위치는 "켜고 끄는 시간의 비율"로 해낸다. 이 장은 볼트-초 균형에서 출발해 벅·부스트·벅-부스트의 변환비와 리플, CCM·DCM, 동기 정류와 데드 타임을 계산하고, PW-800 DC 서버 전원(48 → 12 V, 1 kW, 4상 GaN 벅)의 손실을 항목별로 쪼개 효율 곡선과 최적 주파수를 찾는다. 이어 인터리빙, 절연형 LLC의 이득 곡선과 ZVS, 그리고 교류 전원 앞단의 역률 보정(PFC) — 부스트 PFC와 토템폴 PFC가 왜 GaN·SiC를 부르는지 — 까지 간다.</p>
+    <ul class="objectives">
+      <li>볼트-초·전하 균형으로 벅·부스트·벅-부스트의 변환비, 인덕터 전류 리플, 출력 전압 리플, CCM·DCM 경계를 유도할 수 있다.</li>
+      <li>동기 정류와 데드 타임 손실을 설명하고, 전도·스위칭(\(C_{oss}\)·\(Q_{rr}\) 포함)·게이트·데드 타임·자성체 손실로 효율 곡선을 계산할 수 있다.</li>
+      <li>스위칭 주파수와 인덕터 크기·손실의 트레이드오프에서 최적 주파수를 찾고, 인터리빙의 리플 상쇄를 계산할 수 있다.</li>
+      <li>LLC 공진 컨버터의 FHA 이득 곡선을 그리고 ZVS 영역과 설계 변수(\(L_n\), \(Q\))의 관계를 설명할 수 있다.</li>
+      <li>역률·THD를 정의하고, 부스트 PFC의 전류 성형과 토템폴 PFC에서 \(Q_{rr}\)가 Si를 배제하는 이유를 손실로 보일 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="principle">
+    <h2>스위칭 변환의 원리: 볼트-초와 전하 균형</h2>
+    <p>48 V에서 12 V를 얻는 가장 쉬운 방법은 직렬 저항(또는 선형 레귤레이터, <a href="../../analog/chapters/ldo.html">AnalogBook LDO</a>)으로 36 V를 버리는 것이다. 효율은 \(V_o/V_{in}\) = 25 %다. 스위칭 컨버터는 스위치로 입력을 잘게 썰어 평균만 꺼낸다. 스위치 노드 전압은 \(V_{in}\)과 0을 오가는 사각파이고, LC 저역 통과 필터가 그 평균 \(DV_{in}\)만 남긴다. 이상적인 스위치·L·C는 전력을 소모하지 않으므로 원리상 효율 100 %다. 남는 손실은 스위치의 온저항, 스위칭 과도, 자성체 — 이 장 후반의 주제다.</p>
+    <p>정상 상태 해석의 두 기둥은 간단하다. 정상 상태에서 인덕터 전류는 한 주기 뒤 같은 값으로 돌아와야 하므로, 인덕터 전압의 한 주기 평균은 0이다(<span class="term">볼트-초 균형</span><span class="en">(volt-second balance)</span>). 같은 이유로 커패시터 전류의 평균도 0이다(전하 균형).</p>
+    <div class="formula">$$\langle v_L \rangle = \frac{1}{T_s}\int_0^{T_s} v_L\,dt = 0,\qquad \langle i_C \rangle = 0,\qquad \Delta i_L = \frac{v_L\, t}{L}\ (\text{각 구간에서 직선})$$<div class="where">\(T_s = 1/f_{sw}\), \(D\)는 주 스위치가 켜진 시간 비율(듀티). 리플이 평균보다 작다는 <span class="term">작은 리플 근사</span><span class="en">(small-ripple approximation)</span>로 각 구간의 \(v_L\)을 상수로 본다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 240" role="img" aria-label="벅, 부스트, 벅-부스트 컨버터 회로도">
+        <g transform="translate(10,10)">
+          <rect width="280" height="220" rx="8" class="box"/><text x="140" y="22" text-anchor="middle" class="lbl-b">벅 (강압)  M = D</text>
+          <path d="M30 60 V 180" class="wire"/><circle cx="30" cy="120" r="14" class="box2"/><text x="30" y="125" text-anchor="middle" class="lbl-sm">Vin</text>
+          <path d="M30 60 H 70" class="wire"/>
+          <g transform="translate(90,60) rotate(-90)" class="wire"><path d="M0 -20 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 20 M -8 0 H 0 V 14 M -14 -14 V 14 M -24 0 H -14"/></g>
+          <path d="M110 60 H 130" class="wire"/><circle cx="130" cy="60" r="3" class="dot"/><text x="130" y="50" text-anchor="middle" class="lbl-sm">SW</text>
+          <path d="M130 60 V 100 M120 120 H 140 L 130 100 Z M120 100 H 140" class="wire"/><path d="M130 120 V 180" class="wire"/>
+          <path d="M130 60 H 150 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 H 240" class="wire"/><text x="182" y="40" text-anchor="middle" class="lbl">L</text>
+          <path d="M215 60 V 108 M203 108 H 227 M203 116 H 227 M215 116 V 180" class="wire"/><text x="200" y="120" text-anchor="end" class="lbl">C</text>
+          <path d="M240 60 V 108 M234 108 H 246 V 140 H 234 Z M240 140 V 180" class="wire"/><text x="252" y="128" class="lbl-sm">R</text>
+          <path d="M30 180 H 240" class="wire"/>
+          <text x="140" y="206" text-anchor="middle" class="lbl-sm">48 V → 12 V (DC 서버)</text>
+        </g>
+        <g transform="translate(300,10)">
+          <rect width="280" height="220" rx="8" class="box"/><text x="140" y="22" text-anchor="middle" class="lbl-b">부스트 (승압)  M = 1/(1−D)</text>
+          <path d="M30 60 V 180" class="wire"/><circle cx="30" cy="120" r="14" class="box2"/><text x="30" y="125" text-anchor="middle" class="lbl-sm">Vin</text>
+          <path d="M30 60 H 50 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 H 130" class="wire"/><text x="82" y="40" text-anchor="middle" class="lbl">L</text>
+          <circle cx="130" cy="60" r="3" class="dot"/>
+          <g transform="translate(130,140)" class="wire"><path d="M0 -80 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 40 M -8 0 H 0 V 14 M -14 -14 V 14 M -24 0 H -14"/></g>
+          <path d="M130 60 H 150 M150 50 V 70 L 170 60 Z M170 50 V 70 M170 60 H 240" class="wire"/>
+          <path d="M215 60 V 108 M203 108 H 227 M203 116 H 227 M215 116 V 180" class="wire"/>
+          <path d="M240 60 V 108 M234 108 H 246 V 140 H 234 Z M240 140 V 180" class="wire"/>
+          <path d="M30 180 H 240" class="wire"/>
+          <text x="140" y="206" text-anchor="middle" class="lbl-sm">PFC: 정류 전압 → 400 V 링크</text>
+        </g>
+        <g transform="translate(590,10)">
+          <rect width="280" height="220" rx="8" class="box"/><text x="140" y="22" text-anchor="middle" class="lbl-b">벅-부스트 (반전)  M = −D/(1−D)</text>
+          <path d="M30 60 V 180" class="wire"/><circle cx="30" cy="120" r="14" class="box2"/><text x="30" y="125" text-anchor="middle" class="lbl-sm">Vin</text>
+          <path d="M30 60 H 70" class="wire"/>
+          <g transform="translate(90,60) rotate(-90)" class="wire"><path d="M0 -20 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 20 M -8 0 H 0 V 14 M -14 -14 V 14 M -24 0 H -14"/></g>
+          <path d="M110 60 H 150" class="wire"/><circle cx="130" cy="60" r="3" class="dot"/>
+          <path d="M130 60 V 80 q-14 8 0 16 q-14 8 0 16 q-14 8 0 16 q-14 8 0 16 V 180" class="wire"/><text x="110" y="124" text-anchor="end" class="lbl">L</text>
+          <path d="M150 60 H 160 M180 50 V 70 L 160 60 Z M160 50 V 70 M180 60 H 240" class="wire"/>
+          <path d="M215 60 V 108 M203 108 H 227 M203 116 H 227 M215 116 V 180" class="wire"/>
+          <path d="M240 60 V 108 M234 108 H 246 V 140 H 234 Z M240 140 V 180" class="wire"/>
+          <path d="M30 180 H 240" class="wire"/>
+          <text x="250" y="76" class="lbl-sm">−</text><text x="250" y="176" class="lbl-sm">+</text>
+          <text x="140" y="206" text-anchor="middle" class="lbl-sm">플라이백은 이 회로의 절연형</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-1.</b> 기본 비절연 컨버터 셋. 모두 스위치 하나, 다이오드(또는 동기 스위치) 하나, 인덕터 하나, 출력 커패시터 하나다. 인덕터가 어디에 붙느냐(출력 쪽 / 입력 쪽 / 접지 쪽)가 변환비를 정한다.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="ratio">
+    <h2>벅·부스트·벅-부스트의 변환비</h2>
+    <p>벅에서 스위치가 켜진 \(DT_s\) 동안 인덕터 양단은 \(V_{in}-V_o\), 꺼진 \((1-D)T_s\) 동안은 \(-V_o\)다. 볼트-초 균형 \((V_{in}-V_o)D = V_o(1-D)\)에서 \(V_o = DV_{in}\). 부스트는 켜진 동안 \(V_{in}\), 꺼진 동안 \(V_{in}-V_o\)라 \(V_o = V_{in}/(1-D)\). 같은 방법으로 세 회로를 정리하면 다음과 같다.</p>
+    <div class="formula">$$\text{벅: } M = D,\quad \Delta i_L = \frac{(V_{in}-V_o)D}{Lf_{sw}};\qquad \text{부스트: } M = \frac{1}{1-D},\quad \Delta i_L = \frac{V_{in}D}{Lf_{sw}};\qquad \text{벅-부스트: } M = -\frac{D}{1-D},\quad \Delta i_L = \frac{V_{in}D}{Lf_{sw}}$$<div class="where">\(M = V_o/V_{in}\). 벅의 리플은 \(\Delta i_L = V_o(1-D)/(Lf_{sw})\)로도 쓴다. 출력 커패시터 리플은 벅에서 \(\Delta v_o = \Delta i_L/(8f_{sw}C)\)(삼각파 전류가 C를 충전), 부스트·벅-부스트는 출력 전류가 펄스라 \(\Delta v_o = I_oD/(f_{sw}C)\)로 훨씬 크다(ESR 전압 강하는 따로 더한다).</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 210" role="img" aria-label="벅 컨버터의 스위치 노드 전압, 인덕터 전압, 인덕터 전류 파형과 볼트-초 면적">
+        <g class="lbl-sm"><text x="10" y="40">v_SW</text><text x="10" y="105">v_L</text><text x="10" y="178">i_L</text></g>
+        <line x1="60" y1="60" x2="860" y2="60" class="s-axis"/>
+        <path d="M60 60 V 25 H 160 V 60 H 360 V 25 H 460 V 60 H 660 V 25 H 760 V 60 H 860" class="wv"/>
+        <text x="110" y="20" text-anchor="middle" class="lbl-v">V_in</text>
+        <line x1="60" y1="110" x2="860" y2="110" class="s-axis"/>
+        <path d="M60 110 V 82 H 160 V 120 H 360 V 82 H 460 V 120 H 660 V 82 H 760 V 120 H 860 V 110" class="wv"/>
+        <rect x="60" y="82" width="100" height="28" class="f-acc-soft"/><rect x="160" y="110" width="200" height="10" class="f-acc2-soft"/>
+        <text x="110" y="100" text-anchor="middle" class="lbl-sm">(V_in−V_o)·DT</text><text x="260" y="135" text-anchor="middle" class="lbl-sm">V_o·(1−D)T — 두 면적이 같다</text>
+        <line x1="60" y1="190" x2="860" y2="190" class="s-axis"/>
+        <path d="M60 175 L 160 148 L 360 175 L 460 148 L 660 175 L 760 148 L 860 175" class="wi"/>
+        <line x1="60" y1="161.5" x2="860" y2="161.5" class="dash"/><text x="868" y="165" text-anchor="end" class="lbl-sm">I_o</text>
+        <path d="M770 148 V 175" class="wire-t"/><text x="776" y="166" class="lbl-i">Δi_L</text>
+        <text x="110" y="205" text-anchor="middle" class="lbl-sm">DT</text><text x="260" y="205" text-anchor="middle" class="lbl-sm">(1−D)T</text>
+      </svg>
+      <figcaption><b>그림 12-2.</b> 벅 컨버터의 볼트-초 균형. 켜진 구간의 인덕터 전압 면적(주황)과 꺼진 구간의 면적(보라)이 같아야 인덕터 전류가 한 주기 뒤 제자리로 돌아온다. 그 기울기가 리플 \(\Delta i_L\)을 정한다.</figcaption>
+    </figure>
+    <p>DC 서버 한 상: 48 → 12 V, \(D\) = 0.25, 상전류 20.8 A(1 kW/12 V/4상), \(L\) = 2.2 µH, 500 kHz. \(\Delta i_L\) = 36 V × 0.25 / (2.2 µH × 500 kHz) ≈ 8.2 A(리플 비율 약 39 %). 출력 커패시터 100 µF(상당)면 \(\Delta v_o\) ≈ 8.2/(8 × 500k × 100 µ) ≈ 20 mV — 실제로는 4상 인터리빙으로 더 작아진다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="ripple">
+    <h2>리플과 CCM·DCM 경계</h2>
+    <p>부하 전류가 리플의 절반보다 작아지면 인덕터 전류 골이 0에 닿는다. 다이오드(비동기) 컨버터에서는 다이오드가 역전류를 막아 전류가 0에 머무는 세 번째 구간이 생긴다. 이것이 <span class="term">불연속 전도 모드</span><span class="en">(DCM, discontinuous conduction mode)</span>이고, 그때부터 변환비가 \(D\)만이 아니라 부하에도 의존한다(출력이 오른다). 경계는 무차원수 \(K = 2L/(RT_s)\)로 깔끔하게 정리된다.</p>
+    <div class="formula">$$\text{CCM} \iff K \gt K_{crit}(D),\qquad K_{crit}^{\text{벅}} = 1-D,\quad K_{crit}^{\text{부스트}} = D(1-D)^2,\quad K_{crit}^{\text{벅-부스트}} = (1-D)^2$$
+    $$M_{\text{DCM}}^{\text{벅}} = \frac{2}{1+\sqrt{1+4K/D^2}},\qquad M_{\text{DCM}}^{\text{부스트}} = \frac{1+\sqrt{1+4D^2/K}}{2},\qquad M_{\text{DCM}}^{\text{벅-부스트}} = \frac{D}{\sqrt K}$$<div class="where">\(R\)는 부하 저항. 동기 정류 컨버터는 하단 스위치가 역전류도 흘리므로 경부하에서도 CCM을 유지한다(강제 연속 모드, FCCM) — 대신 전류가 음으로 내려가 순환 전류 손실이 생긴다. 경부하 효율을 위해 컨트롤러는 다이오드 에뮬레이션(역전류 차단)이나 펄스 스킵으로 바꾼다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 170" role="img" aria-label="CCM, 경계 모드, DCM의 인덕터 전류 파형 비교">
+        <g transform="translate(10,10)">
+          <rect width="280" height="150" rx="8" class="box"/><text x="12" y="20" class="lbl-b">CCM</text>
+          <line x1="20" y1="120" x2="270" y2="120" class="s-axis"/>
+          <path d="M20 80 L 70 50 L 145 80 L 195 50 L 270 80" class="wi"/>
+          <text x="20" y="140" class="lbl-sm">골이 0 위: M = D</text>
+        </g>
+        <g transform="translate(300,10)">
+          <rect width="280" height="150" rx="8" class="box"/><text x="12" y="20" class="lbl-b">경계 (BCM/CrM)</text>
+          <line x1="20" y1="120" x2="270" y2="120" class="s-axis"/>
+          <path d="M20 120 L 70 50 L 145 120 L 195 50 L 270 120" class="wi"/>
+          <text x="20" y="140" class="lbl-sm">I_o = Δi_L/2, ZVS·ZCS에 쓰는 운전점</text>
+        </g>
+        <g transform="translate(590,10)">
+          <rect width="280" height="150" rx="8" class="box"/><text x="12" y="20" class="lbl-b">DCM</text>
+          <line x1="20" y1="120" x2="270" y2="120" class="s-axis"/>
+          <path d="M20 120 L 60 60 L 110 120 H 145 L 185 60 L 235 120 H 270" class="wi"/>
+          <text x="20" y="140" class="lbl-sm">0에 머무는 구간: M이 부하에 의존</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-3.</b> 세 운전 모드의 인덕터 전류. 같은 \(D\)·같은 \(L\)에서 부하만 줄여도 CCM → 경계 → DCM으로 넘어간다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-bk">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>벅·부스트·벅-부스트 스위칭 파형 (시간 적분)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bk-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>회로</span><div class="seg" id="bk-top"><button data-value="buck" class="on">벅</button><button data-value="boost">부스트</button><button data-value="bb">벅-부스트</button></div></div>
+          <div class="ctrl"><span>정류</span><div class="seg" id="bk-sr"><button data-value="diode" class="on">다이오드</button><button data-value="sync">동기 (FCCM)</button></div></div>
+          <label class="ctrl"><span><span>V<sub>in</sub></span> <output id="bk-Vin-out"></output></span><input type="range" id="bk-Vin" min="5" max="60" step="1" value="48"></label>
+          <label class="ctrl"><span>듀티 D <output id="bk-D-out"></output></span><input type="range" id="bk-D" min="0.05" max="0.9" step="0.01" value="0.25"></label>
+          <label class="ctrl"><span><span>f<sub>sw</sub></span> <output id="bk-f-out"></output></span><input type="range" id="bk-f" min="0" max="100" step="0.1" value="62.4"></label>
+          <label class="ctrl"><span>L <output id="bk-L-out"></output></span><input type="range" id="bk-L" min="0" max="100" step="0.1" value="43.4"></label>
+          <label class="ctrl"><span>C <output id="bk-C-out"></output></span><input type="range" id="bk-C" min="0" max="100" step="0.5" value="50"></label>
+          <label class="ctrl"><span>부하 R <output id="bk-R-out"></output></span><input type="range" id="bk-R" min="0" max="100" step="0.1" value="25.3"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">V<sub>o</sub> (시뮬레이션 평균)</span><span class="v" id="bk-vo">—</span></div>
+        <div class="stat"><span class="k">이론 M·V<sub>in</sub></span><span class="v" id="bk-th">—</span></div>
+        <div class="stat"><span class="k">Δi<sub>L</sub> / I<sub>L</sub></span><span class="v" id="bk-di">—</span></div>
+        <div class="stat"><span class="k">Δv<sub>o</sub></span><span class="v" id="bk-dv">—</span></div>
+        <div class="stat"><span class="k">K / K<sub>crit</sub></span><span class="v" id="bk-k">—</span></div>
+        <div class="stat"><span class="k">모드</span><span class="v" id="bk-mode">—</span></div>
+      </div>
+      <div class="sim-note">이상 스위치·다이오드 + 인덕터 직렬 저항 5 mΩ. 이론 정상 상태(CCM 또는 DCM 식)에서 출발해 주기당 400단계로 60주기를 적분하고 마지막 3주기를 그린다. 위: \(i_L\)(점선 = 평균), 가운데: 스위치 노드 \(v_{SW}\), 아래: 출력 리플(중앙값 기준 mV). 해볼 것: 벅에서 부하 R을 키워 DCM에 들어가면 다이오드 모드는 \(V_o\)가 \(DV_{in}\)보다 올라가고, 동기 모드는 전류가 음으로 내려가며 \(V_o\)가 그대로인 것을 비교하자.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="sync">
+    <h2>동기 정류와 데드 타임</h2>
+    <p>12 V 출력에서 다이오드(\(V_F\) 약 0.5 V 쇼트키)는 20 A × 0.5 V × 0.75 = 7.5 W, 상당 출력의 3 %를 태운다. 그래서 저전압 컨버터는 다이오드 자리에 MOSFET을 넣어 반대 박자로 켜는 <span class="term">동기 정류</span><span class="en">(synchronous rectification)</span>를 쓴다. 3 mΩ GaN이면 같은 전류에서 약 1 W다. 대가는 두 스위치가 동시에 켜지면 입력이 단락된다는 것. 한쪽이 꺼지고 다른 쪽이 켜지기 전 둘 다 꺼진 <span class="term">데드 타임</span><span class="en">(dead time)</span>을 둔다. 그 동안 인덕터 전류는 하단 소자의 역방향 경로(Si는 바디 다이오드, GaN은 3사분면 역도통)로 흐른다.</p>
+    <div class="formula">$$P_{dead} = V_{SD}\,(I_{valley}+I_{peak})\,t_{dt}\,f_{sw},\qquad P_{rr} = Q_{rr}V_{in}f_{sw},\qquad P_{oss} \approx Q_{oss}V_{in}f_{sw}$$<div class="where">\(V_{SD}\): 역도통 전압. Si 바디 다이오드 약 0.8 V, GaN은 바디 다이오드가 없지만 게이트가 꺼진 채 역도통하므로 \(V_{SD} \approx V_{th} + |V_{GS,off}| + I R\) ≈ 2–3 V. Si는 바디 다이오드가 축적한 전하 \(Q_{rr}\)가 상단 턴온 때 역회복 손실을 더하고(<a href="diodes.html">5장</a>·<a href="switching.html">10장</a>), \(Q_{oss}\) 항은 하드 스위칭 상단 턴온에서 두 소자의 \(C_{oss}\) 전하가 상단 채널로 흐르며 생기는 손실이다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="동기 벅의 하프 브리지, 데드 타임 동안의 전류 경로와 게이트 신호 타이밍">
+        <path d="M40 30 H 200" class="wire"/><text x="20" y="34" class="lbl-v">48 V</text>
+        <g transform="translate(160,80)" class="wire"><path d="M0 -50 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 40 M -8 0 H 0 V 14 M -14 -14 V 14 M -30 0 H -14"/></g>
+        <text x="104" y="84" class="lbl-sm">HS</text>
+        <circle cx="160" cy="120" r="3" class="dot"/>
+        <g transform="translate(160,170)" class="wire"><path d="M0 -50 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 50 M -8 0 H 0 V 14 M -14 -14 V 14 M -30 0 H -14"/></g>
+        <text x="104" y="174" class="lbl-sm">LS</text>
+        <path d="M160 120 H 200 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 H 300 V 140 M290 140 H 310 M290 148 H 310 M300 148 V 220" class="wire"/>
+        <path d="M40 220 H 320" class="wire"/>
+        <text x="232" y="100" text-anchor="middle" class="lbl">L</text><text x="316" y="128" class="lbl-v">12 V</text>
+        <path d="M170 210 V 130 H 290" class="path-i2"/><text x="176" y="200" class="lbl-sm">데드 타임: LS 역도통</text>
+        <path d="M170 40 V 112 H 290" class="path-i"/>
+        <g transform="translate(400,20)">
+          <rect width="470" height="200" rx="8" class="box"/>
+          <text x="12" y="22" class="lbl-b">게이트 타이밍과 스위치 노드</text>
+          <text x="12" y="56" class="lbl-sm">HS</text><path d="M50 60 H 120 V 40 H 240 V 60 H 460" class="wire"/>
+          <text x="12" y="96" class="lbl-sm">LS</text><path d="M50 80 H 100 V 100 H 260 V 80 H 460" class="wire" transform="translate(0,0)"/>
+          <rect x="100" y="34" width="20" height="150" class="f-warn-soft"/><rect x="240" y="34" width="20" height="150" class="f-warn-soft"/>
+          <text x="12" y="146" class="lbl-sm">v_SW</text>
+          <path d="M50 170 H 100 V 178 H 120 V 130 H 240 V 178 H 260 V 170 H 460" class="wv"/>
+          <text x="110" y="196" text-anchor="middle" class="lbl-sm">t_dt</text><text x="250" y="196" text-anchor="middle" class="lbl-sm">t_dt</text>
+          <text x="300" y="150" class="lbl-sm">데드 타임 중 v_SW = −V_SD</text>
+          <text x="300" y="166" class="lbl-sm">(Si −0.8 V, GaN −2~−3 V)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-4.</b> 동기 벅의 데드 타임. 두 스위치가 모두 꺼진 구간(노랑)에서 인덕터 전류는 하단 소자로 역도통하고 스위치 노드는 \(-V_{SD}\)까지 내려간다. GaN은 \(V_{SD}\)가 커서 데드 타임을 수 ns로 줄이는 것이 중요하다(게이트 드라이버 지연 정합은 <a href="gatedrive.html">11장</a>).</figcaption>
+    </figure>
+    <p>하단 스위치는 켜지기 직전 이미 역도통 중이라 전압이 거의 0에서 켜진다 — 자연스러운 영전압 스위칭(ZVS)이고 스위칭 손실이 거의 없다. 손실을 내는 것은 상단의 하드 스위칭이다. 정리하면 동기 벅의 상단 스위치는 "빠른 스위치"(작은 \(Q_{GD}\)·\(Q_{oss}\)), 하단은 "낮은 온저항"(D가 작아 하단이 75 % 시간을 도통)으로 고르는 것이 정석이다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="loss">
+    <h2>손실 분해와 효율 곡선</h2>
+    <p>효율 곡선의 모양은 손실 항이 부하 전류에 어떻게 의존하느냐로 정해진다. <strong>고정 손실</strong>(게이트 구동, \(C_{oss}\), 코어 손실, 컨트롤러)은 부하와 무관해 경부하 효율을 깎고, <strong>비례 손실</strong>(스위칭 V·I 겹침, 데드 타임)은 전류에 비례하며, <strong>제곱 손실</strong>(전도, 권선, 배선)은 전류 제곱에 비례해 중부하 이후를 깎는다. 효율의 최대점은 고정 손실과 제곱 손실이 같아지는 부하 근처에 생긴다.</p>
+    <div class="formula">$$P_{loss}(I) = \underbrace{P_0}_{\text{게이트},\,C_{oss},\,\text{코어}} + \underbrace{aI}_{\text{VI 겹침, 데드 타임}} + \underbrace{bI^2}_{\text{전도, 권선}},\qquad \frac{d\eta}{dI} = 0 \Rightarrow I_{\eta,\max} \approx \sqrt{P_0/b}$$
+    $$P_{cond} = I_{rms}^2 R,\quad I_{rms}^2 = I^2 + \frac{\Delta i_L^2}{12},\qquad P_{VI} = \tfrac12 V_{in}\big(I_{valley}t_{on} + I_{peak}t_{off}\big)f_{sw},\qquad P_G = 2Q_GV_{GS}f_{sw}$$<div class="where">코어 손실은 스타인메츠 식 \(P_{core} = k f^{\alpha}\Delta B^{\beta}\)(\(\alpha \approx 1.4\), \(\beta \approx 2.5\))을 리플 전류로 바꿔 쓴다. 아래 모델 값: GaN 100 V 3 mΩ(고온 ×1.5), \(Q_G\) 12 nC@5 V, \(Q_{oss}\) 35 nC, \(t_{on}=t_{off}\) = 3 ns, \(V_{SD}\) 2.0 V, 2.2 µH(DCR 1.3 mΩ), 500 kHz / Si 100 V 3 mΩ(×1.5), \(Q_G\) 60 nC@10 V, \(Q_{oss}\) 90 nC, \(Q_{rr}\) 80 nC, 8 ns, \(V_{SD}\) 0.8 V, 4.7 µH(1.8 mΩ), 200 kHz. 공통: 출력 배선 0.25 mΩ, 컨트롤러·보조 전원 1.2 W.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 200" role="img" aria-label="4상 인터리브드 동기 벅 서버 전원의 손실 위치 지도">
+        <rect x="10" y="20" width="860" height="170" rx="8" class="box"/>
+        <text x="24" y="44" class="lbl-b">DC 서버 전원 한 상 (×4)에서 열이 나는 곳</text>
+        <g transform="translate(150,120)" class="wire"><path d="M0 -60 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 20 M -8 0 H 0 V 14 M -14 -14 V 14 M -30 0 H -14"/></g>
+        <circle cx="150" cy="140" r="3" class="dot"/>
+        <path d="M150 140 H 260 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 H 400" class="wire"/>
+        <g class="lbl-h"><text x="30" y="80">상단 HS</text></g>
+        <text x="30" y="98" class="lbl-sm">전도 D·I²R</text><text x="30" y="114" class="lbl-sm">V·I 겹침, Q_oss·V</text><text x="30" y="130" class="lbl-sm">(Si: Q_rr·V)</text>
+        <text x="190" y="170" class="lbl-h">하단 LS</text><text x="190" y="186" class="lbl-sm">전도 (1−D)·I²R, 데드 타임 V_SD·I</text>
+        <text x="300" y="100" class="lbl-h">인덕터</text><text x="300" y="116" class="lbl-sm">권선 I²·DCR + 코어 f^1.4·ΔB^2.5</text>
+        <text x="430" y="80" class="lbl-h">드라이버</text><text x="430" y="96" class="lbl-sm">2·Q_G·V·f</text>
+        <text x="430" y="140" class="lbl-h">공통</text><text x="430" y="156" class="lbl-sm">출력 배선·커넥터 I²R, 컨트롤러 고정 손실</text>
+        <g transform="translate(690,40)">
+          <text x="0" y="14" class="lbl-sm">부하에 대한 의존</text>
+          <text x="0" y="40" class="lbl-sm">고정 P₀ → 경부하 η 하락</text>
+          <text x="0" y="60" class="lbl-sm">비례 aI</text>
+          <text x="0" y="80" class="lbl-sm">제곱 bI² → 중·고부하 η 하락</text>
+          <text x="0" y="110" class="lbl-sm">최대 η: P₀ ≈ bI²</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-5.</b> 동기 벅 한 상의 손실 위치. 손실 항마다 부하 전류 의존성이 달라(고정·비례·제곱) 효율 곡선이 "경부하에서 오르고, 중부하에서 최대, 고부하에서 다시 내려가는" 모양이 된다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-ls">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>DC 서버 48 → 12 V 손실 분해: GaN 500 kHz vs Si 200 kHz</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ls-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>부하 <output id="ls-P-out"></output></span><input type="range" id="ls-P" min="2" max="100" step="1" value="50"></label>
+          <label class="ctrl"><span>데드 타임 (GaN) <output id="ls-dg-out"></output></span><input type="range" id="ls-dg" min="1" max="40" step="1" value="10"></label>
+          <label class="ctrl"><span>데드 타임 (Si) <output id="ls-ds-out"></output></span><input type="range" id="ls-ds" min="5" max="100" step="1" value="40"></label>
+          <label class="check"><input type="checkbox" id="ls-shed"> 상 줄이기 (손실 최소인 상 수 자동 선택)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">η GaN</span><span class="v" id="ls-eg">—</span></div>
+        <div class="stat"><span class="k">η Si</span><span class="v" id="ls-es">—</span></div>
+        <div class="stat"><span class="k">손실 GaN / Si</span><span class="v" id="ls-pl">—</span></div>
+        <div class="stat"><span class="k">동작 상 수</span><span class="v" id="ls-n">—</span></div>
+        <div class="stat"><span class="k">GaN 최대 손실 항</span><span class="v" id="ls-top">—</span></div>
+        <div class="stat"><span class="k">피크 η (GaN / Si)</span><span class="v" id="ls-pk">—</span></div>
+      </div>
+      <div class="sim-note">위: 부하(1 kW 기준 %)에 대한 효율 곡선(GaN·Si, 점선은 상 줄이기 끔/켬의 반대). 아래: 선택 부하에서 4상 전체 손실 분해 막대(전도 / 스위칭 = V·I + \(Q_{oss}\) + \(Q_{rr}\) / 게이트 / 데드 타임 / 인덕터 / 배선·고정). 해볼 것: 10 % 부하에서 상 줄이기를 켜면 효율이 크게 오르는 이유(고정 손실이 상 수에 비례), GaN 데드 타임을 30 ns로 늘리면 GaN의 이점이 얼마나 줄어드는지 보자.</div>
+    </div>
+    <div class="callout fab"><strong>DC 서버 전원의 효율 곡선</strong>모델에서 GaN 500 kHz 설계는 피크 효율 약 97.6 %(60–80 % 부하), 전부하 약 97.5 %, Si 200 kHz 설계는 피크 약 97.2 %다. 효율 차이는 0.5 %p 안팎이지만 GaN은 주파수가 2.5배라 인덕터가 2.2 µH로 Si(4.7 µH)의 절반 이하이고 출력 커패시터도 줄어든다 — GaN의 이득은 "같은 효율에서 더 작게"다. 경부하(10 %)는 고정 손실이 지배해 상 줄이기가 필수이며, 이것이 데이터센터 전원 등급(80 PLUS)이 10–20 % 부하 효율을 따로 요구하는 이유다(<a href="applications.html">17장</a>). SoC 안의 전압 조정기와 비교는 <a href="../../soc/chapters/power.html">SoCBook 전력 관리</a>를 보라.</div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="fsw">
+    <h2>스위칭 주파수 최적</h2>
+    <p>주파수를 올리면 같은 리플 비율을 지키는 데 필요한 인덕턴스가 \(1/f\)로 줄고, 인덕터 부피(저장 에너지 \(\tfrac12 LI_{pk}^2\))와 권선 저항이 함께 준다. 대신 주기마다 내는 스위칭·게이트·\(C_{oss}\)·데드 타임 에너지가 \(f\)에 비례해 늘고, 코어 손실도 \(f^{1.4}\)로 는다. 둘의 합은 어딘가에서 최소가 되고, 그 최적 주파수는 소자의 스위칭 에너지(\(Q_{oss}\), \(Q_{rr}\), 전환 시간)가 작을수록 높아진다. 그런데 손실만 최소화한 주파수는 생각보다 낮다(아래 모델에서 GaN 약 130 kHz, Si 약 65 kHz). 실제 설계는 전력 밀도와 부하 과도 응답(작은 L·C)을 위해 손실 최소점보다 몇 배 높은 주파수를 고르고, 그 대가로 손실을 조금 더 낸다. 같은 손실 증가(예: 부하의 +0.5 %p)로 얼마나 높이 갈 수 있느냐가 소자의 가치이고, 여기서 GaN은 Si의 약 2.4배다(약 420 kHz 대 175 kHz) — "넓은 밴드갭 소자는 주파수를 올려 수동 소자를 줄인다"는 말의 정량적 의미다.</p>
+    <div class="formula">$$L = \frac{V_o(1-D)}{r\,I\,f_{sw}},\qquad P(f) = \underbrace{I_{rms}^2(R_{ds}+R_{DCR}(L))}_{f\uparrow\ \Rightarrow\ \downarrow} + \underbrace{E_{sw}f + k f^{1.4}\Delta I^{2.5}}_{f\uparrow\ \Rightarrow\ \uparrow},\qquad f_{opt}: \frac{dP}{df}=0$$<div class="where">\(r = \Delta i_L/I\)는 리플 비율(보통 0.2–0.5). 권선 저항은 \(R_{DCR} \approx 0.3 + 1.0\,(L/2.2\,\mu\text{H})^{0.7}\) mΩ로 인덕턴스와 함께 줄어든다고 둔 근사. \(E_{sw}\)는 주기당 스위칭·게이트·\(C_{oss}\)·\(Q_{rr}\)·데드 타임 에너지의 합.</div></div>
+    <div class="sim" id="sim-fs">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>최적 스위칭 주파수: 인덕터가 작아지는 값과 스위칭 손실</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="fs-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>리플 비율 r <output id="fs-r-out"></output></span><input type="range" id="fs-r" min="0.1" max="1.2" step="0.02" value="0.4"></label>
+          <label class="ctrl"><span>부하 (1 kW 기준) <output id="fs-P-out"></output></span><input type="range" id="fs-P" min="10" max="100" step="1" value="100"></label>
+          <label class="ctrl"><span>표시 주파수 <output id="fs-f-out"></output></span><input type="range" id="fs-f" min="0" max="100" step="0.1" value="59.4"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">f<sub>opt</sub> GaN / Si</span><span class="v" id="fs-opt">—</span></div>
+        <div class="stat"><span class="k">최소 손실 (4상)</span><span class="v" id="fs-min">—</span></div>
+        <div class="stat"><span class="k">선택 f: L</span><span class="v" id="fs-L">—</span></div>
+        <div class="stat"><span class="k">선택 f: 손실 GaN / Si</span><span class="v" id="fs-pl">—</span></div>
+        <div class="stat"><span class="k">인덕터 에너지 (부피 지표)</span><span class="v" id="fs-e">—</span></div>
+        <div class="stat"><span class="k">손실 +0.5 %p 허용 최고 f</span><span class="v" id="fs-hi">—</span></div>
+      </div>
+      <div class="sim-note">손실 모델은 위 손실 분해와 같고(4상 전체, 상당 \(I\) = 부하/12 V/4), 인덕턴스만 \(L = V_o(1-D)/(rIf)\)로 주파수마다 다시 정한다. 오른쪽 축 점선은 상당 인덕터 저장 에너지 \(\tfrac12 LI_{pk}^2\)(부피에 대략 비례). 마지막 칸은 손실이 최소값보다 부하의 0.5 %(1 kW에서 5 W)만큼 늘어나는 것을 허용할 때 갈 수 있는 최고 주파수 — PW-800이 GaN 500 kHz, Si 200 kHz를 고른 근거에 해당한다. 해볼 것: 리플 비율을 키우면(작은 L) 최적 주파수가 내려가는 이유 — 코어 손실과 리플 전류 손실이 커지기 때문 — 를 확인하자.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="interleave">
+    <h2>인터리빙: 리플 상쇄</h2>
+    <p>1 kW 12 V면 출력 전류가 83 A다. 한 상으로 감당하면 인덕터가 크고 리플·열이 한 곳에 몰린다. 상을 \(N\)개로 나누고 각 상의 스위칭 시점을 \(T_s/N\)씩 어긋나게 하는 <span class="term">인터리빙</span><span class="en">(interleaving)</span>을 쓰면, 상전류의 리플이 출력 노드에서 서로 상쇄된다. 합 전류의 리플 주파수는 \(Nf_{sw}\)가 되고, 특정 듀티(\(D = k/N\))에서는 리플이 완전히 0이 된다. 입력 커패시터의 RMS 전류도 크게 준다.</p>
+    <div class="formula">$$\frac{\Delta i_{total}}{\Delta i_{phase}} = \frac{(ND-m)(m+1-ND)}{ND(1-D)},\qquad m = \lfloor ND \rfloor,\qquad f_{ripple} = Nf_{sw}$$<div class="where">\(\Delta i_{phase}\)는 한 상의 리플 \(V_{in}D(1-D)/(Lf)\). 상 사이 전류 균형은 전류 모드 제어나 상별 전류 감지로 맞춘다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 200" role="img" aria-label="4상 인터리브드 동기 벅: 위상이 90도씩 어긋난 네 개의 하프 브리지와 인덕터가 하나의 출력에 연결">
+        <path d="M30 30 V 180" class="wire"/><text x="16" y="24" class="lbl-v">48 V</text>
+        <g class="wire">
+          <path d="M30 40 H 70 M30 80 H 70 M30 120 H 70 M30 160 H 70"/>
+        </g>
+        <g class="lbl-sm">
+          <rect x="70" y="28" width="90" height="24" rx="4" class="box2"/><text x="115" y="44" text-anchor="middle">하프 브리지 1</text>
+          <rect x="70" y="68" width="90" height="24" rx="4" class="box2"/><text x="115" y="84" text-anchor="middle">하프 브리지 2</text>
+          <rect x="70" y="108" width="90" height="24" rx="4" class="box2"/><text x="115" y="124" text-anchor="middle">하프 브리지 3</text>
+          <rect x="70" y="148" width="90" height="24" rx="4" class="box2"/><text x="115" y="164" text-anchor="middle">하프 브리지 4</text>
+        </g>
+        <text x="190" y="22" class="lbl-sm">위상 0° / 90° / 180° / 270°</text>
+        <g class="wire">
+          <path d="M160 40 H 190 q6 -12 12 0 q6 -12 12 0 q6 -12 12 0 q6 -12 12 0 H 280 V 160"/>
+          <path d="M160 80 H 190 q6 -12 12 0 q6 -12 12 0 q6 -12 12 0 q6 -12 12 0 H 280"/>
+          <path d="M160 120 H 190 q6 -12 12 0 q6 -12 12 0 q6 -12 12 0 q6 -12 12 0 H 280"/>
+          <path d="M160 160 H 190 q6 -12 12 0 q6 -12 12 0 q6 -12 12 0 q6 -12 12 0 H 280"/>
+          <path d="M280 100 H 330 M310 100 V 120 M298 120 H 322 M298 128 H 322 M310 128 V 180"/>
+        </g>
+        <text x="340" y="104" class="lbl-v">12 V / 83 A</text>
+        <g transform="translate(470,20)">
+          <rect width="400" height="170" rx="8" class="box"/>
+          <text x="12" y="20" class="lbl-b">상전류와 합 (D = 0.25, N = 4)</text>
+          <path d="M20 110 L 45 80 L 120 110 L 145 80 L 220 110 L 245 80 L 320 110 L 345 80 L 390 98" class="wi" opacity=".5"/>
+          <path d="M20 90 L 45 102 L 70 80 L 145 110 L 170 80 L 245 110 L 270 80 L 345 110 L 370 80 L 390 88" class="wi" opacity=".5" transform="translate(0,0)"/>
+          <path d="M20 60 H 390" stroke="var(--m-amp)" stroke-width="3" fill="none"/>
+          <text x="24" y="52" class="lbl-i">합 전류: D = 1/4 에서 리플 0</text>
+          <text x="24" y="150" class="lbl-sm">각 상 리플 8.2 A pk-pk, 주파수 500 kHz → 합은 2 MHz</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-6.</b> PW-800 DC 서버 전원의 4상 인터리브드 벅. 48 V → 12 V는 \(D\) = 0.25 = 1/4이라 4상 합 전류의 리플이 이론상 완전히 상쇄되는 행운의 운전점이다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-il">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>인터리빙 리플 상쇄: 상 수와 듀티</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="il-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>상 수 N <output id="il-N-out"></output></span><input type="range" id="il-N" min="1" max="6" step="1" value="4"></label>
+          <label class="ctrl"><span>듀티 D <output id="il-D-out"></output></span><input type="range" id="il-D" min="0.05" max="0.95" step="0.01" value="0.3"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">상 리플 Δi<sub>phase</sub></span><span class="v" id="il-dp">—</span></div>
+        <div class="stat"><span class="k">합 리플 Δi<sub>total</sub></span><span class="v" id="il-dt">—</span></div>
+        <div class="stat"><span class="k">상쇄 비율</span><span class="v" id="il-r">—</span></div>
+        <div class="stat"><span class="k">리플 주파수</span><span class="v" id="il-f">—</span></div>
+        <div class="stat"><span class="k">입력 C RMS 전류</span><span class="v" id="il-cin">—</span></div>
+      </div>
+      <div class="sim-note">조건: \(V_{in}\) = 48 V, 상당 \(L\) = 2.2 µH, 500 kHz, 총 출력 전류 83 A(1 kW/12 V)를 \(N\)상이 나눈다(\(V_o = DV_{in}\)). 위: 각 상 전류(얇은 선)와 합 전류(굵은 선, 오른쪽 눈금). 아래: \(\Delta i_{total}/\Delta i_{phase}\) 곡선(현재 N, 점선 N = 1·2)과 현재 점. 입력 RMS 전류는 상 펄스 합을 수치 적분(리플 무시). 해볼 것: D를 0.25·0.5·0.75로 맞춰 4상 리플이 0이 되는 점과, D = 0.3에서도 N을 늘리면 리플이 줄어드는 것을 보자.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="llc">
+    <h2>절연형 컨버터와 LLC 공진</h2>
+    <p>입력과 출력을 갈바닉 절연해야 하면(안전 규격, 차량 고전압과 저전압 분리) 변압기가 들어간다. 저전력은 벅-부스트를 변압기로 바꾼 <strong>플라이백</strong>이 주력이다. PW-800 GC 충전기는 플라이백의 누설 인덕턴스 에너지를 클램프 커패시터에 모아 되돌리고 주 스위치를 ZVS로 켜는 <strong>능동 클램프 플라이백</strong>(ACF, 약 300 kHz, 650 V GaN)이다. 수 kW 이상은 <strong>LLC 공진 컨버터</strong>가 표준이다. 하프(또는 풀) 브리지가 만든 사각파를 직렬 공진 탱크(\(L_r\), \(C_r\))와 변압기 자화 인덕턴스 \(L_m\)에 걸어, 공진 근처에서 모든 1차 스위치를 ZVS로, 2차 정류기를 ZCS로 동작시킨다. OB 충전기 2단의 CLLC는 2차에도 공진 커패시터를 둔 양방향 대칭형이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 220" role="img" aria-label="LLC 하프 브리지 공진 컨버터: 하프 브리지, 공진 인덕터, 공진 커패시터, 자화 인덕턴스, 변압기, 중앙 탭 동기 정류기">
+        <path d="M30 30 V 190" class="wire"/><text x="14" y="24" class="lbl-v">V_in 800 V</text>
+        <g transform="translate(110,70)" class="wire"><path d="M0 -40 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 40 M -8 0 H 0 V 14 M -14 -14 V 14 M -30 0 H -14"/></g>
+        <g transform="translate(110,150)" class="wire"><path d="M0 -40 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 40 M -8 0 H 0 V 14 M -14 -14 V 14 M -30 0 H -14"/></g>
+        <path d="M30 30 H 110 M30 190 H 110" class="wire"/>
+        <circle cx="110" cy="110" r="3" class="dot"/>
+        <path d="M110 110 H 150 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 H 230 M230 98 V 122 M238 98 V 122 M238 110 H 300 V 80" class="wire"/>
+        <text x="174" y="90" text-anchor="middle" class="lbl">L<tspan class="sub" dy="3">r</tspan></text><text x="234" y="92" text-anchor="middle" class="lbl">C<tspan class="sub" dy="3">r</tspan></text>
+        <path d="M300 80 V 90 q14 6 0 12 q14 6 0 12 q14 6 0 12 q14 6 0 12 V 170 H 110" class="wire"/>
+        <text x="324" y="128" class="lbl">L<tspan class="sub" dy="3">m</tspan></text>
+        <path d="M300 80 H 360 V 90 q-14 6 0 12 q-14 6 0 12 q-14 6 0 12 q-14 6 0 12 V 160 H 300" class="wire"/>
+        <path d="M374 84 V 166 M380 84 V 166" class="wire"/>
+        <path d="M394 70 V 90 q14 6 0 12 q14 6 0 12 V 116 q14 6 0 12 q14 6 0 12 V 170" class="wire"/>
+        <text x="377" y="190" text-anchor="middle" class="lbl-sm">1 : n</text>
+        <path d="M394 70 H 450 M394 170 H 450 M394 120 H 520" class="wire"/>
+        <rect x="450" y="62" width="30" height="16" class="box2"/><rect x="450" y="162" width="30" height="16" class="box2"/>
+        <text x="465" y="56" text-anchor="middle" class="lbl-sm">SR1</text><text x="465" y="198" text-anchor="middle" class="lbl-sm">SR2</text>
+        <path d="M480 70 H 500 V 170 H 480 M500 120 H 500" class="wire"/>
+        <path d="M520 120 V 130 M508 130 H 532 M508 138 H 532 M520 138 V 150 H 500" class="wire"/>
+        <text x="540" y="132" class="lbl-v">V_o</text>
+        <g transform="translate(600,20)">
+          <rect width="270" height="180" rx="8" class="box"/>
+          <text x="12" y="20" class="lbl-b">공진 주파수 두 개</text>
+          <text x="12" y="46" class="lbl-sm">f_r = 1 / (2π√(L_r C_r))</text>
+          <text x="12" y="64" class="lbl-sm">— 직렬 공진: 이득 1, 부하 무관</text>
+          <text x="12" y="90" class="lbl-sm">f_p = 1 / (2π√((L_r+L_m) C_r))</text>
+          <text x="12" y="108" class="lbl-sm">— 무부하 공진: 이득 최대</text>
+          <text x="12" y="134" class="lbl-sm">L_n = L_m / L_r,  Q = √(L_r/C_r) / R_ac</text>
+          <text x="12" y="152" class="lbl-sm">R_ac = 8n²R_L / π²</text>
+          <text x="12" y="170" class="lbl-sm">f_p &lt; f_sw (유도성) → ZVS</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-7.</b> LLC 하프 브리지 공진 컨버터. 주파수를 바꿔 이득을 조절한다(PWM이 아닌 주파수 변조). 1차 스위치는 탱크 전류가 전압보다 늦을 때(유도성 영역) 데드 타임 동안 \(C_{oss}\)가 방전되어 ZVS로 켜진다.</figcaption>
+    </figure>
+    <p>정밀 해석은 시간 영역 구간 풀이가 필요하지만, 설계는 <span class="term">기본파 근사</span><span class="en">(FHA, first harmonic approximation)</span>로 한다. 사각파를 기본파 사인으로, 정류기+부하를 등가 교류 저항 \(R_{ac}\)로 바꾸면 탱크는 선형 회로이고 이득은 전달 함수의 크기다.</p>
+    <div class="formula">$$M(f_n) = \left|\frac{Z_p}{Z_{in}}\right| = \frac{L_n f_n^2}{\sqrt{\big[(L_n+1)f_n^2-1\big]^2 + \big[L_n Q f_n (f_n^2-1)\big]^2}},\qquad f_n = \frac{f_{sw}}{f_r}$$<div class="where">\(Z_p = j\omega L_m \parallel R_{ac}\), \(Z_{in} = j\omega L_r + 1/(j\omega C_r) + Z_p\). ZVS 조건은 \(\arg Z_{in} \gt 0\)(입력 전류가 전압보다 늦음). \(Q\)가 크면(중부하) 피크 이득이 낮아지고, \(L_n\)이 작으면 이득 범위가 넓지만 순환 자화 전류가 커진다.</div></div>
+    <div class="sim" id="sim-llc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>LLC 이득 곡선 (FHA)과 ZVS 영역</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="llc-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>L<sub>n</sub> = L<sub>m</sub>/L<sub>r</sub></span> <output id="llc-Ln-out"></output></span><input type="range" id="llc-Ln" min="2" max="12" step="0.1" value="5"></label>
+          <label class="ctrl"><span>품질 계수 Q (부하) <output id="llc-Q-out"></output></span><input type="range" id="llc-Q" min="0.05" max="1.5" step="0.01" value="0.4"></label>
+          <label class="ctrl"><span><span>f<sub>n</sub> = f<sub>sw</sub>/f<sub>r</sub></span> <output id="llc-fn-out"></output></span><input type="range" id="llc-fn" min="0.3" max="2.5" step="0.01" value="1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">이득 M</span><span class="v" id="llc-M">—</span></div>
+        <div class="stat"><span class="k">Z<sub>in</sub> 위상</span><span class="v" id="llc-ph">—</span></div>
+        <div class="stat"><span class="k">스위칭 상태</span><span class="v" id="llc-z">—</span></div>
+        <div class="stat"><span class="k">f<sub>sw</sub> (f<sub>r</sub> = 200 kHz)</span><span class="v" id="llc-f">—</span></div>
+        <div class="stat"><span class="k">피크 이득 (위치)</span><span class="v" id="llc-pk">—</span></div>
+        <div class="stat"><span class="k">f<sub>p</sub>/f<sub>r</sub></span><span class="v" id="llc-fp">—</span></div>
+      </div>
+      <div class="sim-note">얇은 선: \(Q\) = 0.1·0.3·0.5·0.8·1.2의 이득 곡선, 굵은 선: 현재 \(Q\)(실선 = 유도성·ZVS, 빨강 점선 = 용량성·ZVS 상실). 회색 점선: 각 \(Q\)에서 \(\arg Z_{in} = 0\)이 되는 경계(이 선 오른쪽이 ZVS). 해볼 것: 중부하(\(Q\) = 0.8)에서 이득 1.3을 얻으려면 어디까지 주파수를 내려야 하는지, 그때 ZVS 경계에 얼마나 가까운지 보자. \(L_n\)을 3으로 줄이면 이득 범위가 넓어진다.</div>
+    </div>
+    <div class="callout fab"><strong>OB 충전기 2단 CLLC</strong>PW-800 OB의 2단은 1200 V SiC 풀 브리지 CLLC, 공진 주파수 약 200 kHz다. 배터리 전압(약 550–850 V)이 넓게 변하므로 이득 범위가 필요하고, 그래서 \(L_n\)을 약 4–6으로 잡아 \(f_n\) 약 0.7–1.3에서 운전한다. 공진점(\(f_n\) = 1) 근처에서 효율이 가장 높고(약 98 % 이상), 링크 전압(약 800 V)을 1단 PFC가 조절해 2단이 공진점 가까이 머물게 하는 것이 2단 구성 OBC의 요령이다. 양방향(V2G) 운전에서는 2차 측이 1차 역할을 하므로 CLLC의 대칭 탱크가 필요하다.</div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="pfc">
+    <h2>역률, THD, 부스트 PFC</h2>
+    <p>교류 전원에서 직류를 얻는 가장 단순한 방법은 다이오드 브리지 + 큰 커패시터다. 그러면 커패시터 전압보다 교류 순시값이 높은 피크 근처에서만 짧고 큰 전류가 흐른다. 이 전류는 고조파가 많아(3·5·7차…) 같은 유효 전력을 위해 더 큰 RMS 전류가 필요하고, 배전망 전압을 일그러뜨린다. 그래서 규격(가전·충전기의 고조파 전류 한도)이 정해져 있고, 일정 전력 이상의 전원은 <span class="term">역률 보정</span><span class="en">(PFC, power factor correction)</span> 단을 둔다.</p>
+    <div class="formula">$$\mathrm{PF} = \frac{P}{V_{rms}I_{rms}} = \underbrace{\frac{I_{1,rms}}{I_{rms}}}_{\text{왜곡 인자}}\cdot\underbrace{\cos\varphi_1}_{\text{변위 인자}} = \frac{\cos\varphi_1}{\sqrt{1+\mathrm{THD}^2}},\qquad \mathrm{THD} = \frac{\sqrt{\sum_{h\ge2} I_h^2}}{I_1}$$<div class="where">\(I_h\)는 \(h\)차 고조파 전류의 RMS, \(\varphi_1\)는 기본파 전압과 전류의 위상차. 전압이 사인파라고 가정.</div></div>
+    <p><strong>부스트 PFC</strong>는 다이오드 브리지 뒤에 부스트 컨버터를 두고, 인덕터 평균 전류가 정류 전압 \(|v_{in}(t)|\)에 비례하게 듀티를 매 순간 바꾼다(평균 전류 모드 제어). 입력이 순수 저항처럼 보이므로 전류가 사인파가 되고, 출력은 정류 전압 피크(230 VAC면 325 V)보다 높은 약 400 V로 조절된다. 출력 커패시터의 100 Hz 리플이 전압 루프를 통해 전류 기준을 흔들면 3차 고조파가 생기므로, 전압 루프 대역폭은 10–20 Hz로 낮게 둔다. 저전력에서는 인덕터 전류를 매 주기 0까지 떨어뜨리는 임계 모드(CrM)·DCM을 쓰기도 하는데, 고정 온 시간 DCM은 평균 전류가 \(|v|/(1-|v|/V_o)\) 꼴이라 출력 전압이 낮을수록 왜곡된다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 220" role="img" aria-label="부스트 PFC: 교류 입력, EMI 필터, 다이오드 브리지, 부스트 인덕터, 스위치, 부스트 다이오드, 400V 직류 링크와 전류 기준 제어">
+        <circle cx="40" cy="110" r="22" class="box2"/><path d="M28 110 q6 -12 12 0 q6 12 12 0" class="wire-t"/><text x="40" y="150" text-anchor="middle" class="lbl-sm">230 VAC</text>
+        <path d="M40 88 V 50 H 90 M40 132 V 170 H 90" class="wire"/>
+        <rect x="90" y="40" width="60" height="140" rx="6" class="box2"/><text x="120" y="114" text-anchor="middle" class="lbl-sm">EMI</text>
+        <path d="M150 50 H 190 M150 170 H 190" class="wire"/>
+        <rect x="190" y="40" width="70" height="140" rx="6" class="box"/>
+        <g class="wire"><path d="M200 74 l 8 -14 l 8 14 z M200 60 H 216"/><path d="M232 74 l 8 -14 l 8 14 z M232 60 H 248"/><path d="M200 164 l 8 -14 l 8 14 z M200 150 H 216"/><path d="M232 164 l 8 -14 l 8 14 z M232 150 H 248"/></g>
+        <text x="225" y="114" text-anchor="middle" class="lbl-sm">브리지</text>
+        <path d="M260 60 H 300 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 H 400" class="wire"/><text x="332" y="40" text-anchor="middle" class="lbl">L 300 µH</text>
+        <g transform="translate(400,120)" class="wire"><path d="M0 -60 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 50 M -8 0 H 0 V 14 M -14 -14 V 14 M -30 0 H -14"/></g>
+        <path d="M400 60 H 430 M430 50 V 70 L 450 60 Z M450 50 V 70 M450 60 H 520" class="wire"/><text x="440" y="40" text-anchor="middle" class="lbl-sm">SiC SBD</text>
+        <path d="M500 60 V 104 M488 104 H 512 M488 112 H 512 M500 112 V 170" class="wire"/>
+        <path d="M260 170 H 520" class="wire"/><text x="528" y="64" class="lbl-v">400 V</text>
+        <rect x="590" y="40" width="280" height="150" rx="8" class="box"/>
+        <text x="604" y="62" class="lbl-b">평균 전류 모드 제어</text>
+        <text x="604" y="86" class="lbl-sm">전압 루프 (10–20 Hz): V_o 오차 → 크기 A</text>
+        <text x="604" y="106" class="lbl-sm">전류 기준 i_ref = A · |v_in(t)|</text>
+        <text x="604" y="126" class="lbl-sm">전류 루프 (수 kHz): i_L 평균 → i_ref</text>
+        <text x="604" y="146" class="lbl-sm">결과: 입력이 저항처럼 보임 → PF ≈ 1</text>
+        <text x="604" y="170" class="lbl-sm">손실 큰 곳: 브리지 다이오드 2 × V_F × I</text>
+      </svg>
+      <figcaption><b>그림 12-8.</b> 부스트 PFC. 다이오드 브리지 뒤 부스트 컨버터가 인덕터 전류를 정류 전압 모양으로 성형한다. 문제는 전류가 언제나 브리지 다이오드 두 개를 지난다는 것 — 7.4 kW에서 약 50 W다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-pfc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>입력 전류 성형: 정류+C vs 부스트 PFC (PF·THD)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pfc-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>방식</span><div class="seg" id="pfc-mode"><button data-value="cap">정류 + C</button><button data-value="ccm" class="on">CCM PFC</button><button data-value="dcm">DCM 고정 온</button></div></div>
+          <label class="ctrl"><span>입력 전력 <output id="pfc-P-out"></output></span><input type="range" id="pfc-P" min="0.3" max="7.4" step="0.1" value="3.7"></label>
+          <label class="ctrl"><span><span>출력 V<sub>o</sub></span> <output id="pfc-Vo-out"></output></span><input type="range" id="pfc-Vo" min="360" max="450" step="5" value="400"></label>
+          <label class="ctrl"><span>전압 루프 대역폭 <output id="pfc-bw-out"></output></span><input type="range" id="pfc-bw" min="2" max="60" step="1" value="10"></label>
+          <label class="ctrl"><span>부스트 L <output id="pfc-L-out"></output></span><input type="range" id="pfc-L" min="50" max="1000" step="10" value="300"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">역률 PF</span><span class="v" id="pfc-pf">—</span></div>
+        <div class="stat"><span class="k">THD</span><span class="v" id="pfc-thd">—</span></div>
+        <div class="stat"><span class="k">I<sub>rms</sub></span><span class="v" id="pfc-irms">—</span></div>
+        <div class="stat"><span class="k">파고율</span><span class="v" id="pfc-cf">—</span></div>
+        <div class="stat"><span class="k">3차 고조파</span><span class="v" id="pfc-h3">—</span></div>
+        <div class="stat"><span class="k">판정 (THD 5 %)</span><span class="v" id="pfc-st">—</span></div>
+      </div>
+      <div class="sim-note">230 VAC 50 Hz. 정류+C: 선로·브리지 저항 0.25 Ω, 1 mF, 정전력 부하를 10주기 시간 적분(주기당 2000단계). CCM: \(i = I_{pk}\sin\theta\,(1 + k\cos2\theta)\), \(k = (\Delta V_o/V_o)(f_{bw}/100\,\text{Hz})\), \(\Delta V_o = P/(2\omega C V_o)\)(C = 1 mF), EMI 필터 X 커패시터 2 µF의 진상 전류 포함, 얇은 선은 65 kHz 스위칭 리플이 실린 인덕터 전류(\(\Delta i = |v|(V_o-|v|)/(V_oLf)\)). DCM: \(i \propto |\sin\theta|/(1-(V_{pk}/V_o)|\sin\theta|)\). PF·THD는 한 주기 1024점 DFT(40차까지). 아래: 고조파 스펙트럼(기본파 대비 %).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="totem">
+    <h2>토템폴 PFC와 역회복</h2>
+    <p>브리지 다이오드를 없애는 <span class="term">브리지리스</span><span class="en">(bridgeless)</span> 구조 중 부품이 가장 적은 것이 <span class="term">토템폴 PFC</span><span class="en">(totem-pole PFC)</span>다. 빠른 레그(하프 브리지, \(f_{sw}\)로 스위칭)와 느린 레그(라인 주파수 50 Hz로 극성만 바꾸는 저저항 MOSFET 또는 다이오드)로 이루어진다. 양의 반주기에는 빠른 레그 하단이 부스트 스위치, 상단이 동기 정류기이고, 음의 반주기에는 역할이 뒤바뀐다. 전류 경로에 다이오드 전압 강하가 없으므로 브리지 손실(약 0.7 %)이 사라진다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="토템폴 PFC 회로: 빠른 레그와 느린 레그, 양의 반주기 부스트 충전·방전 전류 경로">
+        <circle cx="50" cy="130" r="22" class="box2"/><path d="M38 130 q6 -12 12 0 q6 12 12 0" class="wire-t"/>
+        <path d="M50 108 V 100 H 90 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 q8 -14 16 0 H 200" class="wire"/><text x="122" y="80" text-anchor="middle" class="lbl">L</text>
+        <path d="M50 152 V 160 H 360" class="wire"/>
+        <path d="M200 30 H 440 M200 230 H 440" class="wire"/>
+        <g transform="translate(200,65)" class="wire"><path d="M0 -35 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 35 M -8 0 H 0 V 14 M -14 -14 V 14 M -30 0 H -14"/></g>
+        <g transform="translate(200,195)" class="wire"><path d="M0 -95 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 35 M -8 0 H 0 V 14 M -14 -14 V 14 M -30 0 H -14"/></g>
+        <circle cx="200" cy="100" r="3" class="dot"/>
+        <g transform="translate(360,65)" class="wire"><path d="M0 -35 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 95 M -8 0 H 0 V 14 M -14 -14 V 14 M -30 0 H -14"/></g>
+        <g transform="translate(360,195)" class="wire"><path d="M0 -35 V -14 H -8 M -8 -18 V -10 M -8 -4 V 4 M -8 10 V 18 M -8 14 H 0 V 35 M -8 0 H 0 V 14 M -14 -14 V 14 M -30 0 H -14"/></g>
+        <circle cx="360" cy="160" r="3" class="dot"/>
+        <path d="M440 30 V 110 M428 110 H 452 M428 118 H 452 M440 118 V 230" class="wire"/><text x="458" y="118" class="lbl-v">400 V</text>
+        <text x="216" y="60" class="lbl-sm">빠른 레그 (GaN/SiC)</text><text x="216" y="74" class="lbl-sm">상단 = 동기 정류</text>
+        <text x="216" y="190" class="lbl-sm">하단 = 부스트 스위치</text>
+        <text x="374" y="60" class="lbl-sm">느린 레그</text><text x="374" y="74" class="lbl-sm">(50 Hz, Si 저저항)</text>
+        <path d="M60 106 H 190 V 220 H 350 V 168 H 60" class="path-i"/>
+        <path d="M206 100 V 40 H 434 V 220 H 366 V 168" class="path-i2"/>
+        <g transform="translate(520,20)">
+          <rect width="350" height="210" rx="8" class="box"/>
+          <text x="12" y="22" class="lbl-b">양의 반주기</text>
+          <text x="12" y="46" class="lbl-i">실선: 하단 ON → L 충전</text>
+          <text x="12" y="66" class="lbl-sm" fill="var(--accent-2)">점선: 하단 OFF → 상단(동기)으로 방전</text>
+          <text x="12" y="96" class="lbl-sm">하단이 다시 켜질 때 상단 소자는</text>
+          <text x="12" y="112" class="lbl-sm">데드 타임 동안 역도통 중이었다.</text>
+          <text x="12" y="128" class="lbl-sm">→ 상단의 역회복 전하 Q_rr가</text>
+          <text x="12" y="144" class="lbl-sm">   하단 턴온 순간 400 V로 끌려 나온다.</text>
+          <text x="12" y="172" class="lbl-bad">Si SJ 바디 다이오드 Q_rr ≈ 10 µC</text>
+          <text x="12" y="192" class="lbl-sm">10 µC × 400 V × 65 kHz ≈ 260 W / 소자</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-9.</b> 토템폴 PFC의 양의 반주기 전류 경로. 빠른 레그는 하드 스위칭 CCM에서 동기 정류 소자의 역회복을 매 주기 겪는다. 바디 다이오드 \(Q_{rr}\)가 큰 Si 슈퍼정션으로는 불가능하고, \(Q_{rr}\) ≈ 0인 GaN이나 \(Q_{rr}\)가 작은 SiC가 이 구조를 실용화했다.</figcaption>
+    </figure>
+    <p>그림의 숫자가 핵심이다. 하드 스위칭 CCM 토템폴에서 동기 정류 소자의 역회복 손실은 \(Q_{rr}V_of_{sw}\)이고, Si 슈퍼정션 바디 다이오드(\(Q_{rr}\) 약 10 µC)는 소자 하나가 수백 W를 낸다. 게다가 슈퍼정션 바디 다이오드는 회복이 급격(스냅)해서 전압 오버슈트로 소자가 부서진다. 그래서 Si로 토템폴을 하려면 인덕터 전류를 매 주기 음으로 넘겨 ZVS로 켜는 임계·삼각 전류 모드(CrM/TCM)로 가야 하고, 그만큼 RMS 전류와 주파수 변동을 감수한다. GaN(\(Q_{rr}\) = 0)과 SiC(\(Q_{rr}\) 약 0.1 µC)는 하드 스위칭 CCM에서 그대로 쓸 수 있다.</p>
+    <div class="formula">$$P_{rr} = n_p Q_{rr} V_o f_{sw},\qquad P_{cond}^{\text{토템폴}} = I_{rms}^2\Big(\frac{R_{fast}}{n_p} + R_{slow}\Big),\qquad P_{bridge}^{\text{기존}} = 2V_F\,\bar I,\quad \bar I = \frac{2\sqrt2}{\pi}I_{rms}$$<div class="where">\(n_p\)는 빠른 레그 스위치당 병렬 소자 수. 기존 부스트 PFC의 스위치 RMS 전류 \(I_{Q,rms}^2 = I_{rms}^2\big(1 - \tfrac{8\sqrt2\,V_{rms}}{3\pi V_o}\big)\), 부스트 다이오드는 SiC 쇼트키(\(V_F\) 1.3 V, 역회복 없음).</div></div>
+    <div class="sim" id="sim-tp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>토템폴 PFC 손실: 빠른 레그 소자 선택과 Q<sub>rr</sub></h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="tp-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>빠른 레그 소자 (650 V급)</span><div class="seg" id="tp-dev"><button data-value="si">Si SJ 40 mΩ</button><button data-value="sic">SiC 40 mΩ</button><button data-value="gan" class="on">GaN 50 mΩ</button></div></div>
+          <label class="ctrl"><span>입력 전력 <output id="tp-P-out"></output></span><input type="range" id="tp-P" min="0.5" max="7.4" step="0.1" value="7.4"></label>
+          <label class="ctrl"><span><span>f<sub>sw</sub></span> <output id="tp-f-out"></output></span><input type="range" id="tp-f" min="20" max="200" step="1" value="65"></label>
+          <label class="ctrl"><span>병렬 소자 수 <output id="tp-np-out"></output></span><input type="range" id="tp-np" min="1" max="3" step="1" value="2"></label>
+          <label class="check"><input type="checkbox" id="tp-crm"> 임계 모드 (CrM/TCM, ZVS)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">기존 부스트 PFC 손실 / η</span><span class="v" id="tp-a">—</span></div>
+        <div class="stat"><span class="k">토템폴 손실 / η</span><span class="v" id="tp-b">—</span></div>
+        <div class="stat"><span class="k">역회복 손실</span><span class="v" id="tp-rr">—</span></div>
+        <div class="stat"><span class="k">입력 I<sub>rms</sub></span><span class="v" id="tp-i">—</span></div>
+        <div class="stat"><span class="k">판정</span><span class="v" id="tp-st">—</span></div>
+      </div>
+      <div class="sim-note">230 VAC, \(V_o\) = 400 V(단상 모드), 두 구조 모두 같은 소자를 주 스위치로 쓴다. 소자: Si SJ 40 mΩ(고온 ×2.0, \(Q_G\) 90 nC@12 V, \(Q_{oss}\) 약 300 nC, \(Q_{rr}\) 10 µC, 전환 30 ns), SiC 40 mΩ(×1.3, 60 nC@22 V, 70 nC, 0.1 µC, 20 ns), GaN 50 mΩ(×1.7, 6 nC@6 V, 60 nC, 0, 8 ns). 느린 레그 Si 10 mΩ(×1.7), 브리지 \(V_F\) 0.9 V. 하드 스위칭 V·I 손실 \(\tfrac12V_o\bar I(t_r+t_f)f\). CrM: \(Q_{rr}\)·\(Q_{oss}\) 손실 0, 전도 ×4/3, V·I는 턴오프만(피크 2\(\bar I\)). 막대는 200 W에서 자른다(넘으면 화살표). 해볼 것: Si를 고르고 CrM을 켜고 끄며 역회복 손실이 어떻게 사라지는지 보자.</div>
+    </div>
+    <div class="callout fab"><strong>OB 충전기 1단</strong>PW-800 OB는 3상 11 kW / 단상 7.4 kW 겸용으로, 1단이 토템폴 PFC(빠른 레그 650 V GaN 또는 SiC, 65 kHz CCM)다. 모델에서 GaN 2병렬 토템폴은 7.4 kW에서 약 99 %, 같은 소자의 기존 부스트 PFC는 약 98.7 %다. 브리지 다이오드 약 50 W가 사라진 몫이다. 2단 CLLC(약 98 %)와 보조 손실을 합친 전체 효율이 약 96 %, 역률 0.99 이상, THD 5 % 미만이 목표다. 빠른 레그 소자가 \(Q_{rr}\) ≈ 0이 아니면 이 구조 자체가 성립하지 않는다는 점에서, 토템폴 PFC는 넓은 밴드갭 소자가 "더 좋은 부품"이 아니라 "새 회로를 가능하게 한" 대표 사례다.</div>
+  </section>
+
+  <!-- ============================================================ 11 -->
+  <section id="threephase">
+    <h2>3상 PFC 개요</h2>
+    <p>11 kW 이상은 3상 입력을 쓴다. 3상 평형 전류는 순시 전력이 일정해(\(p = 3V_{ph}I_{ph}\cos\varphi\)) 단상의 100 Hz 전력 맥동이 없으므로 DC 링크 커패시터가 작아진다. 대표 구조는 셋이다. ① 6스위치 2레벨 능동 정류기(인버터를 거꾸로 쓴 구조, 양방향 가능, 1200 V 소자 필요, <a href="inverter.html">13장</a>의 PWM과 같다), ② 비엔나형 3레벨 정류기(단방향, 각 상 스위치 하나와 다이오드, 650 V 소자로 800 V 링크 가능), ③ 단상 토템폴 세 개를 묶는 구조. PW-800 OB는 3상에서 약 800 V 링크를 만들고, 단상에서는 같은 하드웨어를 토템폴로 재구성해 약 400 V 링크를 쓴다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 210" role="img" aria-label="3상 6스위치 능동 정류기 구조와 단상 대비 전력 맥동">
+        <g transform="translate(10,10)">
+          <rect width="430" height="190" rx="8" class="box"/>
+          <text x="12" y="22" class="lbl-b">3상 6스위치 능동 정류기</text>
+          <g class="wire">
+            <path d="M20 70 H 60 q6 -12 12 0 q6 -12 12 0 q6 -12 12 0 H 150"/>
+            <path d="M20 110 H 60 q6 -12 12 0 q6 -12 12 0 q6 -12 12 0 H 230"/>
+            <path d="M20 150 H 60 q6 -12 12 0 q6 -12 12 0 q6 -12 12 0 H 310"/>
+            <path d="M150 40 H 360 M150 180 H 360"/>
+            <path d="M150 40 V 180 M230 40 V 180 M310 40 V 180"/>
+            <path d="M360 40 V 100 M348 100 H 372 M348 108 H 372 M360 108 V 180"/>
+          </g>
+          <g class="box2"><rect x="140" y="48" width="20" height="16"/><rect x="140" y="156" width="20" height="16"/><rect x="220" y="48" width="20" height="16"/><rect x="220" y="156" width="20" height="16"/><rect x="300" y="48" width="20" height="16"/><rect x="300" y="156" width="20" height="16"/></g>
+          <text x="20" y="62" class="lbl-sm">a</text><text x="20" y="102" class="lbl-sm">b</text><text x="20" y="142" class="lbl-sm">c</text>
+          <text x="378" y="108" class="lbl-v">800 V</text>
+        </g>
+        <g transform="translate(450,10)">
+          <rect width="420" height="190" rx="8" class="box"/>
+          <text x="12" y="22" class="lbl-b">순시 입력 전력 p(t)</text>
+          <line x1="20" y1="160" x2="400" y2="160" class="s-axis"/>
+          <path d="M20 160 C 50 160 60 60 87 60 C 115 60 125 160 155 160 C 185 160 195 60 222 60 C 250 60 260 160 290 160 C 320 160 330 60 357 60 C 380 60 390 140 400 150" class="wi" opacity=".6"/>
+          <path d="M20 90 H 400" stroke="var(--m-heat)" stroke-width="2.5" fill="none"/>
+          <text x="30" y="52" class="lbl-i">단상: 0 ↔ 2P, 100 Hz 맥동</text>
+          <text x="250" y="84" class="lbl-h">3상 평형: 일정</text>
+          <text x="20" y="182" class="lbl-sm">단상은 링크 C가 맥동 에너지를 저장해야 한다 (수 mF)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-10.</b> 3상 능동 정류기(왼쪽)와 순시 입력 전력(오른쪽). 3상 평형이면 입력 전력이 일정해 DC 링크 커패시터가 작아지고, 단상은 2배 주파수 맥동을 커패시터가 흡수해야 한다.</figcaption>
+    </figure>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>볼트-초 균형 \(\langle v_L\rangle = 0\)과 전하 균형 \(\langle i_C\rangle = 0\)이 모든 정상 상태 해석의 출발점: 벅 \(M = D\), 부스트 \(1/(1-D)\), 벅-부스트 \(-D/(1-D)\). 리플은 \(\Delta i_L = v_L t/L\).</li>
+      <li>\(K = 2L/(RT_s)\)가 \(K_{crit}\)보다 작으면 DCM: 다이오드 컨버터는 변환비가 부하에 의존한다. 동기 정류는 FCCM으로 역전류를 흘린다.</li>
+      <li>동기 정류는 다이오드 전도 손실을 \(I^2R\)로 바꾸지만 데드 타임 손실 \(V_{SD}It_{dt}f\)와 Si의 \(Q_{rr}V f\)가 남는다. GaN은 \(Q_{rr}\) = 0이지만 \(V_{SD}\)가 커서 데드 타임을 줄여야 한다.</li>
+      <li>손실 = 고정 + 비례 + 제곱. 효율 최대는 고정 손실 ≈ 제곱 손실 근처. 경부하는 상 줄이기·펄스 스킵. DC 서버 GaN 500 kHz 모델 피크 약 97.6 %.</li>
+      <li>주파수를 올리면 L이 \(1/f\)로 줄고 스위칭 손실이 \(f\)로 는다. 스위칭 에너지가 작은 GaN의 최적 주파수가 Si보다 높다. 인터리빙은 리플을 \(Nf\)로 올리고 \(D = k/N\)에서 상쇄한다.</li>
+      <li>LLC: FHA 이득 \(M(f_n, L_n, Q)\). 공진점 근처가 최고 효율, \(\arg Z_{in} \gt 0\)(유도성)에서 ZVS. 중부하에서 높은 이득을 얻으려 주파수를 내리면 ZVS 경계에 다가간다.</li>
+      <li>PF = \(\cos\varphi_1/\sqrt{1+\mathrm{THD}^2}\). 부스트 PFC는 전류를 정류 전압 모양으로 성형해 PF ≈ 1. 토템폴 PFC는 브리지 손실을 없애지만 빠른 레그 \(Q_{rr}V_of\) 때문에 하드 스위칭 CCM은 GaN·SiC로만 가능하다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 48 V → 12 V 벅, \(L\) = 2.2 µH, 500 kHz. 인덕터 전류 리플(피크-피크)은?</p><div class="opts">
+        <button class="opt">약 2.7 A</button>
+        <button class="opt" data-correct>약 8.2 A</button>
+        <button class="opt">약 11 A</button>
+        <button class="opt">약 33 A</button>
+      </div><div class="quiz-exp">\(\Delta i_L = (V_{in}-V_o)D/(Lf) = 36 \times 0.25/(2.2\,\mu\text{H}\times500\,\text{kHz}) \approx 8.2\) A. 상전류 20.8 A의 약 39 %다.</div></div>
+
+      <div class="quiz-q"><p>2. 다이오드(비동기) 벅에서 \(D\) = 0.5, \(K = 2L/(RT_s)\) = 0.2다. 운전 모드와 출력은?</p><div class="opts">
+        <button class="opt">CCM, \(V_o = 0.5V_{in}\)</button>
+        <button class="opt" data-correct>DCM, \(V_o\)는 \(0.5V_{in}\)보다 크다</button>
+        <button class="opt">DCM, \(V_o\)는 \(0.5V_{in}\)보다 작다</button>
+        <button class="opt">경계 모드, \(V_o = 0.5V_{in}\)</button>
+      </div><div class="quiz-exp">\(K_{crit} = 1-D = 0.5\)이고 \(K = 0.2 \lt 0.5\)이므로 DCM. \(M = 2/(1+\sqrt{1+4K/D^2}) = 2/(1+\sqrt{4.2}) \approx 0.65\)로 \(D\)보다 크다. 경부하에서 출력이 오르는 것을 피드백 루프가 \(D\)를 줄여 보정한다.</div></div>
+
+      <div class="quiz-q"><p>3. 동기 벅에서 데드 타임을 20 ns → 5 ns로 줄였을 때 Si MOSFET보다 GaN에서 이득이 더 큰 이유는?</p><div class="opts">
+        <button class="opt">GaN은 \(Q_{rr}\)가 커서</button>
+        <button class="opt" data-correct>GaN의 역도통 전압 \(V_{SD}\)가 약 2–3 V로 Si 바디 다이오드(약 0.8 V)보다 커서</button>
+        <button class="opt">GaN의 온저항이 더 커서</button>
+        <button class="opt">GaN의 게이트 전하가 더 커서</button>
+      </div><div class="quiz-exp">데드 타임 손실은 \(V_{SD}It_{dt}f\). GaN은 바디 다이오드 없이 게이트가 꺼진 채 역도통하므로 \(V_{SD} \approx V_{th} + |V_{GS,off}|\)로 크다. 대신 \(Q_{rr}\) = 0이라 Si처럼 역회복 손실은 없다.</div></div>
+
+      <div class="quiz-q"><p>4. 4상 인터리브드 벅이 \(D\) = 0.25로 운전할 때 출력 합 전류 리플은?</p><div class="opts">
+        <button class="opt">한 상 리플의 1/4</button>
+        <button class="opt">한 상 리플과 같다</button>
+        <button class="opt" data-correct>이론상 0 (완전 상쇄)</button>
+        <button class="opt">한 상 리플의 4배</button>
+      </div><div class="quiz-exp">\(ND = 1\)이 정수라 \((ND-m)(m+1-ND) = 0\). 한 상의 전류가 내려가는 기울기 합과 다른 상이 올라가는 기울기 합이 정확히 상쇄된다. 48 → 12 V 서버 전원이 4상과 잘 맞는 이유다.</div></div>
+
+      <div class="quiz-q"><p>5. LLC 컨버터를 공진 주파수보다 한참 낮은 주파수(이득 피크 왼쪽)에서 운전하면?</p><div class="opts">
+        <button class="opt">이득이 1로 고정된다</button>
+        <button class="opt">ZVS가 더 확실해진다</button>
+        <button class="opt" data-correct>입력 임피던스가 용량성이 되어 ZVS를 잃고 하드 스위칭·역회복 문제가 생긴다</button>
+        <button class="opt">자화 전류가 0이 된다</button>
+      </div><div class="quiz-exp">피크 이득 왼쪽은 \(\arg Z_{in} \lt 0\)(용량성)이라 전류가 전압보다 앞선다. 스위치가 켜질 때 \(C_{oss}\)가 방전되어 있지 않고, 상대 소자의 바디 다이오드가 역회복을 겪는다. 설계는 최소 주파수를 이 경계 오른쪽에 둔다.</div></div>
+
+      <div class="quiz-q"><p>6. 입력 전류 THD가 40 %이고 변위 인자 \(\cos\varphi_1\) = 1이면 역률은?</p><div class="opts">
+        <button class="opt">0.60</button>
+        <button class="opt">0.85</button>
+        <button class="opt" data-correct>약 0.93</button>
+        <button class="opt">1.00</button>
+      </div><div class="quiz-exp">\(\mathrm{PF} = 1/\sqrt{1+0.4^2} = 1/\sqrt{1.16} \approx 0.928\). 위상이 맞아도 왜곡만으로 역률이 떨어진다. 정류+C 입력은 THD가 100 %를 넘어 PF 0.6 안팎이다.</div></div>
+
+      <div class="quiz-q"><p>7. 7.4 kW 토템폴 PFC의 빠른 레그에 Si 슈퍼정션(\(Q_{rr}\) = 10 µC)을 2병렬로 쓰고 65 kHz CCM으로 돌리면 역회복 손실은 대략?</p><div class="opts">
+        <button class="opt">약 5 W</button>
+        <button class="opt">약 50 W</button>
+        <button class="opt" data-correct>약 500 W</button>
+        <button class="opt">약 5 kW</button>
+      </div><div class="quiz-exp">\(2\times10\,\mu\text{C}\times400\,\text{V}\times65\,\text{kHz} \approx 520\) W — 입력의 7 %다. SiC(0.1 µC)면 약 5 W, GaN은 0. 그래서 하드 스위칭 토템폴은 넓은 밴드갭 소자의 회로이고, Si로는 CrM/TCM으로 ZVS를 만들어야 한다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const setCls = (id, cls) => { const el = $(id); if (el) el.className = "v " + cls; };
+  const logMap = (u, a, b) => a * Math.pow(b / a, u / 100);
+  const fmtF = (f) => (f >= 1e6 ? (f / 1e6).toFixed(2) + " MHz" : f >= 1e3 ? (f / 1e3).toFixed(f >= 1e5 ? 0 : 1) + " kHz" : f.toFixed(0) + " Hz");
+  const fmtW = (p) => (!isFinite(p) ? "—" : p >= 1000 ? (p / 1000).toFixed(2) + " kW" : p >= 10 ? p.toFixed(1) + " W" : p >= 1 ? p.toFixed(2) + " W" : (p * 1e3).toFixed(0) + " mW");
+  const fmtA = (i) => (!isFinite(i) ? "—" : Math.abs(i) >= 10 ? i.toFixed(1) + " A" : Math.abs(i) >= 0.1 ? i.toFixed(2) + " A" : (i * 1e3).toFixed(1) + " mA");
+  const fmtV = (v) => (!isFinite(v) ? "—" : Math.abs(v) >= 10 ? v.toFixed(2) + " V" : Math.abs(v) >= 0.1 ? v.toFixed(3) + " V" : (v * 1e3).toFixed(1) + " mV");
+  const fmtL = (L) => (L >= 1e-3 ? (L * 1e3).toFixed(2) + " mH" : L >= 1e-6 ? (L * 1e6).toFixed(L >= 1e-5 ? 1 : 2) + " µH" : (L * 1e9).toFixed(0) + " nH");
+  const font = (px, mono) => px + "px " + getComputedStyle(document.body).getPropertyValue(mono ? "--mono" : "--font");
+
+  /* ==========================================================
+     1) 벅·부스트·벅-부스트 시간 적분
+     ========================================================== */
+  (function () {
+    const FA = 50e3, FB = 2e6, LA = 0.2e-6, LB = 50e-6, CA = 10e-6, CB = 1000e-6, RA = 0.1, RB = 100, RL = 5e-3, SPC = 400, NC = 60;
+    const top = PW.seg("bk-top", upd), sr = PW.seg("bk-sr", upd);
+    const gVin = PW.range("bk-Vin", (v) => v + " V", upd), gD = PW.range("bk-D", (v) => v.toFixed(2), upd);
+    const gf = PW.range("bk-f", (u) => fmtF(logMap(u, FA, FB)), upd), gL = PW.range("bk-L", (u) => fmtL(logMap(u, LA, LB)), upd);
+    const gC = PW.range("bk-C", (u) => (logMap(u, CA, CB) * 1e6).toFixed(0) + " µF", upd), gR = PW.range("bk-R", (u) => { const r = logMap(u, RA, RB); return (r < 1 ? r.toFixed(3) : r.toFixed(2)) + " Ω"; }, upd);
+    let res = null;
+    function theory(t, D, K, diode) {
+      const kc = t === "buck" ? 1 - D : t === "boost" ? D * (1 - D) * (1 - D) : (1 - D) * (1 - D);
+      const Mc = t === "buck" ? D : t === "boost" ? 1 / (1 - D) : D / (1 - D);
+      if (!diode || K >= kc) return { M: Mc, dcm: false, kc };
+      const Md = t === "buck" ? 2 / (1 + Math.sqrt(1 + 4 * K / (D * D))) : t === "boost" ? (1 + Math.sqrt(1 + 4 * D * D / K)) / 2 : D / Math.sqrt(K);
+      return { M: Md, dcm: true, kc };
+    }
+    function sim() {
+      const t = top(), diode = sr() === "diode", Vin = gVin(), D = gD(), f = logMap(gf(), FA, FB), L = logMap(gL(), LA, LB), C = logMap(gC(), CA, CB), R = logMap(gR(), RA, RB);
+      const T = 1 / f, dt = T / SPC, K = 2 * L / (R * T), th = theory(t, D, K, diode);
+      let v = Math.min(th.M * Vin, 50 * Vin);
+      const Io = v / R, IL = t === "buck" ? Io : Io / (1 - D);
+      const dI0 = t === "buck" ? (Vin - v) * D / (L * f) : Vin * D / (L * f);
+      let i = th.dcm ? 0 : IL - dI0 / 2;
+      const ia = [], sa = [], va = [];
+      const non = Math.round(D * SPC);
+      for (let c = 0; c < NC; c++) {
+        for (let k = 0; k < SPC; k++) {
+          const on = k < non;
+          let vL, iC, sw;
+          if (t === "buck") { vL = on ? Vin - v : -v; iC = i - v / R; }
+          else if (t === "boost") { vL = on ? Vin : Vin - v; iC = on ? -v / R : i - v / R; }
+          else { vL = on ? Vin : -v; iC = on ? -v / R : i - v / R; }
+          i += (vL - RL * i) * dt / L;
+          if (diode && !on && i < 0) { i = 0; if (t !== "buck") iC = -v / R; }
+          v += iC * dt / C;
+          if (!isFinite(v) || !isFinite(i)) { v = 0; i = 0; }
+          v = PW.clamp(v, -10, 60 * Vin);
+          if (t === "buck") sw = on ? Vin : (i > 0 || !diode ? 0 : v);
+          else if (t === "boost") sw = on ? 0 : (i > 0 || !diode ? v : Vin);
+          else sw = on ? Vin : (i > 0 || !diode ? -v : 0);
+          if (c >= NC - 3 && k % 2 === 0) { const tt = ((c - NC + 3) * SPC + k) * dt; ia.push([tt, i]); sa.push([tt, sw]); va.push([tt, v]); }
+        }
+      }
+      const last = va.slice(-SPC / 2), vo = last.reduce((a, p) => a + p[1], 0) / last.length;
+      const iLast = ia.slice(-SPC / 2), imax = Math.max(...iLast.map((p) => p[1])), imin = Math.min(...iLast.map((p) => p[1])), iavg = iLast.reduce((a, p) => a + p[1], 0) / iLast.length;
+      const vmax = Math.max(...last.map((p) => p[1])), vmin = Math.min(...last.map((p) => p[1]));
+      const dcmSeen = diode && imin <= 1e-9;
+      const vall = va.map((p) => p[1]), vmid = (Math.max(...vall) + Math.min(...vall)) / 2;
+      return { t, Vin, D, T, K, th, ia, sa, va, vo, vmid, imax, imin, iavg, dv: vmax - vmin, dcmSeen, diode };
+    }
+    function upd() {
+      res = sim();
+      const r = res;
+      PW.stat("bk-vo", fmtV(r.vo) + (r.t === "bb" ? " (반전)" : ""));
+      PW.stat("bk-th", fmtV(r.th.M * r.Vin) + " (M " + r.th.M.toFixed(3) + ")");
+      PW.stat("bk-di", fmtA(r.imax - r.imin) + " / " + fmtA(r.iavg));
+      PW.stat("bk-dv", fmtV(r.dv));
+      PW.stat("bk-k", r.K.toFixed(3) + " / " + r.th.kc.toFixed(3)); setCls("bk-k", r.K >= r.th.kc ? "ok" : "warn");
+      const mode = r.dcmSeen ? "DCM" : r.imin < 0 ? "FCCM (역전류)" : "CCM";
+      PW.stat("bk-mode", mode); setCls("bk-mode", mode === "CCM" ? "ok" : "warn");
+      cv.redraw();
+    }
+    const cv = PW.canvas($("bk-cv"), (ctx, w, h) => {
+      if (!res) return;
+      const P = PW.palette(), r = res, s = 1e6, Tm = 3 * r.T * s, h1 = Math.round(h * 0.4), h2 = Math.round(h * 0.28);
+      const ilo = Math.min(0, r.imin) - 0.1 * (r.imax - Math.min(0, r.imin) + 1e-6), ihi = r.imax + 0.15 * (r.imax - Math.min(0, r.imin) + 1e-6);
+      PW.chart(ctx, { x: 56, y: 10, w: w - 70, h: h1 - 20 }, { x: [0, Tm], y: [ilo, ihi], yLabel: "i_L (A)", series: [{ data: r.ia.map((p) => [p[0] * s, p[1]]), color: P.amp, width: 2.2 }], hlines: [{ y: r.iavg, color: P.faint }, { y: 0, color: P.dim, dash: [] }], xFmt: () => "" });
+      const sv = r.sa.map((p) => p[1]), smin = Math.min(0, ...sv), smax = Math.max(...sv, 1);
+      PW.chart(ctx, { x: 56, y: h1 + 2, w: w - 70, h: h2 - 14 }, { x: [0, Tm], y: [smin - 0.1 * (smax - smin), smax * 1.15], yLabel: "v_SW (V)", series: [{ data: r.sa.map((p) => [p[0] * s, p[1]]), color: P.volt, width: 1.8 }], xFmt: () => "" });
+      const mv = Math.max(1e-4, r.dv * 0.65) * 1e3, vmid = r.vmid;
+      PW.chart(ctx, { x: 56, y: h1 + h2 + 2, w: w - 70, h: h - h1 - h2 - 44 }, { x: [0, Tm], y: [-mv, mv], xLabel: "시간 (µs)", yLabel: "Δv_o (mV)", series: [{ data: r.va.map((p) => [p[0] * s, (p[1] - vmid) * 1e3]), color: P.volt, width: 2 }], hlines: [{ y: 0, color: P.faint }] });
+    }, { aspect: 0.7, minHeight: 340, maxHeight: 480 });
+    upd();
+  })();
+
+  /* ==========================================================
+     공통: DC 서버 손실 모델
+     ========================================================== */
+  const DCV = { Vin: 48, Vo: 12, Np: 4, Rpcb: 0.25e-3, Pfix: 1.2 };
+  const DCDEV = {
+    gan: { f: 500e3, L: 2.2e-6, R: 3e-3 * 1.5, Qg: 12e-9, Vg: 5, Qoss: 35e-9, Qrr: 0, Vsd: 2.0, ton: 3e-9, toff: 3e-9, dcr: 1.3e-3 },
+    si: { f: 200e3, L: 4.7e-6, R: 3e-3 * 1.5, Qg: 60e-9, Vg: 10, Qoss: 90e-9, Qrr: 80e-9, Vsd: 0.8, ton: 8e-9, toff: 8e-9, dcr: 1.8e-3 },
+  };
+  function phaseLoss(d, I, tdt, f, L, dcr) {
+    f = f || d.f; L = L || d.L; dcr = dcr == null ? d.dcr : dcr;
+    const D = DCV.Vo / DCV.Vin, dI = (DCV.Vin - DCV.Vo) * D / (L * f), Irms2 = I * I + dI * dI / 12;
+    const Iv = I - dI / 2, Ip = I + dI / 2;
+    const cond = Irms2 * d.R;
+    const sw = 0.5 * DCV.Vin * (Math.max(Iv, 0) * d.ton + Ip * d.toff) * f + d.Qoss * DCV.Vin * f + d.Qrr * DCV.Vin * f;
+    const gate = 2 * d.Qg * d.Vg * f;
+    const dead = d.Vsd * (Math.abs(Iv) + Math.abs(Ip)) * tdt * f;
+    const ind = Irms2 * dcr + 0.05 * Math.pow(f / 1e5, 1.4) * Math.pow(dI / 10, 2.5);
+    return { cond, sw, gate, dead, ind, dI };
+  }
+  function dcTotal(d, P, tdt, shed) {
+    const Io = P / DCV.Vo; let best = null;
+    for (let n = shed ? 1 : DCV.Np; n <= DCV.Np; n++) {
+      const pl = phaseLoss(d, Io / n, tdt);
+      const parts = { cond: n * pl.cond, sw: n * pl.sw, gate: n * pl.gate, dead: n * pl.dead, ind: n * pl.ind, fix: Io * Io * DCV.Rpcb + DCV.Pfix };
+      const L = Object.values(parts).reduce((a, b) => a + b, 0);
+      if (!best || L < best.L) best = { L, n, parts };
+    }
+    return best;
+  }
+
+  /* ==========================================================
+     2) 손실 분해와 효율 곡선
+     ========================================================== */
+  (function () {
+    const gP = PW.range("ls-P", (v) => v + " % (" + (v * 10).toFixed(0) + " W)", upd), gdg = PW.range("ls-dg", (v) => v + " ns", upd), gds = PW.range("ls-ds", (v) => v + " ns", upd);
+    $("ls-shed").addEventListener("change", upd);
+    const NAMES = { cond: "전도", sw: "스위칭", gate: "게이트", dead: "데드 타임", ind: "인덕터", fix: "배선·고정" };
+    let st = null;
+    function curve(k, tdt, shed) { const a = []; let pk = 0, pkx = 0; for (let p = 2; p <= 100; p += 1) { const P = 10 * p, r = dcTotal(DCDEV[k], P, tdt, shed), e = 100 * P / (P + r.L); a.push([p, e]); if (e > pk) { pk = e; pkx = p; } } return { a, pk, pkx }; }
+    function upd() {
+      const shed = $("ls-shed").checked, P = gP() * 10, tg = gdg() * 1e-9, ts = gds() * 1e-9;
+      const g = dcTotal(DCDEV.gan, P, tg, shed), s = dcTotal(DCDEV.si, P, ts, shed);
+      const eg = 100 * P / (P + g.L), es = 100 * P / (P + s.L);
+      const cg = curve("gan", tg, shed), cs = curve("si", ts, shed), cg2 = curve("gan", tg, !shed), cs2 = curve("si", ts, !shed);
+      st = { g, s, cg, cs, cg2, cs2, P, eg, es };
+      PW.stat("ls-eg", eg.toFixed(2) + " %"); PW.stat("ls-es", es.toFixed(2) + " %");
+      PW.stat("ls-pl", fmtW(g.L) + " / " + fmtW(s.L));
+      PW.stat("ls-n", g.n + " / " + s.n + " 상");
+      const topk = Object.keys(g.parts).reduce((a, b) => (g.parts[a] > g.parts[b] ? a : b));
+      PW.stat("ls-top", NAMES[topk] + " " + fmtW(g.parts[topk]));
+      PW.stat("ls-pk", cg.pk.toFixed(2) + " % @" + cg.pkx + "% / " + cs.pk.toFixed(2) + " % @" + cs.pkx + "%");
+      cv.redraw();
+    }
+    const cv = PW.canvas($("ls-cv"), (ctx, w, h) => {
+      if (!st) return;
+      const P = PW.palette(), h1 = Math.round(h * 0.55);
+      PW.chart(ctx, { x: 52, y: 12, w: w - 66, h: h1 - 46 }, { x: [0, 100], y: [85, 99], xLabel: "부하 (%)", yLabel: "효율 (%)",
+        series: [{ data: st.cg2.a, color: P.gan, width: 1.2, dash: [5, 4] }, { data: st.cs2.a, color: P.si, width: 1.2, dash: [5, 4] }, { data: st.cg.a, color: P.gan, width: 2.6 }, { data: st.cs.a, color: P.si, width: 2.6 }],
+        vlines: [{ x: st.P / 10, color: P.faint }], points: [{ x: st.P / 10, y: st.eg, color: P.gan }, { x: st.P / 10, y: st.es, color: P.si }] });
+      ctx.font = font(11); ctx.textAlign = "left"; ctx.fillStyle = P.gan; ctx.fillText("GaN 500 kHz", 62, h1 - 66); ctx.fillStyle = P.si; ctx.fillText("Si 200 kHz", 150, h1 - 66);
+      // 막대
+      const keys = ["cond", "sw", "gate", "dead", "ind", "fix"], cols = [P.amp, P.heat, P.accent2, P.warn, P.copper, P.dim];
+      const maxL = Math.max(st.g.L, st.s.L) * 1.08, bx = 80, bw = w - bx - 20, by = h1 + 18, bh = Math.min(26, (h - by - 40) / 2 - 6);
+      const X = (v) => bx + bw * v / maxL;
+      [["GaN", st.g], ["Si", st.s]].forEach(([nm, r], j) => {
+        const y = by + j * (bh + 12); let acc = 0;
+        ctx.fillStyle = P.text; ctx.font = font(12); ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(nm, bx - 8, y + bh / 2);
+        keys.forEach((k, i) => { const v = r.parts[k]; ctx.fillStyle = cols[i]; ctx.fillRect(X(acc), y, Math.max(0, X(acc + v) - X(acc)), bh); acc += v; });
+        ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.font = font(11, true); const tx = X(acc) + 4; if (tx < w - 50) ctx.fillText(fmtW(acc), tx, y + bh / 2);
+      });
+      let lx = bx, ly = by + 2 * (bh + 12) + 6; ctx.font = font(11); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      keys.forEach((k, i) => { const tw = ctx.measureText(NAMES[k]).width + 22; if (lx + tw > w - 10) { lx = bx; ly += 16; } ctx.fillStyle = cols[i]; ctx.fillRect(lx, ly - 5, 10, 10); ctx.fillStyle = P.dim; ctx.fillText(NAMES[k], lx + 14, ly); lx += tw; });
+    }, { aspect: 0.72, minHeight: 360, maxHeight: 500 });
+    upd();
+  })();
+
+  /* ==========================================================
+     3) 최적 스위칭 주파수
+     ========================================================== */
+  (function () {
+    const FA = 50e3, FB = 3e6;
+    const gr = PW.range("fs-r", (v) => v.toFixed(2), upd), gP = PW.range("fs-P", (v) => v + " %", upd), gf = PW.range("fs-f", (u) => fmtF(logMap(u, FA, FB)), upd);
+    let st = null;
+    const dcrOf = (L) => 0.3e-3 + 1.0e-3 * Math.pow(L / 2.2e-6, 0.7);
+    function lossAt(k, f, r, P) {
+      const d = DCDEV[k], I = P / DCV.Vo / DCV.Np, D = DCV.Vo / DCV.Vin, L = DCV.Vo * (1 - D) / (r * I * f);
+      const pl = phaseLoss(d, I, k === "gan" ? 10e-9 : 40e-9, f, L, dcrOf(L));
+      const Lp = DCV.Np * (pl.cond + pl.sw + pl.gate + pl.dead + pl.ind) + Math.pow(P / DCV.Vo, 2) * DCV.Rpcb + DCV.Pfix;
+      return { Lp, L, E: 0.5 * L * Math.pow(I + pl.dI / 2, 2) };
+    }
+    function upd() {
+      const r = gr(), P = gP() * 10, f = logMap(gf(), FA, FB), out = {};
+      ["gan", "si"].forEach((k) => {
+        const a = []; let best = null;
+        for (let j = 0; j <= 160; j++) { const ff = FA * Math.pow(FB / FA, j / 160), q = lossAt(k, ff, r, P); a.push([ff, q.Lp]); if (!best || q.Lp < best.Lp) best = { f: ff, Lp: q.Lp, L: q.L }; }
+        let hi = best.f; for (const q of a) if (q[0] > best.f && q[1] <= best.Lp + 0.005 * P) hi = q[0];
+        out[k] = { a, best, cur: lossAt(k, f, r, P), hi };
+      });
+      const e = [], I = P / DCV.Vo / DCV.Np; for (let j = 0; j <= 80; j++) { const ff = FA * Math.pow(FB / FA, j / 80), q = lossAt("gan", ff, r, P); e.push([ff, q.E * 1e6]); }
+      st = { out, f, P, e };
+      PW.stat("fs-opt", fmtF(out.gan.best.f) + " / " + fmtF(out.si.best.f));
+      PW.stat("fs-min", fmtW(out.gan.best.Lp) + " / " + fmtW(out.si.best.Lp));
+      PW.stat("fs-L", fmtL(out.gan.cur.L) + " (상당)");
+      PW.stat("fs-pl", fmtW(out.gan.cur.Lp) + " / " + fmtW(out.si.cur.Lp));
+      PW.stat("fs-e", (out.gan.cur.E * 1e6).toFixed(0) + " µJ/상");
+      PW.stat("fs-hi", fmtF(out.gan.hi) + " / " + fmtF(out.si.hi));
+      cv.redraw();
+    }
+    const cv = PW.canvas($("fs-cv"), (ctx, w, h) => {
+      if (!st) return;
+      const P = PW.palette(), { out } = st;
+      const ymax = Math.max(10, Math.min(Math.max(out.gan.best.Lp, out.si.best.Lp) * 3, 400));
+      const box = { x: 56, y: 14, w: w - 112, h: h - 60 };
+      const r = PW.chart(ctx, box, { x: [FA, FB], y: [0, ymax], logX: true, xLabel: "스위칭 주파수", yLabel: "4상 손실 (W)", xFmt: (v) => fmtF(v),
+        series: [{ data: out.gan.a, color: P.gan, width: 2.6 }, { data: out.si.a, color: P.si, width: 2.6 }],
+        vlines: [{ x: out.gan.best.f, color: P.gan, label: "GaN 최적" }, { x: out.si.best.f, color: P.si, label: "Si 최적" }, { x: st.f, color: P.faint, dash: [2, 3] }],
+        points: [{ x: st.f, y: Math.min(ymax, out.gan.cur.Lp), color: P.gan }, { x: st.f, y: Math.min(ymax, out.si.cur.Lp), color: P.si }] });
+      const emax = Math.max(...st.e.map((p) => p[1])) * 1.1;
+      PW.chart(ctx, box, { x: [FA, FB], y: [0, emax], logX: true, series: [{ data: st.e, color: P.copper, width: 1.6, dash: [4, 3] }], xTicks: [], yTicks: [] });
+      ctx.font = font(11, true); ctx.fillStyle = P.copper; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      for (let k = 0; k <= 4; k++) { const v = emax * k / 4; ctx.fillText(v.toFixed(0), box.x + box.w + 6, box.y + box.h - box.h * k / 4); }
+      ctx.save(); ctx.translate(w - 10, box.y + box.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.font = font(11); ctx.fillText("인덕터 에너지 (µJ/상)", 0, 0); ctx.restore();
+    }, { aspect: 0.6, minHeight: 300, maxHeight: 420 });
+    upd();
+  })();
+
+  /* ==========================================================
+     4) 인터리빙
+     ========================================================== */
+  (function () {
+    const VIN = 48, L = 2.2e-6, F = 500e3, IO = 1000 / 12;
+    const gN = PW.range("il-N", (v) => v + " 상", upd), gD = PW.range("il-D", (v) => v.toFixed(2), upd);
+    let st = null;
+    const ratio = (N, D) => { const m = Math.floor(N * D + 1e-9); return D <= 0 || D >= 1 ? 0 : ((N * D - m) * (m + 1 - N * D)) / (N * D * (1 - D)); };
+    const tri = (x, D) => { x = x - Math.floor(x); return x < D ? x / D : 1 - (x - D) / (1 - D); }; // 0..1
+    function cinRms(N, D, I) { const M = 2000; let s = 0, s2 = 0; for (let k = 0; k < M; k++) { const x = k / M; let ii = 0; for (let p = 0; p < N; p++) { const y = (x - p / N) - Math.floor(x - p / N); if (y < D) ii += I / N; } s += ii; s2 += ii * ii; } const m = s / M; return Math.sqrt(Math.max(0, s2 / M - m * m)); }
+    function upd() {
+      const N = gN(), D = gD(), Iph = IO / N, dIp = VIN * D * (1 - D) / (L * F), M = 400;
+      const ph = [], sum = [];
+      for (let p = 0; p < N; p++) ph.push([]);
+      let smax = -1e9, smin = 1e9;
+      for (let k = 0; k <= M; k++) {
+        const x = 2 * k / M; let s = 0;
+        for (let p = 0; p < N; p++) { const v = Iph - dIp / 2 + dIp * tri(x - p / N, D); ph[p].push([x, v]); s += v; }
+        sum.push([x, s]); smax = Math.max(smax, s); smin = Math.min(smin, s);
+      }
+      const dT = smax - smin, rr = ratio(N, D), c1 = cinRms(1, D, IO), cN = cinRms(N, D, IO);
+      st = { N, D, ph, sum, dIp, Iph, rr, dT };
+      PW.stat("il-dp", fmtA(dIp)); PW.stat("il-dt", fmtA(dT));
+      PW.stat("il-r", (dT / Math.max(1e-9, dIp) * 100).toFixed(1) + " % (식 " + (rr * 100).toFixed(1) + " %)"); setCls("il-r", dT / dIp < 0.2 ? "ok" : dT / dIp < 0.6 ? "warn" : "bad");
+      PW.stat("il-f", fmtF(N * F));
+      PW.stat("il-cin", fmtA(cN) + " (1상 " + fmtA(c1) + ")");
+      cv.redraw();
+    }
+    const cv = PW.canvas($("il-cv"), (ctx, w, h) => {
+      if (!st) return;
+      const P = PW.palette(), h1 = Math.round(h * 0.55);
+      const lo = st.Iph - st.dIp * 0.7, hi = st.Iph + st.dIp * 0.7;
+      const ser = st.ph.map((a) => ({ data: a, color: P.amp, width: 1.2 }));
+      PW.chart(ctx, { x: 52, y: 12, w: w - 110, h: h1 - 46 }, { x: [0, 2], y: [Math.max(0, lo) - 1, hi + 1], xLabel: "시간 (스위칭 주기)", yLabel: "상전류 (A)", series: ser });
+      const mid = (Math.max(...st.sum.map((p) => p[1])) + Math.min(...st.sum.map((p) => p[1]))) / 2, span = Math.max(st.dIp, 1) * 0.7;
+      const b2 = { x: 52, y: 12, w: w - 110, h: h1 - 46 };
+      const r = PW.chart(ctx, b2, { x: [0, 2], y: [mid - span, mid + span], series: [{ data: st.sum, color: P.heat, width: 2.8 }], xTicks: [], yTicks: [] });
+      ctx.font = font(11, true); ctx.fillStyle = P.heat; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      [mid - span * 0.8, mid, mid + span * 0.8].forEach((v) => ctx.fillText(v.toFixed(1), b2.x + b2.w + 6, r.Y(v)));
+      ctx.fillText("합 (A)", b2.x + b2.w + 6, b2.y + 6);
+      const cur = [], c1 = [], c2 = [];
+      for (let k = 1; k < 300; k++) { const D = k / 300; cur.push([D, ratio(st.N, D)]); c1.push([D, 1]); c2.push([D, ratio(2, D)]); }
+      PW.chart(ctx, { x: 52, y: h1 + 4, w: w - 110, h: h - h1 - 48 }, { x: [0, 1], y: [0, 1.05], xLabel: "듀티 D", yLabel: "Δi_tot/Δi_ph",
+        series: [{ data: c1, color: P.dim, width: 1, dash: [4, 3] }, { data: c2, color: P.dim, width: 1.2, dash: [4, 3] }, { data: cur, color: P.accent, width: 2.4 }], points: [{ x: st.D, y: st.rr, color: P.heat }] });
+    }, { aspect: 0.7, minHeight: 340, maxHeight: 480 });
+    upd();
+  })();
+
+  /* ==========================================================
+     5) LLC 이득 곡선
+     ========================================================== */
+  (function () {
+    const FR = 200e3, X0 = 0.3, X1 = 3;
+    const gLn = PW.range("llc-Ln", (v) => v.toFixed(1), upd), gQ = PW.range("llc-Q", (v) => v.toFixed(2), upd), gfn = PW.range("llc-fn", (v) => v.toFixed(2), upd);
+    let st = null;
+    function tank(fn, Ln, Q) {
+      // Z0 = sqrt(Lr/Cr) = 1, Rac = 1/Q
+      const xr = fn - 1 / fn, xm = fn * Ln, Rac = 1 / Q;
+      // Zp = j xm || Rac = (j xm Rac)/(Rac + j xm)
+      const den = Rac * Rac + xm * xm, zpr = xm * xm * Rac / den, zpi = xm * Rac * Rac / den;
+      const zr = zpr, zi = zpi + xr;
+      const M = Math.hypot(zpr, zpi) / Math.hypot(zr, zi);
+      return { M, ph: Math.atan2(zi, zr) * 180 / Math.PI };
+    }
+    function upd() {
+      const Ln = gLn(), Q = gQ(), fn = gfn(), t = tank(fn, Ln, Q);
+      let pk = 0, pkx = 1; for (let j = 0; j <= 600; j++) { const x = X0 * Math.pow(X1 / X0, j / 600), m = tank(x, Ln, Q).M; if (m > pk) { pk = m; pkx = x; } }
+      st = { Ln, Q, fn, t };
+      PW.stat("llc-M", t.M.toFixed(3));
+      PW.stat("llc-ph", (t.ph >= 0 ? "+" : "") + t.ph.toFixed(1) + "°");
+      const z = t.ph > 5 ? "ZVS (유도성)" : t.ph > 0 ? "ZVS 경계 근접" : "용량성: ZVS 상실";
+      PW.stat("llc-z", z); setCls("llc-z", t.ph > 5 ? "ok" : t.ph > 0 ? "warn" : "bad");
+      PW.stat("llc-f", fmtF(fn * FR));
+      PW.stat("llc-pk", pk.toFixed(2) + " (f_n " + pkx.toFixed(2) + ")");
+      PW.stat("llc-fp", (1 / Math.sqrt(1 + Ln)).toFixed(3));
+      cv.redraw();
+    }
+    const cv = PW.canvas($("llc-cv"), (ctx, w, h) => {
+      if (!st) return;
+      const P = PW.palette(), { Ln, Q } = st, N = 300, xs = [];
+      for (let j = 0; j <= N; j++) xs.push(X0 * Math.pow(X1 / X0, j / N));
+      const ser = [0.1, 0.3, 0.5, 0.8, 1.2].map((q) => ({ data: xs.map((x) => [x, Math.min(3.5, tank(x, Ln, q).M)]), color: P.dim, width: 1 }));
+      const ind = [], cap = [];
+      xs.forEach((x) => { const t = tank(x, Ln, Q), m = Math.min(3.5, t.M); if (t.ph >= 0) { ind.push([x, m]); cap.push([x, NaN]); } else { cap.push([x, m]); ind.push([x, NaN]); } });
+      // ZVS 경계: 각 q에서 위상 0이 되는 fn (이분법)
+      const bd = [];
+      for (let q = 0.05; q <= 2.0; q += 0.025) {
+        let lo = X0, hi = 1.0; if (tank(hi, Ln, q).ph < 0) continue; if (tank(lo, Ln, q).ph >= 0) { bd.push([lo, Math.min(3.5, tank(lo, Ln, q).M)]); continue; }
+        for (let k = 0; k < 50; k++) { const m = Math.sqrt(lo * hi); tank(m, Ln, q).ph >= 0 ? (hi = m) : (lo = m); }
+        bd.push([hi, Math.min(3.5, tank(hi, Ln, q).M)]);
+      }
+      bd.sort((a, b) => a[0] - b[0]);
+      PW.chart(ctx, null, { x: [X0, X1], y: [0, 3.5], logX: true, xLabel: "f_n = f_sw / f_r", yLabel: "이득 M", xTicks: [0.3, 0.5, 0.7, 1, 1.5, 2, 3], xFmt: (v) => String(v),
+        series: ser.concat([{ data: bd, color: P.faint, width: 1.6, dash: [5, 4] }, { data: ind, color: P.accent, width: 3 }, { data: cap, color: P.bad, width: 2.4, dash: [6, 4] }]),
+        hlines: [{ y: 1, color: P.faint }], vlines: [{ x: 1, color: P.faint, label: "f_r" }, { x: 1 / Math.sqrt(1 + Ln), color: P.faint, label: "f_p" }],
+        points: [{ x: st.fn, y: Math.min(3.5, st.t.M), color: st.t.ph >= 0 ? P.ok : P.bad, r: 5 }] });
+    }, { aspect: 0.62, minHeight: 300, maxHeight: 440 });
+    upd();
+  })();
+
+  /* ==========================================================
+     6) PFC 입력 전류
+     ========================================================== */
+  (function () {
+    const VR = 230, VPK = VR * Math.SQRT2, FL = 50, W = 2 * Math.PI * FL, CB = 1e-3, CX = 2e-6, FSW = 65e3, NS = 1024, ETA = 0.98;
+    const mode = PW.seg("pfc-mode", upd);
+    const gP = PW.range("pfc-P", (v) => v.toFixed(1) + " kW", upd), gVo = PW.range("pfc-Vo", (v) => v + " V", upd), gbw = PW.range("pfc-bw", (v) => v + " Hz", upd), gL = PW.range("pfc-L", (v) => v + " µH", upd);
+    let st = null;
+    function capRect(P) {
+      const Rs = 0.25, T = 1 / FL, M = 2000, dt = T / M; let vc = 0.95 * VPK; const out = new Array(M);
+      for (let c = 0; c < 10; c++) for (let k = 0; k < M; k++) {
+        const th = W * k * dt, v = VPK * Math.sin(th), av = Math.abs(v);
+        const i = av > vc ? (av - vc) / Rs : 0;
+        vc += (i - P / Math.max(vc, 50)) * dt / CB; vc = PW.clamp(vc, 50, VPK);
+        if (c === 9) out[k] = Math.sign(v) * i;
+      }
+      return (th) => { const k = Math.floor(((th / (2 * Math.PI)) % 1) * M); return out[Math.min(M - 1, Math.max(0, k))]; };
+    }
+    function upd() {
+      const P = gP() * 1e3, Vo = gVo(), m = mode(), Pin = P / ETA;
+      let fn;
+      if (m === "cap") fn = capRect(Pin);
+      else if (m === "ccm") {
+        const dV = Pin / (2 * W * CB * Vo), k = (dV / Vo) * (gbw() / 100), Ipk = 2 * Pin / VPK;
+        fn = (th) => Ipk * Math.sin(th) * (1 + k * Math.cos(2 * th)) + CX * W * VPK * Math.cos(th);
+      } else {
+        const a = VPK / Vo, shp = (th) => Math.abs(Math.sin(th)) / (1 - a * Math.abs(Math.sin(th)));
+        let s = 0; for (let j = 0; j < 400; j++) { const th = Math.PI * (j + 0.5) / 400; s += Math.sin(th) * shp(th); } s /= 400; // <|sin|·shape>
+        const A = Pin / (VPK * s);
+        fn = (th) => Math.sign(Math.sin(th)) * A * shp(th) + CX * W * VPK * Math.cos(th);
+      }
+      const ia = new Float64Array(NS), va = new Float64Array(NS);
+      let s2 = 0, pin = 0, ipk = 0;
+      for (let k = 0; k < NS; k++) { const th = 2 * Math.PI * k / NS, i = fn(th), v = VPK * Math.sin(th); ia[k] = i; va[k] = v; s2 += i * i; pin += v * i; ipk = Math.max(ipk, Math.abs(i)); }
+      const Irms = Math.sqrt(s2 / NS); pin /= NS;
+      const H = []; let hs = 0;
+      for (let h = 1; h <= 40; h++) { let a = 0, b = 0; for (let k = 0; k < NS; k++) { const th = 2 * Math.PI * h * k / NS; a += ia[k] * Math.cos(th); b += ia[k] * Math.sin(th); } const amp = 2 * Math.hypot(a, b) / NS / Math.SQRT2; H.push(amp); if (h > 1) hs += amp * amp; }
+      const thd = Math.sqrt(hs) / Math.max(1e-9, H[0]), pf = pin / (VR * Irms);
+      st = { ia, va, H, m, Vo, ipk, Irms };
+      PW.stat("pfc-pf", pf.toFixed(3)); setCls("pfc-pf", pf > 0.99 ? "ok" : pf > 0.9 ? "warn" : "bad");
+      PW.stat("pfc-thd", (thd * 100).toFixed(1) + " %"); setCls("pfc-thd", thd < 0.05 ? "ok" : thd < 0.2 ? "warn" : "bad");
+      PW.stat("pfc-irms", fmtA(Irms));
+      PW.stat("pfc-cf", (ipk / Irms).toFixed(2));
+      PW.stat("pfc-h3", (H[2] / H[0] * 100).toFixed(1) + " %");
+      const ok = thd < 0.05 && pf > 0.99;
+      PW.stat("pfc-st", ok ? "목표 충족" : thd < 0.05 ? "THD 충족, PF 미달" : "THD 초과"); setCls("pfc-st", ok ? "ok" : "bad");
+      cv.redraw();
+    }
+    const cv = PW.canvas($("pfc-cv"), (ctx, w, h) => {
+      if (!st) return;
+      const P = PW.palette(), h1 = Math.round(h * 0.6), im = Math.max(1, st.ipk) * 1.15, L = gL() * 1e-6;
+      const iser = [], vser = [], rip = [];
+      for (let k = 0; k < NS; k++) { const t = 20 * k / NS; iser.push([t, st.ia[k]]); vser.push([t, st.va[k] / VPK * im * 0.9]); }
+      if (st.m === "ccm") {
+        // 스위칭 리플이 실린 인덕터 전류(정류 측, 극성 복원): 반주기당 650 스위칭 주기 중 꼭짓점만
+        const n = Math.round(FSW / FL);
+        for (let j = 0; j <= 2 * n; j++) {
+          const th = Math.PI * j / n, k = Math.floor((th / (2 * Math.PI)) * NS) % NS, v = Math.abs(VPK * Math.sin(th)), base = Math.abs(st.ia[k]);
+          const di = v * Math.max(0, st.Vo - v) / (st.Vo * L * FSW), sg = Math.sin(th) >= 0 ? 1 : -1;
+          rip.push([20 * th / (2 * Math.PI), sg * Math.max(0, base + (j % 2 ? 0.5 : -0.5) * di)]);
+        }
+      }
+      PW.chart(ctx, { x: 52, y: 12, w: w - 66, h: h1 - 46 }, { x: [0, 20], y: [-im, im], xLabel: "시간 (ms)", yLabel: "i_line (A)",
+        series: [{ data: vser, color: P.volt, width: 1.4, dash: [5, 4] }].concat(rip.length ? [{ data: rip, color: P.amp + "55", width: 0.6 }] : []).concat([{ data: iser, color: P.amp, width: 2.4 }]), hlines: [{ y: 0, color: P.faint }] });
+      // 고조파 막대
+      const bx = 52, bw = w - 66, by = h1 + 6, bh = h - h1 - 34, nH = 25, X = (hh) => bx + bw * (hh - 0.5) / nH, Y = (p) => by + bh - bh * Math.min(100, p) / 100;
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(bx, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.stroke();
+      ctx.font = font(10, true); ctx.fillStyle = P.dim; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      [0, 50, 100].forEach((p) => { ctx.fillText(p + "%", bx - 4, Y(p)); ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(bx, Y(p)); ctx.lineTo(bx + bw, Y(p)); ctx.stroke(); });
+      for (let hh = 1; hh <= nH; hh++) { const p = st.H[hh - 1] / st.H[0] * 100; ctx.fillStyle = hh === 1 ? P.amp : hh % 2 ? P.heat : P.dim; const bwid = Math.max(2, bw / nH * 0.6); ctx.fillRect(X(hh) - bwid / 2, Y(p), bwid, by + bh - Y(p)); }
+      ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = P.dim;
+      [1, 3, 5, 7, 9, 11, 15, 21, 25].forEach((hh) => ctx.fillText(String(hh), X(hh), by + bh + 3));
+      ctx.textAlign = "right"; ctx.fillText("고조파 차수 (기본파 대비 %)", bx + bw - 4, by + 2);
+    }, { aspect: 0.66, minHeight: 320, maxHeight: 460 });
+    upd();
+  })();
+
+  /* ==========================================================
+     7) 토템폴 PFC 손실
+     ========================================================== */
+  (function () {
+    const VR = 230, VO = 400, ETA = 0.98, RSLOW = 10e-3 * 1.7, VFB = 0.9, VFD = 1.3, QCD = 30e-9;
+    const DEV = {
+      si: { R: 40e-3, kT: 2.0, Qg: 90e-9, Vg: 12, Qoss: 300e-9, Qrr: 10e-6, tsw: 30e-9, Vsd: 0.9, tdt: 100e-9, name: "Si SJ" },
+      sic: { R: 40e-3, kT: 1.3, Qg: 60e-9, Vg: 22, Qoss: 70e-9, Qrr: 0.1e-6, tsw: 20e-9, Vsd: 3.0, tdt: 50e-9, name: "SiC" },
+      gan: { R: 50e-3, kT: 1.7, Qg: 6e-9, Vg: 6, Qoss: 60e-9, Qrr: 0, tsw: 8e-9, Vsd: 2.5, tdt: 20e-9, name: "GaN" },
+    };
+    const dev = PW.seg("tp-dev", upd);
+    const gP = PW.range("tp-P", (v) => v.toFixed(1) + " kW", upd), gf = PW.range("tp-f", (v) => v + " kHz", upd), gnp = PW.range("tp-np", (v) => v + "개", upd);
+    $("tp-crm").addEventListener("change", upd);
+    let st = null;
+    function upd() {
+      const d = DEV[dev()], P = gP() * 1e3, f = gf() * 1e3, np = gnp(), crm = $("tp-crm").checked;
+      const Irms = P / ETA / VR, Iav = 2 * Math.SQRT2 / Math.PI * Irms, Reff = d.R * d.kT / np, Io = P / VO;
+      const kc = crm ? 4 / 3 : 1;
+      const vi = crm ? 0.5 * VO * 2 * Iav * (d.tsw / 2) * f : 0.5 * VO * Iav * d.tsw * f;
+      const oss = crm ? 0 : np * d.Qoss * VO * f, rr = crm ? 0 : np * d.Qrr * VO * f;
+      const gate = 2 * np * d.Qg * d.Vg * f, dead = d.Vsd * Iav * 2 * d.tdt * f;
+      // 토템폴
+      const B = { cond: Irms * Irms * Reff * kc, sw: vi + oss, rr, gd: gate + dead, slow: Irms * Irms * RSLOW * kc, bridge: 0, diode: 0 };
+      // 기존 부스트 PFC (같은 소자를 주 스위치로, SiC SBD 부스트 다이오드)
+      const IQ2 = Irms * Irms * Math.max(0, 1 - 8 * Math.SQRT2 * VR / (3 * Math.PI * VO));
+      const A = { cond: IQ2 * Reff * kc, sw: vi + oss + QCD * VO * f, rr: 0, gd: np * d.Qg * d.Vg * f, slow: 0, bridge: 2 * VFB * Iav, diode: VFD * Io };
+      const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0), LA = sum(A), LB = sum(B);
+      st = { A, B, LA, LB };
+      const eta = (L) => (100 * P / (P + L)).toFixed(2) + " %";
+      PW.stat("tp-a", fmtW(LA) + " / " + eta(LA)); PW.stat("tp-b", fmtW(LB) + " / " + eta(LB));
+      setCls("tp-b", LB < LA ? "ok" : "bad");
+      PW.stat("tp-rr", fmtW(rr)); setCls("tp-rr", rr > 0.01 * P ? "bad" : rr > 0.002 * P ? "warn" : "ok");
+      PW.stat("tp-i", fmtA(Irms));
+      const s = rr > 0.01 * P ? "불가: 역회복 손실·스냅 회복" : LB < LA ? "토템폴 유리 (" + fmtW(LA - LB) + " 절감)" : "기존 PFC가 유리";
+      PW.stat("tp-st", s); setCls("tp-st", rr > 0.01 * P ? "bad" : LB < LA ? "ok" : "warn");
+      cv.redraw();
+    }
+    const cv = PW.canvas($("tp-cv"), (ctx, w, h) => {
+      if (!st) return;
+      const P = PW.palette(), keys = ["bridge", "cond", "slow", "sw", "rr", "gd", "diode"], NM = { bridge: "브리지", cond: "주 스위치 전도", slow: "느린 레그", sw: "V·I + C_oss", rr: "역회복 Q_rr", gd: "게이트·데드", diode: "부스트 다이오드" };
+      const cols = [P.dim, P.amp, P.copper, P.heat, P.bad, P.accent2, P.warn];
+      const cap = 200, maxv = Math.min(cap, Math.max(st.LA, st.LB) * 1.1), bx = 92, bw = w - bx - 70, X = (v) => bx + bw * Math.min(v, maxv) / maxv;
+      ctx.font = font(10, true); ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.textBaseline = "top";
+      const step = maxv > 100 ? 50 : maxv > 40 ? 20 : maxv > 20 ? 5 : 2;
+      for (let v = 0; v <= maxv + 1e-6; v += step) { ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(X(v), 20); ctx.lineTo(X(v), 150); ctx.stroke(); ctx.fillText(v + " W", X(v), 152); }
+      [["기존 부스트", st.A, st.LA], ["토템폴", st.B, st.LB]].forEach(([nm, r, tot], j) => {
+        const y = 30 + j * 60, bh = 38; let acc = 0;
+        ctx.fillStyle = P.text; ctx.font = font(12); ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(nm, bx - 8, y + bh / 2);
+        keys.forEach((k, i) => { const v = r[k]; if (v <= 0) return; const x0 = X(acc), x1 = X(acc + v); ctx.fillStyle = cols[i]; ctx.fillRect(x0, y, Math.max(0, x1 - x0), bh); acc += v; });
+        ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.font = font(11, true);
+        if (tot > maxv) { ctx.fillStyle = P.bad; ctx.fillText("→ " + fmtW(tot), X(maxv) + 4, y + bh / 2); } else ctx.fillText(fmtW(tot), X(tot) + 4, y + bh / 2);
+      });
+      let lx = bx, ly = 182; ctx.font = font(11); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      keys.forEach((k, i) => { const tw = ctx.measureText(NM[k]).width + 22; if (lx + tw > w - 10) { lx = bx; ly += 16; } ctx.fillStyle = cols[i]; ctx.fillRect(lx, ly - 5, 10, 10); ctx.fillStyle = P.dim; ctx.fillText(NM[k], lx + 14, ly); lx += tw; });
+    }, { height: 250 });
+    upd();
+  })();
+})();
+</script>
+</body>
+</html>

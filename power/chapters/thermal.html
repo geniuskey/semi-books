@@ -1,0 +1,1174 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and PowerBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>열 설계와 접합 온도 · PowerBook</title>
+<meta name="description" content="손실이 열이 되어 다이·소결층·DBC·베이스·냉각수로 빠지는 길을 1D 열저항과 45° 열 퍼짐으로 계산하고, 카우어 사다리의 과도 응답과 포스터 맞춤으로 Zth(t)를 만들며, 펄스 전력과 모터 기본파 주기의 접합 온도 리플, 온저항의 온도 의존이 만드는 열 폭주 조건, 냉각 방식 비교, VSD 온도 민감 변수로 접합 온도를 재는 법을 시뮬레이터로 다룬다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .lbl { fill: var(--text); font-family: var(--font); font-size: 14px; }
+  svg .lbl-b { fill: var(--text); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .lbl-sm { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .lbl-heat { fill: var(--m-heat); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-acc { fill: var(--accent); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-volt { fill: var(--m-volt); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lbl-amp { fill: var(--m-amp); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .arr { stroke: var(--text); stroke-width: 1.6; fill: none; }
+  svg .dash { stroke: var(--text-dim); stroke-dasharray: 5 4; fill: none; stroke-width: 1.3; }
+  svg .w-heat { fill: none; stroke: var(--m-heat); stroke-width: 2.4; }
+  svg .w-volt { fill: none; stroke: var(--m-volt); stroke-width: 2.4; }
+  svg .w-amp { fill: none; stroke: var(--m-amp); stroke-width: 2.4; }
+  svg .w-acc { fill: none; stroke: var(--accent); stroke-width: 2.2; }
+  svg .w-dim { fill: none; stroke: var(--text-dim); stroke-width: 1.8; }
+  svg .res { fill: none; stroke: var(--text); stroke-width: 1.8; stroke-linejoin: round; }
+  svg .heat-flow { fill: color-mix(in srgb, var(--m-heat) 14%, transparent); stroke: var(--m-heat); stroke-dasharray: 4 3; }
+  svg .fluid { fill: color-mix(in srgb, var(--m-volt) 18%, transparent); stroke: var(--m-volt); }
+  p.small { font-size: 14px; color: var(--text-dim); }
+  .v.ok { color: var(--ok); } .v.warn { color: var(--warn); } .v.bad { color: var(--bad); }
+</style>
+</head>
+<body data-chapter="thermal">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 14</div>
+    <h1>열 설계와 접합 온도</h1>
+    <p class="lead">99 % 효율의 인버터도 150 kW를 바꾸면 약 1 kW를 열로 낸다. 그 열은 손톱만 한 SiC 다이 48개에서 나오며, 다이 표면의 열유속은 100 W/cm²를 넘는다. 접합 온도 \(T_j\)는 소자의 상한(PW-800: 175 °C)을 정하고, 온저항과 스위칭 에너지를 바꾸어 손실을 다시 바꾸며, 온도 리플 \(\Delta T_j\)는 수명을 정한다. 이 장은 <a href="inverter.html#loss">13장</a>의 손실을 입력으로 받아 <strong>손실 → 열저항·열 임피던스 → 접합 온도</strong>를 계산하는 도구를 하나씩 만든다.</p>
+    <ul class="objectives">
+      <li>다이에서 냉각수까지 층 구조의 1D 열저항을 계산하고, 45° 열 퍼짐이 왜 열저항을 크게 줄이는지 설명할 수 있다.</li>
+      <li>카우어·포스터 열 회로의 차이를 알고, 과도 열 임피던스 \(Z_{th}(t)\) 곡선을 포스터 급수로 맞출 수 있다.</li>
+      <li>펄스 전력과 반복 펄스에서 포스터 중첩으로 \(T_j\) 피크를 계산할 수 있다.</li>
+      <li>모터 기본파 주기의 \(T_j\) 리플이 출력 주파수에 따라 어떻게 변하는지, 저속·정지 시 왜 커지는지 계산할 수 있다.</li>
+      <li>온저항의 온도 의존이 만드는 전기-열 결합을 풀고 열 폭주 안정 조건 \(R_{th}\,dP/dT \lt 1\)을 쓸 수 있다.</li>
+      <li>공랭·간접 수냉·핀핀 직접 냉각·양면 냉각을 열저항과 허용 손실로 비교하고, TSEP로 접합 온도를 재는 법을 설명할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="path">
+    <h2>손실에서 열로: 접합에서 냉각수까지</h2>
+    <p>전력 소자의 열은 거의 전부 다이 윗면 몇 µm(MOSFET 채널과 드리프트층 상부)에서 생긴다. 이 열은 다이를 지나 <span class="term">다이 접합</span>(은 소결 또는 솔더), 세라믹 기판의 위아래 구리(DBC·AMB), 기판 솔더, 베이스판(PW-800은 핀핀이 달린 구리 베이스), 그리고 마지막으로 대류로 냉각수에 전달된다. 위쪽(젤·몰드)으로 빠지는 열은 수 % 이하라 무시한다. 층 구조와 재료 선택 자체는 <a href="packaging.html">15장</a>에서 다루고, 여기서는 그 결과인 <span class="term">열저항</span><span class="en">(thermal resistance)</span>과 열용량만 쓴다.</p>
+    <p>열 회로는 전기 회로와 같은 꼴이다. 온도 차가 전압, 열류(W)가 전류, 열저항(K/W)이 저항, 열용량(J/K)이 커패시턴스다. 정상 상태에서는</p>
+    <div class="formula">$$T_j = T_f + P\,R_{th,j-f},\qquad R_{th,j-f} = \sum_i R_{th,i} + R_{conv}$$
+      <div class="where">여기서 \(T_f\)는 냉각수(fluid) 온도, \(P\)는 스위치 하나의 평균 손실, \(R_{th,j-f}\)는 접합-냉각수 열저항. 데이터시트는 \(R_{th,j-c}\)(접합-케이스)와 \(R_{th,c-h}\)(케이스-방열판, TIM 포함)를 따로 주기도 한다. 직접 냉각 모듈은 케이스가 곧 방열 핀이라 \(R_{th,j-f}\)를 한 덩어리로 준다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="SiC 다이에서 냉각수까지 층 단면과 오른쪽의 직렬 열저항 사다리">
+        <defs><marker id="f1-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--m-heat)"/></marker></defs>
+        <rect x="170" y="30" width="120" height="22" class="m-sic"/>
+        <rect x="165" y="52" width="130" height="7" class="m-solder"/>
+        <rect x="90" y="59" width="280" height="22" class="m-copper"/>
+        <rect x="70" y="81" width="320" height="22" class="m-ceramic"/>
+        <rect x="90" y="103" width="280" height="22" class="m-copper"/>
+        <rect x="85" y="125" width="290" height="8" class="m-solder"/>
+        <rect x="50" y="133" width="360" height="40" class="m-copper"/>
+        <g class="m-copper"><rect x="62" y="173" width="14" height="44"/><rect x="100" y="173" width="14" height="44"/><rect x="138" y="173" width="14" height="44"/><rect x="176" y="173" width="14" height="44"/><rect x="214" y="173" width="14" height="44"/><rect x="252" y="173" width="14" height="44"/><rect x="290" y="173" width="14" height="44"/><rect x="328" y="173" width="14" height="44"/><rect x="366" y="173" width="14" height="44"/></g>
+        <rect x="40" y="173" width="380" height="60" class="fluid" opacity="0.7"/>
+        <path d="M195 36 L120 165 L340 165 L265 36 Z" class="heat-flow"/>
+        <line x1="230" y1="40" x2="230" y2="225" stroke="var(--m-heat)" stroke-width="2.4" marker-end="url(#f1-ar)"/>
+        <text x="300" y="46" class="lbl-sm">SiC 다이 150 µm</text>
+        <text x="300" y="60" class="lbl-sm">은 소결 30 µm</text>
+        <text x="378" y="75" class="lbl-sm">Cu 300 µm</text>
+        <text x="398" y="97" class="lbl-sm">Si₃N₄ 320 µm</text>
+        <text x="378" y="119" class="lbl-sm">Cu 300 µm</text>
+        <text x="384" y="134" class="lbl-sm">솔더 100 µm</text>
+        <text x="416" y="158" class="lbl-sm">Cu 베이스 3 mm</text>
+        <text x="60" y="250" class="lbl-sm">냉각수 50/50 글리콜 65 °C, 10 L/min (핀 사이 흐름)</text>
+        <text x="236" y="26" class="lbl-heat">P ≈ 155 W / 스위치 (다이 8개)</text>
+        <!-- ladder -->
+        <g transform="translate(560,20)">
+          <text x="0" y="12" class="lbl-b">T_j</text>
+          <circle cx="40" cy="8" r="4" fill="var(--m-heat)"/>
+          <path class="res" d="M40 12 v10 l8 4 l-16 8 l16 8 l-16 8 l8 4 v10"/><text x="60" y="44" class="lbl-sm">R 다이 0.019</text>
+          <path class="res" d="M40 66 v6 l8 3 l-16 6 l16 6 l-8 3 v6"/><text x="60" y="86" class="lbl-sm">R 접합층 0.006</text>
+          <path class="res" d="M40 96 v6 l8 3 l-16 6 l16 6 l-8 3 v6"/><text x="60" y="116" class="lbl-sm">R Cu 0.029</text>
+          <path class="res" d="M40 126 v6 l8 4 l-16 8 l16 8 l-16 8 l8 4 v6"/><text x="60" y="150" class="lbl-sm">R 세라믹 0.107</text>
+          <path class="res" d="M40 170 v6 l8 3 l-16 6 l16 6 l-8 3 v6"/><text x="60" y="190" class="lbl-sm">R Cu+솔더 0.062</text>
+          <path class="res" d="M40 200 v6 l8 3 l-16 6 l16 6 l-8 3 v6"/><text x="60" y="220" class="lbl-sm">R 베이스 0.105</text>
+          <path class="res" d="M40 230 v6 l8 4 l-16 8 l16 8 l-16 8 l8 4 v4"/><text x="60" y="254" class="lbl-sm">R 대류 0.617</text>
+          <line x1="20" y1="272" x2="60" y2="272" class="arr"/><text x="70" y="277" class="lbl-b">T_f</text>
+          <text x="140" y="12" class="lbl-sm">(다이 1개, K/W)</text>
+          <text x="140" y="30" class="lbl-acc">합 ≈ 0.95 K/W</text>
+          <text x="140" y="48" class="lbl-acc">÷ 8 다이 ≈ 0.12 K/W</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 14-1.</b> PW-800 SiC 모듈 한 스위치의 열 경로(두께는 과장). 열은 다이에서 아래로 내려가며 옆으로 퍼진다(빨간 점선 원뿔). 오른쪽은 다음 절 시뮬레이터 기본값으로 계산한 다이 하나의 직렬 열저항. 다이 8개가 병렬이므로 스위치당 약 0.12 K/W가 된다. 가장 큰 항은 대류와 세라믹이다.</figcaption>
+    </figure>
+
+    <div class="callout fab"><strong>기준 운전점의 손실과 접합 온도</strong>13장(<a href="inverter.html#loss">손실 계산</a>)의 기준점: DC 800 V, 상전류 250 A rms(피크 354 A), \(M \approx 0.9\), 역률 0.9, 10 kHz SiC. 스위치 하나에서 \(R_{DS(on)}(T) = 2.0\,\)mΩ\(\,[1 + 0.004(T_j - 25)]\)를 \(T_j\) = 150 °C로 놓고 계산하면 전도 약 94 W(\(R I_{rms}^2/2\)), 스위칭 약 56 W(\(f_{sw}\,(E_{on}+E_{off})\,\hat I/(\pi\cdot 400\,\text{A})\)), 역회복 약 3 W, 데드 타임 바디 다이오드 약 2 W → <b>약 155 W/스위치</b>, 인버터 전체 약 0.93 kW, 출력 약 172 kW에서 효율 약 99.5 %. 이 손실로 \(R_{th,j-f}\) = 0.12 K/W, 냉각수 65 °C면 평균 \(T_j \approx 65 + 0.12\times155 \approx 84\) °C다. 실제로는 \(T_j\)가 150 °C보다 낮으니 온저항도 작아, 손실과 온도를 함께 풀면(<a href="#runaway">6절</a>) 약 137 W, 약 81 °C에 수렴한다. 450 A·10 s 부스트에서는 150 °C 가정 손실이 약 410 W(평균 약 115 °C), 자기 일관 해가 약 380 W·111 °C이고, 여기에 기본파 리플이 얹힌다(<a href="#ripple">5절</a>).</div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="stack">
+    <h2>1D 열저항과 45° 열 퍼짐</h2>
+    <p>두께 \(t\), 열전도율 \(k\), 면적 \(A\)인 판의 열저항은 \(R = t/(kA)\)다. 문제는 \(A\)다. 다이(4.5×4.5 mm) 면적만 쓰면 3 mm 구리 베이스 한 층이 0.38 K/W로 계산되지만, 실제 열은 아래로 가면서 옆으로 퍼져 더 넓은 면적을 쓴다. 설계 초기에 흔히 쓰는 근사는 <span class="term">45° 열 퍼짐</span><span class="en">(heat spreading)</span>이다. 정사각형 열원 한 변 \(a_1\)이 두께 \(t\)인 층을 지나면 한 변이 \(a_2 = a_1 + 2t\)로 넓어진다고 보고(각뿔대), 단면적을 적분한다.</p>
+    <div class="formula">$$R = \int_0^t \frac{dz}{k\,(a_1 + 2z)^2} = \frac{t}{k\,a_1 a_2},\qquad a_2 = a_1 + 2t\ (\le p)$$
+      <div class="where">\(p\)는 다이 간격(PW-800은 약 9 mm). 이웃 다이의 원뿔이 겹치면 더 퍼질 수 없으므로 한 변을 \(p\)에서 멈춘다. 이후 층은 \(t/(kp^2)\). 열용량은 각뿔대 부피로 \(C = \rho c_p\,t\,(a_1^2 + a_1a_2 + a_2^2)/3\). 대류 저항은 바닥 면적 기준 실효 열전달 계수 \(h_{\text{eff}}\)로 \(R_{conv} = 1/(h_{\text{eff}}\,a_{\text{end}}^2)\)(핀의 면적 확장 효과를 \(h_{\text{eff}}\)에 포함).</div></div>
+    <p>45°는 층의 열전도율이 아래층보다 클 때(구리 위 다이 등) 대략 맞고, 낮은 열전도 층 아래에 높은 열전도 층이 있으면 실제 퍼짐은 더 크다. 정확한 값은 3D 유한 요소 해석이나 측정으로 확인한다. 열 퍼짐 일반론은 <a href="../../packaging/chapters/thermal.html">PackagingBook 열 장</a>도 참고하자.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="45도 열 퍼짐: 다이 아래로 원뿔이 넓어지고 다이 간격에서 이웃 원뿔과 겹친다">
+        <rect x="30" y="40" width="800" height="150" class="m-copper" opacity="0.55"/>
+        <rect x="150" y="22" width="90" height="18" class="m-sic"/><rect x="470" y="22" width="90" height="18" class="m-sic"/>
+        <path d="M150 40 L40 150 L350 150 L240 40 Z" class="heat-flow"/>
+        <path d="M470 40 L360 150 L670 150 L560 40 Z" class="heat-flow"/>
+        <line x1="355" y1="40" x2="355" y2="190" class="dash"/>
+        <text x="362" y="118" class="lbl-sm">원뿔이 만나는 곳</text>
+        <text x="362" y="134" class="lbl-sm">→ 한 변 = 다이 간격 p</text>
+        <path d="M150 40 L150 80" class="dash"/><path d="M150 70 A30 30 0 0 1 129 61" class="arr"/>
+        <text x="96" y="70" class="lbl-sm">45°</text>
+        <text x="160" y="16" class="lbl-sm">a₁ = 4.5 mm</text>
+        <line x1="40" y1="165" x2="350" y2="165" class="arr"/><text x="150" y="182" class="lbl-sm">a₂ = a₁ + 2t</text>
+        <line x1="470" y1="210" x2="790" y2="210" class="arr"/><text x="560" y="226" class="lbl-sm">다이 간격 p ≈ 9 mm (PW-800)</text>
+        <text x="690" y="70" class="lbl-heat">R = t / (k·a₁·a₂)</text>
+        <text x="690" y="92" class="lbl-sm">(각뿔대 적분)</text>
+      </svg>
+      <figcaption><b>그림 14-2.</b> 45° 열 퍼짐 근사. 두께 3 mm 구리에서 원뿔이 1 mm만 내려가도 이웃 원뿔과 만나므로, 두꺼운 베이스는 퍼짐보다 "넓은 바닥으로 나르는" 역할을 한다. 세라믹(\(k\) 24–170 W/m·K)은 얇지만 \(k\)가 낮아 다이 바로 아래에서 큰 몫을 차지한다.</figcaption>
+    </figure>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>층</th><th>두께</th><th>\(k\) (W/m·K)</th><th>\(\rho c_p\) (MJ/m³·K)</th><th>메모</th></tr></thead>
+      <tbody>
+        <tr><td>4H-SiC 다이</td><td>150 µm</td><td>약 370 (150 °C에서 약 250)</td><td>2.2</td><td>Si는 약 150</td></tr>
+        <tr><td>은 소결 / SnAg 솔더</td><td>30 / 80 µm</td><td>약 200 / 약 50</td><td>2.0 / 1.7</td><td>소결은 기공률에 따라 100–250</td></tr>
+        <tr><td>Cu (DBC·AMB, 베이스)</td><td>0.3 mm, 3 mm</td><td>390</td><td>3.45</td><td>퍼짐의 주역</td></tr>
+        <tr><td>Si₃N₄ / AlN / Al₂O₃</td><td>0.32 / 0.635 / 0.38 mm</td><td>약 90 / 170 / 24</td><td>2.2 / 2.4 / 3.4</td><td>강도는 Si₃N₄가 가장 큼(<a href="packaging.html">15장</a>)</td></tr>
+        <tr><td>TIM(서멀 그리스·패드)</td><td>50–100 µm</td><td>약 1–5</td><td>—</td><td>간접 냉각에서만, 가장 나쁜 층</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="sim" id="sim-stack">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>층 구조 열저항 계산기: 45° 퍼짐과 재료 선택</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="st-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>다이 접합</span><div class="seg" id="st-att"><button data-value="sinter" class="on">은 소결</button><button data-value="solder">솔더</button></div></div>
+          <div class="ctrl"><span>세라믹</span><div class="seg" id="st-cer"><button data-value="si3n4" class="on">Si₃N₄</button><button data-value="aln">AlN</button><button data-value="al2o3">Al₂O₃</button></div></div>
+          <label class="ctrl"><span>다이 한 변 <output id="st-die-out"></output></span><input type="range" id="st-die" min="2" max="7" step="0.1" value="4.5"></label>
+          <label class="ctrl"><span>베이스 두께 <output id="st-base-out"></output></span><input type="range" id="st-base" min="0.5" max="6" step="0.1" value="3"></label>
+          <label class="ctrl"><span>실효 h <output id="st-h-out"></output></span><input type="range" id="st-h" min="2000" max="60000" step="500" value="20000"></label>
+          <label class="check"><input type="checkbox" id="st-spread" checked> 45° 열 퍼짐</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">R 다이 1개</span><span class="v" id="st-rdie">—</span></div>
+        <div class="stat"><span class="k">R 스위치 (÷8)</span><span class="v" id="st-rsw">—</span></div>
+        <div class="stat"><span class="k">세라믹 비중</span><span class="v" id="st-cshare">—</span></div>
+        <div class="stat"><span class="k">155 W에서 Tj</span><span class="v" id="st-tj">—</span></div>
+        <div class="stat"><span class="k">다이 열유속</span><span class="v" id="st-flux">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 층 단면(가로는 열이 쓰는 한 변, 세로는 두께를 로그처럼 눌러 그림). 오른쪽: 층별 열저항 막대(빨간색은 대류). 해볼 것: ① 퍼짐을 끄면 0.12 → 약 0.40 K/W. ② Al₂O₃로 바꾸면 세라믹 한 층이 약 0.05 K/W(스위치당)로 커진다. ③ 다이를 작게 하면 같은 손실에서 열유속과 \(T_j\)가 함께 오른다. 이것이 SiC 다이 면적을 줄이기 어려운 열적 이유다. ④ \(h\)를 올려도 결국 다이·세라믹 항이 남는다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="foster">
+    <h2>카우어·포스터 열 회로와 과도 열 임피던스</h2>
+    <p>층마다 열용량이 있으므로 전력을 계단으로 켜면 접합 온도는 즉시가 아니라 여러 시간 상수에 걸쳐 오른다. 단위 계단 전력에 대한 온도 상승을 <span class="term">과도 열 임피던스</span><span class="en">(transient thermal impedance)</span> \(Z_{th}(t) = \Delta T_j(t)/P\)라 한다. \(t \to \infty\)에서 \(Z_{th} \to R_{th}\)다.</p>
+    <p>열 회로를 표현하는 방법은 두 가지다. <span class="term">카우어 회로</span><span class="en">(Cauer)</span>는 각 층의 R과 C를 사다리로 이어 물리 구조를 그대로 따른다. 노드 온도가 실제 층 온도다. <span class="term">포스터 회로</span><span class="en">(Foster)</span>는 RC 병렬 쌍을 직렬로 이은 수학적 표현으로, 계단 응답이 지수 함수의 합이 되어 계산이 쉽다. 데이터시트는 보통 포스터 계수 \((R_i, \tau_i)\) 4개 안팎을 준다. 단, 포스터 노드 온도는 물리적 의미가 없고, 두 모듈의 포스터 회로를 직렬로 이어 붙이면 틀린다(다음 단에서 열이 퍼지는 효과가 빠진다). 방열판을 붙이려면 카우어로 바꾸거나 전체를 다시 측정한다.</p>
+    <div class="formula">$$Z_{th}(t) = \sum_{i=1}^{n} R_i\left(1 - e^{-t/\tau_i}\right),\qquad \tau_i = R_i C_i,\qquad \sum_i R_i = R_{th}$$
+      <div class="where">카우어 사다리: 노드 \(j\)에서 \(C_j\,dT_j/dt = (T_{j-1}-T_j)/R_{j-1} - (T_j - T_{j+1})/R_j\), 첫 노드에 전력 \(P\) 주입, 마지막 저항은 냉각수(0 K 기준)로. 시뮬레이터는 이를 음해법(implicit Euler)으로 로그 간격 시간 400단계(1 µs–20 s)에 적분해 \(Z_{th}(t)\)를 얻고, 포스터 \(n\)항을 상대 오차 최소 제곱으로 맞춘다(\(R_i \ge 0\) 비음 최소 제곱 + \(\log\tau_i\) 좌표 탐색, 반복 횟수 상한).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 220" role="img" aria-label="카우어 사다리 회로와 포스터 직렬 RC 쌍 회로 비교">
+        <text x="20" y="24" class="lbl-b">카우어 (물리 사다리)</text>
+        <circle cx="40" cy="70" r="4" fill="var(--m-heat)"/><text x="18" y="56" class="lbl-heat">P</text>
+        <line x1="40" y1="70" x2="70" y2="70" class="arr"/>
+        <path class="res" d="M70 70 h8 l4 -8 l8 16 l8 -16 l8 16 l8 -16 l4 8 h8"/>
+        <line x1="126" y1="70" x2="170" y2="70" class="arr"/>
+        <path class="res" d="M170 70 h8 l4 -8 l8 16 l8 -16 l8 16 l8 -16 l4 8 h8"/>
+        <line x1="226" y1="70" x2="270" y2="70" class="arr"/>
+        <path class="res" d="M270 70 h8 l4 -8 l8 16 l8 -16 l8 16 l8 -16 l4 8 h8"/>
+        <line x1="326" y1="70" x2="370" y2="70" class="arr"/><text x="376" y="74" class="lbl-sm">T_f</text>
+        <g class="arr"><line x1="55" y1="70" x2="55" y2="96"/><line x1="43" y1="96" x2="67" y2="96"/><line x1="43" y1="104" x2="67" y2="104"/><line x1="55" y1="104" x2="55" y2="130"/>
+          <line x1="148" y1="70" x2="148" y2="96"/><line x1="136" y1="96" x2="160" y2="96"/><line x1="136" y1="104" x2="160" y2="104"/><line x1="148" y1="104" x2="148" y2="130"/>
+          <line x1="248" y1="70" x2="248" y2="96"/><line x1="236" y1="96" x2="260" y2="96"/><line x1="236" y1="104" x2="260" y2="104"/><line x1="248" y1="104" x2="248" y2="130"/>
+          <line x1="30" y1="130" x2="380" y2="130"/></g>
+        <text x="60" y="152" class="lbl-sm">C 다이</text><text x="150" y="152" class="lbl-sm">C DBC</text><text x="250" y="152" class="lbl-sm">C 베이스</text>
+        <text x="20" y="182" class="lbl-sm">노드 = 실제 층 온도. 방열판을 이어 붙일 수 있다.</text>
+        <text x="460" y="24" class="lbl-b">포스터 (수학적 급수)</text>
+        <circle cx="470" cy="70" r="4" fill="var(--m-heat)"/>
+        <g class="arr"><line x1="470" y1="70" x2="490" y2="70"/>
+          <line x1="490" y1="50" x2="490" y2="100"/><line x1="550" y1="50" x2="550" y2="100"/><line x1="490" y1="50" x2="500" y2="50"/><line x1="540" y1="50" x2="550" y2="50"/><line x1="490" y1="100" x2="515" y2="100"/><line x1="525" y1="100" x2="550" y2="100"/><line x1="515" y1="92" x2="515" y2="108"/><line x1="525" y1="92" x2="525" y2="108"/>
+          <line x1="550" y1="70" x2="580" y2="70"/>
+          <line x1="580" y1="50" x2="580" y2="100"/><line x1="640" y1="50" x2="640" y2="100"/><line x1="580" y1="50" x2="590" y2="50"/><line x1="630" y1="50" x2="640" y2="50"/><line x1="580" y1="100" x2="605" y2="100"/><line x1="615" y1="100" x2="640" y2="100"/><line x1="605" y1="92" x2="605" y2="108"/><line x1="615" y1="92" x2="615" y2="108"/>
+          <line x1="640" y1="70" x2="670" y2="70"/>
+          <line x1="670" y1="50" x2="670" y2="100"/><line x1="730" y1="50" x2="730" y2="100"/><line x1="670" y1="50" x2="680" y2="50"/><line x1="720" y1="50" x2="730" y2="50"/><line x1="670" y1="100" x2="695" y2="100"/><line x1="705" y1="100" x2="730" y2="100"/><line x1="695" y1="92" x2="695" y2="108"/><line x1="705" y1="92" x2="705" y2="108"/>
+          <line x1="730" y1="70" x2="760" y2="70"/></g>
+        <path class="res" d="M500 50 l3 -6 l6 12 l6 -12 l6 12 l6 -12 l6 12 l3 -6 h4"/>
+        <path class="res" d="M590 50 l3 -6 l6 12 l6 -12 l6 12 l6 -12 l6 12 l3 -6 h4"/>
+        <path class="res" d="M680 50 l3 -6 l6 12 l6 -12 l6 12 l6 -12 l6 12 l3 -6 h4"/>
+        <text x="766" y="74" class="lbl-sm">T_f</text>
+        <text x="496" y="130" class="lbl-sm">R₁, τ₁</text><text x="586" y="130" class="lbl-sm">R₂, τ₂</text><text x="676" y="130" class="lbl-sm">R₃, τ₃</text>
+        <text x="460" y="162" class="lbl-heat">Z_th(t) = Σ Rᵢ (1 − e^(−t/τᵢ))</text>
+        <text x="460" y="182" class="lbl-sm">계산이 쉽다. 노드 온도는 의미 없음, 직렬 연결 금지.</text>
+      </svg>
+      <figcaption><b>그림 14-3.</b> 같은 열 경로의 두 표현. 카우어와 포스터는 접합 노드(입력 단자)에서 보면 같은 \(Z_{th}(t)\)를 줄 수 있지만 내부는 다르다. 측정(<a href="#tsep">8절</a>)으로 얻은 \(Z_{th}\) 곡선은 보통 포스터로 맞춰 데이터시트에 싣는다.</figcaption>
+    </figure>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 240" role="img" aria-label="로그-로그 축의 Zth 곡선 개념도: 다이, 접합층과 DBC, 베이스, 냉각수 구간">
+        <line x1="70" y1="200" x2="820" y2="200" class="s-axis"/><line x1="70" y1="20" x2="70" y2="200" class="s-axis"/>
+        <text x="445" y="232" class="lbl-sm" text-anchor="middle">시간 t (로그) — 10 µs … 10 s</text>
+        <text x="22" y="110" class="lbl-sm" transform="rotate(-90 22 110)" text-anchor="middle">Z_th (로그)</text>
+        <path class="w-heat" d="M80 190 C 160 170, 200 150, 260 128 C 330 104, 400 92, 470 78 C 560 58, 640 40, 700 34 L 810 32"/>
+        <line x1="70" y1="32" x2="820" y2="32" class="dash"/><text x="814" y="26" class="lbl-sm" text-anchor="end">R_th,j-f ≈ 0.12 K/W</text>
+        <g class="lbl-sm"><text x="90" y="160">다이</text><text x="90" y="174">(√t 구간)</text><text x="250" y="160">소결·DBC</text><text x="250" y="174">~1 ms</text><text x="440" y="130">세라믹·베이스</text><text x="440" y="144">10–100 ms</text><text x="640" y="80">대류·냉각수</text><text x="640" y="94">~0.5 s</text></g>
+        <line x1="230" y1="40" x2="230" y2="200" class="dash"/><line x1="410" y1="40" x2="410" y2="200" class="dash"/><line x1="600" y1="40" x2="600" y2="200" class="dash"/>
+      </svg>
+      <figcaption><b>그림 14-4.</b> \(Z_{th}(t)\)의 구간(개념도). 짧은 시간에는 열이 다이 안에만 머물러 반무한 고체처럼 \(Z_{th} \propto \sqrt t\)로 오르고, 시간이 지나며 아래층이 차례로 "보인다". 곡선의 기울기 변화로 어느 층이 나빠졌는지(예: 솔더 박리) 찾는 것이 구조 함수 분석이다(<a href="reliability.html">16장</a>).</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-foster">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>카우어 사다리 → Z<sub>th</sub>(t) → 포스터 맞춤</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="fo-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>포스터 항 수 n <output id="fo-n-out"></output></span><input type="range" id="fo-n" min="1" max="5" step="1" value="4"></label>
+          <div class="ctrl"><span>세라믹</span><div class="seg" id="fo-cer"><button data-value="si3n4" class="on">Si₃N₄</button><button data-value="aln">AlN</button><button data-value="al2o3">Al₂O₃</button></div></div>
+          <label class="ctrl"><span>베이스 두께 <output id="fo-base-out"></output></span><input type="range" id="fo-base" min="0.5" max="6" step="0.1" value="3"></label>
+          <label class="ctrl"><span>실효 h <output id="fo-h-out"></output></span><input type="range" id="fo-h" min="2000" max="60000" step="500" value="20000"></label>
+          <label class="check"><input type="checkbox" id="fo-delam"> 기판 솔더 50 % 박리</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">R<sub>th</sub> (정상)</span><span class="v" id="fo-rth">—</span></div>
+        <div class="stat"><span class="k">Z<sub>th</sub>(1 ms) / (100 ms)</span><span class="v" id="fo-z">—</span></div>
+        <div class="stat"><span class="k">맞춤 상대 오차 (RMS)</span><span class="v" id="fo-err">—</span></div>
+        <div class="stat"><span class="k">포스터 계수 Rᵢ (K/W) @ τᵢ</span><span class="v" id="fo-coef">—</span></div>
+      </div>
+      <div class="sim-note">실선: 카우어 사다리(층마다 3–6개 노드로 나눔, 스위치당 다이 8개)의 계단 응답. 점선: 포스터 맞춤. 점: τᵢ 위치. 해볼 것: ① n = 1이면 한 지수로 여러 층을 흉내 낼 수 없어 오차가 수십 %다. n = 4에서 약 2 %, n = 5에서 1 % 아래. ② 기판 솔더 박리를 켜면(그 층 열전도 절반) 곡선이 1–10 ms 이후에서만 올라간다. 짧은 시간 구간은 그대로이므로 시간 영역이 고장 위치를 알려 준다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="pulse">
+    <h2>펄스 전력과 접합 온도 피크</h2>
+    <p>열 회로는 선형이므로 <span class="term">중첩</span>이 성립한다. 전력 펄스(높이 \(P\), 폭 \(t_p\))는 \(t = 0\)에서 \(+P\) 계단, \(t = t_p\)에서 \(-P\) 계단의 합이다. 따라서</p>
+    <div class="formula">$$\Delta T_j(t) = P\,Z_{th}(t) - P\,Z_{th}(t - t_p)\,u(t - t_p),\qquad \Delta T_{j,\text{peak}} = P\,Z_{th}(t_p)$$
+      <div class="where">주기 \(T\), 듀티 \(D = t_p/T\)인 반복 펄스의 주기적 정상 상태 피크는 포스터 항마다 정확히 \(\Delta T_i = R_iP\,(1-e^{-t_p/\tau_i})/(1-e^{-T/\tau_i})\)이고, 흔히 쓰는 근사는 \(Z_{th}(t_p, D) \approx D\,R_{th} + (1-D)\,Z_{th}(T + t_p) - Z_{th}(T) + Z_{th}(t_p)\)이다.</div></div>
+    <p>시뮬레이터는 앞 절의 기본 구조를 4항으로 맞춘 PW-800 스위치 포스터 계수(아래 표, 합 0.12 K/W)를 쓴다. 단락 같은 µs 사건에서는 열이 다이 밖으로 나가지도 못하므로 \(Z_{th}\)가 아주 작아 같은 에너지라도 피크가 매우 높다. 반대로 1 s 이상이면 정상 열저항이 된다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>항 i</th><th>1</th><th>2</th><th>3</th><th>4</th><th>합</th></tr></thead>
+      <tbody>
+        <tr><td>\(R_i\) (K/W)</td><td>0.0006</td><td>0.0030</td><td>0.0230</td><td>0.0934</td><td>0.120</td></tr>
+        <tr><td>\(\tau_i\)</td><td>15 µs</td><td>0.2 ms</td><td>9.6 ms</td><td>0.56 s</td><td>—</td></tr>
+        <tr><td>주로 대표하는 층</td><td>다이 표면</td><td>다이·소결</td><td>DBC·세라믹</td><td>베이스·대류</td><td></td></tr>
+      </tbody>
+    </table></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 220" role="img" aria-label="전력 펄스를 두 계단의 합으로 나누어 접합 온도 응답을 중첩하는 그림">
+        <line x1="60" y1="90" x2="400" y2="90" class="s-axis"/>
+        <path class="w-heat" d="M60 90 L110 90 L110 30 L230 30 L230 90 L400 90"/>
+        <text x="64" y="26" class="lbl-heat">P(t)</text><text x="160" y="22" class="lbl-sm">t_p</text>
+        <text x="410" y="66" class="lbl-b">=</text>
+        <line x1="440" y1="90" x2="840" y2="90" class="s-axis"/>
+        <path class="w-heat" d="M440 90 L490 90 L490 30 L840 30"/><text x="700" y="24" class="lbl-sm">+P 계단 (t = 0)</text>
+        <path class="w-dim" d="M610 90 L610 150 L840 150" stroke-dasharray="6 3"/><text x="700" y="166" class="lbl-sm">−P 계단 (t = t_p)</text>
+        <line x1="60" y1="210" x2="400" y2="210" class="s-axis"/>
+        <path class="w-heat" d="M60 210 L110 210 C 130 160, 170 135, 230 125 C 260 160, 300 190, 400 202"/>
+        <text x="236" y="120" class="lbl-heat">ΔT_peak = P·Z_th(t_p)</text>
+        <text x="64" y="196" class="lbl-sm">T_j(t)</text>
+      </svg>
+      <figcaption><b>그림 14-5.</b> 펄스 중첩. 위: 펄스 = 두 계단의 합. 아래: 응답도 \(PZ_{th}(t) - PZ_{th}(t-t_p)\)의 합이며, 피크는 펄스 끝에서 \(PZ_{th}(t_p)\)이다. 반복 펄스는 이 계단 쌍을 주기마다 더한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-pulse">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>펄스 전력 → T<sub>j</sub>(t): 포스터 중첩과 Z<sub>th</sub>(t<sub>p</sub>, D)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pu-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>파형</span><div class="seg" id="pu-mode"><button data-value="single" class="on">단일 펄스</button><button data-value="train">반복 펄스</button></div></div>
+          <label class="ctrl"><span>펄스 전력 P <output id="pu-p-out"></output></span><input type="range" id="pu-p" min="50" max="5000" step="10" value="1000"></label>
+          <label class="ctrl"><span>펄스 폭 t<sub>p</sub> <output id="pu-tp-out"></output></span><input type="range" id="pu-tp" min="-5" max="1" step="0.02" value="-2"></label>
+          <label class="ctrl"><span>듀티 D (반복) <output id="pu-d-out"></output></span><input type="range" id="pu-d" min="0.02" max="0.9" step="0.01" value="0.2"></label>
+          <label class="ctrl"><span>냉각수 T<sub>f</sub> <output id="pu-tf-out"></output></span><input type="range" id="pu-tf" min="25" max="90" step="1" value="65"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Z<sub>th</sub>(t<sub>p</sub>)</span><span class="v" id="pu-z">—</span></div>
+        <div class="stat"><span class="k">펄스 에너지</span><span class="v" id="pu-e">—</span></div>
+        <div class="stat"><span class="k">T<sub>j</sub> 피크</span><span class="v" id="pu-pk">—</span></div>
+        <div class="stat"><span class="k">반복: 피크 / 최저</span><span class="v" id="pu-tr">—</span></div>
+      </div>
+      <div class="sim-note">위: \(T_j(t)\)(단일 펄스는 0–3t<sub>p</sub>, 반복 펄스는 정상 상태의 마지막 3주기). 아래: \(Z_{th}(t_p, D)\) 곡선족(D = 0, 0.05, 0.1, 0.2, 0.5, 실선은 정확한 주기 해)과 현재 점. 해볼 것: ① 5 kW·10 µs(50 mJ, 단락 일부와 비슷한 에너지)는 \(T_j\)를 겨우 수 K 올리지만, 다이 표면 층만 데우므로 실제 국부 온도는 더 높다(1D 근사 한계). ② 같은 50 mJ도 10 ms(5 W)면 거의 0. ③ 반복 펄스에서 \(t_p\)가 \(\tau_4\)(0.56 s)보다 훨씬 짧으면 피크 ≈ \(T_f + DPR_{th}\) + 작은 리플.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="ripple">
+    <h2>모터 기본파 주기의 T<sub>j</sub> 리플</h2>
+    <p>인버터 스위치의 손실은 상전류를 따라 기본파 주기로 출렁인다. 상단 스위치는 전류가 양일 때 하드 스위칭하고(\(E_{on}+E_{off}\)), 음일 때는 동기 정류 쪽이 되어 바디 다이오드 역회복(\(E_{rr}\))과 데드 타임 도통만 진다. SiC MOSFET은 3사분면에서도 채널로 도통하므로 전도 손실은 전류 부호와 상관없이 듀티 \(d(\theta)\) 동안 생긴다. 스위칭 주기로 평균한 순시 손실은</p>
+    <div class="formula">$$p(\theta) = R_{DS(on)}(T_j)\,i^2(\theta)\,d(\theta) + f_{sw}\,E(\theta)\,\frac{|i(\theta)|}{400\,\text{A}}\frac{V_{dc}}{800\,\text{V}} + 2t_d f_{sw} V_{SD}|i|\big|_{i\lt 0}$$
+      <div class="where">\(i(\theta) = \hat I\sin(\theta - \varphi)\), \(d(\theta) = [1 + M\sin\theta]/2\), \(E = E_{on}+E_{off} = 20\) mJ(\(i\gt 0\)) 또는 \(E_{rr} = 1\) mJ(\(i\lt 0\)), 데드 타임 \(t_d = 200\) ns, \(V_{SD} \approx 3.5\) V. 한 주기 평균은 앞 PW-800 노트의 식과 같다.</div></div>
+    <p>출력 주파수 \(f_o\)의 주기 \(1/f_o\)가 열 시간 상수보다 짧으면 \(T_j\)는 평균 근처에서 조금만 출렁이고, 길면 각 반주기마다 거의 정상 상태까지 오르내린다. 전기차가 언덕에서 정지 상태로 버티거나(정지 토크, stall) 아주 느리게 출발할 때는 \(f_o \to 0\)이어서 <b>한 상의 한 스위치가 피크 전류를 계속 진다</b>. 평균 손실은 같아도 \(T_j\) 피크와 \(\Delta T_j\)가 크게 늘어 수명(<a href="reliability.html">16장</a>)과 정격을 함께 위협한다. 그래서 트랙션 인버터는 저속에서 전류 한계를 낮추거나 스위칭 주파수를 줄인다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 220" role="img" aria-label="출력 주파수가 낮을 때와 높을 때 접합 온도 리플의 비교 개념도">
+        <text x="20" y="22" class="lbl-b">f_o = 1 Hz (저속)</text>
+        <line x1="20" y1="190" x2="410" y2="190" class="s-axis"/>
+        <path class="w-amp" d="M20 130 C 70 60, 120 60, 167 130 C 214 200, 264 200, 314 130 C 344 88, 380 70, 410 80" opacity="0.6"/>
+        <path class="w-heat" d="M20 120 C 60 50, 120 44, 167 80 C 200 104, 214 110, 240 108 C 264 106, 290 70, 314 52 C 344 40, 380 38, 410 50"/>
+        <text x="40" y="208" class="lbl-sm">ΔT_j 큼: 반주기 안에 열 경로가 거의 포화</text>
+        <text x="420" y="22" class="lbl-b">f_o = 100 Hz (고속)</text>
+        <line x1="440" y1="190" x2="840" y2="190" class="s-axis"/>
+        <path class="w-amp" d="M440 130 C 450 100, 470 100, 480 130 C 490 160, 510 160, 520 130 C 530 100, 550 100, 560 130 C 570 160, 590 160, 600 130 C 610 100, 630 100, 640 130 C 650 160, 670 160, 680 130 C 690 100, 710 100, 720 130 C 730 160, 750 160, 760 130 C 770 100, 790 100, 800 130 C 810 160, 830 160, 840 130" opacity="0.6"/>
+        <path class="w-heat" d="M440 82 C 455 74, 465 74, 480 80 C 495 86, 505 86, 520 80 C 535 74, 545 74, 560 80 C 575 86, 585 86, 600 80 C 615 74, 625 74, 640 80 C 655 86, 665 86, 680 80 C 695 74, 705 74, 720 80 C 735 86, 745 86, 760 80 C 775 74, 785 74, 800 80 C 815 86, 825 86, 840 80"/>
+        <text x="460" y="208" class="lbl-sm">ΔT_j 작음: 평균 근처에서 출렁</text>
+        <text x="700" y="64" class="lbl-heat">T_j</text><text x="790" y="120" class="lbl-amp">i</text>
+      </svg>
+      <figcaption><b>그림 14-6.</b> 같은 평균 손실, 다른 리플(개념도). 리플 크기는 반주기 \(1/(2f_o)\)에서의 \(Z_{th}\)에 비례한다고 생각하면 된다. 정지(\(f_o = 0\))는 "가장 긴 펄스"다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ripple">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>기본파 주기의 T<sub>j</sub> 리플: 출력 주파수와 정지 토크</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>출력 주파수 f<sub>o</sub> <output id="rp-f-out"></output></span><input type="range" id="rp-f" min="-1" max="3" step="0.02" value="1.7"></label>
+          <label class="ctrl"><span>상전류 <output id="rp-i-out"></output></span><input type="range" id="rp-i" min="20" max="450" step="5" value="250"></label>
+          <label class="ctrl"><span>변조 지수 M <output id="rp-m-out"></output></span><input type="range" id="rp-m" min="0" max="1.15" step="0.01" value="0.9"></label>
+          <label class="ctrl"><span>역률 cos φ <output id="rp-pf-out"></output></span><input type="range" id="rp-pf" min="-1" max="1" step="0.01" value="0.9"></label>
+          <label class="ctrl"><span>스위칭 주파수 <output id="rp-fs-out"></output></span><input type="range" id="rp-fs" min="2" max="40" step="1" value="10"></label>
+          <label class="ctrl"><span>냉각수 T<sub>f</sub> <output id="rp-tf-out"></output></span><input type="range" id="rp-tf" min="25" max="90" step="1" value="65"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">평균 손실/스위치</span><span class="v" id="rp-pavg">—</span></div>
+        <div class="stat"><span class="k">T<sub>j</sub> 평균</span><span class="v" id="rp-tm">—</span></div>
+        <div class="stat"><span class="k">T<sub>j</sub> 최대</span><span class="v" id="rp-tmax">—</span></div>
+        <div class="stat"><span class="k">ΔT<sub>j</sub></span><span class="v" id="rp-dt">—</span></div>
+      </div>
+      <div class="sim-note">위: 기본파 한 주기(3주기 적분 후 마지막 주기)의 순시 손실 \(p(\theta)\)(빨강)과 \(T_j\)(굵은 빨강, 오른쪽 축은 °C), 상전류(주황). 포스터 4항을 단계마다 정확한 지수 갱신 \(\theta_i \leftarrow \theta_i e^{-\Delta t/\tau_i} + R_ip(1 - e^{-\Delta t/\tau_i})\)으로 적분하고, \(R_{DS(on)}\)은 순간 \(T_j\)로 갱신한다. 아래: \(f_o\) 0.1 Hz–1 kHz에 대한 \(\Delta T_j\)·\(T_{j,max}\) 곡선과 현재 점. 해볼 것: ① 250 A에서 50 Hz → 1 Hz로 내리면 \(\Delta T_j\)가 약 4 K → 약 20 K, 0.1 Hz에서는 약 50 K. ② 정지 토크를 흉내 내려면 f<sub>o</sub> 0.1 Hz, M ≈ 0.05로 두자. ③ 역률을 −0.9(회생)로 바꾸면 하드 스위칭 구간이 바뀌어 리플 모양이 달라진다.</div>
+    </div>
+
+    <div class="callout fab"><strong>정지 토크와 450 A 부스트</strong>기본 포스터 계수로 계산하면 250 A, 50 Hz에서 \(T_j\)는 평균 약 81 °C, \(\Delta T_j\) 약 4 K로 여유가 크다. 같은 250 A로 0.1 Hz·\(M\) 0.05(사실상 정지)에서는 피크 전류를 진 스위치의 순시 손실이 약 350 W까지 올라 \(T_{j,max}\) 약 104 °C, \(\Delta T_j\) 약 36 K가 된다. 450 A 부스트는 평균 \(T_j\)가 약 112 °C이지만 1 Hz에서 \(T_{j,max}\) 약 148 °C, 0.5 Hz에서 약 165 °C, 정지(0.1 Hz, \(M\) 0.05)에서 약 173 °C로 설계 상한 150 °C를 넘어 175 °C에 다가간다. 그래서 PW-800은 \(f_o\) 2 Hz 미만에서 전류 한계를 약 70 %로 낮추는 디레이팅 표를 둔다(가정).</div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="runaway">
+    <h2>전기-열 결합과 열 폭주</h2>
+    <p>손실이 온도에 따라 변하면 손실과 온도를 함께 풀어야 한다. SiC MOSFET의 온저항은 25 → 175 °C에서 약 1.6배(PW-800: 2.0 → 3.2 mΩ)가 되므로 온도가 오르면 손실도 오른다(양의 되먹임). 정상 상태 해는 두 곡선의 교점이다.</p>
+    <div class="formula">$$P_{gen}(T_j) = P_{cool}(T_j) = \frac{T_j - T_f}{R_{th}},\qquad \text{안정 조건:}\ \ R_{th}\,\frac{dP_{gen}}{dT_j} \lt 1$$
+      <div class="where">전도 손실만 온도에 선형으로 의존하면 \(P_{gen} = P_{0}[1 + \alpha(T_j - 25)] + P_{sw}\)이고, 해는 \(T_j - 25 = \dfrac{T_f - 25 + R_{th}(P_0 + P_{sw})}{1 - \alpha R_{th}P_0}\). 분모가 0 이하(\(\alpha R_{th}P_0 \ge 1\))면 해가 없다 = <span class="term">열 폭주</span><span class="en">(thermal runaway)</span>. 누설 전류처럼 지수적으로 늘어나는 항 \(P_{leak} = V_{dc}I_{L0}\,e^{(T_j - 25)/\Delta T_L}\)이 있으면 교점이 두 개 생기며, 아래 것은 안정, 위 것은 불안정하다.</div></div>
+    <p>PW-800 기준점의 되먹임 계수는 \(\alpha R_{th}P_0 = 0.004 \times 0.12 \times 62.5 = 0.03\)으로 아주 작다. 온저항 온도 계수 때문에 실제 수냉 인버터가 폭주하는 일은 드물다. 폭주가 문제 되는 것은 ① 열저항이 큰 경우(공랭 디스크리트, TIM 건조·솔더 박리로 \(R_{th}\)가 몇 배가 된 경우), ② 누설이 큰 고온 차단 상태(HTRB 시험, 쇼트키·Si 소자의 고온 누설), ③ 병렬 다이 사이(뜨거운 다이가 전류를 덜 받아 안정 — 양의 온도 계수의 장점, 음의 온도 계수인 IGBT 저전류 구간·바이폴라 소자는 반대)다. 다이 수준의 국부 열점과 전류 집중은 <a href="sic.html">8장</a>, 칩 수준 열 해석은 <a href="../../soc/chapters/thermal.html">SoCBook 열 장</a>도 참고하자.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 240" role="img" aria-label="발열 곡선과 냉각 직선의 교점으로 보는 열 안정성: 안정점, 불안정점, 접선 임계">
+        <line x1="70" y1="210" x2="560" y2="210" class="s-axis"/><line x1="70" y1="20" x2="70" y2="210" class="s-axis"/>
+        <text x="315" y="234" class="lbl-sm" text-anchor="middle">T_j</text>
+        <text x="24" y="115" class="lbl-sm" transform="rotate(-90 24 115)" text-anchor="middle">전력</text>
+        <path class="w-acc" d="M110 210 L540 40"/><text x="470" y="56" class="lbl-acc">냉각 (T_j − T_f)/R_th</text>
+        <path class="w-heat" d="M70 150 C 200 140, 330 124, 400 96 C 440 78, 470 50, 490 20"/>
+        <text x="496" y="30" class="lbl-heat">발열 P_gen(T_j)</text>
+        <circle cx="213" cy="140" r="6" fill="var(--ok)"/><text x="218" y="162" class="lbl-sm">안정점: 기울기 P_gen &lt; 1/R_th</text>
+        <circle cx="440" cy="76" r="6" fill="var(--bad)"/><text x="300" y="70" class="lbl-sm">불안정점 (넘으면 폭주)</text>
+        <g transform="translate(600,30)">
+          <rect x="0" y="0" width="250" height="170" rx="8" class="box"/>
+          <text x="14" y="26" class="lbl-b">T_j가 조금 오르면?</text>
+          <text x="14" y="52" class="lbl">• 냉각 증가 &gt; 발열 증가</text>
+          <text x="28" y="72" class="lbl-sm">→ 원래 점으로 복귀 (안정)</text>
+          <text x="14" y="100" class="lbl">• 발열 증가 &gt; 냉각 증가</text>
+          <text x="28" y="120" class="lbl-sm">→ 더 오른다 (불안정)</text>
+          <text x="14" y="150" class="lbl-sm">R_th↑, I↑, T_f↑ → 두 점이 만나 사라짐</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 14-7.</b> 열 안정성의 그래프 풀이. 냉각 직선의 기울기 \(1/R_{th}\)가 발열 곡선 기울기보다 크면 안정하다. 전류·열저항·냉각수 온도가 커지면 직선이 곡선에 접하게 되고, 그 너머에서는 교점이 없다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-runaway">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>전기-열 결합 해와 열 폭주 경계</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ru-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>상전류 <output id="ru-i-out"></output></span><input type="range" id="ru-i" min="20" max="600" step="5" value="250"></label>
+          <label class="ctrl"><span>R<sub>th,j-f</sub> <output id="ru-r-out"></output></span><input type="range" id="ru-r" min="0.05" max="1.5" step="0.01" value="0.12"></label>
+          <label class="ctrl"><span>냉각수 T<sub>f</sub> <output id="ru-tf-out"></output></span><input type="range" id="ru-tf" min="25" max="120" step="1" value="65"></label>
+          <label class="ctrl"><span>온저항 온도 계수 α <output id="ru-a-out"></output></span><input type="range" id="ru-a" min="0.001" max="0.012" step="0.0005" value="0.004"></label>
+          <label class="ctrl"><span>누설 I<sub>L0</sub> (25 °C) <output id="ru-l-out"></output></span><input type="range" id="ru-l" min="-7" max="-2" step="0.1" value="-6"></label>
+          <label class="check"><input type="checkbox" id="ru-leak"> 누설 손실 포함 (ΔT<sub>L</sub> = 12 K, 차단 반주기)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">해 T<sub>j</sub></span><span class="v" id="ru-tj">—</span></div>
+        <div class="stat"><span class="k">손실 P</span><span class="v" id="ru-p">—</span></div>
+        <div class="stat"><span class="k">안정 지수 R<sub>th</sub>·dP/dT</span><span class="v" id="ru-s">—</span></div>
+        <div class="stat"><span class="k">반복 횟수</span><span class="v" id="ru-it">—</span></div>
+        <div class="stat"><span class="k">판정</span><span class="v" id="ru-v">—</span></div>
+      </div>
+      <div class="sim-note">발열 곡선(빨강) \(P_{gen} = 2.0\,\)mΩ\([1+\alpha(T-25)]\,I^2/2 + P_{sw} + P_{leak}\)(\(P_{sw}\)는 13장 식, 800 V·10 kHz)과 냉각 직선(청록). 고정점 반복 \(T \leftarrow T_f + R_{th}P_{gen}(T)\)을 최대 300회 돌려 수렴하면 해, 300 °C를 넘거나 수렴하지 않으면 폭주로 판정한다(안정 지수가 1에 가까우면 반복이 느려진다). 해볼 것: ① 기본값의 안정 지수는 약 0.03. ② \(R_{th}\)를 1.2 K/W로(공랭 디스크리트 수준) 올리면 해는 있지만 약 290 °C(안정 지수 0.3) — 폭주 전에 소자가 먼저 죽는다. 해 자체가 없는 폭주(\(\alpha R_{th}P_0 \ge 1\))는 α 1.2 %/K, \(R_{th}\) 1.5 K/W에서 보인다. ③ 누설을 켜고 \(I_{L0}\) 10 µA에서 \(R_{th}\)를 0.5 K/W로, 또는 \(I_{L0}\)를 1 mA로 키우면 두 번째(불안정) 교점이 내려와 폭주한다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="cooling">
+    <h2>냉각 방식 비교</h2>
+    <p>같은 모듈 칩이라도 어떻게 식히느냐에 따라 \(R_{th,j-f}\)가 2–4배 달라진다. 큰 차이를 만드는 것은 두 가지다. ① <b>TIM 층이 있느냐</b>: 베이스판을 냉각판에 나사로 조이는 간접 냉각은 서멀 그리스(\(k\) 약 1–5 W/m·K) 층이 전체의 20–40 %를 차지한다. ② <b>대류 면적과 열전달 계수</b>: 공기의 \(h\)는 수십–수백 W/m²·K, 물-글리콜 강제 대류는 수천–수만이다.</p>
+    <div class="formula">$$R_{th,j-f} = R_{j-c} + R_{TIM} + \frac{R_{conv,0}}{(\dot V/\dot V_0)^{0.8}},\qquad \Delta T_{fluid} = \frac{P_{tot}}{\dot m\,c_p}$$
+      <div class="where">대류 열전달 계수는 난류에서 유속의 약 0.8승(디투스-뵐터 꼴 \(Nu \propto Re^{0.8}Pr^{0.4}\))에 비례한다. 냉각수는 인버터를 지나며 \(\Delta T_{fluid}\)만큼 데워진다: 50/50 글리콜 10 L/min(\(\dot m c_p \approx 0.178\,\)kg/s \(\times 3300\,\)J/kg·K \(\approx 590\) W/K), 0.93 kW면 약 1.6 K. 마지막 모듈은 입구보다 그만큼 뜨거운 물을 받는다. 펌프 압력 손실은 유량의 약 1.8승으로 는다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="네 가지 냉각 방식 단면: 공랭 방열판, 간접 수냉, 핀핀 직접 냉각, 양면 냉각">
+        <g transform="translate(10,20)">
+          <text x="0" y="0" class="lbl-b">① 공랭</text>
+          <rect x="50" y="20" width="60" height="12" class="m-sic"/><rect x="20" y="32" width="120" height="16" class="m-copper"/>
+          <rect x="15" y="48" width="130" height="5" class="m-mold"/>
+          <rect x="10" y="53" width="140" height="16" class="m-metal"/>
+          <g class="m-metal"><rect x="14" y="69" width="6" height="90"/><rect x="32" y="69" width="6" height="90"/><rect x="50" y="69" width="6" height="90"/><rect x="68" y="69" width="6" height="90"/><rect x="86" y="69" width="6" height="90"/><rect x="104" y="69" width="6" height="90"/><rect x="122" y="69" width="6" height="90"/><rect x="140" y="69" width="6" height="90"/></g>
+          <text x="0" y="180" class="lbl-sm">h ~ 50–150, 큰 부피</text>
+        </g>
+        <g transform="translate(225,20)">
+          <text x="0" y="0" class="lbl-b">② 간접 수냉</text>
+          <rect x="50" y="20" width="60" height="12" class="m-sic"/><rect x="20" y="32" width="120" height="16" class="m-copper"/>
+          <rect x="15" y="48" width="130" height="6" class="m-mold"/><text x="148" y="56" class="lbl-sm">TIM</text>
+          <rect x="10" y="54" width="140" height="70" class="m-metal"/>
+          <rect x="25" y="74" width="110" height="30" class="fluid"/>
+          <text x="0" y="180" class="lbl-sm">TIM 층이 병목</text>
+        </g>
+        <g transform="translate(440,20)">
+          <text x="0" y="0" class="lbl-b">③ 핀핀 직접 (PW-800)</text>
+          <rect x="50" y="20" width="60" height="12" class="m-sic"/><rect x="20" y="32" width="120" height="16" class="m-copper"/>
+          <rect x="10" y="48" width="140" height="18" class="m-copper"/>
+          <rect x="5" y="66" width="150" height="56" class="fluid"/>
+          <g class="m-copper"><rect x="16" y="66" width="8" height="44"/><rect x="36" y="66" width="8" height="44"/><rect x="56" y="66" width="8" height="44"/><rect x="76" y="66" width="8" height="44"/><rect x="96" y="66" width="8" height="44"/><rect x="116" y="66" width="8" height="44"/><rect x="136" y="66" width="8" height="44"/></g>
+          <text x="0" y="180" class="lbl-sm">TIM 없음, 냉각수가 핀에 직접</text>
+        </g>
+        <g transform="translate(655,20)">
+          <text x="0" y="0" class="lbl-b">④ 양면 냉각</text>
+          <rect x="5" y="20" width="150" height="26" class="fluid"/>
+          <rect x="15" y="46" width="130" height="14" class="m-copper"/>
+          <rect x="50" y="60" width="60" height="12" class="m-sic"/>
+          <rect x="15" y="72" width="130" height="14" class="m-copper"/>
+          <rect x="5" y="86" width="150" height="26" class="fluid"/>
+          <text x="0" y="180" class="lbl-sm">위아래 두 경로 병렬</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 14-8.</b> 냉각 방식 단면(개념도). 다이에서 냉각제까지의 층 수와 대류 면적이 다르다. 양면 냉각은 다이 윗면에 와이어 대신 구리 스페이서·클립을 소결해 위로도 열을 뺀다(<a href="packaging.html">15장</a>).</figcaption>
+    </figure>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>방식</th><th>R<sub>th,j-f</sub>/스위치 (기준 유량)</th><th>장점</th><th>단점</th></tr></thead>
+      <tbody>
+        <tr><td>공랭 강제 대류</td><td>약 0.45 K/W (공기 40 °C)</td><td>냉각 회로 불필요, 간단</td><td>방열판 부피 수 L, 냉매 온도·h가 낮음</td></tr>
+        <tr><td>간접 수냉 (베이스+TIM+냉각판)</td><td>약 0.17 K/W</td><td>모듈 교체 쉬움, 표준 부품</td><td>TIM 펌프아웃·건조로 열화</td></tr>
+        <tr><td>핀핀 직접 냉각</td><td>약 0.12 K/W</td><td>TIM 제거, 큰 대류 면적</td><td>밀봉·부식·압력 손실 관리</td></tr>
+        <tr><td>양면 냉각</td><td>약 0.08 K/W</td><td>열저항 약 30 % 감소, 작은 다이 가능</td><td>제조 복잡, 와이어 없는 접합 필요</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="sim" id="sim-cool">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>냉각 방식 비교: 열저항 분해와 허용 손실</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="co-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>방식</span><div class="seg" id="co-m"><button data-value="air">공랭</button><button data-value="ind">간접</button><button data-value="pin" class="on">핀핀</button><button data-value="dsc">양면</button></div></div>
+          <label class="ctrl"><span>유량 (기준 대비) <output id="co-q-out"></output></span><input type="range" id="co-q" min="0.2" max="3" step="0.05" value="1"></label>
+          <label class="ctrl"><span>스위치당 손실 <output id="co-p-out"></output></span><input type="range" id="co-p" min="20" max="600" step="5" value="155"></label>
+          <label class="ctrl"><span>입구 온도 <output id="co-tin-out"></output></span><input type="range" id="co-tin" min="20" max="90" step="1" value="65"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">R<sub>th,j-f</sub>/스위치</span><span class="v" id="co-r">—</span></div>
+        <div class="stat"><span class="k">냉매 온도 상승 (6스위치)</span><span class="v" id="co-dtf">—</span></div>
+        <div class="stat"><span class="k">T<sub>j</sub> (출구 쪽 스위치)</span><span class="v" id="co-tj">—</span></div>
+        <div class="stat"><span class="k">150 °C까지 허용 손실</span><span class="v" id="co-pmax">—</span></div>
+        <div class="stat"><span class="k">상대 압력 손실</span><span class="v" id="co-dp">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 네 방식의 열저항 누적 막대(접합-케이스 / TIM / 대류). 선택한 방식은 진하게. 오른쪽: 스위치당 손실에 대한 \(T_j\) 직선과 150 °C 선. 공랭은 입구 온도 대신 공기 40 °C(유량 기준 약 0.06 kg/s), 수냉은 글리콜 10 L/min 기준. 해볼 것: ① 유량을 2배로 늘리면 대류 항은 \(2^{-0.8} \approx 0.57\)배지만 압력 손실은 약 3.5배. ② 간접 수냉에서 TIM 항이 대류 항과 비슷하다. ③ 양면 냉각의 허용 손실은 핀핀보다 약 1.5배라 같은 전류에 더 작은 다이를 쓸 수 있다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="tsep">
+    <h2>접합 온도 측정: 온도 민감 전기 변수</h2>
+    <p>다이 윗면에 열전대를 붙일 수는 없으므로 소자 자신의 전기적 특성을 온도계로 쓴다. 이를 <span class="term">온도 민감 전기 변수</span><span class="en">(TSEP)</span>라 한다. 가장 흔한 것은 작은 감지 전류(수십–100 mA)에서의 순방향 전압이다. Si IGBT는 \(V_{CE}\)(감지 전류에서 약 −2 mV/K), SiC MOSFET은 게이트를 음 바이어스(−4 V 등)로 두고 바디 다이오드 \(V_{SD}\)(약 −2.5~−3.5 mV/K, 소자마다 보정)를 쓴다. SiC는 \(V_{GS(th)}\)가 바이어스·스트레스에 따라 움직여(<a href="sic.html">8장</a>) 문턱 전압 기반 TSEP는 덜 믿을 만하다.</p>
+    <ol>
+      <li><b>보정</b>: 소자를 오븐(또는 온도 조절 냉각판)에 넣고 여러 온도에서 감지 전류의 \(V_{SD}\)를 재어 직선 \(V_{SD}(T) = V_0 + k(T - 25)\)을 맞춘다. 감지 전류가 작아야 자기 발열이 없다.</li>
+      <li><b>측정</b>: 큰 가열 전류로 정상 상태를 만든 뒤 가열 전류를 끊고 감지 전류로 바꿔 \(V_{SD}(t)\)를 기록한다(<span class="term">냉각 곡선</span>). \(T_j(t) = 25 + (V_{SD}(t) - V_0)/k\).</li>
+      <li><b>보정 지연</b>: 가열 전류를 끊은 직후 수십–수백 µs는 전기적 과도(전하 저장, 링잉) 때문에 읽을 수 없다. 그동안 다이는 이미 식는다. 짧은 시간 다이는 반무한 고체처럼 \(T_j(t) \approx T_j(0) - \kappa\sqrt t\)로 식으므로, 지연 이후 점들을 \(\sqrt t\)에 대해 직선으로 맞춰 \(t = 0\)으로 외삽한다(JEDEC 51-1 정적 시험법의 \(\sqrt t\) 보정).</li>
+    </ol>
+    <div class="formula">$$Z_{th}(t) = \frac{T_j(0) - T_j(t)}{P_H}\ \ (\text{냉각 곡선에서}),\qquad T_j(0) \approx T_j(t_1) + \kappa\sqrt{t_1}$$
+      <div class="where">\(P_H\)는 가열 전력. 냉각 곡선을 뒤집으면 가열 곡선과 같은 \(Z_{th}(t)\)가 된다(선형계). 이것을 포스터로 맞추면 <a href="#foster">3절</a>의 계수가 나온다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="TSEP 측정 회로와 타이밍: 가열 전류를 끊고 감지 전류로 바디 다이오드 전압을 기록">
+        <g transform="translate(20,20)">
+          <rect x="0" y="0" width="330" height="190" rx="8" class="box"/>
+          <text x="14" y="24" class="lbl-b">측정 회로</text>
+          <circle cx="60" cy="100" r="18" class="arr"/><text x="52" y="105" class="lbl-amp">I_H</text>
+          <circle cx="140" cy="100" r="18" class="arr"/><text x="132" y="105" class="lbl-amp">I_M</text>
+          <line x1="60" y1="82" x2="60" y2="50" class="arr"/><line x1="60" y1="50" x2="230" y2="50" class="arr"/><line x1="140" y1="82" x2="140" y2="50" class="arr"/>
+          <rect x="220" y="70" width="40" height="60" class="m-sic"/><text x="272" y="96" class="lbl-sm">SiC MOSFET</text><text x="272" y="112" class="lbl-sm">V_GS = −4 V</text>
+          <line x1="240" y1="50" x2="240" y2="70" class="arr"/><line x1="240" y1="130" x2="240" y2="160" class="arr"/>
+          <line x1="60" y1="118" x2="60" y2="160" class="arr"/><line x1="140" y1="118" x2="140" y2="160" class="arr"/><line x1="60" y1="160" x2="240" y2="160" class="arr"/>
+          <text x="14" y="182" class="lbl-sm">I_H 수백 A(가열) → 끊고 I_M 100 mA(감지)</text>
+          <text x="280" y="60" class="lbl-volt">V_SD</text>
+        </g>
+        <g transform="translate(380,20)">
+          <line x1="20" y1="80" x2="460" y2="80" class="s-axis"/>
+          <path class="w-amp" d="M20 20 L150 20 L150 74 L460 74"/><text x="24" y="16" class="lbl-amp">전류</text>
+          <line x1="20" y1="190" x2="460" y2="190" class="s-axis"/>
+          <path class="w-volt" d="M150 110 C 156 180, 162 100, 170 140 C 175 158, 190 150, 230 152 C 300 158, 360 170, 460 178"/>
+          <text x="24" y="120" class="lbl-volt">V_SD(t) → T_j(t)</text>
+          <rect x="150" y="96" width="50" height="94" class="f-warn-soft"/><text x="152" y="210" class="lbl-sm">지연 t_d</text>
+          <text x="250" y="140" class="lbl-sm">√t 외삽으로 t = 0 복원</text>
+          <line x1="150" y1="0" x2="150" y2="200" class="dash"/>
+        </g>
+      </svg>
+      <figcaption><b>그림 14-9.</b> 정적 TSEP 측정. 가열 전류를 끊는 순간(점선)부터 감지 전류로 바디 다이오드 \(V_{SD}\)를 기록한다. 노란 구간은 전기적 과도로 읽을 수 없는 지연이다. 운전 중 온도 추정(온라인 TSEP)은 게이트 내부 저항·턴오프 지연 시간·\(dv/dt\) 같은 동적 변수를 쓰기도 한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-tsep">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>TSEP 보정과 냉각 곡선: V<sub>SD</sub>로 T<sub>j</sub> 재기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ts-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>측정 잡음 (σ) <output id="ts-n-out"></output></span><input type="range" id="ts-n" min="0" max="5" step="0.1" value="1"></label>
+          <label class="ctrl"><span>보정 점 수 <output id="ts-k-out"></output></span><input type="range" id="ts-k" min="2" max="12" step="1" value="7"></label>
+          <label class="ctrl"><span>가열 전력 P<sub>H</sub> <output id="ts-p-out"></output></span><input type="range" id="ts-p" min="50" max="600" step="10" value="300"></label>
+          <label class="ctrl"><span>측정 지연 t<sub>d</sub> <output id="ts-d-out"></output></span><input type="range" id="ts-d" min="10" max="1000" step="10" value="150"></label>
+          <button class="btn primary" id="ts-run">다시 측정</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">맞춘 k (mV/K)</span><span class="v" id="ts-kfit">—</span></div>
+        <div class="stat"><span class="k">실제 T<sub>j</sub>(0)</span><span class="v" id="ts-true">—</span></div>
+        <div class="stat"><span class="k">지연 시점 읽기</span><span class="v" id="ts-naive">—</span></div>
+        <div class="stat"><span class="k">√t 외삽</span><span class="v" id="ts-ext">—</span></div>
+        <div class="stat"><span class="k">추정 R<sub>th</sub></span><span class="v" id="ts-rth">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 오븐 보정(25–175 °C, 감지 전류 100 mA, 참값 \(V_0\) = 2.95 V, \(k\) = −3.3 mV/K 가정)과 최소 제곱 직선. 오른쪽: 냉각수 65 °C 위에서 \(P_H\)로 정상 상태까지 가열한 뒤 끊었을 때의 참 \(T_j(t)\)(선, 포스터 4항)와 지연 이후 측정점, 지연 후 0.5 ms 구간을 \(\sqrt t\) 직선으로 외삽한 결과. 해볼 것: ① 지연을 1 ms까지 늘리면 지연 시점 읽기는 약 2 K 낮아지고(300 W) 외삽이 이를 대부분 되찾는다. ② 잡음이 크고 보정 점이 적으면 기울기 \(k\) 오차가 온도 오차로 그대로 번진다(150 °C 근처에서 특히).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="design">
+    <h2>설계 흐름과 손잡이 → 결과</h2>
+    <p>열 설계는 한 방향이 아니라 고리다. ① 미션 프로파일(전류·주파수·냉각수 온도)에서 <a href="inverter.html#loss">13장</a> 식으로 손실을 구하고, ② \(Z_{th}\)로 \(T_j(t)\)를 계산하고, ③ 그 온도로 온저항·스위칭 에너지를 다시 고쳐 수렴시키고, ④ \(T_{j,max} \le 150\) °C(설계 상한)와 \(\Delta T_j\)·\(T_{j,m}\)으로 수명(<a href="reliability.html">16장</a>)을 확인한다. 만족하지 않으면 다이 면적, 스위칭 주파수, 냉각, 저속 전류 한계 중 하나를 돌린다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>손잡이</th><th>평균 T<sub>j</sub></th><th>ΔT<sub>j</sub> 리플</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>다이 수 8 → 6 (면적↓)</td><td>↑ (R<sub>DS(on)</sub>·R<sub>th</sub> 모두 ↑)</td><td>↑</td><td>원가 ↓, 열유속 ↑</td></tr>
+        <tr><td>솔더 → 은 소결</td><td>↓ 약 1 K</td><td>약간 ↓</td><td>파워 사이클 수명은 크게 ↑</td></tr>
+        <tr><td>Al₂O₃ → Si₃N₄</td><td>↓ 약 7 K (155 W)</td><td>↓</td><td>세라믹 강도 ↑, 원가 ↑</td></tr>
+        <tr><td>간접 → 핀핀 직접 냉각</td><td>↓ 약 8 K</td><td>약간 ↓ (느린 항)</td><td>밀봉 관리</td></tr>
+        <tr><td>f<sub>sw</sub> 10 → 20 kHz</td><td>↑ 약 7 K</td><td>↑</td><td>전류 리플·필터 ↓(13장)</td></tr>
+        <tr><td>f<sub>o</sub> 50 → 1 Hz (저속)</td><td>거의 같음</td><td>↑↑ (약 4 → 20 K)</td><td>저속 디레이팅</td></tr>
+        <tr><td>냉각수 65 → 85 °C</td><td>↑ 약 20 K</td><td>같음</td><td>엔진·배터리 냉각 회로 공유 시</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout tip"><strong>수치 감각</strong>스위치당 손실 100 W가 바뀌면 \(T_j\)는 12 K 바뀐다(0.12 K/W). 다이 8개, 활성 면적 합 약 1.6 cm²에 155 W면 열유속 약 100 W/cm²로 전기 레인지 상판(약 10 W/cm²)의 10배다.</div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>\(T_j = T_f + PR_{th,j-f}\). PW-800 스위치는 \(R_{th,j-f}\) 약 0.12 K/W, 기준점 손실 약 155 W(150 °C 가정)·자기 일관 약 137 W로 평균 \(T_j\) 약 81–84 °C.</li>
+      <li>층 열저항은 \(t/(kA)\)이고 45° 퍼짐 근사로 \(R = t/(ka_1a_2)\). 퍼짐을 무시하면 열저항을 3배 넘게 과대평가한다. 가장 큰 항은 대류와 세라믹.</li>
+      <li>카우어는 물리 사다리, 포스터는 \(Z_{th} = \sum R_i(1-e^{-t/\tau_i})\) 급수. 포스터는 계산이 쉽지만 직렬로 이어 붙일 수 없다.</li>
+      <li>열 회로는 선형이므로 펄스는 계단의 중첩. 단일 펄스 피크 \(= PZ_{th}(t_p)\), 반복 펄스는 \(Z_{th}(t_p,D)\).</li>
+      <li>기본파 주기 \(T_j\) 리플은 반주기에서의 \(Z_{th}\)로 정해진다. 저속·정지에서 크게 늘어 디레이팅이 필요하다.</li>
+      <li>전기-열 결합의 안정 조건은 \(R_{th}\,dP/dT \lt 1\). 수냉 SiC 인버터는 여유가 크지만 열저항 열화·고온 누설에서 폭주할 수 있다.</li>
+      <li>냉각은 TIM 제거(직접 냉각)와 양면 냉각이 \(R_{th}\)를 크게 낮춘다. 유량을 늘리면 대류 항은 \(\dot V^{-0.8}\), 압력 손실은 \(\dot V^{1.8}\).</li>
+      <li>접합 온도는 TSEP(\(V_{SD}\), \(V_{CE}\))로 보정 후 냉각 곡선에서 재며, 측정 지연은 \(\sqrt t\) 외삽으로 보정한다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 스위치당 손실 200 W, \(R_{th,j-f}\) = 0.12 K/W, 냉각수 65 °C일 때 정상 상태 평균 접합 온도는?</p><div class="opts">
+        <button class="opt">약 77 °C</button>
+        <button class="opt" data-correct>약 89 °C</button>
+        <button class="opt">약 105 °C</button>
+        <button class="opt">약 129 °C</button>
+      </div><div class="quiz-exp">\(65 + 200 \times 0.12 = 89\) °C. 여기에 기본파 리플의 절반 정도가 피크로 더해진다.</div></div>
+
+      <div class="quiz-q"><p>2. 한 변 4.5 mm 열원이 두께 0.32 mm, \(k\) = 90 W/m·K 세라믹을 45° 퍼짐으로 지날 때 그 층의 열저항에 가장 가까운 것은? (위 경계 한 변은 약 5.5 mm)</p><div class="opts">
+        <button class="opt">약 0.02 K/W</button>
+        <button class="opt" data-correct>약 0.1 K/W</button>
+        <button class="opt">약 0.18 K/W</button>
+        <button class="opt">약 1 K/W</button>
+      </div><div class="quiz-exp">세라믹 위 한 변이 5.46 mm, 아래가 6.1 mm이므로 \(R = 0.32\times10^{-3}/(90 \times 5.46\times10^{-3}\times 6.1\times10^{-3}) \approx 0.107\) K/W(다이 하나). 퍼짐 없이 4.5 mm로 계산하면 약 0.18 K/W다.</div></div>
+
+      <div class="quiz-q"><p>3. 데이터시트의 모듈 포스터 계수와 방열판의 포스터 계수를 직렬로 이어 붙여 \(Z_{th}\)를 구하면 안 되는 이유는?</p><div class="opts">
+        <button class="opt">포스터 계수는 온도에 따라 바뀌기 때문</button>
+        <button class="opt" data-correct>포스터 노드는 물리적 의미가 없어, 다음 단이 붙으면 앞단 경계 조건(열 퍼짐·열용량 분포)이 바뀌는 효과를 나타내지 못하기 때문</button>
+        <button class="opt">포스터 회로의 저항 합이 \(R_{th}\)와 다르기 때문</button>
+        <button class="opt">포스터 회로는 정상 상태만 표현하기 때문</button>
+      </div><div class="quiz-exp">포스터 표현은 특정 경계 조건에서 접합 단자에서 본 응답을 맞춘 수학적 급수다. 연결하려면 카우어로 바꾸거나 시스템 전체 \(Z_{th}\)를 다시 측정·계산해야 한다.</div></div>
+
+      <div class="quiz-q"><p>4. 같은 평균 손실에서 출력 주파수를 50 Hz에서 1 Hz로 낮추면 \(T_j\)는?</p><div class="opts">
+        <button class="opt">평균과 리플이 모두 크게 오른다</button>
+        <button class="opt">평균은 크게 오르고 리플은 같다</button>
+        <button class="opt" data-correct>평균은 거의 같고 리플(피크)이 크게 커진다</button>
+        <button class="opt">아무 변화가 없다</button>
+      </div><div class="quiz-exp">평균 손실이 같으므로 평균 \(T_j\)는 같다. 반주기가 10 ms에서 0.5 s로 길어져 반주기의 \(Z_{th}\)가 거의 \(R_{th}\)에 가까워지므로 리플이 수 K에서 수십 K로 커진다. 수명(ΔTj)과 피크(정격) 모두 문제다.</div></div>
+
+      <div class="quiz-q"><p>5. 전도 손실 \(P_0[1+\alpha(T-25)]\)만 있는 소자의 열 폭주 조건은?</p><div class="opts">
+        <button class="opt">\(\alpha \gt 0\)이면 항상 폭주</button>
+        <button class="opt" data-correct>\(\alpha R_{th}P_0 \ge 1\)</button>
+        <button class="opt">\(T_j \gt T_f\)</button>
+        <button class="opt">\(R_{th}P_0 \gt 175\) K</button>
+      </div><div class="quiz-exp">\(T - 25 = [T_f - 25 + R_{th}P_0]/(1 - \alpha R_{th}P_0)\)의 분모가 0 이하가 되면 해가 없다. PW-800 기준점은 \(0.004\times0.12\times62.5 = 0.03\)로 여유가 크다.</div></div>
+
+      <div class="quiz-q"><p>6. 간접 수냉 모듈을 핀핀 직접 냉각으로 바꿀 때 열저항이 줄어드는 가장 큰 이유는?</p><div class="opts">
+        <button class="opt">세라믹이 얇아지기 때문</button>
+        <button class="opt" data-correct>열전도가 낮은 TIM 층이 없어지고 냉각수가 핀에 직접 닿아 대류 면적이 넓어지기 때문</button>
+        <button class="opt">냉각수 온도가 낮아지기 때문</button>
+        <button class="opt">다이의 온저항이 줄기 때문</button>
+      </div><div class="quiz-exp">TIM은 \(k\) 1–5 W/m·K로 다른 층보다 수십–수백 배 나쁘다. 직접 냉각은 이 층을 없애고 핀으로 대류 면적을 키운다.</div></div>
+
+      <div class="quiz-q"><p>7. 냉각 곡선 TSEP 측정에서 \(\sqrt t\) 외삽을 쓰는 이유는?</p><div class="opts">
+        <button class="opt">감지 전류의 자기 발열을 없애려고</button>
+        <button class="opt">보정 직선의 기울기를 구하려고</button>
+        <button class="opt" data-correct>가열 전류를 끊은 직후 측정할 수 없는 지연 동안 이미 식은 온도를, 짧은 시간 \(\Delta T \propto \sqrt t\) 거동으로 되돌려 \(t=0\) 온도를 추정하려고</button>
+        <button class="opt">냉각수 온도를 빼려고</button>
+      </div><div class="quiz-exp">짧은 시간 다이는 반무한 고체처럼 \(\sqrt t\)로 식는다. 지연 이후 점을 \(\sqrt t\)에 대해 직선으로 맞춰 \(t=0\)으로 외삽한다.</div></div>
+
+      <div class="quiz-q"><p>8. 유량을 2배로 늘렸을 때 대류 열저항 항과 펌프 압력 손실의 변화로 옳은 것은?</p><div class="opts">
+        <button class="opt">대류 1/2, 압력 2배</button>
+        <button class="opt" data-correct>대류 약 0.57배, 압력 약 3.5배</button>
+        <button class="opt">대류 1/4, 압력 4배</button>
+        <button class="opt">대류 변화 없음, 압력 2배</button>
+      </div><div class="quiz-exp">\(h \propto \dot V^{0.8}\)이므로 \(R_{conv} \propto 2^{-0.8} \approx 0.57\), 압력 손실 \(\propto \dot V^{1.8}\)이므로 \(2^{1.8} \approx 3.5\)배. 다른 층 항은 그대로라 \(R_{th,j-f}\) 감소는 그보다 작다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const font = (px, mono) => px + "px " + getComputedStyle(document.body).getPropertyValue(mono ? "--mono" : "--font");
+  const debounce = (fn) => { let q = 0; return () => { if (q) return; q = requestAnimationFrame(() => { q = 0; fn(); }); }; };
+  const setCls = (id, cls) => { const el = $(id); if (el) el.className = "v " + cls; };
+  const txt = (ctx, s, x, y, col, align, px) => { ctx.fillStyle = col; ctx.font = font(px || 12); ctx.textAlign = align || "left"; ctx.textBaseline = "middle"; ctx.fillText(s, x, y); };
+  const fT = (s) => !isFinite(s) ? "—" : s < 1e-3 ? (s * 1e6).toPrecision(3) + " µs" : s < 1 ? (s * 1e3).toPrecision(3) + " ms" : s.toPrecision(3) + " s";
+  const C1 = (x) => x.toFixed(1) + " °C";
+  const alpha = (c, a) => { const m = /^#([0-9a-f]{6})$/i.exec((c || "").trim()); if (!m) return c; const n = parseInt(m[1], 16); return "rgba(" + (n >> 16) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")"; };
+
+  /* ================= 공통: PW-800 스위치 손실 모델 (13장과 같은 식) ================= */
+  const R25 = 2.0e-3, ESW = 20e-3, ERR = 1e-3, IREF = 400, TD = 200e-9, VSD = 3.5, NDIE = 8;
+  const Rds = (T, a) => R25 * (1 + (a == null ? 0.004 : a) * (T - 25));
+  /** 스위치 하나의 평균 손실 (W). I: rms, fsw: Hz, T: °C */
+  function lossAvg(I, T, fsw, Vdc, a) {
+    const Ipk = Math.SQRT2 * I, v = (Vdc || 800) / 800;
+    const pc = Rds(T, a) * I * I / 2;
+    const ps = fsw * ESW * Ipk / (Math.PI * IREF) * v, pr = fsw * ERR * Ipk / (Math.PI * IREF) * v;
+    const pd = 2 * TD * fsw * VSD * Ipk / Math.PI;
+    return { pc, ps, pr, pd, tot: pc + ps + pr + pd };
+  }
+  /** 순시 손실(스위칭 주기 평균): 상단 스위치 */
+  function lossInst(th, Ipk, M, phi, T, fsw) {
+    const i = Ipk * Math.sin(th - phi), d = PW.clamp((1 + M * Math.sin(th)) / 2, 0, 1), ai = Math.abs(i);
+    let p = Rds(T) * i * i * d;
+    if (i > 0) p += fsw * ESW * ai / IREF;
+    else p += fsw * ERR * ai / IREF + 2 * TD * fsw * VSD * ai;
+    return p;
+  }
+  /* PW-800 스위치 포스터 계수 (3절 기본 구조를 4항으로 맞춘 값, 합 0.12 K/W) */
+  const FR = [0.0006, 0.0030, 0.0230, 0.0934], FT = [1.5e-5, 2e-4, 9.6e-3, 0.56], RTH = 0.12;
+  const Zf = (t) => { let z = 0; for (let i = 0; i < 4; i++) z += FR[i] * -Math.expm1(-Math.max(0, t) / FT[i]); return z; };
+
+  /* ================= 공통: 층 구조, 45° 퍼짐, 카우어 사다리 ================= */
+  function stackLayers(o) {
+    const att = o.attach === "solder" ? { name: "솔더 다이 접합", mat: "solder", t: 80e-6, k: 50, rc: 1.7e6 } : { name: "은 소결", mat: "solder", t: 30e-6, k: 200, rc: 2.0e6 };
+    const cer = { si3n4: { name: "Si₃N₄", t: 320e-6, k: 90, rc: 2.24e6 }, aln: { name: "AlN", t: 635e-6, k: 170, rc: 2.4e6 }, al2o3: { name: "Al₂O₃", t: 380e-6, k: 24, rc: 3.4e6 } }[o.ceramic || "si3n4"];
+    return [
+      { name: "SiC 다이", mat: "sic", t: 150e-6, k: 370, rc: 2.2e6 },
+      att,
+      { name: "상부 Cu", mat: "copper", t: 300e-6, k: 390, rc: 3.45e6 },
+      Object.assign({ mat: "ceramic" }, cer),
+      { name: "하부 Cu", mat: "copper", t: 300e-6, k: 390, rc: 3.45e6 },
+      { name: "기판 솔더", mat: "solder", t: 100e-6, k: o.delam ? 25 : 50, rc: 1.7e6 },
+      { name: "Cu 베이스", mat: "copper", t: (o.base || 3) * 1e-3, k: 390, rc: 3.45e6 },
+    ];
+  }
+  function seg(t, k, rc, a1, p, spread) {
+    if (!spread) return { R: t / (k * a1 * a1), C: rc * t * a1 * a1, a1, a2: a1 };
+    if (a1 >= p) return { R: t / (k * p * p), C: rc * t * p * p, a1: p, a2: p };
+    const tg = (p - a1) / 2;
+    if (t <= tg) { const a2 = a1 + 2 * t; return { R: t / (k * a1 * a2), C: rc * t * (a1 * a1 + a1 * a2 + a2 * a2) / 3, a1, a2 }; }
+    const t2 = t - tg;
+    return { R: tg / (k * a1 * p) + t2 / (k * p * p), C: rc * tg * (a1 * a1 + a1 * p + p * p) / 3 + rc * t2 * p * p, a1, a2: p };
+  }
+  function stackCalc(o) {
+    const L = stackLayers(o), p = 9e-3, spread = o.spread !== false;
+    let a = (o.die || 4.5) * 1e-3; const res = [];
+    for (const l of L) { const s = seg(l.t, l.k, l.rc, a, Math.max(p, a), spread); res.push(Object.assign({}, l, s)); a = s.a2; }
+    const Rconv = 1 / ((o.h || 2e4) * a * a);
+    return { layers: res, Rconv, aEnd: a, Rdie: res.reduce((s, l) => s + l.R, 0) + Rconv };
+  }
+  function ladder(o) {
+    const L = stackLayers(o), p = 9e-3; let a = (o.die || 4.5) * 1e-3; const R = [], C = [];
+    for (const l of L) { const ns = l.t > 1e-3 ? 6 : 3; for (let j = 0; j < ns; j++) { const s = seg(l.t / ns, l.k, l.rc, a, Math.max(p, a), true); R.push(s.R / NDIE); C.push(s.C * NDIE); a = s.a2; } }
+    R[R.length - 1] += 1 / ((o.h || 2e4) * a * a) / NDIE;
+    return { R, C };
+  }
+  /** 음해법 계단 응답 (P = 1 W), 로그 간격 시간 */
+  function stepResp(lad, t0, t1, N) {
+    const n = lad.C.length, T = new Float64Array(n), out = [];
+    const a = new Float64Array(n), b = new Float64Array(n), c = new Float64Array(n), d = new Float64Array(n);
+    let tp = 0;
+    for (let k = 0; k <= N; k++) {
+      const t = t0 * Math.pow(t1 / t0, k / N), dt = t - tp; tp = t;
+      for (let i = 0; i < n; i++) {
+        const gu = i > 0 ? 1 / lad.R[i - 1] : 0, gd = 1 / lad.R[i];
+        a[i] = -gu; c[i] = i < n - 1 ? -gd : 0; b[i] = lad.C[i] / dt + gu + gd; d[i] = lad.C[i] / dt * T[i] + (i === 0 ? 1 : 0);
+      }
+      for (let i = 1; i < n; i++) { const m = a[i] / b[i - 1]; b[i] -= m * c[i - 1]; d[i] -= m * d[i - 1]; }
+      T[n - 1] = d[n - 1] / b[n - 1];
+      for (let i = n - 2; i >= 0; i--) T[i] = (d[i] - c[i] * T[i + 1]) / b[i];
+      out.push([t, T[0]]);
+    }
+    return out;
+  }
+  function nnls(ts, Z, tau) {
+    const n = tau.length, m = ts.length, F = ts.map((t) => tau.map((tt) => -Math.expm1(-t / tt)));
+    const A = [...Array(n)].map(() => new Float64Array(n)), bb = new Float64Array(n);
+    for (let k = 0; k < m; k++) { const w = 1 / (Z[k] * Z[k]); for (let i = 0; i < n; i++) { bb[i] += w * F[k][i] * Z[k]; for (let j = 0; j < n; j++) A[i][j] += w * F[k][i] * F[k][j]; } }
+    const R = new Float64Array(n).fill(Z[m - 1] / n);
+    for (let it = 0; it < 200; it++) for (let i = 0; i < n; i++) { let s = bb[i]; for (let j = 0; j < n; j++) if (j !== i) s -= A[i][j] * R[j]; R[i] = A[i][i] > 0 ? Math.max(0, s / A[i][i]) : 0; }
+    let e = 0;
+    for (let k = 0; k < m; k++) { let f = 0; for (let i = 0; i < n; i++) f += R[i] * F[k][i]; e += ((f - Z[k]) / Z[k]) ** 2; }
+    return { R: [...R], err: Math.sqrt(e / m) };
+  }
+  function fosterFit(data, n) {
+    const sub = []; const st = Math.max(1, Math.floor(data.length / 70));
+    for (let k = 0; k < data.length; k += st) sub.push(data[k]);
+    const ts = sub.map((p) => p[0]), Z = sub.map((p) => p[1]);
+    let lt = []; for (let i = 0; i < n; i++) lt.push(n === 1 ? -1 : -4 + 3.5 * i / (n - 1));
+    let best = nnls(ts, Z, lt.map((x) => 10 ** x)), step = 0.4, iter = 0;
+    while (step > 0.01 && iter < 80) {
+      iter++; let imp = false;
+      for (let i = 0; i < n; i++) for (const s of [step, -step]) {
+        const tr = lt.slice(); tr[i] = PW.clamp(tr[i] + s, -6.5, 1.5);
+        const r = nnls(ts, Z, tr.map((x) => 10 ** x));
+        if (r.err < best.err - 1e-12) { best = r; lt = tr; imp = true; }
+      }
+      if (!imp) step /= 2;
+    }
+    const tau = lt.map((x) => 10 ** x), idx = tau.map((_, i) => i).sort((x, y) => tau[x] - tau[y]);
+    return { tau: idx.map((i) => tau[i]), R: idx.map((i) => best.R[i]), err: best.err };
+  }
+
+  /* =============================================================
+     1) 층 구조 열저항 계산기
+     ============================================================= */
+  (function () {
+    if (!$("st-cv")) return;
+    let res = null;
+    const att = PW.seg("st-att", () => upd()), cer = PW.seg("st-cer", () => upd());
+    const die = PW.range("st-die", (v) => v.toFixed(1) + " mm", () => upd());
+    const base = PW.range("st-base", (v) => v.toFixed(1) + " mm", () => upd());
+    const h = PW.range("st-h", (v) => (v / 1000).toFixed(1) + " kW/m²K", () => upd());
+    const sp = $("st-spread"); sp.addEventListener("change", () => upd());
+    const cv = PW.canvas($("st-cv"), draw, { aspect: 0.6, minHeight: 360, maxHeight: 440 });
+    function upd() {
+      res = stackCalc({ attach: att(), ceramic: cer(), die: die(), base: base(), h: h(), spread: sp.checked });
+      const Rsw = res.Rdie / NDIE, cer_ = res.layers[3].R;
+      PW.stat("st-rdie", res.Rdie.toFixed(3) + " K/W");
+      PW.stat("st-rsw", Rsw.toFixed(4) + " K/W");
+      PW.stat("st-cshare", (cer_ / res.Rdie * 100).toFixed(0) + " %");
+      const tj = 65 + 155 * Rsw;
+      PW.stat("st-tj", C1(tj)); setCls("st-tj", tj > 150 ? "bad" : tj > 120 ? "warn" : "ok");
+      const A = NDIE * (die() * 0.1) ** 2;
+      PW.stat("st-flux", (155 / A).toFixed(0) + " W/cm²");
+      cv.redraw();
+    }
+    function draw(ctx, w, h_) {
+      if (!res) return;
+      const P = PW.palette(), narrow = w < 560;
+      const bx = narrow ? { x: 10, y: 10, w: w - 20, h: h_ * 0.42 } : { x: 10, y: 14, w: w * 0.44, h: h_ - 28 };
+      const gx = narrow ? { x: 96, y: bx.y + bx.h + 18, w: w - 150, h: h_ - bx.h - 34 } : { x: bx.x + bx.w + 100, y: 14, w: w - bx.w - 170, h: h_ - 28 };
+      // 단면
+      const L = res.layers, hs = L.map((l) => Math.sqrt(l.t)), conv = Math.sqrt(1e-3);
+      const tot = hs.reduce((s, v) => s + v, 0) + conv, sc = bx.h / tot;
+      const amax = Math.max(9e-3, res.aEnd), ws = (bx.w - 10) / amax, cx = bx.x + bx.w / 2;
+      let y = bx.y;
+      L.forEach((l, i) => {
+        const hh = hs[i] * sc;
+        ctx.globalAlpha = 0.25; ctx.fillStyle = P[l.mat]; ctx.fillRect(bx.x, y, bx.w, hh);
+        ctx.globalAlpha = 0.95; ctx.beginPath();
+        ctx.moveTo(cx - l.a1 * ws / 2, y); ctx.lineTo(cx + l.a1 * ws / 2, y); ctx.lineTo(cx + l.a2 * ws / 2, y + hh); ctx.lineTo(cx - l.a2 * ws / 2, y + hh); ctx.closePath(); ctx.fill();
+        ctx.globalAlpha = 1;
+        if (hh > 11) txt(ctx, l.name, bx.x + 4, y + hh / 2, P.text, "left", 11);
+        y += hh;
+      });
+      ctx.globalAlpha = 0.3; ctx.fillStyle = P.volt; ctx.fillRect(bx.x, y, bx.w, conv * sc); ctx.globalAlpha = 1;
+      txt(ctx, "냉각수 (대류)", bx.x + 4, y + conv * sc / 2, P.text, "left", 11);
+      txt(ctx, "한 변 " + (res.aEnd * 1e3).toFixed(1) + " mm", bx.x + bx.w - 4, y + conv * sc / 2, P.dim, "right", 11);
+      // 막대
+      const items = L.map((l) => [l.name, l.R / NDIE, P[l.mat]]).concat([["대류", res.Rconv / NDIE, P.heat]]);
+      const mx = Math.max(...items.map((it) => it[1])) * 1.15, bh = gx.h / items.length;
+      items.forEach((it, i) => {
+        const yy = gx.y + i * bh;
+        txt(ctx, it[0], gx.x - 6, yy + bh / 2, P.dim, "right", 11);
+        ctx.fillStyle = it[2]; ctx.fillRect(gx.x, yy + bh * 0.18, Math.max(1, it[1] / mx * gx.w), bh * 0.64);
+        txt(ctx, (it[1] * 1000).toFixed(1) + " mK/W", gx.x + it[1] / mx * gx.w + 4, yy + bh / 2, P.text, "left", 11);
+      });
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(gx.x, gx.y); ctx.lineTo(gx.x, gx.y + gx.h); ctx.stroke();
+    }
+    upd();
+  })();
+
+  /* =============================================================
+     2) 카우어 → Zth → 포스터 맞춤
+     ============================================================= */
+  (function () {
+    if (!$("fo-cv")) return;
+    let data = null, fit = null;
+    const nS = PW.range("fo-n", (v) => String(v), () => doFit());
+    const cer = PW.seg("fo-cer", () => upd());
+    const base = PW.range("fo-base", (v) => v.toFixed(1) + " mm", () => upd());
+    const h = PW.range("fo-h", (v) => (v / 1000).toFixed(1) + " kW/m²K", () => upd());
+    const dl = $("fo-delam"); dl.addEventListener("change", () => upd());
+    const cv = PW.canvas($("fo-cv"), draw, { aspect: 0.6, minHeight: 280, maxHeight: 420 });
+    const run = debounce(() => { const o = { ceramic: cer(), base: base(), h: h(), delam: dl.checked }; data = stepResp(ladder(o), 1e-6, 20, 400); doFit(); });
+    function upd() { run(); }
+    function doFit() {
+      if (!data) return;
+      fit = fosterFit(data, nS());
+      const zAt = (t) => { for (const p of data) if (p[0] >= t) return p[1]; return data[data.length - 1][1]; };
+      PW.stat("fo-rth", data[data.length - 1][1].toFixed(4) + " K/W");
+      PW.stat("fo-z", (zAt(1e-3) * 1000).toFixed(1) + " / " + (zAt(0.1) * 1000).toFixed(1) + " mK/W");
+      PW.stat("fo-err", (fit.err * 100).toFixed(1) + " %"); setCls("fo-err", fit.err < 0.03 ? "ok" : fit.err < 0.1 ? "warn" : "bad");
+      PW.stat("fo-coef", fit.R.map((r, i) => r.toFixed(4) + " @ " + fT(fit.tau[i])).join("<br>"));
+      cv.redraw();
+    }
+    function draw(ctx, w, h_) {
+      if (!data || !fit) return;
+      const P = PW.palette();
+      const fz = (t) => fit.R.reduce((s, r, i) => s + r * -Math.expm1(-t / fit.tau[i]), 0);
+      const fs = data.map((p) => [p[0], fz(p[0])]);
+      const ymin = Math.pow(10, Math.floor(Math.log10(Math.max(1e-7, data[0][1]))));
+      PW.chart(ctx, null, {
+        x: [1e-6, 20], y: [ymin, 1], logX: true, logY: true, xLabel: "시간 t (s)", yLabel: "Zth (K/W)",
+        series: [{ data, color: P.heat, width: 2.6 }, { data: fs, color: P.accent, width: 2, dash: [6, 4] }],
+        points: fit.tau.map((t, i) => ({ x: t, y: Math.max(ymin, fz(t)), color: P.accent, r: 4 })),
+        hlines: [{ y: data[data.length - 1][1], color: P.dim, label: "Rth" }],
+      });
+      txt(ctx, "— 카우어 사다리   - - 포스터 " + fit.R.length + "항", 70, 26, P.dim, "left", 12);
+    }
+    upd();
+  })();
+
+  /* =============================================================
+     3) 펄스 전력 → Tj
+     ============================================================= */
+  (function () {
+    if (!$("pu-cv")) return;
+    let tr = null;
+    const mode = PW.seg("pu-mode", () => upd());
+    const Pp = PW.range("pu-p", (v) => v + " W", () => upd());
+    const tp = PW.range("pu-tp", (v) => fT(Math.pow(10, v)), () => upd());
+    const D = PW.range("pu-d", (v) => (v * 100).toFixed(0) + " %", () => upd());
+    const Tf = PW.range("pu-tf", (v) => v + " °C", () => upd());
+    const cv = PW.canvas($("pu-cv"), draw, { aspect: 0.8, minHeight: 380, maxHeight: 560 });
+    const Zp = (t, d) => { if (!(d > 0)) return Zf(t); let z = 0; for (let i = 0; i < 4; i++) z += FR[i] * (-Math.expm1(-t / FT[i])) / (-Math.expm1(-t / (d * FT[i]))); return z; };
+    function trace() {
+      const P = Pp(), t1 = Math.pow(10, tp()), tf = Tf(), out = [];
+      if (mode() === "single") {
+        for (let k = 0; k <= 300; k++) { const t = 3 * t1 * k / 300; out.push([t, tf + P * (Zf(t) - (t > t1 ? Zf(t - t1) : 0))]); }
+        return { out, tmax: 3 * t1 };
+      }
+      const T = t1 / D();
+      const th0 = FR.map((r, i) => r * P * Math.exp(-(T - t1) / FT[i]) * (-Math.expm1(-t1 / FT[i])) / (-Math.expm1(-T / FT[i])));
+      const thp = FR.map((r, i) => r * P * (-Math.expm1(-t1 / FT[i])) / (-Math.expm1(-T / FT[i])));
+      for (let k = 0; k <= 600; k++) {
+        const t = 3 * T * k / 600, u = t % T; let s = tf;
+        for (let i = 0; i < 4; i++) s += u < t1 ? th0[i] * Math.exp(-u / FT[i]) + FR[i] * P * (-Math.expm1(-u / FT[i])) : thp[i] * Math.exp(-(u - t1) / FT[i]);
+        out.push([t, s]);
+      }
+      return { out, tmax: 3 * T, pk: tf + thp.reduce((a, b) => a + b, 0), lo: tf + th0.reduce((a, b) => a + b, 0) };
+    }
+    function upd() {
+      tr = trace();
+      const t1 = Math.pow(10, tp()), z = Zf(t1), P = Pp();
+      PW.stat("pu-z", (z * 1000).toPrecision(3) + " mK/W");
+      PW.stat("pu-e", PW.si(P * t1, "J"));
+      const pk = mode() === "single" ? Tf() + P * z : tr.pk;
+      PW.stat("pu-pk", C1(pk)); setCls("pu-pk", pk > 175 ? "bad" : pk > 150 ? "warn" : "ok");
+      PW.stat("pu-tr", mode() === "train" ? C1(tr.pk) + " / " + C1(tr.lo) : "—");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!tr) return;
+      const P = PW.palette(), hh = Math.floor(h / 2);
+      const ys = tr.out.map((p) => p[1]), y0 = Math.min(...ys), y1 = Math.max(...ys);
+      const sc = tr.tmax < 1e-3 ? 1e6 : tr.tmax < 1 ? 1e3 : 1, un = sc === 1e6 ? "µs" : sc === 1e3 ? "ms" : "s";
+      PW.chart(ctx, { x: 58, y: 12, w: w - 76, h: hh - 52 }, {
+        x: [0, tr.tmax * sc], y: [Math.floor(y0 - 1), Math.ceil(y1 + Math.max(1, (y1 - y0) * 0.1))], xLabel: "시간 (" + un + ")", yLabel: "Tj (°C)",
+        series: [{ data: tr.out.map((p) => [p[0] * sc, p[1]]), color: P.heat, width: 2.4 }],
+        hlines: y1 > 140 ? [{ y: 150, color: P.warn, label: "150 °C" }] : [],
+      });
+      const dl = [0, 0.05, 0.1, 0.2, 0.5], cols = [P.heat, P.accent, P.accent2, P.warn, P.ok];
+      const series = dl.map((d, j) => { const s = []; for (let k = 0; k <= 120; k++) { const t = Math.pow(10, -6 + 7 * k / 120); s.push([t, Zp(t, d)]); } return { data: s, color: cols[j], width: j === 0 ? 2.6 : 1.6 }; });
+      const t1 = Math.pow(10, tp()), dc = mode() === "train" ? D() : 0;
+      PW.chart(ctx, { x: 58, y: hh + 8, w: w - 76, h: h - hh - 52 }, {
+        x: [1e-6, 10], y: [1e-4, 0.2], logX: true, logY: true, xLabel: "펄스 폭 tp (s)", yLabel: "Zth(tp, D) (K/W)",
+        series, points: [{ x: t1, y: Zp(t1, dc), color: P.text, r: 5 }],
+      });
+      dl.forEach((d, j) => txt(ctx, "D=" + d, 66 + j * 54, hh + 18, cols[j], "left", 11));
+    }
+    upd();
+  })();
+
+  /* =============================================================
+     4) 기본파 주기 Tj 리플
+     ============================================================= */
+  const rippleSim = (f, I, M, phi, fsw, tf, N) => {
+    // 평균점 자기 일관 초기화
+    let T = tf + 20; for (let k = 0; k < 30; k++) T = tf + RTH * lossAvg(I, T, fsw).tot;
+    const P0 = lossAvg(I, T, fsw).tot, th = FR.map((r) => r * P0), per = 1 / f, dt = per / N, Ipk = Math.SQRT2 * I;
+    const dec = FT.map((t) => Math.exp(-dt / t)), out = [];
+    let Tj = tf + th.reduce((a, b) => a + b, 0), psum = 0;
+    for (let k = 0; k < 3 * N; k++) {
+      const ang = 2 * Math.PI * ((k + 0.5) % N) / N, p = lossInst(ang, Ipk, M, phi, Tj, fsw);
+      Tj = tf;
+      for (let i = 0; i < 4; i++) { th[i] = th[i] * dec[i] + FR[i] * p * (1 - dec[i]); Tj += th[i]; }
+      if (k >= 2 * N) { out.push([ang * 180 / Math.PI, Tj, p, Ipk * Math.sin(ang - phi)]); psum += p; }
+    }
+    const ts = out.map((o) => o[1]), mx = Math.max(...ts), mn = Math.min(...ts);
+    return { out, max: mx, min: mn, mean: ts.reduce((a, b) => a + b, 0) / ts.length, pavg: psum / N };
+  };
+  (function () {
+    if (!$("rp-cv")) return;
+    let r = null, sweep = null, args = null;
+    const f = PW.range("rp-f", (v) => { const x = Math.pow(10, v); return x < 10 ? x.toPrecision(2) + " Hz" : x.toFixed(0) + " Hz"; }, () => upd());
+    const I = PW.range("rp-i", (v) => v + " A rms", () => upd());
+    const M = PW.range("rp-m", (v) => v.toFixed(2), () => upd());
+    const pf = PW.range("rp-pf", (v) => v.toFixed(2) + (v < 0 ? " (회생)" : ""), () => upd());
+    const fs = PW.range("rp-fs", (v) => v + " kHz", () => upd());
+    const tf = PW.range("rp-tf", (v) => v + " °C", () => upd());
+    const cv = PW.canvas($("rp-cv"), draw, { aspect: 0.8, minHeight: 400, maxHeight: 580 });
+    const run = debounce(() => {
+      args = [I(), M(), Math.acos(pf()), fs() * 1e3, tf()];
+      r = rippleSim(Math.pow(10, f()), ...args.slice(0, 4), args[4], 240);
+      sweep = [];
+      for (let k = 0; k <= 32; k++) { const ff = Math.pow(10, -1 + 4 * k / 32); const s = rippleSim(ff, ...args.slice(0, 4), args[4], 120); sweep.push([ff, s.max - s.min, s.max]); }
+      PW.stat("rp-pavg", r.pavg.toFixed(0) + " W");
+      PW.stat("rp-tm", C1(r.mean));
+      PW.stat("rp-tmax", C1(r.max)); setCls("rp-tmax", r.max > 175 ? "bad" : r.max > 150 ? "warn" : "ok");
+      PW.stat("rp-dt", (r.max - r.min).toFixed(1) + " K");
+      cv.redraw();
+    });
+    function upd() { run(); }
+    function draw(ctx, w, h) {
+      if (!r) return;
+      const P = PW.palette(), hh = Math.floor(h * 0.55);
+      const y0 = Math.floor(r.min - 2), y1 = Math.ceil(r.max + Math.max(2, (r.max - r.min) * 0.15));
+      const ch = PW.chart(ctx, { x: 58, y: 12, w: w - 76, h: hh - 52 }, {
+        x: [0, 360], y: [y0, y1], xLabel: "기본파 위상 θ (°)", yLabel: "Tj (°C)", xTicks: [0, 90, 180, 270, 360],
+        series: [{ data: r.out.map((o) => [o[0], o[1]]), color: P.heat, width: 3 }],
+      });
+      const b = ch.box, pm = Math.max(1, ...r.out.map((o) => o[2])), im = Math.SQRT2 * args[0];
+      ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip();
+      ctx.globalAlpha = 0.7; ctx.lineWidth = 1.4;
+      ctx.strokeStyle = P.heat; ctx.setLineDash([3, 3]); ctx.beginPath();
+      r.out.forEach((o, k) => { const x = ch.X(o[0]), y = b.y + b.h - o[2] / pm * b.h * 0.6; k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
+      ctx.strokeStyle = P.amp; ctx.setLineDash([]); ctx.beginPath();
+      r.out.forEach((o, k) => { const x = ch.X(o[0]), y = b.y + b.h * 0.7 - o[3] / im * b.h * 0.25; k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
+      ctx.restore();
+      txt(ctx, "— Tj   ··· 손실 p(θ) (최대 " + pm.toFixed(0) + " W)   — 상전류", b.x + 6, b.y + 10, P.dim, "left", 11);
+      const ymax = Math.max(5, ...sweep.map((s) => s[1])) * 1.15;
+      PW.chart(ctx, { x: 58, y: hh + 8, w: w - 76, h: h - hh - 50 }, {
+        x: [0.1, 1000], y: [0, ymax], logX: true, xLabel: "출력 주파수 fo (Hz)", yLabel: "ΔTj (K)",
+        series: [{ data: sweep.map((s) => [s[0], s[1]]), color: P.heat, width: 2.4 }],
+        points: [{ x: Math.pow(10, f()), y: r.max - r.min, color: P.text, r: 5, label: "Tj,max " + r.max.toFixed(0) + " °C" }],
+      });
+    }
+    upd();
+  })();
+
+  /* =============================================================
+     5) 전기-열 결합과 열 폭주
+     ============================================================= */
+  (function () {
+    if (!$("ru-cv")) return;
+    let sol = null;
+    const I = PW.range("ru-i", (v) => v + " A rms", () => upd());
+    const Rt = PW.range("ru-r", (v) => v.toFixed(2) + " K/W", () => upd());
+    const Tf = PW.range("ru-tf", (v) => v + " °C", () => upd());
+    const al = PW.range("ru-a", (v) => (v * 100).toFixed(2) + " %/K", () => upd());
+    const IL = PW.range("ru-l", (v) => PW.si(Math.pow(10, v), "A", 2), () => upd());
+    const lk = $("ru-leak"); lk.addEventListener("change", () => upd());
+    const TMAX = 300;
+    const Pg = (T) => { const L = lossAvg(I(), T, 1e4, 800, al()); let p = L.tot; if (lk.checked) p += 0.5 * 800 * Math.pow(10, IL()) * Math.exp(Math.min(60, (T - 25) / 12)); return p; };
+    const cv = PW.canvas($("ru-cv"), draw, { aspect: 0.6, minHeight: 280, maxHeight: 420 });
+    function upd() {
+      const tf = Tf(), r = Rt();
+      let T = tf, it = 0, ok = false;
+      for (; it < 300; it++) {
+        const Tn = tf + r * Pg(T);
+        if (!isFinite(Tn) || Tn > TMAX) { T = Tn; break; }
+        if (Math.abs(Tn - T) < 1e-4) { T = Tn; ok = true; it++; break; }
+        T = Tn;
+      }
+      sol = ok ? T : null;
+      PW.stat("ru-it", String(it));
+      if (ok) {
+        const S = r * (Pg(T + 0.05) - Pg(T - 0.05)) / 0.1;
+        PW.stat("ru-tj", C1(T)); PW.stat("ru-p", Pg(T).toFixed(0) + " W"); PW.stat("ru-s", S.toFixed(3));
+        setCls("ru-s", S < 0.3 ? "ok" : "warn");
+        const v = T > 175 ? "수렴했지만 175 °C 초과" : T > 150 ? "안정, 설계 상한 초과" : "안정";
+        PW.stat("ru-v", v); setCls("ru-v", T > 175 ? "bad" : T > 150 ? "warn" : "ok");
+      } else {
+        PW.stat("ru-tj", "> " + TMAX + " °C"); PW.stat("ru-p", "—"); PW.stat("ru-s", "≥ 1 (해 없음)"); setCls("ru-s", "bad");
+        PW.stat("ru-v", "열 폭주"); setCls("ru-v", "bad");
+      }
+      cv.redraw();
+    }
+    function draw(ctx) {
+      const P = PW.palette(), tf = Tf(), r = Rt();
+      const g = [], c = [];
+      for (let k = 0; k <= 200; k++) { const T = 25 + (TMAX - 25) * k / 200; g.push([T, Pg(T)]); c.push([T, Math.max(0, (T - tf) / r)]); }
+      const ymax = Math.max((TMAX - tf) / r, Pg(sol != null ? Math.min(TMAX, sol + 40) : 150)) * 1.1;
+      PW.chart(ctx, null, {
+        x: [25, TMAX], y: [0, ymax], xLabel: "접합 온도 Tj (°C)", yLabel: "전력 (W)",
+        series: [{ data: g, color: P.heat, width: 2.6 }, { data: c, color: P.accent, width: 2.2 }],
+        vlines: [{ x: 175, color: P.bad, label: "175 °C" }],
+        points: sol != null ? [{ x: sol, y: Pg(sol), color: P.ok, r: 6, label: "해" }] : [],
+      });
+    }
+    upd();
+  })();
+
+  /* =============================================================
+     6) 냉각 방식 비교
+     ============================================================= */
+  (function () {
+    if (!$("co-cv")) return;
+    const M = {
+      air: { name: "공랭", jc: 0.05, tim: 0.06, cv: 0.34, mcp: 0.06 * 1005, air: true },
+      ind: { name: "간접", jc: 0.05, tim: 0.06, cv: 0.06, mcp: 0.178 * 3300 },
+      pin: { name: "핀핀", jc: 0.043, tim: 0, cv: 0.077, mcp: 0.178 * 3300 },
+      dsc: { name: "양면", jc: 0.055, tim: 0, cv: 0.11, mcp: 0.178 * 3300, two: true },
+    };
+    const keys = ["air", "ind", "pin", "dsc"];
+    const m = PW.seg("co-m", () => upd());
+    const q = PW.range("co-q", (v) => "× " + v.toFixed(2), () => upd());
+    const Pp = PW.range("co-p", (v) => v + " W", () => upd());
+    const Tin = PW.range("co-tin", (v) => v + " °C", () => upd());
+    const parts = (k) => { const o = M[k], c = o.cv / Math.pow(q(), 0.8), f = o.two ? 0.5 : 1; return [o.jc * f, o.tim * f, c * f]; };
+    const Rof = (k) => parts(k).reduce((a, b) => a + b, 0);
+    const tin = (k) => (M[k].air ? 40 : Tin());
+    const dTf = (k, P) => 6 * P / (M[k].mcp * q());
+    const cv = PW.canvas($("co-cv"), draw, { aspect: 0.55, minHeight: 320, maxHeight: 420 });
+    function upd() {
+      const k = m(), R = Rof(k), P = Pp(), d = dTf(k, P), tj = tin(k) + d + P * R;
+      PW.stat("co-r", R.toFixed(3) + " K/W");
+      PW.stat("co-dtf", d.toFixed(1) + " K");
+      PW.stat("co-tj", C1(tj)); setCls("co-tj", tj > 175 ? "bad" : tj > 150 ? "warn" : "ok");
+      const pmax = Math.max(0, (150 - tin(k)) / (R + 6 / (M[k].mcp * q())));
+      PW.stat("co-pmax", pmax.toFixed(0) + " W/스위치");
+      PW.stat("co-dp", "× " + Math.pow(q(), 1.8).toFixed(2));
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      const P = PW.palette(), narrow = w < 560, sel = m();
+      const bb = narrow ? { x: 54, y: 12, w: w - 70, h: h * 0.42 } : { x: 54, y: 14, w: w * 0.38, h: h - 50 };
+      const rmax = Math.max(...keys.map(Rof)) * 1.3, cols = [P.copper, P.mold, P.oxide];
+      const bw = bb.w / keys.length;
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(bb.x, bb.y); ctx.lineTo(bb.x, bb.y + bb.h); ctx.lineTo(bb.x + bb.w, bb.y + bb.h); ctx.stroke();
+      [0, rmax / 2, rmax].forEach((v) => txt(ctx, v.toFixed(2), bb.x - 4, bb.y + bb.h - v / rmax * bb.h, P.dim, "right", 10));
+      keys.forEach((k, i) => {
+        let y = bb.y + bb.h; const x = bb.x + i * bw + bw * 0.18;
+        ctx.globalAlpha = k === sel ? 1 : 0.4;
+        parts(k).forEach((v, j) => { const hh = v / rmax * bb.h; ctx.fillStyle = cols[j]; ctx.fillRect(x, y - hh, bw * 0.64, hh); y -= hh; });
+        ctx.globalAlpha = 1;
+        txt(ctx, M[k].name, x + bw * 0.32, bb.y + bb.h + 12, k === sel ? P.text : P.dim, "center", 11);
+        txt(ctx, Rof(k).toFixed(3), x + bw * 0.32, y - 8, P.text, "center", 10);
+      });
+      txt(ctx, "■ j-c", bb.x + 6, bb.y + 6, P.copper, "left", 10); txt(ctx, "■ TIM", bb.x + 46, bb.y + 6, P.mold, "left", 10); txt(ctx, "■ 대류", bb.x + 90, bb.y + 6, P.oxide, "left", 10);
+      const gb = narrow ? { x: 58, y: bb.y + bb.h + 30, w: w - 76, h: h - bb.h - 80 } : { x: bb.x + bb.w + 70, y: 14, w: w - bb.x - bb.w - 90, h: h - 60 };
+      const series = keys.map((k, i) => ({ data: [[0, tin(k)], [600, tin(k) + dTf(k, 600) + 600 * Rof(k)]], color: k === sel ? P.heat : P.series[i + 1], width: k === sel ? 3 : 1.4 }));
+      PW.chart(ctx, gb, {
+        x: [0, 600], y: [20, 260], xLabel: "스위치당 손실 (W)", yLabel: "Tj (°C)", series,
+        hlines: [{ y: 150, color: P.warn, label: "150 °C" }],
+        points: [{ x: Pp(), y: tin(sel) + dTf(sel, Pp()) + Pp() * Rof(sel), color: P.text, r: 5 }],
+      });
+    }
+    upd();
+  })();
+
+  /* =============================================================
+     7) TSEP 보정과 냉각 곡선
+     ============================================================= */
+  (function () {
+    if (!$("ts-cv")) return;
+    const V0 = 2.95, K = -3.3e-3, TF = 65;
+    let cal = [], fitp = { a: V0, b: K }, meas = [], ext = null, noiseM = [];
+    const sg = PW.range("ts-n", (v) => v.toFixed(1) + " mV", () => upd(true));
+    const nk = PW.range("ts-k", (v) => String(v), () => upd(true));
+    const Ph = PW.range("ts-p", (v) => v + " W", () => upd(false));
+    const td = PW.range("ts-d", (v) => v + " µs", () => upd(false));
+    $("ts-run").addEventListener("click", () => upd(true));
+    const Ttrue = (t) => { let s = TF; for (let i = 0; i < 4; i++) s += FR[i] * Ph() * Math.exp(-t / FT[i]); return s; };
+    const cv = PW.canvas($("ts-cv"), draw, { aspect: 0.55, minHeight: 300, maxHeight: 420 });
+    function upd(recal) {
+      const s = sg() * 1e-3;
+      if (recal) {
+        cal = [];
+        const n = nk();
+        for (let i = 0; i < n; i++) { const T = 25 + 150 * i / (n - 1); cal.push([T, V0 + K * (T - 25) + s * PW.randn()]); }
+        const mx = cal.reduce((a, p) => a + p[0], 0) / n, my = cal.reduce((a, p) => a + p[1], 0) / n;
+        let sxx = 0, sxy = 0; cal.forEach((p) => { sxx += (p[0] - mx) ** 2; sxy += (p[0] - mx) * (p[1] - my); });
+        const b = sxx > 0 ? sxy / sxx : K; fitp = { a: my - b * (mx - 25), b: Math.min(-1e-4, b) };
+        noiseM = []; for (let i = 0; i < 100; i++) noiseM.push(PW.randn());
+      }
+      meas = [];
+      const t0 = td() * 1e-6;
+      for (let i = 0; i < 100; i++) {
+        const t = t0 + i * 20e-6, Vm = V0 + K * (Ttrue(t) - 25) + s * noiseM[i % noiseM.length];
+        meas.push([t, 25 + (Vm - fitp.a) / fitp.b]);
+      }
+      // √t 직선 맞춤 (지연 후 0.5 ms)
+      const win = meas.filter((p) => p[0] <= t0 + 0.5e-3);
+      const xs = win.map((p) => Math.sqrt(p[0])), ys = win.map((p) => p[1]), n = xs.length;
+      const mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+      let sxx = 0, sxy = 0; for (let i = 0; i < n; i++) { sxx += (xs[i] - mx) ** 2; sxy += (xs[i] - mx) * (ys[i] - my); }
+      const sl = sxx > 0 ? sxy / sxx : 0; ext = { b: my - sl * mx, s: sl };
+      const naive = (meas[0][1] + meas[1][1] + meas[2][1]) / 3, tr = Ttrue(0);
+      PW.stat("ts-kfit", (fitp.b * 1000).toFixed(2));
+      PW.stat("ts-true", C1(tr));
+      PW.stat("ts-naive", C1(naive) + " (" + (naive - tr >= 0 ? "+" : "") + (naive - tr).toFixed(1) + ")");
+      PW.stat("ts-ext", C1(ext.b) + " (" + (ext.b - tr >= 0 ? "+" : "") + (ext.b - tr).toFixed(1) + ")");
+      setCls("ts-ext", Math.abs(ext.b - tr) < 1.5 ? "ok" : "warn");
+      PW.stat("ts-rth", ((ext.b - TF) / Ph()).toFixed(4) + " K/W");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!meas.length || !ext) return;
+      const P = PW.palette(), narrow = w < 560;
+      const b1 = narrow ? { x: 58, y: 12, w: w - 76, h: h / 2 - 50 } : { x: 58, y: 12, w: w / 2 - 80, h: h - 58 };
+      const b2 = narrow ? { x: 58, y: h / 2 + 8, w: w - 76, h: h / 2 - 54 } : { x: w / 2 + 50, y: 12, w: w / 2 - 68, h: h - 58 };
+      PW.chart(ctx, b1, {
+        x: [0, 200], y: [2.3, 3.05], xLabel: "오븐 온도 (°C)", yLabel: "V_SD @100 mA (V)",
+        series: [{ data: [[0, fitp.a + fitp.b * -25], [200, fitp.a + fitp.b * 175]], color: P.accent, width: 1.8 }],
+        points: cal.map((p) => ({ x: p[0], y: p[1], color: P.volt, r: 4 })),
+      });
+      const tmax = meas[meas.length - 1][0], xm = Math.sqrt(tmax) * 1e3;
+      const tr = []; for (let k = 0; k <= 120; k++) { const x = xm * k / 120, t = (x / 1e3) ** 2; tr.push([x, Ttrue(t)]); }
+      const ys = tr.map((p) => p[1]).concat(meas.map((p) => p[1]), [ext.b]);
+      const y0 = Math.floor(Math.min(...ys) - 1), y1 = Math.ceil(Math.max(...ys) + 1);
+      PW.chart(ctx, b2, {
+        x: [0, xm], y: [y0, y1], xLabel: "√t (√µs)", yLabel: "Tj (°C)",
+        series: [{ data: tr, color: P.heat, width: 2.4 }, { data: [[0, ext.b], [Math.sqrt(td() * 1e-6 + 0.5e-3) * 1e3, ext.b + ext.s * Math.sqrt(td() * 1e-6 + 0.5e-3)]], color: P.accent, width: 1.8, dash: [5, 4] }],
+        bands: [{ x0: 0, x1: Math.sqrt(td() * 1e-6) * 1e3, color: alpha(P.warn, 0.18) }],
+        points: meas.filter((_, i) => i % 2 === 0).map((p) => ({ x: Math.sqrt(p[0]) * 1e3, y: p[1], color: P.volt, r: 2.5 })).concat([{ x: 0, y: ext.b, color: P.accent, r: 5 }]),
+      });
+    }
+    upd(true);
+  })();
+})();
+</script>
+</body>
+</html>

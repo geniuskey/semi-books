@@ -1,0 +1,1171 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and PowerBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>에지 종단과 표면 전계 · PowerBook</title>
+<meta name="description" content="칩 가장자리에서 항복이 먼저 오는 이유와 그것을 막는 기술을 계산한다. 원통·구 접합의 전계 집중과 종단 효율, 2차원 포아송 완화법 솔버로 보는 필드 플레이트·플로팅 가드 링·접합 종단 확장(JTE)의 전계 지도, JTE 도즈 창, 표면 전하 민감도, 종단 면적과 다이 비용을 시뮬레이터로 다룬다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .tm-l { fill: var(--text); font-family: var(--font); font-size: 14px; }
+  svg .tm-lb { fill: var(--text); font-family: var(--font); font-size: 14px; font-weight: 700; }
+  svg .tm-s { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .tm-f { fill: var(--m-field); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .tm-dash { stroke: var(--text-dim); stroke-dasharray: 5 4; fill: none; stroke-width: 1.3; }
+  svg .tm-box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .tm-n { fill: color-mix(in srgb, var(--m-electron) 12%, transparent); stroke: var(--border); }
+  svg .tm-nn { fill: color-mix(in srgb, var(--m-electron) 38%, transparent); stroke: var(--border); }
+  svg .tm-p { fill: color-mix(in srgb, var(--m-hole) 45%, transparent); stroke: var(--m-hole); stroke-width: 1; }
+  svg .tm-pl { fill: color-mix(in srgb, var(--m-hole) 18%, transparent); stroke: var(--m-hole); stroke-width: 1; stroke-dasharray: 3 2; }
+  svg .tm-ox { fill: color-mix(in srgb, var(--m-oxide) 32%, transparent); stroke: var(--border); }
+  svg .tm-met { fill: color-mix(in srgb, var(--m-metal) 75%, transparent); stroke: var(--border); }
+  svg .tm-eq { stroke: var(--text-dim); fill: none; stroke-width: 1.2; }
+  svg .tm-fz { fill: color-mix(in srgb, var(--m-field) 30%, transparent); stroke: var(--m-field); stroke-width: 2; }
+  svg .tm-hot { fill: color-mix(in srgb, var(--bad) 30%, transparent); stroke: var(--bad); stroke-width: 1.5; }
+  .tm-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tm-v.ok { color: var(--ok); } .tm-v.warn { color: var(--warn); } .tm-v.bad { color: var(--bad); }
+</style>
+</head>
+<body data-chapter="termination">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 04</div>
+    <h1>에지 종단과 표면 전계</h1>
+    <p class="lead"><a href="breakdown.html">3장</a>의 항복 전압은 무한히 넓은 평면 접합의 값이다. 실제 칩에는 끝이 있다. p 영역이 끝나는 가장자리에서 접합은 휘고, 휘어진 곳에 전계가 몰려 평면 BV의 30–50 %에서 먼저 애벌런치가 온다. 이를 막는 구조가 <span class="term">에지 종단</span><span class="en">(edge termination)</span>이다. 이 장은 원통·구 접합의 전계 집중을 1D 반지름 솔버로 계산한 뒤, 브라우저에서 도는 2차원 포아송 완화법 솔버로 필드 플레이트, 플로팅 가드 링, 접합 종단 확장(JTE)이 전위선을 어떻게 펴는지 직접 보고, 표면 전하와 다이 면적까지 따져 PW-800 SiC 다이의 종단을 설계한다.</p>
+    <ul class="objectives">
+      <li>원통·구 접합에서 전계가 몰리는 이유를 반지름 포아송 해로 설명하고, 종단 효율 \(\eta = BV_{edge}/BV_{pp}\)를 \(r_j/W_{pp}\)의 함수로 계산할 수 있다.</li>
+      <li>2차원 포아송 방정식의 박스(유한 체적) 이산화와 비선형 SOR 완화법을 이해하고, 전위선 밀집으로 최대 전계 위치를 찾을 수 있다.</li>
+      <li>필드 플레이트의 두 전계 봉우리와 산화막 전계 한계를 설명하고, 산화막 두께·플레이트 길이를 고를 수 있다.</li>
+      <li>플로팅 가드 링의 펀치스루 전압 분배를 이해하고 링 간격(점증 간격)을 최적화할 수 있다.</li>
+      <li>JTE의 도즈 창(최적 \(\approx \varepsilon E_c/q\))과 SiC에서 JTE가 표준인 이유를 설명할 수 있다.</li>
+      <li>표면 전하·이동 이온·습기가 종단에 미치는 영향과 종단 폭이 다이 면적·비용을 잡아먹는 비율을 계산할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="edge">
+    <h2>왜 가장자리에서 먼저 깨지는가</h2>
+    <p>평면형 전력 소자의 p 영역은 산화막 창을 통해 이온을 주입하고 열처리해 만든다. 도펀트는 아래로 \(r_j\)만큼 들어가는 동안 옆으로도 거의 같은 거리만큼 퍼진다. 그래서 창의 직선 변 아래에서는 접합이 반지름 \(r_j\)인 <em>원통</em>의 4분의 1이 되고, 창의 모서리 아래에서는 <em>구</em>의 8분의 1이 된다. 같은 전압에서 곡률 반지름이 작은 도체 표면일수록 전계가 센 것처럼(피뢰침), 휘어진 접합 바깥쪽에 전계가 몰린다. 전계가 몰린 곳에서는 이온화 적분이 먼저 1에 닿으므로 칩 전체의 BV는 가장 휜 곳이 정한다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 300" role="img" aria-label="평면 확산 접합의 위에서 본 모양과 단면: 직선 변은 원통 접합, 모서리는 구 접합">
+        <rect x="30" y="30" width="250" height="250" rx="6" class="tm-n"/>
+        <rect x="75" y="75" width="160" height="160" rx="26" class="tm-p"/>
+        <rect x="95" y="95" width="120" height="120" class="tm-met" opacity=".6"/>
+        <text x="155" y="160" text-anchor="middle" class="tm-s">활성 영역(셀)</text>
+        <circle cx="101" cy="101" r="26" fill="none" stroke="var(--bad)" stroke-width="2.4" stroke-dasharray="4 3"/>
+        <text x="40" y="60" class="tm-s" fill="var(--bad)">구 접합(모서리)</text>
+        <line x1="235" y1="120" x2="235" y2="190" stroke="var(--warn)" stroke-width="3"/>
+        <text x="200" y="262" class="tm-s">원통 접합(직선 변)</text>
+        <line x1="240" y1="155" x2="250" y2="250" class="tm-dash"/>
+        <text x="155" y="22" text-anchor="middle" class="tm-lb">위에서 본 칩 가장자리</text>
+        <!-- cross-section -->
+        <text x="600" y="22" text-anchor="middle" class="tm-lb">A–A′ 단면 (가장자리)</text>
+        <rect x="330" y="80" width="520" height="190" class="tm-n"/>
+        <rect x="330" y="64" width="520" height="16" class="tm-ox"/>
+        <path d="M330 80 L 520 80 A 50 50 0 0 1 470 130 L 330 130 Z" class="tm-p"/>
+        <path d="M330 80 L 470 80 A 50 50 0 0 1 520 80" class="tm-p" stroke="none"/>
+        <path d="M330 80 H 470 A 50 50 0 0 1 520 80" fill="none"/>
+        <path d="M330 80 L 470 80 Q 470 130 470 130 L 330 130 Z" class="tm-p"/>
+        <path d="M470 80 A 50 50 0 0 1 520 80 L 470 130 Z" fill="none"/>
+        <path d="M470 130 A 50 50 0 0 0 520 80 L 470 80 Z" class="tm-p"/>
+        <rect x="330" y="50" width="130" height="14" class="tm-met"/>
+        <text x="395" y="46" text-anchor="middle" class="tm-s">애노드 금속</text>
+        <path d="M330 175 L 520 175 C 600 175, 640 140, 660 80" class="tm-eq"/>
+        <path d="M330 220 L 540 220 C 650 220, 720 160, 740 80" class="tm-eq"/>
+        <path d="M330 150 L 490 150 C 530 150, 560 120, 568 80" class="tm-eq"/>
+        <circle cx="514" cy="112" r="14" class="tm-hot"/>
+        <text x="540" y="116" class="tm-s" fill="var(--bad)">전위선 밀집 = 최대 전계</text>
+        <text x="345" y="122" class="tm-s">p⁺ (r<tspan baseline-shift="sub" font-size="75%">j</tspan>)</text>
+        <text x="700" y="250" class="tm-s">n⁻ 드리프트</text>
+        <text x="660" y="74" class="tm-s">산화막</text>
+        <rect x="330" y="270" width="520" height="12" class="tm-nn"/>
+        <text x="590" y="296" text-anchor="middle" class="tm-s">n⁺ 기판 (+V<tspan baseline-shift="sub" font-size="75%">R</tspan>)</text>
+      </svg>
+      <figcaption><b>그림 4-1.</b> 평면 확산 접합의 가장자리. 직선 변 아래는 원통 접합, 모서리 아래는 구 접합이 된다(왼쪽). 단면(오른쪽)에서 전위선(회색)은 평면 영역에서 평행하다가 접합이 휘는 곳에서 바깥으로 퍼지면서 곡률 안쪽에 촘촘히 몰린다. 칩 모서리는 보통 반지름 수십–수백 µm로 둥글려 구 접합을 피한다.</figcaption>
+    </figure>
+
+    <p>평행 평면 BV에 대한 실제 BV의 비를 <span class="term">종단 효율</span><span class="en">(termination efficiency)</span> \(\eta = BV_{edge}/BV_{pp}\)라 한다. 종단 구조 없이 얕은 확산 접합을 그대로 두면 \(\eta\)는 30–50 %에 그친다. 좋은 종단은 85–95 %를 되찾는다. 대가는 칩 둘레에 수십–수백 µm 폭을 내주는 것과, 표면 상태에 민감해지는 것이다. 이 장의 모든 수치는 <a href="breakdown.html#bvn">3장</a>의 멱법칙 이온화 계수(\(\alpha_{\text{eff}} = CE^7\))를 쓴다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="curv">
+    <h2>원통·구 접합의 전계 집중</h2>
+    <p>곡률의 효과는 1차원 반지름 좌표로 정확히 풀 수 있다. 반지름 \(r_j\)인 p⁺ 원통(또는 구)을 n⁻가 둘러싸고, 공핍층이 \(r_d\)까지 퍼졌다고 하자. 가우스 법칙으로 반지름 \(r\) 안의 공간 전하를 세면</p>
+    <div class="formula">$$\text{원통: } E(r) = \frac{qN_D}{2\varepsilon_s}\left(\frac{r_d^2}{r} - r\right),\quad V = \frac{qN_D}{2\varepsilon_s}\left[r_d^2\ln\frac{r_d}{r_j} - \frac{r_d^2 - r_j^2}{2}\right]$$
+    $$\text{구: } E(r) = \frac{qN_D}{3\varepsilon_s}\left(\frac{r_d^3}{r^2} - r\right),\quad V = \frac{qN_D}{3\varepsilon_s}\left[r_d^3\left(\frac{1}{r_j} - \frac{1}{r_d}\right) - \frac{r_d^2 - r_j^2}{2}\right]$$<div class="where">평면이면 \(E\)가 직선으로 줄지만, 원통은 \(1/r\), 구는 \(1/r^2\)로 접합 근처에서 가파르게 크다. 같은 전압이면 전계가 접합 바로 앞에 몰리고, 그곳의 \(\int\alpha\,dr\)이 먼저 1에 닿는다. 이온화 적분 \(\int_{r_j}^{r_d} CE(r)^7\,dr = 1\)을 \(r_d\)에 대해 풀면 원통·구 BV가 나온다.</div></div>
+    <p>멱법칙이면 결과는 도핑에 무관하게 \(x = r_j/W_{pp}\) 하나의 함수가 된다. 스지–기번스<span class="en">(Sze–Gibbons)</span> 근사식이 널리 쓰인다.</p>
+    <div class="formula">$$\frac{BV_{cyl}}{BV_{pp}} \approx \tfrac12\left(x^2 + 2x^{6/7}\right)\ln\!\left(1 + 2x^{-8/7}\right) - x^{6/7},\qquad \frac{BV_{sp}}{BV_{pp}} \approx x^2 + 2.14\,x^{6/7} - \left(x^3 + 3x^{13/7}\right)^{2/3}$$<div class="where">\(x = r_j/W_{pp}\). 예: Si 650 V급(\(N_D = 3\times10^{14}\), \(W_{pp} \approx 56\) µm)에 \(r_j = 5\) µm 확산(\(x \approx 0.09\))이면 원통 약 32 %, 구 약 17 %. SiC는 주입 접합 깊이가 1 µm 안팎(\(W_{pp}\) 약 18 µm에서 \(x \approx 0.05\))이라 더 나쁘다 — 약 24 %. SiC에 종단이 필수인 이유다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 240" role="img" aria-label="같은 항복 조건에서 평면, 원통, 구 접합의 전계 분포 비교">
+        <line x1="60" y1="200" x2="520" y2="200" class="s-axis"/><line x1="60" y1="200" x2="60" y2="30" class="s-axis"/>
+        <path d="M60 60 L 480 200" stroke="var(--m-field)" stroke-width="2.6" fill="none"/>
+        <path d="M60 46 C 90 120, 140 170, 300 200" stroke="var(--warn)" stroke-width="2.6" fill="none"/>
+        <path d="M60 38 C 72 130, 100 180, 200 200" stroke="var(--bad)" stroke-width="2.6" fill="none"/>
+        <text x="300" y="120" class="tm-f">평면: 삼각형, 넓게</text>
+        <text x="180" y="160" class="tm-s" fill="var(--warn)">원통: 1/r</text>
+        <text x="96" y="100" class="tm-s" fill="var(--bad)">구: 1/r²</text>
+        <text x="290" y="222" text-anchor="middle" class="tm-s">접합(r<tspan baseline-shift="sub" font-size="75%">j</tspan>)에서의 거리 →</text>
+        <text x="40" y="40" class="tm-s" transform="rotate(-90 40 40)">E</text>
+        <rect x="560" y="24" width="300" height="190" rx="8" class="tm-box"/>
+        <text x="575" y="48" class="tm-lb">항복 순간의 비교</text>
+        <text x="575" y="76" class="tm-s">세 접합 모두 꼭대기 근처 좁은 곳에서</text>
+        <text x="575" y="94" class="tm-s">∫α dr = 1을 채운다 (E<tspan baseline-shift="sub" font-size="75%">c</tspan>는 비슷)</text>
+        <text x="575" y="124" class="tm-s">그러나 곡면은 전계가 빨리 꺼져</text>
+        <text x="575" y="142" class="tm-s">전계 아래 면적(= 전압)이 작다</text>
+        <text x="575" y="176" class="tm-f">BV<tspan baseline-shift="sub" font-size="75%">sp</tspan> &lt; BV<tspan baseline-shift="sub" font-size="75%">cyl</tspan> &lt; BV<tspan baseline-shift="sub" font-size="75%">pp</tspan></text>
+        <text x="575" y="200" class="tm-s">곡률 반지름이 작을수록 손해가 크다</text>
+      </svg>
+      <figcaption><b>그림 4-2.</b> 각자의 항복 순간 전계. 항복은 국소 조건(\(\int\alpha = 1\))이라 최대 전계는 셋이 비슷하지만, 곡면은 전계가 거리에 따라 빨리 줄어 막는 전압(면적)이 작다. 접합이 깊을수록(\(r_j\) 큼) 평면에 가까워진다 — 고전압 Si 소자가 깊은 확산을 쓰던 이유다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-cyl">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>반지름 솔버: 원통·구 접합의 종단 효율</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cy-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>접합 곡률 r<sub>j</sub> / W<sub>pp</sub></span> <output id="cy-x-out"></output></span><input type="range" id="cy-x" min="-1.7" max="0.3" step="0.005" value="-1.046"></label>
+          <label class="check"><input type="checkbox" id="cy-sg" checked> 스지–기번스 근사식</label>
+          <div class="legend" style="padding:0"><span><i style="background:var(--m-field)"></i>평면</span><span><i style="background:var(--accent-2)"></i>원통</span><span><i style="background:var(--bad)"></i>구</span></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">η 원통 (수치 / 근사)</span><span class="v" id="cy-c">—</span></div>
+        <div class="stat"><span class="k">η 구 (수치 / 근사)</span><span class="v" id="cy-s">—</span></div>
+        <div class="stat"><span class="k">항복 시 r<sub>d</sub>/W<sub>pp</sub> 원통 / 구</span><span class="v" id="cy-rd">—</span></div>
+        <div class="stat"><span class="k">항복 시 최대 전계 / 평면 E<sub>c</sub></span><span class="v" id="cy-e">—</span></div>
+        <div class="stat"><span class="k">예: Si 3×10¹⁴ / SiC 8×10¹⁵의 r<sub>j</sub></span><span class="v" id="cy-ex">—</span></div>
+      </div>
+      <div class="sim-note">위: \(x = r_j/W_{pp}\)에 따른 η. 실선은 반지름 좌표에서 \(\int_{r_j}^{r_d}CE^7dr = 1\)이 되는 \(r_d\)를 이분법으로 찾아 구한 수치해, 점선은 스지–기번스 근사식. 아래: 커서 위치에서 각자의 항복 순간 전계를 접합에서의 거리(÷W<sub>pp</sub>)로 그렸다. 해볼 것: ① x = 0.09(Si 5 µm 확산)에서 원통 약 32 %, 구 약 17 %. ② x를 1까지 키워도 원통은 약 75 %에 머문다 — 깊은 확산만으로는 부족하다. ③ 근사식은 x ≲ 0.5에서 수치해와 수 % 안에서 맞고, 큰 x에서 원통 식이 어긋난다. ④ 최대 전계는 평면보다 약간 높다(이온화 길이가 짧아 더 센 전계가 필요).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="laplace">
+    <h2>2차원 포아송 완화법: 브라우저 안의 종단 솔버</h2>
+    <p>실제 종단은 원통 하나가 아니라 접합, 산화막, 금속 플레이트, 링, 표면 전하가 얽힌 2차원 문제다. 이 장의 2D 시뮬레이터들은 모두 같은 솔버를 쓴다. 단면을 비균일 직사각 격자로 나누고, 각 절점을 둘러싼 작은 상자(제어 체적)에 가우스 법칙을 적용한다(<span class="term">박스 이산화</span>, 유한 체적법).</p>
+    <div class="formula">$$\sum_{k\in\{E,W,N,S\}} \varepsilon_k\,\frac{\phi_k - \phi_0}{d_k}\,\ell_k \;+\; \rho(\phi_0)\,A_0 \;+\; q\,Q_{ss}\,\ell_s \;=\; 0,\qquad \rho = q\left(N_D - N_A + p - n\right)$$<div class="where">\(\ell_k\)는 상자 면의 길이, \(d_k\)는 이웃 절점까지 거리, \(\varepsilon_k\)는 그 면이 지나는 재료(반도체·SiO₂ 3.9·패시베이션 3.5)의 유전율, \(A_0\)는 상자 중 반도체 부분의 넓이, \(Q_{ss}\)는 산화막/반도체 계면 전하(cm⁻²). 공핍은 따로 가정하지 않는다: \(n = N_D\,e^{(\phi - V_R)/V_T}\), \(p = N_A\,e^{-\phi/V_T}\)로 두면 중성 영역과 공핍층이 스스로 생긴다(전자는 캐소드, 정공은 애노드와 평형).</div></div>
+    <p>비선형 방정식은 절점마다 뉴턴 한 걸음과 과완화(SOR)를 섞어 푼다: \(\phi_0 \leftarrow \phi_0 + \omega F/(\sum\varepsilon_k\ell_k/d_k + qA_0(n+p)/V_T)\), \(\omega \approx 1.85\). 수천 V에서 \(V_T\) = 26 mV인 지수 항은 수치적으로 너무 가팔라서, 이 솔버는 열전압을 \(V_R/300\)으로 키운 "부드러운 공핍 가장자리"를 쓴다(최대 전계에는 거의 영향이 없다). 수렴하면 셀마다 \(\mathbf{E} = -\nabla\phi\)를 구하고, 최대 전계 셀에서 전기력선을 양방향으로 따라가며 \(\int CE^7\,dl\)을 적분한다. 그 값이 1이 되도록 \(V \leftarrow V\cdot I^{-1/m}\)(\(m = d\ln I/d\ln V\), 1D에서 구함)로 전압을 고쳐 다시 푸는 것을 반복하면 그 구조의 BV가 나온다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="2D 솔버의 계산 흐름: 격자와 구조 정의, 비선형 SOR, 전계 계산, 전기력선 이온화 적분, 전압 갱신">
+        <defs><marker id="f43-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text-dim)"/></marker></defs>
+        <g>
+          <rect x="20" y="30" width="150" height="80" rx="8" class="tm-box"/><text x="95" y="58" text-anchor="middle" class="tm-lb">① 구조 → 격자</text><text x="95" y="80" text-anchor="middle" class="tm-s">비균일 x·y 격자</text><text x="95" y="98" text-anchor="middle" class="tm-s">재료·도핑·전극·링</text>
+          <rect x="200" y="30" width="150" height="80" rx="8" class="tm-box"/><text x="275" y="58" text-anchor="middle" class="tm-lb">② 비선형 SOR</text><text x="275" y="80" text-anchor="middle" class="tm-s">뉴턴 1회 + ω≈1.85</text><text x="275" y="98" text-anchor="middle" class="tm-s">프레임당 ~8 ms</text>
+          <rect x="380" y="30" width="150" height="80" rx="8" class="tm-box"/><text x="455" y="58" text-anchor="middle" class="tm-lb">③ 링 전위</text><text x="455" y="80" text-anchor="middle" class="tm-s">펀치스루 조건</text><text x="455" y="98" text-anchor="middle" class="tm-s">(최소-최대 경로)</text>
+          <rect x="560" y="30" width="150" height="80" rx="8" class="tm-box"/><text x="635" y="58" text-anchor="middle" class="tm-lb">④ E = −∇φ</text><text x="635" y="80" text-anchor="middle" class="tm-s">최대 전계 셀 찾기</text><text x="635" y="98" text-anchor="middle" class="tm-s">산화막 전계도</text>
+          <rect x="560" y="150" width="150" height="80" rx="8" class="tm-box"/><text x="635" y="178" text-anchor="middle" class="tm-lb">⑤ 전기력선 적분</text><text x="635" y="200" text-anchor="middle" class="tm-s">I = ∫CE⁷ dl</text><text x="635" y="218" text-anchor="middle" class="tm-s">I = 1이면 항복</text>
+          <rect x="300" y="150" width="200" height="80" rx="8" class="tm-box"/><text x="400" y="178" text-anchor="middle" class="tm-lb">⑥ 전압 갱신</text><text x="400" y="200" text-anchor="middle" class="tm-s">V ← V·I<tspan baseline-shift="super" font-size="70%">−1/m</tspan>, 이전 해에서 다시</text><text x="400" y="218" text-anchor="middle" class="tm-s">|ln I| &lt; 0.015면 끝 → BV</text>
+          <line x1="170" y1="70" x2="196" y2="70" stroke="var(--text-dim)" stroke-width="1.6" marker-end="url(#f43-a)"/>
+          <line x1="350" y1="70" x2="376" y2="70" stroke="var(--text-dim)" stroke-width="1.6" marker-end="url(#f43-a)"/>
+          <path d="M455 110 L 455 128 L 275 128 L 275 114" stroke="var(--text-dim)" stroke-width="1.4" fill="none" marker-end="url(#f43-a)"/>
+          <text x="365" y="124" class="tm-s">수렴할 때까지</text>
+          <line x1="530" y1="70" x2="556" y2="70" stroke="var(--text-dim)" stroke-width="1.6" marker-end="url(#f43-a)"/>
+          <line x1="635" y1="110" x2="635" y2="146" stroke="var(--text-dim)" stroke-width="1.6" marker-end="url(#f43-a)"/>
+          <line x1="560" y1="190" x2="504" y2="190" stroke="var(--text-dim)" stroke-width="1.6" marker-end="url(#f43-a)"/>
+          <path d="M300 190 L 240 190 L 240 114" stroke="var(--text-dim)" stroke-width="1.4" fill="none" marker-end="url(#f43-a)"/>
+          <text x="740" y="60" class="tm-s">격자 약 1–2만 절점</text>
+          <text x="740" y="80" class="tm-s">BV 하나에</text>
+          <text x="740" y="100" class="tm-s">0.1–1초</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 4-3.</b> 이 장의 2D 솔버. 상용 소자 시뮬레이터(TCAD)도 원리는 같다 — 다만 전자·정공 연속 방정식을 함께 풀고, 이온화를 전류로 계산해 항복을 찾는다(<a href="../../tcad/chapters/highfield.html">TCADBook 고전계</a>). 여기서는 화면 프레임마다 몇 번씩 나눠 풀어 페이지가 멈추지 않게 했다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-bare">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2D 솔버 ① 종단 없는 평면 접합의 가장자리</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ba-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>재료·드리프트</span><div class="seg" id="ba-m"><button data-value="Si" class="on">Si 3×10¹⁴</button><button data-value="SiC">SiC 8×10¹⁵</button></div></div>
+          <label class="ctrl"><span><span>접합 깊이 r<sub>j</sub> / W<sub>pp</sub></span> <output id="ba-x-out"></output></span><input type="range" id="ba-x" min="0.05" max="0.6" step="0.01" value="0.09"></label>
+          <div class="ctrl"><span>지도</span><div class="seg" id="ba-show"><button data-value="E" class="on">|E|</button><button data-value="phi">전위 φ</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">상태</span><span class="v tm-v" id="ba-st">—</span></div>
+        <div class="stat"><span class="k">가장자리 BV / 평면 BV<sub>pp</sub></span><span class="v" id="ba-bv">—</span></div>
+        <div class="stat"><span class="k">종단 효율 η (2D)</span><span class="v" id="ba-eta">—</span></div>
+        <div class="stat"><span class="k">η 원통 반지름 해</span><span class="v" id="ba-cyl">—</span></div>
+        <div class="stat"><span class="k">최대 전계 위치 / 값</span><span class="v" id="ba-pk">—</span></div>
+      </div>
+      <div class="sim-note">위: 항복 순간(I = 1)의 |E| 지도(노랑 → 빨강 = 평면 임계 전계 이상), 전위선(V<sub>R</sub>/10 간격), 최대 전계 점과 이온화 적분 경로(초록). 위쪽 띠는 산화막·패시베이션, 빨간 면은 p⁺. 가로·세로 축척이 다르다. 아래: 표면 바로 아래 |E|(실선)와 깊이 방향 최대 |E|(점선). 드리프트층은 1.3 W<sub>pp</sub>(NPT)로 두었다. 해볼 것: ① x = 0.09에서 η가 원통 해(약 32 %) 근처로 나온다. 격자(W<sub>pp</sub>/56)가 곡률을 계단으로 그리므로 수 % 차이는 수치 오차다. x가 크면 2D가 원통 해보다 낮아진다 — 평면 바닥, 표면, n⁺ 경계가 원통 대칭을 깨기 때문이다. ② Si와 SiC를 바꿔도 같은 x면 η가 거의 같다 — 멱법칙 이온화에서 종단 효율은 r<sub>j</sub>/W<sub>pp</sub>만의 함수다. ③ x를 키우면 최대 전계 점이 표면 근처에서 곡면 아래쪽으로 옮겨 간다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="fp">
+    <h2>필드 플레이트</h2>
+    <p>가장 단순한 종단은 애노드 금속을 산화막 위로 접합 바깥까지 연장하는 <span class="term">필드 플레이트</span><span class="en">(field plate)</span>다. 플레이트는 애노드 전위(0 V)이므로 그 아래 n⁻ 표면을 공핍시키고, 공핍층을 가장자리 밖으로 끌어내 접합 곡률의 전계를 덜어 준다. 대신 전위선이 플레이트 끝에서 다시 몰려 두 번째 전계 봉우리가 생긴다. 산화막이 얇으면 플레이트가 표면을 강하게 공핍시키지만 플레이트 끝 봉우리가 커지고, 두꺼우면 영향력이 약해진다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 260" role="img" aria-label="필드 플레이트 단면과 표면 전계의 두 봉우리">
+        <rect x="30" y="90" width="560" height="150" class="tm-n"/>
+        <rect x="30" y="66" width="560" height="24" class="tm-ox"/>
+        <path d="M30 90 L 170 90 A 40 40 0 0 1 130 130 L 30 130 Z" class="tm-p"/>
+        <path d="M130 130 A 40 40 0 0 0 170 90 L 130 90 Z" class="tm-p"/>
+        <rect x="30" y="50" width="120" height="16" class="tm-met"/>
+        <rect x="150" y="50" width="210" height="16" class="tm-met"/>
+        <text x="255" y="44" text-anchor="middle" class="tm-s">필드 플레이트 (애노드 전위, 길이 L<tspan baseline-shift="sub" font-size="75%">FP</tspan>)</text>
+        <path d="M30 170 L 150 170 C 230 170, 300 120, 360 92" class="tm-eq"/>
+        <path d="M30 200 L 190 200 C 300 200, 380 150, 420 92" class="tm-eq"/>
+        <path d="M30 150 L 140 150 C 190 140, 260 100, 330 92" class="tm-eq"/>
+        <circle cx="168" cy="108" r="10" class="tm-hot"/><circle cx="360" cy="96" r="10" class="tm-hot"/>
+        <text x="40" y="232" class="tm-s">n⁻</text><text x="45" y="120" class="tm-s">p⁺</text>
+        <text x="380" y="82" class="tm-s">t<tspan baseline-shift="sub" font-size="75%">ox</tspan></text>
+        <rect x="620" y="30" width="245" height="210" rx="8" class="tm-box"/>
+        <text x="635" y="54" class="tm-lb">표면 아래 |E|(x)</text>
+        <line x1="640" y1="210" x2="850" y2="210" class="s-axis"/>
+        <path d="M640 205 L 680 200 L 700 110 L 715 180 L 770 170 L 790 120 L 805 190 L 850 205" stroke="var(--m-field)" stroke-width="2.4" fill="none"/>
+        <text x="690" y="104" class="tm-s">접합 모서리</text><text x="768" y="114" class="tm-s">FP 끝</text>
+        <text x="645" y="232" class="tm-s">두 봉우리를 같게 맞추는 것이 설계</text>
+      </svg>
+      <figcaption><b>그림 4-4.</b> 필드 플레이트. 플레이트가 공핍층을 끌어내 접합 모서리 전계를 낮추지만 플레이트 끝에 새 봉우리가 생긴다. 산화막 두께를 계단처럼 늘려 가는 <em>계단형 필드 플레이트</em>나 여러 단 플레이트는 봉우리를 여럿으로 나눠 더 높인다. GaN HEMT의 게이트·소스 필드 플레이트도 같은 원리다(<a href="gan.html">9장</a>).</figcaption>
+    </figure>
+    <p>산화막 안 전계도 따져야 한다. 계면에서 수직 전속 밀도가 연속이므로 \(\varepsilon_{ox}E_{ox} = \varepsilon_sE_s\), 곧 산화막 전계는 반도체 수직 전계의 \(\varepsilon_s/\varepsilon_{ox}\)배(Si 3배, SiC 2.5배)다. Si에서는 0.2–0.3 MV/cm × 3 ≈ 1 MV/cm 안팎으로 SiO₂(장기 신뢰성 한계 약 3–4 MV/cm)에 여유가 있지만, SiC 표면 전계 2 MV/cm는 산화막에 5 MV/cm를 걸어 위험하다. 그래서 SiC는 필드 플레이트 단독보다 반도체 안에서 전계를 펴는 JTE·링을 주로 쓴다.</p>
+
+    <div class="sim" id="sim-fp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2D 솔버 ② 필드 플레이트 (Si 650 V급)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="fp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>산화막 두께 t<sub>ox</sub></span> <output id="fp-t-out"></output></span><input type="range" id="fp-t" min="0.2" max="3" step="0.1" value="1"></label>
+          <label class="ctrl"><span><span>플레이트 길이 L<sub>FP</sub> (접합 끝부터)</span> <output id="fp-L-out"></output></span><input type="range" id="fp-L" min="0" max="45" step="1" value="20"></label>
+          <div class="ctrl"><span>지도</span><div class="seg" id="fp-show"><button data-value="E" class="on">|E|</button><button data-value="phi">전위 φ</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">상태</span><span class="v tm-v" id="fp-st">—</span></div>
+        <div class="stat"><span class="k">BV / η</span><span class="v" id="fp-bv">—</span></div>
+        <div class="stat"><span class="k">최대 전계 위치</span><span class="v" id="fp-pk">—</span></div>
+        <div class="stat"><span class="k">산화막 최대 전계</span><span class="v" id="fp-ox">—</span></div>
+        <div class="stat"><span class="k">종단 없음 대비</span><span class="v" id="fp-gain">—</span></div>
+      </div>
+      <div class="sim-note">Si, N<sub>D</sub> = 3×10¹⁴ cm⁻³, 드리프트 60 µm(BV<sub>pp</sub> 약 730 V), 접합 깊이 5 µm, 패시베이션 10 µm(ε<sub>r</sub> 3.5). 플레이트는 산화막 위(회색 굵은 선). 해볼 것: ① L<sub>FP</sub> = 0에서 η 약 32 %(종단 없음). 플레이트를 늘리면 최대 전계가 접합 모서리에서 플레이트 끝으로 옮겨 가며 η가 약 50 %까지 오른다. ② t<sub>ox</sub>를 0.3 µm로 얇게 하면 플레이트 끝 봉우리가 커져 오히려 나빠진다. ③ 3 µm로 두껍게 하면 플레이트의 효과가 약해져 다시 접합 모서리가 깨진다. ④ 단일 플레이트로는 60 % 안팎이 한계다 — 그래서 가드 링·JTE와 함께 쓴다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="flr">
+    <h2>플로팅 가드 링</h2>
+    <p><span class="term">플로팅 가드 링</span><span class="en">(floating field limiting ring, FLR)</span>은 주 접합과 같은 p⁺ 확산을 몇 개의 고리로 칩 둘레에 더 만들고 아무 데도 연결하지 않는 구조다. 공정이 주 접합과 같아 추가 마스크가 거의 필요 없다. 역전압이 오르면 주 접합의 공핍층이 옆으로 퍼지다가 첫 링에 닿는다(<span class="term">펀치스루</span>). 그 순간부터 링은 그 지점의 전위로 고정되고, 이후 늘어나는 전압의 일부를 링과 다음 링 사이가 나눠 맡는다. 링 사이 간격 \(s\)가 맡는 전압은 대략 그 간격의 펀치스루 전압이다.</p>
+    <div class="formula">$$\Delta V_{k} \approx \frac{qN_D\,s_k^2}{2\varepsilon_s},\qquad V_R \approx V_{main} + \sum_k \Delta V_k$$<div class="where">링이 \(N\)개면 전압이 \(N+1\)개의 곡면 접합에 나뉘어 각자의 곡률 전계가 줄어든다. 간격이 너무 좁으면 링이 주 접합과 같은 전위에 묶여 하는 일이 없고, 너무 넓으면 공핍층이 링에 닿기 전에 주 접합이 먼저 깨진다. 바깥 링일수록 맡는 전위가 커지므로 간격을 바깥으로 갈수록 조금씩 넓히는 <em>점증 간격</em>이 보통이다. 이 솔버는 링 전위를 "정공이 넘을 장벽이 0"인 조건, 곧 안쪽 p 영역에서 그 링까지 가는 경로 중 최대 전위가 가장 낮은 경로의 값으로 둔다(최소-최대 경로, 다익스트라 탐색).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="플로팅 가드 링: 주 접합과 링 사이 펀치스루로 전압이 계단처럼 나뉨">
+        <rect x="20" y="80" width="840" height="140" class="tm-n"/>
+        <rect x="20" y="64" width="840" height="16" class="tm-ox"/>
+        <path d="M20 80 H 140 A 30 30 0 0 1 110 110 H 20 Z" class="tm-p"/><path d="M110 110 A 30 30 0 0 0 140 80 H 110 Z" class="tm-p"/>
+        <g class="tm-p"><path d="M200 80 h50 a25 25 0 0 1 -25 25 a25 25 0 0 1 -25 -25z"/><path d="M320 80 h50 a25 25 0 0 1 -25 25 a25 25 0 0 1 -25 -25z"/><path d="M455 80 h50 a25 25 0 0 1 -25 25 a25 25 0 0 1 -25 -25z"/><path d="M600 80 h50 a25 25 0 0 1 -25 25 a25 25 0 0 1 -25 -25z"/></g>
+        <rect x="20" y="48" width="110" height="16" class="tm-met"/>
+        <rect x="800" y="80" width="60" height="22" class="tm-nn"/>
+        <text x="830" y="74" text-anchor="middle" class="tm-s">채널 스토퍼 n⁺</text>
+        <text x="75" y="44" text-anchor="middle" class="tm-s">애노드 0 V</text>
+        <text x="225" y="128" text-anchor="middle" class="tm-s">링1</text><text x="345" y="128" text-anchor="middle" class="tm-s">링2</text><text x="480" y="128" text-anchor="middle" class="tm-s">링3</text><text x="625" y="128" text-anchor="middle" class="tm-s">링4</text>
+        <text x="170" y="150" text-anchor="middle" class="tm-s">s₁</text><text x="285" y="150" text-anchor="middle" class="tm-s">s₂</text><text x="410" y="150" text-anchor="middle" class="tm-s">s₃</text><text x="550" y="150" text-anchor="middle" class="tm-s">s₄</text>
+        <!-- staircase potential -->
+        <path d="M30 240 L 140 240 L 200 214 L 250 214 L 320 186 L 370 186 L 455 152 L 505 152 L 600 116 L 650 116 L 790 80" transform="translate(0,0)" stroke="var(--accent)" stroke-width="2.4" fill="none" opacity=".9"/>
+        <text x="700" y="140" class="t-acc">표면 전위: 링마다 계단</text>
+        <path d="M30 190 C 120 190, 160 170, 200 120" class="tm-eq"/>
+        <path d="M250 170 C 290 170, 310 150, 320 120" class="tm-eq"/>
+        <path d="M370 200 C 420 200, 445 160, 455 120" class="tm-eq"/>
+      </svg>
+      <figcaption><b>그림 4-5.</b> 플로팅 가드 링. 주 접합의 공핍층이 링에 닿을 때마다 링이 전위를 하나씩 이어받아 표면 전위가 계단처럼 오른다. 간격 \(s_k\)가 그 계단 높이를 정한다. 맨 바깥의 n⁺ <span class="term">채널 스토퍼</span>는 표면 반전층이 칩 끝(절단면)까지 이어지는 것을 막는다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-flr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2D 솔버 ③ 플로팅 가드 링 간격 최적화 (Si 650 V급)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="fl-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>링 개수 <output id="fl-n-out"></output></span><input type="range" id="fl-n" min="0" max="6" step="1" value="5"></label>
+          <label class="ctrl"><span><span>첫 간격 s<sub>1</sub></span> <output id="fl-s-out"></output></span><input type="range" id="fl-s" min="2" max="24" step="1" value="6"></label>
+          <label class="ctrl"><span>간격 증분 Δs <output id="fl-d-out"></output></span><input type="range" id="fl-d" min="0" max="6" step="0.5" value="3"></label>
+          <label class="ctrl"><span><span>표면 전하 Q<sub>ss</sub></span> <output id="fl-q-out"></output></span><input type="range" id="fl-q" min="-0.5" max="2" step="0.1" value="0"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">상태</span><span class="v tm-v" id="fl-st">—</span></div>
+        <div class="stat"><span class="k">BV / η</span><span class="v" id="fl-bv">—</span></div>
+        <div class="stat"><span class="k">링 전위 (항복 시)</span><span class="v" id="fl-rv">—</span></div>
+        <div class="stat"><span class="k">최대 전계 위치</span><span class="v" id="fl-pk">—</span></div>
+        <div class="stat"><span class="k">종단 폭 (주 접합 끝 → 마지막 링)</span><span class="v" id="fl-w">—</span></div>
+      </div>
+      <div class="sim-note">링 폭 12 µm(표면), 접합 깊이 5 µm, 나머지는 필드 플레이트 시뮬레이터와 같다. 간격은 접합 가장자리 사이의 표면 거리. Q<sub>ss</sub> 단위는 10¹² cm⁻²(양전하 = 산화막 고정 전하·이동 이온). 해볼 것: ① 링 5개, s<sub>1</sub> = 6 µm, Δs = 3 µm에서 η 약 65 %. 링 전위가 계단처럼 오른다. ② 간격을 모두 15 µm 이상으로 넓히면 바깥 링들이 같은 전위에 머문다 — 공핍층이 닿지 못해 쉬는 링이다. ③ 간격을 2–3 µm로 좁히면 링들이 주 접합에 묶여 효과가 사라진다. ④ Q<sub>ss</sub>를 +1(10¹² cm⁻²)로 올리면 η가 20 %대로 무너진다. 링 종단은 표면 전하에 매우 민감하다(<a href="#surface">8절</a>). 음의 큰 전하는 n⁻ 표면을 반전시켜 링을 단락하는데, 이 솔버는 반전층을 모델링하지 않아 −0.5까지만 둔다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="jte">
+    <h2>접합 종단 확장(JTE)과 도즈 창</h2>
+    <p><span class="term">접합 종단 확장</span><span class="en">(junction termination extension, JTE)</span>은 주 접합 바깥에 옅은 p층을 길게 붙인 구조다. 역바이어스가 오르면 이 p층이 바깥 끝부터 점점 공핍되면서 전위를 표면을 따라 고르게 내려놓는다. 핵심은 p층의 <em>도즈</em>(면 전하 \(Q_{JTE} = N_A t\), cm⁻²)다. 너무 적으면 전압이 조금만 올라도 다 공핍되어 없는 것과 같고(주 접합 모서리가 깨짐), 너무 많으면 공핍되지 않고 주 접합의 연장일 뿐이라 JTE 끝 모서리가 깨진다. 그 사이의 좁은 <span class="term">도즈 창</span>에서 효율이 최대다.</p>
+    <div class="formula">$$Q_{JTE}^{opt} \sim \frac{\varepsilon_s E_c}{q}:\qquad \text{Si} \approx 1.9\times10^{12},\quad \text{4H-SiC} \approx 1.3 \sim 1.5\times10^{13}\ \text{cm}^{-2}$$<div class="where">가우스 법칙으로 보면 \(\varepsilon_sE_c/q\)는 "임계 전계를 종단하는 데 필요한 면 전하"다. JTE가 이보다 많으면 임계 전계에서도 다 공핍되지 않는다. 실제 최적은 이 값의 약 0.6–1배이고, 창의 폭(η가 최대의 90 % 이상인 범위)은 단일 JTE에서 ±20–30 % 정도다. 이온 주입 도즈 정밀도(±수 %)는 충분하지만, SiC에서는 주입한 Al의 전기적 활성화율(열처리에 따라 수십–100 %)과 표면 전하가 창을 흔든다(<a href="../../doping/chapters/dose.html">DopingBook 도즈</a>).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 270" role="img" aria-label="JTE 단면과 도즈에 따른 세 경우: 너무 적음, 최적, 너무 많음">
+        <g transform="translate(0,0)">
+          <text x="145" y="20" text-anchor="middle" class="tm-lb">도즈 부족</text>
+          <rect x="20" y="40" width="250" height="110" class="tm-n"/>
+          <path d="M20 40 H 70 A 14 14 0 0 1 56 54 H 20 Z" class="tm-p"/><path d="M56 54 A 14 14 0 0 0 70 40 H 56 Z" class="tm-p"/>
+          <rect x="70" y="40" width="150" height="8" class="tm-pl" opacity=".5"/>
+          <path d="M20 100 L 50 100 C 64 90, 70 70, 72 40" class="tm-eq"/><path d="M20 120 L 60 120 C 80 110, 90 80, 92 40" class="tm-eq"/>
+          <circle cx="68" cy="52" r="9" class="tm-hot"/>
+          <text x="145" y="172" text-anchor="middle" class="tm-s">JTE가 다 공핍 → 없는 것과 같음</text>
+          <text x="145" y="190" text-anchor="middle" class="tm-s">주 접합 모서리에서 항복</text>
+        </g>
+        <g transform="translate(295,0)">
+          <text x="145" y="20" text-anchor="middle" class="tm-lb">최적 도즈</text>
+          <rect x="20" y="40" width="250" height="110" class="tm-n"/>
+          <path d="M20 40 H 70 A 14 14 0 0 1 56 54 H 20 Z" class="tm-p"/><path d="M56 54 A 14 14 0 0 0 70 40 H 56 Z" class="tm-p"/>
+          <rect x="70" y="40" width="150" height="8" class="tm-pl"/>
+          <path d="M20 90 L 60 90 C 110 88, 160 70, 200 40" class="tm-eq"/><path d="M20 115 L 70 115 C 140 112, 200 80, 236 40" class="tm-eq"/><path d="M20 135 L 80 135 C 160 132, 240 90, 266 40" class="tm-eq"/>
+          <text x="145" y="172" text-anchor="middle" class="tm-s">JTE가 바깥부터 점점 공핍</text>
+          <text x="145" y="190" text-anchor="middle" class="tm-s">전위가 표면을 따라 고르게</text>
+        </g>
+        <g transform="translate(590,0)">
+          <text x="145" y="20" text-anchor="middle" class="tm-lb">도즈 과다</text>
+          <rect x="20" y="40" width="250" height="110" class="tm-n"/>
+          <path d="M20 40 H 70 A 14 14 0 0 1 56 54 H 20 Z" class="tm-p"/><path d="M56 54 A 14 14 0 0 0 70 40 H 56 Z" class="tm-p"/>
+          <rect x="70" y="40" width="150" height="8" class="tm-p"/>
+          <path d="M20 100 L 200 100 C 214 90, 220 70, 222 40" class="tm-eq"/><path d="M20 120 L 210 120 C 230 110, 240 80, 242 40" class="tm-eq"/>
+          <circle cx="220" cy="48" r="9" class="tm-hot"/>
+          <text x="145" y="172" text-anchor="middle" class="tm-s">JTE가 공핍 안 됨 → 접합의 연장</text>
+          <text x="145" y="190" text-anchor="middle" class="tm-s">JTE 끝 모서리에서 항복</text>
+        </g>
+        <rect x="20" y="206" width="840" height="56" rx="8" class="tm-box"/>
+        <path d="M60 252 C 200 250, 320 236, 420 214 C 470 208, 500 214, 520 230 C 560 250, 700 252, 840 254" stroke="var(--accent)" stroke-width="2.4" fill="none"/>
+        <text x="40" y="226" class="tm-s">η</text><text x="420" y="226" text-anchor="middle" class="t-acc">도즈 창</text><text x="820" y="226" text-anchor="end" class="tm-s">JTE 도즈 →</text>
+      </svg>
+      <figcaption><b>그림 4-6.</b> JTE 도즈와 항복 위치. 부족하면 주 접합 모서리, 과다하면 JTE 끝이 깨진다. 최적에서는 공핍된 JTE의 음전하가 전위선을 표면을 따라 고르게 편다. 아래: 단일 JTE의 η–도즈 곡선은 최적 도즈 바로 위에서 급격히 떨어지는 비대칭 모양이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-jte">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2D 솔버 ④ SiC JTE와 도즈 창 (PW-800 1200 V 드리프트)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="jt-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>JTE 도즈 Q<sub>JTE</sub></span> <output id="jt-d-out"></output></span><input type="range" id="jt-d" min="0" max="3" step="0.05" value="1.2"></label>
+          <label class="ctrl"><span><span>JTE 길이 L<sub>JTE</sub></span> <output id="jt-L-out"></output></span><input type="range" id="jt-L" min="5" max="60" step="1" value="40"></label>
+          <label class="ctrl"><span><span>표면 전하 Q<sub>ss</sub></span> <output id="jt-q-out"></output></span><input type="range" id="jt-q" min="-2" max="5" step="0.25" value="0"></label>
+          <div class="ctrl tm-btns"><button class="btn primary" id="jt-scan">도즈 창 스캔</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">상태</span><span class="v tm-v" id="jt-st">—</span></div>
+        <div class="stat"><span class="k">BV / η</span><span class="v" id="jt-bv">—</span></div>
+        <div class="stat"><span class="k">최대 전계 위치</span><span class="v" id="jt-pk">—</span></div>
+        <div class="stat"><span class="k">도즈 / (εE<sub>c</sub>/q)</span><span class="v" id="jt-r">—</span></div>
+        <div class="stat"><span class="k">스캔 최적 도즈 / 창(η ≥ 0.9 η<sub>max</sub>)</span><span class="v" id="jt-win">—</span></div>
+      </div>
+      <div class="sim-note">4H-SiC, N<sub>D</sub> = 8×10¹⁵ cm⁻³, 드리프트 10 µm(BV<sub>pp</sub> 약 1.98 kV, 멱법칙), 주 접합 깊이 0.8 µm, JTE 두께 0.6 µm(Al 주입), 산화막 0.5 µm. 도즈 단위 10¹³ cm⁻². "도즈 창 스캔"은 도즈 0–3×10¹³을 13점 다시 풀어 η–도즈 곡선을 아래 그림에 겹쳐 그린다(수 초). 해볼 것: ① 도즈 0이면 η 약 33 %. 1.2–1.5에서 약 90 %에 이른다. ② 2를 넘기면 최대 전계 점이 JTE 바깥 끝으로 튀며 η가 60 % 아래로 떨어진다 — 창은 최적 바로 위에서 가파르다. ③ Q<sub>ss</sub>를 +3으로 두고 다시 스캔하면 곡선 전체가 오른쪽으로 밀린다. 양의 계면 전하가 p형 JTE 도즈를 상쇄하기 때문이다. ④ L<sub>JTE</sub>를 10 µm로 줄이면 공핍될 거리가 모자라 최대 η가 떨어진다(대략 3–5 W 이상 필요).</div>
+    </div>
+
+    <div class="callout fab"><strong>PW-800 SiC 다이의 종단</strong>1200 V SiC 다이(드리프트 10 µm, 8×10¹⁵ cm⁻³, BV<sub>pp</sub> 약 1.9–2.0 kV)는 Al 주입 JTE(도즈 약 1×10¹³ cm⁻², 길이 약 50 µm)에 바깥쪽 플로팅 링 여러 개를 더한 혼합 종단을 가정한다. 단일 JTE의 좁은 창을 링이 넓혀 주어 활성화율·계면 전하 산포에도 η 약 85 %(BV 약 1.6–1.7 kV)를 지킨다. 종단과 채널 스토퍼, 절단 여유를 합친 가장자리 폭은 약 200 µm로, 4.5 × 4.5 mm 다이 면적의 약 17 %다(<a href="#area">9절</a>). 그 위를 폴리이미드가 덮어 몰드 수지·습기에서 표면을 지킨다.</div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="other">
+    <h2>다른 종단: 다단 JTE, 링 보조 JTE, 베벨, 트렌치</h2>
+    <p>단일 JTE의 창을 넓히는 방법은 도즈를 바깥으로 갈수록 줄이는 것이다. 두세 단으로 도즈를 나누는 <em>다단 JTE</em>, 마스크 패턴의 밀도로 평균 도즈를 연속적으로 줄이는 <em>공간 변조 JTE</em>와 <span class="term">VLD</span><span class="en">(variation of lateral doping)</span>, JTE 안에 링을 겹쳐 넣는 <em>링 보조 JTE</em>가 쓰인다. 사이리스터·고전압 다이오드처럼 웨이퍼 전체가 한 소자인 경우에는 칩 옆면을 비스듬히 갈아 내는 <span class="term">베벨</span><span class="en">(bevel)</span>로 표면 전계를 벌크 전계보다 낮춘다. 트렌치 소자는 깊은 트렌치를 산화막으로 채워 전위를 수직으로 내려놓는 트렌치 종단도 쓴다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 210" role="img" aria-label="다단 JTE, 공간 변조 JTE, 양의 베벨, 트렌치 종단의 단면 개념도">
+        <g><text x="105" y="20" text-anchor="middle" class="tm-lb">2단 JTE</text>
+          <rect x="10" y="40" width="190" height="110" class="tm-n"/>
+          <rect x="10" y="40" width="40" height="18" class="tm-p"/><rect x="50" y="40" width="60" height="8" class="tm-p" opacity=".6"/><rect x="110" y="40" width="60" height="8" class="tm-pl"/>
+          <text x="105" y="172" text-anchor="middle" class="tm-s">도즈 Q₁ &gt; Q₂: 창 확대</text></g>
+        <g transform="translate(220,0)"><text x="105" y="20" text-anchor="middle" class="tm-lb">공간 변조 JTE</text>
+          <rect x="10" y="40" width="190" height="110" class="tm-n"/>
+          <rect x="10" y="40" width="40" height="18" class="tm-p"/>
+          <g class="tm-p" opacity=".6"><rect x="55" y="40" width="12" height="8"/><rect x="72" y="40" width="10" height="8"/><rect x="88" y="40" width="8" height="8"/><rect x="104" y="40" width="6" height="8"/><rect x="120" y="40" width="5" height="8"/><rect x="138" y="40" width="4" height="8"/><rect x="156" y="40" width="3" height="8"/></g>
+          <text x="105" y="172" text-anchor="middle" class="tm-s">패턴 밀도로 평균 도즈 경사</text></g>
+        <g transform="translate(440,0)"><text x="105" y="20" text-anchor="middle" class="tm-lb">양의 베벨 (사이리스터)</text>
+          <path d="M20 40 L 150 40 L 190 150 L 20 150 Z" class="tm-n"/><path d="M20 40 L 150 40 L 160 68 L 20 68 Z" class="tm-p"/>
+          <path d="M150 40 L 190 150" stroke="var(--text)" stroke-width="1.6"/>
+          <text x="105" y="172" text-anchor="middle" class="tm-s">p 쪽이 넓어지게 갈면</text><text x="105" y="188" text-anchor="middle" class="tm-s">표면 공핍이 넓어져 E<tspan baseline-shift="sub" font-size="75%">surf</tspan> &lt; E<tspan baseline-shift="sub" font-size="75%">bulk</tspan></text></g>
+        <g transform="translate(660,0)"><text x="105" y="20" text-anchor="middle" class="tm-lb">트렌치 종단</text>
+          <rect x="10" y="40" width="190" height="110" class="tm-n"/><rect x="10" y="40" width="60" height="18" class="tm-p"/>
+          <rect x="90" y="40" width="40" height="80" class="tm-ox"/><rect x="104" y="40" width="12" height="70" class="tm-met"/>
+          <text x="105" y="172" text-anchor="middle" class="tm-s">산화막 트렌치가 전위를 수직으로</text><text x="105" y="188" text-anchor="middle" class="tm-s">좁은 폭, 산화막 신뢰성 관건</text></g>
+      </svg>
+      <figcaption><b>그림 4-7.</b> 종단의 변형들. 도즈를 바깥으로 갈수록 줄이면 공핍이 더 고르게 진행해 도즈 창이 넓어진다. 베벨은 웨이퍼 크기의 사이리스터·IGCT에서(<a href="igbt.html">7장</a>), 트렌치 종단은 저전압 트렌치 MOSFET에서 많이 쓴다.</figcaption>
+    </figure>
+    <div class="table-wrap"><table>
+      <thead><tr><th>방식</th><th>추가 공정</th><th class="num">대표 η</th><th>폭 (1.2 kV급)</th><th>표면 전하 민감도</th><th>주 사용처</th></tr></thead>
+      <tbody>
+        <tr><td>종단 없음(얕은 접합)</td><td>—</td><td class="num">~25–40 %</td><td>—</td><td>—</td><td>비교 기준</td></tr>
+        <tr><td>필드 플레이트(단일)</td><td>없음(금속 연장)</td><td class="num">~50–60 %</td><td>수십 µm</td><td>중간</td><td>저전압 Si, GaN</td></tr>
+        <tr><td>계단형·다단 필드 플레이트</td><td>산화막 단차</td><td class="num">~70–85 %</td><td>~100 µm</td><td>중간</td><td>Si MOSFET, GaN HEMT</td></tr>
+        <tr><td>플로팅 가드 링</td><td>없음(주 접합과 동시)</td><td class="num">~70–90 %</td><td>~150–300 µm (링 수 많음)</td><td>높음</td><td>Si 다이오드·IGBT·MOSFET, SiC</td></tr>
+        <tr><td>링 + 필드 플레이트</td><td>없음</td><td class="num">~85–95 %</td><td>~200 µm</td><td>낮아짐(플레이트가 차폐)</td><td>Si IGBT 표준</td></tr>
+        <tr><td>JTE(단일)</td><td>주입 1회</td><td class="num">~85–90 %(최적 도즈)</td><td>~3–5 W</td><td>중간(창이 좁음)</td><td>SiC</td></tr>
+        <tr><td>다단·공간 변조 JTE, 링 보조 JTE</td><td>주입 1–2회</td><td class="num">~90–95 %</td><td>~100–200 µm</td><td>낮음</td><td>SiC 1.2–10 kV</td></tr>
+        <tr><td>베벨</td><td>기계 연마</td><td class="num">~90 % 이상</td><td>웨이퍼 둘레</td><td>낮음</td><td>사이리스터, 웨이퍼급 소자</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="surface">
+    <h2>표면 전하·이동 이온·습기와 패시베이션</h2>
+    <p>종단은 전압을 표면을 따라 눕혀 놓는 기술이므로 표면에 무엇이 있느냐에 민감하다. 산화막/반도체 계면의 <span class="term">고정 전하</span>(Si/SiO₂ 약 10¹⁰–10¹¹, SiC/SiO₂는 10¹¹–10¹² cm⁻² 수준), 산화막 안을 떠다니는 <span class="term">이동 이온</span>(Na⁺, K⁺), 패시베이션 위에 쌓이는 전하, 그리고 습기가 들어와 생기는 표면 누설 경로가 모두 표면 전위를 바꾼다. n⁻ 위의 양전하는 표면 근처를 더 n형처럼 만들어 공핍층이 옆으로 덜 퍼지게 하고(링·플레이트 효율 저하), p형 JTE 위의 양전하는 JTE 도즈를 상쇄한다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 240" role="img" aria-label="종단 표면을 위협하는 요소: 고정 전하, 이동 이온, 습기와 이온성 오염, 패시베이션 층 구조">
+        <rect x="20" y="150" width="840" height="70" class="tm-n"/>
+        <rect x="20" y="130" width="840" height="20" class="tm-ox"/>
+        <rect x="20" y="96" width="840" height="34" fill="color-mix(in srgb, var(--m-oxide) 14%, transparent)" stroke="var(--border)"/>
+        <rect x="20" y="40" width="840" height="56" fill="color-mix(in srgb, var(--m-mold) 18%, transparent)" stroke="var(--border)"/>
+        <text x="30" y="144" class="tm-s">SiO₂ (계면)</text><text x="30" y="118" class="tm-s">폴리이미드·SIPOS·SiN 패시베이션</text><text x="30" y="62" class="tm-s">몰드 수지 / 실리콘 젤</text><text x="30" y="210" class="tm-s">n⁻ 종단 영역</text>
+        <g fill="var(--m-hole)"><text x="200" y="152" class="tm-l" fill="var(--m-hole)">+ + + +</text></g>
+        <text x="190" y="176" class="tm-s">고정 전하 Q<tspan baseline-shift="sub" font-size="75%">f</tspan></text>
+        <circle cx="380" cy="138" r="5" fill="var(--warn)"/><circle cx="400" cy="141" r="5" fill="var(--warn)"/><circle cx="420" cy="136" r="5" fill="var(--warn)"/>
+        <path d="M430 138 L 470 138" stroke="var(--warn)" stroke-width="2" fill="none"/>
+        <text x="370" y="176" class="tm-s">이동 이온 Na⁺ (고온·전계로 이동)</text>
+        <g fill="var(--m-oxide)"><circle cx="620" cy="70" r="5"/><circle cx="640" cy="82" r="5"/><circle cx="660" cy="66" r="5"/><circle cx="650" cy="102" r="4"/><circle cx="645" cy="118" r="4"/></g>
+        <path d="M640 40 L 640 26" stroke="var(--m-oxide)" stroke-width="2"/>
+        <text x="600" y="22" class="tm-s">습기 침투 (85 °C/85 %RH)</text>
+        <text x="600" y="176" class="tm-s">→ 이온성 오염 + 전계 → 표면 누설·전식</text>
+        <rect x="760" y="150" width="100" height="20" class="tm-nn"/><text x="810" y="196" text-anchor="middle" class="tm-s">채널 스토퍼</text>
+      </svg>
+      <figcaption><b>그림 4-8.</b> 종단 표면의 적들. 고정 전하는 공정(산화·열처리)이 정하고, 이동 이온은 고온 역바이어스에서 전계를 따라 움직여 시간이 지나며 BV를 바꾼다(BV 워크아웃·워크인). 습기는 패시베이션을 뚫고 들어와 표면 전도와 금속 부식을 일으킨다. 실리콘 젤·몰드도 그 자체가 전하를 띨 수 있다. 계면 산화막의 물리는 <a href="../../thinfilm/chapters/oxidation.html">ThinFilmBook 산화</a>에서 다룬다.</figcaption>
+    </figure>
+
+    <p>이 위협들을 걸러 내는 표준 시험이 <span class="term">HTRB</span><span class="en">(high-temperature reverse bias)</span>와 <span class="term">H3TRB</span><span class="en">(high humidity, high temperature reverse bias)</span>다. PW-800 신뢰성 목표는 HTRB 1,000 h(0.8 BV, 175 °C), H3TRB 1,000 h(85 °C/85 %RH, 80 V)다. HTRB는 이동 이온과 계면 전하의 이동을, H3TRB는 습기와 이온성 오염을 겨냥한다(<a href="reliability.html">16장</a>, <a href="../../test/chapters/burnin.html">TestBook 번인</a>). 고전압 SiC 모듈은 H3TRB를 정격 전압의 80 %로 올린 HV-H3TRB도 쓴다 — 습기가 들어간 종단 표면에 큰 전계가 걸리면 전기화학 반응(전식, 덴드라이트)이 빨라지기 때문이다.</p>
+
+    <div class="sim" id="sim-qss">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>표면 전하 민감도: 세 종단을 같은 축에서 비교</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="qs-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>스캔할 종단</span>
+            <label class="check"><input type="checkbox" id="qs-flr" checked> Si 가드 링 5개 (6+3k µm)</label>
+            <label class="check"><input type="checkbox" id="qs-fp" checked> Si 필드 플레이트 (1 µm, 20 µm)</label>
+            <label class="check"><input type="checkbox" id="qs-jte" checked> SiC JTE (1.2×10¹³, 40 µm)</label>
+          </div>
+          <div class="ctrl tm-btns"><button class="btn primary" id="qs-run">스캔 시작</button><button class="btn" id="qs-stop">멈춤</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">진행</span><span class="v" id="qs-prog">—</span></div>
+        <div class="stat"><span class="k">FLR η: Q<sub>ss</sub> 0 → +1</span><span class="v" id="qs-a">—</span></div>
+        <div class="stat"><span class="k">FP η: Q<sub>ss</sub> 0 → +1</span><span class="v" id="qs-b">—</span></div>
+        <div class="stat"><span class="k">JTE η: Q<sub>ss</sub> 0 → +1</span><span class="v" id="qs-c">—</span></div>
+      </div>
+      <div class="sim-note">Q<sub>ss</sub>(10¹² cm⁻²)를 −0.5 ~ +3으로 바꾸며 위의 2D 솔버로 각 구조의 BV를 다시 찾는다(구조당 8점, 전체 수–십수 초, 화면에 보일 때만 진행). 해볼 것: ① Si 가드 링은 +1×10¹²에서 η가 절반 아래로 떨어진다 — Si에서 εE<sub>c</sub>/q가 약 2×10¹²에 불과해 같은 계면 전하가 상대적으로 크다. ② SiC JTE는 같은 전하에 몇 %만 움직인다. SiC는 εE<sub>c</sub>/q가 약 1.3×10¹³으로 7배 크다. ③ 그렇다고 SiC가 안전한 것은 아니다. SiC/SiO₂ 계면 전하가 Si보다 10배 가까이 많고, 산화막에 걸리는 전계가 크다. 실제 설계는 링 보조 JTE·필드 플레이트·두꺼운 패시베이션을 겹쳐 민감도를 낮춘다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="area">
+    <h2>종단이 잡아먹는 면적</h2>
+    <p>종단 영역은 전류를 흘리지 않으면서 칩 둘레를 차지한다. 종단 폭 \(w_t\)(채널 스토퍼·절단 여유 포함)가 같아도 작은 다이일수록 비율이 커진다. 정사각 다이 한 변이 \(a\)이면</p>
+    <div class="formula">$$A_{act} = (a - 2w_t)^2 - A_{pad},\qquad R_{DS(on)} = \frac{R_{on,sp}}{A_{act}},\qquad \text{DPW} \approx \frac{\pi d^2}{4A_{die}} - \frac{\pi d}{\sqrt{2A_{die}}},\qquad Y = e^{-D_0A_{die}}$$<div class="where">\(A_{pad}\)는 게이트 패드 등 비활성 면적, DPW는 지름 \(d\) 웨이퍼의 다이 수(가장자리 손실 포함), \(Y\)는 결함 밀도 \(D_0\)의 푸아송 수율. 다이를 키우면 종단 비율은 줄지만 수율이 떨어진다 — "웨이퍼 한 장에서 얻는 양품 전도도 \(\sum 1/R_{DS(on)}\)"을 최대로 하는 다이 크기가 있다. 종단 폭은 전압에 비례해 늘어(대략 \(w_t \sim\) 수 \(W\) + 여유) 고전압일수록 작은 다이가 불리하다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 240" role="img" aria-label="다이 위에서 본 활성 영역과 종단 링, 게이트 패드의 면적 비율">
+        <rect x="40" y="20" width="200" height="200" rx="4" class="tm-n"/>
+        <rect x="58" y="38" width="164" height="164" rx="14" class="tm-pl"/>
+        <rect x="74" y="54" width="132" height="132" rx="8" class="tm-met" opacity=".55"/>
+        <rect x="80" y="60" width="30" height="30" fill="color-mix(in srgb, var(--accent) 40%, transparent)"/>
+        <text x="95" y="80" text-anchor="middle" class="tm-s">G</text>
+        <text x="140" y="130" text-anchor="middle" class="tm-l">활성 영역</text>
+        <text x="140" y="236" text-anchor="middle" class="tm-s">4.5 mm 다이 (PW-800)</text>
+        <rect x="290" y="70" width="100" height="100" rx="3" class="tm-n"/><rect x="303" y="83" width="74" height="74" rx="8" class="tm-pl"/><rect x="314" y="94" width="52" height="52" class="tm-met" opacity=".55"/>
+        <text x="340" y="190" text-anchor="middle" class="tm-s">2 mm 다이</text>
+        <rect x="430" y="30" width="430" height="190" rx="8" class="tm-box"/>
+        <text x="450" y="56" class="tm-lb">가장자리 폭 200 µm일 때 활성 비율</text>
+        <text x="450" y="86" class="tm-l">4.5 mm: (4.1/4.5)² − 패드 ≈ 80 %</text>
+        <text x="450" y="114" class="tm-l">2 mm: (1.6/2)² − 패드 ≈ 52 %</text>
+        <text x="450" y="142" class="tm-l">1 mm: (0.6/1)² − 패드 ≈ 0–35 %</text>
+        <text x="450" y="176" class="tm-s">같은 R<tspan baseline-shift="sub" font-size="75%">on,sp</tspan>라도 작은 다이는 칩 저항이 비례 이상으로 커진다.</text>
+        <text x="450" y="198" class="tm-s">저전류 SiC 디스크리트가 비싼 이유 중 하나.</text>
+      </svg>
+      <figcaption><b>그림 4-9.</b> 종단의 면적 비용. 회색 점선 고리가 종단, 금속 사각형이 활성 영역(셀 배열), G는 게이트 패드. 가장자리 폭은 다이 크기와 무관하므로 작은 다이일수록 손해가 크다. 칩 모서리를 둥글리는 것(구 접합 회피)도 면적을 조금 더 쓴다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-area">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>다이 크기 최적화: 종단 면적 vs 수율</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ar-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>다이 한 변 a <output id="ar-a-out"></output></span><input type="range" id="ar-a" min="1" max="10" step="0.1" value="4.5"></label>
+          <label class="ctrl"><span><span>가장자리 폭 w<sub>t</sub></span> <output id="ar-w-out"></output></span><input type="range" id="ar-w" min="50" max="600" step="10" value="200"></label>
+          <label class="ctrl"><span><span>활성 R<sub>on,sp</sub></span> <output id="ar-r-out"></output></span><input type="range" id="ar-r" min="0.5" max="10" step="0.1" value="2.5"></label>
+          <label class="ctrl"><span><span>결함 밀도 D<sub>0</sub></span> <output id="ar-d-out"></output></span><input type="range" id="ar-d" min="0.05" max="3" step="0.05" value="0.5"></label>
+          <div class="ctrl"><span>웨이퍼</span><div class="seg" id="ar-wf"><button data-value="150" class="on">150 mm</button><button data-value="200">200 mm</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">활성 비율</span><span class="v" id="ar-f">—</span></div>
+        <div class="stat"><span class="k">다이 R<sub>DS(on)</sub> (25 °C)</span><span class="v" id="ar-R">—</span></div>
+        <div class="stat"><span class="k">다이 수 / 수율</span><span class="v" id="ar-n">—</span></div>
+        <div class="stat"><span class="k">웨이퍼당 Σ1/R (양품)</span><span class="v" id="ar-g">—</span></div>
+        <div class="stat"><span class="k">이 조건의 최적 a</span><span class="v" id="ar-opt">—</span></div>
+      </div>
+      <div class="sim-note">게이트 패드 0.5 mm², 다이 간 절단 폭 0.1 mm. 위: 다이 크기에 따른 활성 비율(파랑)과 수율(초록). 아래: 웨이퍼 한 장의 양품 다이 전도도 합 Σ1/R<sub>DS(on)</sub>(정규화, 주황)과 그 최댓값. 해볼 것: ① 기본값(PW-800: 4.5 mm, 200 µm, 2.5 mΩ·cm²)에서 활성 비율 약 80 %, 다이 R<sub>DS(on)</sub> 약 15–16 mΩ — 표의 16 mΩ과 맞는다. 8개 병렬이면 스위치당 약 2 mΩ. ② D<sub>0</sub>를 0.2로 낮추면(성숙한 기판) 최적 다이가 커진다. SiC가 큰 다이를 쓰기 시작한 것은 기판 결함이 줄어서다(<a href="sic.html">8장</a>). ③ 3.3 kV처럼 종단이 400 µm 이상으로 넓어지면 작은 다이가 급격히 불리해진다.</div>
+    </div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>평면 확산 접합은 가장자리에서 원통(직선 변)·구(모서리) 접합이 되어 전계가 몰린다. 종단 효율 \(\eta = BV_{edge}/BV_{pp}\)는 멱법칙 이온화에서 \(r_j/W_{pp}\)만의 함수이며, 얕은 접합(x ≈ 0.05–0.1)은 원통 25–35 %, 구 15–20 %다.</li>
+      <li>2D 종단은 박스 이산화한 포아송 방정식(\(\rho = q(N_D - N_A + p - n)\), 볼츠만 캐리어)을 비선형 SOR로 풀고, 최대 전계 셀에서 전기력선 이온화 적분 = 1이 되는 전압을 반복으로 찾아 계산한다.</li>
+      <li>필드 플레이트는 접합 모서리와 플레이트 끝의 두 봉우리를 맞추는 설계이고, 산화막 전계 \(E_{ox} = (\varepsilon_s/\varepsilon_{ox})E_s\)가 SiC에서 걸림돌이다. 단일 플레이트는 η 50–60 % 안팎.</li>
+      <li>플로팅 가드 링은 펀치스루(\(\Delta V \approx qN_Ds^2/2\varepsilon\))로 전압을 계단처럼 나눈다. 간격이 좁으면 묶이고 넓으면 쉬므로 점증 간격이 최적이며, 표면 전하에 가장 민감하다.</li>
+      <li>JTE는 도즈 \(\sim \varepsilon E_c/q\)(SiC 약 1.3×10¹³ cm⁻²) 근처의 좁은 창에서 η 약 90 %. 부족하면 주 접합, 과다하면 JTE 끝이 깨진다. 다단·공간 변조·링 보조 JTE가 창을 넓힌다.</li>
+      <li>계면 고정 전하·이동 이온·습기는 종단 효율과 장기 BV를 바꾼다. HTRB·H3TRB가 이를 걸러 낸다. 종단 폭은 다이 면적의 수십 %를 차지하므로 다이 크기는 종단 비율과 수율의 균형으로 정한다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 같은 드리프트층에서 평면 확산 접합의 항복이 가장 먼저 일어나는 곳은?</p><div class="opts">
+        <button class="opt">활성 영역 한가운데 평면 접합</button>
+        <button class="opt">직선 변 아래 원통 접합</button>
+        <button class="opt" data-correct>창 모서리 아래 구 접합</button>
+        <button class="opt">n⁺ 기판 경계</button>
+      </div><div class="quiz-exp">곡률이 두 방향으로 있는 구 접합에서 전계가 \(1/r^2\)로 가장 빨리 몰린다(x = 0.1에서 원통 약 33 %, 구 약 18 %). 그래서 칩 모서리를 크게 둥글린다.</div></div>
+
+      <div class="quiz-q"><p>2. 멱법칙 이온화 모델에서 원통 접합의 종단 효율을 정하는 변수는?</p><div class="opts">
+        <button class="opt">드리프트 도핑 N<sub>D</sub>만</button>
+        <button class="opt" data-correct>접합 반지름과 평면 공핍 폭의 비 r<sub>j</sub>/W<sub>pp</sub></button>
+        <button class="opt">재료의 밴드갭만</button>
+        <button class="opt">산화막 두께</button>
+      </div><div class="quiz-exp">길이를 \(W_{pp}\)로, 전계를 \(E_c\)로 정규화하면 반지름 포아송·이온화 적분이 도핑과 재료에 무관한 식이 된다. 그래서 Si와 SiC의 η 곡선이 겹친다.</div></div>
+
+      <div class="quiz-q"><p>3. 필드 플레이트의 산화막을 아주 얇게(예: 0.2 µm) 하면 생기는 주된 문제는?</p><div class="opts">
+        <button class="opt">플레이트가 표면을 전혀 공핍시키지 못한다</button>
+        <button class="opt" data-correct>플레이트 끝에 전위선이 몰려 그곳 전계 봉우리가 커지고 산화막 전계도 커진다</button>
+        <button class="opt">접합 모서리 전계가 커진다</button>
+        <button class="opt">드리프트 저항이 커진다</button>
+      </div><div class="quiz-exp">얇은 산화막은 플레이트가 반도체에 가까워 플레이트 끝이 작은 곡률의 "접합"처럼 행동한다. 두 봉우리를 같게 맞추는 중간 두께가 최적이다.</div></div>
+
+      <div class="quiz-q"><p>4. Si에서 N<sub>D</sub> = 3×10¹⁴ cm⁻³, 링 간격 10 µm의 펀치스루 전압(한 간격이 맡는 전압)에 가장 가까운 것은?</p><div class="opts">
+        <button class="opt">약 2 V</button>
+        <button class="opt" data-correct>약 23 V</button>
+        <button class="opt">약 230 V</button>
+        <button class="opt">약 700 V</button>
+      </div><div class="quiz-exp">\(qN_Ds^2/(2\varepsilon) = 1.6\times10^{-19}\times3\times10^{14}\times(10^{-3})^2/(2\times1.04\times10^{-12})\) ≈ 23 V. 실제 2D에서는 링 아래 공핍까지 더해져 이보다 크게 나온다. 수백 V를 나누려면 링이 여러 개 필요하다.</div></div>
+
+      <div class="quiz-q"><p>5. SiC JTE의 도즈를 최적보다 훨씬 크게 하면?</p><div class="opts">
+        <button class="opt">JTE가 완전히 공핍되어 주 접합 모서리에서 항복한다</button>
+        <button class="opt" data-correct>JTE가 공핍되지 않아 주 접합의 연장처럼 되고, JTE 바깥 끝 모서리에서 항복한다</button>
+        <button class="opt">η가 100 %에 가까워진다</button>
+        <button class="opt">항복 위치가 n⁺ 기판으로 옮겨 간다</button>
+      </div><div class="quiz-exp">도즈가 \(\varepsilon E_c/q\)를 크게 넘으면 임계 전계에서도 JTE가 공핍되지 않는다. 곡률 문제를 JTE 끝으로 옮겼을 뿐이다. 도즈 창이 최적 위쪽에서 가파른 이유다.</div></div>
+
+      <div class="quiz-q"><p>6. 같은 1×10¹² cm⁻²의 양의 계면 전하가 Si 가드 링 종단에는 치명적이고 SiC JTE에는 작은 영향만 주는 주된 이유는?</p><div class="opts">
+        <button class="opt">SiC 산화막이 더 두꺼워서</button>
+        <button class="opt">SiC의 이동도가 낮아서</button>
+        <button class="opt" data-correct>종단이 다루는 면 전하 규모 εE<sub>c</sub>/q가 SiC에서 약 7배 커서 같은 전하가 상대적으로 작다</button>
+        <button class="opt">SiC 표면에는 전하가 생기지 않아서</button>
+      </div><div class="quiz-exp">Si는 약 2×10¹², SiC는 약 1.3×10¹³ cm⁻². 다만 SiC/SiO₂ 계면 전하 자체가 더 많고 산화막 전계가 크므로 SiC도 표면 관리가 필요하다.</div></div>
+
+      <div class="quiz-q"><p>7. 가장자리 폭 200 µm일 때 2 mm 다이의 활성 영역 비율(게이트 패드 무시)은?</p><div class="opts">
+        <button class="opt">약 90 %</button>
+        <button class="opt">약 80 %</button>
+        <button class="opt" data-correct>약 64 %</button>
+        <button class="opt">약 40 %</button>
+      </div><div class="quiz-exp">\((2 - 0.4)^2/2^2 = 2.56/4 = 64\) %. 4.5 mm 다이면 약 83 %. 패드까지 빼면 더 줄어든다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const font = (px) => px + "px " + getComputedStyle(document.body).getPropertyValue("--font");
+  const SUP = { "-": "⁻", "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹" };
+  const sci = (x, d) => { if (!isFinite(x)) return "—"; if (x === 0) return "0"; const e = Math.floor(Math.log10(Math.abs(x)) + 1e-9); return (x / Math.pow(10, e)).toFixed(d == null ? 1 : d) + "×10" + String(e).split("").map((c) => SUP[c]).join(""); };
+  const fV = (v) => (!isFinite(v) ? "—" : v >= 1000 ? (v / 1000).toPrecision(3) + " kV" : v.toPrecision(3) + " V");
+  const fE = (E) => (E / 1e6).toFixed(E < 1e6 ? 3 : 2) + " MV/cm";
+  const pct = (x) => (isFinite(x) ? (x * 100).toFixed(1) + " %" : "—");
+  function rgbOf(c) {
+    c = (c || "").trim();
+    if (c[0] === "#") { let h = c.slice(1); if (h.length === 3) h = h.split("").map((x) => x + x).join(""); const n = parseInt(h, 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+    const m = c.match(/rgba?\(([^)]+)\)/); if (m) return m[1].split(",").slice(0, 3).map(Number);
+    return [128, 128, 128];
+  }
+  const rgba = (c, a) => { const r = rgbOf(c); return "rgba(" + r[0] + "," + r[1] + "," + r[2] + "," + a + ")"; };
+  const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+
+  /* ============================================================
+     공통: 재료, 1D 멱법칙 BV, 2D 박스 이산화 포아송 솔버
+     ============================================================ */
+  const Q = 1.602176634e-19, EPS0 = 8.8541878128e-14, KQ = Q / EPS0;
+  const MATS = { Si: { er: 11.7, C: 1.8e-35 }, SiC: { er: 9.7, C: 3.9e-42 } };
+  function bvPL(mat, N, W) {
+    const m = MATS[mat], e = m.er * EPS0, s = (Q * N) / e, EmN = Math.pow((8 * s) / m.C, 1 / 8);
+    if (EmN / s <= W) return { bv: (EmN * EmN) / (2 * s), Em: EmN, xd: EmN / s };
+    const g = (a) => { const b = a - s * W; return W * (a + b) * (a * a + b * b) * (a * a * a * a + b * b * b * b) - 8 / m.C; };
+    let lo = s * W, hi = Math.max(2 * s * W, 2 * Math.pow(1 / (m.C * W), 1 / 7)), guard = 0;
+    while (g(hi) < 0 && guard++ < 60) hi *= 2;
+    for (let k = 0; k < 64; k++) { const mid = 0.5 * (lo + hi); if (g(mid) < 0) lo = mid; else hi = mid; }
+    const a = 0.5 * (lo + hi);
+    return { bv: (a - (s * W) / 2) * W, Em: a, xd: W };
+  }
+  // 1D에서 m = d ln I / d ln V
+  function mExp(mat, N, W, V) {
+    const m = MATS[mat], e = m.er * EPS0, s = (Q * N) / e;
+    const f = (v) => { let xd = Math.sqrt((2 * e * v) / (Q * N)), Em, E1 = 0; if (xd <= W) Em = s * xd; else { Em = v / W + (s * W) / 2; E1 = Em - s * W; xd = W; } return (m.C / 8) * xd * (Em + E1) * (Em * Em + E1 * E1) * (Em * Em * Em * Em + E1 * E1 * E1 * E1); };
+    const r = Math.log(f(V * 1.01) / f(V / 1.01)) / (2 * Math.log(1.01));
+    return isFinite(r) && r > 1 ? r : 4;
+  }
+  const yGrid = (W, h0, yfine, g) => { const y = []; for (let v = 0; v <= yfine + 1e-9; v += h0) y.push(+v.toFixed(4)); let h = h0, v = y[y.length - 1]; while (v < W - 1e-6) { h *= g; v = Math.min(W, v + h); if (W - v < h * 0.5) v = W; y.push(+v.toFixed(4)); } if (y[y.length - 1] < W) y.push(W); return y; };
+
+  // 2D 박스 이산화 포아송 솔버 (단위: µm, V). 반도체·산화막·패시베이션, p⁺·JTE·링·필드 플레이트·계면 전하.
+  function T2D(cfg) {
+    // cfg: mat, N (cm^-3), W (µm), Lx, hx, yS (array semis y from 0..W), tox, nox, tpas, npas, xj, rj, fp (len beyond xj or null), rings [{x0,x1}], jte {L, dose, t}, qss (cm^-2), V
+    const m = MATS[cfg.mat], er = m.er;
+    const xs = []; for (let x = 0; x <= cfg.Lx + 1e-9; x += cfg.hx) xs.push(+x.toFixed(6));
+    const yd = []; // dielectric nodes: passivation (top) then oxide down to 0 (excluded)
+    const top = -(cfg.tox + cfg.tpas);
+    for (let k = 0; k < cfg.npas; k++) { const f = k / cfg.npas; yd.push(top + cfg.tpas * (1 - Math.pow(1 - f, 1.6))); }
+    for (let k = 0; k < cfg.nox; k++) yd.push(-cfg.tox + (cfg.tox * k) / cfg.nox);
+    const ys = yd.concat(cfg.yS);
+    const nx = xs.length, ny = ys.length, n = nx * ny, j0 = yd.length; // j0 = row index of y=0
+    const id = (i, j) => j * nx + i;
+    const type = new Uint8Array(n), fix = new Float64Array(n), Nn = new Float64Array(n), ring = new Int16Array(n).fill(-1);
+    const cE = new Float64Array(n), cW = new Float64Array(n), cN = new Float64Array(n), cS = new Float64Array(n), Aq = new Float64Array(n), sh = new Float64Array(n);
+    cfg.NA = cfg.NA || 300 * cfg.N;
+    const inPP = (x, y) => y >= -1e-9 && ((x <= cfg.xj && y <= cfg.rj + 1e-9) || ((x - cfg.xj) ** 2 + y * y <= cfg.rj * cfg.rj + 1e-9));
+    const inRing = (x, y) => { if (y < -1e-9) return -1; for (let k = 0; k < (cfg.rings || []).length; k++) { const r = cfg.rings[k]; const cx = Math.min(Math.max(x, r.x0), r.x1); if ((x - cx) ** 2 + y * y <= cfg.rj * cfg.rj + 1e-9) return k; } return -1; };
+    const epsCell = (i, j) => (i < 0 || j < 0 || i >= nx - 1 || j >= ny - 1 ? 0 : ys[j + 1] <= 1e-9 ? (ys[j] >= -cfg.tox - 1e-9 ? 3.9 : cfg.epas || 3.5) : er);
+    const semiCell = (i, j) => i >= 0 && j >= 0 && i < nx - 1 && j < ny - 1 && ys[j + 1] > 1e-9;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const k = id(i, j), x = xs[i], y = ys[j];
+      const hxE = i < nx - 1 ? xs[i + 1] - x : 0, hxW = i > 0 ? x - xs[i - 1] : 0, hS = j < ny - 1 ? ys[j + 1] - y : 0, hN = j > 0 ? y - ys[j - 1] : 0;
+      const eNE = epsCell(i, j - 1), eSE = epsCell(i, j), eNW = epsCell(i - 1, j - 1), eSW = epsCell(i - 1, j);
+      if (hxE) cE[k] = (eNE * hN / 2 + eSE * hS / 2) / hxE;
+      if (hxW) cW[k] = (eNW * hN / 2 + eSW * hS / 2) / hxW;
+      if (hN) cN[k] = (eNW * hxW / 2 + eNE * hxE / 2) / hN;
+      if (hS) cS[k] = (eSW * hxW / 2 + eSE * hxE / 2) / hS;
+      let A = 0; if (semiCell(i, j)) A += hxE * hS / 4; if (semiCell(i - 1, j)) A += hxW * hS / 4; if (semiCell(i, j - 1)) A += hxE * hN / 4; if (semiCell(i - 1, j - 1)) A += hxW * hN / 4;
+      Aq[k] = A * 1e-8 * KQ; // V per (cm^-3)
+      if (Math.abs(y) < 1e-9) sh[k] = KQ * (cfg.qss || 0) * ((hxE + hxW) / 2) * 1e-4;
+      let nn = y >= -1e-9 ? cfg.N : 0;
+      if (cfg.jte && y >= -1e-9 && y <= cfg.jte.t + 1e-9 && x > cfg.xj - 1e-9 && x <= cfg.xj + cfg.jte.L + 1e-9) nn = cfg.N - cfg.jte.dose / (cfg.jte.t * 1e-4);
+      Nn[k] = nn;
+      if (j === ny - 1) { type[k] = 2; fix[k] = cfg.V; }
+      else if (inPP(x, y) && (cfg.ppCond || (Math.abs(y) < 1e-9 && x <= Math.max(cfg.xj - cfg.rj, cfg.xj * 0.5)))) { type[k] = 2; fix[k] = 0; }
+      else if (inPP(x, y)) { Nn[k] = -cfg.NA; type[k] = 0; }
+      else if (cfg.fp != null && Math.abs(y + cfg.tox) < 1e-9 && x <= cfg.xj + cfg.fp + 1e-9) { type[k] = 2; fix[k] = 0; }
+      else { const r = inRing(x, y); if (r >= 0) { type[k] = 3; ring[k] = r; } else type[k] = y >= -1e-9 ? 0 : 1; }
+    }
+    const nr = (cfg.rings || []).length;
+    const S = { cfg, xs, ys, nx, ny, j0, n, id, type, fix, Nn, ring, cE, cW, cN, cS, Aq, sh, nr, phi: new Float64Array(n), V: cfg.V, it: 0, res: 1, conv: false, ringV: new Float64Array(nr) };
+    S.setV = function (V, keep) {
+      const old = S.V; S.V = V; S.VT = Math.max(0.0259, V / 300);
+      for (let k = 0; k < n; k++) if (type[k] === 2 && fix[k] !== 0) fix[k] = V;
+      if (keep && old > 0) { for (let k = 0; k < n; k++) S.phi[k] *= V / old; for (let r = 0; r < nr; r++) S.ringV[r] *= V / old; }
+      for (let k = 0; k < n; k++) if (type[k] === 2) S.phi[k] = fix[k];
+      S.conv = false; S.it = 0;
+    };
+    S.init = function () {
+      const e = er * EPS0, xd = Math.min(cfg.W, Math.sqrt(2 * e * S.V / (Q * cfg.N)) * 1e4);
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const k = id(i, j), x = xs[i], y = Math.max(0, ys[j]);
+        if (type[k] === 2) { S.phi[k] = fix[k]; continue; }
+        const d = x <= cfg.xj ? Math.max(0, y - cfg.rj) : Math.max(0, Math.hypot(x - cfg.xj, y) - cfg.rj);
+        S.phi[k] = S.V * Math.min(1, d / xd);
+      }
+      for (let r = 0; r < nr; r++) S.ringV[r] = S.V * 0.5;
+      S.conv = false; S.it = 0;
+    };
+    S.VT = Math.max(0.0259, cfg.V / 300);
+    S.sweep = function (omega) {
+      const phi = S.phi, VT = S.VT, V = S.V; let dmax = 0;
+      for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx; i++) {
+        const k = j * nx + i, t = type[k]; if (t >= 2) continue;
+        const pE = i < nx - 1 ? phi[k + 1] : 0, pW = i > 0 ? phi[k - 1] : 0, pN = j > 0 ? phi[k - nx] : 0, pS = phi[k + nx];
+        const C = cE[k] + cW[k] + cN[k] + cS[k];
+        const sum = cE[k] * pE + cW[k] * pW + cN[k] * pN + cS[k] * pS;
+        const p0 = phi[k];
+        let F = sum - C * p0, D = C;
+        if (t === 0) {
+          const N = Nn[k], A = Aq[k];
+          let car = 0, dcar = 0;
+          if (N > 0) { const ex = Math.exp(Math.min(40, (p0 - V) / VT)); car = -N * ex; dcar = N * ex / VT; }
+          else if (N < 0) { const ex = Math.exp(Math.min(40, -p0 / VT)); car = -N * ex; dcar = -N * ex / VT; }
+          F += A * (N + car) + sh[k]; D += A * dcar;
+        } else F += sh[k];
+        let dp = (omega * F) / D;
+        const lim = 0.25 * V; if (dp > lim) dp = lim; else if (dp < -lim) dp = -lim;
+        phi[k] = p0 + dp; const a = Math.abs(dp); if (a > dmax) dmax = a;
+      }
+      if (nr && (S.it % 4 === 0)) dmax = Math.max(dmax, S.ringSolve());
+      S.it++; S.res = dmax / Math.max(1, V); if (S.res < 2e-5 && S.it > 20) S.conv = true;
+      return S.res;
+    };
+    // 펀치스루 조건: 링 전위 = 주 접합(또는 안쪽 링)에서 그 링까지 가는 경로 중 '최대 전위'가 가장 낮은 경로의 값 (정공 장벽 0)
+    S.ringSolve = function () {
+      const phi = S.phi, cost = S.rc || (S.rc = new Float64Array(n)), done = S.rd || (S.rd = new Uint8Array(n));
+      cost.fill(Infinity); done.fill(0);
+      const heap = []; const push = (k, c) => { if (c >= cost[k]) return; cost[k] = c; heap.push([c, k]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+      const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+      for (let k = 0; k < n; k++) if (type[k] === 2 && fix[k] === 0 && Math.floor(k / nx) >= j0) push(k, phi[k]);
+      const rv = new Float64Array(nr).fill(S.V), got = new Uint8Array(nr);
+      while (heap.length) {
+        const [c, k] = pop(); if (done[k]) continue; done[k] = 1;
+        const r = ring[k];
+        if (r >= 0 && !got[r]) { got[r] = 1; rv[r] = c; for (let q = 0; q < n; q++) if (ring[q] === r) push(q, c); }
+        const i = k % nx, j = (k - i) / nx;
+        const nb = [i < nx - 1 ? k + 1 : -1, i > 0 ? k - 1 : -1, j > j0 ? k - nx : -1, j < ny - 2 ? k + nx : -1];
+        for (const q of nb) { if (q < 0 || done[q]) continue; const t = type[q]; if (t === 1 || t === 2) continue; push(q, Math.max(c, t === 3 ? c : phi[q])); }
+      }
+      let d = 0;
+      for (let r = 0; r < nr; r++) { const nv = 0.5 * S.ringV[r] + 0.5 * rv[r]; d = Math.max(d, Math.abs(nv - S.ringV[r])); S.ringV[r] = nv; }
+      for (let k = 0; k < n; k++) if (ring[k] >= 0) phi[k] = S.ringV[ring[k]];
+      return d;
+    };
+    S.run = function (ms) { const t0 = performance.now(); let c = 0; while (!S.conv && performance.now() - t0 < ms) { S.sweep(S.omega || 1.85); c++; } return c; };
+    // cell fields (V/cm), stats
+    S.fields = function () {
+      const ncx = nx - 1, ncy = ny - 1, Ex = new Float64Array(ncx * ncy), Ey = new Float64Array(ncx * ncy), Em = new Float64Array(ncx * ncy);
+      let pk = 0, pki = 0, ox = 0, oxi = 0;
+      for (let j = 0; j < ncy; j++) for (let i = 0; i < ncx; i++) {
+        const a = S.phi[id(i, j)], b = S.phi[id(i + 1, j)], c = S.phi[id(i, j + 1)], d = S.phi[id(i + 1, j + 1)];
+        const hx = xs[i + 1] - xs[i], hy = ys[j + 1] - ys[j];
+        const ex = -((b + d) - (a + c)) / (2 * hx) * 1e4, ey = -((c + d) - (a + b)) / (2 * hy) * 1e4, e = Math.hypot(ex, ey), q = j * ncx + i;
+        Ex[q] = ex; Ey[q] = ey; Em[q] = e;
+        if (ys[j + 1] > 1e-9) { if (e > pk) { pk = e; pki = q; } } else if (e > ox) { ox = e; oxi = q; }
+      }
+      S.F = { Ex, Ey, Em, pk, pki, ox, oxi, ncx, ncy };
+      return S.F;
+    };
+    const cellAt = (x, y) => { // returns cell index or -1
+      if (x < 0 || x > cfg.Lx || y < 0 || y > cfg.W) return -1;
+      let i = Math.min(nx - 2, Math.floor(x / cfg.hx)); let j = j0; while (j < ny - 2 && ys[j + 1] < y) j++;
+      return j * (nx - 1) + i;
+    };
+    S.cellAt = cellAt;
+    S.ionPath = function (q0) {
+      const F = S.F, ncx = F.ncx; const cx = (q) => { const i = q % ncx, j = (q - i) / ncx; return [(xs[i] + xs[i + 1]) / 2, (ys[j] + ys[j + 1]) / 2]; };
+      const [x0, y0] = cx(q0); const Epk = F.Em[q0]; let I = 0; const path = [[x0, y0]];
+      const ds = Math.min(cfg.hx, cfg.yS[1] - cfg.yS[0]) * 0.5;
+      for (const dir of [1, -1]) {
+        let x = x0, y = y0;
+        for (let s = 0; s < 6000; s++) {
+          const q = cellAt(x, y); if (q < 0) break; const e = F.Em[q]; if (e < 0.03 * Epk) break;
+          if (s > 0 || dir === 1) I += m.C * Math.pow(e, 7) * ds * 1e-4;
+          x += (dir * F.Ex[q] / e) * ds; y += (dir * F.Ey[q] / e) * ds;
+          if (dir === 1 && s % 4 === 0) path.push([x, y]); if (dir === -1 && s % 4 === 0) path.unshift([x, y]);
+        }
+      }
+      return { I, path };
+    };
+    S.planeI = function () { // vertical line at column 0
+      const F = S.F; let I = 0; for (let j = j0; j < ny - 1; j++) { const e = F.Em[j * F.ncx]; I += m.C * Math.pow(e, 7) * (ys[j + 1] - ys[j]) * 1e-4; } return I;
+    };
+    S.setV(cfg.V); S.init();
+    return S;
+  }
+
+  // BV 탐색: V ← V·I^(−1/m)를 |ln I| < 0.015까지. step(ms)로 나눠 실행.
+  function Search(cfg, prev) {
+    const bvpp = bvPL(cfg.mat, cfg.N, cfg.W * 1e-4).bv;
+    let V0 = prev && isFinite(prev.BV) && prev.BV > 0 ? prev.BV : 0.6 * bvpp;
+    V0 = PW.clamp(V0, 0.05 * bvpp, 1.5 * bvpp);
+    const S = T2D(Object.assign({}, cfg, { V: V0 }));
+    if (prev && prev.S && prev.S.nx === S.nx && prev.S.ny === S.ny) {
+      S.phi.set(prev.S.phi); S.V = prev.S.V; if (prev.S.nr === S.nr) S.ringV.set(prev.S.ringV);
+      S.setV(V0, true);
+    }
+    const o = { S, cfg, bvpp, V: V0, iter: 0, done: false, fail: false, BV: NaN, eta: NaN, I: NaN, path: null, F: null, sweeps: 0 };
+    o.step = function (ms) {
+      const t0 = performance.now();
+      while (!o.done && performance.now() - t0 < ms) {
+        o.sweeps += S.run(Math.max(0.5, ms - (performance.now() - t0)));
+        if (!(S.conv || S.it > 5000)) break;
+        const F = S.fields(), p = S.ionPath(F.pki), m = mExp(cfg.mat, cfg.N, cfg.W * 1e-4, o.V);
+        o.F = F; o.I = p.I; o.path = p.path;
+        if (!(p.I > 0) || !isFinite(p.I)) { o.done = true; o.fail = true; break; }
+        const Vn = o.V * Math.pow(p.I, -1 / m);
+        if (Math.abs(Math.log(p.I)) < 0.015 || o.iter >= 14) { o.BV = Vn; o.eta = Vn / bvpp; o.done = true; o.fail = Vn < 0.02 * bvpp; break; }
+        o.V = PW.clamp(Vn, 0.02 * bvpp, 2 * bvpp); o.iter++; S.setV(o.V, true);
+      }
+      return o.done;
+    };
+    return o;
+  }
+
+  // 2D 지도 그리기
+  function draw2D(ctx, w, h, o, opt) {
+    const P = PW.palette(), S = o.S, cfg = S.cfg, xs = S.xs, ys = S.ys, nx = S.nx, ny = S.ny, j0 = S.j0;
+    const x0 = opt.x0, x1 = Math.min(opt.x1, cfg.Lx), mapH = Math.round(h * 0.64), mx = 46, mw = w - mx - 14, top = 8;
+    const dH = Math.round(mapH * 0.15), sH = mapH - dH, ytop = ys[0];
+    const X = (x) => mx + ((x - x0) / (x1 - x0)) * mw;
+    const Y = (y) => (y < 0 ? top + dH * (1 - y / ytop) : top + dH + (y / cfg.W) * sH);
+    const bg = rgbOf(P.bg), cf = rgbOf(P.field), cb = rgbOf(P.bad), cox = rgbOf(P.oxide);
+    const Eref = o.Ec || 1, F = o.F || (S.it > 0 ? S.fields() : null), show = opt.show ? opt.show() : "E";
+    ctx.save(); ctx.beginPath(); ctx.rect(mx, top, mw, mapH); ctx.clip();
+    if (F) {
+      for (let j = 0; j < ny - 1; j++) {
+        const ya = Y(ys[j]), yb = Y(ys[j + 1]);
+        for (let i = 0; i < nx - 1; i++) {
+          if (xs[i + 1] < x0 || xs[i] > x1) continue;
+          const q = j * (nx - 1) + i, semi = ys[j + 1] > 1e-9;
+          let c;
+          if (show === "phi") { const v = (S.phi[S.id(i, j)] + S.phi[S.id(i + 1, j + 1)]) / (2 * Math.max(1, S.V)); c = mix(rgbOf(P.hole), rgbOf(P.electron), PW.clamp(v, 0, 1)); c = mix(bg, c, 0.55); }
+          else { const t = F.Em[q] / Eref; c = t < 0.75 ? mix(bg, cf, PW.clamp(t / 0.75, 0, 1)) : mix(cf, cb, PW.clamp((t - 0.75) / 0.3, 0, 1)); if (!semi) c = mix(c, cox, 0.35); }
+          ctx.fillStyle = "rgb(" + (c[0] | 0) + "," + (c[1] | 0) + "," + (c[2] | 0) + ")";
+          ctx.fillRect(X(xs[i]), ya, X(xs[i + 1]) - X(xs[i]) + 0.6, yb - ya + 0.6);
+        }
+      }
+    }
+    // p 영역, 링
+    for (let j = j0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+      if (xs[i + 1] < x0 || xs[i] > x1) continue;
+      const k = S.id(i, j), k2 = S.id(i + 1, j + 1);
+      const pp = (S.type[k] === 2 && S.fix[k] === 0) || S.Nn[k] < -5 * cfg.N || S.ring[k] >= 0;
+      const pj = S.Nn[k] < 0 && S.Nn[k2] < 0 && !pp;
+      if (pp && (S.Nn[k2] < -5 * cfg.N || S.ring[k2] >= 0 || (S.type[k2] === 2 && S.fix[k2] === 0))) { ctx.fillStyle = rgba(P.hole, 0.55); ctx.fillRect(X(xs[i]), Y(ys[j]), X(xs[i + 1]) - X(xs[i]) + 0.6, Y(ys[j + 1]) - Y(ys[j]) + 0.6); }
+      else if (pj) { ctx.fillStyle = rgba(P.hole, 0.28); ctx.fillRect(X(xs[i]), Y(ys[j]), X(xs[i + 1]) - X(xs[i]) + 0.6, Y(ys[j + 1]) - Y(ys[j]) + 0.6); }
+    }
+    // 등전위선 (마칭 스퀘어)
+    if (S.it > 0) {
+      ctx.strokeStyle = rgba(P.text, 0.55); ctx.lineWidth = 1; ctx.beginPath();
+      for (let L = 1; L < 10; L++) {
+        const lv = (S.V * L) / 10;
+        for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+          if (xs[i + 1] < x0 || xs[i] > x1) continue;
+          const a = S.phi[S.id(i, j)], b = S.phi[S.id(i + 1, j)], c = S.phi[S.id(i + 1, j + 1)], d = S.phi[S.id(i, j + 1)];
+          const pts = [];
+          const ed = (p, q, xa, ya, xb, yb) => { if ((p - lv) * (q - lv) < 0) { const t = (lv - p) / (q - p); pts.push([xa + (xb - xa) * t, ya + (yb - ya) * t]); } };
+          ed(a, b, xs[i], ys[j], xs[i + 1], ys[j]); ed(b, c, xs[i + 1], ys[j], xs[i + 1], ys[j + 1]); ed(d, c, xs[i], ys[j + 1], xs[i + 1], ys[j + 1]); ed(a, d, xs[i], ys[j], xs[i], ys[j + 1]);
+          if (pts.length >= 2) { ctx.moveTo(X(pts[0][0]), Y(pts[0][1])); ctx.lineTo(X(pts[1][0]), Y(pts[1][1])); }
+          if (pts.length === 4) { ctx.moveTo(X(pts[2][0]), Y(pts[2][1])); ctx.lineTo(X(pts[3][0]), Y(pts[3][1])); }
+        }
+      }
+      ctx.stroke();
+    }
+    // 전극: 애노드 금속, 필드 플레이트
+    ctx.fillStyle = P.metal;
+    const xa = Math.max(cfg.xj - cfg.rj, cfg.xj * 0.5);
+    ctx.fillRect(X(x0), Y(-cfg.tox) - 3, X(Math.min(xa, x1)) - X(x0), 4);
+    if (cfg.fp != null) { ctx.fillRect(X(x0), Y(-cfg.tox) - 3, X(Math.min(cfg.xj + cfg.fp, x1)) - X(x0), 4); }
+    // 이온화 경로, 최대 전계
+    if (o.path && F) {
+      ctx.strokeStyle = P.sic; ctx.lineWidth = 2; ctx.beginPath();
+      o.path.forEach(([x, y], i) => { i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y)); }); ctx.stroke();
+    }
+    if (F) {
+      const i = F.pki % F.ncx, j = (F.pki - i) / F.ncx, cx = X((xs[i] + xs[i + 1]) / 2), cy = Y((ys[j] + ys[j + 1]) / 2);
+      ctx.strokeStyle = P.bad; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, 7, 0, 7); ctx.stroke();
+    }
+    ctx.restore();
+    ctx.strokeStyle = P.border; ctx.strokeRect(mx, top, mw, mapH);
+    ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "right";
+    ctx.fillText("0", mx - 4, Y(0) + 4); ctx.fillText(cfg.W.toFixed(0) + " µm", mx - 4, Y(cfg.W) - 2);
+    ctx.textAlign = "left"; ctx.fillText("유전체", 2, top + 10);
+    // 표면 전계 곡선
+    const cb2 = { x: mx, y: top + mapH + 10, w: mw, h: h - (top + mapH + 10) - 42 };
+    if (F) {
+      const ser = [], ser2 = [];
+      const jr = j0; let emax = 0;
+      for (let i = 0; i < nx - 1; i++) {
+        const xc = (xs[i] + xs[i + 1]) / 2; if (xc < x0 || xc > x1) continue;
+        const e1 = F.Em[jr * F.ncx + i]; let e2 = 0;
+        for (let j = j0; j < ny - 1; j++) e2 = Math.max(e2, F.Em[j * F.ncx + i]);
+        ser.push([xc, e1]); ser2.push([xc, e2]); emax = Math.max(emax, e2);
+      }
+      PW.chart(ctx, cb2, {
+        x: [x0, x1], y: [0, Math.max(emax, Eref) * 1.12], xLabel: "x (µm)", yFmt: (v) => (v / 1e6).toFixed(Eref > 1e6 ? 1 : 2),
+        series: [{ data: ser2, color: P.field, width: 1.4, dash: [5, 3] }, { data: ser, color: P.field, width: 2.2 }],
+        hlines: [{ y: Eref, color: P.bad, label: "평면 항복 시 E_m" }],
+      });
+      ctx.fillStyle = P.dim; ctx.textAlign = "left"; ctx.font = font(11); ctx.fillText("|E| MV/cm: 표면 아래(실선) · 깊이 최대(점선)", cb2.x + 6, cb2.y + 12);
+    }
+    if (!o.done) { ctx.fillStyle = P.warn; ctx.font = font(12); ctx.textAlign = "right"; ctx.fillText("풀이 중… 반복 " + o.iter + ", V = " + fV(o.V), mx + mw - 6, top + dH + 16); }
+  }
+
+  // 2D 시뮬레이터 공통 구동기
+  function Sim2D(o2) {
+    const cvEl = $(o2.cv);
+    let cur = null, frame = 0;
+    const st = { get cur() { return cur; } };
+    st.restart = function () { const cfg = o2.build(); cur = Search(cfg, cur && cur.cfg.mat === cfg.mat ? cur : null); cur.Ec = bvPL(cfg.mat, cfg.N, cfg.W * 1e-4).Em; o2.status && o2.status(cur); cv.redraw(); };
+    const cv = PW.canvas(cvEl, (ctx, w, h) => { if (cur) draw2D(ctx, w, h, cur, o2.view(cur)); }, { aspect: 0.62, minHeight: 330, maxHeight: 470 });
+    PW.loop(cvEl, () => {
+      if (!cur || cur.done) return;
+      cur.step(8); frame++;
+      if (cur.done) { o2.status && o2.status(cur); cv.redraw(); }
+      else if (frame % 5 === 0) { o2.status && o2.status(cur); cv.redraw(); }
+    });
+    st.cv = cv;
+    return st;
+  }
+  const stState = (id, o, txt) => { const el = $(id); if (!el) return; el.className = "v tm-v " + (o.fail ? "bad" : o.done ? "ok" : "warn"); el.textContent = o.fail ? "모델 밖 (표면 반전 등)" : o.done ? "수렴 (" + o.iter + "회 갱신)" : txt || "계산 중"; };
+  const pkWhere = (o, names) => { if (!o.F) return "—"; const S = o.S, i = o.F.pki % o.F.ncx, j = (o.F.pki - i) / o.F.ncx, x = (S.xs[i] + S.xs[i + 1]) / 2, y = (S.ys[j] + S.ys[j + 1]) / 2; return names(x, y) + " (x " + x.toFixed(1) + ", y " + y.toFixed(1) + " µm)"; };
+
+  /* ============================================================
+     1) 반지름 솔버: 원통·구
+     ============================================================ */
+  (function () {
+    if (!$("cy-cv")) return;
+    const gX = PW.range("cy-x", (v) => Math.pow(10, v).toFixed(3), draw);
+    $("cy-sg").addEventListener("change", draw);
+    // 정규화: 길이 ÷ W_pp, 전계 ÷ E_c(평면), C' = 8 (∫ (E/Ec)^7 d(x/Wpp) 단위). 평면: E = 1 − u, ∫0^1 (1−u)^7 du = 1/8 → I = 8∫e^7 du
+    function solve(x, geo) {
+      const Ifn = (rd) => { const n = 600; let I = 0; for (let i = 0; i < n; i++) { const r = x + ((i + 0.5) * (rd - x)) / n; const e = geo === "c" ? 0.5 * (rd * rd / r - r) : (rd * rd * rd / (r * r) - r) / 3; I += 8 * Math.pow(e, 7) * ((rd - x) / n); } return I; };
+      let lo = x * 1.000001, hi = x + 4;
+      for (let k = 0; k < 70; k++) { const mid = 0.5 * (lo + hi); if (Ifn(mid) > 1) hi = mid; else lo = mid; }
+      const rd = 0.5 * (lo + hi);
+      const V = geo === "c" ? 0.5 * (rd * rd * Math.log(rd / x) - (rd * rd - x * x) / 2) : (rd * rd * rd * (1 / x - 1 / rd) - (rd * rd - x * x) / 2) / 3;
+      const Em = geo === "c" ? 0.5 * (rd * rd / x - x) : (rd * rd * rd / (x * x) - x) / 3;
+      return { rd, eta: V / 0.5, Em }; // 평면 BV = ½ (정규화)
+    }
+    const sgC = (x) => 0.5 * (x * x + 2 * Math.pow(x, 6 / 7)) * Math.log(1 + 2 * Math.pow(x, -8 / 7)) - Math.pow(x, 6 / 7);
+    const sgS = (x) => x * x + 2.14 * Math.pow(x, 6 / 7) - Math.pow(x * x * x + 3 * Math.pow(x, 13 / 7), 2 / 3);
+    const tab = [];
+    for (let k = 0; k <= 48; k++) { const x = Math.pow(10, -1.7 + (2 * k) / 48); tab.push({ x, c: solve(x, "c").eta, s: solve(x, "s").eta }); }
+    const cv = PW.canvas($("cy-cv"), (ctx, w, h) => {
+      const P = PW.palette(), x = Math.pow(10, gX()), c = solve(x, "c"), s = solve(x, "s"), h1 = Math.round(h * 0.55);
+      const series = [{ data: tab.map((t) => [t.x, t.c]), color: P.accent2, width: 2.6 }, { data: tab.map((t) => [t.x, t.s]), color: P.bad, width: 2.6 }];
+      if ($("cy-sg").checked) { series.push({ data: tab.map((t) => [t.x, sgC(t.x)]), color: P.accent2, width: 1.4, dash: [6, 4] }); series.push({ data: tab.map((t) => [t.x, sgS(t.x)]), color: P.bad, width: 1.4, dash: [6, 4] }); }
+      PW.chart(ctx, { x: 56, y: 12, w: w - 74, h: h1 - 48 }, {
+        x: [0.02, 2], y: [0, 1], logX: true, xLabel: "r_j / W_pp", yLabel: "η = BV/BV_pp", series,
+        vlines: [{ x, color: P.field }], points: [{ x, y: c.eta, color: P.accent2, r: 5 }, { x, y: s.eta, color: P.bad, r: 5 }], hlines: [{ y: 1, color: P.faint }],
+        xFmt: (v) => String(v),
+      });
+      // E(r) 비교 (각자 항복 순간), 거리 u = r − r_j
+      const prof = (geo, R) => { const d = []; for (let k = 0; k <= 120; k++) { const r = x + ((R.rd - x) * k) / 120; const e = geo === "c" ? 0.5 * (R.rd * R.rd / r - r) : (R.rd * R.rd * R.rd / (r * r) - r) / 3; d.push([r - x, e]); } d.push([R.rd - x, 0]); return d; };
+      const umax = Math.max(1.05, c.rd - x);
+      PW.chart(ctx, { x: 56, y: h1 + 6, w: w - 74, h: h - h1 - 46 }, {
+        x: [0, umax], y: [0, Math.max(1.2, s.Em * 1.08)], xLabel: "접합에서 거리 / W_pp", yLabel: "E / E_c",
+        series: [{ data: [[0, 1], [1, 0]], color: P.field, width: 2.4 }, { data: prof("c", c), color: P.accent2, width: 2.4 }, { data: prof("s", s), color: P.bad, width: 2.4 }],
+      });
+      PW.stat("cy-c", pct(c.eta) + " / " + pct(sgC(x)));
+      PW.stat("cy-s", pct(s.eta) + " / " + pct(sgS(x)));
+      PW.stat("cy-rd", ((c.rd - x)).toFixed(3) + " / " + ((s.rd - x)).toFixed(3));
+      PW.stat("cy-e", c.Em.toFixed(2) + " / " + s.Em.toFixed(2) + " × E_c");
+      PW.stat("cy-ex", (x * 56).toFixed(1) + " µm / " + (x * 18).toFixed(2) + " µm");
+    }, { aspect: 0.7, minHeight: 340, maxHeight: 480 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* ============================================================
+     2) 2D ① 종단 없음
+     ============================================================ */
+  const SI = { mat: "Si", N: 3e14, Wpp: bvPL("Si", 3e14, 1).xd * 1e4 };
+  const SIC = { mat: "SiC", N: 8e15, Wpp: bvPL("SiC", 8e15, 1).xd * 1e4 };
+  (function () {
+    if (!$("ba-cv")) return;
+    let sim = null;
+    const gM = PW.seg("ba-m", () => sim.restart()), gX = PW.range("ba-x", (v) => v.toFixed(2), () => sim.restart()), gS = PW.seg("ba-show", () => sim.cv.redraw());
+    const cylEta = (x) => { // 반지름 수치해 (정규화)
+      const Ifn = (rd) => { const n = 400; let I = 0; for (let i = 0; i < n; i++) { const r = x + ((i + 0.5) * (rd - x)) / n, e = 0.5 * (rd * rd / r - r); I += 8 * Math.pow(e, 7) * ((rd - x) / n); } return I; };
+      let lo = x * 1.000001, hi = x + 4; for (let k = 0; k < 60; k++) { const mid = 0.5 * (lo + hi); if (Ifn(mid) > 1) hi = mid; else lo = mid; }
+      const rd = 0.5 * (lo + hi); return (0.5 * (rd * rd * Math.log(rd / x) - (rd * rd - x * x) / 2)) / 0.5;
+    };
+    function build() {
+      const M = gM() === "Si" ? SI : SIC, Wpp = M.Wpp, h = Wpp / 56, rj = gX() * Wpp, W = 1.3 * Wpp;
+      const xj = Math.round((1.3 * Wpp) / h) * h;
+      return { mat: M.mat, N: M.N, W: +W.toFixed(3), Lx: +(xj + rj + 1.5 * Wpp).toFixed(3), hx: h, yS: yGrid(+W.toFixed(3), h, rj + 0.25 * Wpp, 1.15), tox: M.mat === "Si" ? 1 : 0.5, nox: 3, tpas: M.mat === "Si" ? 10 : 5, npas: 4, xj, rj, fp: null, rings: [], qss: 0 };
+    }
+    sim = Sim2D({
+      cv: "ba-cv", build,
+      view: (o) => ({ x0: o.cfg.xj - 0.5 * o.cfg.W, x1: o.cfg.Lx, show: gS }),
+      status: (o) => {
+        stState("ba-st", o);
+        PW.stat("ba-bv", fV(o.done ? o.BV : NaN) + " / " + fV(o.bvpp));
+        PW.stat("ba-eta", o.done && !o.fail ? pct(o.eta) : "—");
+        PW.stat("ba-cyl", pct(cylEta(gX())));
+        PW.stat("ba-pk", o.F ? pkWhere(o, (x, y) => (y < o.cfg.rj * 0.4 ? "표면 근처 곡면" : "곡면")) + " · " + fE(o.F.pk) : "—");
+      },
+    });
+    sim.restart();
+  })();
+
+  /* ============================================================
+     3) 2D ② 필드 플레이트 (Si)
+     ============================================================ */
+  const siBase = (extra) => Object.assign({ mat: "Si", N: 3e14, W: 60, Lx: 200, hx: 1, yS: yGrid(60, 0.5, 12, 1.15), tox: 1, nox: 3, tpas: 10, npas: 4, xj: 80, rj: 5, fp: null, rings: [], qss: 0 }, extra);
+  const sicBase = (extra) => Object.assign({ mat: "SiC", N: 8e15, W: 10, Lx: 100, hx: 0.4, yS: yGrid(10, 0.1, 2, 1.2), tox: 0.5, nox: 3, tpas: 5, npas: 4, xj: 15, rj: 0.8, fp: null, rings: [], jte: null, qss: 0 }, extra);
+  const flrRings = (n, s1, ds, wr) => { const rings = []; let x = 85; for (let k = 0; k < n; k++) { x += s1 + ds * k; rings.push({ x0: x + 5, x1: x + wr - 5 }); x += wr; } return { rings, end: x }; };
+  (function () {
+    if (!$("fp-cv")) return;
+    let sim = null, bare = null;
+    const gT = PW.range("fp-t", (v) => v.toFixed(1) + " µm", () => sim.restart()), gL = PW.range("fp-L", (v) => v + " µm", () => sim.restart()), gS = PW.seg("fp-show", () => sim.cv.redraw());
+    sim = Sim2D({
+      cv: "fp-cv", build: () => siBase({ tox: gT(), fp: gL() > 0 ? gL() : null }),
+      view: () => ({ x0: 55, x1: 160, show: gS }),
+      status: (o) => {
+        stState("fp-st", o);
+        PW.stat("fp-bv", o.done && !o.fail ? fV(o.BV) + " / " + pct(o.eta) : "—");
+        PW.stat("fp-pk", o.F ? pkWhere(o, (x) => (o.cfg.fp != null && Math.abs(x - (o.cfg.xj + o.cfg.fp)) < 4 ? "플레이트 끝" : x < o.cfg.xj + o.cfg.rj + 3 ? "접합 모서리" : "표면")) : "—");
+        PW.stat("fp-ox", o.F ? fE(o.F.ox) + (o.F.ox > 3e6 ? " ⚠" : "") : "—");
+        if (o.done && !bare) { bare = Search(siBase({}), null); while (!bare.step(50)); }
+        PW.stat("fp-gain", bare && o.done && !o.fail ? "× " + (o.BV / bare.BV).toFixed(2) + " (종단 없음 " + pct(bare.eta) + ")" : "—");
+      },
+    });
+    sim.restart();
+  })();
+
+  /* ============================================================
+     4) 2D ③ 플로팅 가드 링 (Si)
+     ============================================================ */
+  (function () {
+    if (!$("fl-cv")) return;
+    let sim = null;
+    const re = () => sim.restart();
+    const gN = PW.range("fl-n", (v) => v + "개", re), gS = PW.range("fl-s", (v) => v + " µm", re), gD = PW.range("fl-d", (v) => v.toFixed(1) + " µm", re), gQ = PW.range("fl-q", (v) => (v >= 0 ? "+" : "") + v.toFixed(1) + "×10¹² cm⁻²", re);
+    const geo = () => flrRings(gN(), gS(), gD(), 12);
+    sim = Sim2D({
+      cv: "fl-cv",
+      build: () => { const g = geo(); return siBase({ rings: g.rings, Lx: Math.max(200, Math.ceil(g.end + 70)), qss: gQ() * 1e12 }); },
+      view: (o) => ({ x0: 60, x1: Math.max(170, geo().end + 45) }),
+      status: (o) => {
+        stState("fl-st", o);
+        PW.stat("fl-bv", o.done && !o.fail ? fV(o.BV) + " / " + pct(o.eta) : "—");
+        const rv = Array.from(o.S.ringV).map((v) => Math.round(v));
+        PW.stat("fl-rv", rv.length ? rv.join(", ") + " V" : "링 없음");
+        PW.stat("fl-pk", o.F ? pkWhere(o, (x) => { if (x < 85 + 3) return "주 접합"; const rs = o.cfg.rings; for (let k = 0; k < rs.length; k++) if (x < rs[k].x1 + 5 + 3) return "링 " + (k + 1) + " 부근"; return "바깥"; }) : "—");
+        PW.stat("fl-w", gN() ? (geo().end - 85).toFixed(0) + " µm" : "0");
+      },
+    });
+    sim.restart();
+  })();
+
+  /* ============================================================
+     5) 2D ④ SiC JTE + 도즈 창 스캔
+     ============================================================ */
+  (function () {
+    if (!$("jt-cv")) return;
+    let sim = null, scan = null, scanRes = [];
+    const re = () => sim.restart();
+    const gD = PW.range("jt-d", (v) => v.toFixed(2) + "×10¹³ cm⁻²", re), gL = PW.range("jt-L", (v) => v + " µm", re), gQ = PW.range("jt-q", (v) => (v >= 0 ? "+" : "") + v.toFixed(2) + "×10¹² cm⁻²", re);
+    const QOPT = (9.7 * EPS0 * bvPL("SiC", 8e15, 10e-4).Em) / Q;
+    const cfgOf = (dose) => sicBase({ jte: dose > 0 ? { L: gL(), dose, t: 0.6 } : null, qss: gQ() * 1e12 });
+    sim = Sim2D({
+      cv: "jt-cv", build: () => cfgOf(gD() * 1e13),
+      view: () => ({ x0: 8, x1: Math.min(100, 15 + gL() + 20) }),
+      status: (o) => {
+        stState("jt-st", o);
+        PW.stat("jt-bv", o.done && !o.fail ? fV(o.BV) + " / " + pct(o.eta) : "—");
+        PW.stat("jt-pk", o.F ? pkWhere(o, (x) => (x < 15 + 0.8 + 1.5 ? "주 접합 모서리" : o.cfg.jte && Math.abs(x - 15 - o.cfg.jte.L) < 3 ? "JTE 끝" : "JTE 위 표면")) : "—");
+        PW.stat("jt-r", ((gD() * 1e13) / QOPT).toFixed(2) + " (εEc/q = " + sci(QOPT) + ")");
+      },
+    });
+    sim.restart();
+    // 스캔: 별도 탐색기를 프레임마다 조금씩
+    const doses = []; for (let k = 0; k <= 12; k++) doses.push((3e13 * k) / 12);
+    $("jt-scan").addEventListener("click", () => { scanRes = []; scan = { k: 0, q: gQ(), L: gL(), cur: null }; });
+    const scv = $("jt-cv");
+    PW.loop(scv, () => {
+      if (!scan) return;
+      if (!scan.cur) scan.cur = Search(sicBase({ jte: doses[scan.k] > 0 ? { L: scan.L, dose: doses[scan.k], t: 0.6 } : null, qss: scan.q * 1e12 }), scanRes.length ? scanRes[scanRes.length - 1].o : null);
+      if (scan.cur.step(7)) {
+        scanRes.push({ d: doses[scan.k], eta: scan.cur.fail ? NaN : scan.cur.eta, o: scan.cur });
+        scan.k++; scan.cur = null;
+        if (scan.k >= doses.length) scan = null;
+        report(); sim.cv.redraw();
+      }
+    });
+    function report() {
+      const ok = scanRes.filter((r) => isFinite(r.eta));
+      if (!ok.length) { PW.stat("jt-win", scan ? "스캔 중 " + scanRes.length + "/13" : "—"); return; }
+      const best = ok.reduce((a, b) => (b.eta > a.eta ? b : a));
+      const win = ok.filter((r) => r.eta >= 0.9 * best.eta);
+      PW.stat("jt-win", (best.d / 1e13).toFixed(2) + "×10¹³ (η " + pct(best.eta) + ") / " + (win[0].d / 1e13).toFixed(2) + "–" + (win[win.length - 1].d / 1e13).toFixed(2) + (scan ? " · 스캔 중 " + scanRes.length + "/13" : ""));
+    }
+    // 스캔 결과를 지도 아래 그래프 위에 겹쳐 그리기: 원래 draw를 감싼다
+    const origRedraw = sim.cv.redraw;
+    sim.cv.redraw = function () {
+      origRedraw();
+      if (!scanRes.length) return;
+      const c = scv.getContext("2d"), P = PW.palette(), dpr = Math.min(window.devicePixelRatio || 1, 2), w = scv.width / dpr, h = scv.height / dpr;
+      c.save(); c.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const bw = Math.min(220, w * 0.4), bh = 92, bx = w - bw - 18, by = 14 + Math.round(h * 0.64 * 0.15) + 24;
+      c.fillStyle = rgba(P.surface, 0.92); c.fillRect(bx - 6, by - 6, bw + 12, bh + 30); c.strokeStyle = P.border; c.strokeRect(bx - 6, by - 6, bw + 12, bh + 30);
+      PW.chart(c, { x: bx + 26, y: by, w: bw - 30, h: bh - 8 }, {
+        x: [0, 3e13], y: [0, 1], xFmt: (v) => (v / 1e13).toFixed(0), yFmt: (v) => v.toFixed(1), xTicks: [0, 1e13, 2e13, 3e13], yTicks: [0, 0.5, 1],
+        series: [{ data: scanRes.map((r) => [r.d, r.eta]), color: P.accent, width: 2.2 }],
+        points: scanRes.filter((r) => isFinite(r.eta)).map((r) => ({ x: r.d, y: r.eta, color: P.accent, r: 2.5 })), vlines: [{ x: gD() * 1e13, color: P.field }],
+      });
+      c.fillStyle = P.dim; c.font = font(11); c.textAlign = "left"; c.fillText("η 대 도즈 (×10¹³)", bx, by + bh + 18);
+      c.restore();
+    };
+  })();
+
+  /* ============================================================
+     6) 표면 전하 민감도 스캔
+     ============================================================ */
+  (function () {
+    if (!$("qs-cv")) return;
+    const QS = [-0.5, 0, 0.5, 1, 1.5, 2, 2.5, 3];
+    const STRUCT = {
+      flr: { name: "Si 가드 링", col: "warn", cfg: (q) => { const g = flrRings(5, 6, 3, 12); return siBase({ rings: g.rings, Lx: Math.ceil(g.end + 70), qss: q * 1e12 }); } },
+      fp: { name: "Si 필드 플레이트", col: "accent", cfg: (q) => siBase({ fp: 20, qss: q * 1e12 }) },
+      jte: { name: "SiC JTE", col: "sic", cfg: (q) => sicBase({ jte: { L: 40, dose: 1.2e13, t: 0.6 }, qss: q * 1e12 }) },
+    };
+    let res = { flr: [], fp: [], jte: [] }, queue = [], cur = null, run = false, prevBy = {};
+    $("qs-run").addEventListener("click", () => {
+      res = { flr: [], fp: [], jte: [] }; prevBy = {}; queue = [];
+      Object.keys(STRUCT).forEach((k) => { if ($("qs-" + k).checked) QS.forEach((q) => queue.push({ k, q })); });
+      cur = null; run = true; cv.redraw();
+    });
+    $("qs-stop").addEventListener("click", () => { run = false; cv.redraw(); });
+    const cv = PW.canvas($("qs-cv"), (ctx, w, h) => {
+      const P = PW.palette();
+      const series = [], points = [];
+      Object.keys(STRUCT).forEach((k) => { const r = res[k].filter((p) => isFinite(p.eta)); if (r.length) { series.push({ data: r.map((p) => [p.q, p.eta]), color: P[STRUCT[k].col], width: 2.6 }); r.forEach((p) => points.push({ x: p.q, y: p.eta, color: P[STRUCT[k].col], r: 3.5 })); } });
+      PW.chart(ctx, { x: 56, y: 14, w: w - 74, h: h - 58 }, { x: [-0.5, 3], y: [0, 1], xLabel: "계면 전하 Q_ss (×10¹² cm⁻², 양전하)", yLabel: "종단 효율 η", series, points, vlines: [{ x: 0, color: P.faint }] });
+      ctx.font = font(12); ctx.textAlign = "right";
+      Object.keys(STRUCT).forEach((k, i) => { ctx.fillStyle = P[STRUCT[k].col]; ctx.fillText(STRUCT[k].name, w - 26, 34 + 16 * i); });
+      if (!res.flr.length && !res.fp.length && !res.jte.length) { ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.fillText("‘스캔 시작’을 누르면 구조별로 BV를 다시 찾는다", 56 + (w - 74) / 2, h / 2); }
+      const tot = Object.keys(STRUCT).filter((k) => $("qs-" + k).checked).length * QS.length, done = res.flr.length + res.fp.length + res.jte.length;
+      PW.stat("qs-prog", run ? done + " / " + tot + (cur ? " · " + STRUCT[cur.k].name + " Q=" + cur.q : "") : done ? "완료 " + done + "점" : "대기");
+      const at = (k, q) => { const p = res[k].find((r) => r.q === q); return p ? p.eta : NaN; };
+      const fmt2 = (k) => (isFinite(at(k, 0)) ? pct(at(k, 0)) : "—") + " → " + (isFinite(at(k, 1)) ? pct(at(k, 1)) : "—");
+      PW.stat("qs-a", fmt2("flr")); PW.stat("qs-b", fmt2("fp")); PW.stat("qs-c", fmt2("jte"));
+    }, { aspect: 0.55, minHeight: 280, maxHeight: 420 });
+    PW.loop($("qs-cv"), () => {
+      if (!run) return;
+      if (!cur) { const nx = queue.shift(); if (!nx) { run = false; cv.redraw(); return; } cur = { k: nx.k, q: nx.q, o: Search(STRUCT[nx.k].cfg(nx.q), prevBy[nx.k] || null) }; }
+      if (cur.o.step(8)) { res[cur.k].push({ q: cur.q, eta: cur.o.fail ? NaN : cur.o.eta }); prevBy[cur.k] = cur.o; cur = null; cv.redraw(); }
+    });
+  })();
+
+  /* ============================================================
+     7) 다이 크기 최적화
+     ============================================================ */
+  (function () {
+    if (!$("ar-cv")) return;
+    const gA = PW.range("ar-a", (v) => v.toFixed(1) + " mm", draw), gW = PW.range("ar-w", (v) => v + " µm", draw), gR = PW.range("ar-r", (v) => v.toFixed(1) + " mΩ·cm²", draw), gD = PW.range("ar-d", (v) => v.toFixed(2) + " cm⁻²", draw), gF = PW.seg("ar-wf", draw);
+    const PAD = 0.5, KERF = 0.1;
+    function calc(a) {
+      const wt = gW() / 1000, act = Math.max(0, (a - 2 * wt) * (a - 2 * wt) - PAD), frac = act / (a * a);
+      const R = act > 0 ? (gR() * 1e-3) / (act / 100) : Infinity; // Ω
+      const d = +gF(), A = (a + KERF) * (a + KERF), dpw = Math.max(0, (Math.PI * d * d) / (4 * A) - (Math.PI * d) / Math.sqrt(2 * A));
+      const Y = Math.exp(-gD() * (a * a) / 100), G = act > 0 ? (dpw * Y) / (R * 1e3) : 0; // 1/mΩ
+      return { frac, R, dpw, Y, G };
+    }
+    const cv = PW.canvas($("ar-cv"), (ctx, w, h) => {
+      const P = PW.palette(), a = gA(), h1 = Math.round(h * 0.5);
+      const fr = [], yl = [], gg = []; let gmax = 0, aopt = 1;
+      for (let k = 0; k <= 180; k++) { const x = 1 + (9 * k) / 180, r = calc(x); fr.push([x, r.frac]); yl.push([x, r.Y]); gg.push([x, r.G]); if (r.G > gmax) { gmax = r.G; aopt = x; } }
+      PW.chart(ctx, { x: 56, y: 12, w: w - 74, h: h1 - 40 }, { x: [1, 10], y: [0, 1], xLabel: "", yLabel: "비율", series: [{ data: fr, color: P.electron, width: 2.4 }, { data: yl, color: P.ok, width: 2.4 }], vlines: [{ x: a, color: P.field }] });
+      ctx.font = font(11); ctx.textAlign = "left"; ctx.fillStyle = P.electron; ctx.fillText("활성 비율", 64, 26); ctx.fillStyle = P.ok; ctx.fillText("수율 e^(−D₀A)", 64, 42);
+      PW.chart(ctx, { x: 56, y: h1 + 2, w: w - 74, h: h - h1 - 44 }, { x: [1, 10], y: [0, 1.1], xLabel: "다이 한 변 a (mm)", yLabel: "Σ1/R (정규화)", series: [{ data: gg.map(([x, g]) => [x, gmax > 0 ? g / gmax : 0]), color: P.amp, width: 2.6 }], vlines: [{ x: a, color: P.field }, { x: aopt, color: P.ok, label: "최적 " + aopt.toFixed(1) + " mm" }] });
+      const r = calc(a);
+      PW.stat("ar-f", pct(r.frac));
+      PW.stat("ar-R", isFinite(r.R) ? (r.R * 1e3).toFixed(1) + " mΩ" : "활성 영역 없음");
+      PW.stat("ar-n", Math.round(r.dpw) + " / " + pct(r.Y));
+      PW.stat("ar-g", r.G.toFixed(1) + " /mΩ");
+      PW.stat("ar-opt", aopt.toFixed(1) + " mm");
+    }, { aspect: 0.62, minHeight: 300, maxHeight: 440 });
+    function draw() { cv.redraw(); }
+  })();
+})();
+</script>
+</body>
+</html>

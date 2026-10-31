@@ -3,7 +3,7 @@
 
 Usage: python3 tools/sync-catalog.py [path/to/books/data/books.json]
 Default source: migration/books.json. An external portal catalog is optional.
-InfraBook, CMPBook, ThinFilmBook and PlasmaBook metadata live in LOCAL below. Chapter and simulator counts come from the sources.
+InfraBook, CMPBook, ThinFilmBook, PlasmaBook and PowerBook metadata live in LOCAL below. Chapter and simulator counts come from the sources.
 """
 import json
 import re
@@ -20,7 +20,7 @@ ORDER = [
     ("dopingbook", "doping"), ("yieldbook", "yield"), ("failurebook", "failure"), ("tcadbook", "tcad"),
     ("infrabook", "infra"),
     ("packagingbook", "packaging"), ("testbook", "test"), ("memorybook", "memory"), ("opticsbook", "optics"),
-    ("sensorbook", "sensor"), ("displaybook", "display"), ("chipindustrybook", "industry"),
+    ("sensorbook", "sensor"), ("displaybook", "display"), ("powerbook", "power"), ("chipindustrybook", "industry"),
 ]
 
 # 이 저장소 안에 있는 책 (포털 목록에 아직 없거나, 이 저장소가 원본인 책)
@@ -51,6 +51,15 @@ LOCAL = {
         "color": "#862e9c", "colorDark": "#da77f2",
         "topics": ["데바이 차폐·준중성", "충돌·EEDF", "방전·시스", "전역 모델", "CCP·ICP", "RF 정합·펄스", "래디컬·표면 상호작용", "탐침·OES·PIC"],
         "motif": "plasma",
+    },
+    "powerbook": {
+        "id": "powerbook", "code": "PWR", "title": "PowerBook", "subtitle": "전력 반도체 교과서",
+        "headline": "전기를 다루는 반도체",
+        "description": "Si, SiC, GaN. 전기를 바꾸는 스위치를 재료와 항복 전압에서 시스템까지 다루는 편. 드리프트층과 에지 종단, PiN·쇼트키 다이오드, 전력 MOSFET·슈퍼정션·IGBT, SiC MOSFET과 GaN HEMT, 스위칭 손실과 게이트 구동, DC-DC·PFC·인버터 PWM, 열 설계와 모듈 패키징, 신뢰성과 수명까지. 가상 기준 플랫폼 PW-800의 800 V 전기차 인버터를 직접 스위칭해 보며 배우는 전력 반도체 교과서.",
+        "url": "power/", "stage": "device", "status": "published", "chapters": 18,
+        "color": "#d9480f", "colorDark": "#ff8a4c",
+        "topics": ["밴드갭·임계 전계", "항복·드리프트층", "다이오드·MOSFET·IGBT", "SiC·GaN", "스위칭 손실", "게이트 구동", "컨버터·인버터 PWM", "열·패키징·신뢰성"],
+        "motif": "power",
     },
     "cmpbook": {
         "id": "cmpbook", "code": "CMP", "title": "CMPBook", "subtitle": "반도체 CMP·세정 교과서",

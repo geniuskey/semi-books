@@ -1,0 +1,1192 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and PowerBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GaN HEMT · PowerBook</title>
+<meta name="description" content="AlGaN/GaN 계면의 자발·압전 분극이 만드는 2차원 전자 가스 밀도를 Al 조성·장벽 두께로 계산하고, p-GaN 게이트 증강형 HEMT의 문턱 전압과 좁은 게이트 창, 바디 다이오드 없는 3사분면 도통, 트래핑에 의한 동적 온저항, 필드 플레이트와 측면 소자의 전압 한계, GaN-on-Si 에피의 휨, Si·SiC와의 성능 지수 비교를 시뮬레이터와 3D HEMT 층 구조로 익힌다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+  svg .gn-l { fill: var(--text); font-family: var(--font); font-size: 13px; }
+  svg .gn-b { fill: var(--text); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .gn-s { fill: var(--text-dim); font-family: var(--font); font-size: 11.5px; }
+  svg .gn-w { fill: #fff; font-family: var(--font); font-size: 12px; font-weight: 600; }
+  svg .gn-box { fill: var(--bg-elev); stroke: var(--border); }
+  svg .gn-line { stroke: var(--text); stroke-width: 1.6; fill: none; }
+  svg .gn-dash { stroke: var(--text-dim); stroke-dasharray: 5 4; fill: none; stroke-width: 1.3; }
+  svg .gn-gan { fill: color-mix(in srgb, var(--m-gan) 30%, var(--bg-elev)); }
+  svg .gn-gan2 { fill: color-mix(in srgb, var(--m-gan) 55%, var(--bg-elev)); }
+  svg .gn-algan { fill: color-mix(in srgb, var(--m-gan) 14%, var(--bg-elev)); stroke: var(--m-gan); stroke-width: .8; }
+  svg .gn-pgan { fill: color-mix(in srgb, var(--m-hole) 35%, var(--bg-elev)); }
+  svg .gn-si { fill: color-mix(in srgb, var(--m-si) 40%, var(--bg-elev)); }
+  svg .gn-ox { fill: color-mix(in srgb, var(--m-oxide) 22%, transparent); stroke: var(--m-oxide); stroke-width: .8; }
+  svg .gn-met { fill: var(--m-metal); }
+  svg .gn-2deg { stroke: var(--m-electron); stroke-width: 3.2; fill: none; }
+  svg .gn-e { fill: var(--m-electron); }
+  svg .gn-h { fill: var(--m-hole); }
+  svg .gn-f { stroke: var(--m-field); stroke-width: 2.2; fill: none; }
+  svg .gn-amp { stroke: var(--m-amp); stroke-width: 2.4; fill: none; }
+  .gn-v.ok { color: var(--ok); } .gn-v.warn { color: var(--warn); } .gn-v.bad { color: var(--bad); }
+</style>
+</head>
+<body data-chapter="gan">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 09</div>
+    <h1>GaN HEMT</h1>
+    <p class="lead">65 W 휴대폰 충전기가 손바닥 반만 해진 것은 질화갈륨 덕분이다. GaN 전력 소자는 도핑 없이 결정 자체의 <strong>분극</strong>으로 채널을 만든다. AlGaN과 GaN의 경계에 저절로 생기는 <span class="term">2차원 전자 가스</span><span class="en">(two-dimensional electron gas, 2DEG)</span>는 면밀도 약 10¹³ cm⁻², 이동도 약 2000 cm²/V·s로, 같은 전압의 Si 슈퍼정션 MOSFET보다 게이트 전하가 10배 이상 작은 스위치를 만든다. 대신 이 스위치는 원래 켜져 있는 소자이고, 게이트는 +7 V만 넘어도 상하며, 바디 다이오드가 없고, 고전압에 오래 있으면 온저항이 늘어난다. 이 장은 2DEG 밀도를 분극으로 계산하는 데서 시작해 증강형 게이트, 3사분면 도통, 동적 온저항, 필드 플레이트와 측면 소자의 전압 한계, GaN-on-Si 에피의 휨, Si·SiC와의 손실 비교까지 따라간다.</p>
+    <ul class="objectives">
+      <li>자발·압전 분극으로 AlGaN/GaN 계면 분극 전하 \(\sigma\)를 구하고, Al 조성과 장벽 두께에 따른 2DEG 밀도 \(n_s\)와 면저항을 계산할 수 있다.</li>
+      <li>리세스·불소·캐스코드·p-GaN 게이트 증강형 방식을 비교하고, p-GaN 게이트 문턱 전압이 장벽 설계에 어떻게 묶이는지 설명할 수 있다.</li>
+      <li>게이트 전압 창이 좁은 이유와 게이트 루프 링잉이 절대 최대 정격을 넘는 조건을 계산할 수 있다.</li>
+      <li>바디 다이오드 없는 3사분면 도통의 \(V_{SD} = V_{th} - V_{GS} + \dots\)를 유도하고 데드 타임 손실을 추정할 수 있다.</li>
+      <li>전류 붕괴·동적 온저항을 포획·방출 시정수 모델로 설명하고 필드 플레이트·패시베이션·버퍼 설계의 역할을 말할 수 있다.</li>
+      <li>GaN-on-Si 에피의 열팽창 불일치 응력과 휨을 스토니 식으로 계산하고, 측면 소자의 전압 한계와 수직 GaN이 필요한 이유를 설명할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="structure">
+    <h2>HEMT 구조: 도핑 없는 채널</h2>
+    <p>Si·SiC MOSFET은 전자를 반전층에 모으고 수직으로 흐르게 한다. GaN 전력 소자의 주류는 전류가 웨이퍼 표면을 따라 <strong>옆으로</strong> 흐르는 <span class="term">HEMT</span><span class="en">(high-electron-mobility transistor)</span>다. 아래부터 Si(111) 기판, 격자·열팽창 불일치를 흡수하는 AlN 핵 생성층과 AlGaN 전이층, 누설을 막는 탄소 도핑 GaN 버퍼, 도핑하지 않은 GaN 채널층, 두께 10–25 nm의 AlGaN 장벽이 쌓인다. AlGaN 바로 아래 GaN 쪽 수 nm 안에 2DEG가 생기고, 소스·드레인 오믹 전극이 이 전자층에 닿는다. 증강형 소자는 게이트 아래에만 p형 GaN을 얹어 그 부분의 2DEG를 지운다. 게이트와 드레인 사이 \(L_{gd}\)(650 V급 약 10–15 µm)가 전압을 버티는 "드리프트층" 노릇을 하고, 그 위를 SiN 패시베이션과 게이트·소스 필드 플레이트가 덮는다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 330" role="img" aria-label="p-GaN 게이트 GaN-on-Si HEMT 단면: Si 기판, 전이층, 탄소 도핑 버퍼, GaN 채널, 2DEG, AlGaN 장벽, p-GaN 게이트, 소스·드레인, SiN 패시베이션, 필드 플레이트">
+        <defs><marker id="f91-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text)"/></marker></defs>
+        <rect x="20" y="262" width="620" height="56" class="gn-si"/><text x="330" y="294" text-anchor="middle" class="gn-b">Si(111) 기판 · 약 1 mm (소스 전위에 연결)</text>
+        <rect x="20" y="236" width="620" height="26" class="gn-gan2" opacity=".55"/><text x="330" y="253" text-anchor="middle" class="gn-s">AlN 핵 생성 + AlGaN 전이층(조성 단계) · 약 1–2 µm</text>
+        <rect x="20" y="186" width="620" height="50" class="gn-gan2" opacity=".85"/><text x="330" y="215" text-anchor="middle" class="gn-w">탄소 도핑 GaN 버퍼 · 약 2–4 µm (반절연)</text>
+        <rect x="20" y="150" width="620" height="36" class="gn-gan"/><text x="330" y="174" text-anchor="middle" class="gn-l">GaN 채널층 (비도핑) · 약 0.2–0.5 µm</text>
+        <line x1="60" y1="149" x2="600" y2="149" class="gn-2deg"/>
+        <rect x="20" y="132" width="620" height="16" class="gn-algan"/><text x="560" y="144" text-anchor="middle" class="gn-s">AlGaN 장벽 15 nm</text>
+        <rect x="20" y="78" width="620" height="54" class="gn-ox"/><text x="470" y="96" class="gn-s">SiN 패시베이션</text>
+        <!-- source / drain -->
+        <rect x="30" y="70" width="70" height="82" class="gn-met"/><text x="65" y="64" text-anchor="middle" class="gn-b">S</text>
+        <rect x="560" y="70" width="70" height="82" class="gn-met"/><text x="595" y="64" text-anchor="middle" class="gn-b">D</text>
+        <!-- p-GaN gate -->
+        <rect x="160" y="112" width="40" height="20" class="gn-pgan"/><rect x="164" y="96" width="32" height="16" class="gn-met"/><text x="180" y="90" text-anchor="middle" class="gn-b">G</text>
+        <line x1="160" y1="149" x2="200" y2="149" stroke="var(--bg-elev)" stroke-width="4"/>
+        <!-- field plates -->
+        <rect x="164" y="88" width="80" height="6" class="gn-met"/><text x="250" y="86" class="gn-s">게이트 FP</text>
+        <path d="M100 74 H140 V62 H340 V70" stroke="var(--m-metal)" stroke-width="5" fill="none"/><text x="300" y="56" class="gn-s">소스 FP</text>
+        <!-- Lgd -->
+        <line x1="200" y1="126" x2="560" y2="126" class="gn-dash"/>
+        <line x1="205" y1="122" x2="555" y2="122" class="gn-line" marker-start="url(#f91-a)" marker-end="url(#f91-a)"/><text x="380" y="118" text-anchor="middle" class="gn-s">L_gd ≈ 10–15 µm: 전압을 버티는 길이</text>
+        <text x="120" y="164" class="gn-s" text-anchor="middle">2DEG</text>
+        <text x="180" y="164" class="gn-s" text-anchor="middle">지워짐</text>
+        <!-- right legend -->
+        <text x="660" y="40" class="gn-b">층마다 맡은 일</text>
+        <text x="660" y="64" class="gn-s">p-GaN: 게이트 아래 2DEG 제거 → 증강형</text>
+        <text x="660" y="84" class="gn-s">AlGaN: 분극 전하 → 2DEG 공급</text>
+        <text x="660" y="104" class="gn-s">SiN: 표면 트랩 억제, 전류 붕괴↓</text>
+        <text x="660" y="124" class="gn-s">필드 플레이트: 게이트 끝 전계 분산</text>
+        <text x="660" y="150" class="gn-s">채널: 고순도, 이동도 ~2000</text>
+        <text x="660" y="170" class="gn-s">C 도핑 버퍼: 수직 누설 차단</text>
+        <text x="660" y="190" class="gn-s">  (깊은 준위 → 동적 R_on 원인)</text>
+        <text x="660" y="246" class="gn-s">전이층: 격자 17 %·열팽창</text>
+        <text x="660" y="264" class="gn-s">  불일치 흡수, 압축 응력 저장</text>
+        <text x="660" y="296" class="gn-s">기판: 값싼 200 mm Si</text>
+        <path d="M65 152 V149 M595 152 V149" class="gn-line"/>
+        <path d="M100 145 H160 M200 145 H560" class="gn-amp" marker-end="url(#f91-a)" opacity=".8"/>
+      </svg>
+      <figcaption><b>그림 9-1.</b> p-GaN 게이트 GaN-on-Si 전력 HEMT 단면(두께 비율 과장). 전류(주황)는 소스에서 2DEG를 따라 옆으로 흘러 드레인에 닿는다. 소스·드레인은 AlGaN을 뚫거나 합금 열처리로 2DEG에 오믹 접촉한다. 기판은 보통 소스에 묶이므로 꺼진 상태에서 드레인 전압 전부가 버퍼를 세로로도 가로지른다(7절).</figcaption>
+    </figure>
+    <p>재료 자체의 장점은 <a href="materials.html">2장</a>에서 본 대로다. GaN의 임계 전계는 약 3.3 MV/cm로 Si의 10배이고, 2DEG 이동도는 벌크 GaN(약 1200)보다 높은 약 2000 cm²/V·s다. 이온화된 도너가 없으니 이온화 불순물 산란이 적기 때문이다. 같은 내압에서 전압을 버티는 길이는 짧고, 전하는 얇은 면 하나에 모여 있어 <strong>칩이 작고 커패시턴스가 작다</strong>. 이것이 \(Q_G\)와 \(Q_{oss}\)가 작은 이유이고, 수백 kHz–수 MHz 스위칭을 가능하게 한다. 이종 접합 밴드의 기초는 <a href="../../device/chapters/hetero.html">DeviceBook 이종 접합 장</a>, 전력 소자 전체 개관은 <a href="../../device/chapters/power.html">DeviceBook 14장</a>에 있다. 이 장은 그 위에서 <strong>전력 스위치로서의 GaN</strong>을 계산한다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>성질</th><th>Si 슈퍼정션 MOSFET</th><th>SiC MOSFET</th><th>GaN HEMT</th></tr></thead>
+      <tbody>
+        <tr><td>전류 방향</td><td>수직</td><td>수직</td><td>수평(2DEG)</td></tr>
+        <tr><td>채널 형성</td><td>반전층(게이트 산화막)</td><td>반전층(SiO₂/SiC, 이동도 낮음)</td><td>분극 2DEG(도핑 없음)</td></tr>
+        <tr><td>기본 상태</td><td>노멀리 오프</td><td>노멀리 오프</td><td>노멀리 온 → 게이트 구조로 오프</td></tr>
+        <tr><td>바디 다이오드</td><td>있음(\(Q_{rr}\) 큼)</td><td>있음(\(V_F\) 약 3 V)</td><td>없음(채널 역도통, \(Q_{rr}\) 0)</td></tr>
+        <tr><td>게이트 전압</td><td>±20 V 정격, 10–12 V 구동</td><td>+18/−4 V 구동</td><td>+6 V 구동, 절대 최대 +7 V</td></tr>
+        <tr><td>주 사용 전압</td><td>600–900 V</td><td>650–3300 V</td><td>15–650 V(일부 900–1200 V)</td></tr>
+        <tr><td>대표 약점</td><td>큰 \(Q_{rr}\)·\(Q_{oss}\)</td><td>계면 트랩·\(V_{th}\) 이동</td><td>동적 온저항·게이트 창·단락 내량</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="polarization">
+    <h2>분극이 만드는 2DEG</h2>
+    <p>우르츠광 GaN 결정은 Ga 원자층과 N 원자층이 c축을 따라 번갈아 쌓이고, Ga–N 결합이 위아래로 비대칭이다. 그래서 외부 전계가 없어도 결정 전체가 c축 방향의 <span class="term">자발 분극</span><span class="en">(spontaneous polarization)</span> \(P_{sp}\)를 갖는다. 그 위에 격자 상수가 더 작은 AlGaN을 얇게 키우면 AlGaN이 GaN 격자에 맞춰 옆으로 늘어나고(인장 변형) <span class="term">압전 분극</span><span class="en">(piezoelectric polarization)</span> \(P_{pz}\)가 더해진다. Ga 면 성장에서 두 분극은 모두 기판 쪽(−c)을 향하고 AlGaN 쪽이 더 크므로, 분극의 불연속 \(\sigma = -\nabla\cdot P\)가 계면에 <strong>고정된 양전하</strong>로 남는다.</p>
+    <div class="formula">$$\sigma(x) = \left|P_{sp}^{\text{AlGaN}}(x) + P_{pz}^{\text{AlGaN}}(x) - P_{sp}^{\text{GaN}}\right|,\qquad P_{pz} = 2\,\frac{a_0 - a(x)}{a(x)}\left(e_{31} - e_{33}\frac{C_{13}}{C_{33}}\right)$$<div class="where">\(x\)는 AlGaN의 Al 조성. 앰바허(Ambacher)의 선형 보간: \(P_{sp} = -0.052x - 0.029\) C/m², \(a(x) = 3.189 - 0.077x\) Å, \(e_{31} = -0.11x - 0.49\), \(e_{33} = 0.73x + 0.73\) C/m², \(C_{13} = 5x + 103\), \(C_{33} = -32x + 405\) GPa. \(x\) = 0.25에서 \(\sigma/q \approx 1.4\times10^{13}\) cm⁻², 그중 약 40 %가 압전 몫이다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 270" role="img" aria-label="분극 벡터와 계면 전하: AlGaN과 GaN의 자발·압전 분극 화살표, 계면 양의 분극 전하, 표면 음전하와 표면 도너, 2DEG 전자">
+        <defs><marker id="f92-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-field)"/></marker></defs>
+        <rect x="40" y="40" width="380" height="70" class="gn-algan"/><text x="60" y="62" class="gn-b">AlGaN (인장 변형)</text>
+        <rect x="40" y="110" width="380" height="130" class="gn-gan"/><text x="60" y="226" class="gn-b">GaN (이완, Ga 면)</text>
+        <line x1="150" y1="50" x2="150" y2="100" class="gn-f" marker-end="url(#f92-a)"/><text x="158" y="80" class="gn-s">P_sp</text>
+        <line x1="220" y1="50" x2="220" y2="96" class="gn-f" marker-end="url(#f92-a)"/><text x="228" y="80" class="gn-s">P_pz</text>
+        <line x1="320" y1="140" x2="320" y2="190" class="gn-f" marker-end="url(#f92-a)"/><text x="328" y="170" class="gn-s">P_sp(GaN), 작음</text>
+        <g class="gn-s"><text x="44" y="36">− − − − − − − − − − (표면: 분극 음전하 ⊖, 표면 도너가 전자를 내줌 ⊕)</text></g>
+        <g class="gn-b" fill="var(--m-hole)"><text x="50" y="118" style="fill:var(--m-hole)">+ + + + + + + + + + + + + + + + + + + + + + + +</text></g>
+        <g class="gn-e"><circle cx="70" cy="126" r="4"/><circle cx="100" cy="127" r="4"/><circle cx="130" cy="126" r="4"/><circle cx="160" cy="127" r="4"/><circle cx="190" cy="126" r="4"/><circle cx="220" cy="127" r="4"/><circle cx="250" cy="126" r="4"/><circle cx="280" cy="127" r="4"/><circle cx="310" cy="126" r="4"/><circle cx="340" cy="127" r="4"/><circle cx="370" cy="126" r="4"/><circle cx="400" cy="127" r="4"/></g>
+        <text x="430" y="122" class="gn-s">+σ (고정, 분극) ↔ 2DEG 전자 nₛ</text>
+        <!-- charge bookkeeping -->
+        <rect x="500" y="40" width="350" height="200" rx="10" class="gn-box"/>
+        <text x="520" y="64" class="gn-b">전하 장부 (Ga 면 AlGaN/GaN)</text>
+        <text x="520" y="90" class="gn-s">① 계면 고정 전하 +σ ≈ 1.1–1.7×10¹³ cm⁻² (x 0.2–0.3)</text>
+        <text x="520" y="112" class="gn-s">② 표면 고정 전하 −σ (분극의 반대쪽 끝)</text>
+        <text x="520" y="134" class="gn-s">③ 표면 도너가 이온화되며 전자를 내놓음 (+)</text>
+        <text x="520" y="156" class="gn-s">④ 그 전자가 계면 우물로 내려가 2DEG (−nₛ)</text>
+        <text x="520" y="184" class="gn-b">nₛ = σ/q − (ε/q²d)(qφ_b + E_F − ΔE_c)</text>
+        <text x="520" y="208" class="gn-s">장벽이 얇으면 φ_b 항이 커져 nₛ↓ → 임계 두께 아래 0</text>
+        <text x="520" y="228" class="gn-s">전자의 출처는 도핑이 아니라 표면 상태</text>
+      </svg>
+      <figcaption><b>그림 9-2.</b> 분극 벡터(노랑)와 전하 분포. 분극 자체는 중성이지만 끝면에 \(\pm\sigma\)가 남는다. 2DEG 전자는 AlGaN 표면의 도너형 상태에서 온다는 것이 정설이며(입벤 모델), 그래서 <strong>표면 상태가 곧 채널의 일부</strong>다. 이 사실이 5절의 전류 붕괴로 이어진다.</figcaption>
+    </figure>
+    <p>2DEG 밀도는 장벽 안의 정전기로 구한다. 표면에서 페르미 준위가 전도대 아래 \(q\phi_b\)(약 \(0.84 + 1.3x\) eV)에 고정되어 있고, 계면에서는 GaN 전도대가 페르미 준위보다 \(E_F\)만큼 아래에 있다. 장벽 안 전계는 \((q\sigma - q^2 n_s)/\varepsilon_B\)이고, 이를 두께 \(d\)에 걸쳐 적분한 전압이 두 끝의 밴드 높이 차와 같아야 한다.</p>
+    <div class="formula">$$n_s = \frac{\sigma}{q} - \frac{\varepsilon_B}{q^2 d}\left(q\phi_b + E_F - \Delta E_c\right),\qquad E_F = E_0 + \frac{\pi\hbar^2}{m^*}n_s,\quad E_0 = \left(\frac{9\pi\hbar q^2 n_s}{8\varepsilon\sqrt{8m^*}}\right)^{2/3}$$<div class="where">\(\varepsilon_B \approx 9\varepsilon_0\), \(m^* = 0.22m_e\), \(\Delta E_c = 0.7\,[E_g(x) - E_g(0)]\), \(E_g(x) = 6.13x + 3.42(1-x) - x(1-x)\) eV. \(E_0\)는 삼각 우물의 바닥 부밴드 에너지. \(n_s\)가 0이 되는 <strong>임계 두께</strong> \(d_c = \varepsilon_B(q\phi_b - \Delta E_c)/(q\sigma)\)는 \(x\) = 0.25에서 약 3 nm다. 면저항은 \(R_{sh} = 1/(q n_s \mu)\).</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="AlGaN/GaN 전도대 다이어그램: 표면 고정 장벽, 기울어진 AlGaN 전도대, 계면 불연속 ΔEc, GaN 쪽 삼각 우물과 2DEG, 페르미 준위">
+        <rect x="60" y="20" width="12" height="210" class="gn-met"/><text x="66" y="244" text-anchor="middle" class="gn-s">표면/게이트</text>
+        <rect x="72" y="20" width="170" height="210" class="gn-algan" opacity=".5"/><text x="157" y="244" text-anchor="middle" class="gn-s">AlGaN (d)</text>
+        <rect x="242" y="20" width="360" height="210" class="gn-gan" opacity=".5"/><text x="420" y="244" text-anchor="middle" class="gn-s">GaN</text>
+        <line x1="40" y1="150" x2="620" y2="150" class="gn-dash"/><text x="626" y="154" class="gn-s">E_F</text>
+        <path d="M72 50 L242 140 L242 170 Q262 158 300 130 Q380 100 600 92" class="gn-line"/>
+        <text x="80" y="44" class="gn-s">qφ_b</text><line x1="76" y1="50" x2="76" y2="150" stroke="var(--text-dim)" stroke-width="1"/>
+        <text x="250" y="132" class="gn-s">ΔE_c</text>
+        <path d="M244 152 Q262 148 280 140 L280 168 Z" class="gn-e" opacity=".6"/>
+        <line x1="246" y1="160" x2="282" y2="160" stroke="var(--m-electron)" stroke-width="2"/><text x="290" y="176" class="gn-s" style="fill:var(--m-electron)">E₀ 부밴드, 2DEG (폭 약 2–3 nm)</text>
+        <text x="110" y="100" class="gn-s" transform="rotate(28 110 100)">기울기 = 장벽 전계</text>
+        <rect x="660" y="30" width="200" height="190" rx="10" class="gn-box"/>
+        <text x="676" y="54" class="gn-b">게이트로 보면</text>
+        <text x="676" y="78" class="gn-s">nₛ = C_B(V_GS − V_th)/q</text>
+        <text x="676" y="98" class="gn-s">C_B = ε_B/(d + Δd)</text>
+        <text x="676" y="122" class="gn-s">V_th = φ_b − ΔE_c/q</text>
+        <text x="676" y="140" class="gn-s">       − qσd/ε_B (+E_F/q)</text>
+        <text x="676" y="166" class="gn-s">x 0.25, d 20 nm:</text>
+        <text x="676" y="184" class="gn-s">V_th ≈ −5 V (공핍형)</text>
+        <text x="676" y="204" class="gn-s">장벽이 곧 게이트 유전체</text>
+      </svg>
+      <figcaption><b>그림 9-3.</b> AlGaN/GaN 전도대(개념도). 분극 전하가 AlGaN 전도대를 크게 기울여 계면 GaN 쪽에 페르미 준위 아래로 내려간 삼각 우물을 만든다. 게이트 전압은 장벽 커패시턴스 \(C_B\)를 통해 \(n_s\)를 선형으로 바꾸며, 이것이 HEMT의 전하 제어 모델이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ns">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>분극 전하 → 2DEG 밀도: Al 조성과 장벽 두께</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ns-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>Al 조성 x <output id="ns-x-out"></output></span><input type="range" id="ns-x" min="0.08" max="0.45" step="0.01" value="0.25"></label>
+          <label class="ctrl"><span>장벽 두께 d <output id="ns-d-out"></output></span><input type="range" id="ns-d" min="1" max="40" step="0.5" value="20"></label>
+          <label class="ctrl"><span>2DEG 이동도 μ <output id="ns-mu-out"></output></span><input type="range" id="ns-mu" min="800" max="2200" step="50" value="1900"></label>
+          <label class="check"><input type="checkbox" id="ns-pz" checked> 압전 분극 포함</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">분극 전하 σ/q</span><span class="v" id="ns-sig">—</span></div>
+        <div class="stat"><span class="k">2DEG nₛ</span><span class="v" id="ns-n">—</span></div>
+        <div class="stat"><span class="k">면저항 R<sub>sh</sub></span><span class="v" id="ns-r">—</span></div>
+        <div class="stat"><span class="k">임계 두께 d<sub>c</sub></span><span class="v" id="ns-dc">—</span></div>
+        <div class="stat"><span class="k">공핍형 V<sub>th</sub></span><span class="v" id="ns-vt">—</span></div>
+      </div>
+      <div class="sim-note">곡선은 x = 0.15–0.35의 \(n_s(d)\), 굵은 선이 현재 조성, 점이 현재 두께다. \(E_F\)는 위 식을 고정점 반복(감쇠 50 %, 40회)으로 푼다. 해볼 것: ① 두께를 키우면 \(n_s\)가 \(\sigma/q\)에 점근한다. 20 nm를 넘으면 거의 늘지 않는다. ② 압전 분극을 끄면 \(n_s\)가 약 40 % 줄어든다. 변형이 풀린(이완된) AlGaN은 2DEG를 많이 잃는다. ③ x를 0.4 이상으로 올리면 \(n_s\)는 크지만 AlGaN이 두꺼울 때 격자 이완·균열이 생기고 합금 산란으로 이동도가 떨어진다(실제 전력 소자는 x 0.15–0.25). ④ 장벽을 5 nm 아래로 얇게 하면 \(V_{th}\)가 0에 가까워진다. 리세스 게이트 증강형의 원리다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="emode">
+    <h2>공핍형에서 증강형으로: p-GaN 게이트</h2>
+    <p>2DEG는 게이트에 아무것도 걸지 않아도 있다. 그래서 기본 HEMT는 \(V_{th}\)가 −3 ~ −6 V인 <span class="term">공핍형</span><span class="en">(depletion-mode, normally-on)</span>이다. RF 증폭기에는 괜찮지만 전력 변환기에서는 치명적이다. 드라이버 전원이 올라오기 전, 혹은 드라이버가 고장 났을 때 하프 브리지 두 스위치가 함께 켜져 DC 링크를 단락시킨다. 전력용 GaN은 그래서 네 가지 길로 <span class="term">증강형</span><span class="en">(enhancement-mode, normally-off)</span>을 만든다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="증강형 GaN 방식 네 가지: 리세스 게이트, 불소 이온 주입, 캐스코드(저전압 Si MOSFET + 공핍형 HEMT), p-GaN 게이트">
+        <g transform="translate(10,20)">
+          <text x="95" y="0" text-anchor="middle" class="gn-b">(a) 리세스 게이트</text>
+          <rect x="0" y="80" width="190" height="60" class="gn-gan"/><rect x="0" y="66" width="190" height="14" class="gn-algan"/>
+          <rect x="75" y="66" width="40" height="10" fill="var(--bg-elev)"/><rect x="70" y="40" width="50" height="10" class="gn-met"/><rect x="70" y="50" width="50" height="26" class="gn-ox"/>
+          <path d="M5 81 H72 M118 81 H185" class="gn-2deg"/>
+          <text x="95" y="160" text-anchor="middle" class="gn-s">장벽을 깎아 d → d_c 이하</text>
+          <text x="95" y="176" text-anchor="middle" class="gn-s">+ 게이트 절연막(MIS)</text>
+          <text x="95" y="196" text-anchor="middle" class="gn-s">식각 깊이 균일도·계면 트랩</text>
+        </g>
+        <g transform="translate(230,20)">
+          <text x="95" y="0" text-anchor="middle" class="gn-b">(b) 불소 주입</text>
+          <rect x="0" y="80" width="190" height="60" class="gn-gan"/><rect x="0" y="66" width="190" height="14" class="gn-algan"/>
+          <rect x="70" y="52" width="50" height="14" class="gn-met"/>
+          <g class="gn-s"><text x="78" y="77">F⁻F⁻F⁻</text></g>
+          <path d="M5 81 H72 M118 81 H185" class="gn-2deg"/>
+          <text x="95" y="160" text-anchor="middle" class="gn-s">장벽에 음이온 고정 전하</text>
+          <text x="95" y="176" text-anchor="middle" class="gn-s">σ를 상쇄해 V_th ↑</text>
+          <text x="95" y="196" text-anchor="middle" class="gn-s">고온 안정성 문제로 소수</text>
+        </g>
+        <g transform="translate(460,20)">
+          <text x="95" y="0" text-anchor="middle" class="gn-b">(c) 캐스코드</text>
+          <rect x="20" y="40" width="70" height="44" rx="6" class="gn-si"/><text x="55" y="66" text-anchor="middle" class="gn-s">저전압 Si</text>
+          <rect x="110" y="40" width="70" height="44" rx="6" class="gn-gan2"/><text x="145" y="60" text-anchor="middle" class="gn-w">공핍형</text><text x="145" y="76" text-anchor="middle" class="gn-w">GaN</text>
+          <path d="M90 62 H110 M55 84 V110 H145 V84" class="gn-line"/><text x="100" y="124" text-anchor="middle" class="gn-s">GaN 게이트 = Si 소스</text>
+          <text x="95" y="160" text-anchor="middle" class="gn-s">Si 게이트로 구동(±20 V)</text>
+          <text x="95" y="176" text-anchor="middle" class="gn-s">Si 바디 다이오드 Q_rr 일부</text>
+          <text x="95" y="196" text-anchor="middle" class="gn-s">두 칩·패키지 인덕턴스</text>
+        </g>
+        <g transform="translate(680,20)">
+          <text x="95" y="0" text-anchor="middle" class="gn-b">(d) p-GaN 게이트</text>
+          <rect x="0" y="80" width="190" height="60" class="gn-gan"/><rect x="0" y="66" width="190" height="14" class="gn-algan"/>
+          <rect x="70" y="46" width="50" height="20" class="gn-pgan"/><rect x="76" y="34" width="38" height="12" class="gn-met"/>
+          <path d="M5 81 H72 M118 81 H185" class="gn-2deg"/>
+          <text x="95" y="160" text-anchor="middle" class="gn-s">p형 층이 밴드를 들어올림</text>
+          <text x="95" y="176" text-anchor="middle" class="gn-s">V_th ≈ +1.2–1.8 V</text>
+          <text x="95" y="196" text-anchor="middle" class="gn-s">현재 주류(15–650 V)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 9-4.</b> 증강형을 만드는 네 가지 방법. (a)·(b)는 게이트 아래 \(\sigma\)나 \(d\)를 줄이고, (d)는 p-GaN의 정공이 밴드를 들어올려 2DEG를 지운다. (c)는 소자 물리 대신 회로로 해결한 방식으로, 공핍형 HEMT의 게이트를 저전압 Si MOSFET의 소스에 묶는다. 고전압·고전류 쪽(예: 900 V 이상)에 캐스코드나 직접 구동 공핍형이 남아 있다.</figcaption>
+    </figure>
+    <p>p-GaN 게이트에서 2DEG 위의 장벽 꼭대기는 금속이 아니라 p형 GaN에 붙는다. p형 GaN의 페르미 준위는 가전자대 가까이(약 0.1–0.2 eV 위)에 있으므로 AlGaN 위쪽 끝의 전도대는 페르미 준위보다 거의 밴드갭 하나(약 3.3 eV)만큼 높아진다. 위 식에서 \(q\phi_b\)를 약 3.3 eV로 바꾼 것과 같고, 그만큼 문턱이 오른다. 금속/p-GaN 사이는 쇼트키 접합이라, 양의 게이트 전압을 걸면 이 접합이 역바이어스되어 전압 일부를 가져간다. 두 커패시턴스의 분압 때문에 외부에서 보는 문턱은 내부 문턱보다 크다.</p>
+    <div class="formula">$$V_{th,\text{int}} = \phi_p - \frac{\Delta E_c}{q} - \frac{q\sigma d}{\varepsilon_B},\qquad V_{th} \approx V_{th,\text{int}}\left(1 + \frac{C_B}{C_{SB}}\right) = V_{th,\text{int}}\left(1 + \frac{W_{SB}}{d}\right),\quad W_{SB} = \sqrt{\frac{2\varepsilon V_{bi}}{qN_A}}$$<div class="where">\(\phi_p \approx 3.3\) V(p-GaN 장벽), \(C_B = \varepsilon/d\), 쇼트키 공핍 폭 \(W_{SB}\)는 활성 Mg 농도 \(N_A\)와 \(V_{bi}\) 약 1.5 V로 정하고 p-GaN 두께(약 70 nm)를 넘지 못한다. 교육용 단순화 모델이다(실제로는 정공 축적·계면 전하·Mg 확산이 더해진다). \(V_{th,\text{int}} \le 0\)이면 소자는 공핍형이 된다.</div></div>
+    <p>여기에 증강형 GaN의 근본 트레이드오프가 있다. \(V_{th}\)를 올리려면 \(\sigma d\)를 줄여야 하는데(낮은 Al 조성, 얇은 장벽), 그러면 게이트 바깥 <strong>접근 영역의 \(n_s\)도 줄어 면저항이 커진다</strong>. 그래서 실제 p-GaN HEMT는 x 0.15–0.2, d 12–15 nm 근처에서 \(V_{th}\) 약 1.5 V와 \(R_{sh}\) 약 400–500 Ω/□를 맞바꾼다.</p>
+    <div class="sim" id="sim-pg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>p-GaN 게이트 문턱 전압과 접근 영역 면저항</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pg-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>Al 조성 x <output id="pg-x-out"></output></span><input type="range" id="pg-x" min="0.10" max="0.30" step="0.01" value="0.20"></label>
+          <label class="ctrl"><span>장벽 두께 d <output id="pg-d-out"></output></span><input type="range" id="pg-d" min="6" max="25" step="0.5" value="12"></label>
+          <label class="ctrl"><span><span>활성 Mg 농도 N<sub>A</sub></span> <output id="pg-na-out"></output></span><input type="range" id="pg-na" min="17" max="19" step="0.05" value="18"></label>
+          <label class="ctrl"><span>p-GaN 두께 <output id="pg-tp-out"></output></span><input type="range" id="pg-tp" min="30" max="120" step="5" value="70"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">내부 문턱 V<sub>th,int</sub></span><span class="v" id="pg-vi">—</span></div>
+        <div class="stat"><span class="k">외부 문턱 V<sub>th</sub></span><span class="v" id="pg-vt">—</span></div>
+        <div class="stat"><span class="k">접근 영역 nₛ</span><span class="v" id="pg-n">—</span></div>
+        <div class="stat"><span class="k">R<sub>sh</sub> (μ 1900)</span><span class="v" id="pg-r">—</span></div>
+        <div class="stat"><span class="k">판정</span><span class="v" id="pg-ok">—</span></div>
+      </div>
+      <div class="sim-note">위: 게이트 아래 \(n_s(V_{GS}) = C_{eff}(V_{GS} - V_{th})/q\)(포화는 접근 영역 \(n_s\))와 전달 특성. 아래: x–d 평면에서 \(V_{th}\) = 1.5 V 등고선(실선)과 \(R_{sh}\) = 500 Ω/□ 등고선(점선). 두 조건을 함께 만족하는 곳(실선 아래이면서 점선 위)은 두 선이 엇갈리는 x ≈ 0.2, d ≈ 12 nm에서 오른쪽(높은 x, 더 얇은 장벽)으로 열리는 좁은 쐐기뿐이다. 이것이 "노멀리 오프이면서 저항도 낮은" 설계 창이고, 쐐기 안쪽으로 갈수록 장벽이 얇아져 게이트 누설과 공정 산포에 민감해진다. 해볼 것: ① x 0.25, d 15 nm로 옮기면 \(R_{sh}\)는 낮지만 \(V_{th}\)가 음수(공핍형)가 된다. ② \(N_A\)를 10¹⁷로 낮추면 \(W_{SB}\)가 p-GaN 두께에 걸려 분압비가 커지고 \(V_{th}\)가 오른다. 대신 게이트 쇼트키가 더 많은 전압을 받아 게이트 누설·신뢰성이 나빠진다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>방식</th><th>\(V_{th}\)</th><th>게이트 구동</th><th>장점</th><th>약점</th></tr></thead>
+      <tbody>
+        <tr><td>p-GaN 게이트(쇼트키 금속)</td><td>약 +1.2–1.8 V</td><td>0/+6 V, 절대 최대 +7 V</td><td>단일 칩, \(Q_{rr}\) 0, 공정 성숙</td><td>좁은 게이트 창, 낮은 \(V_{th}\), 게이트 누설 µA급</td></tr>
+        <tr><td>p-GaN 게이트(오믹 금속, 게이트 주입형)</td><td>약 +1 V</td><td>정전류 구동(mA)</td><td>정공 주입으로 전도도 변조·동적 \(R_{on}\) 억제</td><td>게이트 정상 전류, 구동 손실</td></tr>
+        <tr><td>MIS 리세스 게이트</td><td>약 +1.5–3 V</td><td>0/+10–15 V</td><td>넓은 게이트 창</td><td>절연막 계면 트랩, \(V_{th}\) 이동</td></tr>
+        <tr><td>캐스코드</td><td>Si MOSFET 문턱(약 +4 V)</td><td>0/+10–12 V(Si 표준)</td><td>기존 드라이버 사용, 견고한 게이트</td><td>Si 바디 다이오드 \(Q_{rr}\), 두 칩 간 인덕턴스, \(dv/dt\) 제어 어려움</td></tr>
+        <tr><td>공핍형 직접 구동</td><td>−10 ~ −15 V</td><td>음 전원 + 내장 Si 스위치</td><td>최고의 채널 품질</td><td>시동·고장 시 보호 회로 필수</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="gatewindow">
+    <h2>좁은 게이트 창</h2>
+    <p>Si MOSFET의 게이트는 수십 nm 산화막이라 ±20 V를 견디고, 문턱 약 3–4 V 위로 넉넉히 10–12 V를 건다. p-GaN HEMT 게이트는 금속/p-GaN 쇼트키 다이오드와 p-GaN/AlGaN/GaN pin 다이오드가 등을 맞댄 구조다. +5 V 근처부터 정공이 채널로 주입되기 시작하고, 쇼트키 접합의 역방향 전계가 커져 +7–10 V에서 시간 의존 파괴가 빨라진다. 그래서 정격은 보통 <strong>권장 구동 +5–6 V, 절대 최대 +7 V(과도 수 ns 펄스에서 약 +10 V), 음 방향 −10 V 안팎</strong>이다. \(V_{th}\) 약 1.5 V에서 권장 구동까지 여유가 4.5 V뿐이고, 꺼진 상태에서 잡음 여유도 1.5 V뿐이다.</p>
+    <p>문제는 게이트 루프다. 드라이버 출력 저항과 외부 \(R_G\), 루프 인덕턴스 \(L_G\), 입력 커패시턴스 \(C_{iss}\)는 직렬 RLC 회로를 이룬다. 감쇠비가 작으면 계단 입력에 대한 응답이 목표 전압을 넘어선다.</p>
+    <div class="formula">$$\zeta = \frac{R_G}{2}\sqrt{\frac{C_{iss}}{L_G}},\qquad \omega_0 = \frac{1}{\sqrt{L_G C_{iss}}},\qquad \frac{V_{pk}}{V_{drv}} = 1 + \exp\!\left(-\frac{\pi\zeta}{\sqrt{1-\zeta^2}}\right)\quad(\zeta \lt 1)$$<div class="where">\(R_G\)는 드라이버·외부·내부 게이트 저항의 합. \(C_{iss}\) 약 0.5 nF(650 V 50 mΩ급)이고 \(L_G\) = 5 nH면 \(R_G \ge 2\sqrt{L_G/C_{iss}}\) ≈ 6 Ω에서 임계 감쇠다. 6 V 구동에서 \(\zeta\) = 0.3이면 꼭대기는 약 8.2 V로 절대 최대를 넘는다. 게이트 루프 설계 전반(턴온·턴오프 저항 분리, 음 바이어스, 밀러 클램프)은 <a href="gatedrive.html">11장</a>에서 다룬다.</div></div>
+    <div class="sim" id="sim-gw">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>게이트 루프 링잉과 GaN 게이트 창</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gw-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>구동 전압 V<sub>drv</sub></span> <output id="gw-v-out"></output></span><input type="range" id="gw-v" min="4" max="7" step="0.1" value="6"></label>
+          <label class="ctrl"><span><span>게이트 저항 합 R<sub>G</sub></span> <output id="gw-r-out"></output></span><input type="range" id="gw-r" min="0.5" max="30" step="0.5" value="3"></label>
+          <label class="ctrl"><span><span>게이트 루프 L<sub>G</sub></span> <output id="gw-l-out"></output></span><input type="range" id="gw-l" min="0.5" max="20" step="0.5" value="5"></label>
+          <label class="ctrl"><span><span>C<sub>iss</sub></span> <output id="gw-c-out"></output></span><input type="range" id="gw-c" min="0.1" max="2" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span>끌 때 전압 <output id="gw-off-out"></output></span><input type="range" id="gw-off" min="-4" max="0" step="0.5" value="0"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">감쇠비 ζ</span><span class="v" id="gw-z">—</span></div>
+        <div class="stat"><span class="k">턴온 꼭대기</span><span class="v" id="gw-pk">—</span></div>
+        <div class="stat"><span class="k">턴오프 바닥 → 반동</span><span class="v" id="gw-lo">—</span></div>
+        <div class="stat"><span class="k">10–90 % 상승</span><span class="v" id="gw-tr">—</span></div>
+        <div class="stat"><span class="k">판정</span><span class="v" id="gw-ok">—</span></div>
+      </div>
+      <div class="sim-note">게이트를 0 → \(V_{drv}\) → 끌 때 전압으로 바꾸는 펄스에 대한 RLC 응답을 해석해로 계산한다(\(\zeta \lt 1\) 감쇠 진동, \(\zeta = 1\) 임계, \(\zeta \gt 1\) 과감쇠). 빨간 점선은 절대 최대 +7 V, 노란 점선은 \(V_{th}\) 1.5 V. 해볼 것: ① 기본값(3 Ω, 5 nH)에서 꼭대기가 7 V를 살짝 넘는다. \(R_G\)를 6 Ω으로 올리면 넘지 않지만 상승이 느려져 스위칭 손실이 는다. ② \(L_G\)를 1 nH로 줄이면(드라이버를 소자 옆에 붙이거나 같은 칩에 집적) 작은 \(R_G\)로도 링잉이 없다. 10절의 모놀리식 집적이 노리는 효과다. ③ 0 V로 끌 때 바닥에서 반동하는 진동이 \(V_{th}\)에 닿으면 잠깐 다시 켜질 수 있다. 음 바이어스(−2 ~ −3 V)는 이 여유를 넓히지만 3사분면 \(V_{SD}\)를 키운다(5절).</div>
+    </div>
+    <div class="callout warn"><strong>GaN 게이트의 세 가지 함정</strong> ① 프로브로 보는 게이트 파형은 칩 내부 게이트와 다르다. 패키지 안 공통 소스 인덕턴스 때문에 켈빈 소스 핀 없이 재면 링잉이 과소·과대평가된다(<a href="switching.html">10장</a>). ② 문턱이 낮고 \(C_{gd}/C_{gs}\) 비가 작지 않아 하프 브리지 반대편의 \(dv/dt\)(50–150 V/ns)가 밀러 전류로 꺼진 게이트를 1.5 V 넘게 밀어 올릴 수 있다. ③ 온도가 오르면 \(V_{th}\)가 약간 내려가 잡음 여유가 더 준다.</div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="reverse">
+    <h2>바디 다이오드 없는 역도통</h2>
+    <p>수직 MOSFET에는 p 바디와 n 드리프트층이 만드는 pn 다이오드가 저절로 들어 있다. HEMT에는 p형 영역이 게이트 아래 말고는 없으므로 <strong>바디 다이오드가 없다</strong>. 그런데도 하프 브리지 데드 타임 동안 인덕터 전류를 흘릴 수 있다. 소스·드레인이 대칭인 채널이라, 드레인이 소스보다 낮아지면 드레인이 "소스" 노릇을 하고 게이트-드레인 전압 \(V_{GD} = V_{GS} + V_{SD}\)가 문턱을 넘는 순간 채널이 켜지기 때문이다. 전하 저장이 없으므로 <span class="term">역회복</span> 전하 \(Q_{rr}\)는 0이다(<a href="diodes.html">5장</a>의 PiN 역회복과 비교).</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="3사분면 도통: 게이트 꺼진 HEMT에서 드레인 전위가 내려가면 게이트-드레인 전압이 문턱을 넘어 채널이 열리고 전류가 드레인에서 소스 방향 반대로 흐른다">
+        <defs><marker id="f95-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-amp)"/></marker></defs>
+        <rect x="30" y="110" width="420" height="60" class="gn-gan"/><rect x="30" y="96" width="420" height="14" class="gn-algan"/>
+        <rect x="40" y="70" width="60" height="42" class="gn-met"/><text x="70" y="62" text-anchor="middle" class="gn-b">S (0 V)</text>
+        <rect x="380" y="70" width="60" height="42" class="gn-met"/><text x="410" y="62" text-anchor="middle" class="gn-b">D (−V_SD)</text>
+        <rect x="190" y="76" width="40" height="20" class="gn-pgan"/><rect x="196" y="64" width="28" height="12" class="gn-met"/><text x="210" y="56" text-anchor="middle" class="gn-b">G (V_GS ≤ 0)</text>
+        <path d="M100 111 H190 M230 111 H380" class="gn-2deg"/><path d="M190 111 H230" stroke="var(--m-electron)" stroke-width="3.2" stroke-dasharray="3 3"/>
+        <path d="M370 132 H110" class="gn-amp" marker-end="url(#f95-a)"/><text x="240" y="152" text-anchor="middle" class="gn-s" style="fill:var(--m-amp)">전류 S → D (3사분면)</text>
+        <text x="240" y="196" text-anchor="middle" class="gn-s">V_GD = V_GS + V_SD &gt; V_th 이면 게이트 아래 채널이 드레인 쪽에서 열린다</text>
+        <rect x="490" y="20" width="370" height="190" rx="10" class="gn-box"/>
+        <text x="508" y="44" class="gn-b">드레인을 "소스"로 보면</text>
+        <text x="508" y="70" class="gn-s">유효 V_GS′ = V_GS + V_SD,  유효 V_DS′ = V_SD</text>
+        <text x="508" y="92" class="gn-s">V_DS′ ≥ V_GS′ − V_th ⇔ V_th ≥ V_GS → 항상 포화</text>
+        <text x="508" y="116" class="gn-b">I = (k/2)(V_SD − (V_th − V_GS))²</text>
+        <text x="508" y="140" class="gn-s">V_SD = V_th − V_GS + √(2I/k) + I·R_acc</text>
+        <text x="508" y="166" class="gn-s">V_GS = 0: 약 2–3 V,  V_GS = −3 V: 약 5–6 V</text>
+        <text x="508" y="190" class="gn-s">게이트를 켜면(동기 정류) I·R_on 만 남음</text>
+      </svg>
+      <figcaption><b>그림 9-5.</b> HEMT의 3사분면 도통. 바디 다이오드 대신 채널이 "다이오드처럼" 켜진다. 문턱만큼의 전압(과 그 위의 과구동)을 내야 켜지므로 \(V_{SD}\)는 Si 바디 다이오드(약 0.8 V)보다 크고, 끌 때 음 바이어스를 걸면 그만큼 더 커진다.</figcaption>
+    </figure>
+    <div class="formula">$$V_{SD} = (V_{th} - V_{GS}) + \sqrt{\frac{2I_{SD}}{k}} + I_{SD}R_{acc},\qquad P_{dt} = 2\,V_{SD}\,I\,t_{dt}\,f_{sw}$$<div class="where">\(k\)는 채널 트랜스컨덕턴스 계수, \(R_{acc}\)는 접근 영역·접촉 저항. 온 상태 \(R_{DS(on)} = R_{acc} + 1/[k(V_{GS,on} - V_{th})]\)에서 역산한다. \(P_{dt}\)는 한 주기 두 번의 데드 타임 동안 역도통하는 손실(동기 벅의 하단 스위치). 대신 역회복 손실 \(Q_{rr}V_{dc}f\)는 없다.</div></div>
+    <div class="sim" id="sim-rv">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>3사분면 I–V와 데드 타임 손실</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rv-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>소자</span><div class="seg" id="rv-dev"><button data-value="hv" class="on">650 V 50 mΩ</button><button data-value="lv">100 V 3 mΩ</button></div></div>
+          <label class="ctrl"><span><span>끌 때 V<sub>GS</sub></span> <output id="rv-vg-out"></output></span><input type="range" id="rv-vg" min="-4" max="0" step="0.25" value="0"></label>
+          <label class="ctrl"><span>역전류 I <output id="rv-i-out"></output></span><input type="range" id="rv-i" min="1" max="40" step="1" value="10"></label>
+          <label class="ctrl"><span><span>데드 타임 t<sub>dt</sub></span> <output id="rv-dt-out"></output></span><input type="range" id="rv-dt" min="2" max="100" step="1" value="20"></label>
+          <label class="ctrl"><span>스위칭 주파수 <output id="rv-f-out"></output></span><input type="range" id="rv-f" min="50" max="2000" step="10" value="300"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">GaN V<sub>SD</sub></span><span class="v" id="rv-vsd">—</span></div>
+        <div class="stat"><span class="k">데드 타임 손실 (GaN)</span><span class="v" id="rv-p">—</span></div>
+        <div class="stat"><span class="k">Si 바디 다이오드 V<sub>F</sub> / Q<sub>rr</sub> 손실</span><span class="v" id="rv-si">—</span></div>
+        <div class="stat"><span class="k">SiC 바디 다이오드 V<sub>F</sub></span><span class="v" id="rv-sic">—</span></div>
+      </div>
+      <div class="sim-note">곡선: GaN 꺼진 상태(현재 \(V_{GS}\), 굵게)와 \(V_{GS}\) = 0·−2·−4 V, 게이트 켠 역도통(\(I R_{on}\)), 비교용 Si 바디 다이오드(\(V_F \approx 0.75\) V + 저항)와 SiC 바디 다이오드(약 2.7 V 무릎). Si의 역회복 손실은 같은 전압 등급의 대표 \(Q_{rr}\)(650 V: 약 10 µC, 100 V: 약 0.1 µC)로 \(Q_{rr}V_{dc}f\)를 계산했다. 해볼 것: ① 100 V 소자, 21 A, 500 kHz, 10 ns(DC 서버 전원 한 상)로 맞추면 데드 타임 손실이 상당 0.4 W 안팎이다. ② 끌 때 −3 V를 걸면 \(V_{SD}\)가 3 V 늘어 데드 타임 손실이 두 배 이상이 된다. 그래서 GaN 드라이버는 데드 타임을 수 ns로 줄이고 0 V로 끄는 쪽을 선호한다. ③ 650 V급에서 Si 슈퍼정션의 \(Q_{rr}\) 손실은 수십–수백 W라 CCM 토템폴 PFC에 쓸 수 없다.</div>
+    </div>
+    <div class="callout fab"><strong>DC 서버 전원의 데드 타임 예산</strong>48 V → 12 V, 1 kW, 4상 인터리브드 동기 벅은 상당 약 21 A, 500 kHz로 돈다. 100 V GaN(\(R_{DS(on)}\) 약 3 mΩ)의 꺼진 상태 \(V_{SD}\)는 약 1.8–2 V라, 데드 타임 10 ns 두 번이면 상당 약 0.4 W다. 피크 효율 97.5 %에서 상당 손실 예산이 약 6 W이므로 데드 타임 하나가 예산의 약 6 %를 쓴다. 같은 회로의 Si MOSFET(200 kHz)은 \(V_F\)가 0.8 V로 낮지만 \(Q_{rr}\)와 \(Q_{oss}\)가 커서 주파수를 올리지 못한다. 적응형 데드 타임 제어로 2–5 ns까지 줄이면 이 손실은 절반 아래가 된다.</div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="collapse">
+    <h2>전류 붕괴와 동적 온저항</h2>
+    <p>초기 GaN HEMT는 DC로 재면 멀쩡한데 고전압에서 끄고 다시 켜면 전류가 크게 줄었다. 이것이 <span class="term">전류 붕괴</span><span class="en">(current collapse)</span>, 스위칭 회로에서 보면 <span class="term">동적 온저항</span><span class="en">(dynamic R<sub>on</sub>)</span> 증가다. 꺼진 상태의 고전계가 전자를 게이트–드레인 사이 표면 상태, 패시베이션 계면, 탄소 도핑 버퍼의 깊은 준위로 밀어 넣는다. 포획된 음전하는 그 위치에서 2DEG를 밀어내는 <strong>가상 게이트</strong>가 된다. 소자를 켜도 이 전하는 방출 시정수(수 µs–수 초)만큼 남아 접근 영역 저항을 키운다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 240" role="img" aria-label="트래핑 위치: 게이트 드레인 쪽 표면 트랩(가상 게이트)과 버퍼 깊은 준위 트랩이 2DEG를 공핍시키는 모습, 꺼진 상태 고전계와 켜진 상태 방출">
+        <rect x="30" y="100" width="460" height="100" class="gn-gan"/><rect x="30" y="86" width="460" height="14" class="gn-algan"/><rect x="30" y="56" width="460" height="30" class="gn-ox"/>
+        <rect x="30" y="170" width="460" height="30" class="gn-gan2" opacity=".8"/><text x="260" y="190" text-anchor="middle" class="gn-w">C 도핑 버퍼 (깊은 준위 E_c − 약 0.9 eV)</text>
+        <rect x="40" y="50" width="50" height="52" class="gn-met"/><text x="65" y="44" text-anchor="middle" class="gn-b">S</text>
+        <rect x="430" y="50" width="50" height="52" class="gn-met"/><text x="455" y="44" text-anchor="middle" class="gn-b">D (고전압)</text>
+        <rect x="140" y="66" width="34" height="20" class="gn-pgan"/><rect x="144" y="56" width="26" height="10" class="gn-met"/><text x="157" y="44" text-anchor="middle" class="gn-b">G</text>
+        <g class="gn-e"><circle cx="190" cy="84" r="3.5"/><circle cx="204" cy="84" r="3.5"/><circle cx="218" cy="84" r="3.5"/><circle cx="232" cy="84" r="3.5"/><circle cx="246" cy="84" r="3.5"/></g>
+        <text x="220" y="76" text-anchor="middle" class="gn-s">표면 트랩 = 가상 게이트</text>
+        <path d="M90 101 H140 M174 101 H186 M260 101 H430" class="gn-2deg"/><path d="M186 101 H258" stroke="var(--m-electron)" stroke-width="1.4" stroke-dasharray="2 4"/>
+        <g class="gn-e"><circle cx="300" cy="166" r="3.5"/><circle cx="320" cy="168" r="3.5"/><circle cx="340" cy="166" r="3.5"/><circle cx="360" cy="168" r="3.5"/></g>
+        <text x="330" y="156" text-anchor="middle" class="gn-s">버퍼 포획 → 아래에서 2DEG 공핍</text>
+        <text x="260" y="226" text-anchor="middle" class="gn-s">꺼짐: 고전계 → 포획 (τ_c ≈ ns–µs)    켜짐: 열 방출 (τ_e = τ₀·e^(E_a/kT), µs–s)</text>
+        <rect x="520" y="20" width="340" height="200" rx="10" class="gn-box"/>
+        <text x="538" y="44" class="gn-b">대책</text>
+        <text x="538" y="68" class="gn-s">① SiN 패시베이션(제자리 성장): 표면 트랩↓</text>
+        <text x="538" y="90" class="gn-s">② 게이트·소스 필드 플레이트: 게이트 끝</text>
+        <text x="538" y="108" class="gn-s">    전계 분산 → 표면 주입↓</text>
+        <text x="538" y="130" class="gn-s">③ 채널-버퍼 거리·탄소 농도 최적화,</text>
+        <text x="538" y="148" class="gn-s">    버퍼 누설 경로로 전하 빼내기</text>
+        <text x="538" y="170" class="gn-s">④ 드레인 쪽 p-GaN(하이브리드 드레인)으로</text>
+        <text x="538" y="188" class="gn-s">    정공 주입해 포획 전자 중화</text>
+        <text x="538" y="210" class="gn-s">검증: 하드 스위칭 동적 R_on 시험</text>
+      </svg>
+      <figcaption><b>그림 9-6.</b> 동적 온저항의 두 근원. 게이트 드레인 쪽 끝 표면(패시베이션 계면)에 잡힌 전자는 위에서, 버퍼 깊은 준위에 잡힌 전자는 아래에서 2DEG를 밀어낸다. 두 트랩은 방출 활성화 에너지(표면 약 0.3–0.5 eV, 탄소 관련 약 0.8–0.9 eV)가 달라 회복 시간이 수 자릿수 차이 난다.</figcaption>
+    </figure>
+    <p>스위칭 회로에서는 매 주기 꺼짐(포획)과 켜짐(방출)이 반복된다. 트랩 점유율 \(f\)를 1차 방정식으로 쓰면 각 구간의 해는 지수 함수이므로, 주기마다 정확히 갱신할 수 있다.</p>
+    <div class="formula">$$\text{꺼짐: } f \to f_\infty(V) + \left[f - f_\infty(V)\right]e^{-t_{off}/\tau_c},\qquad \text{켜짐: } f \to f\,e^{-t_{on}/\tau_e(T)},\qquad \frac{R_{on,dyn}}{R_{on,0}} = 1 + \beta_s f_s + \beta_b f_b$$<div class="where">\(f_\infty(V) = V/(V + V_{1/2})\)는 꺼짐 전압에 따른 포화 점유율, \(\tau_e(T) = \tau_{e,25}\exp[(E_a/k)(1/T - 1/T_{25})]\). 아래 \(s\)는 표면(\(E_a\) 0.45 eV, \(\tau_c\) 약 1 µs, \(\tau_{e,25}\) 약 30 µs), \(b\)는 버퍼(\(E_a\) 0.9 eV, \(\tau_c\) 약 0.3 ms, \(\tau_{e,25}\) 약 20 ms)다. 버퍼 포획이 느린 것은 전자가 누설 전류로 버퍼까지 가야 하기 때문이다. 민감도 \(\beta\)는 패시베이션·필드 플레이트·버퍼 설계가 정한다. 시정수는 교육용 대표값이며 실제 트랩은 넓은 분포를 갖는다.</div></div>
+    <div class="sim" id="sim-dr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>트래핑·디트래핑 모델: 동적 온저항의 누적</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="dr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>꺼짐 전압 V<sub>off</sub></span> <output id="dr-v-out"></output></span><input type="range" id="dr-v" min="0" max="650" step="10" value="400"></label>
+          <label class="ctrl"><span>스위칭 주파수 <output id="dr-f-out"></output></span><input type="range" id="dr-f" min="10" max="1000" step="10" value="100"></label>
+          <label class="ctrl"><span>듀티(켜짐 비율) <output id="dr-d-out"></output></span><input type="range" id="dr-d" min="0.05" max="0.95" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span>접합 온도 <output id="dr-t-out"></output></span><input type="range" id="dr-t" min="25" max="150" step="5" value="25"></label>
+          <div class="ctrl"><span>소자 세대</span><div class="seg" id="dr-gen"><button data-value="old">초기형</button><button data-value="fp">FP+SiN</button><button data-value="new" class="on">최신형</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">정상 상태 R<sub>on,dyn</sub>/R<sub>on,0</sub></span><span class="v" id="dr-ss">—</span></div>
+        <div class="stat"><span class="k">표면 / 버퍼 점유율</span><span class="v" id="dr-fo">—</span></div>
+        <div class="stat"><span class="k">버퍼 방출 τ<sub>e</sub></span><span class="v" id="dr-te">—</span></div>
+        <div class="stat"><span class="k">전도 손실 증가</span><span class="v" id="dr-pl">—</span></div>
+      </div>
+      <div class="sim-note">가로축은 스위칭을 시작한 뒤의 시간(로그), 세로축은 매 주기 켜지는 순간의 \(R_{on,dyn}/R_{on,0}\)이다. 0.1 s 동안 최대 10만 주기를 구간별 지수 해로 정확히 갱신하므로 시간 간격과 무관하게 안정하다. 해볼 것: ① 초기형에서 400 V, 100 kHz면 \(R_{on}\)이 수 배로 커진다. 1990–2000년대 소자가 전력 변환에 못 쓰였던 이유다. ② 최신형은 같은 조건에서 10–20 % 안팎이다. ③ 온도를 올리면 버퍼 방출이 빨라져 동적 \(R_{on}\)이 오히려 줄 수 있지만, 정적 \(R_{on}\) 자체는 이동도 감소로 150 °C에서 약 1.9배가 된다. ④ 주파수를 낮추고 듀티를 키우면(켜짐이 길면) 방출할 시간이 늘어 누적이 준다.</div>
+    </div>
+    <p>그래서 GaN 데이터시트의 \(R_{DS(on)}\)는 DC 값만으로는 부족하다. 지금은 하드 스위칭 이중 펄스나 연속 스위칭 회로에서 켜진 직후 수백 ns의 \(V_{DS}\)를 클램프 회로로 재는 <strong>동적 \(R_{on}\) 시험</strong>이 표준 검증 항목이고, 신뢰성 시험에서는 고전압 하드 스위칭 장기 시험으로 \(R_{on}\) 증가와 \(V_{th}\) 이동을 함께 본다(<a href="reliability.html">16장</a>). 측정 회로와 파형 함정은 <a href="switching.html">10장</a>에 있다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="lateral">
+    <h2>필드 플레이트와 측면 소자의 전압 한계</h2>
+    <p>꺼진 HEMT에서 전압은 게이트 드레인 쪽 끝에서 드레인까지 \(L_{gd}\)를 따라 걸린다. 2DEG가 공핍되며 생기는 전계는 게이트 끝에 뾰족한 봉우리를 만들고, 그 봉우리가 표면 주입(전류 붕괴)과 조기 항복을 부른다. <span class="term">필드 플레이트</span><span class="en">(field plate)</span>는 게이트나 소스에 연결한 금속을 패시베이션 위로 드레인 쪽까지 뻗어, 전계 봉우리를 여러 개로 쪼갠다. 같은 \(L_{gd}\)에서 평균 전계를 1 MV/cm 가까이 올릴 수 있다. 원리는 <a href="termination.html">4장</a>의 종단 필드 플레이트와 같다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="게이트-드레인 사이 측면 전계 분포: 필드 플레이트가 없을 때 게이트 끝 한 봉우리, 게이트 FP와 소스 FP가 있을 때 세 봉우리로 나뉘는 모습, 면적은 같은 전압">
+        <defs><marker id="f97-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--text)"/></marker></defs>
+        <line x1="60" y1="200" x2="840" y2="200" class="s-axis" marker-end="url(#f97-a)"/><line x1="60" y1="200" x2="60" y2="20" class="s-axis" marker-end="url(#f97-a)"/>
+        <text x="840" y="220" text-anchor="end" class="gn-s">게이트 끝 → 드레인 (x)</text><text x="70" y="24" class="gn-s">측면 전계 E(x)</text>
+        <path d="M80 200 L100 30 Q120 150 200 186 Q400 198 780 199" class="gn-f" opacity=".45"/>
+        <text x="110" y="28" class="gn-s">FP 없음: 게이트 끝 집중</text>
+        <path d="M80 200 L100 120 Q120 150 160 160 L260 112 Q290 150 330 158 L470 106 Q500 150 560 170 Q680 192 780 198" class="gn-f"/>
+        <line x1="100" y1="205" x2="100" y2="214" class="gn-line"/><text x="100" y="236" text-anchor="middle" class="gn-s">게이트</text>
+        <line x1="260" y1="205" x2="260" y2="214" class="gn-line"/><text x="260" y="236" text-anchor="middle" class="gn-s">게이트 FP 끝</text>
+        <line x1="470" y1="205" x2="470" y2="214" class="gn-line"/><text x="470" y="236" text-anchor="middle" class="gn-s">소스 FP 끝</text>
+        <line x1="780" y1="205" x2="780" y2="214" class="gn-line"/><text x="780" y="236" text-anchor="middle" class="gn-s">드레인</text>
+        <text x="560" y="96" class="gn-s">FP 2단: 봉우리 셋으로 분산</text>
+        <text x="560" y="114" class="gn-s">∫E dx = V_DS (두 곡선 면적 같음)</text>
+        <text x="560" y="132" class="gn-s">평균 전계 E_lat = BV / L_gd</text>
+      </svg>
+      <figcaption><b>그림 9-7.</b> 측면 전계 분포(개념도). 필드 플레이트가 없으면 전압 대부분이 게이트 끝 1 µm 안에 걸려 봉우리가 임계 전계에 먼저 닿는다. 다단 필드 플레이트는 각 끝에서 전계를 나눠 받아 분포를 사각형에 가깝게 만든다. 이상적인 사각형이면 \(BV = E_c L_{gd}\)지만, 실제 650 V 소자의 평균 전계는 약 0.5–0.8 MV/cm다.</figcaption>
+    </figure>
+    <p>측면 소자의 비온저항은 전압을 버티는 길이 \(L_{gd}\)에 비례하는 저항과, 그 길이에 비례하는 셀 피치를 곱한 것이다. 두 항이 모두 \(BV\)에 비례하므로 \(R_{on,sp} \propto BV^2\)이다. 동시에 GaN-on-Si는 기판이 소스 전위이므로 드레인 전압 전부를 버퍼가 세로로 버텨야 한다. 버퍼 두께는 \(BV/E_{buf}\)로 늘어나는데, 에피 두께는 다음 절의 휨·균열 때문에 Si 위에서 약 6–8 µm를 넘기 어렵다. <strong>측면 GaN-on-Si가 650 V(넓게 보아 900–1200 V)에서 멈추는 이유</strong>다.</p>
+    <div class="formula">$$L_{gd} = \frac{BV}{E_{lat}},\qquad R_{on,sp}^{\text{lat}} \approx k_A\left(R_{sh}L_{gd} + 2R_c\right)\left(L_{gd} + L_0\right),\qquad t_{buf} \ge \frac{BV}{E_{buf}},\qquad R_{on,sp}^{\text{vert}} = \frac{4BV^2}{\varepsilon\mu E_c^3}$$<div class="where">\(R_c\)는 폭당 접촉 저항(약 0.5 Ω·mm), \(L_0\)는 소스·게이트·드레인 전극 등 고정 피치(약 12 µm), \(k_A\)(약 1.5)는 패드·종단·배선 면적 부담. 수직 소자는 <a href="breakdown.html">3장</a>의 단극 한계(GaN \(E_c\) 3.3 MV/cm, μ 1200)다.</div></div>
+    <div class="sim" id="sim-lv">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>측면 vs 수직: 항복 길이와 비온저항 스케일링</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="lv-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>목표 항복 전압 BV <output id="lv-bv-out"></output></span><input type="range" id="lv-bv" min="2" max="3.52" step="0.01" value="2.81"></label>
+          <label class="ctrl"><span><span>평균 측면 전계 E<sub>lat</sub></span> <output id="lv-e-out"></output></span><input type="range" id="lv-e" min="0.2" max="1.5" step="0.05" value="0.6"></label>
+          <label class="ctrl"><span><span>면저항 R<sub>sh</sub></span> <output id="lv-r-out"></output></span><input type="range" id="lv-r" min="250" max="700" step="10" value="420"></label>
+          <label class="ctrl"><span><span>버퍼 수직 전계 E<sub>buf</sub></span> <output id="lv-eb-out"></output></span><input type="range" id="lv-eb" min="0.8" max="2" step="0.05" value="1.5"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">L<sub>gd</sub></span><span class="v" id="lv-l">—</span></div>
+        <div class="stat"><span class="k">측면 GaN R<sub>on,sp</sub></span><span class="v" id="lv-rl">—</span></div>
+        <div class="stat"><span class="k">수직 GaN 한계</span><span class="v" id="lv-rv">—</span></div>
+        <div class="stat"><span class="k">필요 버퍼(+전이층)</span><span class="v" id="lv-tb">—</span></div>
+        <div class="stat"><span class="k">GaN-on-Si 판정</span><span class="v" id="lv-ok">—</span></div>
+      </div>
+      <div class="sim-note">로그-로그 그래프: 측면 GaN(현재 설정, 실선), 수직 GaN 단극 한계, 4H-SiC·Si 단극 한계(\(2.97\times10^{-12}BV^{2.5}\), \(5.93\times10^{-9}BV^{2.5}\)). 빨간 띠는 필요한 에피 두께(버퍼 + 전이층 약 1.5 µm)가 8 µm를 넘어 GaN-on-Si로 만들기 어려운 영역이다. 해볼 것: ① 650 V, 0.6 MV/cm에서 측면 GaN은 약 2 mΩ·cm²로 SiC 실제 소자(약 2.5)와 비슷하다. ② 필드 플레이트를 잘 써서 E<sub>lat</sub>를 1 MV/cm로 올리면 \(L_{gd}\)와 \(R_{on,sp}\)가 크게 준다(\(\propto 1/E_{lat}^2\)에 가까움). ③ 1700 V 이상으로 가면 측면 소자는 기울기 2로, SiC는 2.5로 오르지만 버퍼 두께가 먼저 한계에 닿는다. 그 너머는 수직 GaN(GaN 기판)이나 SiC의 영역이다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="epitaxy">
+    <h2>GaN-on-Si 에피: 격자와 열팽창의 싸움</h2>
+    <p>GaN 기판은 비싸고 작다. 전력용 GaN의 거의 전부는 150–200 mm Si(111) 위에 MOCVD로 키운다. 값싼 대구경 기판과 기존 Si 팹을 쓸 수 있다는 장점 뒤에 두 가지 불일치가 있다. 격자 상수는 GaN 3.189 Å 대 Si(111) 면 3.84 Å으로 약 17 % 어긋나 전위 밀도가 10⁸–10⁹ cm⁻²에 이른다. 더 심각한 것은 <strong>열팽창 계수</strong>다. GaN 약 5.6×10⁻⁶ /K, Si 약 2.6×10⁻⁶ /K라서, 약 1050 °C 성장 온도에서 응력 없이 자란 막이 상온으로 식으면 GaN은 Si보다 더 줄어들려 하다가 붙잡혀 <strong>인장 응력</strong>을 받는다. 인장은 균열을 부른다.</p>
+    <div class="formula">$$\varepsilon_{th} = (\alpha_f - \alpha_s)\Delta T,\qquad \sigma_f = M_f\left(\varepsilon_{th} - \varepsilon_{comp}\right),\qquad \kappa = \frac{6\sigma_f t_f}{M_s t_s^2},\qquad \delta = \frac{\kappa D^2}{8}$$<div class="where">스토니(Stoney) 식. \(M_f\)(GaN 이축 탄성률 약 450 GPa), \(M_s\)(Si(111) 약 229 GPa), \(t_f\)·\(t_s\) 막·기판 두께, \(D\) 웨이퍼 지름, \(\delta\) 휨(bow). \(\varepsilon_{comp}\)는 AlN/AlGaN 전이층이 성장 중에 저장해 둔 압축 변형으로, 냉각 인장을 미리 상쇄한다. 막 균열은 에너지 해방률 \(G = 1.98\,\sigma_f^2 t_f/E_f\)가 GaN 파괴 인성 \(G_c\)(약 2 J/m²)를 넘을 때로 판정한다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 260" role="img" aria-label="GaN-on-Si 에피 응력 공학: 단계형 AlGaN 전이층 또는 AlN/GaN 초격자가 성장 중 압축 응력을 쌓고 냉각 시 인장을 상쇄하는 그림, 웨이퍼 휨 방향">
+        <rect x="40" y="200" width="300" height="40" class="gn-si"/><text x="190" y="225" text-anchor="middle" class="gn-b">Si(111)</text>
+        <rect x="40" y="190" width="300" height="10" class="gn-gan2"/><text x="350" y="199" class="gn-s">AlN 핵 생성층 (Ga–Si 반응 방지)</text>
+        <rect x="40" y="176" width="300" height="14" class="gn-algan" style="fill:color-mix(in srgb, var(--m-gan) 40%, var(--bg-elev))"/><text x="350" y="187" class="gn-s">Al 75 %</text>
+        <rect x="40" y="162" width="300" height="14" class="gn-algan" style="fill:color-mix(in srgb, var(--m-gan) 30%, var(--bg-elev))"/><text x="350" y="173" class="gn-s">Al 50 %</text>
+        <rect x="40" y="148" width="300" height="14" class="gn-algan" style="fill:color-mix(in srgb, var(--m-gan) 20%, var(--bg-elev))"/><text x="350" y="159" class="gn-s">Al 25 % → 위층 GaN이 압축으로 자람</text>
+        <rect x="40" y="96" width="300" height="52" class="gn-gan2" opacity=".85"/><text x="190" y="127" text-anchor="middle" class="gn-w">C 도핑 GaN 버퍼</text>
+        <rect x="40" y="76" width="300" height="20" class="gn-gan"/><text x="190" y="90" text-anchor="middle" class="gn-s">GaN 채널 + AlGaN</text>
+        <text x="40" y="60" class="gn-b">성장 중(1050 °C): 압축 축적</text>
+        <path d="M60 40 L120 40 M320 40 L260 40" stroke="var(--m-field)" stroke-width="2.4" fill="none"/><path d="M120 40 l-8 -5 v10 z M260 40 l8 -5 v10 z" fill="var(--m-field)"/>
+        <!-- bow cartoon -->
+        <text x="520" y="40" class="gn-b">냉각 후 웨이퍼 휨</text>
+        <path d="M480 120 Q630 70 780 120" stroke="var(--m-gan)" stroke-width="5" fill="none"/><path d="M480 128 Q630 78 780 128" stroke="var(--m-si)" stroke-width="10" fill="none" opacity=".7"/>
+        <text x="630" y="150" text-anchor="middle" class="gn-s">압축 과다 → 볼록 (convex)</text>
+        <path d="M480 190 Q630 240 780 190" stroke="var(--m-gan)" stroke-width="5" fill="none"/><path d="M480 198 Q630 248 780 198" stroke="var(--m-si)" stroke-width="10" fill="none" opacity=".7"/>
+        <text x="630" y="180" text-anchor="middle" class="gn-s">인장 → 오목 (concave), 균열 위험</text>
+        <text x="630" y="72" text-anchor="middle" class="gn-s">목표: 상온 휨 |δ| ≲ 50 µm (200 mm)</text>
+      </svg>
+      <figcaption><b>그림 9-8.</b> 응력 공학. AlN과 단계형 AlGaN(또는 AlN/GaN 초격자) 위에 자라는 GaN은 아래층보다 격자 상수가 커서 압축을 받으며 자란다. 이 압축이 냉각 인장을 상쇄하도록 층 두께와 조성을 맞춘다. 성장 중 웨이퍼 곡률을 실시간으로 재며 MOCVD 레시피를 조정하는 것이 GaN-on-Si 수율의 핵심이다(<a href="../../thinfilm/chapters/cvd.html">ThinFilmBook CVD 장</a>).</figcaption>
+    </figure>
+    <div class="sim" id="sim-bw">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>GaN-on-Si 웨이퍼 휨과 균열: 스토니 식</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bw-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>웨이퍼 지름</span><div class="seg" id="bw-dia"><button data-value="150">150 mm</button><button data-value="200" class="on">200 mm</button><button data-value="300">300 mm</button></div></div>
+          <label class="ctrl"><span><span>Si 두께 t<sub>s</sub></span> <output id="bw-ts-out"></output></span><input type="range" id="bw-ts" min="500" max="1500" step="25" value="1000"></label>
+          <label class="ctrl"><span><span>에피 두께 t<sub>f</sub></span> <output id="bw-tf-out"></output></span><input type="range" id="bw-tf" min="1" max="12" step="0.25" value="5"></label>
+          <label class="ctrl"><span><span>전이층 압축 변형 ε<sub>comp</sub></span> <output id="bw-ec-out"></output></span><input type="range" id="bw-ec" min="0" max="0.35" step="0.005" value="0.22"></label>
+          <label class="ctrl"><span>성장 온도 <output id="bw-tg-out"></output></span><input type="range" id="bw-tg" min="900" max="1150" step="10" value="1050"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">냉각 인장 변형 ε<sub>th</sub></span><span class="v" id="bw-eth">—</span></div>
+        <div class="stat"><span class="k">막 응력 σ<sub>f</sub></span><span class="v" id="bw-s">—</span></div>
+        <div class="stat"><span class="k">상온 휨 δ</span><span class="v" id="bw-d">—</span></div>
+        <div class="stat"><span class="k">균열 판정 G/G<sub>c</sub></span><span class="v" id="bw-g">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 웨이퍼 단면 휨(세로 과장, 양수 = 볼록). 오른쪽: 에피 두께에 따른 휨(현재 설정)과 ±50 µm 사양 띠. Δα는 온도 구간 평균 약 2.2×10⁻⁶ /K로 잡았다. 해볼 것: ① 압축 보상을 0으로 하면 5 µm 에피만으로 200 mm 웨이퍼가 수백 µm 오목해지고 \(G/G_c\)가 1을 훌쩍 넘어 막이 갈라진다. 초기 GaN-on-Si가 1 µm 남짓에서 멈췄던 이유다. ② 보상을 맞춰 휨을 0 근처로 만들어도 에피를 키우면 전이층이 압축을 다 담지 못한다(실제로는 두께에 따라 보상이 줄어든다). ③ Si를 1 mm 이상 두껍게 하면 휨은 \(t_s^2\)로 줄지만 웨이퍼 무게·팹 장비 호환이 걸린다. 300 mm로 가면 같은 응력에서 휨이 \(D^2\)로 2.25배다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="compare">
+    <h2>성능 지수: Si·SiC·GaN을 같은 저울에</h2>
+    <p>소자 하나의 "빠르기"는 같은 온저항을 얻는 데 필요한 전하로 잰다. 다이를 크게 하면 \(R_{DS(on)}\)는 면적에 반비례해 줄고 전하는 면적에 비례해 늘므로, 곱 \(R_{DS(on)}\cdot Q\)는 다이 크기와 무관한 <strong>기술의 지수</strong>가 된다. 전력 변환기에서 중요한 세 가지는 \(R\cdot Q_G\)(구동 손실·속도), \(R\cdot Q_{oss}\)(출력 커패시턴스 손실·ZVS에 필요한 전류), \(Q_{rr}\)(하드 스위칭 하프 브리지의 역회복 손실)다. 정의와 측정은 <a href="mosfet.html">6장</a>, 스위칭 에너지 적분은 <a href="switching.html">10장</a>에서 다룬다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>650 V급 비교 (대표값, 약)</th><th class="num">\(R_{DS(on)}\) (mΩ, 25 °C)</th><th class="num">\(Q_G\) (nC)</th><th class="num">\(R\cdot Q_G\) (mΩ·nC)</th><th class="num">\(Q_{oss}\) @400 V (nC)</th><th class="num">\(Q_{rr}\) (µC)</th><th class="num">\(R(100\,{}^\circ\text{C})/R(25\,{}^\circ\text{C})\)</th></tr></thead>
+      <tbody>
+        <tr><td>Si 슈퍼정션 MOSFET</td><td class="num">40</td><td class="num">90</td><td class="num">3600</td><td class="num">~550</td><td class="num">~10</td><td class="num">~1.7</td></tr>
+        <tr><td>SiC MOSFET</td><td class="num">40</td><td class="num">60</td><td class="num">2400</td><td class="num">~90</td><td class="num">~0.1</td><td class="num">~1.2</td></tr>
+        <tr><td>GaN HEMT (p-GaN)</td><td class="num">50</td><td class="num">6</td><td class="num">300</td><td class="num">~50</td><td class="num">0</td><td class="num">~1.5</td></tr>
+      </tbody>
+    </table></div>
+    <div class="sim" id="sim-fom">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>하드 스위칭 하프 브리지 손실: 650 V Si·SiC·GaN</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="fom-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>스위칭 주파수 <output id="fom-f-out"></output></span><input type="range" id="fom-f" min="1.3" max="3.3" step="0.01" value="1.81"></label>
+          <label class="ctrl"><span>부하 전류 I <output id="fom-i-out"></output></span><input type="range" id="fom-i" min="1" max="30" step="0.5" value="10"></label>
+          <label class="ctrl"><span><span>DC 버스 V<sub>dc</sub></span> <output id="fom-v-out"></output></span><input type="range" id="fom-v" min="100" max="450" step="10" value="400"></label>
+          <label class="ctrl"><span>접합 온도 <output id="fom-t-out"></output></span><input type="range" id="fom-t" min="25" max="150" step="5" value="100"></label>
+          <label class="check"><input type="checkbox" id="fom-zvs"> <span>소프트 스위칭(ZVS, Q<sub>oss</sub>·Q<sub>rr</sub> 손실 제거)</span></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">Si SJ 합계</span><span class="v" id="fom-si">—</span></div>
+        <div class="stat"><span class="k">SiC 합계</span><span class="v" id="fom-sic">—</span></div>
+        <div class="stat"><span class="k">GaN 합계</span><span class="v" id="fom-gan">—</span></div>
+        <div class="stat"><span class="k">GaN 대비 주파수 여유</span><span class="v" id="fom-x">—</span></div>
+      </div>
+      <div class="sim-note">한 스위치(듀티 0.5)의 손실을 전도 \(I^2R(T)/2\), 구동 \(Q_G V_{drv} f\)(구동 진폭 Si 12 V, SiC 22 V, GaN 6 V), 출력 커패시턴스 \(Q_{oss}V_{dc}f\), 역회복 \(Q_{rr}V_{dc}f\), 전압·전류 겹침 \(\tfrac12 V_{dc}I(t_r + t_f)f\)(겹침 시간 약 Si 30 ns, SiC 12 ns, GaN 4 ns)로 나눠 쌓았다. \(Q_{oss}\)는 \(V_{dc}\)에 비례, \(Q_{rr}\)는 400 V 값으로 고정한다고 단순화했다. 마지막 칸은 "GaN 손실 = 다른 소자 손실"이 되는 주파수의 비. 해볼 것: ① 65 kHz(OBC 토템폴 PFC)에서 Si SJ의 역회복 손실이 수백 W로 폭주한다. CCM 토템폴에 Si를 못 쓰는 이유다. ② ZVS를 켜면 Si도 살아나지만 \(Q_{oss}\)가 커서 ZVS에 큰 순환 전류가 필요하다. ③ 1 MHz 이상에서는 GaN도 겹침·\(Q_{oss}\) 손실이 전도 손실을 넘는다.</div>
+    </div>
+    <div class="callout fab"><strong>GC GaN 충전기: 왜 300 kHz인가</strong>65 W USB-C 어댑터의 능동 클램프 플라이백은 650 V 증강형 GaN(\(R_{DS(on)}\) 약 150 mΩ, \(Q_G\) 약 3 nC, \(Q_{rr}\) 0)을 약 300 kHz로 돌린다. 능동 클램프가 누설 인덕턴스 에너지를 재활용해 주 스위치를 ZVS로 켜므로 \(Q_{oss}\) 손실이 거의 없고, 구동 손실은 \(3\,\text{nC}\times 6\,\text{V}\times 300\,\text{kHz} \approx 5\) mW에 불과하다. 같은 회로의 Si 슈퍼정션(\(Q_G\) 약 20 nC급)은 60–100 kHz에 머문다. 주파수가 3–5배 오른 만큼 변압기와 입력 필터가 작아져 효율 약 93 %에서 전력 밀도 약 2 W/cm³(약 30 W/in³)가 나온다.</div>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="integration">
+    <h2>수직 GaN과 모놀리식 집적</h2>
+    <p>측면 GaN-on-Si의 두 한계(전압과 전류 밀도)를 넘는 길은 둘이다. 하나는 Si·SiC처럼 전류를 세로로 흘리는 <span class="term">수직 GaN</span><span class="en">(vertical GaN)</span>이다. 도전성 GaN 기판(전위 밀도 10⁴–10⁶ cm⁻²) 위에 n⁻ 드리프트층을 키우고 트렌치 MOSFET, 전류 개구 수직 HEMT(CAVET), pn 다이오드를 만든다. 전압은 드리프트층 두께로, 전류는 면적으로 늘어나므로 1.2–3.3 kV와 애벌런치 내량이 가능하다. 과제는 기판 값(지름 50–100 mm), Mg 이온 주입 활성화, 선택적 p형 영역 형성이다. 다른 하나는 측면 구조의 장점을 거꾸로 쓰는 <strong>모놀리식 집적</strong>이다. 모든 단자가 위에 있으니 같은 칩 위에 하프 브리지 두 스위치, 게이트 드라이버, 레벨 시프터, 전류 감지, 보호 회로를 함께 만들 수 있다. 게이트 루프 인덕턴스가 pH급이 되어 4절의 링잉 문제가 사라지고, 공통 소스 인덕턴스도 거의 0이 된다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 270" role="img" aria-label="왼쪽: GaN 기판 위 수직 GaN 트렌치 MOSFET 단면(드레인이 뒷면), 오른쪽: GaN-on-Si 모놀리식 하프 브리지 IC 평면도(드라이버, 상단·하단 스위치, 레벨 시프터, 부트스트랩)">
+        <defs><marker id="f99-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-amp)"/></marker></defs>
+        <text x="190" y="20" text-anchor="middle" class="gn-b">(a) 수직 GaN 트렌치 MOSFET</text>
+        <rect x="40" y="200" width="300" height="34" class="gn-gan2"/><text x="190" y="222" text-anchor="middle" class="gn-w">n⁺ GaN 기판</text>
+        <rect x="40" y="234" width="300" height="10" class="gn-met"/><text x="190" y="262" text-anchor="middle" class="gn-s">드레인 (뒷면)</text>
+        <rect x="40" y="100" width="300" height="100" class="gn-gan"/><text x="190" y="176" text-anchor="middle" class="gn-l">n⁻ 드리프트 (BV ∝ 두께)</text>
+        <rect x="40" y="70" width="300" height="30" class="gn-pgan"/><text x="80" y="90" class="gn-s">p-GaN 바디</text>
+        <rect x="40" y="56" width="300" height="14" class="gn-gan2"/>
+        <rect x="165" y="56" width="50" height="78" class="gn-ox"/><rect x="175" y="62" width="30" height="66" class="gn-met"/><text x="190" y="50" text-anchor="middle" class="gn-s">트렌치 게이트</text>
+        <rect x="40" y="44" width="110" height="12" class="gn-met"/><rect x="230" y="44" width="110" height="12" class="gn-met"/><text x="95" y="38" text-anchor="middle" class="gn-s">소스</text>
+        <path d="M160 70 V190 M220 70 V190" class="gn-amp" marker-start="url(#f99-a)" opacity=".85"/>
+        <text x="190" y="152" text-anchor="middle" class="gn-s">전류 ↓</text>
+        <text x="460" y="20" class="gn-b">(b) 모놀리식 GaN 하프 브리지 IC (평면도)</text>
+        <rect x="440" y="36" width="420" height="200" rx="8" class="gn-box"/>
+        <rect x="456" y="52" width="110" height="80" rx="6" class="f-acc-soft"/><text x="511" y="86" text-anchor="middle" class="gn-s">로직·레벨</text><text x="511" y="102" text-anchor="middle" class="gn-s">시프터·보호</text>
+        <rect x="456" y="146" width="110" height="74" rx="6" class="f-acc2-soft"/><text x="511" y="178" text-anchor="middle" class="gn-s">부트스트랩</text><text x="511" y="194" text-anchor="middle" class="gn-s">·UVLO</text>
+        <rect x="580" y="52" width="60" height="80" rx="6" class="gn-gan2"/><text x="610" y="96" text-anchor="middle" class="gn-w">HS 드라이버</text>
+        <rect x="580" y="146" width="60" height="74" rx="6" class="gn-gan2"/><text x="610" y="187" text-anchor="middle" class="gn-w">LS 드라이버</text>
+        <rect x="652" y="52" width="196" height="80" rx="6" class="gn-gan"/><text x="750" y="90" text-anchor="middle" class="gn-b">상단 스위치</text><text x="750" y="108" text-anchor="middle" class="gn-s">(손가락 구조 수천 개)</text>
+        <rect x="652" y="146" width="196" height="74" rx="6" class="gn-gan"/><text x="750" y="182" text-anchor="middle" class="gn-b">하단 스위치</text><text x="750" y="200" text-anchor="middle" class="gn-s">게이트 루프 ≪ 1 nH</text>
+      </svg>
+      <figcaption><b>그림 9-9.</b> (a) 수직 GaN: 전류가 드리프트층을 세로로 지나 뒷면 드레인으로 간다. 전압이 두께로, 전류가 면적으로 늘어 SiC와 같은 방식으로 kV급을 노린다. (b) 모놀리식 집적: 증강형·공핍형 HEMT를 함께 써서 로직과 드라이버를 만들고, 파워 스위치 바로 옆에서 구동한다. 15–100 V 급(DC 서버 전원, 노트북 충전기)과 650 V 급 충전기용 IC로 상용화되어 있다.</figcaption>
+    </figure>
+    <div class="callout deep"><strong>단락 내량과 애벌런치가 없다는 것</strong>측면 HEMT에는 애벌런치 증배를 안전하게 흡수할 pn 접합이 없다. 과전압이 걸리면 애벌런치로 클램프되지 않고 전계가 버퍼·패시베이션을 파괴하므로, 데이터시트는 애벌런치 에너지 대신 과도 과전압 정격(예: 650 V 정격에 짧은 펄스 750–800 V)을 준다. 단락 시에는 2DEG 전류가 포화된 채 작은 칩에 집중되어 수 µs 안에 가열 파괴된다(SiC 2–3 µs보다도 짧은 경우가 많다). 그래서 GaN 하프 브리지는 오버슈트를 루프 인덕턴스로 억제하고(<a href="packaging.html">15장</a>), 단락은 수백 ns 안에 끊는 전류 감지를 쓴다(<a href="gatedrive.html">11장</a>).</div>
+  </section>
+
+  <!-- ============================================================ 11 -->
+  <section id="three">
+    <h2>3D GaN HEMT 층 구조</h2>
+    <p>아래 3D 모델은 650 V급 p-GaN 게이트 GaN-on-Si HEMT의 셀 하나를 확대한 것이다(두께는 과장). 게이트 전압을 올리면 게이트 아래 2DEG가 채워지며 빛나고, 소스에서 드레인으로 전자가 흐른다. 꺼진 상태에서 드레인 전압을 올리면 게이트 끝에서 드레인 쪽으로 2DEG가 지워진 공핍 영역이 자라고, 필드 플레이트를 켜면 같은 전압에서 전계 봉우리가 낮아진다. 수치는 2–7절 모델(\(x\) 0.2, \(d\) 12 nm, \(V_{th}\) 1.5 V, 1 mm 게이트 폭 기준)에서 가져온다.</p>
+    <div class="sim" id="sim-3d">
+      <div class="sim-head"><span class="sim-tag three">3D</span><h3>p-GaN HEMT: 게이트 전압에 반응하는 2DEG</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view three" id="h3-view"></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>V<sub>GS</sub></span> <output id="h3-vg-out"></output></span><input type="range" id="h3-vg" min="-3" max="7.5" step="0.1" value="6"></label>
+          <label class="ctrl"><span><span>V<sub>DS</sub></span> <output id="h3-vd-out"></output></span><input type="range" id="h3-vd" min="0" max="650" step="5" value="5"></label>
+          <label class="check"><input type="checkbox" id="h3-fp" checked> 필드 플레이트</label>
+          <label class="check"><input type="checkbox" id="h3-pas" checked> SiN 패시베이션 보이기</label>
+          <label class="check"><input type="checkbox" id="h3-e" checked> 전자 흐름</label>
+          <label class="check"><input type="checkbox" id="h3-rot"> 자동 회전</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">게이트 아래 nₛ</span><span class="v" id="h3-ns">—</span></div>
+        <div class="stat"><span class="k">드레인 전류 (1 mm)</span><span class="v" id="h3-id">—</span></div>
+        <div class="stat"><span class="k">공핍 길이 / L<sub>gd</sub></span><span class="v" id="h3-ld">—</span></div>
+        <div class="stat"><span class="k">게이트 끝 전계 봉우리</span><span class="v" id="h3-ep">—</span></div>
+        <div class="stat"><span class="k">상태</span><span class="v" id="h3-st">—</span></div>
+      </div>
+      <div class="sim-note">드래그로 회전, 휠로 확대. 층(아래→위): Si 기판, AlN/AlGaN 전이층, C 도핑 버퍼, GaN 채널, 2DEG(빛나는 면), AlGaN 장벽, p-GaN 게이트·금속, 소스·드레인, SiN, 게이트·소스 필드 플레이트. 게이트 아래 \(n_s = C_{eff}(V_{GS} - V_{th})/q\)(접근 영역 값에서 포화), 전류는 \(I_D = \min(V_{DS}/R_{on},\, q n_s v_{sat} W)\). 꺼진 상태 공핍 길이는 \(L_{dep} \approx V_{DS}/E_{avg}\)(\(E_{avg}\) 0.6 MV/cm, \(L_{gd}\) 12 µm에서 멈춤)이고, 공핍 영역의 전계 모양을 게이트 끝(과 FP 끝)의 봉우리 + 바닥으로 두고 \(\int E\,dx = V_{DS}\)가 되게 맞춰 봉우리 값을 구한다(앞면 노란 선). 봉우리가 약 3.3 MV/cm를 넘으면 경고한다. 해볼 것: ① \(V_{GS}\)를 1.5 V 근처에서 올리면 게이트 아래 띠만 서서히 밝아진다. ② 7 V를 넘기면 게이트 경고가 뜬다. ③ \(V_{GS}\) = 0, \(V_{DS}\) = 650 V에서 필드 플레이트를 끄면 봉우리 전계가 임계를 넘는다.</div>
+    </div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>Ga 면 AlGaN/GaN 계면에는 자발 + 압전 분극의 불연속으로 고정 양전하 \(\sigma\)(x 0.25에서 약 1.4×10¹³ cm⁻²)가 생기고, 표면 도너가 내놓은 전자가 2DEG가 된다. \(n_s = \sigma/q - (\varepsilon/q^2 d)(q\phi_b + E_F - \Delta E_c)\)이며 임계 두께 수 nm 위에서 \(\sigma/q\)로 포화한다.</li>
+      <li>기본 HEMT는 공핍형(\(V_{th}\) 약 −3 ~ −6 V)이다. 전력용 증강형은 주로 p-GaN 게이트로 밴드를 들어올려 \(V_{th}\) 약 1.5 V를 얻으며, 그 대가로 낮은 Al 조성·얇은 장벽 → 높은 \(R_{sh}\)를 받아들인다.</li>
+      <li>p-GaN 게이트는 쇼트키 + pin 다이오드 구조라 권장 +5–6 V, 절대 최대 +7 V의 좁은 창을 갖는다. 게이트 루프 \(\zeta = (R_G/2)\sqrt{C_{iss}/L_G}\)가 작으면 링잉이 정격을 넘으므로 \(L_G\)를 줄이는 것이 근본 대책이다.</li>
+      <li>바디 다이오드가 없어 \(Q_{rr}\) = 0이지만, 꺼진 상태 역도통 \(V_{SD} = V_{th} - V_{GS} + \sqrt{2I/k} + IR_{acc}\)는 2–6 V로 커서 데드 타임을 수 ns로 줄여야 한다.</li>
+      <li>꺼짐 고전계에서 표면·버퍼 트랩에 잡힌 전자가 가상 게이트가 되어 동적 온저항을 만든다. 포획(빠름)과 방출(\(\tau_e \propto e^{E_a/kT}\), 느림)의 주기적 누적으로 이해하며, SiN 패시베이션·필드 플레이트·버퍼 설계로 억제한다.</li>
+      <li>측면 소자의 \(R_{on,sp} \propto BV^2\), 필요한 버퍼 두께 \(\propto BV\)이고 GaN-on-Si 에피는 열팽창 불일치(냉각 인장 약 0.2 %)와 휨(스토니 식) 때문에 약 6–8 µm에 묶인다. 그래서 측면 GaN은 650 V(넓게 1.2 kV)가 주무대이고, 그 위는 수직 GaN·SiC의 영역이다.</li>
+      <li>\(R\cdot Q_G\)는 Si SJ의 약 1/10, \(Q_{rr}\) = 0, \(Q_{oss}\)도 작아 GaN은 하드 스위칭 토템폴 PFC와 수백 kHz–MHz 컨버터에서 이긴다(GC 충전기 300 kHz, DC 서버 전원 500 kHz). 모놀리식 집적은 게이트 루프와 공통 소스 인덕턴스를 없애는 측면 구조만의 무기다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. Al 조성 0.25, 두께 25 nm AlGaN 장벽을 성장 후 열처리했더니 AlGaN이 부분적으로 이완(격자가 원래 크기로 돌아감)되었다. 2DEG 밀도는?</p><div class="opts">
+        <button class="opt">자발 분극은 그대로이므로 변하지 않는다</button>
+        <button class="opt" data-correct>압전 분극 몫(약 40 %)이 줄어 \(n_s\)가 크게 감소한다</button>
+        <button class="opt">이완으로 결함이 늘어 도너가 생기므로 증가한다</button>
+        <button class="opt">임계 두께가 0이 되어 \(n_s\)가 \(\sigma/q\)와 같아진다</button>
+      </div><div class="quiz-exp">압전 분극 \(P_{pz}\)는 AlGaN이 GaN에 맞춰 늘어난 변형 \((a_0 - a)/a\)에 비례한다. 이완되면 이 몫이 사라지고 \(\sigma\)가 자발 분극 차이만 남아 \(n_s\)가 약 40 % 줄어든다. 두꺼운·고조성 장벽이 위험한 이유다.</div></div>
+
+      <div class="quiz-q"><p>2. p-GaN 게이트 HEMT의 문턱 전압을 1.5 V에서 2.5 V로 올리려고 AlGaN 장벽을 15 nm에서 10 nm로 얇게 했다. 가장 먼저 걱정할 부작용은?</p><div class="opts">
+        <button class="opt">게이트 누설이 사라진다</button>
+        <button class="opt">역회복 전하가 생긴다</button>
+        <button class="opt" data-correct>게이트 밖 접근 영역의 \(n_s\)도 줄어 면저항과 \(R_{DS(on)}\)이 커진다</button>
+        <button class="opt">버퍼 수직 항복 전압이 내려간다</button>
+      </div><div class="quiz-exp">장벽은 소자 전체에 공통이다. \(\sigma d\)를 줄이면 게이트 아래 2DEG가 잘 지워져 \(V_{th}\)가 오르지만 접근 영역 \(n_s\)도 \(\sigma/q - \varepsilon(\dots)/(q^2 d)\)로 줄어든다. 이것이 증강형 GaN의 \(V_{th}\)–\(R_{on}\) 트레이드오프다.</div></div>
+
+      <div class="quiz-q"><p>3. \(C_{iss}\) = 0.5 nF, 게이트 루프 \(L_G\) = 8 nH인 GaN HEMT를 6 V로 구동한다. 링잉 꼭대기가 7 V를 넘지 않으려면 \(R_G\)는 대략 얼마 이상이어야 하는가? (\(V_{pk}/V_{drv} \le 7/6\)이면 \(\zeta \ge\) 약 0.5)</p><div class="opts">
+        <button class="opt">약 1 Ω</button>
+        <button class="opt">약 2 Ω</button>
+        <button class="opt" data-correct>약 4 Ω</button>
+        <button class="opt">약 20 Ω</button>
+      </div><div class="quiz-exp">\(\zeta = (R_G/2)\sqrt{C/L}\), \(\sqrt{0.5/8} = 0.25\)이므로 \(R_G = 2\zeta/0.25 = 8\zeta\)다. 오버슈트 1/6 ≈ 0.167은 \(\exp(-\pi\zeta/\sqrt{1-\zeta^2}) = 0.167\), 곧 \(\pi\zeta/\sqrt{1-\zeta^2} = \ln 6 \approx 1.79\)에서 \(\zeta \approx 0.5\)이므로 \(R_G \approx 4\) Ω이다. 대신 상승이 느려지므로 루프 인덕턴스 자체를 줄이는 편이 낫다.</div></div>
+
+      <div class="quiz-q"><p>4. \(V_{th}\) = 1.5 V인 GaN HEMT를 데드 타임 동안 −3 V로 꺼 두었다. 채널 과구동과 저항 강하가 1 V라면 역도통 \(V_{SD}\)는?</p><div class="opts">
+        <button class="opt">약 0.7 V (바디 다이오드와 같음)</button>
+        <button class="opt">약 2.5 V</button>
+        <button class="opt" data-correct>약 5.5 V</button>
+        <button class="opt">역도통하지 않는다</button>
+      </div><div class="quiz-exp">\(V_{SD} = V_{th} - V_{GS} + \dots = 1.5 + 3 + 1 = 5.5\) V. 바디 다이오드가 없으므로 채널이 열리려면 \(V_{GD}\)가 문턱을 넘어야 하고, 음의 끔 전압은 그만큼 \(V_{SD}\)를 키운다. 그래서 데드 타임 손실을 줄이려면 0 V로 끄고 데드 타임을 짧게 한다.</div></div>
+
+      <div class="quiz-q"><p>5. 하드 스위칭 시험에서 400 V로 꺼 두었다가 켠 직후 \(R_{on}\)이 DC 값보다 30 % 컸고, 수십 ms 뒤 서서히 원래로 돌아왔다. 가장 그럴듯한 원인과 대책은?</p><div class="opts">
+        <button class="opt">접합 온도 상승 — 냉각 강화</button>
+        <button class="opt" data-correct>버퍼 깊은 준위(탄소 관련)에 포획된 전자 — 버퍼 설계·필드 플레이트·정공 주입 구조</button>
+        <button class="opt">게이트 산화막 파괴 — 게이트 전압 낮추기</button>
+        <button class="opt">역회복 전하 — 쇼트키 다이오드 병렬</button>
+      </div><div class="quiz-exp">회복 시정수가 ms급이면 활성화 에너지가 큰(약 0.8–0.9 eV) 버퍼 트랩이다. 표면 트랩은 µs급으로 더 빨리 풀린다. 온도 상승이라면 \(R_{on}\)은 열 시정수로 변하고 꺼짐 전압과 무관하다.</div></div>
+
+      <div class="quiz-q"><p>6. 200 mm Si(1 mm) 위에 5 µm GaN 에피를 응력 보상 없이 키웠을 때(냉각 인장 약 0.2 %) 일어날 일로 가장 옳은 것은?</p><div class="opts">
+        <button class="opt">휨은 수 µm로 무시할 수 있다</button>
+        <button class="opt">압축 응력으로 볼록해진다</button>
+        <button class="opt" data-correct>인장으로 수백 µm 오목하게 휘고 막에 균열이 생긴다</button>
+        <button class="opt">Si 기판이 GaN보다 많이 줄어들어 GaN이 압축된다</button>
+      </div><div class="quiz-exp">GaN 열팽창 계수가 Si보다 커서 냉각 시 GaN이 더 줄어들려다 인장을 받는다. \(\sigma \approx 450\,\text{GPa}\times0.0023 \approx 1\) GPa, 스토니 식으로 200 mm에서 휨 수백 µm, 에너지 해방률이 파괴 인성을 크게 넘어 균열이 생긴다. 그래서 AlN/AlGaN 전이층으로 압축을 미리 저장한다.</div></div>
+
+      <div class="quiz-q"><p>7. 같은 650 V급에서 Si 슈퍼정션(40 mΩ, \(Q_{rr}\) 10 µC) 대신 GaN HEMT를 CCM 토템폴 PFC(400 V, 65 kHz)의 고속 레그에 쓰는 가장 큰 이유는?</p><div class="opts">
+        <button class="opt">GaN의 온저항이 훨씬 낮아서</button>
+        <button class="opt" data-correct>Si 바디 다이오드의 역회복 손실 \(Q_{rr}V f\)(약 260 W)이 감당할 수 없을 만큼 커서</button>
+        <button class="opt">GaN의 게이트 전압이 낮아 드라이버가 싸서</button>
+        <button class="opt">GaN은 애벌런치 내량이 커서</button>
+      </div><div class="quiz-exp">\(10\,\mu\text{C}\times400\,\text{V}\times65\,\text{kHz} = 260\) W. CCM 토템폴에서는 매 주기 한 스위치의 바디 다이오드가 하드 역회복을 겪으므로 \(Q_{rr}\)가 큰 Si SJ는 쓸 수 없다. GaN(\(Q_{rr}\) 0)이나 SiC(약 0.1 µC → 약 2.6 W)가 이 토폴로지를 가능하게 했다(<a href="converters.html">12장</a>).</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const Q = 1.602176634e-19, EPS0 = 8.8541878128e-12, HBAR = 1.054571817e-34, ME = 9.1093837015e-31, KB_EV = 8.617333e-5;
+  const EPSB = 9 * EPS0, MSTAR = 0.22 * ME;
+  const font = (px, mono) => px + "px " + getComputedStyle(document.body).getPropertyValue(mono ? "--mono" : "--font");
+  const SUP = { "-": "⁻", "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹" };
+  const sci = (x, d) => { if (!isFinite(x) || x <= 0) return "0"; const e = Math.floor(Math.log10(x)); return (x / Math.pow(10, e)).toFixed(d == null ? 2 : d) + "×10" + String(e).split("").map((c) => SUP[c] || c).join(""); };
+  const setCls = (id, c) => { const el = $(id); if (el) el.className = "v gn-v " + c; };
+  const fmtF = (f) => (f >= 1e6 ? PW.fmt(f / 1e6, 3) + " MHz" : PW.fmt(f / 1e3, 3) + " kHz");
+  const rgba = (hex, a) => { const m = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim()); if (!m) return hex; const n = parseInt(m[1], 16); return "rgba(" + (n >> 16) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")"; };
+  const fmtW = (p) => (p >= 1 ? PW.fmt(p, 3) + " W" : PW.fmt(p * 1e3, 3) + " mW");
+
+  /* ---------------- AlGaN/GaN 분극과 2DEG (앰바허 보간) ---------------- */
+  function polar(x, withPz) {
+    const a0 = 3.189, a = 3.189 - 0.077 * x;
+    const e31 = -0.11 * x - 0.49, e33 = 0.73 * x + 0.73, C13 = 5 * x + 103, C33 = -32 * x + 405;
+    const Ppz = withPz === false ? 0 : 2 * (a0 - a) / a * (e31 - e33 * C13 / C33);
+    const Psp = -0.052 * x - 0.029;
+    return Math.abs(Ppz + Psp - (-0.029)); // C/m²
+  }
+  const Eg = (x) => 6.13 * x + 3.42 * (1 - x) - 1.0 * x * (1 - x);
+  const dEc = (x) => 0.7 * (Eg(x) - 3.42);           // eV
+  const phiB = (x) => 0.84 + 1.3 * x;                // eV (표면 고정)
+  /** nₛ (m⁻²): 장벽 정전기 + 삼각 우물 E_F, 감쇠 고정점 반복 */
+  function nsSolve(x, d, phi, withPz) {
+    const sg = polar(x, withPz) / Q, C = EPSB / (Q * d);
+    if (!(d > 0)) return 0;
+    let n = Math.max(0, sg - C * (phi - dEc(x)));
+    for (let i = 0; i < 40; i++) {
+      const nn0 = Math.max(n, 1e12);
+      const E0 = Math.pow(9 * Math.PI * HBAR * Q * Q * nn0 / (8 * EPSB * Math.sqrt(8 * MSTAR)), 2 / 3) / Q;
+      const EF = E0 + Math.PI * HBAR * HBAR * Math.max(n, 0) / MSTAR / Q;
+      const nn = Math.max(0, sg - C * (phi + EF - dEc(x)));
+      n = 0.5 * n + 0.5 * nn;
+    }
+    return n;
+  }
+
+  /* ================= 1. nₛ(x, d) ================= */
+  (function () {
+    if (!$("ns-cv")) return;
+    let ready = false;
+    const gx = PW.range("ns-x", (v) => v.toFixed(2), () => ready && cv.redraw());
+    const gd = PW.range("ns-d", (v) => v.toFixed(1) + " nm", () => ready && cv.redraw());
+    const gm = PW.range("ns-mu", (v) => v + " cm²/V·s", () => ready && cv.redraw());
+    $("ns-pz").addEventListener("change", () => cv.redraw());
+    const cv = PW.canvas($("ns-cv"), (ctx, w, h) => {
+      const P = PW.palette(), x = gx(), d = gd(), pz = $("ns-pz").checked, mu = gm();
+      const xs = [0.15, 0.2, 0.25, 0.3, 0.35];
+      const series = xs.map((xx, i) => ({ data: Array.from({ length: 81 }, (_, k) => { const dd = 0.5 + k * 0.5; return [dd, nsSolve(xx, dd * 1e-9, phiB(xx), pz) / 1e17]; }), color: P.faint, width: 1.2 }));
+      const cur = Array.from({ length: 81 }, (_, k) => { const dd = 0.5 + k * 0.5; return [dd, nsSolve(x, dd * 1e-9, phiB(x), pz) / 1e17]; });
+      series.push({ data: cur, color: P.electron, width: 3 });
+      const sg = polar(x, pz) / Q / 1e17, n = nsSolve(x, d * 1e-9, phiB(x), pz) / 1e17;
+      const ch = PW.chart(ctx, null, { x: [0, 40], y: [0, 2.4], xLabel: "AlGaN 장벽 두께 d (nm)", yLabel: "nₛ (10¹³ cm⁻²)", series, hlines: [{ y: sg, color: P.gan, label: "σ/q (x = " + x.toFixed(2) + ")" }], points: [{ x: d, y: n, color: P.electron, r: 5 }] });
+      ctx.font = font(11); ctx.fillStyle = P.dim; ctx.textAlign = "left";
+      xs.forEach((xx) => { const yy = nsSolve(xx, 39.5e-9, phiB(xx), pz) / 1e17; ctx.fillText("x=" + xx.toFixed(2), ch.X(34.5), ch.Y(yy) - 6); });
+      const dc = EPSB * (phiB(x) - dEc(x)) / (polar(x, pz));
+      const vth = phiB(x) - dEc(x) - polar(x, pz) * d * 1e-9 / EPSB;
+      const nsm = n * 1e17;
+      PW.stat("ns-sig", sci(sg * 1e13) + " cm⁻²");
+      PW.stat("ns-n", sci(nsm / 1e4) + " cm⁻²");
+      PW.stat("ns-r", nsm > 1e14 ? PW.fmt(1 / (Q * nsm * mu * 1e-4), 3) + " Ω/□" : "∞ (채널 없음)");
+      PW.stat("ns-dc", PW.fmt(dc * 1e9, 3) + " nm");
+      PW.stat("ns-vt", PW.fmt(vth, 3) + " V");
+    }, { aspect: 0.55, minHeight: 280, maxHeight: 420 });
+    ready = true;
+  })();
+
+  /* ================= 2. p-GaN 문턱 ================= */
+  const PHI_P = 3.3, VBI_SB = 1.5;
+  function pgan(x, d, NA, tp) { // d, tp in m, NA in m⁻³
+    const vint = PHI_P - dEc(x) - polar(x) * d / EPSB;
+    const W = Math.min(tp, Math.sqrt(2 * EPSB * VBI_SB / (Q * NA)));
+    const vth = vint > 0 ? vint * (1 + W / d) : vint;
+    const nacc = nsSolve(x, d, phiB(x));
+    return { vint, W, vth, nacc, Ceff: EPSB / (d + W) };
+  }
+  (function () {
+    if (!$("pg-cv")) return;
+    let ready = false;
+    const gx = PW.range("pg-x", (v) => v.toFixed(2), () => ready && cv.redraw());
+    const gd = PW.range("pg-d", (v) => v.toFixed(1) + " nm", () => ready && cv.redraw());
+    const gn = PW.range("pg-na", (v) => sci(Math.pow(10, v), 1) + " cm⁻³", () => ready && cv.redraw());
+    const gt = PW.range("pg-tp", (v) => v + " nm", () => ready && cv.redraw());
+    const bisect = (f, a, b) => { let fa = f(a), fb = f(b); if (!(fa * fb <= 0)) return NaN; for (let i = 0; i < 50; i++) { const m = 0.5 * (a + b), fm = f(m); if (fa * fm <= 0) { b = m; fb = fm; } else { a = m; fa = fm; } } return 0.5 * (a + b); };
+    const cv = PW.canvas($("pg-cv"), (ctx, w, h) => {
+      const P = PW.palette(), x = gx(), d = gd() * 1e-9, NA = Math.pow(10, gn()) * 1e6, tp = gt() * 1e-9;
+      const o = pgan(x, d, NA, tp);
+      const hTop = Math.round(h * 0.42);
+      // 위: nₛ(V_GS) 게이트 아래
+      const data = [];
+      for (let v = -2; v <= 8.001; v += 0.05) { const n = Math.min(o.nacc, Math.max(0, o.Ceff * (v - o.vth) / Q)); data.push([v, n / 1e17]); }
+      const top = { x: 58, y: 14, w: w - 76, h: hTop - 50 };
+      PW.chart(ctx, top, { x: [-2, 8], y: [0, Math.max(0.4, o.nacc / 1e17 * 1.15)], xLabel: "V_GS (V)", yLabel: "nₛ 게이트 (10¹³)", series: [{ data, color: P.electron, width: 2.6 }],
+        bands: [{ x0: 7, x1: 8, color: rgba(P.bad, 0.16) }],
+        vlines: [{ x: o.vth, color: P.warn, label: "V_th " + o.vth.toFixed(2) + " V" }, { x: 6, color: P.ok, label: "권장 6 V" }] });
+      // 아래: x–d 설계 지도
+      const bot = { x: 58, y: hTop + 8, w: w - 76, h: h - hTop - 54 };
+      const cVth = [], cR = [];
+      for (let xx = 0.10; xx <= 0.3001; xx += 0.005) {
+        const dv = bisect((dd) => pgan(xx, dd * 1e-9, NA, tp).vth - 1.5, 4, 30);
+        const dr = bisect((dd) => { const n = nsSolve(xx, dd * 1e-9, phiB(xx)); return (n > 1e14 ? 1 / (Q * n * 0.19) : 1e5) - 500; }, 2, 30);
+        cVth.push([xx, isFinite(dv) ? dv : NaN]); cR.push([xx, isFinite(dr) ? dr : NaN]);
+      }
+      PW.chart(ctx, bot, { x: [0.1, 0.3], y: [4, 30], xLabel: "Al 조성 x", yLabel: "장벽 d (nm)", series: [{ data: cVth, color: P.warn, width: 2.4 }, { data: cR, color: P.electron, width: 2.2, dash: [6, 4] }],
+        points: [{ x, y: d * 1e9, color: P.text, r: 5 }] });
+      ctx.font = font(11); ctx.textAlign = "left"; ctx.fillStyle = P.warn; ctx.fillText("아래: V_th > 1.5 V", bot.x + bot.w - 120, bot.y + 14);
+      ctx.fillStyle = P.electron; ctx.fillText("위: R_sh < 500 Ω/□", bot.x + bot.w - 120, bot.y + 30);
+      const rsh = o.nacc > 1e14 ? 1 / (Q * o.nacc * 0.19) : Infinity;
+      PW.stat("pg-vi", o.vint.toFixed(2) + " V");
+      PW.stat("pg-vt", o.vth.toFixed(2) + " V");
+      PW.stat("pg-n", sci(o.nacc / 1e4) + " cm⁻²");
+      PW.stat("pg-r", isFinite(rsh) ? PW.fmt(rsh, 3) + " Ω/□" : "∞");
+      let msg, c;
+      if (o.vth <= 0) { msg = "공핍형(노멀리 온)"; c = "bad"; }
+      else if (o.vth < 1) { msg = "문턱 낮음 (잡음 여유↓)"; c = "warn"; }
+      else if (rsh > 600) { msg = "오프 OK · 저항 큼"; c = "warn"; }
+      else { msg = "설계 창 안"; c = "ok"; }
+      PW.stat("pg-ok", msg); setCls("pg-ok", c);
+    }, { aspect: 0.75, minHeight: 380, maxHeight: 560 });
+    ready = true;
+  })();
+
+  /* ================= 3. 게이트 루프 RLC ================= */
+  function stepResp(t, z, w0) { // 단위 계단에 대한 직렬 RLC 커패시터 전압
+    if (t <= 0) return 0;
+    if (Math.abs(z - 1) < 1e-3) return 1 - Math.exp(-w0 * t) * (1 + w0 * t);
+    if (z < 1) { const wd = w0 * Math.sqrt(1 - z * z); return 1 - Math.exp(-z * w0 * t) * (Math.cos(wd * t) + z / Math.sqrt(1 - z * z) * Math.sin(wd * t)); }
+    const s = Math.sqrt(z * z - 1), r1 = -w0 * (z - s), r2 = -w0 * (z + s);
+    return 1 + (r2 * Math.exp(r1 * t) - r1 * Math.exp(r2 * t)) / (r1 - r2);
+  }
+  (function () {
+    if (!$("gw-cv")) return;
+    let ready = false;
+    const re = () => ready && cv.redraw();
+    const gv = PW.range("gw-v", (v) => v.toFixed(1) + " V", re), gr = PW.range("gw-r", (v) => v.toFixed(1) + " Ω", re);
+    const gl = PW.range("gw-l", (v) => v.toFixed(1) + " nH", re), gc = PW.range("gw-c", (v) => v.toFixed(2) + " nF", re);
+    const go = PW.range("gw-off", (v) => v.toFixed(1) + " V", re);
+    const VTH = 1.5;
+    const cv = PW.canvas($("gw-cv"), (ctx, w, h) => {
+      const P = PW.palette(), V = gv(), R = gr(), L = gl() * 1e-9, C = gc() * 1e-9, Voff = go();
+      const w0 = 1 / Math.sqrt(L * C), z = (R / 2) * Math.sqrt(C / L);
+      const tauS = z < 1 ? 1 / (z * w0) : 1 / (w0 * (z - Math.sqrt(z * z - 1)));
+      const T1 = PW.clamp(7 * tauS, 15e-9, 400e-9), Tt = 2 * T1, N = 1600;
+      const data = []; let pk = -1e9, lo = 1e9, iLo = 0, t10 = NaN, t90 = NaN;
+      const vs = new Float64Array(N + 1);
+      for (let i = 0; i <= N; i++) {
+        const t = (i / N) * Tt - 0.08 * Tt;
+        const v = Voff + (V - Voff) * (stepResp(t, z, w0) - stepResp(t - T1, z, w0));
+        vs[i] = v; data.push([t * 1e9, v]);
+        if (t > 0 && t < T1) { if (v > pk) pk = v; if (isNaN(t10) && v >= Voff + 0.1 * (V - Voff)) t10 = t; if (isNaN(t90) && v >= Voff + 0.9 * (V - Voff)) t90 = t; }
+        if (t >= T1 && v < lo) { lo = v; iLo = i; }
+      }
+      let reb = -1e9; for (let i = iLo; i <= N; i++) reb = Math.max(reb, vs[i]);
+      PW.chart(ctx, null, { x: [-0.08 * Tt * 1e9, 0.92 * Tt * 1e9], y: [Math.min(-5, Voff - 2), 10.5], xLabel: "시간 (ns)", yLabel: "칩 게이트 전압 v_GS (V)",
+        bands: [], series: [{ data, color: P.volt, width: 2.6 }],
+        hlines: [{ y: 7, color: P.bad, label: "절대 최대 +7 V", dash: [2, 2] }, { y: VTH, color: P.warn, label: "V_th 1.5 V" }, { y: V, color: P.faint }] });
+      PW.stat("gw-z", z.toFixed(2) + (z < 1 ? " (진동)" : z < 1.001 ? " (임계)" : " (과감쇠)"));
+      PW.stat("gw-pk", pk.toFixed(2) + " V");
+      PW.stat("gw-lo", lo.toFixed(2) + " → " + reb.toFixed(2) + " V");
+      PW.stat("gw-tr", isFinite(t90 - t10) ? PW.fmt((t90 - t10) * 1e9, 3) + " ns" : "—");
+      let msg = "여유 있음", c = "ok";
+      if (pk > 7) { msg = "+7 V 초과!"; c = "bad"; }
+      else if (reb > VTH) { msg = "끈 뒤 재점호 위험"; c = "bad"; }
+      else if (pk > 6.5 || reb > VTH - 0.5) { msg = "여유 빠듯"; c = "warn"; }
+      PW.stat("gw-ok", msg); setCls("gw-ok", c);
+    }, { aspect: 0.5, minHeight: 260, maxHeight: 380 });
+    ready = true;
+  })();
+
+  /* ================= 4. 3사분면 도통 ================= */
+  (function () {
+    if (!$("rv-cv")) return;
+    let ready = false;
+    const re = () => ready && cv.redraw();
+    const dev = PW.seg("rv-dev", re);
+    const gvg = PW.range("rv-vg", (v) => v.toFixed(2) + " V", re), gi = PW.range("rv-i", (v) => v + " A", re);
+    const gdt = PW.range("rv-dt", (v) => v + " ns", re), gf = PW.range("rv-f", (v) => fmtF(v * 1e3), re);
+    const DEV = {
+      hv: { R: 0.050, vth: 1.5, von: 6, fch: 0.3, Vdc: 400, siQrr: 10e-6, siRd: 0.012, sic: true },
+      lv: { R: 0.003, vth: 1.4, von: 5, fch: 0.3, Vdc: 48, siQrr: 0.1e-6, siRd: 0.002, sic: false },
+    };
+    const cv = PW.canvas($("rv-cv"), (ctx, w, h) => {
+      const P = PW.palette(), D = DEV[dev()], VG = gvg(), I = gi(), tdt = gdt() * 1e-9, f = gf() * 1e3;
+      const Rch = D.R * D.fch, Racc = D.R - Rch, k = 1 / (Rch * (D.von - D.vth));
+      const vsdG = (i, vg) => (D.vth - vg) + Math.sqrt(2 * i / k) + i * Racc;
+      const vsdSi = (i) => 0.65 + 0.035 * Math.log(1 + i / 0.2) + i * D.siRd;
+      const vsdSiC = (i) => 2.55 + 0.08 * Math.log(1 + i / 0.5) + i * 0.03;
+      const Imax = 40, curve = (fn) => Array.from({ length: 101 }, (_, j) => { const i = (j / 100) * Imax; return [fn(i), i]; });
+      const series = [];
+      [0, -2, -4].forEach((vg) => series.push({ data: curve((i) => vsdG(i, vg)), color: P.faint, width: 1.2, dash: [4, 3] }));
+      series.push({ data: curve((i) => vsdG(i, VG)), color: P.gan, width: 3 });
+      series.push({ data: curve((i) => i * D.R), color: P.gan, width: 1.8, dash: [8, 4] });
+      series.push({ data: curve(vsdSi), color: P.si, width: 2 });
+      if (D.sic) series.push({ data: curve(vsdSiC), color: P.sic, width: 2 });
+      const vsd = vsdG(I, VG);
+      const ch = PW.chart(ctx, null, { x: [0, 9], y: [0, Imax], xLabel: "V_SD (V)", yLabel: "역전류 I_SD (A)", series, hlines: [{ y: I, color: P.amp, label: I + " A" }], points: [{ x: vsd, y: I, color: P.amp, r: 5 }] });
+      ctx.font = font(11); ctx.textAlign = "left";
+      const lab = (txt, col, xv, yv) => { ctx.fillStyle = col; ctx.fillText(txt, ch.X(xv) + 4, ch.Y(yv)); };
+      lab("GaN 게이트 켬 (I·R_on)", P.gan, Math.min(8, 30 * D.R) * 0.6, 30);
+      lab("Si 바디 다이오드", P.si, vsdSi(34), 35);
+      if (D.sic) lab("SiC 바디 다이오드", P.sic, vsdSiC(26), 26);
+      lab("GaN V_GS=" + VG.toFixed(1) + " V", P.gan, vsdG(16, VG), 16);
+      const Pdt = 2 * vsd * I * tdt * f;
+      const vfSi = vsdSi(I), Psi = 2 * vfSi * I * tdt * f + D.siQrr * D.Vdc * f;
+      PW.stat("rv-vsd", vsd.toFixed(2) + " V");
+      PW.stat("rv-p", fmtW(Pdt));
+      PW.stat("rv-si", vfSi.toFixed(2) + " V / " + fmtW(D.siQrr * D.Vdc * f));
+      PW.stat("rv-sic", D.sic ? vsdSiC(I).toFixed(2) + " V" : "100 V급 없음");
+      void Psi;
+    }, { aspect: 0.55, minHeight: 280, maxHeight: 420 });
+    ready = true;
+  })();
+
+  /* ================= 5. 동적 온저항 ================= */
+  (function () {
+    if (!$("dr-cv")) return;
+    let ready = false;
+    const re = () => ready && cv.redraw();
+    const gv = PW.range("dr-v", (v) => v + " V", re), gf = PW.range("dr-f", (v) => fmtF(v * 1e3), re);
+    const gd = PW.range("dr-d", (v) => v.toFixed(2), re), gt = PW.range("dr-t", (v) => v + " °C", re);
+    const gen = PW.seg("dr-gen", re);
+    const GEN = { old: { bs: 3.0, bb: 1.2 }, fp: { bs: 0.5, bb: 0.45 }, new: { bs: 0.06, bb: 0.12 } };
+    const TR = { s: { tc: 1e-6, te25: 30e-6, Ea: 0.45, Vh: 150 }, b: { tc: 300e-6, te25: 20e-3, Ea: 0.9, Vh: 300 } };
+    const tauE = (tr, Tc) => tr.te25 * Math.exp((tr.Ea / KB_EV) * (1 / (Tc + 273.15) - 1 / 298.15));
+    const cv = PW.canvas($("dr-cv"), (ctx, w, h) => {
+      const P = PW.palette(), V = gv(), f = gf() * 1e3, D = gd(), Tc = gt(), G = GEN[gen()];
+      const Tp = 1 / f, ton = D * Tp, toff = (1 - D) * Tp, Ttot = 0.1;
+      const N = Math.min(100000, Math.max(10, Math.round(Ttot / Tp)));
+      const tes = tauE(TR.s, Tc), teb = tauE(TR.b, Tc);
+      const finf = (tr) => V / (V + tr.Vh);
+      const cs = Math.exp(-toff / TR.s.tc), cb = Math.exp(-toff / TR.b.tc), es = Math.exp(-ton / tes), eb = Math.exp(-ton / teb);
+      const fis = finf(TR.s), fib = finf(TR.b);
+      let fs = 0, fb = 0, lastS = 0, lastB = 0;
+      const data = [], dataB = [];
+      let nextT = Tp, ratio = 1;
+      const mean = (fv, te) => (te > 0 && ton > 0 ? fv * te * (1 - Math.exp(-ton / te)) / ton : fv);
+      let meanRatio = 1;
+      for (let n = 0; n < N; n++) {
+        // 꺼짐(포획) → 켜짐(방출)
+        fs = fis + (fs - fis) * cs; fb = fib + (fb - fib) * cb;
+        ratio = 1 + G.bs * fs + G.bb * fb; lastS = fs; lastB = fb;
+        const t = (n + 1) * Tp;
+        if (t >= nextT || n === N - 1) { data.push([t, ratio]); dataB.push([t, 1 + fb]); nextT = t * 1.06; }
+        meanRatio = 1 + G.bs * mean(fs, tes) + G.bb * mean(fb, teb);
+        fs *= es; fb *= eb;
+      }
+      const ymax = Math.max(1.5, Math.ceil(Math.max(...data.map((p) => p[1])) * 1.15 * 2) / 2);
+      PW.chart(ctx, null, { x: [Tp, Ttot], logX: true, y: [0.9, ymax], xLabel: "스위칭 시작 후 시간 (s)", yLabel: "R_on,dyn / R_on,0 (켜진 순간)", series: [{ data, color: P.accent, width: 2.6 }], hlines: [{ y: 1, color: P.faint, label: "DC 값" }],
+        xFmt: (v) => (v >= 1 ? v + "s" : v >= 1e-3 ? Math.round(v * 1e3) + "ms" : Math.round(v * 1e6) + "µs") });
+      const stat = Math.pow((Tc + 273.15) / 298.15, 1.83);
+      PW.stat("dr-ss", ratio.toFixed(2) + "×");
+      PW.stat("dr-fo", (lastS * 100).toFixed(0) + " % / " + (lastB * 100).toFixed(0) + " %");
+      PW.stat("dr-te", PW.si(teb, "s"));
+      PW.stat("dr-pl", "+" + ((meanRatio - 1) * 100).toFixed(0) + " % (온도 포함 ×" + (meanRatio * stat).toFixed(2) + ")");
+      setCls("dr-ss", ratio > 1.5 ? "bad" : ratio > 1.2 ? "warn" : "ok");
+    }, { aspect: 0.5, minHeight: 260, maxHeight: 380 });
+    ready = true;
+  })();
+
+  /* ================= 6. 측면 vs 수직 ================= */
+  (function () {
+    if (!$("lv-cv")) return;
+    let ready = false;
+    const re = () => ready && cv.redraw();
+    const gbv = PW.range("lv-bv", (v) => Math.round(Math.pow(10, v)) + " V", re), ge = PW.range("lv-e", (v) => v.toFixed(2) + " MV/cm", re);
+    const gr = PW.range("lv-r", (v) => v + " Ω/□", re), geb = PW.range("lv-eb", (v) => v.toFixed(2) + " MV/cm", re);
+    const RC = 0.05, L0 = 12e-4, KA = 1.5, TRANS = 1.5, EPI_MAX = 8; // Ω·cm, cm, -, µm, µm
+    const latR = (BV, E, Rsh) => { const L = BV / (E * 1e6); return KA * (Rsh * L + 2 * RC) * (L + L0) * 1e3; }; // mΩ·cm²
+    const vertR = (BV) => 4 * BV * BV / (9 * 8.854e-14 * 1200 * Math.pow(3.3e6, 3)) * 1e3;
+    const cv = PW.canvas($("lv-cv"), (ctx, w, h) => {
+      const P = PW.palette(), BV = Math.pow(10, gbv()), E = ge(), Rsh = gr(), Eb = geb();
+      const bvs = Array.from({ length: 121 }, (_, i) => Math.pow(10, 2 + i * 1.52 / 120));
+      const bvLim = (EPI_MAX - TRANS) * Eb * 100; // V (E in MV/cm → 100 V/µm per MV/cm)
+      const ch = PW.chart(ctx, null, { x: [100, 3300], y: [1e-3, 1e3], logX: true, logY: true, xLabel: "항복 전압 BV (V)", yLabel: "R_on,sp (mΩ·cm²)",
+        bands: bvLim < 3300 ? [{ x0: Math.max(100, bvLim), x1: 3300, color: rgba(P.bad, 0.13) }] : [],
+        series: [
+          { data: bvs.map((b) => [b, 5.93e-9 * Math.pow(b, 2.5) * 1e3]), color: P.si, width: 1.8 },
+          { data: bvs.map((b) => [b, 2.97e-12 * Math.pow(b, 2.5) * 1e3]), color: P.sic, width: 1.8 },
+          { data: bvs.map((b) => [b, vertR(b)]), color: P.gan, width: 1.8, dash: [6, 4] },
+          { data: bvs.map((b) => [b, latR(b, E, Rsh)]), color: P.gan, width: 3 },
+        ],
+        vlines: [{ x: BV, color: P.text, label: Math.round(BV) + " V" }], points: [{ x: BV, y: latR(BV, E, Rsh), color: P.gan, r: 5 }],
+        xFmt: (v) => String(v), yFmt: (v) => (v >= 1 ? String(v) : v.toExponential(0)) });
+      ctx.font = font(11); ctx.textAlign = "left";
+      const lab = (t, c, b, y) => { ctx.fillStyle = c; ctx.fillText(t, ch.X(b) + 4, ch.Y(y) - 4); };
+      lab("Si 한계", P.si, 120, 5.93e-9 * Math.pow(120, 2.5) * 1e3);
+      lab("4H-SiC 한계", P.sic, 400, 2.97e-12 * Math.pow(400, 2.5) * 1e3 * 0.6);
+      lab("수직 GaN 한계", P.gan, 1200, vertR(1200) * 0.4);
+      lab("측면 GaN", P.gan, 1500, latR(1500, E, Rsh) * 0.3);
+      const L = BV / (E * 100), tb = BV / (Eb * 100) + TRANS;
+      PW.stat("lv-l", PW.fmt(L, 3) + " µm");
+      PW.stat("lv-rl", PW.fmt(latR(BV, E, Rsh), 3) + " mΩ·cm²");
+      PW.stat("lv-rv", PW.fmt(vertR(BV), 3) + " mΩ·cm²");
+      PW.stat("lv-tb", PW.fmt(tb, 3) + " µm");
+      const ok = tb <= 6.5 ? ["가능", "ok"] : tb <= EPI_MAX ? ["빠듯 (휨·균열 관리)", "warn"] : ["어려움 → 수직/절연 기판", "bad"];
+      PW.stat("lv-ok", ok[0]); setCls("lv-ok", ok[1]);
+    }, { aspect: 0.58, minHeight: 290, maxHeight: 440 });
+    ready = true;
+  })();
+
+  /* ================= 7. 웨이퍼 휨 ================= */
+  (function () {
+    if (!$("bw-cv")) return;
+    let ready = false;
+    const re = () => ready && cv.redraw();
+    const gdia = PW.seg("bw-dia", re);
+    const gts = PW.range("bw-ts", (v) => v + " µm", re), gtf = PW.range("bw-tf", (v) => v.toFixed(2) + " µm", re);
+    const gec = PW.range("bw-ec", (v) => v.toFixed(3) + " %", re), gtg = PW.range("bw-tg", (v) => v + " °C", re);
+    const MF = 450e9, MS = 229e9, EF = 360e9, GC = 2, DA = 2.2e-6;
+    const calc = (tf, ts, D, ec, Tg) => { const eth = DA * (Tg - 25), sig = MF * (eth - ec / 100), k = 6 * sig * tf / (MS * ts * ts), bow = -k * D * D / 8, G = sig > 0 ? 1.98 * sig * sig * tf / EF : 0; return { eth, sig, k, bow, G }; };
+    const cv = PW.canvas($("bw-cv"), (ctx, w, h) => {
+      const P = PW.palette(), D = Number(gdia()) * 1e-3, ts = gts() * 1e-6, tf = gtf() * 1e-6, ec = gec(), Tg = gtg();
+      const o = calc(tf, ts, D, ec, Tg);
+      const narrow = w < 560;
+      const lw = narrow ? w : Math.round(w * 0.45);
+      const lh = narrow ? Math.round(h * 0.4) : h;
+      // 왼쪽: 웨이퍼 단면
+      const cx = lw / 2, cy = lh * 0.55, half = lw * 0.4;
+      const bowUm = o.bow * 1e6, sc = PW.clamp(bowUm, -800, 800) / 800 * lh * 0.32;
+      ctx.lineCap = "round";
+      const prof = (off, col, lwid) => { ctx.strokeStyle = col; ctx.lineWidth = lwid; ctx.beginPath(); for (let i = 0; i <= 60; i++) { const u = -1 + (2 * i) / 60, X = cx + u * half, Y = cy - sc * (1 - u * u) + sc + off; i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); } ctx.stroke(); };
+      prof(9, P.si, 12); prof(0, P.gan, 4);
+      ctx.strokeStyle = P.faint; ctx.setLineDash([4, 4]); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cx - half, cy + 9); ctx.lineTo(cx + half, cy + 9); ctx.stroke(); ctx.setLineDash([]);
+      ctx.font = font(12); ctx.fillStyle = P.text; ctx.textAlign = "center";
+      ctx.fillText((bowUm >= 0 ? "볼록 " : "오목 ") + Math.abs(bowUm).toFixed(0) + " µm (" + Math.round(D * 1e3) + " mm)", cx, 22);
+      ctx.fillStyle = P.dim; ctx.font = font(11);
+      ctx.fillText(o.sig > 0 ? "막 인장 → 오목" : "막 압축 → 볼록", cx, lh - 14);
+      ctx.fillStyle = P.gan; ctx.textAlign = "left"; ctx.fillText("GaN 에피", cx - half, cy - 30 - Math.max(0, sc));
+      // 오른쪽: 휨 vs 에피 두께
+      const box = narrow ? { x: 58, y: lh + 12, w: w - 76, h: h - lh - 58 } : { x: lw + 56, y: 16, w: w - lw - 72, h: h - 62 };
+      const data = Array.from({ length: 61 }, (_, i) => { const t = 0.2 + i * 0.2; return [t, calc(t * 1e-6, ts, D, ec, Tg).bow * 1e6]; });
+      const lim = Math.max(150, Math.min(1500, Math.ceil(Math.max(...data.map((p) => Math.abs(p[1]))) / 50) * 50));
+      PW.chart(ctx, box, { x: [0, 12.2], y: [-lim, lim], xLabel: "에피 두께 (µm)", yLabel: "휨 δ (µm)", series: [{ data, color: P.gan, width: 2.6 }],
+        bands: [], hlines: [{ y: 50, color: P.ok, label: "+50" }, { y: -50, color: P.ok, label: "−50" }], points: [{ x: tf * 1e6, y: o.bow * 1e6, color: P.gan, r: 5 }] });
+      PW.stat("bw-eth", (o.eth * 100).toFixed(3) + " % 인장");
+      PW.stat("bw-s", (o.sig >= 0 ? "+" : "−") + PW.fmt(Math.abs(o.sig) / 1e6, 3) + " MPa " + (o.sig >= 0 ? "(인장)" : "(압축)"));
+      PW.stat("bw-d", (bowUm >= 0 ? "+" : "−") + PW.fmt(Math.abs(bowUm), 3) + " µm");
+      setCls("bw-d", Math.abs(bowUm) <= 50 ? "ok" : Math.abs(bowUm) <= 120 ? "warn" : "bad");
+      PW.stat("bw-g", o.sig > 0 ? (o.G / GC).toFixed(2) + (o.G > GC ? " → 균열" : "") : "압축 (균열 없음)");
+      setCls("bw-g", o.G > GC ? "bad" : o.G > 0.5 * GC ? "warn" : "ok");
+    }, { aspect: 0.5, minHeight: 280, maxHeight: 420 });
+    ready = true;
+  })();
+
+  /* ================= 8. FOM 손실 비교 ================= */
+  (function () {
+    if (!$("fom-cv")) return;
+    let ready = false;
+    const re = () => ready && cv.redraw();
+    const gf = PW.range("fom-f", (v) => fmtF(Math.pow(10, v) * 1e3), re), gi = PW.range("fom-i", (v) => v.toFixed(1) + " A", re);
+    const gv = PW.range("fom-v", (v) => v + " V", re), gt = PW.range("fom-t", (v) => v + " °C", re);
+    $("fom-zvs").addEventListener("change", re);
+    const DEVS = [
+      { key: "si", name: "Si SJ 40 mΩ", R: 0.040, n: 2.4, QG: 90e-9, Vd: 12, Qoss: 550e-9, Qrr: 10e-6, tov: 30e-9, col: "si" },
+      { key: "sic", name: "SiC 40 mΩ", R: 0.040, n: 0.8, QG: 60e-9, Vd: 22, Qoss: 90e-9, Qrr: 0.1e-6, tov: 12e-9, col: "sic" },
+      { key: "gan", name: "GaN 50 mΩ", R: 0.050, n: 1.83, QG: 6e-9, Vd: 6, Qoss: 50e-9, Qrr: 0, tov: 4e-9, col: "gan" },
+    ];
+    const parts = (d, f, I, V, Tc, zvs) => {
+      const R = d.R * Math.pow((Tc + 273.15) / 298.15, d.n);
+      const cond = I * I * R * 0.5, gate = d.QG * d.Vd * f;
+      const oss = zvs ? 0 : d.Qoss * (V / 400) * V * f, rr = zvs ? 0 : d.Qrr * V * f;
+      const ov = 0.5 * V * I * d.tov * f * (zvs ? 0.3 : 1);
+      return { cond, gate, oss, rr, ov, tot: cond + gate + oss + rr + ov, A: cond, B: (gate + oss + rr + ov) / f };
+    };
+    const cv = PW.canvas($("fom-cv"), (ctx, w, h) => {
+      const P = PW.palette(), f = Math.pow(10, gf()) * 1e3, I = gi(), V = gv(), Tc = gt(), zvs = $("fom-zvs").checked;
+      const res = DEVS.map((d) => parts(d, f, I, V, Tc, zvs));
+      const segs = [["cond", "전도", P.amp], ["gate", "구동", P.volt], ["oss", "Q_oss", P.oxide], ["rr", "Q_rr", P.hole], ["ov", "겹침", P.heat]];
+      const sorted = res.map((r) => r.tot).sort((a, b) => a - b);
+      let scale = sorted[2];
+      if (sorted[2] > 3 * sorted[1]) scale = sorted[1] * 2.2;
+      scale = Math.max(scale, 1e-3);
+      const x0 = 96, x1 = w - 70, bh = Math.min(42, (h - 90) / 4.2), gap = bh * 0.55;
+      ctx.font = font(12); ctx.textBaseline = "middle";
+      res.forEach((r, i) => {
+        const y = 22 + i * (bh + gap);
+        ctx.fillStyle = P.text; ctx.textAlign = "right"; ctx.fillText(DEVS[i].name, x0 - 8, y + bh / 2);
+        let acc = 0;
+        segs.forEach(([k, , col]) => {
+          const v = r[k]; if (v <= 0) return;
+          const a = x0 + (acc / scale) * (x1 - x0), b = x0 + (Math.min(acc + v, scale * 1.0001) / scale) * (x1 - x0);
+          acc += v; if (a >= x1) return;
+          ctx.fillStyle = col; ctx.fillRect(a, y, Math.max(0.5, Math.min(b, x1) - a), bh);
+        });
+        ctx.fillStyle = P.text; ctx.textAlign = "left";
+        const over = r.tot > scale * 1.0001;
+        ctx.fillText((over ? "▶ " : "") + fmtW(r.tot), Math.min(x1, x0 + (r.tot / scale) * (x1 - x0)) + 6 - (over ? 0 : 0), y + bh / 2);
+      });
+      // 축과 범례
+      const ya = 22 + 3 * (bh + gap) - gap / 2;
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(x0, 14); ctx.lineTo(x0, ya); ctx.lineTo(x1, ya); ctx.stroke();
+      ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.font = font(11, true);
+      for (let k = 0; k <= 4; k++) { const v = scale * k / 4; ctx.fillText(fmtW(v), x0 + (k / 4) * (x1 - x0), ya + 12); }
+      ctx.font = font(12); ctx.textAlign = "left";
+      let lx = x0, ly = ya + 34;
+      segs.forEach(([, name, col]) => { if (lx > w - 70) { lx = x0; ly += 18; } ctx.fillStyle = col; ctx.fillRect(lx, ly - 5, 12, 10); ctx.fillStyle = P.dim; ctx.fillText(name, lx + 16, ly); lx += 16 + ctx.measureText(name).width + 18; });
+      ["si", "sic", "gan"].forEach((k, i) => PW.stat("fom-" + k, fmtW(res[i].tot)));
+      const g = res[2].tot;
+      const ratio = (r) => (r.A >= g ? "불가" : "×" + PW.fmt((g - r.A) / r.B / f, 2));
+      PW.stat("fom-x", "SiC " + ratio(res[1]) + " · Si " + ratio(res[0]));
+    }, { aspect: 0.5, minHeight: 260, maxHeight: 360 });
+    ready = true;
+  })();
+
+  /* ================= 9. 3D HEMT ================= */
+  (function () {
+    const el = $("h3-view"); if (!el) return;
+    const T = PW.three(el, { camera: [1.3, 4.0, 6.6], target: [0, -0.2, 0], fov: 38, minDistance: 3, maxDistance: 16 });
+    if (!T) return;
+    const THREE = T.THREE;
+    const XS = -2.2, XD = 2.2, XG0 = -1.4, XG1 = -1.0, ZW = 1.2; // 월드 좌표
+    const LGD_UM = 12, U2UM = LGD_UM / (XD - XG1);               // 1 단위 = 3.75 µm (가로), 세로는 과장
+    const box = (x0, x1, y0, y1, mat, z = ZW) => { const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, 2 * z), mat); m.position.set((x0 + x1) / 2, (y0 + y1) / 2, 0); T.scene.add(m); return m; };
+    // 층 (물리적 재질색)
+    box(-3, 3, -1.6, -0.9, T.material(0x5d6470, { metalness: 0.35, roughness: 0.5 }));
+    box(-3, 3, -0.9, -0.8, T.material(0xd9d3e6, { roughness: 0.6 }));
+    box(-3, 3, -0.8, -0.7, T.material(0xc4b3d9, { roughness: 0.6 }));
+    box(-3, 3, -0.7, -0.6, T.material(0xae94cc, { roughness: 0.6 }));
+    box(-3, 3, -0.6, -0.15, T.material(0x4a3358, { roughness: 0.7 }));
+    box(-3, 3, -0.15, 0.0, T.material(0xb79fd0, { roughness: 0.4 }));
+    box(XS, XD, 0.03, 0.08, T.material(0xe6dcf2, { roughness: 0.3, transparent: true, opacity: 0.4, depthWrite: false }));
+    const metal = T.material(0xc9ccd2, { metalness: 0.8, roughness: 0.3 });
+    box(-3, XS, -0.05, 0.5, metal); box(XD, 3, -0.05, 0.5, metal);
+    box(XG0, XG1, 0.08, 0.23, T.material(0xc4566e, { roughness: 0.5 }));
+    box(XG0 + 0.03, XG1 - 0.03, 0.23, 0.33, T.material(0xb08d57, { metalness: 0.7, roughness: 0.35 }));
+    const pasMat = new THREE.MeshStandardMaterial({ color: 0x7fc4e8, transparent: true, opacity: 0.12, depthWrite: false, roughness: 0.2 });
+    const pas1 = box(XS, XD, 0.08, 0.55, pasMat), pas2 = box(XS, XD, 0.55, 0.78, pasMat.clone());
+    const fpMat = T.material(0xcfd3d9, { metalness: 0.8, roughness: 0.3, transparent: true, opacity: 0.6 });
+    const fpG = box(XG0 + 0.03, -0.35, 0.40, 0.46, fpMat), fpGv = box(XG1 - 0.12, XG1 - 0.03, 0.33, 0.40, fpMat);
+    const fpS = box(XS, 0.75, 0.66, 0.72, fpMat), fpSv = box(XS, XS + 0.1, 0.5, 0.66, fpMat);
+    const fps = [fpG, fpGv, fpS, fpSv];
+    // 2DEG 띠
+    const NS = 88, strips = [], sw = (XD - XS) / NS;
+    for (let i = 0; i < NS; i++) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(sw * 1.01, 0.03, 2 * ZW + 0.04), new THREE.MeshBasicMaterial({ color: 0x228be6, transparent: true, opacity: 0.8, depthWrite: false }));
+      m.position.set(XS + (i + 0.5) * sw, 0.015, 0); T.scene.add(m); strips.push(m);
+    }
+    // 전계 선(앞면)
+    const NF = 160, fPos = new Float32Array(NF * 3);
+    const fGeo = new THREE.BufferGeometry(); fGeo.setAttribute("position", new THREE.BufferAttribute(fPos, 3));
+    const fLine = new THREE.Line(fGeo, new THREE.LineBasicMaterial({ color: 0xffd43b })); T.scene.add(fLine);
+    // 전자
+    const NE = 260, ePos = new Float32Array(NE * 3), eX = new Float32Array(NE), eZ = new Float32Array(NE);
+    for (let i = 0; i < NE; i++) { eX[i] = XS + Math.random() * (XD - XS); eZ[i] = (Math.random() * 2 - 1) * ZW * 0.95; }
+    const eGeo = new THREE.BufferGeometry(); eGeo.setAttribute("position", new THREE.BufferAttribute(ePos, 3));
+    const eMat = new THREE.PointsMaterial({ color: 0x1b3fbf, size: 0.075, transparent: true, opacity: 0.95, depthWrite: false });
+    const ePts = new THREE.Points(eGeo, eMat); T.scene.add(ePts);
+    T.label("Si(111) 기판", [2.2, -1.25, ZW + 0.05]); T.label("AlN/AlGaN 전이층", [2.2, -0.75, ZW + 0.05]); T.label("C 도핑 GaN 버퍼", [2.0, -0.38, ZW + 0.05]);
+    T.label("2DEG", [-2.6 + 0.3, 0.02, ZW + 0.25]); T.label("p-GaN 게이트", [-1.2, 0.9, 0]); T.label("S", [-2.6, 0.75, 0]); T.label("D", [2.6, 0.75, 0]);
+    const Lfp = T.label("필드 플레이트", [0.3, 1.0, 0]);
+    // 모델
+    const X = 0.2, D = 12e-9, o = pgan(X, D, 1e24, 70e-9);
+    const NACC = o.nacc, MU = 0.19, VSAT = 1.2e5, W = 1e-3;
+    const RACC = 420 * (1.5e-6 + 12e-6) / W + 2 * 0.5e-3 / W; // Ω (1 mm)
+    let ready = false, M = null;
+    const gvg = PW.range("h3-vg", (v) => v.toFixed(1) + " V", () => ready && upd());
+    const gvd = PW.range("h3-vd", (v) => v + " V", () => ready && upd());
+    ["h3-fp", "h3-pas"].forEach((id) => $(id).addEventListener("change", () => ready && upd()));
+    $("h3-rot").addEventListener("change", (e) => { if (T.controls) T.controls.autoRotate = e.target.checked; });
+    function fieldProfile(V, fp) { // x(µm) from gate drain edge; returns {xs, E(V/µm), Ldep, Epk}
+      const Ldep = Math.max(0.05, Math.min(LGD_UM, V / 60));
+      const n = 200, xs = [], Es = []; let integ = 0;
+      const pk = fp ? [[0, 0.8], [3, 0.8], [7, 0.8]] : [[0, 1]];
+      for (let i = 0; i <= n; i++) { const x = (i / n) * Ldep; let e = 0.1; pk.forEach(([x0, a]) => { if (x0 <= Ldep) e += a * Math.exp(-Math.abs(x - x0) / 0.8); }); xs.push(x); Es.push(e); }
+      for (let i = 1; i <= n; i++) integ += 0.5 * (Es[i] + Es[i - 1]) * (xs[i] - xs[i - 1]);
+      const s = integ > 0 ? V / integ : 0; let Epk = 0;
+      for (let i = 0; i <= n; i++) { Es[i] *= s; Epk = Math.max(Epk, Es[i]); }
+      return { xs, Es, Ldep, Epk };
+    }
+    function upd() {
+      const VG = gvg(), VD = gvd(), fp = $("h3-fp").checked;
+      fps.forEach((m) => (m.visible = fp)); Lfp.setVisible(fp);
+      pas1.visible = pas2.visible = $("h3-pas").checked;
+      const ng = Math.min(NACC, Math.max(0, o.Ceff * (VG - o.vth) / Q));
+      const on = ng > NACC * 0.02;
+      const Rch = ng > 0 ? 1.5e-6 / (Q * ng * MU * W) : Infinity;
+      const Ron = RACC + Rch, Isat = Q * ng * VSAT * W;
+      const ID = on ? Isat * Math.tanh(VD / (Ron * Math.max(Isat, 1e-9))) : 0;
+      const fpr = !on && VD > 0 ? fieldProfile(VD, fp) : null;
+      const xDep = fpr ? XG1 + fpr.Ldep / U2UM : XG1;
+      strips.forEach((m) => {
+        const x = m.position.x; let n = NACC;
+        if (x > XG0 && x < XG1) n = ng; else if (x >= XG1 && x < xDep) n = 0;
+        m.material.opacity = 0.04 + 0.86 * (n / NACC);
+      });
+      // 전계 선
+      for (let i = 0; i < NF; i++) {
+        const x = XG1 + (i / (NF - 1)) * (XD - XG1); let E = 0;
+        if (fpr) { const xum = (x - XG1) * U2UM; if (xum <= fpr.Ldep) { const j = Math.min(200, Math.round(xum / fpr.Ldep * 200)); E = fpr.Es[j]; } }
+        fPos[i * 3] = x; fPos[i * 3 + 1] = 0.02 + PW.clamp(E / 330, 0, 1.6) * 0.9; fPos[i * 3 + 2] = ZW + 0.02;
+      }
+      fGeo.attributes.position.needsUpdate = true;
+      fLine.material.color.set(fpr && fpr.Epk > 330 ? 0xff6b6b : 0xffd43b);
+      M = { ng, on, ID, xDep, speed: on ? 0.25 + 2.2 * Math.min(1, ID / 1.2) : 0 };
+      PW.stat("h3-ns", sci(ng / 1e4) + " cm⁻²");
+      PW.stat("h3-id", on ? (ID >= 0.01 ? PW.fmt(ID, 3) + " A" : PW.fmt(ID * 1e3, 3) + " mA") + (VD > 0 ? "" : "") : "누설만 (~µA)");
+      PW.stat("h3-ld", fpr ? PW.fmt(fpr.Ldep, 3) + " / " + LGD_UM + " µm" : "—");
+      PW.stat("h3-ep", fpr ? PW.fmt(fpr.Epk / 100, 3) + " MV/cm" : "—");
+      setCls("h3-ep", fpr && fpr.Epk > 330 ? "bad" : fpr && fpr.Epk > 250 ? "warn" : "");
+      let st, c;
+      if (VG > 7) { st = "게이트 과전압!"; c = "bad"; }
+      else if (fpr && fpr.Epk > 330) { st = "전계 임계 초과"; c = "bad"; }
+      else if (on) { st = VG > 6 ? "켜짐 (게이트 누설↑)" : "켜짐"; c = VG > 6 ? "warn" : "ok"; }
+      else { st = "꺼짐 · 차단"; c = "ok"; }
+      PW.stat("h3-st", st); setCls("h3-st", c);
+    }
+    T.onFrame((dt) => {
+      if (!M) return;
+      const show = $("h3-e").checked; ePts.visible = show; if (!show) return;
+      const step = Math.min(dt, 0.05);
+      for (let i = 0; i < NE; i++) {
+        if (M.on) { eX[i] += M.speed * step * (0.7 + 0.6 * ((i * 7919) % 100) / 100); if (eX[i] > XD) { eX[i] = XS + Math.random() * 0.1; eZ[i] = (Math.random() * 2 - 1) * ZW * 0.95; } }
+        else { eX[i] += (Math.random() - 0.5) * 0.02; eX[i] = PW.clamp(eX[i], XS, XD); }
+        const x = eX[i];
+        const hidden = (x > XG0 && x < XG1 && !M.on) || (!M.on && x >= XG1 && x < M.xDep) || (M.on && x > XG0 && x < XG1 && M.ng < NACC * 0.3 && (i % 3));
+        ePos[i * 3] = x; ePos[i * 3 + 1] = hidden ? -50 : 0.05; ePos[i * 3 + 2] = eZ[i];
+      }
+      eGeo.attributes.position.needsUpdate = true;
+    });
+    ready = true; upd();
+  })();
+})();
+</script>
+</body>
+</html>

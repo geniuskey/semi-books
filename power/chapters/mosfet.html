@@ -1,0 +1,1271 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and PowerBook contributors.
+     Executable code: MIT (see ../../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>전력 MOSFET과 슈퍼정션 · PowerBook</title>
+<meta name="description" content="수직 전력 MOSFET(평면 DMOS·트렌치·차폐 게이트)의 온저항 성분을 전압 등급과 셀 피치로 분해하고, 비선형 커패시턴스와 게이트 전하·밀러 플래토, Eoss, 슈퍼정션 전하 균형과 전계·단극 한계, 바디 다이오드·기생 BJT, 애벌런치 에너지 EAS를 시뮬레이터와 3D 셀 모델로 계산한다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+  svg .mo-n { fill: color-mix(in srgb, var(--m-electron) 16%, var(--bg-elev)); stroke: var(--border); }
+  svg .mo-nn { fill: color-mix(in srgb, var(--m-electron) 42%, var(--bg-elev)); stroke: var(--border); }
+  svg .mo-p { fill: color-mix(in srgb, var(--m-hole) 18%, var(--bg-elev)); stroke: var(--border); }
+  svg .mo-pp { fill: color-mix(in srgb, var(--m-hole) 40%, var(--bg-elev)); stroke: var(--border); }
+  svg .mo-ox { fill: color-mix(in srgb, var(--m-oxide) 45%, var(--bg-elev)); stroke: var(--m-oxide); stroke-width: .8; }
+  svg .mo-poly { fill: color-mix(in srgb, var(--m-copper) 55%, var(--bg-elev)); stroke: var(--m-copper); stroke-width: .8; }
+  svg .mo-met { fill: color-mix(in srgb, var(--m-metal) 70%, var(--bg-elev)); stroke: var(--m-metal); }
+  svg .mo-dep { fill: color-mix(in srgb, var(--m-field) 22%, transparent); stroke: var(--m-field); stroke-dasharray: 4 3; }
+  svg .mo-w { stroke: var(--text); stroke-width: 1.6; fill: none; }
+  svg .mo-dash { stroke: var(--text-dim); stroke-width: 1.2; fill: none; stroke-dasharray: 5 4; }
+  svg .mo-e { stroke: var(--m-electron); stroke-width: 2.2; fill: none; }
+  svg .mo-v { stroke: var(--m-volt); stroke-width: 2.2; fill: none; }
+  svg .mo-i { stroke: var(--m-amp); stroke-width: 2.2; fill: none; }
+  svg .mo-f { stroke: var(--m-field); stroke-width: 2.4; fill: none; }
+  svg .mo-b { fill: var(--text); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .mo-s { fill: var(--text-dim); font-family: var(--font); font-size: 11.5px; }
+  .mo-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .mo-btns .btn { font-size: 13px; padding: 5px 9px; }
+  .v.ok { color: var(--ok); } .v.warn { color: var(--warn); } .v.bad { color: var(--bad); }
+</style>
+</head>
+<body data-chapter="mosfet">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 06</div>
+    <h1>전력 MOSFET과 슈퍼정션</h1>
+    <p class="lead">휴대폰 충전기의 동기 정류기, 서버 보드의 48 V→12 V 벅, 노트북 어댑터의 PFC 스위치는 대부분 실리콘 <span class="term">전력 MOSFET</span><span class="en">(power MOSFET)</span>이다. 칩 한 장에 수백만 개의 작은 셀이 병렬로 서 있고, 전류는 칩을 위에서 아래로 관통한다. 이 장에서는 그 셀 하나를 해부한다. <strong>온저항은 어디서 생기는가</strong>(전압 등급에 따라 병목이 채널에서 드리프트층으로 옮겨 간다), <strong>스위칭 속도는 무엇이 정하는가</strong>(비선형 커패시턴스와 게이트 전하), 그리고 <span class="term">슈퍼정션</span>이 어떻게 p·n 기둥의 전하 균형으로 3장의 단극 한계 \(R_{on,sp} \propto BV^{2.5}\)를 넘어서는지 계산한다. 끝으로 바디 다이오드·기생 BJT·애벌런치 내량처럼 데이터시트 뒷면에 숨은 견고성을 다룬다.</p>
+    <ul class="objectives">
+      <li>평면 DMOS·트렌치·차폐 게이트 트렌치·슈퍼정션 셀의 구조를 그리고 전자의 경로를 따라 온저항 성분(채널·축적·JFET·드리프트·기판·패키지)을 식으로 쓸 수 있다.</li>
+      <li>전압 등급과 셀 피치에 따라 어떤 성분이 지배하는지 판단하고, 30 V급과 650 V급 소자의 설계 손잡이가 왜 다른지 설명할 수 있다.</li>
+      <li>출력·전달 특성과 온도 계수(\(R_{DS(on)}\)의 양의 온도 계수, 영 온도 계수점)를 계산할 수 있다.</li>
+      <li>\(C_{iss}, C_{oss}, C_{rss}\)의 전압 의존성을 공핍 폭으로 설명하고, 게이트 전하 곡선(\(Q_{GS}, Q_{GD}\), 밀러 플래토)과 \(E_{oss}\), \(R_{DS(on)}\cdot Q_G\) 성능 지수를 적분으로 구할 수 있다.</li>
+      <li>슈퍼정션의 전하 균형 조건과 불균형이 전계·항복 전압을 어떻게 바꾸는지 계산하고, 다중 에피와 트렌치 충전 공정을 비교할 수 있다.</li>
+      <li>바디 다이오드와 기생 BJT의 위험을 이해하고, 비클램프 유도성 스위칭(UIS)에서 애벌런치 에너지 \(E_{AS}\)와 접합 온도 상승을 계산할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="structure">
+    <h2>수직 전력 MOSFET: 셀 수백만 개의 병렬</h2>
+    <p>로직 MOSFET은 소스와 드레인이 표면에 나란히 놓인 <strong>수평</strong> 소자다. 전력 MOSFET은 드레인을 칩 뒷면 전체로 옮겨 전류가 칩을 <strong>수직</strong>으로 지나가게 만든다. 이렇게 하면 차단 전압을 맡는 두꺼운 저도핑 <span class="term">드리프트층</span>을 칩 두께 방향으로 쌓을 수 있고, 앞면 전체를 셀로 채워 단위 면적당 채널 폭을 최대로 쓸 수 있다. 셀 구조는 세 세대를 거쳤다(그림 6-1). DeviceBook <a href="../../device/chapters/power.html">전력 소자 장</a>이 구조와 성분을 한 번 훑었다면, 이 장은 각 성분의 크기를 전압 등급별로 계산하고 동적 특성까지 내려간다.</p>
+    <ul>
+      <li><strong>평면 DMOS</strong><span class="en">(double-diffused MOS, VDMOS)</span>: 같은 마스크 창으로 p 바디와 n⁺ 소스를 차례로 확산해 두 확산의 옆 퍼짐 차이로 채널 길이(약 1 µm)를 정한다. 채널은 표면에 수평이고, 전자는 채널 → 게이트 아래 축적층 → 두 p 바디 사이 좁은 목(<span class="term">JFET 영역</span>) → 드리프트층 → n⁺ 기판으로 흐른다. 200 V 이상, 특히 슈퍼정션의 표면 구조로 여전히 쓰인다.</li>
+      <li><strong>트렌치 MOSFET</strong><span class="en">(UMOS)</span>: 게이트를 실리콘에 판 홈에 묻는다. 채널이 홈 벽을 따라 수직으로 서므로 JFET 목이 사라지고 셀 피치를 1–2 µm까지 줄일 수 있다. 12–60 V 저전압의 표준.</li>
+      <li><strong>차폐 게이트 트렌치</strong><span class="en">(shielded/split-gate trench, SGT)</span>: 홈을 깊게 파고 게이트 아래에 소스와 연결된 차폐 전극(필드 플레이트)을 두꺼운 산화막으로 감싸 넣는다. 차폐 전극이 메사를 옆에서 공핍시켜 전계를 사다리꼴로 펴 주므로 같은 BV에서 드리프트 도핑을 올릴 수 있고, 게이트-드레인 커패시턴스도 차폐된다. 40–250 V의 표준. 슈퍼정션과 같은 "옆에서 전하를 상쇄"하는 원리를 전극으로 구현한 것이다.</li>
+    </ul>
+
+    <figure class="diagram">
+      <svg viewBox="0 -14 880 344" role="img" aria-label="세 가지 전력 MOSFET 셀 단면: 평면 DMOS는 표면 채널과 JFET 목, 트렌치는 홈 벽 수직 채널, 차폐 게이트 트렌치는 깊은 홈 속 게이트 아래 차폐 전극. 전자 경로는 파란 화살표">
+        <defs><marker id="f61-e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-electron)"/></marker></defs>
+        <!-- (a) planar -->
+        <text x="145" y="4" text-anchor="middle" class="mo-b">(a) 평면 DMOS · 피치 8–20 µm</text>
+        <rect x="20" y="40" width="250" height="240" class="mo-n"/>
+        <rect x="20" y="250" width="250" height="30" class="mo-nn"/>
+        <path d="M20 40 H90 Q100 40 100 50 V95 Q100 105 90 105 H20 Z" class="mo-p"/>
+        <path d="M270 40 H200 Q190 40 190 50 V95 Q190 105 200 105 H270 Z" class="mo-p"/>
+        <rect x="45" y="40" width="40" height="14" class="mo-nn"/><rect x="205" y="40" width="40" height="14" class="mo-nn"/>
+        <rect x="70" y="30" width="150" height="10" class="mo-ox"/>
+        <rect x="78" y="18" width="134" height="12" class="mo-poly"/>
+        <text x="145" y="28" text-anchor="middle" class="mo-s" style="font-size:10px">게이트(poly)</text>
+        <text x="40" y="80" class="mo-s">p 바디</text><text x="208" y="80" class="mo-s">p 바디</text>
+        <text x="145" y="175" text-anchor="middle" class="mo-s">n⁻ 드리프트층</text>
+        <text x="145" y="270" text-anchor="middle" class="mo-s">n⁺ 기판 (드레인)</text>
+        <path d="M86 46 H118 Q140 46 140 70 V120 Q140 160 100 200 V246" class="mo-e" marker-end="url(#f61-e)"/>
+        <path d="M204 46 H172 Q150 46 150 70 V120 Q150 160 190 200 V246" class="mo-e" marker-end="url(#f61-e)"/>
+        <text x="100" y="62" class="mo-s" style="font-size:10px">채널</text><text x="158" y="62" class="mo-s" style="font-size:10px">축적</text>
+        <text x="122" y="100" class="mo-s" style="font-size:10px">JFET</text>
+        <text x="145" y="300" text-anchor="middle" class="mo-s">JFET 목 때문에 피치를 줄이기 어렵다</text>
+        <!-- (b) trench -->
+        <text x="440" y="4" text-anchor="middle" class="mo-b">(b) 트렌치 · 피치 0.8–3 µm</text>
+        <rect x="320" y="40" width="240" height="240" class="mo-n"/>
+        <rect x="320" y="250" width="240" height="30" class="mo-nn"/>
+        <rect x="320" y="40" width="240" height="55" class="mo-p"/>
+        <rect x="320" y="40" width="240" height="14" class="mo-nn"/>
+        <rect x="350" y="40" width="40" height="14" class="mo-pp"/><rect x="470" y="40" width="40" height="14" class="mo-pp"/>
+        <rect x="415" y="34" width="30" height="96" rx="6" class="mo-ox"/><rect x="421" y="40" width="18" height="84" rx="4" class="mo-poly"/>
+        <rect x="535" y="34" width="25" height="96" rx="6" class="mo-ox"/><rect x="320" y="34" width="25" height="96" rx="6" class="mo-ox"/>
+        <text x="370" y="80" class="mo-s">p 바디</text><text x="482" y="80" class="mo-s">p 바디</text>
+        <path d="M405 48 V125 Q405 150 380 175 V246" class="mo-e" marker-end="url(#f61-e)"/>
+        <path d="M455 48 V125 Q455 150 480 175 V246" class="mo-e" marker-end="url(#f61-e)"/>
+        <text x="440" y="175" text-anchor="middle" class="mo-s">n⁻ 드리프트</text>
+        <text x="440" y="300" text-anchor="middle" class="mo-s">채널이 홈 벽에 수직 · JFET 없음</text>
+        <!-- (c) SGT -->
+        <text x="735" y="4" text-anchor="middle" class="mo-b">(c) 차폐 게이트 트렌치 · 40–250 V</text>
+        <rect x="610" y="40" width="250" height="240" class="mo-n"/>
+        <rect x="610" y="250" width="250" height="30" class="mo-nn"/>
+        <rect x="610" y="40" width="250" height="45" class="mo-p"/>
+        <rect x="610" y="40" width="250" height="12" class="mo-nn"/>
+        <rect x="705" y="34" width="60" height="196" rx="10" class="mo-ox"/>
+        <rect x="725" y="40" width="20" height="56" rx="4" class="mo-poly"/>
+        <rect x="727" y="112" width="16" height="104" rx="4" class="mo-met"/>
+        <text x="735" y="108" text-anchor="middle" class="mo-s" style="font-size:9.5px">게이트</text>
+        <text x="772" y="170" class="mo-s" style="font-size:10px">차폐 전극</text><text x="772" y="183" class="mo-s" style="font-size:10px">(소스 전위)</text>
+        <path d="M697 46 V100 V246" class="mo-e" marker-end="url(#f61-e)"/>
+        <path d="M773 46 V100 V246" class="mo-e" marker-end="url(#f61-e)"/>
+        <rect x="610" y="96" width="94" height="130" class="mo-dep"/><rect x="766" y="96" width="94" height="130" class="mo-dep"/>
+        <text x="657" y="160" text-anchor="middle" class="mo-s" style="font-size:10px">메사 옆</text><text x="657" y="173" text-anchor="middle" class="mo-s" style="font-size:10px">공핍</text>
+        <text x="735" y="300" text-anchor="middle" class="mo-s">메사를 옆에서 공핍 → 도핑↑, C_gd 차폐</text>
+        <text x="440" y="322" text-anchor="middle" class="mo-s">공통: 앞면 = 소스 금속(그림에서 생략), 뒷면 = 드레인. 전자(파란 화살표)는 위에서 아래로 칩을 관통한다.</text>
+      </svg>
+      <figcaption><b>그림 6-1.</b> 전력 MOSFET 셀의 세 세대(가로 과장). (a) 평면 DMOS: 표면 채널, 축적층, 두 p 바디 사이의 JFET 목. (b) 트렌치: 홈 벽 수직 채널로 JFET 영역이 없고 피치가 작다. p⁺(진한 분홍)는 바디 접촉. (c) 차폐 게이트: 깊은 홈 아래쪽의 소스 전위 전극이 메사를 옆에서 공핍시킨다(점선 노랑). 슈퍼정션은 6절, 3D 셀은 7절.</figcaption>
+    </figure>
+
+    <p>칩 위에서 보면(그림 6-2) 활성 영역은 피치 \(p\)로 반복되는 줄무늬(스트라이프) 또는 육각·정사각 셀로 덮여 있고, 가장자리에는 <a href="termination.html">4장</a>의 <span class="term">에지 종단</span>이 한 바퀴 두른다. 게이트 패드에서 들어간 게이트 신호는 폴리실리콘 버스와 금속 핑거로 셀까지 퍼진다. 셀 하나의 채널 폭은 µm 단위지만 4×4 mm 칩에 1 µm 피치 스트라이프를 깔면 채널 폭의 합은 \(2\times(4\ \text{mm})^2/1\ \mu\text{m} \approx 32\) m에 이른다. 전력 MOSFET은 "수십 m 폭의 MOSFET 하나"다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="전력 MOSFET 칩 평면도: 가운데 활성 영역 스트라이프 셀, 게이트 패드와 게이트 버스, 둘레 에지 종단, 오른쪽에 셀 피치 확대">
+        <rect x="20" y="15" width="300" height="220" rx="6" class="f-elev"/>
+        <rect x="34" y="29" width="272" height="192" rx="4" class="mo-dep"/>
+        <text x="170" y="245" text-anchor="middle" class="mo-s">에지 종단 (가드 링·필드 플레이트, 4장)</text>
+        <g class="mo-dash">
+          <line x1="50" y1="48" x2="290" y2="48"/><line x1="50" y1="60" x2="290" y2="60"/><line x1="50" y1="72" x2="290" y2="72"/><line x1="50" y1="84" x2="290" y2="84"/><line x1="50" y1="96" x2="290" y2="96"/><line x1="50" y1="108" x2="290" y2="108"/><line x1="50" y1="120" x2="290" y2="120"/><line x1="50" y1="132" x2="290" y2="132"/><line x1="50" y1="144" x2="290" y2="144"/><line x1="50" y1="156" x2="290" y2="156"/><line x1="50" y1="168" x2="290" y2="168"/><line x1="50" y1="180" x2="290" y2="180"/><line x1="50" y1="192" x2="290" y2="192"/><line x1="50" y1="204" x2="290" y2="204"/>
+        </g>
+        <rect x="50" y="44" width="240" height="164" fill="none" stroke="var(--accent)" stroke-width="1.4"/>
+        <text x="170" y="128" text-anchor="middle" class="mo-b">활성 영역 (셀 스트라이프)</text>
+        <rect x="52" y="186" width="36" height="20" class="mo-poly"/><text x="70" y="200" text-anchor="middle" class="mo-s" style="font-size:9.5px">G</text>
+        <line x1="88" y1="196" x2="290" y2="196" stroke="var(--m-copper)" stroke-width="3"/>
+        <text x="200" y="190" class="mo-s" style="font-size:10px">게이트 버스</text>
+        <line x1="290" y1="110" x2="400" y2="60" class="mo-dash"/><line x1="290" y1="130" x2="400" y2="200" class="mo-dash"/>
+        <rect x="400" y="60" width="300" height="140" class="mo-n"/>
+        <g><rect x="400" y="60" width="300" height="12" class="mo-nn"/>
+          <rect x="430" y="56" width="16" height="70" rx="4" class="mo-ox"/><rect x="490" y="56" width="16" height="70" rx="4" class="mo-ox"/><rect x="550" y="56" width="16" height="70" rx="4" class="mo-ox"/><rect x="610" y="56" width="16" height="70" rx="4" class="mo-ox"/><rect x="670" y="56" width="16" height="70" rx="4" class="mo-ox"/></g>
+        <line x1="438" y1="215" x2="498" y2="215" class="mo-w"/><line x1="438" y1="208" x2="438" y2="222" class="mo-w"/><line x1="498" y1="208" x2="498" y2="222" class="mo-w"/>
+        <text x="468" y="236" text-anchor="middle" class="mo-b">p</text>
+        <text x="560" y="160" text-anchor="middle" class="mo-s">피치 하나에 채널 2개(홈 양벽)</text>
+        <text x="720" y="80" class="mo-s">채널 폭/면적 = 2/p</text>
+        <text x="720" y="100" class="mo-s">p = 1 µm → 2 m/mm²</text>
+        <text x="720" y="130" class="mo-s">4×4 mm 칩 → 약 32 m</text>
+        <text x="720" y="160" class="mo-s">셀 수 ≈ 수백만</text>
+      </svg>
+      <figcaption><b>그림 6-2.</b> 칩 평면도와 셀 피치. 활성 영역은 피치 \(p\)의 스트라이프 셀로 채워지고, 단위 면적당 채널 폭은 \(2/p\)다. 활성 영역 밖의 에지 종단과 게이트 패드·버스는 전류를 흘리지 못하는 면적이므로, 같은 칩 크기에서 비율이 작을수록 좋다.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="ron">
+    <h2>온저항 분해: 병목은 전압 등급이 정한다</h2>
+    <p>온 상태의 \(R_{DS(on)}\)은 전자가 소스에서 드레인까지 지나는 저항들의 직렬 합이다. 면적에 무관한 비교를 위해 <span class="term">비온저항</span><span class="en">(specific on-resistance)</span> \(R_{on,sp} = R_{DS(on)}\cdot A\) (단위 mΩ·cm²)로 쓴다.</p>
+    <div class="formula">$$R_{on,sp} = R_{ch} + R_{acc} + R_{JFET} + R_{drift} + R_{sub},\qquad R_{DS(on)} = \frac{R_{on,sp}}{A_{act}} + R_{pkg}$$<div class="where">\(A_{act}\)는 활성 면적, \(R_{pkg}\)는 금속화·본드 와이어·리드 저항(TO-247 약 0.3–1 mΩ, 클립 본딩 소형 패키지 약 0.1–0.3 mΩ). 30 V급 1 mΩ 소자에서는 \(R_{pkg}\)가 전체의 절반을 넘기도 한다.</div></div>
+    <p>각 성분을 셀 피치 \(p\)로 쓰면(바리가의 모델, 스트라이프 셀):</p>
+    <div class="formula">$$R_{ch} = \frac{L_{ch}\,p}{2\mu_{ch}C_{ox}(V_{GS}-V_{th})},\qquad R_{acc} = K_A\frac{(W_G - 2x_L)\,p}{4\mu_{acc}C_{ox}(V_{GS}-V_{th})},\qquad R_{JFET} = \rho_D\frac{x_p\,p}{a}$$
+    $$R_{drift} = \rho_D\left[\frac{p}{2}\ln\frac{p}{a} + t_D - \frac{p-a}{2}\right],\qquad \rho_D = \frac{1}{q\mu_n(N_D)N_D},\qquad R_{sub} = \rho_{sub}t_{sub}$$<div class="where">\(L_{ch}\): 채널 길이, \(C_{ox} = \varepsilon_{ox}/t_{ox}\), \(W_G\): 게이트 폭(평면), \(x_L\): p 바디의 옆 확산, \(K_A \approx 0.6\). JFET 목 폭 \(a = W_G - 2x_L - 2W_0\)(\(W_0\): 영 바이어스 공핍 폭), \(x_p\): p 바디 깊이. 드리프트 식의 첫 항은 전류가 폭 \(a\)에서 45°로 퍼지는 구간, 둘째 항은 다 퍼진 뒤의 균일 구간이다. 트렌치에서는 \(a\)를 홈 폭으로 바꾸고 \(R_{JFET} = 0\). 드리프트층 \(N_D\), \(t_D\)는 BV에 맞춘 최적 비펀치스루 설계(\(N_D = (5.34\times10^{13}/BV)^{4/3}\), \(t_D = 2.67\times10^{10}N_D^{-7/8}\), <a href="breakdown.html">3장</a>), 이동도는 \(\mu_n = 88 + 1252/[1+(N_D/1.26\times10^{17})^{0.88}]\).</div></div>
+    <p>식을 보면 손잡이가 둘로 나뉜다. <strong>채널·축적 성분은 피치에 비례</strong>하고 전압 등급과 무관하다. <strong>드리프트 성분은 \(BV^{2.5}\)</strong>로 커진다. 따라서 30 V급에서는 피치를 줄이는 것(트렌치, 미세 공정)이 전부이고, 600 V급에서는 피치를 아무리 줄여도 드리프트층이 99 %를 차지한다. 그 벽을 넘는 방법이 차폐 게이트(저전압 쪽)와 슈퍼정션(고전압 쪽)이다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 210" role="img" aria-label="온저항 성분의 직렬 사슬: 소스 금속, 채널, 축적층, JFET, 드리프트, 기판, 드레인. 30 V와 600 V에서 각 성분 비중 막대">
+        <g transform="translate(20,20)">
+          <text x="0" y="12" class="mo-b">전자 경로 = 저항 사슬</text>
+          <line x1="0" y1="50" x2="840" y2="50" class="mo-w"/>
+          <g class="mo-w">
+            <rect x="40" y="38" width="90" height="24" rx="4" class="f-acc-soft"/><rect x="160" y="38" width="90" height="24" rx="4" class="f-acc2-soft"/><rect x="280" y="38" width="90" height="24" rx="4" class="f-warn-soft"/><rect x="400" y="38" width="200" height="24" rx="4" class="mo-n"/><rect x="630" y="38" width="90" height="24" rx="4" class="mo-nn"/>
+          </g>
+          <text x="85" y="55" text-anchor="middle" class="mo-s">R_ch</text><text x="205" y="55" text-anchor="middle" class="mo-s">R_acc</text><text x="325" y="55" text-anchor="middle" class="mo-s">R_JFET</text><text x="500" y="55" text-anchor="middle" class="mo-s">R_drift</text><text x="675" y="55" text-anchor="middle" class="mo-s">R_sub</text>
+          <text x="0" y="80" class="mo-s">S</text><text x="830" y="80" class="mo-s">D</text>
+          <text x="85" y="80" text-anchor="middle" class="mo-s">∝ p/(V_GS−V_th)</text><text x="205" y="80" text-anchor="middle" class="mo-s">∝ p</text><text x="325" y="80" text-anchor="middle" class="mo-s">∝ 1/a</text><text x="500" y="80" text-anchor="middle" class="mo-s">∝ BV^2.5</text><text x="675" y="80" text-anchor="middle" class="mo-s">∝ t_sub</text>
+          <text x="0" y="118" class="mo-s">30 V 트렌치</text>
+          <rect x="110" y="106" width="250" height="16" class="f-acc"/><rect x="360" y="106" width="40" height="16" class="f-acc2"/><rect x="400" y="106" width="250" height="16" fill="var(--m-electron)"/><rect x="650" y="106" width="150" height="16" fill="var(--m-si)"/>
+          <text x="0" y="150" class="mo-s">600 V 평면</text>
+          <rect x="110" y="138" width="8" height="16" class="f-acc"/><rect x="118" y="138" width="4" height="16" class="f-acc2"/><rect x="122" y="138" width="40" height="16" fill="var(--m-field)"/><rect x="162" y="138" width="636" height="16" fill="var(--m-electron)"/><rect x="798" y="138" width="2" height="16" fill="var(--m-si)"/>
+          <text x="110" y="178" class="mo-s">대략의 비중(아래 시뮬레이터로 확인): 저전압은 채널·기판이 절반 이상, 고전압은 드리프트가 90 % 이상</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 6-3.</b> 온저항 성분의 직렬 사슬과 전압 등급별 비중(개념). 채널(주황)·축적(밝은 파랑)·JFET(노랑)·드리프트(남색)·기판(회색). 저전압 소자는 "표면 저항"을, 고전압 소자는 "몸통 저항"을 줄여야 한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ron">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>온저항 성분 분해: 전압 등급 × 셀 피치 × 구조</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ron-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>셀 구조</span><div class="seg" id="ron-type"><button data-value="planar">평면</button><button data-value="trench" class="on">트렌치</button><button data-value="sgt">차폐</button><button data-value="sj">SJ</button></div></div>
+          <label class="ctrl"><span>정격 BV <output id="ron-bv-out"></output></span><input type="range" id="ron-bv" min="1.301" max="3" step="0.005" value="1.477"></label>
+          <label class="ctrl"><span>셀 피치 p <output id="ron-p-out"></output></span><input type="range" id="ron-p" min="-0.097" max="1.301" step="0.005" value="0.176"></label>
+          <label class="ctrl"><span>게이트 전압 V_GS <output id="ron-vg-out"></output></span><input type="range" id="ron-vg" min="5" max="15" step="0.5" value="10"></label>
+          <div class="mo-btns"><button class="btn" id="ron-b30">30 V 트렌치</button><button class="btn" id="ron-b100">100 V 차폐</button><button class="btn" id="ron-b650">650 V SJ</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">총 R_on,sp</span><span class="v" id="ron-tot">—</span></div>
+        <div class="stat"><span class="k">가장 큰 성분</span><span class="v" id="ron-max">—</span></div>
+        <div class="stat"><span class="k">Si 1D 한계 대비</span><span class="v" id="ron-lim">—</span></div>
+        <div class="stat"><span class="k">드리프트 N_D / 두께</span><span class="v" id="ron-nd">—</span></div>
+      </div>
+      <div class="sim-note">위: 성분별 막대(비중 %와 값). 아래: 각 구조를 대표 피치(평면 12, 트렌치 1.5, 차폐 2.5, SJ 5 µm)에 둔 총 \(R_{on,sp}\)–BV 곡선(점선)과 현재 설정(점), 회색 실선은 Si 1D 한계 \(5.93\times10^{-9}BV^{2.5}\). 가정: \(t_{ox}\) = 50 nm, \(\mu_{ch}\) = 450(평면)·350(홈 벽) cm²/V·s, \(V_{th}\) = 3 V(평면)·2.5 V(트렌치), 기판 2 mΩ·cm × 100 µm. 차폐 게이트는 메사 전하 \(N_D w_m\) = 2×10¹² cm⁻², 평균 전계 1.6×10⁵ V/cm(40–300 V에서만), SJ는 기둥 전하 \(N_D w_n\) = 2×10¹² cm⁻²(400 V 이상). 피치가 그 구조의 최소값보다 작으면 최소값으로 고정된다. 해볼 것: ① 30 V 트렌치에서 피치를 3 → 0.8 µm로 줄여 보라. ② 600 V 평면에서 같은 일을 하면? ③ 평면 DMOS의 피치를 줄이면 JFET 목이 막혀 오히려 저항이 는다.</div>
+    </div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>전압 등급</th><th>주된 구조</th><th>지배 성분</th><th>설계 손잡이</th><th>대표 \(R_{on,sp}\) (약)</th></tr></thead>
+      <tbody>
+        <tr><td>12–40 V</td><td>트렌치</td><td>채널·기판·패키지</td><td>피치↓, 기판 연마(50 µm 이하), 클립 패키지</td><td>0.05–0.15 mΩ·cm²</td></tr>
+        <tr><td>40–250 V</td><td>차폐 게이트 트렌치</td><td>드리프트(메사)·채널</td><td>홈 깊이·산화막 두께로 전하 균형, 피치↓</td><td>0.3–3 mΩ·cm² (100 V 약 0.5)</td></tr>
+        <tr><td>400–900 V</td><td>슈퍼정션(평면/트렌치 게이트)</td><td>기둥 드리프트</td><td>기둥 피치↓, 전하 균형 공정 여유</td><td>6–15 mΩ·cm² (650 V)</td></tr>
+        <tr><td>(참고) 600 V 평면</td><td>평면 DMOS</td><td>드리프트(약 95 %)</td><td>사실상 1D 한계에 묶임</td><td>약 60–100 mΩ·cm²</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout fab"><strong>DC 서버 전원의 Si 비교 기준</strong>48 V → 12 V 벅의 Si 비교안은 100 V 차폐 게이트 트렌치 MOSFET이다. 시뮬레이터의 100 V 차폐 설정에서 \(R_{on,sp}\) ≈ 0.5 mΩ·cm²이면 3 mΩ을 얻는 활성 면적은 약 0.17 cm²(약 4×4 mm)다. 같은 3 mΩ의 100 V GaN은 면적이 몇 분의 1이라 게이트 전하·\(Q_{oss}\)가 작고, 그래서 상당 500 kHz(Si는 200 kHz)를 쓸 수 있다. 이 차이를 5절 끝 "최적 다이 크기" 시뮬레이터로 계산한다.</div>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="output">
+    <h2>출력 특성과 온도: 양의 온도 계수와 영 온도 계수점</h2>
+    <p>전력 MOSFET의 출력 특성은 로직 MOSFET과 모양이 같다(DeviceBook <a href="../../device/chapters/mosfet.html">MOSFET 장</a>). 다른 점은 채널 뒤에 직렬 드리프트 저항 \(R_d\)가 붙어 있다는 것이다. 채널 전압은 \(V_c = V_{DS} - I_DR_d\)이고, 채널 전류는 1차 모델로</p>
+    <div class="formula">$$I_D = \beta\left[(V_{GS}-V_{th})V_c - \tfrac12V_c^2\right]\ (V_c \lt V_{GS}-V_{th}),\qquad I_{D,sat} = \tfrac12\beta(V_{GS}-V_{th})^2,\qquad \beta = \frac{\beta_0(T/300)^{-1.8}}{1+\theta(V_{GS}-V_{th})}$$<div class="where">\(\beta_0 = \mu_{ch}C_{ox}W/L\). \(\theta\)는 수직 전계에 의한 이동도 감소. \(V_{th}(T)\)는 약 −5~−7 mV/K로 떨어지고, 드리프트 저항은 격자 산란으로 \(R_d \propto (T/300)^{2.4}\)로 오른다. 시뮬레이터는 \(I_D = I_{ch}(V_{DS}-I_DR_d)\)를 이분법으로 푼다.</div></div>
+    <p>온도에 대한 두 가지 성질이 설계를 좌우한다. 첫째, 선형 영역의 \(R_{DS(on)}\)은 <strong>양의 온도 계수</strong>다(Si 고전압 소자는 25 → 150 °C에서 약 2–2.5배). 뜨거운 셀은 저항이 커져 전류를 덜 받으므로, 병렬 다이와 수백만 셀이 저절로 전류를 나눠 갖는다. 둘째, 포화 영역의 전달 특성에는 <span class="term">영 온도 계수점</span><span class="en">(zero temperature coefficient, ZTC)</span>이 있다. 그보다 낮은 \(V_{GS}\)에서는 \(V_{th}\) 하락이 이겨 뜨거울수록 전류가 <strong>늘어난다</strong>. 선형 모드(돌입 전류 제한, 전자 부하, 핫스왑)로 쓰면 뜨거운 셀에 전류가 몰려 열 폭주가 생긴다(스피리토 효과). 스위칭 소자는 이 영역을 수십 ns 만에 지나가므로 괜찮지만, 선형 모드용으로는 ZTC가 낮은 소자를 따로 고른다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 240" role="img" aria-label="왼쪽 출력 특성의 선형·포화 영역과 R_DS(on) 기울기, 오른쪽 전달 특성의 25도와 150도 곡선이 교차하는 영 온도 계수점">
+        <g transform="translate(40,20)">
+          <line x1="0" y1="180" x2="360" y2="180" class="s-axis"/><line x1="0" y1="180" x2="0" y2="0" class="s-axis"/>
+          <text x="360" y="198" text-anchor="end" class="mo-s">V_DS</text><text x="6" y="10" class="mo-s">I_D</text>
+          <path d="M0 180 Q40 90 110 60 L360 50" class="mo-i"/><path d="M0 180 Q35 120 90 110 L360 104" class="mo-i" opacity=".7"/><path d="M0 180 Q25 150 60 146 L360 142" class="mo-i" opacity=".45"/>
+          <line x1="0" y1="180" x2="80" y2="40" class="mo-dash"/><text x="70" y="34" class="mo-s">기울기 = 1/R_DS(on)</text>
+          <text x="40" y="200" class="mo-s">선형(옴) 영역 — 스위치 온</text><text x="220" y="40" class="mo-s">포화 — 단락·선형 모드</text>
+          <text x="300" y="62" class="mo-s">V_GS = 10 V</text><text x="300" y="116" class="mo-s">7 V</text><text x="300" y="154" class="mo-s">6 V</text>
+        </g>
+        <g transform="translate(480,20)">
+          <line x1="0" y1="180" x2="360" y2="180" class="s-axis"/><line x1="0" y1="180" x2="0" y2="0" class="s-axis"/>
+          <text x="360" y="198" text-anchor="end" class="mo-s">V_GS</text><text x="6" y="10" class="mo-s">I_D (포화)</text>
+          <path d="M80 180 Q160 150 200 110 T330 10" class="mo-i"/>
+          <path d="M55 180 Q140 140 200 110 T300 40" class="mo-dash" style="stroke:var(--m-heat);stroke-dasharray:none;stroke-width:2"/>
+          <circle cx="200" cy="110" r="5" class="f-acc"/><text x="210" y="124" class="mo-s">ZTC</text>
+          <text x="20" y="150" class="mo-s">뜨거울수록 전류↑</text><text x="20" y="164" class="mo-s">(열적 불안정)</text>
+          <text x="250" y="150" class="mo-s">뜨거울수록 전류↓ (안정)</text>
+          <text x="150" y="20" class="mo-s" style="fill:var(--m-heat)">150 °C</text><text x="300" y="20" class="mo-s" style="fill:var(--m-amp)">25 °C</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 6-4.</b> 출력 특성(왼쪽)과 전달 특성의 영 온도 계수점(오른쪽). 스위치는 선형 영역 끝에서 온, 0 A 축에서 오프로만 머문다. 포화 영역은 단락(<a href="#avalanche">9절</a>, <a href="gatedrive.html">11장</a>)이나 선형 모드에서만 지나간다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-iv">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>650 V 슈퍼정션 40 mΩ: 출력·전달 특성과 온도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="iv-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>접합 온도 T_j <output id="iv-t-out"></output></span><input type="range" id="iv-t" min="-40" max="175" step="1" value="25"></label>
+          <label class="ctrl"><span>게이트 전압 V_GS <output id="iv-vg-out"></output></span><input type="range" id="iv-vg" min="4" max="15" step="0.1" value="10"></label>
+          <label class="ctrl"><span>드레인 전류(R_DS(on) 측정점) <output id="iv-id-out"></output></span><input type="range" id="iv-id" min="1" max="80" step="1" value="20"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">R_DS(on) (현재 T, V_GS, I_D)</span><span class="v" id="iv-r">—</span></div>
+        <div class="stat"><span class="k">R(T)/R(25 °C)</span><span class="v" id="iv-rr">—</span></div>
+        <div class="stat"><span class="k">포화 전류 (V_DS 20 V)</span><span class="v" id="iv-sat">—</span></div>
+        <div class="stat"><span class="k">ZTC 점 (25↔T)</span><span class="v" id="iv-ztc">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: \(V_{GS}\) = 5, 6, 7, 8 V와 현재 \(V_{GS}\)(굵은 선)의 출력 특성, 점선은 같은 \(V_{GS}\)의 25 °C 곡선. 오른쪽: \(V_{DS}\) = 20 V 전달 특성(25 °C 주황, 현재 온도 빨강)과 교차점 ZTC. 모델: \(V_{th}\) = 3.5 V − 6.5 mV/K·(T−25), \(\beta_0\) = 18 A/V², \(\theta\) = 0.1 V⁻¹, \(R_d\)(25 °C) = 26 mΩ. 해볼 것: ① 150 °C에서 \(R_{DS(on)}\)이 몇 배인가? 데이터시트의 "최대 \(R_{DS(on)}\)"은 보통 25 °C 값이라 설계는 고온 값으로 해야 한다. ② \(V_{GS}\)를 6 V로 낮추면 채널 몫이 커져 온도 계수가 작아지지만 \(R_{DS(on)}\) 자체가 커진다. ③ ZTC보다 낮은 \(V_{GS}\)에서 온도를 올리면 포화 전류가 는다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="cap">
+    <h2>비선형 커패시턴스: \(C_{iss}, C_{oss}, C_{rss}\)와 \(E_{oss}\)</h2>
+    <p>스위칭 속도를 정하는 것은 셀 안의 세 커패시턴스다(그림 6-5). <strong>\(C_{GS}\)</strong>는 게이트와 소스·p 바디 사이 산화막 커패시턴스로 거의 일정하다. <strong>\(C_{GD}\)</strong>는 게이트가 드리프트층(평면의 JFET 목, 트렌치의 홈 바닥) 위에 겹친 부분으로, 산화막 커패시턴스와 그 아래 공핍층 커패시턴스의 직렬이다. <strong>\(C_{DS}\)</strong>는 p 바디/드리프트 pn 접합의 공핍 커패시턴스다. 데이터시트는 이것을 측정하기 쉬운 조합으로 적는다.</p>
+    <div class="formula">$$C_{iss} = C_{GS} + C_{GD},\qquad C_{oss} = C_{DS} + C_{GD},\qquad C_{rss} = C_{GD}$$
+    $$C_{GD}(V) = \left(\frac{1}{C_{ox,gd}} + \frac{W_d(V)}{\varepsilon_s A_{gd}}\right)^{-1},\qquad C_{DS}(V) = \frac{\varepsilon_s A_j}{W_d(V)},\qquad W_d(V) = \sqrt{\frac{2\varepsilon_s(V+V_{bi})}{qN_D}}$$<div class="where">\(A_{gd}\): 게이트-드리프트 겹침 면적, \(A_j\): 접합 면적, \(V_{bi} \approx 0.7\) V. \(W_d\)는 드리프트 두께 \(t_D\)에서 멈춘다(펀치스루). \(V_{DG} \lt 0\)(\(V_{DS} \lt V_{GS}\))이면 게이트 아래가 축적되어 \(C_{GD} = C_{ox,gd}\)로 커진다 — 게이트 전하 곡선 3구간이 가파르지 않은 이유다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 272" role="img" aria-label="평면 셀 단면에 표시한 세 커패시턴스: 게이트-소스, 게이트-드레인(산화막과 공핍층 직렬), 드레인-소스(pn 접합 공핍). 오른쪽은 등가 회로">
+        <rect x="30" y="60" width="380" height="170" class="mo-n"/>
+        <rect x="30" y="205" width="380" height="25" class="mo-nn"/>
+        <path d="M30 60 H120 Q135 60 135 75 V120 Q135 135 120 135 H30 Z" class="mo-p"/><path d="M410 60 H320 Q305 60 305 75 V120 Q305 135 320 135 H410 Z" class="mo-p"/>
+        <rect x="60" y="60" width="45" height="14" class="mo-nn"/><rect x="335" y="60" width="45" height="14" class="mo-nn"/>
+        <rect x="90" y="48" width="260" height="12" class="mo-ox"/><rect x="98" y="30" width="244" height="18" class="mo-poly"/>
+        <text x="220" y="44" text-anchor="middle" class="mo-s">게이트</text>
+        <path d="M150 60 V60 Q220 150 290 60 Z" class="mo-dep"/>
+        <path d="M30 140 H120 Q145 140 145 110 M295 110 Q295 140 320 140 H410" class="mo-dash" style="stroke:var(--m-field)"/>
+        <text x="110" y="24" class="mo-b" style="fill:var(--accent)">C_GS</text><line x1="118" y1="28" x2="118" y2="58" class="s-acc"/>
+        <text x="225" y="100" text-anchor="middle" class="mo-b" style="fill:var(--accent-2)">C_GD</text><text x="225" y="116" text-anchor="middle" class="mo-s">C_ox,gd + 공핍 직렬</text>
+        <text x="60" y="162" class="mo-b" style="fill:var(--m-field)">C_DS</text><text x="60" y="178" class="mo-s">p 바디/드리프트 접합 공핍</text>
+        <text x="220" y="222" text-anchor="middle" class="mo-s">드레인</text>
+        <!-- equivalent circuit -->
+        <g transform="translate(470,20)">
+          <text x="0" y="14" class="mo-b">등가 회로</text>
+          <line x1="20" y1="100" x2="90" y2="100" class="mo-w"/><text x="0" y="104" class="mo-s">G</text>
+          <line x1="90" y1="60" x2="90" y2="150" class="mo-w"/>
+          <line x1="90" y1="60" x2="200" y2="60" class="mo-w"/><line x1="200" y1="40" x2="200" y2="60" class="mo-w"/>
+          <line x1="140" y1="52" x2="140" y2="68" class="mo-w"/><line x1="148" y1="52" x2="148" y2="68" class="mo-w"/>
+          <text x="144" y="44" text-anchor="middle" class="mo-s" style="fill:var(--accent-2)">C_GD</text>
+          <line x1="90" y1="150" x2="200" y2="150" class="mo-w"/><line x1="200" y1="150" x2="200" y2="185" class="mo-w"/>
+          <line x1="140" y1="142" x2="140" y2="158" class="mo-w"/><line x1="148" y1="142" x2="148" y2="158" class="mo-w"/>
+          <text x="144" y="172" text-anchor="middle" class="mo-s" style="fill:var(--accent)">C_GS</text>
+          <line x1="200" y1="60" x2="300" y2="60" class="mo-w"/><line x1="300" y1="60" x2="300" y2="96" class="mo-w"/>
+          <line x1="292" y1="96" x2="308" y2="96" class="mo-w"/><line x1="292" y1="104" x2="308" y2="104" class="mo-w"/>
+          <line x1="300" y1="104" x2="300" y2="150" class="mo-w"/><line x1="200" y1="150" x2="300" y2="150" class="mo-w"/>
+          <text x="316" y="104" class="mo-s" style="fill:var(--m-field)">C_DS</text>
+          <text x="196" y="34" class="mo-s">D</text><text x="196" y="200" class="mo-s">S</text>
+          <text x="0" y="222" class="mo-s">C_iss = C_GS + C_GD (입력, 드레인 단락)</text>
+          <text x="0" y="238" class="mo-s">C_oss = C_DS + C_GD (출력, 게이트 단락) · C_rss = C_GD (역전달)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 6-5.</b> 셀 속 세 커패시턴스. \(C_{GD}\)(밀러 커패시턴스)는 게이트 아래 공핍층(노랑)이 \(V_{DS}\)와 함께 깊어지며 급히 작아진다. \(C_{DS}\)는 p 바디 접합(점선)의 공핍 커패시턴스. 슈퍼정션에서는 p 기둥 옆벽 전체가 접합이 되어 저전압 \(C_{DS}\)가 수십 배 크다.</figcaption>
+    </figure>
+
+    <p>슈퍼정션은 이 곡선 모양을 크게 바꾼다. 깊이 \(t\)의 기둥이 피치 \(p\)로 서 있으면 접합 옆벽 면적이 \(A_{side} = 2tA/p\)로 칩 면적의 15–20배다. 낮은 전압에서는 이 거대한 옆벽 접합이 \(C_{oss}\)를 키우다가, 기둥이 옆으로 다 공핍되는 전압</p>
+    <div class="formula">$$V_{dep} \approx \frac{qN_D w_n^2}{4\varepsilon_s} - V_{bi}$$<div class="where">같은 도핑·같은 폭의 n·p 기둥이 각자 양옆에서 공핍된다고 본 값. \(N_D\) = 8×10¹⁵ cm⁻³, \(w_n\) = 2.5 µm이면 \(V_{dep}\) ≈ 18 V. 이 전압을 지나면 공핍층이 기둥 전체를 덮어 커패시턴스가 "깊이 \(t\)의 평행판" 수준(\(\varepsilon_s A/t\))으로 두세 자릿수 떨어진다.</div></div>
+    <p>에서 절벽처럼 떨어진다. 그래서 SJ의 \(C_{oss}\)는 0 V에서 수십 nF, 400 V에서 수십 pF이다. 이 비선형성 때문에 하나의 숫자로는 출력 커패시턴스를 말할 수 없고, 두 가지 <strong>등가값</strong>을 쓴다.</p>
+    <div class="formula">$$Q_{oss}(V) = \int_0^{V} C_{oss}\,dv,\qquad E_{oss}(V) = \int_0^{V} v\,C_{oss}\,dv,\qquad C_{o(tr)} = \frac{Q_{oss}}{V},\qquad C_{o(er)} = \frac{2E_{oss}}{V^2}$$<div class="where">\(C_{o(tr)}\)(시간 등가)은 정전류로 충전할 때 걸리는 시간(ZVS 데드 타임 설계), \(C_{o(er)}\)(에너지 등가)은 저장 에너지를 준다. 하드 스위칭 턴온에서 \(E_{oss}\)는 채널에서 모두 열이 된다: \(P_{oss} = E_{oss}f_{sw}\). SJ는 \(Q_{oss}\)가 저전압 쪽에 몰려 있어 \(C_{o(tr)} \gg C_{o(er)}\)이다(LLC·ZVS 회로에서 불리, 하드 스위칭에서 유리).</div></div>
+
+    <div class="sim" id="sim-cv">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>C–V 곡선과 \(Q_{oss}\)·\(E_{oss}\) 적분: 슈퍼정션 vs 평면</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cv-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>650 V 소자 구조</span><div class="seg" id="cv-type"><button data-value="sj" class="on">슈퍼정션</button><button data-value="pl">평면 DMOS</button></div></div>
+          <label class="ctrl"><span>활성 면적 A <output id="cv-a-out"></output></span><input type="range" id="cv-a" min="0.05" max="1" step="0.01" value="0.14"></label>
+          <label class="ctrl"><span>SJ 기둥 폭 w_n (피치/2) <output id="cv-w-out"></output></span><input type="range" id="cv-w" min="1" max="6" step="0.1" value="2.5"></label>
+          <label class="ctrl"><span>평가 전압 V <output id="cv-v-out"></output></span><input type="range" id="cv-v" min="10" max="600" step="5" value="400"></label>
+          <label class="ctrl"><span>스위칭 주파수 <output id="cv-f-out"></output></span><input type="range" id="cv-f" min="20" max="500" step="5" value="100"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">R_DS(on) (25 °C, 이 면적)</span><span class="v" id="cv-r">—</span></div>
+        <div class="stat"><span class="k">C_iss / C_oss / C_rss @V</span><span class="v" id="cv-c">—</span></div>
+        <div class="stat"><span class="k">Q_oss / E_oss @V</span><span class="v" id="cv-q">—</span></div>
+        <div class="stat"><span class="k">C_o(tr) / C_o(er)</span><span class="v" id="cv-eq">—</span></div>
+        <div class="stat"><span class="k">P_oss = E_oss·f · R·E_oss</span><span class="v" id="cv-p">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽(로그): \(C_{iss}\)(주황), \(C_{oss}\)(파랑), \(C_{rss}\)(노랑)과 \(V_{dep}\)(점선). 오른쪽: 적분한 \(Q_{oss}(V)\)와 \(E_{oss}(V)\). 모델: SJ 기둥 깊이 40 µm, 기둥 전하 \(N_Dw_n\) = 2×10¹² cm⁻²(폭을 바꾸면 도핑이 반비례), 게이트 겹침 \(A_{gd}\) = 0.32A, \(t_{ox}\) = 100 nm, \(C_{GS}\) = 44 nF/cm²(SJ)·12 nF/cm²(평면 피치 12 µm). 평면은 3장의 최적 NPT 드리프트(약 3.6×10¹⁴ cm⁻³, 약 49 µm). 기본 면적 0.14 cm²가 SJ 40 mΩ이다. 해볼 것: ① 같은 면적에서 SJ와 평면의 \(R_{DS(on)}\)을 비교한 뒤, 평면의 면적을 늘려 같은 온저항을 만들면 \(E_{oss}\)가 어떻게 되나? ② 기둥 폭을 줄이면 \(V_{dep}\)가 낮아지고 절벽이 더 가팔라진다. ③ 100 kHz 하드 스위칭에서 \(P_{oss}\)를 전도 손실과 비교해 보라.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="gatecharge">
+    <h2>게이트 전하와 밀러 플래토, 성능 지수</h2>
+    <p>게이트 드라이버가 실제로 다루는 양은 커패시턴스가 아니라 <span class="term">게이트 전하</span><span class="en">(gate charge)</span>다. 유도성 부하를 정전류로 켜는 상황(드레인에 \(V_{DD}\), 부하 전류 \(I_D\))에서 게이트에 정전류를 넣으면 \(V_{GS}\)는 세 구간을 지난다(그림 6-6).</p>
+    <ol>
+      <li><strong>\(Q_{GS}\) 구간</strong>: \(V_{GS}\)가 0 → \(V_{th}\) → 플래토 전압 \(V_{pl}\)로 오른다. \(V_{DS} = V_{DD}\)라 \(C_{GD}\)는 작고, 주로 \(C_{GS}\)를 충전한다. \(V_{th}\)를 넘으면 드레인 전류가 \(I_D\)까지 오른다.</li>
+      <li><strong>\(Q_{GD}\) 구간 = <span class="term">밀러 플래토</span></strong>: 전류가 \(I_D\)에 도달하면 \(V_{GS}\)는 \(V_{pl} = V_{th} + \sqrt{2I_D/\beta}\)에 묶이고, 게이트 전류는 전부 \(C_{GD}\)를 방전하며 \(V_{DS}\)를 \(V_{DD}\)에서 \(I_DR_{DS(on)}\)까지 끌어내린다. 이 구간의 길이가 전압 하강 시간 = 스위칭 손실이다.</li>
+      <li><strong>나머지</strong>: \(V_{DS}\)가 바닥에 닿으면 게이트 아래가 축적되어 \(C_{iss} \approx C_{GS} + C_{ox,gd}\)로 다시 \(V_{GS}\)가 구동 전압까지 오른다. 이 구간의 전하는 \(R_{DS(on)}\)을 마저 낮추는 데 쓰인다.</li>
+    </ol>
+    <div class="formula">$$Q_G = \underbrace{\int_0^{V_{pl}}\!\big(C_{GS} + C_{GD}(V_{DD}-v)\big)dv}_{Q_{GS}} + \underbrace{\int_{V_{DS(on)}}^{V_{DD}}\!C_{GD}(v)\,dv}_{Q_{GD}} + \int_{V_{pl}}^{V_{drv}}\!\big(C_{GS} + C_{ox,gd}\big)dv,\qquad t_{pl} = \frac{Q_{GD}}{I_G},\quad I_G = \frac{V_{drv}-V_{pl}}{R_G}$$<div class="where">\(V_{DS(on)} = I_DR_{DS(on)}\). 플래토 동안 게이트 전류는 \((V_{drv}-V_{pl})/R_G\)로 일정하므로 전압 하강 시간 \(t_{pl}\)은 \(Q_{GD}\)에 비례한다. 실제 파형(공통 소스 인덕턴스, \(di/dt\), 링잉)은 <a href="switching.html">10장</a>, 구동 회로는 <a href="gatedrive.html">11장</a>.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="게이트 전하 곡선: V_GS가 Q_GS 구간에서 상승, Q_GD 구간에서 밀러 플래토로 평평, 이후 다시 상승. 같은 축에 V_DS가 플래토 동안 떨어지는 모습">
+        <g transform="translate(60,20)">
+          <line x1="0" y1="190" x2="560" y2="190" class="s-axis"/><line x1="0" y1="190" x2="0" y2="0" class="s-axis"/>
+          <text x="560" y="210" text-anchor="end" class="mo-s">게이트 전하 Q_G (nC)</text><text x="6" y="10" class="mo-s">V_GS</text>
+          <path d="M0 190 L140 110 L330 110 L540 30" class="mo-w" style="stroke:var(--accent);stroke-width:2.6"/>
+          <path d="M0 30 L140 30 Q240 40 300 175 L330 182 L540 184" class="mo-v"/>
+          <text x="40" y="24" class="mo-s" style="fill:var(--m-volt)">V_DS = V_DD</text>
+          <line x1="140" y1="0" x2="140" y2="190" class="mo-dash"/><line x1="330" y1="0" x2="330" y2="190" class="mo-dash"/>
+          <text x="70" y="206" text-anchor="middle" class="mo-s">Q_GS</text><text x="235" y="206" text-anchor="middle" class="mo-s">Q_GD (밀러)</text><text x="435" y="206" text-anchor="middle" class="mo-s">C_GS + C_ox,gd 충전</text>
+          <line x1="-6" y1="110" x2="6" y2="110" class="s-axis"/><text x="-10" y="114" text-anchor="end" class="mo-s">V_pl</text>
+          <line x1="-6" y1="150" x2="6" y2="150" class="s-axis"/><text x="-10" y="154" text-anchor="end" class="mo-s">V_th</text>
+          <text x="545" y="30" class="mo-s">V_drv</text>
+          <path d="M0 190 L80 150" class="mo-dash"/>
+          <path d="M80 160 L120 140" class="mo-i"/><text x="88" y="178" class="mo-s" style="fill:var(--m-amp)">i_D 상승</text>
+        </g>
+        <g transform="translate(660,30)">
+          <text x="0" y="0" class="mo-b">구간별로 하는 일</text>
+          <text x="0" y="26" class="mo-s">① C_GS 충전, i_D 0 → I_D</text>
+          <text x="0" y="48" class="mo-s">② C_GD 방전, v_DS V_DD → 0</text>
+          <text x="0" y="64" class="mo-s">   (스위칭 손실 대부분)</text>
+          <text x="0" y="86" class="mo-s">③ R_DS(on) 마저 낮춤</text>
+          <text x="0" y="118" class="mo-s">구동 전력 P_G = Q_G·V_drv·f</text>
+          <text x="0" y="140" class="mo-s">플래토 시간 = Q_GD / I_G</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 6-6.</b> 게이트 전하 곡선(정전류 게이트 구동, 유도성 부하). 밀러 플래토는 \(C_{GD}\)가 게이트 전류를 다 가져가 \(V_{GS}\)가 멈춘 구간이다. \(V_{DS}\)(파랑)는 플래토 동안 떨어지는데, \(C_{GD}\)가 저전압에서 커지므로 꼬리가 길어진다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-qg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>게이트 전하 곡선 적분과 밀러 플래토</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="qg-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>650 V 40 mΩ 소자</span><div class="seg" id="qg-type"><button data-value="sj" class="on">슈퍼정션</button><button data-value="pl">평면(같은 R)</button></div></div>
+          <label class="ctrl"><span>V_DD <output id="qg-vdd-out"></output></span><input type="range" id="qg-vdd" min="20" max="520" step="5" value="400"></label>
+          <label class="ctrl"><span>부하 전류 I_D <output id="qg-id-out"></output></span><input type="range" id="qg-id" min="1" max="60" step="1" value="20"></label>
+          <label class="ctrl"><span>구동 전압 V_drv <output id="qg-vd-out"></output></span><input type="range" id="qg-vd" min="8" max="15" step="0.5" value="10"></label>
+          <label class="ctrl"><span>게이트 저항 R_G <output id="qg-rg-out"></output></span><input type="range" id="qg-rg" min="1" max="30" step="0.5" value="5"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">V_pl</span><span class="v" id="qg-vpl">—</span></div>
+        <div class="stat"><span class="k">Q_GS / Q_GD / Q_G</span><span class="v" id="qg-q">—</span></div>
+        <div class="stat"><span class="k">플래토 시간 / 평균 dv/dt</span><span class="v" id="qg-t">—</span></div>
+        <div class="stat"><span class="k">FOM R·Q_G / R·Q_GD</span><span class="v" id="qg-fom">—</span></div>
+      </div>
+      <div class="sim-note">\(V_{GS}\)(주황)와 \(V_{DS}\)(파랑, 오른쪽 축)를 게이트 전하에 대해 그렸다. 앞 시뮬레이터와 같은 커패시턴스 모델을 위 식으로 수치 적분했다(각 구간 400 단계). 평면은 SJ와 같은 40 mΩ이 되도록 면적을 키운 소자다. 해볼 것: ① \(V_{DD}\)를 400 → 100 V로 낮춰도 SJ의 \(Q_{GD}\)는 거의 그대로다(전하가 \(V_{dep}\) 아래에 몰려 있다). ② 부하 전류를 올리면 \(V_{pl}\)이 올라 플래토 게이트 전류가 줄고 플래토가 길어진다. ③ 평면 소자의 \(Q_G\)는 몇 배인가? PW-800 비교 기준표의 SJ 40 mΩ \(Q_G\) 약 90 nC와 비교해 보라.</div>
+    </div>
+
+    <p>스위치의 손실은 전도 손실(\(\propto R_{DS(on)}\))과 스위칭·구동 손실(\(\propto Q_{GD}, Q_G, Q_{oss}\))로 나뉜다. 같은 기술로 다이를 키우면 \(R\)은 \(1/A\)로 줄고 전하는 \(A\)로 늘어 곱 \(R_{DS(on)}\cdot Q_G\)는 면적과 무관하다. 그래서 이 곱이 기술의 <span class="term">성능 지수</span><span class="en">(figure of merit, FOM)</span>가 된다. 주어진 회로에서 손실을 \(P(A) = a/A + bA\)로 쓰면 최적 면적과 최소 손실은</p>
+    <div class="formula">$$A^\ast = \sqrt{\frac{a}{b}},\qquad P_{min} = 2\sqrt{ab},\qquad a = I_{rms}^2R_{on,sp},\quad b = f_{sw}\Big(V_{in}I_o\frac{q_{GD}+q_{GS2}}{I_G} + q_GV_{drv} + q_{oss}V_{in}\Big)$$<div class="where">소문자 \(q\)는 단위 면적당 전하(nC/cm²). \(P_{min} \propto \sqrt{R_{on,sp}\,q}\), 곧 <strong>FOM의 제곱근</strong>에 비례한다. 최적점에서는 전도 손실과 주파수 의존 손실이 같다. 주파수를 4배로 올리면 최적 면적은 절반, 최소 손실은 2배가 된다.</div></div>
+
+    <div class="sim" id="sim-opt">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>최적 다이 크기: 48 V → 12 V 벅 상측 스위치</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="opt-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>100 V 기술</span><div class="seg" id="opt-tech"><button data-value="tr">트렌치</button><button data-value="sgt" class="on">차폐 게이트</button><button data-value="gan">GaN(참고)</button></div></div>
+          <label class="ctrl"><span>스위칭 주파수 <output id="opt-f-out"></output></span><input type="range" id="opt-f" min="50" max="1000" step="10" value="200"></label>
+          <label class="ctrl"><span>상당 출력 전류 <output id="opt-i-out"></output></span><input type="range" id="opt-i" min="5" max="40" step="0.1" value="20.8"></label>
+          <label class="ctrl"><span>게이트 전류 I_G <output id="opt-ig-out"></output></span><input type="range" id="opt-ig" min="0.5" max="4" step="0.1" value="1.5"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최적 면적 A*</span><span class="v" id="opt-a">—</span></div>
+        <div class="stat"><span class="k">그때 R_DS(on)</span><span class="v" id="opt-r">—</span></div>
+        <div class="stat"><span class="k">최소 손실 (상측 1개)</span><span class="v" id="opt-p">—</span></div>
+        <div class="stat"><span class="k">상당 효율 영향</span><span class="v" id="opt-eta">—</span></div>
+      </div>
+      <div class="sim-note">\(V_{in}\) = 48 V, \(D\) = 0.25, \(V_{drv}\) = 5 V(GaN)·10 V(Si). 곡선: 전도 손실(주황), 스위칭(빨강), 구동+\(Q_{oss}\)(파랑), 합(굵은 선), 최적점. 기술 값(교육용, 약): 트렌치 \(R_{on,sp}\) 1.0 mΩ·cm², \(q_G\) 300, \(q_{GD}\) 120, \(q_{oss}\) 400 nC/cm²; 차폐 게이트 0.45 / 330 / 60 / 520; GaN 0.3 / 120 / 15 / 250. 효율 영향은 상당 250 W 대비 상측 스위치 손실 비율. 해볼 것: ① 차폐 게이트에서 200 kHz → 500 kHz로 올리면 손실이 몇 배가 되나? ② 같은 500 kHz에서 GaN으로 바꾸면? PW-800 DC 서버 전원이 GaN 500 kHz, Si 200 kHz를 비교하는 이유다. ③ 게이트 전류를 키우면(구동 저항↓) 최적 면적이 커진다.</div>
+    </div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>조건 → </th><th>\(Q_{GD}\)·스위칭 시간</th><th>\(R_{DS(on)}\)</th><th>총 손실</th></tr></thead>
+      <tbody>
+        <tr><td>같은 기술, 다이 면적 ×2</td><td>×2</td><td>×½</td><td>최적 면적 근처면 거의 같음, 고주파면 ↑</td></tr>
+        <tr><td>게이트 저항 \(R_G\) ↑</td><td>플래토 길어짐(∝ \(R_G\))</td><td>그대로</td><td>스위칭 손실↑, 오버슈트·EMI↓</td></tr>
+        <tr><td>구동 전압 \(V_{drv}\) ↑</td><td>플래토 게이트 전류↑ → 빨라짐</td><td>약간↓</td><td>구동 전력 \(Q_GV_{drv}f\)↑</td></tr>
+        <tr><td>\(V_{DD}\) ↓ (SJ)</td><td>\(Q_{GD}\) 거의 그대로</td><td>그대로</td><td>\(E_{oss}\)·스위칭 손실↓</td></tr>
+        <tr><td>차폐 게이트 도입</td><td>\(q_{GD}\) 크게↓</td><td>\(R_{on,sp}\)↓</td><td>FOM 2–4배 개선</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="sj">
+    <h2>슈퍼정션: 전하 균형으로 1D 한계 넘기</h2>
+    <p>3장의 단극 한계는 "드리프트층의 도너 전하가 수직 전계의 기울기를 만든다"는 1차원 가정에서 나왔다. 도핑을 올리면 전계가 가파른 삼각형이 되어 짧은 거리에서 임계 전계에 닿으므로 두께와 도핑을 함께 맞춰야 했고, 그 결과가 \(R_{on,sp} \propto BV^{2.5}\)다. <span class="term">슈퍼정션</span><span class="en">(superjunction, SJ)</span>은 이 가정을 깬다. 드리프트층을 폭 수 µm의 n 기둥과 p 기둥이 번갈아 선 구조로 바꾸고 두 기둥의 전하를 같게(\(N_Dw_n = N_Aw_p\)) 맞춘다. 역바이어스가 수십 V를 넘으면 기둥들이 옆으로 먼저 다 공핍되고, 그 뒤로는 알짜 전하가 0인 층처럼 행동해 <strong>수직 전계가 직사각형</strong>이 된다(그림 6-7).</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 312" role="img" aria-label="슈퍼정션 기둥 단면과 수직 전계 분포: 전하 균형이면 직사각형, n 과잉이면 위가 높은 사다리꼴, p 과잉이면 아래가 높은 사다리꼴. 일반 NPT 삼각형과 비교">
+        <g transform="translate(20,20)">
+          <text x="140" y="0" text-anchor="middle" class="mo-b">(a) 기둥 구조 (차단 상태)</text>
+          <rect x="0" y="16" width="280" height="28" class="mo-p"/><text x="140" y="35" text-anchor="middle" class="mo-s">p 바디 · n⁺ 소스 · 게이트 (표면)</text>
+          <g><rect x="0" y="44" width="35" height="190" class="mo-n"/><rect x="35" y="44" width="35" height="190" class="mo-p"/><rect x="70" y="44" width="35" height="190" class="mo-n"/><rect x="105" y="44" width="35" height="190" class="mo-p"/><rect x="140" y="44" width="35" height="190" class="mo-n"/><rect x="175" y="44" width="35" height="190" class="mo-p"/><rect x="210" y="44" width="35" height="190" class="mo-n"/><rect x="245" y="44" width="35" height="190" class="mo-p"/></g>
+          <rect x="0" y="44" width="280" height="190" class="mo-dep" style="stroke:none"/>
+          <rect x="0" y="234" width="280" height="22" class="mo-nn"/><text x="140" y="250" text-anchor="middle" class="mo-s">n⁺ 기판 (드레인)</text>
+          <text x="17" y="140" text-anchor="middle" class="mo-b" style="font-size:11px">n</text><text x="52" y="140" text-anchor="middle" class="mo-b" style="font-size:11px">p</text>
+          <line x1="70" y1="266" x2="140" y2="266" class="mo-w"/><text x="105" y="282" text-anchor="middle" class="mo-s">피치 p = w_n + w_p</text>
+          <line x1="292" y1="44" x2="292" y2="234" class="mo-w"/><text x="300" y="142" class="mo-s">t</text>
+        </g>
+        <g transform="translate(360,30)">
+          <text x="250" y="-10" text-anchor="middle" class="mo-b">(b) 같은 깊이의 수직 전계 E(y)</text>
+          <line x1="0" y1="34" x2="0" y2="224" class="s-axis"/><line x1="0" y1="224" x2="480" y2="224" class="s-axis"/>
+          <text x="-6" y="40" text-anchor="end" class="mo-s">위</text><text x="-6" y="224" text-anchor="end" class="mo-s">아래</text>
+          <text x="480" y="242" text-anchor="end" class="mo-s">전계 →</text>
+          <path d="M0 34 H300 V224 H0" class="mo-f"/><text x="306" y="130" class="mo-s" style="fill:var(--m-field)">균형: 직사각형</text>
+          <path d="M380 34 L220 224" class="mo-dash" style="stroke:var(--accent)"/><text x="330" y="60" class="mo-s" style="fill:var(--accent)">n 과잉</text>
+          <path d="M220 34 L380 224" class="mo-dash" style="stroke:var(--accent-2)"/><text x="330" y="212" class="mo-s" style="fill:var(--accent-2)">p 과잉</text>
+          <path d="M460 34 L0 150" class="mo-dash" style="stroke:var(--text-faint)"/><text x="100" y="110" class="mo-s">일반 n⁻ (같은 도핑이면 금방 꺾임)</text>
+          <text x="0" y="262" class="mo-s">넓이 = 전압. 직사각형이 같은 최대 전계에서 가장 큰 넓이 → 같은 BV를 가장 얇은 층으로</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 6-7.</b> (a) n·p 기둥이 번갈아 선 슈퍼정션 드리프트층. 차단 상태에서는 기둥 전체가 공핍된다(노랑). (b) 수직 전계. 전하가 균형이면 기울기 0의 직사각형, 불균형 \(\delta = (N_Aw_p - N_Dw_n)/(N_Dw_n)\)이 있으면 알짜 전하 \(q\delta N_D/2\)가 기울기를 만들어 사다리꼴이 된다. 같은 최대 전계에서 넓이(BV)가 줄어든다.</figcaption>
+    </figure>
+
+    <p>전계가 직사각형이면 \(BV \approx E_{c,eff}\,t\)이고, 도핑은 BV가 아니라 <strong>옆 공핍 조건</strong>이 정한다. 기둥을 옆으로 다 공핍시킬 때 접합의 옆 전계 \(E_{lat} = qN_Dw_n/(2\varepsilon_s)\)가 임계 전계보다 충분히 작아야 하므로 기둥 전하 \(N_Dw_n\)에는 상한(약 2–4×10¹² cm⁻²)이 있다. n 기둥이 면적의 절반을 차지하므로</p>
+    <div class="formula">$$R_{on,sp}^{SJ} \approx \frac{2t}{q\mu_nN_D} = \frac{2t\,w_n}{q\mu_n(N_Dw_n)} \propto BV\cdot p,\qquad \int_0^{t}\alpha\!\left(\sqrt{E_v(y)^2 + (\kappa E_{lat})^2}\right)dy = 1$$<div class="where">BV에 1차, 피치에 1차로 비례한다(정밀 이론에서는 \(BV^{1.3}\) 안팎). 오른쪽은 이 장의 항복 판정이다: 수직 전계 \(E_v(y)\)에 옆 전계를 가중치 \(\kappa\) = 0.6으로 더해 Si 풀롭 이온화 계수 \(\alpha = 1.8\times10^{-35}E^7\)을 적분한다. 불균형이 있으면 \(E_v(y) = \max(0, E_p - s y')\), \(s = q|\delta|N_D/(2\varepsilon_s)\), \(y'\)은 전계 최대점(n 과잉이면 위, p 과잉이면 아래)에서 잰 거리. \(\kappa E_{lat}\)가 임계 전계를 넘으면 기둥이 다 공핍되기 전에 항복하므로 BV는 그 도핑의 일반 접합 수준으로 무너진다.</div></div>
+
+    <div class="sim" id="sim-sj">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>슈퍼정션 전하 균형: 전계 분포·공정 창·단극 한계</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sj-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>기둥 깊이 t <output id="sj-t-out"></output></span><input type="range" id="sj-t" min="15" max="70" step="0.5" value="40"></label>
+          <label class="ctrl"><span>피치 p (w_n = p/2) <output id="sj-p-out"></output></span><input type="range" id="sj-p" min="2" max="16" step="0.1" value="5"></label>
+          <label class="ctrl"><span>n 기둥 도핑 N_D <output id="sj-n-out"></output></span><input type="range" id="sj-n" min="15" max="16.7" step="0.01" value="15.9"></label>
+          <label class="ctrl"><span>전하 불균형 δ (+ = p 과잉) <output id="sj-d-out"></output></span><input type="range" id="sj-d" min="-40" max="40" step="1" value="0"></label>
+          <div class="mo-btns"><button class="btn" id="sj-g1">1세대 (p 15 µm)</button><button class="btn" id="sj-g3">현세대 (p 5 µm)</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">BV</span><span class="v" id="sj-bv">—</span></div>
+        <div class="stat"><span class="k">R_on,sp (드리프트)</span><span class="v" id="sj-r">—</span></div>
+        <div class="stat"><span class="k">같은 BV의 Si 1D 한계</span><span class="v" id="sj-lim">—</span></div>
+        <div class="stat"><span class="k">N_D·w_n / 옆 전계</span><span class="v" id="sj-q">—</span></div>
+        <div class="stat"><span class="k">BV 90 % 유지 δ 창</span><span class="v" id="sj-win">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽 위: 항복 순간의 수직 전계 \(E_v\)(노랑)와 옆 전계 \(E_{lat}\)(점선), 세로축이 깊이. 오른쪽 위: 불균형 δ에 따른 BV(현재 도핑 실선, 절반 도핑 점선)와 90 % 창. 아래: \(R_{on,sp}\)–BV(로그). 회색은 Si 1D 한계, 파랑은 현재 피치·기둥 전하로 깊이만 바꾼 SJ 설계선, 초록 점선은 4H-SiC 1D 한계, 점은 현재 설정. 해볼 것: ① 기본값에서 BV와 한계 대비 저항을 읽어라. ② 도핑을 두 배로 올리면 저항은 절반이지만 δ 창이 좁아진다 — 공정 여유와 온저항의 트레이드오프. ③ 도핑을 더 올려 \(N_Dw_n\)이 약 4×10¹² cm⁻²를 넘으면 BV가 무너진다. 피치를 줄이면 다시 산다. 세대 진화(피치 15 → 5 µm 이하)가 이것이다.</div>
+    </div>
+
+    <p>남은 문제는 <strong>깊이 40 µm 안팎, 폭 수 µm의 기둥을 ±5–10 % 전하 정밀도로 만드는 일</strong>이다. 두 가지 공정이 쓰인다(그림 6-8). <strong>다중 에피</strong><span class="en">(multi-epitaxy)</span>는 얇은 n 에피를 키우고 p 이온 주입을 하는 일을 6–10번 되풀이한 뒤 열처리로 주입층을 위아래로 이어 붙인다. 정밀하지만 단계가 많고, 확산 때문에 피치를 줄이기 어렵다. <strong>트렌치 충전</strong><span class="en">(deep trench refill)</span>은 n 에피에 깊은 홈을 파고 p형 에피로 다시 채운다. 피치를 줄이기 쉽고 단계가 적지만, 높은 종횡비 식각과 빈틈 없는 에피 충전, 홈 벽 각도에 따른 전하 분포가 관건이다(<a href="../../doping/">DopingBook</a>의 이온 주입·확산과 같은 손잡이다).</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 220" role="img" aria-label="슈퍼정션 두 공정 흐름: 다중 에피는 에피 성장과 p 이온 주입을 반복한 뒤 확산으로 기둥을 이음, 트렌치 충전은 깊은 홈 식각 후 p 에피로 채움">
+        <g transform="translate(20,20)">
+          <text x="0" y="0" class="mo-b">(a) 다중 에피 + 주입 (6–10회 반복)</text>
+          <rect x="0" y="20" width="80" height="150" class="mo-n"/><rect x="0" y="150" width="80" height="20" class="mo-nn"/>
+          <g class="mo-p"><ellipse cx="25" cy="140" rx="8" ry="6"/><ellipse cx="55" cy="140" rx="8" ry="6"/><ellipse cx="25" cy="115" rx="8" ry="6"/><ellipse cx="55" cy="115" rx="8" ry="6"/><ellipse cx="25" cy="90" rx="8" ry="6"/><ellipse cx="55" cy="90" rx="8" ry="6"/><ellipse cx="25" cy="65" rx="8" ry="6"/><ellipse cx="55" cy="65" rx="8" ry="6"/><ellipse cx="25" cy="40" rx="8" ry="6"/><ellipse cx="55" cy="40" rx="8" ry="6"/></g>
+          <text x="40" y="190" text-anchor="middle" class="mo-s">층마다 주입</text>
+          <text x="105" y="100" class="mo-b">→</text>
+          <rect x="130" y="20" width="80" height="150" class="mo-n"/><rect x="130" y="150" width="80" height="20" class="mo-nn"/>
+          <path d="M145 26 q10 -6 20 0 v114 q-10 6 -20 0 z M175 26 q10 -6 20 0 v114 q-10 6 -20 0 z" class="mo-p"/>
+          <text x="170" y="190" text-anchor="middle" class="mo-s">확산으로 이음 (물결 옆벽)</text>
+          <text x="240" y="60" class="mo-s">+ 전하 정밀(주입 도즈)</text><text x="240" y="80" class="mo-s">− 공정 단계 많음</text><text x="240" y="100" class="mo-s">− 확산 폭 → 피치 하한</text>
+        </g>
+        <g transform="translate(470,20)">
+          <text x="0" y="0" class="mo-b">(b) 깊은 트렌치 + p 에피 충전</text>
+          <rect x="0" y="20" width="80" height="150" class="mo-n"/><rect x="0" y="150" width="80" height="20" class="mo-nn"/>
+          <rect x="16" y="20" width="14" height="122" class="f-surface"/><rect x="50" y="20" width="14" height="122" class="f-surface"/>
+          <text x="40" y="190" text-anchor="middle" class="mo-s">깊은 홈 식각</text>
+          <text x="105" y="100" class="mo-b">→</text>
+          <rect x="130" y="20" width="80" height="150" class="mo-n"/><rect x="130" y="150" width="80" height="20" class="mo-nn"/>
+          <rect x="146" y="20" width="14" height="122" class="mo-p"/><rect x="180" y="20" width="14" height="122" class="mo-p"/>
+          <text x="170" y="190" text-anchor="middle" class="mo-s">p 에피 충전 + CMP</text>
+          <text x="240" y="60" class="mo-s">+ 피치↓ 쉬움, 단계 적음</text><text x="240" y="80" class="mo-s">− 종횡비 10:1 이상 식각</text><text x="240" y="100" class="mo-s">− 빈틈·홈 각도 → 전하 오차</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 6-8.</b> 슈퍼정션 기둥을 만드는 두 공정. 어느 쪽이든 목표는 전하 불균형 \(|\delta|\)를 수 % 안에 묶는 것이다. 위 시뮬레이터의 δ 창이 곧 공정 창이다.</figcaption>
+    </figure>
+    <div class="callout fab"><strong>OB 충전기의 650 V 비교 기준</strong>PW-800 비교 기준표의 Si 슈퍼정션 40 mΩ은 \(Q_G\) 약 90 nC, 바디 다이오드 \(Q_{rr}\) 약 10 µC이다. 온저항·게이트 전하는 SiC 40 mΩ(\(Q_G\) 약 60 nC)과 큰 차이가 없지만, \(Q_{rr}\)이 100배다. 토템폴 PFC의 고속 레그처럼 바디 다이오드가 하드 정류되는 자리에는 SJ를 쓸 수 없고(8절), 저속(50/60 Hz) 레그나 LLC처럼 ZVS로 다이오드가 부드럽게 꺼지는 자리에만 쓴다. 65 kHz CCM 고속 레그에는 GaN 또는 SiC가 들어간다.</div>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="cell3d">
+    <h2>3D 셀 해부: 트렌치와 슈퍼정션</h2>
+    <p>아래 3D 모델은 트렌치 MOSFET 4셀과 슈퍼정션 4피치를 잘라 낸 블록이다. 앞면이 단면이고 안쪽(z 방향)으로 스트라이프가 이어진다. <strong>온 상태</strong>에서는 전자(파란 점)가 소스에서 채널을 지나 드리프트층으로 퍼지고, <strong>차단 상태</strong>에서는 \(V_{DS}\)에 따라 공핍층(노란 반투명)이 자란다. 트렌치는 p 바디 접합에서 아래로 \(W_d = t_D\sqrt{V/BV}\)만큼(비펀치스루 최적 설계), 슈퍼정션은 먼저 기둥 옆벽에서 옆으로 \(x = (w_n/2)\sqrt{(V+V_{bi})/(V_{dep}+V_{bi})}\)만큼 자라다가 \(V_{dep}\)를 넘으면 기둥 전체를 덮는다.</p>
+    <div class="sim" id="sim-3d">
+      <div class="sim-head"><span class="sim-tag three">3D</span><h3>트렌치 MOSFET 셀과 슈퍼정션 기둥: 전류 경로와 공핍</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view three" id="m3-view"></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>구조</span><div class="seg" id="m3-type"><button data-value="tr" class="on">트렌치 100 V</button><button data-value="sj">SJ 650 V</button></div></div>
+          <div class="ctrl"><span>상태</span><div class="seg" id="m3-state"><button data-value="on" class="on">온 (V_GS 10 V)</button><button data-value="off">차단</button></div></div>
+          <label class="ctrl"><span>차단 전압 V_DS (정격 대비) <output id="m3-v-out"></output></span><input type="range" id="m3-v" min="0" max="100" step="1" value="60"></label>
+          <label class="check"><input type="checkbox" id="m3-flow" checked> 전자 흐름</label>
+          <label class="check"><input type="checkbox" id="m3-dep" checked> 공핍층</label>
+          <label class="check"><input type="checkbox" id="m3-met" checked> 소스 금속</label>
+          <label class="check"><input type="checkbox" id="m3-rot"> 자동 회전</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">V_DS</span><span class="v" id="m3-vv">—</span></div>
+        <div class="stat"><span class="k">공핍 깊이 / 옆 공핍</span><span class="v" id="m3-w">—</span></div>
+        <div class="stat"><span class="k">최대 전계 (1D 추정)</span><span class="v" id="m3-e">—</span></div>
+        <div class="stat"><span class="k">전류 경로</span><span class="v" id="m3-path">—</span></div>
+      </div>
+      <div class="sim-note">드래그로 회전, 휠로 확대. 가로·세로 축척은 다르다(트렌치 피치 1.5 µm·드리프트 약 6 µm, SJ 피치 5 µm·기둥 40 µm). 색: 파랑 계열 n형(진할수록 n⁺), 분홍 p형, 하늘색 산화막, 갈색 폴리실리콘 게이트, 회색 금속. 해볼 것: ① 트렌치 차단 상태에서 전압을 올리면 공핍층이 \(\sqrt V\)로 아래로 자라 정격에서 드리프트층 바닥에 닿는다. ② SJ로 바꾸면 수 % 전압에서 이미 옆 공핍이 끝나 기둥 전체가 노랗다 — 그래서 \(C_{oss}\)가 절벽처럼 떨어진다(4절). ③ 온 상태 SJ에서 전자는 n 기둥만 타고 내려간다(면적의 절반 → 저항식의 인자 2).</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="bodydiode">
+    <h2>바디 다이오드와 기생 BJT</h2>
+    <p>소스 금속은 n⁺ 소스와 p 바디를 함께 덮는다. 그래서 p 바디/n⁻ 드리프트 접합이 소스→드레인 방향의 <span class="term">바디 다이오드</span><span class="en">(body diode)</span>가 된다. 하프 브리지에서 데드 타임 동안 이 다이오드가 부하 전류를 흘리고, 반대편 스위치가 켜질 때 역회복한다. 실리콘 바디 다이오드는 수명 제어 없는 PiN 다이오드라 저장 전하가 크다(\(Q_{rr} = I_F\tau\), <a href="diodes.html">5장</a>). 슈퍼정션은 p 기둥까지 접합 면적이 넓어 더 나쁘다: 40 mΩ급 \(Q_{rr}\) 약 10 µC, 역회복 끝에서 기둥이 갑자기 공핍되며 전류가 뚝 끊기는 <strong>스냅</strong> 경향까지 있다. 전자선·백금 수명 제어로 \(Q_{rr}\)을 몇 분의 1로 줄인 "고속 바디 다이오드" SJ 계열이 따로 있지만, 대신 누설과 \(R_{DS(on)}\)이 조금 나빠진다.</p>
+    <p>더 위험한 것은 셀 속에 숨은 <span class="term">기생 BJT</span>다. n⁺ 소스(이미터) – p 바디(베이스) – n⁻ 드리프트(컬렉터)가 NPN 트랜지스터를 이룬다. 소스 금속이 p 바디를 이미터에 단락해 두었지만, n⁺ 소스 아래 p 바디에는 옆 저항 \(R_B\)가 남는다. p 바디를 따라 흐르는 정공 전류 \(I_h\)가 \(I_hR_B \gtrsim 0.6\)–0.7 V를 만들면 BJT가 켜지고, 고전압에서 애벌런치 증배와 맞물려 <strong>2차 항복</strong>(전류 집중 → 국소 용융)으로 소자가 파괴된다. 정공 전류의 출처는 세 가지다.</p>
+    <ul>
+      <li><strong>애벌런치</strong>: 항복 중 생긴 정공이 p 바디로 흘러든다(9절).</li>
+      <li><strong>dv/dt 변위 전류</strong>: \(I_h = C_{DS}\,dv/dt\). 바디 다이오드 역회복 중 급격한 dv/dt가 특히 위험하다(정격 "다이오드 dv/dt").</li>
+      <li><strong>역회복 저장 전하</strong>: 다이오드 전도 중 드리프트층에 쌓인 정공이 역회복 때 p 바디로 쓸려 나간다.</li>
+    </ul>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 256" role="img" aria-label="기생 BJT: n+ 소스-p 바디-n- 드리프트가 NPN, p 바디 옆 저항 R_B, 바디 다이오드. 오른쪽 등가 회로와 정공 전류 경로">
+        <defs><marker id="f69-h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--m-hole)"/></marker></defs>
+        <g transform="translate(20,10)">
+          <rect x="0" y="40" width="380" height="180" class="mo-n"/>
+          <rect x="0" y="40" width="200" height="90" rx="0" class="mo-p"/>
+          <rect x="0" y="40" width="70" height="40" class="mo-pp"/>
+          <rect x="70" y="40" width="90" height="24" class="mo-nn"/>
+          <rect x="0" y="22" width="120" height="18" class="mo-met"/><text x="60" y="35" text-anchor="middle" class="mo-s" style="font-size:10px">소스 금속</text>
+          <rect x="150" y="30" width="230" height="10" class="mo-ox"/><rect x="160" y="16" width="210" height="14" class="mo-poly"/>
+          <text x="115" y="57" text-anchor="middle" class="mo-s" style="font-size:10px">n⁺ (이미터)</text>
+          <text x="100" y="110" text-anchor="middle" class="mo-s">p 바디 (베이스)</text>
+          <text x="280" y="170" text-anchor="middle" class="mo-s">n⁻ 드리프트 (컬렉터)</text>
+          <path d="M200 160 Q190 100 160 78 L40 78" class="mo-w" style="stroke:var(--m-hole);stroke-width:2.2" marker-end="url(#f69-h)"/>
+          <text x="210" y="150" class="mo-s" style="fill:var(--m-hole)">정공 전류 I_h</text>
+          <path d="M80 72 l6 -5 l6 10 l6 -10 l6 10 l6 -10 l6 5" class="mo-w"/><text x="100" y="94" text-anchor="middle" class="mo-b" style="font-size:12px">R_B</text>
+        </g>
+        <g transform="translate(470,20)">
+          <text x="0" y="10" class="mo-b">등가 회로</text>
+          <line x1="200" y1="20" x2="200" y2="70" class="mo-w"/><text x="208" y="30" class="mo-s">D</text>
+          <line x1="200" y1="70" x2="170" y2="95" class="mo-w"/><line x1="170" y1="85" x2="170" y2="135" class="mo-w" style="stroke-width:3"/><line x1="170" y1="125" x2="200" y2="150" class="mo-w"/>
+          <line x1="200" y1="150" x2="200" y2="200" class="mo-w"/><text x="208" y="200" class="mo-s">S</text>
+          <line x1="120" y1="110" x2="170" y2="110" class="mo-w"/>
+          <path d="M120 110 V130 l-6 4 l12 6 l-12 6 l12 6 l-6 4 V180 H200" class="mo-w"/><text x="90" y="150" class="mo-s">R_B</text>
+          <text x="128" y="104" class="mo-s">B</text><text x="60" y="80" class="mo-s">기생 NPN</text>
+          <line x1="290" y1="70" x2="290" y2="150" class="mo-w"/><line x1="200" y1="70" x2="290" y2="70" class="mo-w"/><line x1="200" y1="150" x2="290" y2="150" class="mo-w"/>
+          <path d="M280 120 H300 L290 104 Z" class="m-hole" opacity=".5"/><line x1="280" y1="104" x2="300" y2="104" class="mo-w"/>
+          <text x="306" y="114" class="mo-s">바디 다이오드</text>
+          <text x="0" y="226" class="mo-s">I_h·R_B ≳ 0.6 V → NPN 켜짐 → 2차 항복</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 6-9.</b> 셀 속 기생 BJT. p⁺ 바디 접촉과 짧은 n⁺ 소스로 \(R_B\)를 줄이는 것이 견고성 설계의 핵심이다. 이 구조는 IGBT의 래치업(<a href="igbt.html">7장</a>)과 같은 뿌리를 갖는다.</figcaption>
+    </figure>
+    <p>그래서 견고한 셀은 n⁺ 소스를 짧게, p⁺ 바디 접촉을 깊고 진하게 만들어 \(R_B\)를 줄인다. SJ에서는 p 기둥이 정공의 낮은 저항 통로가 되어 오히려 유리한 면도 있다. 바디 다이오드의 하드 정류가 피할 수 없는 회로라면, 소자 밖에서 해결한다: 병렬 SiC 쇼트키 다이오드, 데드 타임 최소화, 또는 처음부터 \(Q_{rr}\)이 거의 없는 SiC MOSFET(<a href="sic.html">8장</a>)·GaN HEMT(<a href="gan.html">9장</a>)를 쓴다.</p>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="avalanche">
+    <h2>애벌런치 내량과 \(E_{AS}\)</h2>
+    <p>유도성 부하를 끌 때 클램프(프리휠 다이오드·스너버)가 없거나 느리면 인덕터 전류가 갈 곳이 없어 \(V_{DS}\)가 항복 전압까지 올라가고, 소자가 <strong>애벌런치 상태로 전류를 흘려</strong> 인덕터 에너지를 흡수한다. 이것을 시험하는 회로가 <span class="term">비클램프 유도성 스위칭</span><span class="en">(unclamped inductive switching, UIS)</span>이다(그림 6-10). 애벌런치 동안 \(V_{DS} = V_{(BR)}\)로 고정되므로 전류는 직선으로 줄고, 소자가 흡수하는 에너지는</p>
+    <div class="formula">$$t_{av} = \frac{L I_{AS}}{V_{(BR)} - V_{DD}},\qquad E_{AS} = \int_0^{t_{av}} V_{(BR)}\,i(t)\,dt = \frac12LI_{AS}^2\,\frac{V_{(BR)}}{V_{(BR)}-V_{DD}}$$<div class="where">\(V_{DD}\)도 애벌런치 동안 에너지를 보태므로 인자 \(V_{(BR)}/(V_{(BR)}-V_{DD})\)가 붙는다. 실제 \(V_{(BR)}\)은 정격의 1.1–1.3배이고 온도와 함께 오른다(약 +0.1 %/K, <a href="breakdown.html">3장</a>의 양의 온도 계수). 접합 온도는 펄스 전력 \(P(t) = V_{(BR)}i(t)\)를 과도 열 임피던스(포스터 회로)로 적분해 구한다: \(dT_k/dt = (PR_k - T_k)/\tau_k\), \(T_j = T_0 + \sum_kT_k\).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 880 220" role="img" aria-label="UIS 시험 회로: 전원, 인덕터, 시험 MOSFET, 게이트 펄스. 오른쪽 파형: 게이트 온 동안 전류가 선형 증가, 턴오프 후 V_DS가 V_BR로 고정되고 전류가 선형 감소, 접합 온도 상승">
+        <g transform="translate(20,20)">
+          <line x1="40" y1="20" x2="40" y2="170" class="mo-w"/><line x1="25" y1="80" x2="55" y2="80" class="mo-w"/><line x1="32" y1="90" x2="48" y2="90" class="mo-w"/><text x="0" y="90" class="mo-s">V_DD</text>
+          <line x1="40" y1="20" x2="180" y2="20" class="mo-w"/>
+          <path d="M180 20 V30 q12 6 0 12 q12 6 0 12 q12 6 0 12 q12 6 0 12 V90" class="mo-w"/><text x="196" y="60" class="mo-s">L</text>
+          <line x1="180" y1="90" x2="180" y2="110" class="mo-w"/><line x1="165" y1="110" x2="165" y2="140" class="mo-w" style="stroke-width:3"/><line x1="180" y1="110" x2="180" y2="140" class="mo-w"/>
+          <line x1="150" y1="125" x2="165" y2="125" class="mo-w"/><text x="110" y="129" class="mo-s">게이트</text>
+          <line x1="180" y1="140" x2="180" y2="170" class="mo-w"/><line x1="40" y1="170" x2="180" y2="170" class="mo-w"/>
+          <text x="200" y="125" class="mo-s">DUT</text>
+          <text x="60" y="196" class="mo-s">클램프 다이오드 없음</text>
+        </g>
+        <g transform="translate(320,20)">
+          <line x1="0" y1="170" x2="520" y2="170" class="s-axis"/><line x1="0" y1="170" x2="0" y2="0" class="s-axis"/><text x="520" y="188" text-anchor="end" class="mo-s">t</text>
+          <path d="M0 170 L200 60 L380 170" class="mo-i"/><text x="120" y="70" class="mo-s" style="fill:var(--m-amp)">i_D (기울기 V_DD/L)</text>
+          <path d="M0 160 H200 V20 H380 V150 H520" class="mo-v"/><text x="210" y="14" class="mo-s" style="fill:var(--m-volt)">V_DS = V_(BR) (애벌런치)</text>
+          <text x="388" y="146" class="mo-s" style="fill:var(--m-volt)">V_DD</text>
+          <path d="M200 165 Q260 100 320 92 Q360 92 380 100 Q440 130 520 150" class="mo-w" style="stroke:var(--m-heat)"/><text x="400" y="100" class="mo-s" style="fill:var(--m-heat)">T_j (최대는 t_av 중간쯤)</text>
+          <line x1="200" y1="0" x2="200" y2="170" class="mo-dash"/><line x1="380" y1="0" x2="380" y2="170" class="mo-dash"/>
+          <text x="290" y="190" text-anchor="middle" class="mo-s">t_av</text><text x="100" y="190" text-anchor="middle" class="mo-s">게이트 온 (충전)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 6-10.</b> UIS 시험. 게이트를 켜 인덕터 전류를 \(I_{AS}\)까지 키운 뒤 끄면 소자가 애벌런치로 인덕터 에너지를 흡수한다. 파괴 기준은 접합 온도가 진성 온도 근처(Si 드리프트 도핑에서 약 350–400 °C)에 닿아 기생 BJT·열 폭주가 일어나는 시점이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-uis">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>UIS 애벌런치: \(E_{AS}\)와 접합 온도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="uis-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>인덕턴스 L <output id="uis-l-out"></output></span><input type="range" id="uis-l" min="-1" max="1.301" step="0.01" value="0"></label>
+          <label class="ctrl"><span>애벌런치 전류 I_AS <output id="uis-i-out"></output></span><input type="range" id="uis-i" min="1" max="80" step="0.5" value="15"></label>
+          <label class="ctrl"><span>V_DD <output id="uis-vdd-out"></output></span><input type="range" id="uis-vdd" min="25" max="400" step="5" value="50"></label>
+          <label class="ctrl"><span>시작 온도 T₀ <output id="uis-t0-out"></output></span><input type="range" id="uis-t0" min="25" max="150" step="1" value="25"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">t_av</span><span class="v" id="uis-tav">—</span></div>
+        <div class="stat"><span class="k">E_AS</span><span class="v" id="uis-e">—</span></div>
+        <div class="stat"><span class="k">최대 T_j</span><span class="v" id="uis-tj">—</span></div>
+        <div class="stat"><span class="k">판정 / 이 L에서 최대 I_AS</span><span class="v" id="uis-max">—</span></div>
+      </div>
+      <div class="sim-note">650 V SJ 40 mΩ(TO-247 가정): \(V_{(BR)}\) = 700 V(25 °C), +0.09 %/K. 포스터 열 회로(접합–케이스) \(R_k\) = 0.01, 0.04, 0.10, 0.15, 0.10 K/W, \(\tau_k\) = 5 µs, 50 µs, 0.5 ms, 5 ms, 50 ms(합 0.4 K/W), 케이스는 \(T_0\)로 고정. 파괴 판정 \(T_j\) ≥ 380 °C(교육용). 위: \(i_D\)(주황), \(v_{DS}\)(파랑), 아래: \(T_j\)(빨강). 해볼 것: ① 같은 \(E_{AS}\)라도 L이 작고 전류가 크면(짧은 펄스) 열이 퍼질 시간이 없어 더 뜨겁다 — 데이터시트의 \(E_{AS}\)는 반드시 조건(\(L, I_{AS}, T_0\))과 함께 읽어야 한다. ② 시작 온도 150 °C에서 최대 \(I_{AS}\)는 얼마나 줄어드나? ③ \(V_{DD}\)를 올려 \(V_{(BR)}\)에 가까워지면 \(t_{av}\)가 길어져 에너지가 커진다.</div>
+    </div>
+
+    <div class="callout warn"><strong>반복 애벌런치와 "애벌런치 정격"</strong>단일 펄스 \(E_{AS}\)는 파괴 시험이다. 반복 애벌런치(\(E_{AR}\))는 평균 온도와 핫 캐리어 주입에 의한 파라미터 이동을 함께 보므로 훨씬 작게 정격된다. 정상 동작에서 애벌런치를 쓰는 설계(클램프 없는 플라이백 등)는 피하고, 서지·고장 때의 마지막 방어선으로만 생각한다. SiC MOSFET도 애벌런치 내량이 있지만, GaN HEMT에는 애벌런치가 없다(<a href="gan.html">9장</a>) — 과전압 여유를 정격 전압 쪽에서 확보해야 한다.</div>
+    <div class="callout fab"><strong>GC GaN 충전기와 Si 동기 정류기</strong>65 W 어댑터의 1차 스위치는 650 V GaN이지만, 2차 동기 정류기는 보통 100–150 V Si 트렌치·차폐 게이트 MOSFET이다. 출력 20 V에서 플라이백 2차 스위치의 차단 전압은 \(V_{out} + V_{in}/n\)에 누설 인덕턴스 링잉이 더해져 80–100 V에 이르고, 여기서 기생 링잉이 애벌런치로 들어가지 않게 RC 스너버나 정격 여유를 둔다. 이 자리는 전도 손실이 지배하므로 \(R_{DS(on)}\)이 작은 차폐 게이트가 유리하다.</div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>전력 MOSFET은 수직 소자로, 피치 \(p\)의 셀 수백만 개가 병렬이다. 구조는 평면 DMOS → 트렌치(JFET 제거, 피치 1–2 µm) → 차폐 게이트(메사 옆 공핍)로 진화했고, 고전압은 슈퍼정션이 맡는다.</li>
+      <li>\(R_{on,sp} = R_{ch} + R_{acc} + R_{JFET} + R_{drift} + R_{sub}\). 채널·축적은 \(\propto p/(V_{GS}-V_{th})\), 드리프트는 \(\propto BV^{2.5}\). 저전압은 피치·기판·패키지, 고전압은 드리프트가 병목이다.</li>
+      <li>\(R_{DS(on)}\)은 양의 온도 계수(Si 고전압 25 → 150 °C 약 2.3배)라 병렬이 안정하다. 포화 영역에는 ZTC점이 있고 그 아래 \(V_{GS}\)에서는 열적으로 불안정하다(선형 모드 주의).</li>
+      <li>\(C_{iss} = C_{GS} + C_{GD}\), \(C_{oss} = C_{DS} + C_{GD}\), \(C_{rss} = C_{GD}\). 공핍 폭이 \(\sqrt V\)로 자라 커패시턴스가 비선형이고, SJ는 \(V_{dep}\)(수십 V)에서 절벽처럼 떨어진다. \(E_{oss} = \int vC_{oss}dv\), \(Q_{oss} = \int C_{oss}dv\), 등가값 \(C_{o(er)}, C_{o(tr)}\).</li>
+      <li>게이트 전하 곡선: \(Q_{GS}\) → 밀러 플래토(\(Q_{GD}\), \(V_{pl} = V_{th} + \sqrt{2I_D/\beta}\)) → 나머지. 플래토 시간 = \(Q_{GD}/I_G\). FOM \(R_{DS(on)}\cdot Q_G\)는 면적과 무관하고, 최적 다이 손실은 \(\sqrt{\text{FOM}}\)과 \(\sqrt{f}\)에 비례한다.</li>
+      <li>슈퍼정션은 n·p 기둥의 전하 균형으로 전계를 직사각형으로 만들어 \(R_{on,sp} \propto BV\cdot p\)를 얻는다. 기둥 전하 \(N_Dw_n\) 약 2–4×10¹² cm⁻² 상한, 전하 불균형 δ의 공정 창이 도핑과 트레이드오프한다.</li>
+      <li>바디 다이오드(Si SJ \(Q_{rr}\) 약 10 µC)와 기생 NPN(\(I_hR_B \gtrsim 0.6\) V)이 견고성의 약점이다. UIS 애벌런치 에너지 \(E_{AS} = \tfrac12LI^2V_{(BR)}/(V_{(BR)}-V_{DD})\)이고, 파괴는 펄스 길이와 열 임피던스가 정하는 접합 온도로 판정한다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 30 V 트렌치 MOSFET의 \(R_{on,sp}\)을 더 낮추려 한다. 가장 효과가 큰 손잡이는?</p><div class="opts">
+        <button class="opt">드리프트층 도핑을 두 배로 올린다</button>
+        <button class="opt" data-correct>셀 피치를 줄이고 기판을 얇게 연마한다</button>
+        <button class="opt">슈퍼정션 기둥을 도입한다</button>
+        <button class="opt">게이트 산화막을 두껍게 한다</button>
+      </div><div class="quiz-exp">30 V급에서는 채널(∝ 피치)과 기판·패키지 저항이 대부분이다. 드리프트는 얇아 비중이 작고, 슈퍼정션은 고전압에서만 이득이 있다. 산화막을 두껍게 하면 \(C_{ox}\)가 줄어 채널 저항이 오히려 는다.</div></div>
+
+      <div class="quiz-q"><p>2. 650 V 소자의 \(R_{DS(on)}\)이 25 °C에서 40 mΩ이다. 접합 온도 150 °C에서 전도 손실을 계산할 때 쓸 값으로 가장 그럴듯한 것은?</p><div class="opts">
+        <button class="opt">약 30 mΩ (음의 온도 계수)</button>
+        <button class="opt">약 40 mΩ (온도와 무관)</button>
+        <button class="opt" data-correct>약 90 mΩ (드리프트 이동도 감소)</button>
+        <button class="opt">약 400 mΩ</button>
+      </div><div class="quiz-exp">고전압 Si 소자는 드리프트 저항이 지배하고, 격자 산란으로 이동도가 \(T^{-2.4}\) 정도로 줄어 25 → 150 °C에서 약 2.2–2.5배가 된다. 그래서 병렬 소자는 저절로 전류를 나눠 갖는다.</div></div>
+
+      <div class="quiz-q"><p>3. 슈퍼정션 MOSFET의 \(C_{oss}\)가 0 V 근처에서 수십 nF이다가 20–50 V 부근에서 급격히 떨어지는 이유는?</p><div class="opts">
+        <button class="opt">게이트 산화막이 그 전압에서 축적에서 공핍으로 바뀌기 때문</button>
+        <button class="opt" data-correct>기둥 옆벽의 거대한 접합이 옆으로 다 공핍되는 순간 접합 면적 효과가 사라지기 때문</button>
+        <button class="opt">바디 다이오드가 역회복을 끝내기 때문</button>
+        <button class="opt">기판이 펀치스루되기 때문</button>
+      </div><div class="quiz-exp">옆벽 접합 면적 \(2tA/p\)는 칩 면적의 15–20배다. 기둥이 옆으로 다 공핍되는 \(V_{dep} \approx qN_Dw_n^2/(4\varepsilon_s)\)를 지나면 커패시턴스가 깊이 \(t\)의 평행판 수준으로 두세 자릿수 떨어진다.</div></div>
+
+      <div class="quiz-q"><p>4. 게이트 저항을 5 Ω에서 10 Ω으로 바꿨다. 밀러 플래토 시간과 게이트 전하 \(Q_G\)는 어떻게 되나?</p><div class="opts">
+        <button class="opt">둘 다 두 배</button>
+        <button class="opt" data-correct>플래토 시간은 약 두 배, \(Q_G\)는 그대로</button>
+        <button class="opt">플래토 시간은 그대로, \(Q_G\)는 두 배</button>
+        <button class="opt">둘 다 그대로</button>
+      </div><div class="quiz-exp">\(Q_G\)는 소자와 \(V_{DD}, I_D, V_{drv}\)가 정하는 전하량이라 게이트 저항과 무관하다. 플래토 게이트 전류 \(I_G = (V_{drv}-V_{pl})/R_G\)가 반이 되므로 \(t_{pl} = Q_{GD}/I_G\)는 두 배, 스위칭 손실도 대략 두 배가 된다.</div></div>
+
+      <div class="quiz-q"><p>5. 같은 기술로 만든 MOSFET의 다이 면적을 두 배로 늘렸다. 변하지 <em>않는</em> 것은?</p><div class="opts">
+        <button class="opt">\(R_{DS(on)}\)</button>
+        <button class="opt">\(Q_G\)</button>
+        <button class="opt" data-correct>\(R_{DS(on)}\cdot Q_G\)</button>
+        <button class="opt">\(E_{oss}\)</button>
+      </div><div class="quiz-exp">\(R_{DS(on)} \propto 1/A\), \(Q_G, E_{oss} \propto A\)이므로 곱은 면적과 무관하다. 그래서 \(R\cdot Q_G\)(또는 \(R\cdot Q_{GD}\), \(R\cdot E_{oss}\))가 기술의 성능 지수가 된다.</div></div>
+
+      <div class="quiz-q"><p>6. 슈퍼정션 공정에서 p 기둥 전하가 n 기둥보다 15 % 많아졌다(δ = +15 %). 무엇이 일어나나?</p><div class="opts">
+        <button class="opt">온저항이 15 % 준다</button>
+        <button class="opt">아무 변화가 없다(전하는 공핍되면 무관)</button>
+        <button class="opt" data-correct>알짜 음전하가 수직 전계에 기울기를 만들어 아래쪽 전계가 높아지고 BV가 떨어진다</button>
+        <button class="opt">BV가 15 % 오른다</button>
+      </div><div class="quiz-exp">알짜 전하 \(q\delta N_D/2\)가 \(dE/dy\)를 만들어 직사각형 전계가 사다리꼴(p 과잉이면 아래가 높음)이 된다. 같은 최대 전계에서 넓이(전압)가 줄어든다. 도핑이 높을수록 같은 δ에서 기울기가 커져 공정 창이 좁다.</div></div>
+
+      <div class="quiz-q"><p>7. UIS 시험에서 L = 1 mH, \(I_{AS}\) = 20 A, \(V_{(BR)}\) = 700 V, \(V_{DD}\) = 50 V일 때 \(E_{AS}\)에 가장 가까운 값은?</p><div class="opts">
+        <button class="opt">0.20 J</button>
+        <button class="opt" data-correct>0.22 J</button>
+        <button class="opt">0.40 J</button>
+        <button class="opt">14 J</button>
+      </div><div class="quiz-exp">\(\tfrac12LI^2 = 0.5\times10^{-3}\times400 = 0.2\) J, 여기에 \(V_{(BR)}/(V_{(BR)}-V_{DD}) = 700/650 \approx 1.08\)을 곱하면 약 0.215 J. \(t_{av} = LI/(V_{(BR)}-V_{DD}) \approx 31\) µs다.</div></div>
+
+      <div class="quiz-q"><p>8. 토템폴 PFC의 65 kHz 고속 레그(CCM, 바디 다이오드 하드 정류)에 650 V Si 슈퍼정션을 쓰지 않는 가장 큰 이유는?</p><div class="opts">
+        <button class="opt">\(R_{DS(on)}\)이 너무 커서</button>
+        <button class="opt">게이트 문턱 전압이 너무 낮아서</button>
+        <button class="opt" data-correct>바디 다이오드의 \(Q_{rr}\)(약 10 µC)이 매 주기 큰 역회복 손실과 dv/dt 위험을 만들어서</button>
+        <button class="opt">애벌런치 내량이 없어서</button>
+      </div><div class="quiz-exp">하드 정류에서는 \(Q_{rr}V\)만큼의 에너지가 매 주기 반대편 스위치에서 열이 되고, 역회복 dv/dt가 기생 BJT를 켤 위험도 있다. 그래서 고속 레그에는 \(Q_{rr}\)이 거의 없는 GaN·SiC를 쓴다.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const Q = 1.602e-19, ES = 11.7 * 8.854e-14, EOX = 3.9 * 8.854e-14;
+  const font = (px, mono) => px + "px " + getComputedStyle(document.body).getPropertyValue(mono ? "--mono" : "--font");
+  const SUP = { "-": "⁻", "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹" };
+  const sci = (x, d) => { if (!isFinite(x) || x <= 0) return "—"; const e = Math.floor(Math.log10(x)); return (x / Math.pow(10, e)).toFixed(d == null ? 1 : d) + "×10" + String(e).split("").map((c) => SUP[c] || c).join(""); };
+  const muSi = (N) => 88 + 1252 / (1 + Math.pow(N / 1.26e17, 0.88));
+  const NDopt = (BV) => Math.pow(5.34e13 / BV, 4 / 3);
+  const Wopt = (N) => 2.67e10 * Math.pow(N, -7 / 8);
+  const siLim = (BV) => 5.93e-9 * Math.pow(BV, 2.5);
+  const sicLim = (BV) => 2.97e-12 * Math.pow(BV, 2.5);
+  const mohm = (r) => { const m = r * 1e3; return (m >= 100 ? m.toFixed(0) : m >= 10 ? m.toFixed(1) : m >= 1 ? m.toFixed(2) : m.toFixed(3)); };
+  const setCls = (id, c) => { const el = $(id); if (el) el.className = "v " + c; };
+  const rgba = (c, a) => { const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec((c || "").trim()); if (!m) return c; let hx = m[1]; if (hx.length === 3) hx = hx.split("").map((x) => x + x).join(""); const n = parseInt(hx, 16); return "rgba(" + (n >> 16) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")"; };
+  const tlabel = (ctx, txt, x, y, col, al, px) => { ctx.fillStyle = col; ctx.font = font(px || 11); ctx.textAlign = al || "left"; ctx.textBaseline = "middle"; ctx.fillText(txt, x, y); };
+
+  /* ---------------- 온저항 모델 (단위: cm, Ω·cm²) ---------------- */
+  function spread(rho, p, a, t) { const L = (p - a) / 2; return t >= L ? rho * (p / 2 * Math.log(p / a) + t - L) : rho * p / 2 * Math.log((a + 2 * t) / a); }
+  const COX50 = EOX / 50e-7;
+  function ronModel(type, BV, pum, Vgs) {
+    const r = { type, note: "", valid: true };
+    let p = pum * 1e-4, N, t, rho, ch = 0, acc = 0, jf = 0, dr = 0;
+    const Vth = (type === "planar" || type === "sj") ? 3 : 2.5, Vov = Math.max(0.3, Vgs - Vth);
+    if (type === "planar") {
+      N = NDopt(BV); t = Wopt(N); rho = 1 / (Q * muSi(N) * N);
+      const W0 = Math.sqrt(2 * ES * 0.7 / (Q * N)), xp = 2e-4, xl = 0.6 * xp, Wwin = 3e-4;
+      const pmin = Wwin + 2 * xl + 2 * W0 + 0.3e-4;
+      if (p < pmin) { p = pmin; r.note = "최소 피치 " + (pmin * 1e4).toFixed(1) + " µm로 고정"; }
+      const WG = p - Wwin, a = WG - 2 * xl - 2 * W0;
+      ch = 1e-4 * p / (2 * 450 * COX50 * Vov);
+      acc = 0.6 * (WG - 2 * xl) * p / (4 * 650 * COX50 * Vov);
+      jf = rho * xp * p / a; dr = spread(rho, p, a, t); r.a = a;
+    } else if (type === "trench") {
+      N = NDopt(BV); t = Wopt(N); rho = 1 / (Q * muSi(N) * N);
+      if (p < 0.8e-4) { p = 0.8e-4; r.note = "최소 피치 0.8 µm로 고정"; }
+      const wt = Math.min(0.5e-4, 0.4 * p);
+      ch = 0.5e-4 * p / (2 * 350 * COX50 * Vov);
+      acc = 0.6 * wt * p / (4 * 650 * COX50 * Vov);
+      dr = spread(rho, p, wt, t);
+    } else if (type === "sgt") {
+      if (BV < 40 || BV > 300) r.valid = false;
+      const B = PW.clamp(BV, 20, 400), wt = 2 * B / 3e6 + 0.3e-4, pmin = wt + 0.4e-4;
+      if (p < pmin) { p = pmin; r.note = "최소 피치 " + (pmin * 1e4).toFixed(1) + " µm로 고정"; }
+      const wm = p - wt; N = 2e12 / wm; t = B / 1.6e5; rho = 1 / (Q * muSi(N) * N);
+      ch = 0.5e-4 * p / (2 * 350 * COX50 * Vov);
+      acc = 0.6 * 0.3e-4 * p / (4 * 650 * COX50 * Vov);
+      dr = rho * t * p / wm;
+    } else {
+      if (BV < 400) r.valid = false;
+      if (p < 3e-4) { p = 3e-4; r.note = "최소 피치 3 µm로 고정"; }
+      const wn = p / 2; N = 2e12 / wn; t = BV / 1.7e5; rho = 1 / (Q * muSi(2 * N) * N);
+      ch = 0.8e-4 * p / (2 * 450 * COX50 * Vov);
+      acc = 0.6 * 0.25 * p * p / (4 * 650 * COX50 * Vov);
+      jf = rho * 1.5e-4 / 0.35; dr = 2 * rho * t;
+    }
+    const sub = 2e-3 * 100e-4 + 5e-6;
+    r.parts = [["채널", ch], ["축적", acc], ["JFET", jf], ["드리프트", dr], ["기판", sub]];
+    r.tot = ch + acc + jf + dr + sub; r.N = N; r.t = t; r.p = p;
+    return r;
+  }
+  const REP = { planar: 12, trench: 1.5, sgt: 2.5, sj: 5 };
+
+  /* =============================================================
+     1) 온저항 분해
+     ============================================================= */
+  (function () {
+    if (!$("ron-cv")) return;
+    const fmtBV = (v) => Math.round(Math.pow(10, v)) + " V";
+    const gbv = PW.range("ron-bv", fmtBV, draw), gp = PW.range("ron-p", (v) => Math.pow(10, v).toFixed(2) + " µm", draw), gvg = PW.range("ron-vg", (v) => v.toFixed(1) + " V", draw);
+    const gty = PW.seg("ron-type", draw);
+    const preset = (ty, bv, p) => { gty.set(ty, false); gbv.set(Math.log10(bv)); gp.set(Math.log10(p)); gvg.set(10); };
+    $("ron-b30").addEventListener("click", () => preset("trench", 30, 1.5));
+    $("ron-b100").addEventListener("click", () => preset("sgt", 100, 2.5));
+    $("ron-b650").addEventListener("click", () => preset("sj", 650, 5));
+    const cv = PW.canvas($("ron-cv"), (ctx, w, h) => {
+      const P = PW.palette(), BV = Math.pow(10, gbv()), pum = Math.pow(10, gp()), Vg = gvg(), ty = gty();
+      const r = ronModel(ty, BV, pum, Vg);
+      const cols = [P.accent, P.accent2, P.field, P.electron, P.si];
+      // bars
+      const bx = 96, bw = w - bx - 110, top = 14, rowH = Math.min(24, (h * 0.42) / 5);
+      r.parts.forEach(([nm, v], i) => {
+        const y = top + i * rowH, frac = v / r.tot;
+        tlabel(ctx, nm, bx - 8, y + rowH / 2 - 2, P.text, "right", 12);
+        ctx.fillStyle = P.grid; ctx.fillRect(bx, y + 3, bw, rowH - 8);
+        ctx.fillStyle = cols[i]; ctx.fillRect(bx, y + 3, Math.max(1, bw * frac), rowH - 8);
+        tlabel(ctx, (frac * 100).toFixed(frac < 0.1 ? 1 : 0) + " % · " + mohm(v), bx + bw + 6, y + rowH / 2 - 2, P.dim, "left", 11);
+      });
+      tlabel(ctx, "mΩ·cm²" + (r.note ? " · " + r.note : "") + (r.valid ? "" : " · 이 구조의 적용 범위 밖"), bx, top + 5 * rowH + 4, r.valid ? P.dim : P.warn, "left", 11);
+      // chart
+      const cy = top + 5 * rowH + 18, box = { x: 62, y: cy + 4, w: w - 62 - 16, h: h - cy - 4 - 44 };
+      if (box.h < 60) return;
+      const grid = []; for (let k = 0; k <= 60; k++) grid.push(Math.pow(10, 1.301 + k * (3 - 1.301) / 60));
+      const line = (tt, lo, hi) => grid.filter((b) => b >= lo && b <= hi).map((b) => [b, ronModel(tt, b, REP[tt], Vg).tot * 1e3]);
+      const C = PW.chart(ctx, box, {
+        x: [20, 1000], y: [0.01, 300], logX: true, logY: true, xLabel: "정격 BV (V)", yLabel: "R_on,sp (mΩ·cm²)",
+        series: [
+          { data: grid.map((b) => [b, siLim(b) * 1e3]), color: P.dim, width: 2 },
+          { data: line("planar", 20, 1000), color: P.field, width: 1.5, dash: [5, 4] },
+          { data: line("trench", 20, 1000), color: P.accent, width: 1.5, dash: [5, 4] },
+          { data: line("sgt", 40, 300), color: P.accent2, width: 1.5, dash: [5, 4] },
+          { data: line("sj", 400, 1000), color: P.sic, width: 1.5, dash: [5, 4] },
+        ],
+        points: [{ x: BV, y: r.tot * 1e3, color: P.bad, r: 5 }],
+      });
+      ctx.font = font(11); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      [["Si 1D 한계", P.dim], ["평면", P.field], ["트렌치", P.accent], ["차폐", P.accent2], ["SJ", P.sic]].forEach(([t, c], i) => { ctx.fillStyle = c; ctx.fillRect(box.x + 8 + i * 74, box.y + 6, 14, 3); ctx.fillStyle = P.text; ctx.fillText(t, box.x + 26 + i * 74, box.y + 8); });
+      // readouts
+      PW.stat("ron-tot", mohm(r.tot) + " mΩ·cm²");
+      let mi = 0; r.parts.forEach((pp, i) => { if (pp[1] > r.parts[mi][1]) mi = i; });
+      PW.stat("ron-max", r.parts[mi][0] + " " + (r.parts[mi][1] / r.tot * 100).toFixed(0) + " %");
+      PW.stat("ron-lim", (r.tot / siLim(BV) * 100).toFixed(r.tot / siLim(BV) < 0.1 ? 1 : 0) + " % (한계 " + mohm(siLim(BV)) + ")");
+      PW.stat("ron-nd", sci(r.N) + " cm⁻³ / " + (r.t * 1e4).toFixed(1) + " µm");
+    }, { aspect: 0.78, minHeight: 380, maxHeight: 560 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     2) 출력·전달 특성 (650 V SJ 40 mΩ)
+     ============================================================= */
+  const IV = {
+    vth: (T) => 3.5 - 0.0065 * (T - 25),
+    beta: (T, Vov) => 18 * Math.pow((T + 273) / 298, -1.8) / (1 + 0.1 * Math.max(0, Vov)),
+    rd: (T) => 0.026 * Math.pow((T + 273) / 298, 2.4),
+    ich(Vc, Vgs, T) { const Vov = Vgs - this.vth(T); if (Vov <= 0 || Vc <= 0) return 0; const b = this.beta(T, Vov); return Vc < Vov ? b * (Vov * Vc - 0.5 * Vc * Vc) : 0.5 * b * Vov * Vov * (1 + 0.01 * (Vc - Vov)); },
+    id(Vds, Vgs, T) { const Rd = this.rd(T); let lo = 0, hi = Vds / Rd; for (let k = 0; k < 50; k++) { const m = (lo + hi) / 2; if (m - this.ich(Vds - m * Rd, Vgs, T) > 0) hi = m; else lo = m; } return (lo + hi) / 2; },
+    ron(Vgs, T, I) { // V_DS where id = I
+      let lo = 0, hi = 50; if (this.id(hi, Vgs, T) < I) return Infinity;
+      for (let k = 0; k < 50; k++) { const m = (lo + hi) / 2; if (this.id(m, Vgs, T) > I) hi = m; else lo = m; }
+      return (lo + hi) / 2 / I;
+    },
+  };
+  (function () {
+    if (!$("iv-cv")) return;
+    const gt = PW.range("iv-t", (v) => v + " °C", draw), gvg = PW.range("iv-vg", (v) => v.toFixed(1) + " V", draw), gid = PW.range("iv-id", (v) => v + " A", draw);
+    const cv = PW.canvas($("iv-cv"), (ctx, w, h) => {
+      const P = PW.palette(), T = gt(), Vg = gvg(), I0 = gid();
+      const narrow = w < 560, gap = 14;
+      const bw = narrow ? w - 70 : (w - 70 - 60 - gap) / 2, bh = narrow ? (h - 2 * 50 - 20) / 2 : h - 60;
+      const b1 = { x: 58, y: 14, w: bw, h: bh }, b2 = narrow ? { x: 58, y: 14 + bh + 56, w: bw, h: bh } : { x: 58 + bw + 60 + gap, y: 14, w: bw, h: bh };
+      const VD = []; for (let k = 0; k <= 80; k++) VD.push(k * 0.25);
+      const ser = [];
+      [5, 6, 7, 8].forEach((v) => ser.push({ data: VD.map((x) => [x, IV.id(x, v, T)]), color: P.amp, width: 1.3 }));
+      ser.push({ data: VD.map((x) => [x, IV.id(x, Vg, 25)]), color: P.dim, width: 1.5, dash: [5, 4] });
+      ser.push({ data: VD.map((x) => [x, IV.id(x, Vg, T)]), color: P.amp, width: 3 });
+      const ymax = Math.max(60, Math.min(400, IV.id(20, Math.max(Vg, 8), Math.min(T, 25)) * 1.1));
+      PW.chart(ctx, b1, { x: [0, 20], y: [0, ymax], xLabel: "V_DS (V)", yLabel: "I_D (A)", series: ser });
+      ctx.font = font(10.5); ctx.fillStyle = P.dim; ctx.textAlign = "left";
+      [5, 6, 7, 8].forEach((v) => { const y = IV.id(20, v, T); if (y < ymax * 0.95) ctx.fillText(v + " V", b1.x + b1.w - 30, b1.y + b1.h - y / ymax * b1.h - 6); });
+      // transfer
+      const VG = []; for (let k = 0; k <= 120; k++) VG.push(k * 0.1);
+      const i25 = VG.map((v) => [v, IV.id(20, v, 25)]), iT = VG.map((v) => [v, IV.id(20, v, T)]);
+      let ztc = null;
+      if (Math.abs(T - 25) >= 3) for (let k = 1; k < VG.length; k++) { const a = iT[k - 1][1] - i25[k - 1][1], b = iT[k][1] - i25[k][1]; if (VG[k] > 3 && a * b < 0) { const f = a / (a - b); ztc = [VG[k - 1] + f * 0.1, i25[k - 1][1] + f * (i25[k][1] - i25[k - 1][1])]; break; } }
+      PW.chart(ctx, b2, { x: [0, 12], y: [0, 300], xLabel: "V_GS (V), V_DS = 20 V", yLabel: "I_D (A)",
+        series: [{ data: i25, color: P.amp, width: 2 }, { data: iT, color: P.heat, width: 2.2, dash: T === 25 ? [4, 4] : [] }],
+        points: ztc ? [{ x: ztc[0], y: ztc[1], color: P.accent, r: 5, label: "ZTC" }] : [] });
+      tlabel(ctx, "25 °C", b2.x + 10, b2.y + 12, P.amp); tlabel(ctx, T + " °C", b2.x + 60, b2.y + 12, P.heat);
+      const R = IV.ron(Vg, T, I0), R25 = IV.ron(Vg, 25, I0);
+      PW.stat("iv-r", isFinite(R) ? (R * 1e3).toFixed(1) + " mΩ" : "포화 (전류 부족)");
+      PW.stat("iv-rr", isFinite(R) && isFinite(R25) ? "×" + (R / R25).toFixed(2) : "—");
+      PW.stat("iv-sat", IV.id(20, Vg, T).toFixed(0) + " A");
+      PW.stat("iv-ztc", ztc ? ztc[0].toFixed(2) + " V · " + ztc[1].toFixed(0) + " A" : (Math.abs(T - 25) < 3 ? "온도를 바꿔 보세요" : "범위 밖"));
+    }, { aspect: 0.5, minHeight: 300, maxHeight: 420 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* ---------------- 커패시턴스 모델 ---------------- */
+  function makeDev(type, A, wnum) {
+    if (type === "sj") {
+      const wn = wnum * 1e-4, N = 2e12 / wn, t = 40e-4, p = 2 * wnum;
+      const Rsp = ronModel("sj", 650, p, 10).tot;
+      return { type, A, N, t, wn, p, Rsp, Aside: 2 * t * A / (2 * wn), Vdep: Math.max(1, Q * N * wn * wn / (4 * ES) - 0.7), Agd: 0.32 * A, Cgs: 44e-9 * A, tox: 100e-7 };
+    }
+    const N = NDopt(650), t = Wopt(N), Rsp = ronModel("planar", 650, 12, 10).tot;
+    return { type, A, N, t, p: 12, Rsp, Agd: 0.32 * A, Cgs: 12e-9 * A, tox: 100e-7, Vdep: 0 };
+  }
+  function cgdOf(d, vdg) {
+    const Cox = EOX / d.tox * d.Agd;
+    if (vdg <= 0) return Cox;
+    let Cdg;
+    if (d.type === "sj") {
+      const s = 1 / (1 + Math.exp((vdg - d.Vdep) / (0.12 * d.Vdep + 0.5)));
+      const xg = Math.min(d.t, Math.sqrt(2 * ES * (vdg + 0.7) / (Q * d.N)));
+      Cdg = s * ES * d.Agd / xg + (1 - s) * ES * d.Agd * 0.3 / d.t;
+    } else {
+      Cdg = ES * d.Agd / Math.min(d.t, Math.sqrt(2 * ES * (vdg + 0.7) / (Q * d.N)));
+    }
+    return 1 / (1 / Cox + 1 / Cdg);
+  }
+  function cdsOf(d, v) {
+    v = Math.max(0, v);
+    if (d.type === "sj") {
+      const s = 1 / (1 + Math.exp((v - d.Vdep) / (0.12 * d.Vdep + 0.5)));
+      const x = Math.min(d.wn / 2, Math.sqrt(ES * (v + 0.7) / (Q * d.N)));
+      return s * ES * d.Aside / (2 * x) + (1 - s) * ES * d.A / d.t + ES * d.A / d.t * 0.2;
+    }
+    return ES * d.A / Math.min(d.t, Math.sqrt(2 * ES * (v + 0.7) / (Q * d.N)));
+  }
+  const cossOf = (d, v) => cdsOf(d, v) + cgdOf(d, v);
+  function ossInt(d, Vmax) { // returns arrays of [v, Q, E]
+    const n = 600, out = [[0, 0, 0]]; let q = 0, e = 0, vp = 0, cp = cossOf(d, 0);
+    for (let k = 1; k <= n; k++) { const v = Vmax * (k / n) * (k / n), c = cossOf(d, v); q += 0.5 * (c + cp) * (v - vp); e += 0.5 * (c * v + cp * vp) * (v - vp); out.push([v, q, e]); vp = v; cp = c; }
+    return out;
+  }
+  const fmtC = (c) => c >= 1e-9 ? (c * 1e9).toPrecision(3) + " nF" : (c * 1e12).toPrecision(3) + " pF";
+
+  /* =============================================================
+     3) C–V와 Eoss
+     ============================================================= */
+  (function () {
+    if (!$("cv-cv")) return;
+    const gty = PW.seg("cv-type", draw);
+    const ga = PW.range("cv-a", (v) => v.toFixed(2) + " cm²", draw), gw = PW.range("cv-w", (v) => v.toFixed(1) + " µm", draw);
+    const gv = PW.range("cv-v", (v) => v + " V", draw), gf = PW.range("cv-f", (v) => v + " kHz", draw);
+    const cv = PW.canvas($("cv-cv"), (ctx, w, h) => {
+      const P = PW.palette(), d = makeDev(gty(), ga(), gw()), V = gv(), f = gf() * 1e3;
+      const narrow = w < 560;
+      const b1 = narrow ? { x: 58, y: 12, w: w - 74, h: h * 0.5 - 50 } : { x: 62, y: 12, w: w * 0.55 - 70, h: h - 58 };
+      const rx = narrow ? 58 : w * 0.55 + 46, rw = narrow ? w - 74 : w - rx - 14;
+      const rTop = narrow ? h * 0.5 + 12 : 12, rH = narrow ? h * 0.5 - 12 : h - 12;
+      const b2 = { x: rx, y: rTop, w: rw, h: rH / 2 - 44 }, b3 = { x: rx, y: rTop + rH / 2 + 4, w: rw, h: rH / 2 - 48 };
+      const vs = []; for (let k = 0; k <= 200; k++) vs.push(0.5 + 599.5 * Math.pow(k / 200, 2));
+      const ciss = vs.map((v) => [v, (d.Cgs + cgdOf(d, v)) * 1e12]), coss = vs.map((v) => [v, cossOf(d, v) * 1e12]), crss = vs.map((v) => [v, cgdOf(d, v) * 1e12]);
+      PW.chart(ctx, b1, { x: [0, 600], y: [0.5, 2e5], logY: true, xLabel: "V_DS (V)", yLabel: "C (pF)",
+        series: [{ data: ciss, color: P.accent, width: 2 }, { data: coss, color: P.electron, width: 2.2 }, { data: crss, color: P.field, width: 2 }],
+        vlines: [{ x: V, color: P.faint, dash: [2, 3] }].concat(d.type === "sj" ? [{ x: d.Vdep, color: P.dim, label: "V_dep" }] : []), yFmt: (v) => v >= 1000 ? (v / 1000) + "n" : String(v) });
+      tlabel(ctx, "C_iss", b1.x + b1.w - 44, b1.y + 12, P.accent); tlabel(ctx, "C_oss", b1.x + b1.w - 44, b1.y + 26, P.electron); tlabel(ctx, "C_rss", b1.x + b1.w - 44, b1.y + 40, P.field);
+      const arr = ossInt(d, 600), sj = makeDev("sj", ga(), gw()), pl = makeDev("pl", ga(), gw());
+      const other = ossInt(d.type === "sj" ? pl : sj, 600);
+      const qmax = Math.max(arr[arr.length - 1][1], other[other.length - 1][1]) * 1e9 * 1.05, emax = Math.max(arr[arr.length - 1][2], other[other.length - 1][2]) * 1e6 * 1.05;
+      PW.chart(ctx, b2, { x: [0, 600], y: [0, qmax], yLabel: "Q_oss (nC)", series: [{ data: other.map((r) => [r[0], r[1] * 1e9]), color: P.dim, width: 1.4, dash: [5, 4] }, { data: arr.map((r) => [r[0], r[1] * 1e9]), color: P.electron, width: 2.2 }], vlines: [{ x: V, color: P.faint, dash: [2, 3] }] });
+      PW.chart(ctx, b3, { x: [0, 600], y: [0, emax], xLabel: "V (V)", yLabel: "E_oss (µJ)", series: [{ data: other.map((r) => [r[0], r[2] * 1e6]), color: P.dim, width: 1.4, dash: [5, 4] }, { data: arr.map((r) => [r[0], r[2] * 1e6]), color: P.heat, width: 2.2 }], vlines: [{ x: V, color: P.faint, dash: [2, 3] }] });
+      tlabel(ctx, "점선: " + (d.type === "sj" ? "평면" : "SJ") + " (같은 면적)", b2.x + 8, b2.y + 10, P.dim, "left", 10.5);
+      // values at V
+      let k = 0; while (k < arr.length - 1 && arr[k][0] < V) k++;
+      const qv = arr[k][1], ev = arr[k][2], R = d.Rsp / d.A;
+      PW.stat("cv-r", (R * 1e3).toFixed(R < 0.1 ? 1 : 0) + " mΩ");
+      PW.stat("cv-c", fmtC(d.Cgs + cgdOf(d, V)) + " / " + fmtC(cossOf(d, V)) + " / " + fmtC(cgdOf(d, V)));
+      PW.stat("cv-q", (qv * 1e9).toFixed(0) + " nC / " + (ev * 1e6).toFixed(1) + " µJ");
+      PW.stat("cv-eq", fmtC(qv / V) + " / " + fmtC(2 * ev / (V * V)));
+      PW.stat("cv-p", (ev * f).toFixed(2) + " W · " + (R * 1e3 * ev * 1e6).toFixed(0) + " mΩ·µJ");
+    }, { aspect: 0.58, minHeight: 360, maxHeight: 480 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     4) 게이트 전하 곡선
+     ============================================================= */
+  function gateCharge(d, Vdd, Id, Vdrv) {
+    const Ron = d.Rsp / d.A, beta = 18 * (d.A / d.p) / (makeDev("sj", 1, 2.5).Rsp / 0.04 / 5);
+    const Vth = 3.5, Vpl = Math.min(Vdrv - 0.2, Vth + Math.sqrt(2 * Id / beta)), Cox = EOX / d.tox * d.Agd;
+    const pts = [[0, 0, Vdd]]; let q = 0; const N = 400;
+    for (let k = 1; k <= N; k++) { const v0 = Vpl * (k - 1) / N, v1 = Vpl * k / N, vm = 0.5 * (v0 + v1); q += (d.Cgs + cgdOf(d, Vdd - vm)) * (v1 - v0); pts.push([q, v1, Vdd]); }
+    const Qgs = q, Von = Math.min(Vdd * 0.5, Id * Ron);
+    for (let k = 1; k <= N; k++) { const a = Vdd - (Vdd - Von) * (k - 1) / N, b = Vdd - (Vdd - Von) * k / N; q += cgdOf(d, 0.5 * (a + b) - Vpl) * (a - b); pts.push([q, Vpl, b]); }
+    const Qgd = q - Qgs;
+    for (let k = 1; k <= 60; k++) { const v0 = Vpl + (Vdrv - Vpl) * (k - 1) / 60, v1 = Vpl + (Vdrv - Vpl) * k / 60; q += (d.Cgs + Cox) * (v1 - v0); pts.push([q, v1, Von]); }
+    return { pts, Qgs, Qgd, Qg: q, Vpl, Ron, Von, limited: Vpl >= Vdrv - 0.21 };
+  }
+  (function () {
+    if (!$("qg-cv")) return;
+    const gty = PW.seg("qg-type", draw);
+    const gvdd = PW.range("qg-vdd", (v) => v + " V", draw), gid = PW.range("qg-id", (v) => v + " A", draw), gvd = PW.range("qg-vd", (v) => v.toFixed(1) + " V", draw), grg = PW.range("qg-rg", (v) => v.toFixed(1) + " Ω", draw);
+    const dev = (ty) => { const s = makeDev("sj", 1, 2.5); const Asj = s.Rsp / 0.04; if (ty === "sj") return makeDev("sj", Asj, 2.5); const p0 = makeDev("pl", 1, 2.5); return makeDev("pl", p0.Rsp / 0.04, 2.5); };
+    const cv = PW.canvas($("qg-cv"), (ctx, w, h) => {
+      const P = PW.palette(), d = dev(gty()), Vdd = gvdd(), Id = gid(), Vdrv = gvd(), Rg = grg() + 1.0;
+      const g = gateCharge(d, Vdd, Id, Vdrv);
+      const other = gateCharge(dev(gty() === "sj" ? "pl" : "sj"), Vdd, Id, Vdrv);
+      const qmax = Math.max(g.Qg, 1e-12) * 1e9 * 1.08;
+      const box = { x: 58, y: 14, w: w - 58 - 58, h: h - 14 - 46 };
+      const C = PW.chart(ctx, box, { x: [0, qmax], y: [0, 16], xLabel: "Q_G (nC)", yLabel: "V_GS (V)",
+        series: [{ data: g.pts.map((r) => [r[0] * 1e9, r[1]]), color: P.accent, width: 2.8 }],
+        hlines: [{ y: g.Vpl, color: P.faint, label: "V_pl " + g.Vpl.toFixed(2) + " V" }],
+        vlines: [{ x: g.Qgs * 1e9, color: P.faint }, { x: (g.Qgs + g.Qgd) * 1e9, color: P.faint }] });
+      // V_DS on right axis
+      const vmax = 550, Yv = (v) => box.y + box.h - v / vmax * box.h;
+      ctx.save(); ctx.beginPath(); ctx.rect(box.x, box.y, box.w, box.h); ctx.clip();
+      ctx.strokeStyle = P.volt; ctx.lineWidth = 2; ctx.beginPath();
+      g.pts.forEach((r, i) => { const x = C.X(r[0] * 1e9), y = Yv(r[2]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); ctx.restore();
+      ctx.fillStyle = P.volt; ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      [0, 100, 200, 300, 400, 500].forEach((v) => ctx.fillText(String(v), box.x + box.w + 6, Yv(v)));
+      ctx.save(); ctx.translate(w - 10, box.y + box.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillText("V_DS (V)", 0, 0); ctx.restore();
+      tlabel(ctx, "비교: " + (gty() === "sj" ? "평면 Q_G " : "SJ Q_G ") + (other.Qg * 1e9).toFixed(0) + " nC", box.x + 10, box.y + 12, P.dim);
+      const Ig = Math.max(1e-3, (Vdrv - g.Vpl) / Rg), tpl = g.Qgd / Ig;
+      PW.stat("qg-vpl", g.Vpl.toFixed(2) + " V" + (g.limited ? " (구동 부족)" : ""));
+      setCls("qg-vpl", g.limited ? "bad" : "");
+      PW.stat("qg-q", (g.Qgs * 1e9).toFixed(1) + " / " + (g.Qgd * 1e9).toFixed(1) + " / " + (g.Qg * 1e9).toFixed(0) + " nC");
+      PW.stat("qg-t", PW.si(tpl, "s") + " / " + ((Vdd - g.Von) / tpl * 1e-9).toFixed(1) + " V/ns");
+      PW.stat("qg-fom", (g.Ron * 1e3 * g.Qg * 1e9 / 1000).toFixed(2) + " / " + (g.Ron * 1e3 * g.Qgd * 1e9 / 1000).toFixed(2) + " Ω·nC");
+    }, { aspect: 0.52, minHeight: 300, maxHeight: 420 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     5) 최적 다이 크기
+     ============================================================= */
+  (function () {
+    if (!$("opt-cv")) return;
+    const TECH = { tr: { R: 1.0e-3, qg: 300e-9, qgd: 120e-9, qgs2: 40e-9, qoss: 400e-9, vd: 10, nm: "트렌치" }, sgt: { R: 0.45e-3, qg: 330e-9, qgd: 60e-9, qgs2: 40e-9, qoss: 520e-9, vd: 10, nm: "차폐 게이트" }, gan: { R: 0.3e-3, qg: 120e-9, qgd: 15e-9, qgs2: 10e-9, qoss: 250e-9, vd: 5, nm: "GaN" } };
+    const gte = PW.seg("opt-tech", draw);
+    const gf = PW.range("opt-f", (v) => v + " kHz", draw), gi = PW.range("opt-i", (v) => v.toFixed(1) + " A", draw), gig = PW.range("opt-ig", (v) => v.toFixed(1) + " A", draw);
+    const VIN = 48, D = 0.25;
+    const cv = PW.canvas($("opt-cv"), (ctx, w, h) => {
+      const P = PW.palette(), t = TECH[gte()], f = gf() * 1e3, Io = gi(), Ig = gig();
+      const a = Io * Io * D * t.R, bs = f * VIN * Io * (t.qgd + t.qgs2) / Ig, bg = f * (t.qg * t.vd + t.qoss * VIN), b = bs + bg;
+      const As = Math.sqrt(a / b), Pm = 2 * Math.sqrt(a * b);
+      const As_ = []; for (let k = 0; k <= 120; k++) As_.push(Math.pow(10, -3 + k * 3 / 120));
+      const ymax = Math.max(4 * Pm, 1);
+      PW.chart(ctx, null, { x: [1e-3, 1], y: [0, ymax], logX: true, xLabel: "활성 면적 A (cm²)", yLabel: "손실 (W)",
+        xFmt: (v) => v >= 0.01 ? String(v) : v.toExponential(0).replace("e-", "e-"),
+        series: [{ data: As_.map((A) => [A, a / A]), color: P.amp, width: 1.6 }, { data: As_.map((A) => [A, bs * A]), color: P.heat, width: 1.6 }, { data: As_.map((A) => [A, bg * A]), color: P.accent2, width: 1.6 }, { data: As_.map((A) => [A, a / A + b * A]), color: P.text, width: 3 }],
+        points: [{ x: As, y: Pm, color: P.bad, r: 5, label: "A* = " + (As * 100).toFixed(1) + " mm²" }] });
+      ctx.font = font(11); ctx.textBaseline = "middle"; ctx.textAlign = "left";
+      [["전도", P.amp], ["스위칭", P.heat], ["구동+Q_oss", P.accent2], ["합", P.text]].forEach(([s, c], i) => { ctx.fillStyle = c; ctx.fillRect(70 + i * 90, 22, 14, 3); ctx.fillStyle = P.text; ctx.fillText(s, 88 + i * 90, 24); });
+      PW.stat("opt-a", (As * 100).toFixed(1) + " mm²");
+      PW.stat("opt-r", (t.R / As * 1e3).toFixed(1) + " mΩ");
+      PW.stat("opt-p", Pm.toFixed(2) + " W");
+      PW.stat("opt-eta", (Pm / (VIN * D * Io) * 100).toFixed(2) + " % of " + (VIN * D * Io).toFixed(0) + " W");
+    }, { aspect: 0.5, minHeight: 280, maxHeight: 400 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     6) 슈퍼정션 전하 균형
+     ============================================================= */
+  const AFU = 1.8e-35, KAP = 0.6;
+  function sjBV(t, wn, N, delta) {
+    const Elat = Q * N * wn / (2 * ES), s = Q * Math.abs(delta) * N / (2 * ES), EL = KAP * Elat, n = 120, dy = t / n;
+    const I = (Ep) => { let sum = 0; for (let i = 0; i < n; i++) { const Ev = Math.max(0, Ep - s * (i + 0.5) * dy); sum += Math.pow(Ev * Ev + EL * EL, 3.5); } return AFU * sum * dy; };
+    const BV1 = Math.min(5000, 5.34e13 * Math.pow(N, -0.75));
+    if (I(0) >= 1) return { BV: BV1, Ep: 0, s, Elat, collapsed: true };
+    let lo = 0, hi = 3e6; for (let k = 0; k < 44; k++) { const m = (lo + hi) / 2; if (I(m) > 1) hi = m; else lo = m; }
+    const Ep = (lo + hi) / 2; let V;
+    if (s === 0) V = Ep * t; else { const y0 = Math.min(t, Ep / s); V = Ep * y0 - 0.5 * s * y0 * y0; }
+    return { BV: Math.max(V, BV1), Ep, s, Elat, collapsed: V < BV1 };
+  }
+  const rSJ = (t, N) => 2 * t / (Q * muSi(2 * N) * N);
+  (function () {
+    if (!$("sj-cv")) return;
+    const gt = PW.range("sj-t", (v) => v.toFixed(1) + " µm", draw), gp = PW.range("sj-p", (v) => v.toFixed(1) + " µm", draw);
+    const gn = PW.range("sj-n", (v) => sci(Math.pow(10, v)) + " cm⁻³", draw), gd = PW.range("sj-d", (v) => (v > 0 ? "+" : "") + v + " %", draw);
+    $("sj-g1").addEventListener("click", () => { gt.set(45); gp.set(15); gn.set(Math.log10(2e12 / 7.5e-4)); gd.set(0); });
+    $("sj-g3").addEventListener("click", () => { gt.set(40); gp.set(5); gn.set(15.9); gd.set(0); });
+    const cv = PW.canvas($("sj-cv"), (ctx, w, h) => {
+      const P = PW.palette(), t = gt() * 1e-4, wn = gp() / 2 * 1e-4, N = Math.pow(10, gn()), dl = gd() / 100;
+      const r = sjBV(t, wn, N, dl), r0 = sjBV(t, wn, N, 0);
+      const narrow = w < 560, topH = narrow ? h * 0.56 : h * 0.5;
+      const bA = narrow ? { x: 50, y: 12, w: w * 0.42 - 50, h: topH - 50 } : { x: 56, y: 12, w: w * 0.36 - 56, h: topH - 50 };
+      const bB = { x: bA.x + bA.w + 58, y: 12, w: w - (bA.x + bA.w + 58) - 14, h: topH - 50 };
+      // field profile: depth on y (0 top)
+      const Emax = Math.max(r.Ep, r.Elat, 1e5) * 1.15 / 1e5;
+      const tum = t * 1e4, prof = [];
+      for (let k = 0; k <= 100; k++) { const yy = k / 100 * tum, yp = dl >= 0 ? tum - yy : yy; prof.push([Math.max(0, r.Ep - r.s * yp * 1e-4) / 1e5, yy]); }
+      PW.chart(ctx, bA, { x: [0, Emax], y: [tum, 0].sort((a, b) => a - b), xLabel: "E (10⁵ V/cm)", yLabel: "깊이 (µm, 아래 = 기판)",
+        series: [{ data: prof.map(([e, y]) => [e, tum - y]), color: P.field, width: 2.6, fill: rgba(P.field, 0.18) }],
+        vlines: [{ x: r.Elat / 1e5, color: P.dim, label: "E_lat" }], yFmt: (v) => String(Math.round(tum - v)) });
+      // BV vs delta
+      const ds = [], cur = [], half = [];
+      for (let k = -40; k <= 40; k += 2) ds.push(k / 100);
+      ds.forEach((x) => { cur.push([x * 100, sjBV(t, wn, N, x).BV]); half.push([x * 100, sjBV(t, wn, N / 2, x).BV]); });
+      let lo = 0, hi = 0; const thr = 0.9 * r0.BV;
+      for (let x = 0; x <= 0.4; x += 0.005) { if (sjBV(t, wn, N, x).BV >= thr) hi = x; else break; }
+      for (let x = 0; x >= -0.4; x -= 0.005) { if (sjBV(t, wn, N, x).BV >= thr) lo = x; else break; }
+      const bvmax = Math.max(r0.BV, sjBV(t, wn, N / 2, 0).BV) * 1.1;
+      PW.chart(ctx, bB, { x: [-40, 40], y: [0, bvmax], xLabel: "전하 불균형 δ (%)", yLabel: "BV (V)",
+        bands: [{ x0: lo * 100, x1: hi * 100, color: rgba(P.ok, 0.16) }],
+        series: [{ data: half, color: P.dim, width: 1.5, dash: [5, 4] }, { data: cur, color: P.accent, width: 2.4 }],
+        points: [{ x: dl * 100, y: r.BV, color: P.bad, r: 5 }] });
+      // R vs BV
+      const bC = { x: 62, y: topH + 8, w: w - 62 - 16, h: h - topH - 8 - 44 };
+      const bvs = []; for (let k = 0; k <= 40; k++) bvs.push(Math.pow(10, 2 + k * 1.3 / 40));
+      const design = []; const EL = KAP * Q * N * wn / (2 * ES); let last = 0;
+      for (let k = 0; k <= 160; k++) { const tt = Math.pow(10, -4 + k * 2.5 / 160) * 1; const Et = Math.pow(1 / (AFU * tt), 1 / 7), e2 = Et * Et - EL * EL; if (e2 <= 0) break; const bv = tt * Math.sqrt(e2); if (bv < last) break; last = bv; design.push([bv, rSJ(tt, N) * 1e3]); }
+      PW.chart(ctx, bC, { x: [100, 2000], y: [0.3, 1000], logX: true, logY: true, xLabel: "BV (V)", yLabel: "R_on,sp (mΩ·cm²)",
+        series: [{ data: bvs.map((b) => [b, siLim(b) * 1e3]), color: P.dim, width: 2 }, { data: bvs.map((b) => [b, sicLim(b) * 1e3]), color: P.sic, width: 1.4, dash: [3, 4] }, { data: design, color: P.accent2, width: 2.2 }],
+        points: [{ x: PW.clamp(r.BV, 100, 2000), y: rSJ(t, N) * 1e3, color: P.bad, r: 5 }] });
+      ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      [["Si 1D 한계", P.dim], ["이 피치·기둥 전하의 SJ 설계선", P.accent2], ["4H-SiC 1D 한계 (8장)", P.sic]].forEach(([s, c], i) => { ctx.fillStyle = c; ctx.fillRect(bC.x + 10, bC.y + 10 + i * 15, 14, 3); ctx.fillStyle = P.text; ctx.fillText(s, bC.x + 30, bC.y + 12 + i * 15); });
+      const R = rSJ(t, N);
+      PW.stat("sj-bv", r.BV.toFixed(0) + " V" + (r.collapsed ? " (옆 공핍 실패)" : ""));
+      setCls("sj-bv", r.collapsed ? "bad" : "");
+      PW.stat("sj-r", mohm(R) + " mΩ·cm²");
+      PW.stat("sj-lim", mohm(siLim(r.BV)) + " mΩ·cm² (×" + (siLim(r.BV) / R).toFixed(1) + ")");
+      PW.stat("sj-q", sci(N * wn) + " cm⁻² / " + (r.Elat / 1e5).toFixed(2) + "×10⁵ V/cm");
+      PW.stat("sj-win", r0.collapsed ? "—" : (lo * 100).toFixed(1) + " … +" + (hi * 100).toFixed(1) + " %");
+    }, { aspect: 0.82, minHeight: 440, maxHeight: 620 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     7) UIS 애벌런치
+     ============================================================= */
+  const FOS = [[0.01, 5e-6], [0.04, 5e-5], [0.10, 5e-4], [0.15, 5e-3], [0.10, 5e-2]];
+  function uis(L, I0, Vdd, T0, rec) {
+    const vbr = (Tj) => 700 * (1 + 0.0009 * (Tj - 25));
+    const tav0 = L * I0 / Math.max(1, vbr(T0) - Vdd), dt = tav0 / 1500;
+    let i = I0, t = 0, E = 0, Tmax = T0; const th = FOS.map(() => 0), out = [];
+    for (let k = 0; k < 6000; k++) {
+      const Tj = T0 + th.reduce((a, b) => a + b, 0), V = i > 0 ? vbr(Tj) : Vdd, Pw = i > 0 ? V * i : 0;
+      if (rec && k % 4 === 0) out.push([t, i, V, Tj]);
+      if (Tj > Tmax) Tmax = Tj;
+      if (i <= 0 && t > 1.6 * tav0) break;
+      for (let m = 0; m < FOS.length; m++) th[m] += dt * (Pw * FOS[m][0] - th[m]) / FOS[m][1];
+      if (i > 0) { E += Pw * dt; i = Math.max(0, i - (V - Vdd) / L * dt); if (i === 0) rec && out.push([t, 0, Vdd, Tj]); }
+      t += dt;
+    }
+    return { tav: tav0, E, Tmax, out };
+  }
+  (function () {
+    if (!$("uis-cv")) return;
+    const gl = PW.range("uis-l", (v) => PW.si(Math.pow(10, v) * 1e-3, "H"), draw), gi = PW.range("uis-i", (v) => v.toFixed(1) + " A", draw);
+    const gv = PW.range("uis-vdd", (v) => v + " V", draw), gt = PW.range("uis-t0", (v) => v + " °C", draw);
+    const TCRIT = 380;
+    const cv = PW.canvas($("uis-cv"), (ctx, w, h) => {
+      const P = PW.palette(), L = Math.pow(10, gl()) * 1e-3, I0 = gi(), Vdd = gv(), T0 = gt();
+      const r = uis(L, I0, Vdd, T0, true), tend = r.out.length ? r.out[r.out.length - 1][0] : 1e-6, sc = tend > 1e-3 ? [1e3, "ms"] : [1e6, "µs"];
+      const b1 = { x: 58, y: 12, w: w - 58 - 58, h: h * 0.5 - 40 }, b2 = { x: 58, y: h * 0.5 + 4, w: w - 58 - 58, h: h * 0.5 - 48 };
+      const C1 = PW.chart(ctx, b1, { x: [0, tend * sc[0]], y: [0, I0 * 1.15], yLabel: "i_D (A)", series: [{ data: r.out.map((o) => [o[0] * sc[0], o[1]]), color: P.amp, width: 2.4 }] });
+      const Yv = (v) => b1.y + b1.h - v / 900 * b1.h;
+      ctx.save(); ctx.beginPath(); ctx.rect(b1.x, b1.y, b1.w, b1.h); ctx.clip(); ctx.strokeStyle = P.volt; ctx.lineWidth = 2; ctx.beginPath();
+      r.out.forEach((o, i) => { const x = C1.X(o[0] * sc[0]), y = Yv(o[2]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); ctx.restore();
+      ctx.fillStyle = P.volt; ctx.font = font(11); ctx.textAlign = "left"; ctx.textBaseline = "middle"; [0, 300, 600, 900].forEach((v) => ctx.fillText(String(v), b1.x + b1.w + 6, Yv(v)));
+      ctx.save(); ctx.translate(w - 10, b1.y + b1.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillText("v_DS (V)", 0, 0); ctx.restore();
+      const tmax = Math.max(TCRIT + 40, r.Tmax * 1.1);
+      PW.chart(ctx, b2, { x: [0, tend * sc[0]], y: [Math.min(0, T0), tmax], xLabel: "t (" + sc[1] + ")", yLabel: "T_j (°C)", series: [{ data: r.out.map((o) => [o[0] * sc[0], o[3]]), color: P.heat, width: 2.4 }], hlines: [{ y: TCRIT, color: P.bad, label: "파괴 판정 " + TCRIT + " °C" }] });
+      // max I_AS
+      let lo = 0.2, hi = 400;
+      if (uis(L, hi, Vdd, T0, false).Tmax < TCRIT) lo = hi; else for (let k = 0; k < 26; k++) { const m = Math.sqrt(lo * hi); if (uis(L, m, Vdd, T0, false).Tmax >= TCRIT) hi = m; else lo = m; }
+      const fail = r.Tmax >= TCRIT;
+      PW.stat("uis-tav", PW.si(r.tav, "s"));
+      PW.stat("uis-e", (r.E >= 1 ? r.E.toFixed(2) + " J" : (r.E * 1e3).toFixed(0) + " mJ") + " (식 " + (0.5 * L * I0 * I0 * 700 / Math.max(1, 700 - Vdd) * 1e3).toFixed(0) + " mJ)");
+      PW.stat("uis-tj", r.Tmax.toFixed(0) + " °C"); setCls("uis-tj", fail ? "bad" : r.Tmax > 250 ? "warn" : "ok");
+      const Emax = uis(L, lo, Vdd, T0, false).E;
+      PW.stat("uis-max", (fail ? "파괴" : "통과") + " / " + (lo >= 400 ? "> 400 A" : lo.toFixed(1) + " A (" + (Emax >= 1 ? Emax.toFixed(2) + " J" : (Emax * 1e3).toFixed(0) + " mJ") + ")"));
+      setCls("uis-max", fail ? "bad" : "ok");
+    }, { aspect: 0.6, minHeight: 340, maxHeight: 460 });
+    function draw() { cv.redraw(); }
+  })();
+
+  /* =============================================================
+     8) 3D 셀: 트렌치와 슈퍼정션
+     ============================================================= */
+  (function () {
+    const el = $("m3-view"); if (!el) return;
+    const T = PW.three(el, { camera: [3.6, 3.4, 6.4], target: [0, 1.6, 0], fov: 38, minDistance: 3, maxDistance: 16 });
+    if (!T) return;
+    const THREE = T.THREE, P = PW.palette(), WHITE = new THREE.Color(0xffffff), DZ = 2.4;
+    const tint = (c, f) => new THREE.Color(c).lerp(WHITE, f);
+    const M = {
+      n: T.material(tint(P.electron, 0.72)), nn: T.material(tint(P.electron, 0.38)), p: T.material(tint(P.hole, 0.7)), pp: T.material(tint(P.hole, 0.42)),
+      ox: T.material(0xa5d8ff, { transparent: true, opacity: 0.85, roughness: 0.2 }), poly: T.material(0x9c6b44, { roughness: 0.5 }),
+      met: T.material(0xc0c6cc, { metalness: 0.7, roughness: 0.35, transparent: true, opacity: 0.6 }), drain: T.material(0xaab1b8, { metalness: 0.7, roughness: 0.35 }),
+    };
+    const box = (g, x0, x1, y0, y1, m, dz) => { const mesh = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, dz || DZ), m); mesh.position.set((x0 + x1) / 2, (y0 + y1) / 2, 0); g.add(mesh); return mesh; };
+    // 한 층을 x 구간으로 나눠 채운다: segs = [[x0,x1,mat],...]
+    const row = (g, y0, y1, segs) => segs.forEach(([a, b, m]) => b - a > 1e-4 && box(g, a, b, y0, y1, m));
+    const metal = [];
+    /* ---- 트렌치 4셀 (피치 1.5 µm → 1.0) ---- */
+    const gT = new THREE.Group(); T.scene.add(gT);
+    const TR = [-1.5, -0.5, 0.5, 1.5], TW = 0.32, OXW = 0.06, TB = 2.0;
+    box(gT, -2, 2, -0.08, 0, M.drain); box(gT, -2, 2, 0, 0.5, M.nn); box(gT, -2, 2, 0.5, TB, M.n);
+    const between = (y0, y1, fill) => { const segs = []; let x = -2; TR.forEach((c) => { segs.push([x, c - TW / 2, fill]); x = c + TW / 2; }); segs.push([x, 2, fill]); row(gT, y0, y1, segs); };
+    between(TB, 2.4, M.n); between(2.4, 2.85, M.p);
+    { const segs = []; let x = -2; TR.forEach((c, i) => { const l = c - TW / 2; if (i === 0) { segs.push([x, l - 0.2, M.pp], [l - 0.2, l, M.nn]); } else { segs.push([x, x + 0.2, M.nn], [x + 0.2, l - 0.2, M.pp], [l - 0.2, l, M.nn]); } x = c + TW / 2; }); segs.push([x, x + 0.2, M.nn], [x + 0.2, 2, M.pp]); row(gT, 2.85, 3.05, segs); }
+    TR.forEach((c) => { box(gT, c - TW / 2, c - TW / 2 + OXW, TB, 3.05, M.ox); box(gT, c + TW / 2 - OXW, c + TW / 2, TB, 3.05, M.ox); box(gT, c - TW / 2 + OXW, c + TW / 2 - OXW, TB, TB + 0.06, M.ox); box(gT, c - TW / 2 + OXW, c + TW / 2 - OXW, TB + 0.06, 2.97, M.poly); box(gT, c - TW / 2 + OXW, c + TW / 2 - OXW, 2.97, 3.05, M.ox); box(gT, c - 0.24, c + 0.24, 3.05, 3.2, M.ox); });
+    { const segs = []; let x = -2; TR.forEach((c) => { segs.push([x, c - 0.24, M.met]); x = c + 0.24; }); segs.push([x, 2, M.met]); segs.forEach(([a, b, m]) => metal.push(box(gT, a, b, 3.05, 3.2, m))); metal.push(box(gT, -2, 2, 3.2, 3.45, M.met)); }
+    const depT = new THREE.Mesh(new THREE.BoxGeometry(4.02, 1, DZ + 0.03), new THREE.MeshBasicMaterial({ color: new THREE.Color(P.field), transparent: true, opacity: 0.32, depthWrite: false }));
+    gT.add(depT);
+    /* ---- 슈퍼정션 4피치 (피치 5 µm → 1.0) ---- */
+    const gS = new THREE.Group(); T.scene.add(gS); gS.visible = false;
+    const PC = [-1.25, -0.25, 0.75, 1.75];
+    box(gS, -2, 2, -0.08, 0, M.drain); box(gS, -2, 2, 0, 0.5, M.nn);
+    { const segs = []; for (let k = 0; k < 4; k++) { const x0 = -2 + k; segs.push([x0, x0 + 0.5, M.n], [x0 + 0.5, x0 + 1, M.p]); } row(gS, 0.5, 2.6, segs); }
+    const pb = (c) => [Math.max(-2, c - 0.4), Math.min(2, c + 0.4)];
+    { const segs = []; let x = -2; PC.forEach((c) => { const [a, b] = pb(c); segs.push([x, a, M.n], [a, b, M.p]); x = b; }); if (x < 2) segs.push([x, 2, M.n]); row(gS, 2.6, 2.88, segs); }
+    { const segs = []; let x = -2; PC.forEach((c) => { const [a, b] = pb(c); segs.push([x, a, M.n]); const full = b >= c + 0.399, L = [[a, a + 0.05, M.p], [a + 0.05, a + 0.2, M.nn], [a + 0.2, full ? c + 0.2 : b, M.pp]]; if (full) L.push([b - 0.2, b - 0.05, M.nn], [b - 0.05, b, M.p]); L.forEach((s) => { if (s[1] > s[0]) segs.push([s[0], Math.min(s[1], 2), s[2]]); }); x = b; }); if (x < 2) segs.push([x, 2, M.n]); row(gS, 2.88, 3.0, segs); }
+    const gates = []; for (let k = 0; k < 4; k++) { const L = k === 0 ? -2 : pb(PC[k - 1])[1] - 0.25, R = pb(PC[k])[0] + 0.25; if (R > L + 0.05) gates.push([Math.max(-2, L), R]); }
+    gates.forEach(([a, b]) => { box(gS, a, b, 3.0, 3.04, M.ox); box(gS, a, b, 3.04, 3.2, M.poly); box(gS, a - 0.04 < -2 ? -2 : a - 0.04, b + 0.04, 3.2, 3.3, M.ox); });
+    { let x = -2; const segs = []; gates.forEach(([a, b]) => { if (a - 0.04 > x + 0.01) segs.push([x, a - 0.04]); x = b + 0.04; }); if (x < 2) segs.push([x, 2]); segs.forEach(([a, b]) => metal.push(box(gS, a, b, 3.0, 3.3, M.met))); metal.push(box(gS, -2, 2, 3.3, 3.55, M.met)); }
+    const depMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(P.field), transparent: true, opacity: 0.32, depthWrite: false });
+    const depS = []; for (let k = 0; k < 7; k++) { const m = new THREE.Mesh(new THREE.BoxGeometry(1, 2.1, DZ + 0.03), depMat); m.position.set(-1.5 + k * 0.5, 1.55, 0); gS.add(m); depS.push(m); }
+    const depSfull = new THREE.Mesh(new THREE.BoxGeometry(4.02, 2.1, DZ + 0.03), depMat); depSfull.position.set(0, 1.55, 0); gS.add(depSfull);
+    /* ---- 라벨 ---- */
+    const LT = [T.label("n⁺ 기판 (드레인)", [0, 0.25, DZ / 2 + 0.05]), T.label("n⁻ 드리프트", [0, 1.1, DZ / 2 + 0.05]), T.label("p 바디", [-1.0, 2.62, DZ / 2 + 0.05]), T.label("트렌치 게이트", [0.5, 3.75, 0])];
+    const LS = [T.label("n⁺ 기판 (드레인)", [0, 0.25, DZ / 2 + 0.05]), T.label("n 기둥", [-1.75, 1.6, DZ / 2 + 0.05]), T.label("p 기둥", [-1.25, 1.0, DZ / 2 + 0.05]), T.label("평면 게이트", [0.25, 3.8, 0])];
+    LS.forEach((L) => L.setVisible(false));
+    /* ---- 전자 ---- */
+    const NE = 260, pos = new Float32Array(NE * 3), eg = new THREE.BufferGeometry(); eg.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    const elec = new THREE.Points(eg, new THREE.PointsMaterial({ color: new THREE.Color(P.electron), size: 0.09, transparent: true, opacity: 0.95, depthWrite: false })); T.scene.add(elec);
+    const pathsT = [], pathsS = [];
+    TR.forEach((c) => [-1, 1].forEach((sgn) => { const x = c + sgn * (TW / 2 + 0.025); if (x < -1.98 || x > 1.98) return; pathsT.push((u) => [[x, 3.0], [x, TB + 0.05], [x + sgn * 0.12, TB - 0.25], [x + sgn * (0.15 + 0.3 * u), 1.0], [x + sgn * (0.15 + 0.32 * u), 0.3]]); }));
+    PC.forEach((c) => { const [a, b] = pb(c); [[a + 0.12, a - 0.03, -1], [b - 0.12, b + 0.03, 1]].forEach(([xs, xe, sgn]) => { if (xs < -1.98 || xs > 1.98 || xe < -1.98 || xe > 1.98) return; const xp = Math.floor(xe + 2) - 2 + 0.25; pathsS.push((u) => [[xs, 2.96], [xe, 2.96], [xe + sgn * 0.05, 2.6], [xp + (u - 0.5) * 0.36, 2.0], [xp + (u - 0.5) * 0.36, 0.3]]); }); });
+    const part = []; const spawn = (i, paths) => { part[i] = { k: Math.floor(Math.random() * paths.length), u: Math.random(), s: Math.random() }; };
+    let cur = "tr";
+    for (let i = 0; i < NE; i++) spawn(i, pathsT);
+    function along(pts, s) { const L = []; let tot = 0; for (let i = 1; i < pts.length; i++) { const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); L.push(d); tot += d; } let r = s * tot; for (let i = 0; i < L.length; i++) { if (r <= L[i]) { const f = r / L[i]; return [pts[i][0] + f * (pts[i + 1][0] - pts[i][0]), pts[i][1] + f * (pts[i + 1][1] - pts[i][1])]; } r -= L[i]; } return pts[pts.length - 1]; }
+    const gty = PW.seg("m3-type", (v) => { cur = v; gT.visible = v === "tr"; gS.visible = v === "sj"; LT.forEach((L) => L.setVisible(v === "tr")); LS.forEach((L) => L.setVisible(v === "sj")); for (let i = 0; i < NE; i++) spawn(i, v === "tr" ? pathsT : pathsS); upd(); });
+    const gst = PW.seg("m3-state", upd);
+    const gv = PW.range("m3-v", (v) => v + " %", upd);
+    ["m3-flow", "m3-dep", "m3-met"].forEach((id) => $(id).addEventListener("change", upd));
+    $("m3-rot").addEventListener("change", (e) => { if (T.controls) T.controls.autoRotate = e.target.checked; });
+    const TRN = NDopt(100), TRW = Wopt(TRN);
+    const SJd = { N: 8e15, wn: 2.5e-4, t: 40e-4 }; SJd.Vdep = Q * SJd.N * SJd.wn * SJd.wn / (4 * ES) - 0.7;
+    function upd() {
+      const on = gst() === "on", frac = gv() / 100, showDep = $("m3-dep").checked && !on;
+      elec.visible = on && $("m3-flow").checked;
+      metal.forEach((m) => { m.visible = $("m3-met").checked; });
+      if (cur === "tr") {
+        const V = frac * 100, W = TRW * Math.sqrt(Math.max(0, V) / 100), d = Math.max(0.02, 1.9 * W / TRW);
+        depT.visible = showDep; depT.scale.y = d; depT.position.y = 2.4 - d / 2;
+        PW.stat("m3-vv", on ? "≈ 0.1 V (온)" : V.toFixed(0) + " V / 100 V");
+        PW.stat("m3-w", on ? "—" : (W * 1e4).toFixed(2) + " µm / 드리프트 " + (TRW * 1e4).toFixed(1) + " µm");
+        PW.stat("m3-e", on ? "—" : (V > 0 ? sci(2 * V / Math.max(W, 1e-6), 2) + " V/cm" : "0"));
+        PW.stat("m3-path", "소스 → 홈 벽 채널 → 퍼짐 → 기판");
+      } else {
+        const V = frac * 650, full = V >= SJd.Vdep, x = full ? SJd.wn / 2 : (SJd.wn / 2) * Math.sqrt((V + 0.7) / (SJd.Vdep + 0.7));
+        depS.forEach((m) => { m.visible = showDep && !full; m.scale.x = 2 * x / 5e-4; });
+        depSfull.visible = showDep && full;
+        PW.stat("m3-vv", on ? "≈ 0.3 V (온)" : V.toFixed(0) + " V / 650 V");
+        PW.stat("m3-w", on ? "—" : full ? "기둥 전체 공핍 (V_dep ≈ " + SJd.Vdep.toFixed(0) + " V)" : "옆 " + (x * 1e4).toFixed(2) + " µm / 기둥 반폭 1.25 µm");
+        const Elat = Q * SJd.N * x / ES, Ev = full ? V / SJd.t : 0;
+        PW.stat("m3-e", on ? "—" : "수직 " + (Ev > 0 ? sci(Ev, 2) : "0") + " · 옆 " + sci(Elat, 2) + " V/cm");
+        PW.stat("m3-path", "소스 → 표면 채널 → n 기둥 → 기판");
+      }
+    }
+    upd();
+    T.onFrame((dt) => {
+      if (!elec.visible) return;
+      const paths = cur === "tr" ? pathsT : pathsS;
+      for (let i = 0; i < NE; i++) {
+        const q = part[i]; q.s += dt * (0.18 + 0.05 * (i % 5));
+        if (q.s >= 1) { spawn(i, paths); part[i].s = 0; }
+        const pt = along(paths[part[i].k](part[i].u), part[i].s);
+        pos[i * 3] = pt[0]; pos[i * 3 + 1] = pt[1]; pos[i * 3 + 2] = DZ / 2 + 0.04;
+      }
+      eg.attributes.position.needsUpdate = true;
+    });
+  })();
+})();
+</script>
+</body>
+</html>

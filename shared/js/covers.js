@@ -45,7 +45,7 @@
       range(6).forEach((i) => { s += `<rect x="${30 + i * 26}" y="22" width="6" height="8" fill="${W}" fill-opacity=".5"/>`; });
       return svg(s);
     },
-    // 이하 fab·process·etch·cmp·film·plasma는 SemiBooks에서 만들어 books 포털과 함께 쓰는 표지다. 움직임은 .fb-·.pr-·.et- 클래스가 맡고,
+    // 이하 fab·process·etch·cmp·film·plasma·power는 SemiBooks에서 만들어 books 포털과 함께 쓰는 표지다. 움직임은 .fb-·.pr-·.et- 클래스가 맡고,
     // 애니메이션이 없을 때(동작 줄이기)도 그 자체로 완성된 그림이 되도록 기본 도형을 첫 프레임과 같게 그린다.
     // 팹 인프라 단면: FFU가 내려보낸 공기는 바닥 구멍을 지나 양쪽 샤프트를 타고 천장으로 돌아가고,
     // 천장 레일의 OHT는 FOUP을 장비 앞 로드 포트에 내려놓는다. 바닥 아래 배관은 초순수와 가스를 장비로 올려 보낸다.
@@ -195,6 +195,24 @@
       [72, 96, 120, 144, 166].forEach((x, k) => {
         s += `<rect class="pl-ion" style="animation-delay:-${(k * 0.27).toFixed(2)}s" x="${x - 0.8}" y="80" width="1.6" height="7" rx=".8" fill="#ffd8a8"/>`;
       });
+      return svg(s);
+    },
+    // 전력 반도체: 사인파 기준을 따라 폭이 변하는 PWM 펄스(위상 전압)가 차례로 켜지고, 그 위를 부드러운 부하 전류가 지난다.
+    // 왼쪽 아래는 스위치(MOSFET) 기호, 오른쪽 아래는 냉각판 위 다이 세 개다.
+    power() {
+      let s = `<path d="M14 66 H192" stroke="${W}" stroke-opacity=".3" stroke-dasharray="2 3"/>`;
+      const n = 14, x0 = 16, p = 12.5;
+      for (let k = 0; k < n; k++) {
+        const d = 0.5 * (1 + 0.86 * Math.sin((2 * Math.PI * (k + 0.5)) / n)), w = Math.max(1.2, d * p), x = x0 + k * p + (p - w) / 2;
+        s += `<rect class="pw-sw" style="animation-delay:${(k * 0.1).toFixed(1)}s" x="${x.toFixed(1)}" y="30" width="${w.toFixed(1)}" height="36" fill="${W}" fill-opacity=".34"/>`;
+      }
+      let d = "";
+      for (let i = 0; i <= 60; i++) { const x = x0 + (i / 60) * n * p, y = 48 - 24 * Math.sin((2 * Math.PI * i) / 60 - 0.45); d += (i ? " L" : "M") + x.toFixed(1) + " " + y.toFixed(1); }
+      s += `<path class="pw-i" d="${d}" fill="none" stroke="#ffd8a8" stroke-width="2.4" stroke-linecap="round"/>`;
+      s += `<path d="M22 96 V122 M28 98 V120 M28 102 H40 V92 M28 116 H40 V126 M28 109 H40" fill="none" stroke="${W}" stroke-opacity=".75" stroke-width="1.6"/><path d="M34 106 l5 3 -5 3z" fill="${W}" fill-opacity=".75"/>`;
+      s += `<rect x="96" y="114" width="96" height="7" rx="1.5" fill="${W}" fill-opacity=".45"/>`;
+      [104, 134, 164].forEach((x, k) => { s += `<rect class="cv-pulse" style="animation-delay:${(k * 0.4).toFixed(1)}s" x="${x}" y="104" width="18" height="10" rx="1" fill="#ffc9a8" fill-opacity=".55"/>`; });
+      s += `<path d="M150 82 l-8 12 h6 l-3 10 10 -14 h-6 z" fill="${W}" fill-opacity=".8"/>`;
       return svg(s);
     },
     // 인과적 어텐션 히트맵
