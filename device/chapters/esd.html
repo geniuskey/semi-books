@@ -1,0 +1,1117 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and DeviceBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESD와 래치업 · DeviceBook</title>
+<meta name="description" content="정전기 방전에서 칩을 지키는 소자와 회로. HBM·CDM·IEC 61000-4-2 펄스, TLP 측정과 운쉬–벨 관계, GGNMOS 스냅백과 멀티 핑거 균일 턴온, 실리사이드 블록, RC 트리거 레일 클램프, CDM 전원 영역 경계 손상, CMOS 래치업과 JESD78, 시스템 수준 ESD와 TVS 공동 설계, 고속 I/O 용량 예산을 시뮬레이터로 익힌다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="../js/semi.js"></script>
+<style>
+.cv2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.cv2 > div { min-width: 0; position: relative; }
+.verdict { font-size: 14px; line-height: 1.6; color: var(--text-dim); min-height: 1.6em; }
+.verdict b { color: var(--text); }
+.ctrl[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+</style>
+<!-- Cloudflare Web Analytics -->
+<!-- End Cloudflare Web Analytics -->
+<link rel="stylesheet" href="../../shared/css/book-shell.css">
+<script defer src="../../shared/js/book-shell.js" data-book="device"></script>
+</head>
+<body data-chapter="esd">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 17</div>
+    <h1>ESD와 래치업</h1>
+    <p class="lead">16장에서 정전기 방전(ESD)이 두께 2 nm 산화막을 순식간에 깨뜨린다는 것과 보호 소자의 설계 창을 맛보았다. 실제 칩에서 ESD 설계는 입출력 패드 하나가 아니라 수백 개 핀과 여러 전원 영역을 잇는 <b>네트워크</b>의 문제다. 1.5 kΩ을 지나 오는 사람의 손, 패키지 자체에 쌓였다가 1 ns 안에 빠져나가는 전하, 완제품 커넥터에 꽂히는 8 kV 정전기 건은 시간 규모도 전류도 다르다. 이 장은 그 펄스들을 재고(TLP), 견디는 소자를 설계하고(스냅백·SCR·RC 클램프), 칩 전체의 방전 경로를 짜고, 같은 기생 바이폴라가 거꾸로 칩을 태우는 래치업까지 다룬다.</p>
+    <ul class="objectives">
+      <li>HBM·CDM·시스템 수준(IEC 61000-4-2) 펄스의 등가 회로와 시간·전류 규모를 비교하고, 부품 등급과 업계 권장 목표를 안다.</li>
+      <li>TLP로 보호 소자의 V<sub>t1</sub>·V<sub>h</sub>·R<sub>on</sub>·I<sub>t2</sub>를 재고, 운쉬–벨 관계로 펄스 폭에 따른 파괴 한계를 어림한다.</li>
+      <li>GGNMOS 스냅백을 애벌런치 증배와 기생 바이폴라로 설명하고, 멀티 핑거 균일 턴온 조건과 실리사이드 블록의 역할을 계산한다.</li>
+      <li>이중 다이오드, RC 트리거 레일 클램프, 전원 영역 간 연결로 칩 전체 ESD 네트워크를 짜고 CDM 내부 손상 경로를 막는다.</li>
+      <li>CMOS 래치업의 조건(β 곱, 션트 저항, 유지 전압)과 JESD78 시험, 가드 링·탭 간격 대책을 정량적으로 이해한다.</li>
+      <li>시스템 수준 ESD에서 TVS와 칩 보호의 공동 설계(SEED), 고속 I/O의 용량 예산, 첨단 공정·칩렛의 ESD 과제를 안다.</li>
+    </ul>
+  </header>
+
+  <section id="events">
+    <h2>ESD 사건과 시험 모델</h2>
+    <p>ESD는 '무엇이 대전되었는가'에 따라 세 부류로 나뉜다. 대전된 <b>사람이나 도구</b>가 칩 핀을 만지면 사람 몸의 용량(약 100 pF)이 피부·접촉 저항(약 1.5 kΩ)을 지나 방전한다. 이것이 <span class="term">HBM</span><span class="en">(Human Body Model)</span>이다. 칩 <b>자신</b>이 운반 튜브를 미끄러지거나 핸들러에서 마찰·유도로 대전된 뒤 접지된 금속에 핀 하나가 닿으면, 패키지와 다이에 쌓인 전하가 저항이 거의 없는 경로로 1 ns 안에 빠져나간다. 이것이 <span class="term">CDM</span><span class="en">(Charged Device Model)</span>이다. 공장 자동화로 사람이 칩을 만질 일이 줄면서 오늘날 현장 ESD 불량의 대부분은 CDM형이다. 마지막으로 칩이 보드에 실장된 <b>완제품</b>의 커넥터나 단추에 사용자의 손이 닿는 경우가 <span class="term">시스템 수준 ESD</span><span class="en">(System-level ESD, IEC 61000-4-2)</span>다. 사람은 같지만 손에 든 금속 열쇠처럼 저항이 낮은 경로를 가정하므로 정점 전류가 HBM보다 훨씬 크다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 250" role="img" aria-label="HBM, CDM, IEC 61000-4-2 시험의 등가 회로">
+        <defs><marker id="e17-a1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker></defs>
+        <g transform="translate(14,10)">
+          <rect x="0" y="0" width="236" height="228" rx="10" class="f-surface"/>
+          <text x="118" y="22" text-anchor="middle" class="lbl-b">HBM (JS-001)</text>
+          <path d="M40 60 V100 M40 112 V170 M40 60 H90 M150 60 H196 V100 M40 170 H196 V140" class="s-line"/>
+          <path d="M25 100 H55 M25 112 H55" stroke="var(--text)" stroke-width="2"/>
+          <text x="62" y="110" class="t-mono">100 pF</text>
+          <rect x="90" y="52" width="60" height="16" fill="none" stroke="var(--text-dim)"/><text x="120" y="46" text-anchor="middle" class="t-mono">1.5 kΩ</text>
+          <rect x="176" y="100" width="40" height="40" rx="4" class="f-acc-soft"/><text x="196" y="124" text-anchor="middle" class="lbl">칩</text>
+          <path d="M60 80 Q120 92 182 96" fill="none" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#e17-a1)"/>
+          <text x="118" y="196" text-anchor="middle" class="lbl-dim">대전된 사람 → 핀 → 접지된 핀</text>
+          <text x="118" y="214" text-anchor="middle" class="lbl-dim">감쇠 약 150 ns · 수 kV에 수 A 미만</text>
+        </g>
+        <g transform="translate(272,10)">
+          <rect x="0" y="0" width="236" height="228" rx="10" class="f-surface"/>
+          <text x="118" y="22" text-anchor="middle" class="lbl-b">CDM (JS-002)</text>
+          <rect x="30" y="150" width="176" height="12" class="f-metal"/><text x="118" y="178" text-anchor="middle" class="lbl-dim">필드 판 (+V로 유도 대전)</text>
+          <rect x="70" y="118" width="96" height="26" rx="3" class="f-acc-soft"/><text x="118" y="136" text-anchor="middle" class="lbl">칩 (뒤집어 놓음)</text>
+          <path d="M100 118 V112 M136 118 V112" class="s-line"/>
+          <path d="M136 112 V60" class="s-dash"/><rect x="128" y="46" width="16" height="14" class="f-metal"/><text x="152" y="56" class="lbl-dim">포고 핀 → 1 Ω → 접지</text>
+          <path d="M150 96 Q170 80 150 64" fill="none" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#e17-a1)"/>
+          <text x="40" y="96" class="t-mono">C_pkg</text><text x="40" y="110" class="lbl-dim">수~수십 pF</text>
+          <text x="118" y="214" text-anchor="middle" class="lbl-dim">상승 수백 ps · 폭 약 1 ns · 수 A</text>
+        </g>
+        <g transform="translate(530,10)">
+          <rect x="0" y="0" width="236" height="228" rx="10" class="f-surface"/>
+          <text x="118" y="22" text-anchor="middle" class="lbl-b">IEC 61000-4-2 (완제품)</text>
+          <path d="M40 60 V100 M40 112 V170 M40 60 H90 M150 60 H186 M40 170 H196" class="s-line"/>
+          <path d="M25 100 H55 M25 112 H55" stroke="var(--text)" stroke-width="2"/>
+          <text x="62" y="110" class="t-mono">150 pF</text>
+          <rect x="90" y="52" width="60" height="16" fill="none" stroke="var(--text-dim)"/><text x="120" y="46" text-anchor="middle" class="t-mono">330 Ω</text>
+          <path d="M186 60 L206 70 L186 80 Z" class="f-warn-soft"/><text x="206" y="98" text-anchor="middle" class="lbl-dim">ESD 건</text>
+          <rect x="150" y="120" width="70" height="40" rx="4" class="f-ok-soft"/><text x="185" y="138" text-anchor="middle" class="lbl">보드</text><text x="185" y="153" text-anchor="middle" class="lbl-dim">TVS + 칩</text>
+          <text x="118" y="196" text-anchor="middle" class="lbl-dim">접촉 8 kV에서 첫 정점 약 30 A</text>
+          <text x="118" y="214" text-anchor="middle" class="lbl-dim">상승 0.6~1 ns · 꼬리 약 100 ns</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 17-1.</b> 세 가지 ESD 시험의 등가 회로. HBM은 사람 몸을 100 pF·1.5 kΩ으로, CDM은 필드 판 위에서 유도 대전시킨 칩이 포고 핀으로 방전하는 상황으로, IEC 61000-4-2는 150 pF·330 Ω 건으로 완제품을 때리는 상황으로 흉내 낸다. HBM·CDM은 <b>부품</b>(칩 단독)의 인증, IEC는 <b>시스템</b>(보드·완제품)의 인증이다.</figcaption>
+    </figure>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>모델</th><th>등가 회로</th><th>상승 시간</th><th>지속 시간</th><th>정점 전류</th><th>규격·쓰임</th></tr></thead>
+        <tbody>
+          <tr><td>HBM</td><td>100 pF, 1.5 kΩ</td><td>2~10 ns</td><td>감쇠 130~170 ns</td><td>V/1.5 kΩ (2 kV에서 약 1.3 A)</td><td>ANSI/ESDA/JEDEC JS-001. 부품 인증</td></tr>
+          <tr><td>CDM</td><td>패키지 용량 + 방전 경로 R·L</td><td>수백 ps</td><td>약 1 ns</td><td>500 V에서 수 A~10 A 남짓(패키지가 클수록 큼)</td><td>ANSI/ESDA/JEDEC JS-002. 부품 인증</td></tr>
+          <tr><td>MM <span class="en">(Machine Model)</span></td><td>200 pF, 0 Ω</td><td>—</td><td>진동 감쇠</td><td>HBM의 수 배</td><td>JEDEC JEP172가 부품 인증 폐기를 권고. 옛 데이터시트에만 남아 있다</td></tr>
+          <tr><td>IEC 61000-4-2</td><td>150 pF, 330 Ω</td><td>0.6~1 ns</td><td>약 100 ns</td><td>첫 정점 3.75 A/kV, 30 ns에서 2 A/kV, 60 ns에서 1 A/kV</td><td>완제품 내성. 접촉 2/4/6/8 kV, 기중 2/4/8/15 kV</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="formula">$$I_{HBM}(t)\approx\frac{V}{1.5\,\text{k}\Omega}\left(e^{-t/\tau_d}-e^{-t/\tau_r}\right),\ \ \tau_d\approx150\ \text{ns};\qquad L\frac{di}{dt}+Ri+\frac{1}{C_{pkg}}\int i\,dt=0,\ \ i(0)=0,\ v_C(0)=V\ \ (\text{CDM})$$
+      <div class="where">HBM은 상승 시상수 \(\tau_r\) 수 ns의 이중 지수로 근사된다. CDM은 패키지 용량 \(C_{pkg}\)가 방전 경로의 저항 \(R\)(포고 핀 1 Ω에 아크 저항이 더해져 수십 Ω)과 인덕턴스 \(L\)(약 10 nH)을 지나 방전하는 직렬 RLC다. 감쇠가 약하면 전류가 진동하고, \(C_{pkg}\)가 클수록 정점 전류와 폭이 함께 커진다. 저장 에너지 \(\tfrac12CV^2\)는 HBM 2 kV에서 0.2 mJ, CDM 500 V(4 pF)에서 0.5 µJ로 CDM이 400배 작지만, 시간이 100배 이상 짧아 순간 전력은 비슷하거나 더 크다.</div>
+    </div>
+    <p>부품의 ESD 내성은 시험 전압의 등급으로 말한다. JS-001은 HBM을 0Z(50 V 미만)부터 3B(8 kV 이상)까지, JS-002는 CDM을 C0a(125 V 미만)부터 C3(1 kV 이상)까지 나눈다. 그러면 얼마면 충분할까? 업계 협의체(Industry Council on ESD Target Levels)는 실제 현장 불량 자료를 모아 <b>표준 ESD 관리(ANSI/ESD S20.20)가 갖춰진 공장이라면 HBM 500 V, CDM 250 V면 안전하게 생산할 수 있다</b>고 결론 내렸고, 이것이 JEDEC JEP155B와 JEP157의 권장 목표다. 예전의 2 kV HBM은 보호 소자 면적과 용량만 키울 뿐 현장 불량을 줄이지 못했다. 고속 SerDes처럼 용량 한 fF가 아쉬운 핀은 그보다 낮은 등급을 받아들이고 생산 관리를 강화한다. S20.20은 HBM 100 V, CDM 200 V 수준까지의 부품을 다룰 수 있도록 작업장을 관리하는 규격이다.</p>
+
+    <div class="sim" id="sim-wf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>세 가지 ESD 펄스 비교</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="wf-cv"></canvas>
+          <div class="legend"><span><i style="background:var(--accent)"></i>HBM</span><span><i style="background:var(--bad)"></i>CDM</span><span><i style="background:var(--warn)"></i>IEC 61000-4-2</span></div>
+        </div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>강조할 모델</span><div class="seg" id="wf-m"><button data-value="hbm" class="on">HBM</button><button data-value="cdm">CDM</button><button data-value="iec">IEC</button></div></div>
+          <label class="ctrl"><span><span>시험 전압</span> <output id="wf-v-out"></output></span><input type="range" id="wf-v" min="2" max="4.18" step="0.01" value="3.3"></label>
+          <label class="ctrl" id="wf-c-c"><span><span>CDM 패키지 용량 C<sub>pkg</sub></span> <output id="wf-c-out"></output></span><input type="range" id="wf-c" min="2" max="60" step="1" value="6"></label>
+          <div class="ctrl"><span>시간 축</span><div class="seg" id="wf-x"><button data-value="log" class="on">로그</button><button data-value="lin">선형 (0~200 ns)</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">정점 전류</span><span class="v" id="wf-o-i">—</span></div>
+        <div class="stat"><span class="k">정점 시각</span><span class="v" id="wf-o-t">—</span></div>
+        <div class="stat"><span class="k">이동 전하 Q</span><span class="v" id="wf-o-q">—</span></div>
+        <div class="stat"><span class="k">저장 에너지 ½CV²</span><span class="v" id="wf-o-e">—</span></div>
+      </div>
+      <div class="sim-note">세 모델을 같은 전압으로 겹쳐 그린다(강조한 모델은 굵게). 해볼 것: ① 2 kV에서 HBM은 정점 약 1.3 A가 수백 ns 이어지고, CDM은 정점이 몇 배 크지만 1 ns 안에 끝난다. 로그 축에서 세 펄스의 시간 규모가 서로 열 배 이상 다르다는 것을 보라. ② C<sub>pkg</sub>를 2 pF에서 60 pF로 키우면 CDM 정점과 폭이 함께 커진다. 큰 패키지(대형 BGA)의 CDM이 어려운 이유다. ③ IEC 8 kV는 첫 정점 약 30 A다. 칩 혼자서는 감당할 수 없어 보드의 TVS가 받아야 한다. (HBM: τ<sub>r</sub> 2 ns, τ<sub>d</sub> 150 ns. CDM: R 50 Ω, L 12 nH의 RLC. IEC: 규격의 세 기준점에 맞춘 두 이중 지수의 합. 모두 단락 부하 기준 교육용 근사)</div>
+    </div>
+  </section>
+
+  <section id="tlp">
+    <h2>TLP: 보호 소자를 재는 법</h2>
+    <p>HBM 시험은 '몇 kV에서 죽었다'는 합격·불합격만 알려 줄 뿐 소자가 어떻게 동작했는지는 말해 주지 않는다. 보호 소자 설계자는 대신 <span class="term">TLP</span><span class="en">(Transmission Line Pulse)</span>를 쓴다. 충전한 동축 케이블을 방전해 폭 100 ns, 상승 수 ns의 <b>네모난</b> 전류 펄스를 만들고, 펄스 뒤쪽의 평평한 구간에서 전압과 전류를 평균해 I–V 곡선의 점 하나를 얻는다. 충전 전압을 조금씩 올리며 펄스를 반복하면 ns 시간 규모의 준정적 I–V가 그려진다. 펄스마다 사이사이에 정상 전압에서 누설 전류를 재서, 누설이 갑자기 뛰는 점을 파괴 전류 \(I_{t2}\)로 삼는다. 100 ns는 HBM 펄스의 실효 폭과 비슷하므로 경험적으로 \(V_{HBM}\approx I_{t2}\,(1.5\,\text{k}\Omega + R_{on})\)이 잘 맞는다. 펄스 폭 1~10 ns, 상승 100 ps 이하의 <span class="term">vf-TLP</span><span class="en">(very fast TLP)</span>는 CDM 시간 규모에서 소자가 얼마나 빨리 켜지는지(전압 오버슈트)를 본다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 270" role="img" aria-label="TLP 측정 구성과 보호 소자의 TLP I–V 곡선">
+        <g transform="translate(14,14)">
+          <rect x="0" y="0" width="340" height="240" rx="10" class="f-surface"/>
+          <text x="170" y="22" text-anchor="middle" class="lbl-b">TLP 측정 구성</text>
+          <rect x="16" y="60" width="62" height="34" rx="4" class="f-warn-soft"/><text x="47" y="81" text-anchor="middle" class="lbl">고압 전원</text>
+          <path d="M78 77 H100" class="s-line"/><rect x="100" y="68" width="30" height="18" fill="none" stroke="var(--text-dim)"/><text x="115" y="62" text-anchor="middle" class="lbl-dim">R 큼</text>
+          <path d="M130 77 H150" class="s-line"/>
+          <rect x="150" y="68" width="90" height="18" rx="9" class="f-acc2-soft"/><text x="195" y="81" text-anchor="middle" class="lbl">충전 케이블</text>
+          <text x="195" y="104" text-anchor="middle" class="lbl-dim">길이 → 펄스 폭 (10 m ≈ 100 ns)</text>
+          <path d="M240 77 H262 M262 77 L276 66 M276 77 H300" class="s-line"/><text x="270" y="58" text-anchor="middle" class="lbl-dim">스위치</text>
+          <rect x="300" y="62" width="28" height="40" rx="3" class="f-acc-soft"/><text x="314" y="120" text-anchor="middle" class="lbl">DUT</text>
+          <path d="M314 102 V140" class="s-line"/><path d="M304 140 H324 M308 146 H320" class="s-line"/>
+          <text x="20" y="160" class="lbl-dim">① 충전 전압 V_c로 케이블을 충전</text>
+          <text x="20" y="180" class="lbl-dim">② 스위치를 닫아 100 ns 네모 펄스를 DUT에 인가</text>
+          <text x="20" y="200" class="lbl-dim">③ 펄스 70~90 % 구간의 V·I 평균 → I–V 한 점</text>
+          <text x="20" y="220" class="lbl-dim">④ 펄스 사이에 DC 누설 측정 → 급증하면 I_t2</text>
+        </g>
+        <g transform="translate(380,14)">
+          <rect x="0" y="0" width="386" height="240" rx="10" class="f-surface"/>
+          <path d="M44 210 H370 M44 210 V24" class="s-axis"/>
+          <text x="368" y="228" text-anchor="end" class="lbl-dim">TLP 전압</text><text x="50" y="22" class="lbl-dim">TLP 전류</text>
+          <path d="M44 209 L190 204 L196 196 L124 178 L150 120 L176 64" fill="none" stroke="var(--accent)" stroke-width="2.6"/>
+          <circle cx="196" cy="196" r="4" class="f-acc"/><text x="204" y="198" class="lbl-acc">(V_t1, I_t1) 트리거</text>
+          <circle cx="124" cy="178" r="4" class="f-acc"/><text x="60" y="168" class="lbl-acc">V_h 유지</text>
+          <circle cx="176" cy="64" r="5" fill="var(--bad)"/><text x="186" y="62" class="lbl" fill="var(--bad)">(V_t2, I_t2) 열 파괴</text>
+          <text x="166" y="126" class="lbl-dim">기울기 1/R_on</text>
+          <path d="M150 64 H44" class="s-dash"/>
+          <rect x="250" y="24" width="2" height="186" fill="var(--bad)" opacity=".5"/><text x="256" y="40" class="lbl-dim">산화막 BV</text>
+          <rect x="70" y="24" width="2" height="186" fill="var(--text-faint)"/><text x="76" y="40" class="lbl-dim">1.1 V_DD</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 17-2.</b> TLP 측정 구성(왼쪽)과 스냅백 소자의 TLP I–V(오른쪽). 곡선 전체가 1.1 V<sub>DD</sub>와 보호 대상 산화막 BV 사이(설계 창)에 들어와야 하고, 목표 ESD 전류에서 I<sub>t2</sub> 아래여야 한다. 실제 장비는 감쇠기와 50 Ω 종단을 함께 써서 DUT를 50 Ω 부하선으로 구동한다.</figcaption>
+    </figure>
+    <p>파괴 전류가 펄스 폭에 따라 어떻게 바뀔까? ns 펄스 동안 열은 멀리 퍼지지 못하고 접합 근처의 작은 부피에 갇힌다. 열 확산 길이 \(\sqrt{Dt}\)가 발열 영역보다 작은 중간 시간대에서는 국소 온도가 실리콘 녹는점 근처(약 1,400 °C)에 이르는 파괴 전력이 시간의 제곱근에 반비례한다. 이것이 <span class="term">운쉬–벨 관계</span><span class="en">(Wunsch–Bell relation)</span>다.</p>
+    <div class="formula">$$\frac{P_f}{A} = \sqrt{\pi\,\kappa\,\rho\,c_p}\;\frac{T_m - T_0}{\sqrt{t}}\qquad\Longrightarrow\qquad P_f\propto t^{-1/2}$$
+      <div class="where">\(A\)는 발열 면적, \(\kappa\)·\(\rho\)·\(c_p\)는 실리콘의 열전도율·밀도·비열, \(T_m\)은 녹는점. 펄스가 100 ns에서 25 ns로 짧아지면 견디는 전력이 약 2배가 된다. 아주 짧으면(단열 영역) \(P_f\propto t^{-1}\)로 더 가팔라지고, 아주 길면 정상 상태로 일정해진다. 실제 vf-TLP의 I<sub>t2</sub>는 100 ns TLP의 대략 2~3배다. 그 시간 규모에서는 열보다 산화막 전압이 먼저 한계가 되는 경우가 많다.</div>
+    </div>
+
+    <div class="sim" id="sim-tlp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>가상 TLP 측정: 펄스를 하나씩 올려 I–V를 그리기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view cv2"><div><canvas id="tlp-cv1"></canvas></div><div><canvas id="tlp-cv2"></canvas></div></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>측정 소자</span><div class="seg" id="tlp-d"><button data-value="dio">다이오드 (순방향)</button><button data-value="gg" class="on">GGNMOS</button><button data-value="scr">LVTSCR</button></div></div>
+          <div class="ctrl"><span>펄스</span><div class="seg" id="tlp-p"><button data-value="tlp" class="on">TLP 100 ns</button><button data-value="vf">vf-TLP 5 ns</button></div></div>
+          <label class="ctrl"><span><span>소자 폭 W</span> <output id="tlp-w-out"></output></span><input type="range" id="tlp-w" min="20" max="400" step="10" value="100"></label>
+          <div class="btn-row"><button class="btn" id="tlp-one">펄스 하나</button><button class="btn" id="tlp-run">자동 스윕</button><button class="btn" id="tlp-reset">초기화</button></div>
+          <div class="verdict" id="tlp-vd"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">V<sub>t1</sub> (측정)</span><span class="v" id="tlp-o-t1">—</span></div>
+        <div class="stat"><span class="k">V<sub>h</sub> / R<sub>on</sub></span><span class="v" id="tlp-o-h">—</span></div>
+        <div class="stat"><span class="k">I<sub>t2</sub></span><span class="v" id="tlp-o-t2">—</span></div>
+        <div class="stat"><span class="k">HBM 환산</span><span class="v" id="tlp-o-hbm">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 측정한 TLP I–V 점과 마지막 펄스의 50 Ω 부하선(점선). 오른쪽: 펄스마다 잰 DC 누설 전류. 해볼 것: ① GGNMOS에서 자동 스윕을 돌려 V<sub>t1</sub>에서 전압이 뚝 떨어지는 스냅백과, 누설이 갑자기 뛰는 I<sub>t2</sub>를 찾는다. ② W를 두 배로 하면 I<sub>t2</sub>와 HBM 환산값이 두 배가 된다. 보호 능력은 면적으로 산다. ③ LVTSCR은 유지 전압이 약 1.5 V로 낮고 단위 폭당 I<sub>t2</sub>가 커서 면적 효율이 가장 좋다. 대신 V<sub>h</sub> &lt; V<sub>DD</sub>라 래치업에 주의해야 한다. ④ vf-TLP로 바꾸면 I<sub>t2</sub>는 커지지만 트리거 순간의 전압 오버슈트가 생긴다. SCR은 켜지는 데 시간이 걸려 오버슈트가 특히 크다. CDM에서 SCR이 불리한 이유다. (교육용 모델. 단위 폭당 R<sub>on</sub>·I<sub>t2</sub>: 다이오드 250 Ω·µm·20 mA/µm, GGNMOS 600 Ω·µm·5 mA/µm, LVTSCR 150 Ω·µm·30 mA/µm. vf-TLP I<sub>t2</sub>는 2.5배로 둔다)</div>
+    </div>
+  </section>
+
+  <section id="snapback">
+    <h2>GGNMOS 스냅백의 물리</h2>
+    <p>게이트·소스·바디를 모두 접지한 NMOS(<span class="term">GGNMOS</span><span class="en">(Grounded-Gate NMOS)</span>)는 I/O 패드 보호의 오랜 일꾼이다. 패드에 양의 ESD 펄스가 오면 채널은 꺼져 있으므로 드레인–바디 접합이 역바이어스되어 전압이 오른다. 접합 전계가 애벌런치 임계에 이르면 충돌 이온화로 전자–정공 쌍이 생긴다(14장의 이온화 적분). 전자는 드레인으로 빠지고 정공은 p 기판을 지나 바디 접촉으로 흘러가는데, 그 길에 있는 기판 저항 \(R_{sub}\)에서 전압이 떨어진다. 소스 아래 기판 전위가 약 0.7 V 오르면 n⁺ 소스–p 기판 접합이 순방향으로 켜진다. 소스(이미터)–기판(베이스)–드레인(컬렉터)이 이루는 <b>기생 수평 npn</b>이 켜지는 순간이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 270" role="img" aria-label="GGNMOS 단면과 기생 npn 바이폴라">
+        <defs><marker id="e17-a3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--hole)"/></marker><marker id="e17-a4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--electron)"/></marker></defs>
+        <g transform="translate(20,20)">
+          <rect x="0" y="60" width="500" height="170" class="f-p" opacity=".55"/>
+          <text x="20" y="220" class="lbl">p 기판 (바디)</text>
+          <rect x="30" y="60" width="70" height="30" class="f-p"/><text x="65" y="80" text-anchor="middle" class="lbl">p⁺ 탭</text>
+          <rect x="150" y="60" width="100" height="36" class="f-n"/><text x="200" y="82" text-anchor="middle" class="lbl">n⁺ 소스</text>
+          <rect x="330" y="60" width="120" height="36" class="f-n"/><text x="390" y="82" text-anchor="middle" class="lbl">n⁺ 드레인</text>
+          <rect x="250" y="48" width="80" height="6" class="f-ox"/><rect x="250" y="30" width="80" height="18" class="f-metal"/><text x="290" y="24" text-anchor="middle" class="lbl-dim">게이트 (접지)</text>
+          <path d="M65 60 V10 M200 60 V10 M290 30 V10 M65 10 H290" class="s-line"/><text x="160" y="6" text-anchor="middle" class="lbl-dim">GND</text>
+          <path d="M390 60 V10" class="s-line"/><circle cx="390" cy="10" r="5" class="f-acc"/><text x="402" y="14" class="lbl-acc">패드 (+ESD)</text>
+          <circle cx="332" cy="98" r="10" fill="none" stroke="var(--bad)" stroke-width="2"/><text x="352" y="122" class="lbl" fill="var(--bad)">① 애벌런치</text>
+          <path d="M326 108 Q240 170 90 96" fill="none" stroke="var(--hole)" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#e17-a3)"/>
+          <text x="120" y="160" class="lbl-h">② 정공 전류가 R_sub를 지나며 V_B 상승</text>
+          <path d="M240 100 Q290 128 334 100" fill="none" stroke="var(--electron)" stroke-width="2.4" marker-end="url(#e17-a4)"/>
+          <text x="232" y="138" class="lbl-e">③ 소스 접합이 켜져 npn 동작</text>
+        </g>
+        <g transform="translate(560,30)">
+          <rect x="0" y="0" width="200" height="220" rx="10" class="f-surface"/>
+          <text x="100" y="20" text-anchor="middle" class="lbl-b">등가 회로</text>
+          <path d="M100 40 V70 M100 150 V190 M70 110 H86 M100 70 L86 92 V128 L100 150" class="s-line"/>
+          <path d="M86 92 V128" stroke="var(--text)" stroke-width="3"/>
+          <text x="108" y="50" class="lbl-dim">패드 (컬렉터)</text><text x="108" y="196" class="lbl-dim">GND (이미터)</text>
+          <path d="M70 110 V170 M70 170 H100" class="s-line"/><rect x="62" y="130" width="16" height="30" fill="none" stroke="var(--text-dim)"/><text x="20" y="150" class="t-mono">R_sub</text>
+          <path d="M140 60 V170" class="s-dash"/><text x="146" y="118" class="lbl-dim">(M−1)·I</text><text x="146" y="134" class="lbl-dim">애벌런치</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 17-3.</b> GGNMOS 단면(왼쪽)과 등가 회로(오른쪽). ① 드레인 접합 애벌런치가 만든 정공이 ② 기판 저항 R<sub>sub</sub>를 지나 바디 탭으로 가며 소스 아래 전위를 올리고, ③ n⁺ 소스–p 기판 접합이 켜지면 기생 npn이 큰 전류를 흘린다. 탭이 멀수록 R<sub>sub</sub>가 커서 적은 애벌런치 전류로도 켜진다(낮은 I<sub>t1</sub>).</figcaption>
+    </figure>
+    <p>일단 npn이 켜지면 드레인 접합은 더 이상 혼자 애벌런치로 전류를 만들 필요가 없다. 이미터가 주입한 전자가 컬렉터 접합에서 증배되어 그 일부가 다시 베이스 전류가 되므로, 증배율 \(M\)이 조금만 1보다 커도 동작이 유지된다. 그래서 전압이 \(V_{t1}\)에서 \(V_h\)로 '뒤로 꺾인다'. 이것이 <span class="term">스냅백</span><span class="en">(Snapback)</span>이다. 11장 BJT의 \(BV_{CEO}\)와 같은 물리다.</p>
+    <div class="formula">$$M(V)=\frac{1}{1-(V/BV_j)^{n}},\qquad \text{트리거: } (M-1)\,I_{gen}\,R_{sub}\approx 0.7\ \text{V},\qquad \text{유지: } \alpha M = 1\ \Rightarrow\ V_h\approx \frac{BV_j}{(\beta+1)^{1/n}}$$
+      <div class="where">밀러의 경험식에서 \(BV_j\)는 드레인 접합 항복 전압, \(n\)은 3~6. 트리거 전압 \(V_{t1}\)은 \(BV_j\) 근처이고, 기판 저항이 클수록 트리거 전류 \(I_{t1}\)이 작아진다. 유지 전압은 기생 npn의 이득 \(\beta\)(게이트 길이가 짧을수록 큼)가 클수록 낮아진다. 켜진 뒤의 기울기는 드레인·소스 확산 저항과 콘택이 정하는 \(R_{on}\)이고, 전류 밀도가 높아져 국부 온도가 녹는점에 이르면 2차 항복(\(I_{t2}\))이 일어난다.</div>
+    </div>
+
+    <div class="sim" id="sim-gg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>GGNMOS 스냅백 곡선 만들기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gg-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>드레인 접합 BV<sub>j</sub></span> <output id="gg-bv-out"></output></span><input type="range" id="gg-bv" min="5" max="11" step="0.1" value="7.5"></label>
+          <label class="ctrl"><span><span>기생 npn 이득 β</span> <output id="gg-b-out"></output></span><input type="range" id="gg-b" min="0.3" max="1.7" step="0.02" value="0.9"></label>
+          <label class="ctrl"><span><span>기판 저항 R<sub>sub</sub></span> <output id="gg-r-out"></output></span><input type="range" id="gg-r" min="2" max="4" step="0.02" value="2.9"></label>
+          <label class="ctrl"><span><span>소자 폭 W</span> <output id="gg-w-out"></output></span><input type="range" id="gg-w" min="50" max="400" step="10" value="200"></label>
+          <div class="verdict" id="gg-vd"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">V<sub>t1</sub> / I<sub>t1</sub></span><span class="v" id="gg-o-t1">—</span></div>
+        <div class="stat"><span class="k">V<sub>h</sub> (곡선 / 식)</span><span class="v" id="gg-o-h">—</span></div>
+        <div class="stat"><span class="k">I<sub>t2</sub>에서 전압</span><span class="v" id="gg-o-t2">—</span></div>
+      </div>
+      <div class="sim-note">1.8 V I/O 패드 보호(산화막 BV 8 V)를 가정한다. 세로축은 로그 전류. 곡선은 이미터 접합 전압 V<sub>BE</sub>를 매개 변수로 '베이스 노드 전류 균형 → 필요한 M → 접합 전압'을 차례로 풀어 얻는다(스냅백은 전압의 함수로는 여러 값이므로 이렇게 풀어야 한다). 해볼 것: ① BV<sub>j</sub>를 낮추면(드레인 도핑을 높이거나 ESD 임플란트) V<sub>t1</sub>이 산화막 BV 아래로 내려온다. ② β를 키우면(짧은 게이트) V<sub>h</sub>가 낮아져 1.1 V<sub>DD</sub> 근처까지 내려간다. ③ R<sub>sub</sub>를 키우면 I<sub>t1</sub>이 작아진다. 바디 탭을 멀리 두는 이유다. (n = 4, R<sub>on</sub>·W = 600 Ω·µm, I<sub>t2</sub> = 5 mA/µm, 교육용 모델)</div>
+    </div>
+  </section>
+
+  <section id="fingers">
+    <h2>멀티 핑거와 실리사이드 블록</h2>
+    <p>HBM 2 kV를 견디려면 GGNMOS 폭이 수백 µm는 되어야 하므로 실제로는 폭 수십 µm의 핑거 여러 개를 나란히 놓는다. 문제는 핑거들이 <b>동시에</b> 켜지지 않는다는 것이다. 공정 산포로 V<sub>t1</sub>이 가장 낮은 핑거 하나가 먼저 스냅백하면 패드 전압이 V<sub>h</sub> 근처로 떨어지고, 나머지 핑거는 트리거 전압에 이르지 못해 꺼진 채 남는다. 먼저 켜진 핑거 혼자 전류를 다 받다가 I<sub>t2</sub>에서 타 버리면, 핑거를 10개 놓아도 보호 능력은 1개분이다. 모든 핑거가 켜지려면 한 핑거가 파괴되기 직전의 전압이 트리거 전압보다 높아야 한다.</p>
+    <div class="formula">$$V_{t2} = V_h + I_{t2,f}\,R_{on,f}\ \ \gt\ \ V_{t1}\qquad(\text{균일 턴온 조건})$$
+      <div class="where">\(I_{t2,f}\)·\(R_{on,f}\)는 핑거 하나의 파괴 전류와 온저항. 실리사이드가 덮인 드레인은 저항이 매우 낮아 \(V_{t2}\)가 \(V_h\)에 가깝고 조건을 만족하지 못한다. 게다가 전류가 실리사이드 표면의 좁은 길로 몰려 단위 폭당 \(I_{t2}\)도 작아진다.</div>
+    </div>
+    <p>해법은 드레인 콘택과 게이트 사이의 일부 영역에 실리사이드가 생기지 않게 막는 <span class="term">실리사이드 블록</span><span class="en">(Silicide block, SAB)</span>이다. 블록된 n⁺ 확산층(면저항 수십~100 Ω/□)이 핑거마다 직렬 <b>밸러스트 저항</b><span class="en">(Ballast resistor)</span>이 되어 V<sub>t2</sub>를 끌어올리고, 전류를 깊은 접합 쪽으로 퍼뜨려 I<sub>t2</sub>도 키운다. 드레인 콘택–게이트 간격을 넓히는 것도 같은 효과다. 다른 길은 V<sub>t1</sub>을 낮추는 것이다. 게이트를 작은 커패시터로 패드에 결합하거나(gate-coupled NMOS), 기판에 트리거 전류를 주입하면(substrate-triggered) 모든 핑거가 낮은 전압에서 함께 켜진다. 다만 지나치면 정상 동작 중 잡음에 켜질 수 있다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 220" role="img" aria-label="멀티 핑거 GGNMOS 평면도와 실리사이드 블록 영역">
+        <g transform="translate(20,14)">
+          <rect x="0" y="0" width="420" height="190" rx="10" class="f-surface"/>
+          <text x="210" y="20" text-anchor="middle" class="lbl-b">평면도 (핑거 4개)</text>
+          <g transform="translate(24,34)">
+            <rect x="0" y="0" width="30" height="130" class="f-n"/><text x="15" y="146" text-anchor="middle" class="lbl-dim">S</text>
+            <rect x="30" y="0" width="12" height="130" class="f-metal"/>
+            <rect x="42" y="0" width="34" height="130" class="f-warn-soft"/>
+            <rect x="76" y="0" width="28" height="130" class="f-n"/><text x="90" y="146" text-anchor="middle" class="lbl-dim">D</text>
+            <rect x="104" y="0" width="34" height="130" class="f-warn-soft"/>
+            <rect x="138" y="0" width="12" height="130" class="f-metal"/>
+            <rect x="150" y="0" width="30" height="130" class="f-n"/><text x="165" y="146" text-anchor="middle" class="lbl-dim">S</text>
+            <rect x="180" y="0" width="12" height="130" class="f-metal"/>
+            <rect x="192" y="0" width="34" height="130" class="f-warn-soft"/>
+            <rect x="226" y="0" width="28" height="130" class="f-n"/><text x="240" y="146" text-anchor="middle" class="lbl-dim">D</text>
+            <rect x="254" y="0" width="34" height="130" class="f-warn-soft"/>
+            <rect x="288" y="0" width="12" height="130" class="f-metal"/>
+            <rect x="300" y="0" width="30" height="130" class="f-n"/><text x="315" y="146" text-anchor="middle" class="lbl-dim">S</text>
+            <g fill="var(--text)"><circle cx="90" cy="20" r="3"/><circle cx="90" cy="50" r="3"/><circle cx="90" cy="80" r="3"/><circle cx="90" cy="110" r="3"/><circle cx="240" cy="20" r="3"/><circle cx="240" cy="50" r="3"/><circle cx="240" cy="80" r="3"/><circle cx="240" cy="110" r="3"/></g>
+            <rect x="340" y="10" width="14" height="10" class="f-warn-soft"/><text x="358" y="19" class="lbl-dim">SAB</text>
+            <rect x="340" y="30" width="14" height="10" class="f-metal"/><text x="358" y="39" class="lbl-dim">게이트</text>
+          </g>
+        </g>
+        <g transform="translate(460,14)">
+          <rect x="0" y="0" width="300" height="190" rx="10" class="f-surface"/>
+          <path d="M36 166 H286 M36 166 V22" class="s-axis"/><text x="284" y="182" text-anchor="end" class="lbl-dim">V</text><text x="42" y="20" class="lbl-dim">I</text>
+          <path d="M36 165 L196 160 L120 150 L150 60" fill="none" stroke="var(--bad)" stroke-width="2.2"/>
+          <path d="M120 150 L232 52" fill="none" stroke="var(--ok)" stroke-width="2.4"/>
+          <path d="M196 30 V166" class="s-dash"/><text x="200" y="40" class="lbl-dim">V_t1</text>
+          <circle cx="150" cy="60" r="4" fill="var(--bad)"/><text x="64" y="58" class="lbl" fill="var(--bad)">실리사이드</text>
+          <circle cx="232" cy="52" r="4" fill="var(--ok)"/><text x="238" y="56" class="lbl" fill="var(--ok)">SAB</text>
+          <text x="160" y="110" class="lbl-dim">V_t2 &lt; V_t1 → 한 핑거만</text>
+          <text x="196" y="132" class="lbl-dim">V_t2 &gt; V_t1 → 전부</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 17-4.</b> 멀티 핑거 GGNMOS의 평면도(왼쪽: 드레인 양옆 주황 영역이 실리사이드 블록)와 핑거 하나의 TLP 곡선(오른쪽). 실리사이드 드레인은 V<sub>t2</sub>가 V<sub>t1</sub>보다 낮아 첫 핑거만 켜진 채 타고, 밸러스트가 있는 SAB 드레인은 V<sub>t2</sub> &gt; V<sub>t1</sub>이라 나머지 핑거가 차례로 켜진다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-fg">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>핑거가 모두 켜질까? 실리사이드 블록 설계</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view cv2"><div><canvas id="fg-cv1"></canvas></div><div><canvas id="fg-cv2"></canvas></div></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>핑거 수 N (각 25 µm)</span> <output id="fg-n-out"></output></span><input type="range" id="fg-n" min="1" max="16" step="1" value="8"></label>
+          <label class="ctrl"><span><span>실리사이드 블록 길이 L<sub>SAB</sub></span> <output id="fg-l-out"></output></span><input type="range" id="fg-l" min="0" max="4" step="0.25" value="0"></label>
+          <div class="ctrl"><span>트리거 방식</span><div class="seg" id="fg-t"><button data-value="gg" class="on">접지 게이트</button><button data-value="gc">게이트 결합 (V<sub>t1</sub>↓)</button></div></div>
+          <div class="verdict" id="fg-vd"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">켜진 핑거</span><span class="v" id="fg-o-n">—</span></div>
+        <div class="stat"><span class="k">V<sub>t2</sub> / 최저 V<sub>t1</sub></span><span class="v" id="fg-o-v">—</span></div>
+        <div class="stat"><span class="k">전체 I<sub>t2</sub></span><span class="v" id="fg-o-i">—</span></div>
+        <div class="stat"><span class="k">HBM 환산</span><span class="v" id="fg-o-hbm">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 파괴 직전 순간 핑거별 전류(색이 진할수록 전류가 큼, 회색은 꺼진 핑거). 오른쪽: 핑거 하나의 TLP 곡선과 핑거별 트리거 전압(공정 산포로 약 ±0.15 V). 해볼 것: ① L<sub>SAB</sub> = 0(전부 실리사이드)에서 핑거를 16개로 늘려도 HBM 환산값이 그대로다. ② L<sub>SAB</sub>를 올리며 V<sub>t2</sub>가 가장 높은 V<sub>t1</sub>을 넘는 순간 모든 핑거가 켜지고 HBM 환산값이 크게 뛰는 것을 보라. ③ 게이트 결합으로 V<sub>t1</sub>을 낮추면 짧은 SAB로도 균일 턴온이 된다. (교육용 모델: R<sub>on</sub>·W = 200 + 80·L<sub>SAB</sub> Ω·µm(블록된 n⁺ 면저항 80 Ω/□), I<sub>t2</sub>/W = 2.5 + 1.2·L<sub>SAB</sub> mA/µm(최대 6.5), V<sub>h</sub> = 4.9 V, V<sub>t1</sub> 7.4 V / 게이트 결합 5.6 V)</div>
+    </div>
+  </section>
+
+  <section id="devices">
+    <h2>보호 소자 한눈에 보기</h2>
+    <p>보호 소자는 동작 방식에 따라 두 부류다. 켜진 뒤에도 전압이 그대로 올라가는 <b>비스냅백</b> 소자(다이오드, 능동 MOSFET 클램프)는 래치업 걱정이 없고 회로 시뮬레이터로 다루기 쉽다. 전압이 꺾이는 <b>스냅백</b> 소자(GGNMOS, SCR)는 낮은 유지 전압 덕에 같은 면적으로 더 큰 전류를 흘리지만, 유지 전압이 전원보다 낮으면 래치업 위험을 안고, 트리거 전압이 높아 얇은 산화막을 지키기 어렵다. 미세 공정의 코어 영역은 산화막 BV가 4~5 V까지 내려와 스냅백 소자의 V<sub>t1</sub>이 설계 창을 벗어난다. 그래서 오늘날 디지털 칩의 기본 구성은 <b>이중 다이오드 + RC 트리거 레일 클램프</b>다.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>소자</th><th>동작</th><th>켜지는 전압</th><th>켜진 뒤 전압</th><th>면적·용량 효율</th><th>주의점</th></tr></thead>
+        <tbody>
+          <tr><td>다이오드 (STI 분리·게이트 분리)</td><td>순방향 전도. 역방향으로는 쓰지 않는다</td><td>약 0.7 V</td><td>0.7 V + I·R<sub>on</sub></td><td>좋음. 게이트 분리형이 R<sub>on</sub>·용량이 작아 고속 I/O에 유리</td><td>반대 극성 전류는 레일 클램프가 받아야 한다</td></tr>
+          <tr><td>직렬 다이오드 열</td><td>순방향 n개</td><td>약 0.6n V</td><td>n배 저항</td><td>보통</td><td>고온 누설(달링턴 효과). 전원 영역 사이 연결에 쓴다</td></tr>
+          <tr><td>GGNMOS</td><td>애벌런치 → 기생 npn 스냅백</td><td>V<sub>t1</sub> 5~10 V</td><td>V<sub>h</sub> 3~5 V</td><td>보통. SAB 면적이 든다</td><td>멀티 핑거 균일 턴온, 코어 산화막에는 V<sub>t1</sub>이 너무 높음</td></tr>
+          <tr><td>SCR, LVTSCR</td><td>pnpn 사이리스터 재생 동작</td><td>SCR 10~20 V, LVTSCR 수 V (NMOS 트리거)</td><td>V<sub>h</sub> 1~2 V</td><td>가장 좋음 (단위 폭당 I<sub>t2</sub> 수십 mA/µm)</td><td>래치업, 느린 턴온(CDM 오버슈트)</td></tr>
+          <tr><td>RC 트리거 레일 클램프 (BigFET)</td><td>RC가 빠른 전압 상승을 감지해 큰 NMOS를 켬</td><td>dV/dt로 켜짐 (DC 전압 아님)</td><td>I/(g<sub>m</sub>) 수준, 1~3 V</td><td>면적 큼 (W 수천 µm). 정확한 회로 설계 가능</td><td>전원 켜짐 오동작, 잡음, 누설</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="network">
+    <h2>칩 전체 ESD 네트워크와 RC 클램프</h2>
+    <p>ESD 시험은 핀 두 개를 골라 하나에 펄스를 주고 다른 하나를 접지한다. 핀 조합이 수백만 가지이므로 규격은 대표 조합을 정해 두는데, 신호 핀 하나에 대해 기준 전원에 대한 네 가지 극성(신호 핀이 +/−, 기준이 V<sub>DD</sub>/V<sub>SS</sub>)과 전원 사이 방전이 기본이다. 어떤 조합이든 전류가 산화막을 지나지 않고 빠져나갈 <b>저저항 경로</b>가 미리 깔려 있어야 한다. 이중 다이오드가 신호 핀을 레일에 묶고, 레일 사이는 <span class="term">레일 클램프</span><span class="en">(Rail clamp, power clamp)</span>가 잇는다. 그러면 신호 핀(+)에서 V<sub>SS</sub>로 가는 가장 흔한 경로는 '위 다이오드 → V<sub>DD</sub> 버스 → 레일 클램프 → V<sub>SS</sub> 버스'가 된다. 핀 전압은 경로 위 전압 강하의 합이다.</p>
+    <div class="formula">$$V_{pin} = V_{D}(I) + I\,R_{bus,DD} + V_{clamp}(I) + I\,R_{bus,SS}\ \ \lt\ \ BV_{ox}\ \ (\text{ns 펄스})$$
+      <div class="where">1 A 남짓한 HBM 전류에서 버스 저항 1 Ω은 1 V다. 그래서 레일 클램프는 칩 한쪽에 하나만 두지 않고 I/O 링을 따라 여러 개를 분산 배치하며, ESD 버스는 굵은 금속으로 만든다. 경로가 길수록 패드에서 먼 곳의 클램프는 덜 쓰인다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 250" role="img" aria-label="칩 전체 ESD 네트워크: 이중 다이오드, 레일 클램프, 전원 영역 사이 다이오드">
+        <defs><marker id="e17-a5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker></defs>
+        <g transform="translate(14,10)">
+          <path d="M20 40 H360 M20 200 H360" stroke="var(--text)" stroke-width="3"/><text x="24" y="32" class="t">V<tspan baseline-shift="sub" font-size="9">DD1</tspan></text><text x="24" y="222" class="t">V<tspan baseline-shift="sub" font-size="9">SS1</tspan></text>
+          <path d="M400 40 H750 M400 200 H750" stroke="var(--text)" stroke-width="3"/><text x="704" y="32" class="t">V<tspan baseline-shift="sub" font-size="9">DD2</tspan></text><text x="704" y="222" class="t">V<tspan baseline-shift="sub" font-size="9">SS2</tspan></text>
+          <circle cx="80" cy="120" r="9" class="f-acc"/><text x="80" y="146" text-anchor="middle" class="lbl-acc">I/O 핀</text>
+          <path d="M89 120 H150 M120 120 V92 M120 120 V148 M120 76 V40 M120 164 V200" class="s-line"/>
+          <path d="M108 92 H132 L120 76 Z" class="f-acc2"/><path d="M108 76 H132" stroke="var(--accent-2)" stroke-width="2"/>
+          <path d="M108 164 H132 L120 148 Z" class="f-acc2"/><path d="M108 148 H132" stroke="var(--accent-2)" stroke-width="2"/>
+          <rect x="150" y="108" width="40" height="24" rx="3" class="f-surface" stroke="var(--text-dim)"/><text x="170" y="124" text-anchor="middle" class="lbl-dim">버퍼</text>
+          <rect x="250" y="80" width="56" height="80" rx="5" fill="none" stroke="var(--warn)" stroke-width="2"/><text x="278" y="116" text-anchor="middle" class="lbl">레일</text><text x="278" y="132" text-anchor="middle" class="lbl">클램프</text>
+          <path d="M278 40 V80 M278 160 V200" class="s-line"/>
+          <path d="M360 200 H400" class="s-line"/>
+          <path d="M366 206 H386 L376 222 Z" class="f-acc2"/><path d="M386 194 H366 L376 178 Z" class="f-acc2"/>
+          <text x="380" y="244" text-anchor="middle" class="lbl-dim">접지 간 B2B 다이오드</text>
+          <rect x="560" y="80" width="56" height="80" rx="5" fill="none" stroke="var(--warn)" stroke-width="2"/><text x="588" y="116" text-anchor="middle" class="lbl">레일</text><text x="588" y="132" text-anchor="middle" class="lbl">클램프</text>
+          <path d="M588 40 V80 M588 160 V200" class="s-line"/>
+          <path d="M190 120 H330 L330 100 H460" class="s-line"/><text x="400" y="94" text-anchor="middle" class="lbl-dim">영역 간 신호</text>
+          <rect x="460" y="88" width="14" height="24" class="f-metal"/><rect x="474" y="88" width="3" height="24" class="f-ox"/><rect x="477" y="84" width="28" height="32" class="f-si"/><text x="490" y="134" text-anchor="middle" class="lbl-dim">수신 게이트</text>
+          <path d="M134 84 Q200 58 250 86" fill="none" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#e17-a5)"/>
+          <path d="M278 168 Q278 190 300 196" fill="none" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#e17-a5)"/>
+          <text x="196" y="60" class="lbl" fill="var(--bad)">PS 모드 경로</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 17-5.</b> 두 전원 영역을 가진 칩의 ESD 네트워크. I/O 핀은 이중 다이오드로 V<sub>DD1</sub>·V<sub>SS1</sub>에 묶이고, 레일 클램프가 각 영역의 전원 사이를 잇는다. 접지끼리는 서로 반대 방향의 다이오드 한 쌍(B2B)으로 이어 정상 동작 중의 잡음 결합은 막고 ESD 전류는 통과시킨다. 빨간 점선은 I/O 핀(+) → V<sub>SS1</sub> 방전(PS 모드) 경로다.</figcaption>
+    </figure>
+    <p>레일 클램프는 어떻게 'ESD일 때만' 켜질까? 전원 전압 자체는 정상 동작과 ESD 사이에 큰 차이가 없을 수도 있다(코어 0.75 V 레일에서 ESD 동안 3 V면 이미 위험하다). 차이는 <b>속도</b>다. ESD는 전압이 ns 만에 오르고, 전원을 켤 때는 µs~ms에 걸쳐 오른다. <span class="term">RC 트리거 클램프</span><span class="en">(RC-triggered clamp)</span>는 V<sub>DD</sub>와 V<sub>SS</sub> 사이에 R과 C를 직렬로 두고 그 중간 노드를 인버터로 읽는다. 전압이 RC 시상수 τ보다 빨리 오르면 C 쪽 노드가 따라가지 못해 낮게 남고, 인버터가 큰 NMOS(BigFET)의 게이트를 켠다. 느리게 오르면 노드가 V<sub>DD</sub>를 따라가 클램프는 꺼진 채다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 230" role="img" aria-label="RC 트리거 레일 클램프 회로와 시간 축 동작">
+        <g transform="translate(14,10)">
+          <rect x="0" y="0" width="330" height="210" rx="10" class="f-surface"/>
+          <path d="M20 30 H310 M20 186 H310" stroke="var(--text)" stroke-width="2.4"/><text x="24" y="24" class="t">V_DD</text><text x="24" y="204" class="t">V_SS</text>
+          <path d="M70 30 V56 M70 92 V108 M70 128 V186" class="s-line"/><rect x="62" y="56" width="16" height="36" fill="none" stroke="var(--text-dim)"/><text x="84" y="78" class="t-mono">R</text>
+          <path d="M56 108 H84 M56 120 H84" stroke="var(--text)" stroke-width="2"/><text x="90" y="120" class="t-mono">C</text>
+          <circle cx="70" cy="100" r="3" fill="var(--text)"/><path d="M70 100 H140" class="s-line"/><text x="98" y="94" class="lbl-dim">V_RC</text>
+          <path d="M140 84 V116 L172 100 Z" fill="none" stroke="var(--text)" stroke-width="1.6"/><circle cx="176" cy="100" r="4" fill="none" stroke="var(--text)" stroke-width="1.6"/>
+          <path d="M180 100 H230" class="s-line"/><text x="200" y="94" class="lbl-dim">V_G</text>
+          <path d="M236 84 V116" stroke="var(--text)" stroke-width="3"/><path d="M230 100 H236" class="s-line"/>
+          <path d="M242 80 V120 M242 84 H270 V30 M242 116 H270 V186" class="s-line"/>
+          <text x="250" y="150" class="lbl">BigFET</text><text x="250" y="166" class="lbl-dim">W 수천 µm</text>
+          <text x="20" y="160" class="lbl-dim">τ = RC ≈ 0.1~1 µs</text>
+        </g>
+        <g transform="translate(366,10)">
+          <rect x="0" y="0" width="400" height="210" rx="10" class="f-surface"/>
+          <path d="M40 180 H390 M40 180 V20" class="s-axis"/><text x="388" y="198" text-anchor="end" class="lbl-dim">log 시간</text>
+          <rect x="60" y="22" width="80" height="158" class="f-bad-soft"/><text x="100" y="40" text-anchor="middle" class="lbl">ESD</text><text x="100" y="56" text-anchor="middle" class="lbl-dim">1~200 ns</text>
+          <rect x="170" y="22" width="70" height="158" class="f-ok-soft"/><text x="205" y="40" text-anchor="middle" class="lbl">τ</text><text x="205" y="56" text-anchor="middle" class="lbl-dim">0.1~1 µs</text>
+          <rect x="280" y="22" width="100" height="158" class="f-acc-soft"/><text x="330" y="40" text-anchor="middle" class="lbl">전원 켜짐</text><text x="330" y="56" text-anchor="middle" class="lbl-dim">µs~ms</text>
+          <text x="210" y="110" text-anchor="middle" class="lbl-dim">ESD 동안 켜져 있고</text>
+          <text x="210" y="128" text-anchor="middle" class="lbl-dim">전원 켜짐에는 반응하지 않도록</text>
+          <text x="210" y="146" text-anchor="middle" class="lbl-dim">τ를 그 사이에 둔다</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 17-6.</b> RC 트리거 레일 클램프(왼쪽)와 시상수 선택(오른쪽). τ가 ESD 펄스보다 충분히 길어야 HBM 꼬리(수백 ns)까지 클램프가 켜져 있고, 전원 상승 시간보다는 충분히 짧아야 전원을 켤 때 클램프가 켜져 전류를 낭비하지 않는다. 실제 회로는 인버터 여러 단과 되먹임(래치형 켜짐 유지)으로 τ를 줄이면서도 켜짐 시간을 늘린다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-rc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>RC 트리거 레일 클램프의 시상수 고르기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rc-cv"></canvas>
+          <div class="legend"><span><i style="background:var(--accent)"></i>V<sub>DD</sub> 레일</span><span><i style="background:var(--warn)"></i>클램프 게이트 V<sub>G</sub></span><span><i style="background:var(--text-dim)"></i>ESD 전류</span><span><i style="background:var(--bad)"></i>클램프 전류</span></div>
+        </div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>사건</span><div class="seg" id="rc-e"><button data-value="hbm" class="on">HBM 2 kV</button><button data-value="pu1">전원 켜짐 1 µs</button><button data-value="pu2">전원 켜짐 100 µs</button></div></div>
+          <label class="ctrl"><span><span>RC 시상수 τ</span> <output id="rc-t-out"></output></span><input type="range" id="rc-t" min="-8" max="-4" step="0.05" value="-6.3"></label>
+          <label class="ctrl"><span><span>BigFET 폭 W</span> <output id="rc-w-out"></output></span><input type="range" id="rc-w" min="2.3" max="3.7" step="0.02" value="3.3"></label>
+          <div class="verdict" id="rc-vd"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">레일 정점 전압</span><span class="v" id="rc-o-v">—</span></div>
+        <div class="stat"><span class="k">클램프 켜짐 시간</span><span class="v" id="rc-o-t">—</span></div>
+        <div class="stat"><span class="k">클램프 정점 전류</span><span class="v" id="rc-o-i">—</span></div>
+      </div>
+      <div class="sim-note">1.8 V 전원 영역, 레일 용량 1 nF, 레일에 걸려도 되는 한계 6 V(I/O 소자의 ns 파괴 전압)를 가정한다. 해볼 것: ① HBM에서 τ를 20 ns 근처로 줄이면 클램프가 펄스 앞부분에만 켜졌다 꺼져 꼬리 전류가 레일 용량을 충전하며 전압이 치솟는다. ② τ를 1 µs 근처로 두고 W를 줄이면 클램프는 켜져 있어도 전류를 다 못 받아 레일 전압이 오른다. ③ 같은 τ로 '전원 켜짐 1 µs'를 고르면 클램프가 켜져 전원에서 큰 전류를 끌어간다(오동작). '100 µs'에서는 조용하다. τ의 창은 ESD(수백 ns)와 전원 상승(수십 µs 이상) 사이다. (BigFET: I = 0.4 mA/µm·(V<sub>G</sub> − 0.45)<sup>1.5</sup>, 인버터 문턱 V<sub>DD</sub>/2, 교육용 모델)</div>
+    </div>
+  </section>
+
+  <section id="cdm">
+    <h2>CDM과 전원 영역 경계</h2>
+    <p>CDM 전하는 다이의 기판과 웰, 금속 배선과 패키지 전체에 퍼져 있다가 핀 하나로 몰려 나간다. 방전 핀에 가까운 I/O 보호 소자는 그 전류를 받도록 설계되지만, 문제는 <b>칩 안쪽</b>이다. 전원 영역 2의 기판에 쌓인 전하가 영역 1의 핀으로 빠져나가려면 두 영역 사이 어딘가를 지나야 하는데, 접지 사이 연결이 약하면 그 길이 영역 경계를 넘는 신호선의 <b>수신 게이트 산화막</b>이 된다. 드라이버 출력은 영역 1 접지에, 수신 게이트의 몸체는 영역 2 접지에 있으므로 두 접지 사이 전압 차가 그대로 얇은 산화막에 걸린다. FailureBook에서 본 'CDM 손상은 내부 회로나 전원 영역 경계에서도 생긴다'는 말의 정체다. HBM 시험은 다 통과했는데 CDM에서만 내부 게이트가 깨지는 일이 흔하다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 220" role="img" aria-label="CDM 방전에서 전원 영역 경계 수신 게이트에 걸리는 전압">
+        <defs><marker id="e17-a6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker></defs>
+        <g transform="translate(14,10)">
+          <rect x="0" y="120" width="370" height="70" class="f-p" opacity=".45"/><text x="16" y="182" class="lbl">영역 1 기판 (V_SS1)</text>
+          <rect x="380" y="120" width="370" height="70" class="f-p" opacity=".65"/><text x="396" y="182" class="lbl">영역 2 기판 (V_SS2)</text>
+          <g fill="var(--hole)"><circle cx="440" cy="150" r="4"/><circle cx="480" cy="160" r="4"/><circle cx="520" cy="146" r="4"/><circle cx="560" cy="160" r="4"/><circle cx="600" cy="150" r="4"/><circle cx="640" cy="162" r="4"/><circle cx="680" cy="148" r="4"/></g>
+          <text x="560" y="210" text-anchor="middle" class="lbl-dim">+ 대전된 전하 (패키지·다이 전체)</text>
+          <circle cx="60" cy="40" r="9" class="f-acc"/><text x="76" y="44" class="lbl-acc">방전 핀 (V_SS1) → 접지된 포고 핀</text>
+          <path d="M60 49 V120" class="s-line"/>
+          <rect x="190" y="70" width="40" height="24" rx="3" class="f-surface" stroke="var(--text-dim)"/><text x="210" y="86" text-anchor="middle" class="lbl-dim">드라이버</text>
+          <path d="M230 82 H460" class="s-line"/><text x="330" y="76" text-anchor="middle" class="lbl-dim">영역 간 신호선</text>
+          <rect x="460" y="70" width="12" height="24" class="f-metal"/><rect x="472" y="70" width="3" height="24" class="f-ox"/><rect x="475" y="66" width="26" height="32" class="f-si"/>
+          <text x="488" y="58" text-anchor="middle" class="lbl" fill="var(--bad)">얇은 산화막</text>
+          <path d="M488 98 V120" class="s-line"/><path d="M210 94 V120" class="s-line"/>
+          <path d="M520 140 Q470 112 478 96" fill="none" stroke="var(--bad)" stroke-width="1.8" stroke-dasharray="5 3" marker-end="url(#e17-a6)"/>
+          <path d="M460 82 Q300 40 70 46" fill="none" stroke="var(--bad)" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#e17-a6)"/>
+          <rect x="352" y="124" width="56" height="26" rx="4" class="f-ok-soft"/><text x="380" y="141" text-anchor="middle" class="lbl">B2B</text>
+          <rect x="520" y="60" width="96" height="40" rx="4" class="f-warn-soft"/><text x="568" y="78" text-anchor="middle" class="lbl">로컬 클램프</text><text x="568" y="93" text-anchor="middle" class="lbl-dim">직렬 R + 작은 다이오드</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 17-7.</b> CDM에서 영역 2에 쌓인 전하가 영역 1의 핀으로 빠져나갈 때. 접지 간 연결(B2B 다이오드)이 약하거나 저항이 크면 전류의 일부가 영역 간 신호선의 수신 게이트 산화막을 지난다(빨간 점선). 대책은 ① 두 접지를 낮은 임피던스로 잇는 것, ② 수신 게이트 바로 앞에 직렬 저항과 작은 로컬 클램프(2차 보호)를 두어 게이트 전압을 국부적으로 묶는 것이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-cdm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>CDM에서 영역 경계 게이트 지키기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cdm-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>CDM 시험 전압</span> <output id="cdm-v-out"></output></span><input type="range" id="cdm-v" min="100" max="1000" step="25" value="500"></label>
+          <label class="ctrl"><span><span>패키지 용량 C<sub>pkg</sub></span> <output id="cdm-c-out"></output></span><input type="range" id="cdm-c" min="2" max="60" step="1" value="6"></label>
+          <div class="ctrl"><span>영역 간 보호</span><div class="seg" id="cdm-p"><button data-value="none">없음</button><button data-value="b2b" class="on">B2B 다이오드</button><button data-value="loc">B2B + 로컬 클램프</button></div></div>
+          <label class="ctrl"><span><span>접지 버스 저항 R<sub>bus</sub></span> <output id="cdm-r-out"></output></span><input type="range" id="cdm-r" min="0.1" max="5" step="0.1" value="1.5"></label>
+          <div class="verdict" id="cdm-vd"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">CDM 정점 전류</span><span class="v" id="cdm-o-i">—</span></div>
+        <div class="stat"><span class="k">영역 경계 전류</span><span class="v" id="cdm-o-i2">—</span></div>
+        <div class="stat"><span class="k">게이트 전압 정점 / BV</span><span class="v" id="cdm-o-v">—</span></div>
+      </div>
+      <div class="sim-note">위: CDM 방전 전류. 아래: 영역 경계 수신 게이트 산화막에 걸리는 전압과 코어 산화막의 ns 파괴 전압(4 V). 전하의 40 %가 영역 2에 있다고 둔다. 해볼 것: ① 보호 없음에서는 경계 전류가 갈 곳이 게이트뿐이라 바로 파괴된다. ② B2B 다이오드로 이어도 R<sub>bus</sub>가 크면 I·R 강하가 게이트에 더해져 실패한다. 버스를 굵게(R<sub>bus</sub>↓) 하거나 ③ 로컬 클램프를 더해 보라. ④ C<sub>pkg</sub>를 키우면 같은 시험 전압에서 정점 전류가 커진다. 큰 패키지 칩일수록 CDM 설계가 어렵다. (CDM: RLC, R 50 Ω, L 12 nH. B2B: 0.8 V + 0.5 Ω. 로컬 클램프: 직렬 200 Ω 뒤 1.5 V로 묶음. 교육용 모델)</div>
+    </div>
+  </section>
+
+  <section id="latchup">
+    <h2>래치업</h2>
+    <p>스냅백과 SCR을 보호 소자로 쓸 수 있다는 것은, 같은 구조가 원하지 않는 곳에 생기면 위험하다는 뜻이기도 하다. 벌크 CMOS에서 PMOS의 p⁺ 소스–n 웰–p 기판–NMOS의 n⁺ 소스는 pnpn 사이리스터를 이룬다. 웰 안의 수직 pnp와 기판 표면의 수평 npn이 서로의 베이스에 전류를 대 주는 구조다. 평소에는 웰 탭과 기판 탭이 두 베이스를 전원·접지에 묶어 꺼져 있지만, I/O 핀의 과전압·과전류나 전원 급변으로 기판에 전류가 주입되면 탭까지의 저항 R<sub>s</sub>(기판)·R<sub>w</sub>(웰)에서 0.7 V가 떨어지며 한쪽이 켜지고, 그 컬렉터 전류가 다른 쪽을 켠다. 고리 이득이 1을 넘으면 주입이 끝나도 V<sub>DD</sub>에서 V<sub>SS</sub>로 큰 전류가 계속 흐른다. 이것이 <span class="term">래치업</span><span class="en">(Latch-up)</span>이다. 전원을 꺼야 풀리고, 전류가 제한되지 않으면 배선이 탄다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 250" role="img" aria-label="CMOS 래치업 기생 사이리스터와 가드 링">
+        <g transform="translate(14,14)">
+          <rect x="0" y="70" width="520" height="150" class="f-p" opacity=".45"/><text x="14" y="212" class="lbl">p 기판</text>
+          <rect x="260" y="70" width="250" height="100" class="f-n" opacity=".45"/><text x="470" y="160" text-anchor="end" class="lbl">n 웰</text>
+          <rect x="20" y="70" width="34" height="22" class="f-p"/><text x="37" y="64" text-anchor="middle" class="lbl-dim">p⁺ 탭</text>
+          <rect x="70" y="70" width="40" height="22" class="f-warn-soft" stroke="var(--warn)"/><text x="90" y="64" text-anchor="middle" class="lbl-dim">p⁺ 가드</text>
+          <rect x="130" y="70" width="50" height="22" class="f-n"/><text x="155" y="64" text-anchor="middle" class="lbl-dim">n⁺ 소스</text>
+          <rect x="280" y="70" width="40" height="22" class="f-warn-soft" stroke="var(--warn)"/><text x="300" y="64" text-anchor="middle" class="lbl-dim">n⁺ 가드</text>
+          <rect x="350" y="70" width="50" height="22" class="f-p"/><text x="375" y="64" text-anchor="middle" class="lbl-dim">p⁺ 소스</text>
+          <rect x="440" y="70" width="34" height="22" class="f-n"/><text x="457" y="64" text-anchor="middle" class="lbl-dim">n⁺ 탭</text>
+          <text x="96" y="22" text-anchor="middle" class="t">V_SS</text><path d="M37 70 V28 M90 70 V28 M155 70 V28 M37 28 H155" class="s-line"/>
+          <text x="400" y="22" text-anchor="middle" class="t">V_DD</text><path d="M300 70 V28 M375 70 V28 M457 70 V28 M300 28 H457" class="s-line"/>
+          <path d="M375 92 V196" stroke="var(--hole)" stroke-width="2" stroke-dasharray="4 3"/><text x="382" y="190" class="lbl-h">수직 pnp</text>
+          <path d="M180 100 H300" stroke="var(--electron)" stroke-width="2" stroke-dasharray="4 3"/><text x="196" y="118" class="lbl-e">수평 npn (간격 d)</text>
+          <rect x="60" y="150" width="70" height="14" fill="none" stroke="var(--text-dim)"/><text x="95" y="182" text-anchor="middle" class="t-mono">R_s</text>
+          <rect x="410" y="110" width="50" height="14" fill="none" stroke="var(--text-dim)"/><text x="436" y="140" text-anchor="middle" class="t-mono">R_w</text>
+        </g>
+        <g transform="translate(560,14)">
+          <rect x="0" y="0" width="206" height="226" rx="10" class="f-surface"/>
+          <text x="103" y="20" text-anchor="middle" class="lbl-b">등가 회로</text>
+          <path d="M103 34 V62 M103 190 V214" class="s-line"/><text x="110" y="44" class="lbl-dim">V_DD</text><text x="110" y="212" class="lbl-dim">V_SS</text>
+          <path d="M103 62 L80 80 V104 L103 122" class="s-line"/><path d="M80 80 V104" stroke="var(--text)" stroke-width="3"/><text x="20" y="96" class="lbl-h">pnp</text>
+          <path d="M103 122 L126 140 V164 L103 182 V190" class="s-line"/><path d="M126 140 V164" stroke="var(--text)" stroke-width="3"/><text x="140" y="156" class="lbl-e">npn</text>
+          <path d="M80 92 H60 V62 H103" class="s-line"/><rect x="52" y="66" width="16" height="22" fill="none" stroke="var(--text-dim)"/><text x="22" y="74" class="t-mono">R_w</text>
+          <path d="M126 152 H160 V190 H103" class="s-line"/><rect x="152" y="160" width="16" height="22" fill="none" stroke="var(--text-dim)"/><text x="172" y="176" class="t-mono">R_s</text>
+          <text x="103" y="136" text-anchor="middle" class="lbl-dim">β_n·β_p &gt; 1 → 래치</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 17-8.</b> 벌크 CMOS의 기생 사이리스터. 웰과 기판 탭까지의 저항 R<sub>w</sub>·R<sub>s</sub>가 두 트랜지스터의 베이스–이미터를 션트한다. 주황색 가드 링(NMOS 둘레의 p⁺, PMOS 둘레의 n⁺)은 주입된 소수 캐리어를 중간에서 걷어 내 β를 낮추고, 탭 역할을 겸해 션트 저항도 줄인다.</figcaption>
+    </figure>
+    <p>래치가 스스로 유지되려면 두 트랜지스터가 각자의 션트 저항으로 빠지는 전류(\(V_{BE}/R\))를 이기고도 상대를 켤 만큼 전류를 대야 한다. 웰 노드에서는 npn 컬렉터 전류가 pnp 베이스 전류와 \(R_w\) 전류를, 기판 노드에서는 pnp 컬렉터 전류가 npn 베이스 전류와 \(R_s\) 전류를 대야 한다. 이 두 균형식을 풀면 유지 조건과 유지 전류가 나온다.</p>
+    <div class="formula">$$\beta_n\beta_p \gt 1,\qquad I_H = I_{Rs} + \frac{(\beta_n+1)\big(\beta_p I_{Rw} + I_{Rs}\big)}{\beta_n\beta_p - 1},\qquad I_{Rs}=\frac{0.7\ \text{V}}{R_s},\ \ I_{Rw}=\frac{0.7\ \text{V}}{R_w}$$
+      <div class="where">유지 전류 \(I_H\)는 래치가 꺼지지 않고 버틸 수 있는 최소 전류다. 션트 저항이 작을수록(탭이 촘촘할수록) \(I_H\)가 커져 래치가 어렵고, \(\beta_n\beta_p\)가 1에 가까울수록 \(I_H\)가 발산한다. 래치된 상태의 전압(유지 전압 \(V_H\), 대개 1~2 V)이 전원 전압보다 높으면 래치가 유지되지 않는다. 그래서 아주 낮은 전압의 코어 영역보다 고전압 I/O와 아날로그·전력 영역이 래치업에 취약하다.</div>
+    </div>
+    <p>래치업 내성은 JEDEC <span class="term">JESD78</span>로 시험한다. 신호 핀에 ±100 mA를 주입하는 <b>I 시험</b>과 전원 핀에 최대 동작 전압의 1.5배를 거는 <b>V 시험</b>(과전압 시험) 뒤 전원 전류가 원래대로 돌아오는지 본다. 상온이면 등급 I, 최대 동작 온도면 등급 II다. 온도가 오르면 β가 커지고 V<sub>BE</sub>가 낮아져 래치업이 쉬워지므로 자동차용(AEC-Q100-004)은 고온 시험을 요구한다. 설계 대책은 ① 웰·기판 탭을 촘촘히(DesignBook의 탭 셀 간격 규칙), ② I/O 주변에 이중 가드 링, ③ n⁺–p⁺ 간격 확보, ④ 공정에서 고농도 기판 위 에피층·역행 웰로 R<sub>s</sub>를 낮추고 β를 줄이는 것이다. SOI는 웰과 기판이 매몰 산화막으로 끊겨 래치업 경로 자체가 없다.</p>
+
+    <div class="sim" id="sim-lu">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>래치업: 탭 간격·가드 링·전원 전압</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view cv2"><div><canvas id="lu-cv1"></canvas></div><div><canvas id="lu-cv2"></canvas></div></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>탭 간격 s</span> <output id="lu-s-out"></output></span><input type="range" id="lu-s" min="2" max="50" step="1" value="20"></label>
+          <label class="ctrl"><span><span>n⁺–p⁺ 간격 d</span> <output id="lu-d-out"></output></span><input type="range" id="lu-d" min="1" max="30" step="0.5" value="4"></label>
+          <div class="ctrl"><span>가드 링</span><div class="seg" id="lu-g"><button data-value="0" class="on">없음</button><button data-value="1">이중 가드 링</button></div></div>
+          <div class="ctrl"><span>전원 전압</span><div class="seg" id="lu-v"><button data-value="1.8">1.8 V</button><button data-value="3.3" class="on">3.3 V</button><button data-value="5">5 V</button></div></div>
+          <div class="verdict" id="lu-vd"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">β<sub>n</sub>·β<sub>p</sub></span><span class="v" id="lu-o-b">—</span></div>
+        <div class="stat"><span class="k">트리거 주입 전류</span><span class="v" id="lu-o-t">—</span></div>
+        <div class="stat"><span class="k">유지 전류 I<sub>H</sub> / 유지 전압 V<sub>H</sub></span><span class="v" id="lu-o-h">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: pnpn 경로의 I–V(꺼짐 → 트리거 → 래치 가지)와 전원 전압(세로선). 래치 가지가 전원선과 만나는 점이 래치 상태 전류다. 오른쪽: 탭 간격에 따른 트리거 주입 전류와 JESD78 I 시험 기준 100 mA. 해볼 것: ① 탭 간격을 넓히면 R<sub>s</sub>가 커져 몇 mA 주입으로도 래치가 걸린다. ② 이중 가드 링은 주입 전류를 대부분 걷어 내고 β를 낮춘다. ③ d를 넓히면 수평 npn의 β가 줄고 V<sub>H</sub>가 올라간다. V<sub>H</sub>가 전원 전압보다 높아지면 트리거되어도 래치가 유지되지 않는다. 같은 구조가 1.8 V에서는 안전하고 5 V에서는 위험할 수 있다. (교육용 모델: R<sub>s</sub> = 25 Ω/µm·s, R<sub>w</sub> = 60 Ω/µm·s, β<sub>n</sub> = 25·e<sup>−d/5 µm</sup>, β<sub>p</sub> = 15, 가드 링은 β<sub>n</sub>×0.08, β<sub>p</sub>×0.3, 주입 수집 비율 0.3 → 0.02, V<sub>H</sub> = 1.0 + 0.12 V/µm·d)</div>
+    </div>
+  </section>
+
+  <section id="system">
+    <h2>시스템 수준 ESD와 칩–보드 공동 설계</h2>
+    <p>칩이 HBM 2 kV를 견딘다고 완제품이 IEC 8 kV를 견디는 것은 아니다. IEC 첫 정점은 30 A, 꼬리도 수십 A·ns로 칩 내부 보호 소자가 받을 수 있는 양(수 A)을 훨씬 넘는다. 그래서 USB·HDMI처럼 외부에 노출된 커넥터에는 보드에 <span class="term">TVS 다이오드</span><span class="en">(Transient Voltage Suppressor)</span>를 달아 대부분의 전류를 받게 한다. 이때 TVS와 칩 보호 소자는 같은 노드에 병렬로 붙어 경쟁한다. 칩의 보호 다이오드가 1.5 V 정도에서 먼저 켜지고 TVS는 6~12 V가 되어야 켜진다면, 전류는 저항이 낮은 칩 쪽으로 먼저 흘러 TVS가 켜지기도 전에 칩이 탄다. 'TVS를 달았는데도 칩이 죽는' 흔한 사고다.</p>
+    <p>이 문제를 칩과 보드를 함께 설계해 푸는 방법이 <span class="term">SEED</span><span class="en">(System-Efficient ESD Design)</span>다. 칩의 TLP I–V와 TVS의 TLP I–V를 함께 놓고, 둘 사이에 보드 배선 임피던스나 직렬 저항(수 Ω)을 넣어 칩 쪽으로 가는 전류를 칩의 I<sub>t2</sub> 아래로 묶는다. 칩 쪽 보호 소자가 스냅백형이어서 높은 전압까지 꺼져 있다면, 그동안 TVS가 먼저 켜져 전류를 가져가므로 오히려 유리할 수 있다. 칩 공급사는 데이터시트에 TLP 곡선을 제공해 보드 설계자가 이 계산을 할 수 있게 한다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 780 180" role="img" aria-label="커넥터, TVS, 직렬 저항, 칩으로 이루어진 시스템 ESD 경로">
+        <defs><marker id="e17-a9" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker></defs>
+        <g transform="translate(14,10)">
+          <path d="M20 60 L60 40 L60 80 Z" class="f-warn-soft"/><text x="40" y="104" text-anchor="middle" class="lbl-dim">ESD 건 8 kV</text>
+          <rect x="80" y="44" width="50" height="34" rx="4" class="f-surface" stroke="var(--text-dim)"/><text x="105" y="65" text-anchor="middle" class="lbl">커넥터</text>
+          <path d="M130 60 H300 M300 60 V96 M300 130 V150" class="s-line"/>
+          <path d="M288 96 H312 L300 112 Z M288 130 H312 L300 114 Z" class="f-acc2"/><text x="318" y="118" class="lbl">TVS</text>
+          <path d="M282 150 H318 M288 156 H312" class="s-line"/>
+          <path d="M300 60 H420" class="s-line"/><rect x="420" y="52" width="60" height="16" fill="none" stroke="var(--text-dim)"/><text x="450" y="44" text-anchor="middle" class="t-mono">R_s (배선·직렬 R)</text>
+          <path d="M480 60 H560" class="s-line"/>
+          <rect x="560" y="20" width="190" height="130" rx="8" class="f-acc-soft"/><text x="655" y="42" text-anchor="middle" class="lbl-b">칩</text>
+          <text x="655" y="66" text-anchor="middle" class="lbl-dim">보호 소자 (TLP I–V)</text><text x="655" y="86" text-anchor="middle" class="lbl-dim">I_t2 ≈ 1 A</text>
+          <path d="M200 52 Q260 30 292 92" fill="none" stroke="var(--bad)" stroke-width="1.8" stroke-dasharray="5 3" marker-end="url(#e17-a9)"/><text x="190" y="30" class="lbl" fill="var(--bad)">대부분 TVS로</text>
+          <path d="M340 66 Q450 94 556 70" fill="none" stroke="var(--bad)" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#e17-a9)"/><text x="450" y="104" text-anchor="middle" class="lbl-dim">잔여 전류만 칩으로</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 17-9.</b> 시스템 수준 ESD 경로. TVS가 대부분의 전류를 접지로 돌리고, TVS와 칩 사이의 직렬 임피던스가 칩으로 가는 잔여 전류를 제한한다. 칩과 TVS가 같은 노드에서 경쟁하므로 둘의 TLP 곡선을 함께 봐야 한다(SEED).</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-seed">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>IEC 펄스에서 TVS와 칩의 전류 나누기 (SEED)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="seed-cv"></canvas>
+          <div class="legend"><span><i style="background:var(--text-dim)"></i>IEC 전체</span><span><i style="background:var(--accent-2)"></i>TVS</span><span><i style="background:var(--bad)"></i>칩</span></div>
+        </div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>IEC 접촉 방전</span> <output id="seed-v-out"></output></span><input type="range" id="seed-v" min="1" max="8" step="0.5" value="8"></label>
+          <div class="ctrl"><span>TVS</span><div class="seg" id="seed-t"><button data-value="0">없음</button><button data-value="6" class="on">6 V TVS</button><button data-value="12">12 V TVS</button></div></div>
+          <label class="ctrl"><span><span>직렬 임피던스 R<sub>s</sub></span> <output id="seed-r-out"></output></span><input type="range" id="seed-r" min="0" max="20" step="0.5" value="0"></label>
+          <div class="ctrl"><span>칩 보호 소자</span><div class="seg" id="seed-c"><button data-value="dio" class="on">다이오드+클램프 (1.5 V에서 켜짐)</button><button data-value="snap">스냅백 (V<sub>t1</sub> 10 V)</button></div></div>
+          <div class="verdict" id="seed-vd"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">IEC 첫 정점</span><span class="v" id="seed-o-i">—</span></div>
+        <div class="stat"><span class="k">칩 정점 전류</span><span class="v" id="seed-o-c">—</span></div>
+        <div class="stat"><span class="k">TVS가 받은 비율</span><span class="v" id="seed-o-f">—</span></div>
+      </div>
+      <div class="sim-note">칩의 한계는 TLP I<sub>t2</sub> 1 A(펄스 폭 수십 ns 이상), 첫 정점 2 ns 안은 vf-TLP 기준 2.5 A로 둔다. 해볼 것: ① 8 kV에 6 V TVS, R<sub>s</sub> = 0이면 칩 보호 다이오드가 TVS보다 먼저 켜져 전류를 나눠 가지며 칩이 탄다. ② R<sub>s</sub>를 몇 Ω 넣으면 칩 쪽 전류가 줄어 통과한다. 고속 신호선이라 저항을 넣을 수 없다면 TVS를 칩에 더 가깝게, 더 낮은 클램프 전압으로 고른다. ③ 칩 보호를 스냅백형(V<sub>t1</sub> 10 V)으로 바꾸면 6 V TVS가 먼저 켜져 칩이 거의 전류를 받지 않는다. 12 V TVS라면? (TVS: V<sub>br</sub> + 0.1 Ω, 칩 다이오드 경로 1.5 V + 1.2 Ω, 스냅백 V<sub>h</sub> 4.5 V + 1.5 Ω, 교육용 모델)</div>
+    </div>
+  </section>
+
+  <section id="advanced">
+    <h2>고속 I/O, 첨단 공정, 칩렛</h2>
+    <p><b>용량 예산.</b> 보호 다이오드는 클수록 튼튼하지만 접합 용량도 커진다. 50 Ω 종단 신호선에서 패드 용량은 \(f_{3dB}=1/(2\pi\cdot25\,\Omega\cdot C)\)의 극점을 만든다. 112 Gb/s PAM4(나이퀴스트 28 GHz) SerDes라면 패드 전체 용량을 수백 fF 아래로 맞춰야 하고, ESD 다이오드는 그 일부만 쓸 수 있다. 그래서 고속 핀은 게이트 분리형 소형 다이오드, 다이오드 용량을 인덕터로 상쇄해 대역을 넓히는 <span class="term">T-코일</span><span class="en">(T-coil)</span>, 그리고 낮은 ESD 목표(생산 관리 강화)를 함께 쓴다.</p>
+    <p><b>FinFET·GAA.</b> 3차원 소자는 전류가 좁은 핀·시트에 몰리고 열이 빠지기 어려워(16장 자가 발열) 같은 레이아웃 면적의 I<sub>t2</sub>가 평면 소자보다 작다. 코어 산화막 BV가 낮아져 설계 창도 좁다. 그래서 핀 사이 STI로 분리한 다이오드와 게이트로 분리한 다이오드의 장단을 비교하고, I/O에는 두꺼운 산화막 소자를 따로 둔다. 후면 전력 공급(BSPDN)은 전원 버스 저항을 낮춰 클램프에 유리하지만 새 방전 경로를 만든다.</p>
+    <p><b>칩렛과 3D 적층.</b> 2.5D·3D 패키지의 다이 사이 인터페이스(마이크로 범프·하이브리드 본딩)는 수천 개 신호가 짧은 거리로 오가므로 핀마다 큰 보호 소자를 둘 수 없다. 조립 공정 안에서만 노출되므로 업계는 다이 사이 핀에 패키지 핀보다 훨씬 낮은 CDM 목표를 적용하고, 대신 조립 장비의 대전 관리(InfraBook의 정전기 관리)를 강화하는 방향으로 간다. 하이브리드 본딩 순간 두 다이의 전위 차가 방전 사건이 되기도 한다. PackagingBook의 <a href="../../packaging/chapters/hbm.html">HBM 적층</a>과 <a href="../../packaging/chapters/interposer.html">인터포저</a> 장을 참고하라.</p>
+
+    <div class="sim" id="sim-hs">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>고속 I/O의 ESD 용량 예산</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="hs-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span><span>데이터 속도</span> <output id="hs-r-out"></output></span><input type="range" id="hs-r" min="1" max="2.35" step="0.01" value="2.05"></label>
+          <div class="ctrl"><span>변조</span><div class="seg" id="hs-m"><button data-value="nrz">NRZ</button><button data-value="pam4" class="on">PAM4</button></div></div>
+          <label class="ctrl"><span><span>ESD 다이오드 폭 W</span> <output id="hs-w-out"></output></span><input type="range" id="hs-w" min="5" max="120" step="1" value="40"></label>
+          <div class="ctrl"><span>대역 보상</span><div class="seg" id="hs-t"><button data-value="0" class="on">없음</button><button data-value="1">T-코일</button></div></div>
+          <div class="verdict" id="hs-vd"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">패드 전체 용량</span><span class="v" id="hs-o-c">—</span></div>
+        <div class="stat"><span class="k">나이퀴스트 손실</span><span class="v" id="hs-o-l">—</span></div>
+        <div class="stat"><span class="k">HBM 환산</span><span class="v" id="hs-o-h">—</span></div>
+        <div class="stat"><span class="k">CDM 견딤 전압</span><span class="v" id="hs-o-cdm">—</span></div>
+      </div>
+      <div class="sim-note">위: 다이오드 폭에 따른 나이퀴스트 주파수 손실(예산 2 dB). 아래: 같은 폭이 견디는 HBM·CDM 전압과 권장 목표(HBM 500 V, CDM 250 V). 두 조건을 모두 만족하는 폭이 초록 띠다. 해볼 것: ① 112 Gb/s PAM4에서 초록 띠를 찾아라. ② 224 Gb/s로 올리면 띠가 사라진다. T-코일을 켜거나, CDM 목표를 낮춰야(생산 관리 강화) 한다. ③ 같은 속도라도 NRZ는 나이퀴스트가 두 배라 훨씬 어렵다. (다이오드 쌍 1.0 fF/µm, 패드·배선 30 fF, 드라이버·종단 50 fF, 50 Ω 양단 종단(25 Ω), 단일 극점. T-코일은 대역 1.8배. I<sub>t2</sub> 20 mA/µm(TLP), vf-TLP 50 mA/µm. CDM 정점은 작은 패키지 기준 약 12 mA/V. 교육용 근사)</div>
+    </div>
+  </section>
+
+  <section id="qual">
+    <h2>인증 시험 정리</h2>
+    <p>칩 하나가 출하되기까지 거치는 ESD·래치업 시험을 모으면 다음과 같다. 패키지 신뢰성 시험(온도 사이클, HAST, HTOL 등)과 함께 JESD47 인증 묶음에 들어간다(PackagingBook <a href="../../packaging/chapters/test.html">시험과 신뢰성</a> 장).</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>시험</th><th>규격</th><th>방법</th><th>등급·목표</th></tr></thead>
+        <tbody>
+          <tr><td>HBM</td><td>ANSI/ESDA/JEDEC JS-001 (차량용 AEC-Q100-002)</td><td>핀 조합별 ±펄스 1회 이상, 시험 후 전기적 검사</td><td>0Z(&lt;50 V), 0A, 0B, 1A(250 V~), 1B(500 V~), 1C(1 kV~), 2(2 kV~), 3A(4 kV~), 3B(≥8 kV). 권장 500 V(JEP155B)</td></tr>
+          <tr><td>CDM</td><td>ANSI/ESDA/JEDEC JS-002 (차량용 AEC-Q100-011)</td><td>필드 판으로 유도 대전 후 핀마다 ±방전</td><td>C0a(&lt;125 V), C0b(125 V~), C1(250 V~), C2a(500 V~), C2b(750 V~), C3(≥1 kV). 권장 250 V(JEP157)</td></tr>
+          <tr><td>래치업</td><td>JEDEC JESD78 (차량용 AEC-Q100-004)</td><td>I 시험: 신호 핀에 ±100 mA 주입. V 시험: 전원에 최대 전압의 1.5배</td><td>등급 I(상온), 등급 II(최대 동작 온도)</td></tr>
+          <tr><td>시스템 수준</td><td>IEC 61000-4-2</td><td>완제품의 노출 지점에 ESD 건으로 접촉·기중 방전</td><td>접촉 레벨 1~4(2/4/6/8 kV). 기능 저하 허용 수준을 A~D로 판정</td></tr>
+          <tr><td>보호 소자 특성</td><td>ANSI/ESD STM5.5.1 (TLP), SP5.5.2 (vf-TLP)</td><td>준정적 I–V와 누설로 V<sub>t1</sub>·V<sub>h</sub>·I<sub>t2</sub> 추출</td><td>인증이 아니라 설계·불량 분석용</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout tip"><strong>설계 흐름 속의 ESD</strong><p>ESD는 레이아웃이 끝난 뒤에 고치기 가장 어려운 항목이다. 그래서 파운드리는 TLP로 검증한 ESD 셀 라이브러리(I/O 셀, 레일 클램프)와 설계 규칙을 제공하고, 설계 팀은 칩 계획 단계에서 전원 영역별 클램프 배치와 ESD 버스를 정한다. 사인오프에서는 핀 쌍마다 방전 경로가 있는지, 경로 저항(점 대 점 저항)이 기준(대개 1~2 Ω) 이하인지, ESD 전류에서 배선 전류 밀도가 한계 안인지, 전원 영역 경계에 2차 보호가 있는지를 도구로 검사한다. 불량이 나면 FailureBook의 <a href="../../failure/chapters/emission.html">발광 분석</a>과 <a href="../../failure/chapters/mechanisms.html">고장 메커니즘</a>(손상 크기로 HBM·CDM·EOS 구분)로 원인을 찾는다.</p></div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>HBM(100 pF·1.5 kΩ, 약 150 ns), CDM(패키지 RLC, 약 1 ns, 수 A), IEC 61000-4-2(150 pF·330 Ω, 3.75 A/kV)는 시간과 전류 규모가 다르다. 권장 부품 목표는 HBM 500 V(JEP155B), CDM 250 V(JEP157)이고, 오늘날 현장 불량은 CDM형이 많다.</li>
+      <li>TLP(100 ns 네모 펄스)로 준정적 I–V와 누설을 재서 V<sub>t1</sub>·V<sub>h</sub>·R<sub>on</sub>·I<sub>t2</sub>를 얻는다. \(V_{HBM}\approx I_{t2}(1.5\,\text{k}\Omega+R_{on})\). 운쉬–벨: 파괴 전력 \(\propto t^{-1/2}\).</li>
+      <li>GGNMOS는 드레인 애벌런치 정공이 R<sub>sub</sub>에서 0.7 V를 만들면 기생 npn이 켜지는 스냅백 소자다. \(V_h\approx BV_j/(\beta+1)^{1/n}\).</li>
+      <li>멀티 핑거는 \(V_{t2}\gt V_{t1}\)이어야 모두 켜진다. 실리사이드 블록(밸러스트)과 게이트 결합 트리거가 균일 턴온을 만든다.</li>
+      <li>칩 전체 네트워크는 이중 다이오드 + RC 트리거 레일 클램프 + 전원 영역 간 B2B 다이오드다. RC 시상수는 ESD 폭(수백 ns)과 전원 상승(µs~ms) 사이에 둔다.</li>
+      <li>CDM은 전원 영역 경계의 수신 게이트를 공격한다. 접지 간 저임피던스 연결과 로컬 2차 보호로 막는다.</li>
+      <li>래치업은 \(\beta_n\beta_p\gt1\)인 기생 pnpn이 주입 전류로 켜져 유지되는 현상이다. 탭 간격·가드 링·n⁺–p⁺ 간격으로 트리거 전류와 유지 전류를 키우고, 유지 전압을 전원보다 높게 하면 막을 수 있다. JESD78은 ±100 mA 주입과 1.5배 과전압으로 시험한다.</li>
+      <li>시스템 ESD는 TVS가 받되, 칩 보호 소자와 TVS가 경쟁하므로 직렬 임피던스와 TLP 곡선으로 함께 설계한다(SEED). 고속 I/O는 용량 예산, FinFET·칩렛은 작아진 I<sub>t2</sub>와 낮은 목표가 과제다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>HBM 시험에서 3 kV로 방전할 때 단락 부하의 정점 전류는 대략?</p><div class="opts">
+        <button class="opt">약 0.2 A</button><button class="opt" data-correct>약 2 A</button><button class="opt">약 11 A</button><button class="opt">약 30 A</button>
+      </div><div class="quiz-exp">I<sub>p</sub> ≈ V/1.5 kΩ = 3,000/1,500 = 2 A. 30 A 수준은 IEC 61000-4-2 8 kV의 첫 정점이다.</div></div>
+      <div class="quiz-q"><p>TLP로 잰 보호 소자의 I<sub>t2</sub>가 1.2 A, R<sub>on</sub>이 3 Ω이다. 기대할 수 있는 HBM 내성은 대략?</p><div class="opts">
+        <button class="opt">약 360 V</button><button class="opt">약 1.2 kV</button><button class="opt" data-correct>약 1.8 kV</button><button class="opt">약 4 kV</button>
+      </div><div class="quiz-exp">V<sub>HBM</sub> ≈ I<sub>t2</sub>(1,500 Ω + R<sub>on</sub>) ≈ 1.2 × 1,503 ≈ 1.8 kV. 100 ns TLP가 HBM 펄스의 실효 폭과 비슷해서 쓸 수 있는 경험식이다.</div></div>
+      <div class="quiz-q"><p>실리사이드 드레인 GGNMOS의 핑거를 4개에서 16개로 늘렸는데 HBM 내성이 거의 그대로다. 가장 그럴듯한 원인은?</p><div class="opts">
+        <button class="opt">기판 저항이 너무 작아서</button><button class="opt" data-correct>V<sub>t2</sub> &lt; V<sub>t1</sub>이라 첫 핑거만 켜진 채 타기 때문</button><button class="opt">게이트 산화막이 너무 두꺼워서</button><button class="opt">유지 전압이 V<sub>DD</sub>보다 높아서</button>
+      </div><div class="quiz-exp">첫 핑거가 파괴되기 직전의 전압 V<sub>t2</sub>가 다른 핑거의 트리거 전압보다 낮으면 나머지는 켜지지 않는다. 실리사이드 블록으로 밸러스트 저항을 넣거나 트리거 전압을 낮춰 균일 턴온을 만든다.</div></div>
+      <div class="quiz-q"><p>RC 트리거 레일 클램프의 시상수 τ로 가장 알맞은 범위는?</p><div class="opts">
+        <button class="opt">1 ns 미만</button><button class="opt" data-correct>ESD 펄스 폭(수백 ns)보다 길고 전원 상승 시간(µs~ms)보다 짧게, 대략 0.1~1 µs</button><button class="opt">전원 상승 시간보다 길게, 10 ms 이상</button><button class="opt">τ는 동작과 무관하다</button>
+      </div><div class="quiz-exp">τ가 너무 짧으면 HBM 꼬리 동안 클램프가 꺼져 레일 전압이 치솟고, 너무 길면 전원을 켤 때 클램프가 켜져 큰 전류를 끌어가거나 잡음에 오동작한다.</div></div>
+      <div class="quiz-q"><p>HBM 2 kV는 통과했는데 CDM 500 V에서 칩 안쪽, 두 전원 영역 경계의 입력 게이트만 깨졌다. 가장 효과적인 대책은?</p><div class="opts">
+        <button class="opt">I/O 패드 다이오드를 두 배로 키운다</button><button class="opt">HBM 목표를 4 kV로 올린다</button><button class="opt" data-correct>두 영역의 접지를 저임피던스(B2B 다이오드·굵은 버스)로 잇고 수신 게이트 앞에 로컬 클램프를 둔다</button><button class="opt">게이트 산화막을 더 얇게 한다</button>
+      </div><div class="quiz-exp">CDM 전하는 칩 전체에서 핀 하나로 빠져나가므로, 영역 경계를 건너는 길이 약하면 신호선의 수신 게이트가 그 길이 된다. 패드 보호를 키워도 내부 경로는 바뀌지 않는다.</div></div>
+      <div class="quiz-q"><p>래치업 방지에 쓰는 이중 가드 링의 역할로 옳은 것은?</p><div class="opts">
+        <button class="opt">게이트 산화막을 두껍게 만든다</button><button class="opt" data-correct>주입된 소수 캐리어를 걷어 내 기생 트랜지스터의 β를 낮추고 탭 역할로 션트 저항을 줄인다</button><button class="opt">웰의 도핑을 낮춘다</button><button class="opt">ESD 전류를 TVS로 돌린다</button>
+      </div><div class="quiz-exp">가드 링은 수집 전극이자 탭이다. β<sub>n</sub>β<sub>p</sub>를 1 아래로 낮추거나 트리거에 필요한 주입 전류를 JESD78 I 시험 기준(±100 mA) 이상으로 올린다.</div></div>
+      <div class="quiz-q"><p>보드에 6 V TVS를 달았는데도 IEC 8 kV 시험에서 칩이 파괴되었다. 칩 보호 소자는 약 1.5 V에서 켜지는 다이오드형이다. 가장 알맞은 설명은?</p><div class="opts">
+        <button class="opt">TVS 전압이 너무 낮아서</button><button class="opt" data-correct>칩 보호 소자가 TVS보다 먼저 켜져 TVS와 칩 사이 임피던스가 작으면 전류를 나눠 가져가기 때문</button><button class="opt">IEC 시험은 칩과 무관하기 때문</button><button class="opt">CDM 등급이 낮아서</button>
+      </div><div class="quiz-exp">TVS와 칩은 같은 노드에 병렬로 경쟁한다. 직렬 저항·배선 인덕턴스를 넣거나 클램프 전압이 더 낮은 TVS를 칩 가까이 두어 칩 전류를 I<sub>t2</sub> 아래로 묶는다(SEED).</div></div>
+      <div class="quiz-q"><p>운쉬–벨 관계를 따르는 소자에서 펄스 폭을 100 ns에서 25 ns로 줄이면 견디는 전력은 대략?</p><div class="opts">
+        <button class="opt">그대로</button><button class="opt" data-correct>약 2배</button><button class="opt">약 4배</button><button class="opt">절반</button>
+      </div><div class="quiz-exp">P<sub>f</sub> ∝ t<sup>−1/2</sup>이므로 (100/25)<sup>1/2</sup> = 2배. 열 확산 거리가 √t로 줄어 열이 작은 부피에 갇히기 때문이다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const small = (v, u) => v + "<small>" + u + "</small>";
+  const lgFmt = (v) => { const e = Math.round(Math.log10(v)); return e >= -2 && e <= 3 ? String(Number(v.toPrecision(2))) : "1e" + e; };
+  const fV = (V) => (V >= 1000 ? Number((V / 1000).toPrecision(3)) + " kV" : Math.round(V) + " V");
+  const fA = (A) => PB.si(A, "A", 3);
+  const logspace = (a, b, n) => { const o = []; for (let i = 0; i <= n; i++) o.push(Math.pow(10, a + ((b - a) * i) / n)); return o; };
+  function ctrlOff(id, off) { const c = document.getElementById(id); if (c) c.setAttribute("aria-disabled", off ? "true" : "false"); }
+  const dexp = (t, a, tr, td) => a * (Math.exp(-t / td) - Math.exp(-t / tr));
+
+  /* ---------- 공통 파형 (시간 단위 ns, 전류 A) */
+  // HBM: 100 pF, 1.5 kΩ, τr 2 ns, τd 150 ns. 정점이 V/1.5k가 되도록 정규화
+  const HBM_TR = 2, HBM_TD = 150;
+  const HBM_N = (() => { const tp = (Math.log(HBM_TD / HBM_TR) * HBM_TR * HBM_TD) / (HBM_TD - HBM_TR); return Math.exp(-tp / HBM_TD) - Math.exp(-tp / HBM_TR); })();
+  const hbm = (t, V) => (t <= 0 ? 0 : ((V / 1500) * (Math.exp(-t / HBM_TD) - Math.exp(-t / HBM_TR))) / HBM_N);
+  // IEC 61000-4-2 접촉: kV당 첫 정점 3.75 A(약 0.9 ns), 30 ns 2 A, 60 ns 1 A에 맞춘 두 이중 지수의 합
+  const iec = (t, V) => (t <= 0 ? 0 : (V / 1000) * (dexp(t, 5, 0.3, 2.5) + dexp(t, 3.6, 5, 50)));
+  // CDM: 직렬 RLC (R 50 Ω, L 12 nH, C_pkg). 1 V 기준 파형을 계산해 캐시
+  const cdmCache = new Map();
+  function cdmWave(CpF) {
+    if (cdmCache.has(CpF)) return cdmCache.get(CpF);
+    const C = CpF * 1e-12, R = 50, L = 12e-9, dt = 0.5e-12;
+    let vc = 1, il = 0; const ts = [0], is = [0];
+    const tEnd = Math.max(3e-9, 14 * Math.sqrt(L * C), 8 * R * C);
+    for (let k = 1, t = 0; t < tEnd; k++) { t = k * dt; il += ((vc - R * il) / L) * dt; vc -= (il / C) * dt; if (k % 10 === 0) { ts.push(t * 1e9); is.push(il); } }
+    let pk = 0; is.forEach((v) => { if (Math.abs(v) > pk) pk = Math.abs(v); });
+    let end = ts[ts.length - 1]; for (let k = is.length - 1; k > 0; k--) if (Math.abs(is[k]) > 0.01 * pk) { end = ts[k]; break; }
+    const w = { ts, is, dt: ts[1], end, f: (t) => { if (t <= 0) return 0; const x = t / ts[1], k = Math.floor(x); if (k >= is.length - 1) return 0; return is[k] + (is[k + 1] - is[k]) * (x - k); } };
+    cdmCache.set(CpF, w); return w;
+  }
+
+  /* ================================================== 1. 세 가지 ESD 펄스 */
+  (function () {
+    let cv; const rr = () => cv && cv.redraw();
+    const gM = PB.seg("wf-m", () => { ctrlOff("wf-c-c", gM() !== "cdm"); rr(); });
+    const gV = PB.range("wf-v", (v) => fV(Math.pow(10, v)), rr);
+    const gC = PB.range("wf-c", (v) => v + " pF", rr);
+    const gX = PB.seg("wf-x", rr);
+    ctrlOff("wf-c-c", gM() !== "cdm");
+    cv = PB.canvas("#wf-cv", (ctx, w, h) => {
+      const P = PB.palette(), V = Math.pow(10, gV()), Cp = gC(), m = gM(), lin = gX() === "lin";
+      const cw = cdmWave(Cp);
+      const f = { hbm: (t) => hbm(t, V), cdm: (t) => V * cw.f(t), iec: (t) => iec(t, V) };
+      let ts = logspace(-2, 3, 600);
+      if (lin) { ts = ts.filter((t) => t <= 200); for (let t = 0; t <= 200; t += 0.5) ts.push(t); ts.sort((a, b) => a - b); }
+      const col = { hbm: P.accent, cdm: P.bad, iec: P.warn };
+      let pk = 0, tp = 0; ts.forEach((t) => { const v = Math.abs(f[m](t)); if (v > pk) { pk = v; tp = t; } });
+      const series = ["hbm", "cdm", "iec"].map((k) => ({ data: ts.map((t) => [t, f[k](t)]), color: col[k], width: k === m ? 3 : 1.3, dash: k === m ? [] : [5, 4] }));
+      PB.chart(ctx, { x: 58, y: 14, w: w - 72, h: h - 60 }, { x: lin ? [0, 200] : [0.01, 1000], y: [Math.min(0, -0.15 * pk), pk * 1.25], logX: !lin,
+        xLabel: "시간 (ns)", yLabel: "방전 전류 (A)", xFmt: lin ? undefined : lgFmt, xTicks: lin ? undefined : [0.01, 0.1, 1, 10, 100, 1000], series });
+      const Cs = { hbm: 100e-12, cdm: Cp * 1e-12, iec: 150e-12 }[m];
+      PB.stat("wf-o-i", small(Number(pk.toPrecision(3)), " A"));
+      PB.stat("wf-o-t", small(Number(tp.toPrecision(2)), " ns"));
+      PB.stat("wf-o-q", PB.si(Cs * V, "C", 2).replace(/ (\S+)$/, "<small> $1</small>"));
+      PB.stat("wf-o-e", PB.si(0.5 * Cs * V * V, "J", 2).replace(/ (\S+)$/, "<small> $1</small>"));
+    }, { aspect: 0.55, minHeight: 300, maxHeight: 420 });
+  })();
+
+  /* ================================================== 2. 가상 TLP */
+  (function () {
+    const DUT = {
+      dio: { vt1: 0, vh: 0.75, ron: 250, it2: 0.020, ov: 0, step: 1 },
+      gg: { vt1: 7.2, vh: 4.6, ron: 600, it2: 0.005, ov: 1.4, step: 2 },
+      scr: { vt1: 7.6, vh: 1.6, ron: 150, it2: 0.030, ov: 3.6, step: 2 },
+    };
+    const Z = 50, RSH = 5;
+    let c1, c2, pts = [], vc = 0, failed = 0, timer = 0, rnd = PB.rng(11);
+    const rr = () => { c1 && c1.redraw(); c2 && c2.redraw(); readout(); };
+    const reset = () => { stop(); pts = []; vc = 0; failed = 0; rnd = PB.rng(11); rr(); };
+    const gD = PB.seg("tlp-d", reset), gP = PB.seg("tlp-p", reset);
+    const gW = PB.range("tlp-w", (v) => v + " µm", reset);
+    function par() {
+      const d = DUT[gD()], W = gW(), vf = gP() === "vf";
+      const It2 = d.it2 * W * (vf ? 2.5 : 1), vt1 = d.vt1 ? d.vt1 + (vf ? d.ov : 0) : 0;
+      return { d, W, vf, R: d.ron / W, It2, vt1, it1: 2e-5 * W, step: Math.max(d.step, Math.round((Z * It2 * 1.25) / 70)) };
+    }
+    function op(Vc, p) {
+      if (failed) { const I = Vc / (Z + RSH); return { V: I * RSH, I }; }
+      if (!p.vt1) { const I = Math.max(0, (Vc - p.d.vh) / (Z + p.R)); return { V: Vc - I * Z, I }; }
+      if (Vc <= p.vt1) return { V: Vc, I: 0 };
+      if (Vc <= p.vt1 + Z * p.it1) return { V: p.vt1, I: (Vc - p.vt1) / Z };
+      const I = (Vc - p.d.vh) / (Z + p.R); return { V: p.d.vh + I * p.R, I };
+    }
+    function pulse() {
+      const p = par();
+      if (failed >= 3 || vc > Z * p.It2 * 1.6 + 30) { stop(); return; }
+      const knee = p.vt1 || p.d.vh + 1;
+      vc = vc < knee + 0.4 ? Math.round((vc + Math.min(p.step, vc < knee - 3 ? 1 : 0.4)) * 10) / 10 : vc + p.step;
+      const o = op(vc, p);
+      if (!failed && o.I > p.It2) failed = 1; else if (failed) failed++;
+      const base = 1e-9 * (p.W / 100) * (1 + 0.15 * rnd());
+      const leak = failed ? base * Math.pow(10, 3.5 + 0.4 * failed + 0.3 * rnd()) : base;
+      pts.push({ V: o.V, I: o.I, leak, bad: !!failed, vc, pre: !!p.vt1 && o.I <= p.it1 * 1.0001 });
+      rr();
+    }
+    function stop() { if (timer) { clearInterval(timer); timer = 0; } document.getElementById("tlp-run").textContent = "자동 스윕"; }
+    document.getElementById("tlp-one").addEventListener("click", () => { stop(); pulse(); });
+    document.getElementById("tlp-reset").addEventListener("click", reset);
+    document.getElementById("tlp-run").addEventListener("click", (e) => {
+      if (timer) { stop(); return; }
+      if (failed >= 3) reset();
+      e.target.textContent = "멈춤"; timer = setInterval(pulse, 70);
+    });
+    function fit() {
+      const p = par(), on = pts.filter((q) => !q.bad && q.I > 3 * p.it1);
+      if (on.length < 2) return null;
+      let sx = 0, sy = 0, sxx = 0, sxy = 0; on.forEach((q) => { sx += q.I; sy += q.V; sxx += q.I * q.I; sxy += q.I * q.V; });
+      const n = on.length, b = (n * sxy - sx * sy) / (n * sxx - sx * sx || 1e-30);
+      return { vh: (sy - b * sx) / n, ron: b };
+    }
+    function readout() {
+      const p = par(), good = pts.filter((q) => !q.bad), fr = fit(), el = document.getElementById("tlp-vd");
+      const pre = good.filter((q) => q.pre), on = good.some((q) => !q.pre && q.I > p.it1), vt1 = pre.length ? Math.max(...pre.map((q) => q.V)) : 0;
+      PB.stat("tlp-o-t1", p.vt1 ? (on ? small(vt1.toFixed(2), " V") : "—") : "<small>스냅백 없음</small>");
+      PB.stat("tlp-o-h", fr ? small(fr.vh.toFixed(2), " V") + " <small>/ " + fr.ron.toFixed(2) + " Ω</small>" : "—");
+      const it2 = failed && good.length ? Math.max(...good.map((q) => q.I)) : 0;
+      PB.stat("tlp-o-t2", it2 ? small(it2.toFixed(2), " A") : "—");
+      PB.stat("tlp-o-hbm", it2 && !p.vf ? small(fV(it2 * (1500 + (fr ? fr.ron : p.R))), "") : it2 ? "<small>100 ns TLP에서</small>" : "—");
+      if (!pts.length) el.innerHTML = "‘펄스 하나’ 또는 ‘자동 스윕’을 눌러 측정을 시작한다.";
+      else if (failed) el.innerHTML = "<span class='bad-t'><b>I<sub>t2</sub> 도달.</b></span> 누설이 " + PB.si(pts[pts.length - 1].leak, "A", 2) + "로 뛰었다. 마지막 정상 점이 파괴 전류다." + (p.vf ? " vf-TLP의 I<sub>t2</sub>는 TLP보다 크다." : "");
+      else el.innerHTML = "펄스 " + pts.length + "개, 충전 전압 " + Number(vc.toFixed(1)) + " V. 아직 누설 변화 없음.";
+    }
+    c1 = PB.canvas("#tlp-cv1", (ctx, w, h) => {
+      const P = PB.palette(), p = par(), Imax = p.It2 * 1.35, Vmax = Math.max(12, p.vt1 + 2);
+      const last = pts[pts.length - 1], ll = last ? [[0, last.vc / Z], [last.vc, 0]] : [];
+      PB.chart(ctx, { x: 58, y: 14, w: w - 72, h: h - 60 }, { x: [0, Vmax], y: [0, Imax], xLabel: "TLP 전압 (V)", yLabel: "TLP 전류 (A)",
+        series: [{ data: ll, color: P.faint, width: 1.2, dash: [5, 4] }],
+        hlines: [{ y: p.It2, color: P.faint, label: "모델 I_t2" }],
+        points: pts.map((q) => ({ x: q.V, y: Math.min(q.I, Imax), color: q.bad ? P.bad : P.accent, r: 3.2 })) });
+    }, { aspect: 0.85, minHeight: 280, maxHeight: 380 });
+    c2 = PB.canvas("#tlp-cv2", (ctx, w, h) => {
+      const P = PB.palette(), p = par(), Imax = p.It2 * 1.35;
+      PB.chart(ctx, { x: 58, y: 14, w: w - 72, h: h - 60 }, { x: [0, Imax], y: [1e-10, 1e-3], logY: true, xLabel: "TLP 전류 (A)", yLabel: "DC 누설 (A)", yFmt: lgFmt,
+        points: pts.map((q) => ({ x: Math.min(q.I, Imax), y: q.leak, color: q.bad ? P.bad : P.accent, r: 3.2 })) });
+    }, { aspect: 0.85, minHeight: 280, maxHeight: 380 });
+    readout();
+  })();
+
+  /* ================================================== 3. GGNMOS 스냅백 */
+  (function () {
+    const VT = 0.02585, NN = 4, I0 = 1e-12, IS = 1e-17, BVOX = 8, VDD = 1.8;
+    let cv; const rr = () => cv && cv.redraw();
+    const gBV = PB.range("gg-bv", (v) => v.toFixed(1) + " V", rr);
+    const gB = PB.range("gg-b", (v) => Math.pow(10, v).toFixed(1), rr);
+    const gR = PB.range("gg-r", (v) => PB.si(Math.pow(10, v), "Ω", 2), rr);
+    const gW = PB.range("gg-w", (v) => v + " µm", rr);
+    function curve() {
+      const BV = gBV(), beta = Math.pow(10, gB()), Rsub = Math.pow(10, gR()), W = gW(), Rs = 600 / W, It2 = 0.005 * W, Ilim = It2 * 1.4;
+      const pts = [];
+      // 트리거 전: 접합 누설 × 증배
+      for (let k = 0; k <= 200; k++) {
+        const Vj = BV * (k / 200) * 0.9999, M = 1 / (1 - Math.pow(Vj / BV, NN)), I = I0 * W * M;
+        if ((M - 1) * I0 * W * Rsub > 0.3) break;
+        pts.push([Vj + I * Rs, I]);
+      }
+      // V_BE 매개: 베이스 노드 전류 균형 (M−1)(I_c + I_gen) = V_BE/R_sub + I_c/β
+      for (let k = 0; k <= 700; k++) {
+        const Vbe = 0.3 + (0.6 * k) / 700, Ic = IS * W * (Math.exp(Vbe / VT) - 1);
+        const Mm1 = (Vbe / Rsub + Ic / beta) / (Ic + I0 * W), M = 1 + Mm1;
+        const Vj = BV * Math.pow(1 - 1 / M, 1 / NN), I = M * (Ic + I0 * W);
+        pts.push([Vj + I * Rs, I]);
+        if (I > Ilim) break;
+      }
+      let it = 0; pts.forEach((q, i) => { if (q[0] > pts[it][0] && q[1] < 0.05 * It2) it = i; });
+      let ih = it; for (let i = it; i < pts.length; i++) if (pts[i][0] < pts[ih][0]) ih = i;
+      const vAtIt2 = (pts.find((q) => q[1] >= It2) || pts[pts.length - 1])[0];
+      return { pts, BV, beta, Rsub, W, It2, Vt1: pts[it][0], It1: pts[it][1], Vh: pts[ih][0], Vhf: BV / Math.pow(beta + 1, 1 / NN), vAtIt2 };
+    }
+    cv = PB.canvas("#gg-cv", (ctx, w, h) => {
+      const P = PB.palette(), o = curve();
+      const ch = PB.chart(ctx, { x: 58, y: 14, w: w - 72, h: h - 60 }, { x: [0, 12], y: [1e-10, 3], logY: true, xLabel: "드레인(패드) 전압 (V)", yLabel: "전류 (A)", yFmt: lgFmt,
+        series: [{ data: o.pts, color: P.accent, width: 2.8 }],
+        vlines: [{ x: BVOX, color: P.bad, label: "산화막 BV" }, { x: 1.1 * VDD, color: P.faint, label: "1.1 V_DD" }],
+        hlines: [{ y: o.It2, color: P.bad, label: "I_t2" }],
+        points: [{ x: o.Vt1, y: o.It1, color: P.warn, r: 5, label: "V_t1" }, { x: o.Vh, y: (o.pts.find((q) => q[0] === o.Vh) || [0, 1e-3])[1], color: P.ok, r: 5, label: "V_h" }] });
+      const b = ch.box; ctx.save(); ctx.globalAlpha = 0.1; ctx.fillStyle = P.ok; ctx.fillRect(ch.X(1.1 * VDD), b.y, ch.X(0.9 * BVOX) - ch.X(1.1 * VDD), b.h); ctx.restore();
+      const el = document.getElementById("gg-vd"); let msg;
+      if (o.Vt1 >= BVOX) msg = "<span class='bad-t'><b>산화막 먼저 파괴.</b></span> 트리거 전압 " + o.Vt1.toFixed(2) + " V가 산화막 BV 8 V 이상이다. BV<sub>j</sub>를 낮춰라.";
+      else if (o.vAtIt2 >= BVOX) msg = "<span class='bad-t'><b>실패.</b></span> I<sub>t2</sub> 근처에서 핀 전압이 BV를 넘는다. 폭 W를 키워 R<sub>on</sub>을 줄여라.";
+      else if (o.Vh < 1.1 * VDD) msg = "<span class='warn-t'><b>래치업 위험.</b></span> 유지 전압 " + o.Vh.toFixed(2) + " V가 1.1 V<sub>DD</sub>보다 낮다. β를 줄여라(게이트를 길게).";
+      else if (o.Vt1 > 0.9 * BVOX) msg = "<span class='warn-t'><b>여유 부족.</b></span> V<sub>t1</sub>이 BV의 90 %를 넘는다. 공정 산포나 빠른 펄스(오버슈트)에 산화막이 먼저 깨질 수 있다.";
+      else msg = "<span class='ok-t'><b>설계 창 안.</b></span> V<sub>t1</sub> " + o.Vt1.toFixed(2) + " V, V<sub>h</sub> " + o.Vh.toFixed(2) + " V, I<sub>t2</sub>에서 " + o.vAtIt2.toFixed(2) + " V.";
+      el.innerHTML = msg;
+      PB.stat("gg-o-t1", small(o.Vt1.toFixed(2), " V") + " <small>/ " + PB.si(o.It1, "A", 2) + "</small>");
+      PB.stat("gg-o-h", small(o.Vh.toFixed(2), " V") + " <small>/ " + o.Vhf.toFixed(2) + " V</small>");
+      PB.stat("gg-o-t2", small(o.vAtIt2.toFixed(2), " V") + " <small>(I<sub>t2</sub> " + o.It2.toFixed(2) + " A)</small>");
+    }, { aspect: 0.6, minHeight: 300, maxHeight: 420 });
+  })();
+
+  /* ================================================== 4. 멀티 핑거 */
+  (function () {
+    const WF = 25, VH = 4.9, rng = PB.rng(7), OFF = [];
+    for (let i = 0; i < 16; i++) OFF.push((rng() * 2 - 1) * 0.15);
+    let c1, c2; const rr = () => { c1 && c1.redraw(); c2 && c2.redraw(); };
+    const gN = PB.range("fg-n", (v) => v + "개 (" + v * WF + " µm)", rr);
+    const gL = PB.range("fg-l", (v) => v.toFixed(2) + " µm", rr);
+    const gT = PB.seg("fg-t", rr);
+    function calc() {
+      const N = gN(), L = gL(), Ron = (200 + 80 * L) / WF, It2f = Math.min(6.5, 2.5 + 1.2 * L) * 1e-3 * WF, vb = gT() === "gc" ? 5.6 : 7.4;
+      const vt = OFF.slice(0, N).map((o) => vb + o), Vt2 = VH + It2f * Ron, vmin = Math.min(...vt), vmax = Math.max(...vt);
+      const on = vt.map((v) => v <= Vt2 || v === vmin), n = on.filter(Boolean).length;
+      const It2 = n * It2f, RonT = Ron / n;
+      return { N, L, Ron, It2f, vb, vt, Vt2, vmin, vmax, on, n, It2, hbm: It2 * (1500 + RonT) };
+    }
+    c1 = PB.canvas("#fg-cv1", (ctx, w, h) => {
+      const P = PB.palette(), o = calc(), pad = 18, bw = (w - 2 * pad) / o.N, top = 40, bh = h - top - 40;
+      ctx.font = PB.font(12, false, 700); ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("파괴 직전 핑거별 전류", pad, 12);
+      o.vt.forEach((v, i) => {
+        const x = pad + i * bw + 2, ww = Math.max(2, bw - 4);
+        ctx.fillStyle = o.on[i] ? P.accent : P.border; ctx.globalAlpha = o.on[i] ? 0.9 : 0.6;
+        ctx.fillRect(x, top, ww, bh); ctx.globalAlpha = 1;
+        if (bw > 26) { ctx.save(); ctx.translate(x + ww / 2, top + bh - 6); ctx.rotate(-Math.PI / 2); ctx.fillStyle = o.on[i] ? "#fff" : P.dim; ctx.font = PB.font(10, true); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(v.toFixed(2) + " V", 0, 0); ctx.restore(); }
+      });
+      ctx.fillStyle = P.dim; ctx.font = PB.font(11); ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillText("켜짐 " + o.n + " / " + o.N + " · 핑거당 " + (o.It2f * 1000).toFixed(0) + " mA", pad, top + bh + 10);
+    }, { aspect: 0.85, minHeight: 260, maxHeight: 360 });
+    c2 = PB.canvas("#fg-cv2", (ctx, w, h) => {
+      const P = PB.palette(), o = calc(), Imax = 0.2;
+      const cur = [[0, 0], [o.vb * 0.97, 0.0004], [o.vb, 0.001], [VH, 0.003], [VH + 0.2 * o.Ron, 0.2]];
+      PB.chart(ctx, { x: 58, y: 14, w: w - 72, h: h - 60 }, { x: [0, 9], y: [0, Imax], xLabel: "핑거 전압 (V)", yLabel: "핑거 전류 (A)",
+        series: [{ data: cur, color: P.accent, width: 2.6 }],
+        vlines: o.vt.map((v) => ({ x: v, color: P.faint, dash: [2, 3], width: 1 })),
+        hlines: [{ y: o.It2f, color: P.bad, label: "I_t2,f" }],
+        points: [{ x: o.Vt2, y: o.It2f, color: o.Vt2 >= o.vmax ? P.ok : P.bad, r: 5, label: "V_t2" }] });
+      const el = document.getElementById("fg-vd");
+      if (o.n === o.N) el.innerHTML = "<span class='ok-t'><b>균일 턴온.</b></span> V<sub>t2</sub> " + o.Vt2.toFixed(2) + " V가 모든 핑거의 V<sub>t1</sub>보다 높아 " + o.N + "개가 모두 켜진다.";
+      else el.innerHTML = "<span class='bad-t'><b>비균일 턴온.</b></span> V<sub>t2</sub> " + o.Vt2.toFixed(2) + " V &lt; 최고 V<sub>t1</sub> " + o.vmax.toFixed(2) + " V. " + o.n + "개만 켜진 채 파괴된다.";
+      PB.stat("fg-o-n", small(o.n + " / " + o.N, ""));
+      PB.stat("fg-o-v", small(o.Vt2.toFixed(2), " V") + " <small>/ " + o.vmin.toFixed(2) + " V</small>");
+      PB.stat("fg-o-i", small(o.It2.toFixed(2), " A"));
+      PB.stat("fg-o-hbm", small(fV(o.hbm), ""));
+    }, { aspect: 0.85, minHeight: 260, maxHeight: 360 });
+  })();
+
+  /* ================================================== 5. RC 트리거 레일 클램프 */
+  (function () {
+    const CR = 1e-9, KP = 4e-4, VTH = 0.45, VNOM = 1.8, VLIM = 6, VBD = 9;
+    let cv; const rr = () => cv && cv.redraw();
+    const gE = PB.seg("rc-e", rr);
+    const gT = PB.range("rc-t", (v) => PB.si(Math.pow(10, v), "s", 2), rr);
+    const gW = PB.range("rc-w", (v) => Math.round(Math.pow(10, v)) + " µm", rr);
+    const gate = (vdd, vrc) => (vdd <= 0 ? 0 : vdd / (1 + Math.exp((vrc - vdd / 2) / (0.03 + 0.03 * vdd))));
+    const iclamp = (vg, vdd, W) => KP * W * Math.pow(Math.max(0, vg - VTH), 1.5) * Math.tanh(Math.max(0, vdd) / 0.3);
+    function run() {
+      const tau = Math.pow(10, gT()), W = Math.pow(10, gW()), ev = gE(), out = [];
+      let vpk = 0, ipk = 0, ton = 0, q = 0;
+      if (ev === "hbm") {
+        const dt = 0.02e-9, tEnd = 800e-9; let vdd = 0, vrc = 0;
+        const a = 1 - Math.exp(-dt / tau);
+        for (let k = 0, t = 0; t <= tEnd; k++, t = k * dt) {
+          const ie = hbm(t * 1e9, 2000), vg = gate(vdd, vrc), ic = iclamp(vg, vdd, W), ib = vdd > VBD ? (vdd - VBD) / 0.5 : 0;
+          vdd += ((ie - ic - ib) * dt) / CR; if (vdd < 0) vdd = 0;
+          vrc += (vdd - vrc) * a;
+          if (vdd > vpk) vpk = vdd; if (ic > ipk) ipk = ic; if (vg > 0.5 * vdd && vdd > 0.3) ton += dt;
+          if (k % 40 === 0) out.push([t * 1e9, vdd, vg, ie, ic]);
+        }
+        return { ev, tau, W, out, vpk, ipk, ton, unit: "ns", tEnd: 800 };
+      }
+      const tr = ev === "pu1" ? 1e-6 : 1e-4, kr = VNOM / tr, tEnd = 3 * tr;
+      for (let k = 0; k <= 900; k++) {
+        const t = (tEnd * k) / 900;
+        let vdd, vrc;
+        if (t <= tr) { vdd = kr * t; vrc = kr * (t - tau * (1 - Math.exp(-t / tau))); }
+        else { const v0 = kr * (tr - tau * (1 - Math.exp(-tr / tau))); vdd = VNOM; vrc = VNOM - (VNOM - v0) * Math.exp(-(t - tr) / tau); }
+        const vg = gate(vdd, vrc), ic = iclamp(vg, vdd, W);
+        if (ic > ipk) ipk = ic; if (vg > 0.5 * vdd && vdd > 0.3) ton += tEnd / 900; q += (ic * tEnd) / 900;
+        out.push([t * 1e6, vdd, vg, 0, ic]);
+      }
+      return { ev, tau, W, out, vpk: VNOM, ipk, ton, q, unit: "µs", tEnd: tEnd * 1e6 };
+    }
+    cv = PB.canvas("#rc-cv", (ctx, w, h) => {
+      const P = PB.palette(), o = run(), hh = (h - 24) / 2, hb = o.ev === "hbm";
+      const vmax = hb ? Math.max(VLIM * 1.25, o.vpk * 1.1) : 2.2;
+      PB.chart(ctx, { x: 58, y: 10, w: w - 72, h: hh - 30 }, { x: [0, o.tEnd], y: [0, vmax], yLabel: "전압 (V)", xTicks: [],
+        series: [{ data: o.out.map((p) => [p[0], p[1]]), color: P.accent, width: 2.6 }, { data: o.out.map((p) => [p[0], p[2]]), color: P.warn, width: 2 }],
+        hlines: hb ? [{ y: VLIM, color: P.bad, label: "한계 6 V" }] : [{ y: VNOM, color: P.faint, label: "1.8 V" }] });
+      const imax = Math.max(hb ? 1.5 : 0.02, o.ipk * 1.15);
+      PB.chart(ctx, { x: 58, y: hh + 4, w: w - 72, h: hh - 24 }, { x: [0, o.tEnd], y: [0, imax], xLabel: "시간 (" + o.unit + ")", yLabel: "전류 (A)",
+        series: [{ data: o.out.map((p) => [p[0], p[3]]), color: P.dim, width: 1.6, dash: [5, 3] }, { data: o.out.map((p) => [p[0], p[4]]), color: P.bad, width: 2.4 }],
+        hlines: hb ? [] : [{ y: 0.01, color: P.faint, label: "10 mA" }] });
+      const el = document.getElementById("rc-vd");
+      if (hb) {
+        if (o.vpk >= VLIM) el.innerHTML = "<span class='bad-t'><b>실패.</b></span> 레일 전압이 " + o.vpk.toFixed(1) + " V까지 오른다. " + (o.ton < 4e-7 ? "클램프가 펄스 꼬리 전에 꺼진다(τ↑)." : "클램프가 전류를 다 못 받는다(W↑).");
+        else if (o.vpk > 0.85 * VLIM) el.innerHTML = "<span class='warn-t'><b>여유 부족.</b></span> 레일 정점 " + o.vpk.toFixed(2) + " V.";
+        else el.innerHTML = "<span class='ok-t'><b>통과.</b></span> 레일 정점 " + o.vpk.toFixed(2) + " V. 클램프가 HBM 펄스 내내 켜져 있다.";
+      } else {
+        if (o.ipk > 0.01) el.innerHTML = "<span class='bad-t'><b>오동작.</b></span> 전원을 켤 때 클램프가 켜져 정점 " + fA(o.ipk) + "를 끌어간다. τ를 전원 상승 시간보다 충분히 짧게.";
+        else el.innerHTML = "<span class='ok-t'><b>조용함.</b></span> 전원 상승이 τ보다 충분히 느려 클램프가 꺼져 있다(정점 " + fA(o.ipk) + ").";
+      }
+      PB.stat("rc-o-v", small(o.vpk.toFixed(2), " V"));
+      PB.stat("rc-o-t", PB.si(o.ton, "s", 2).replace(/ (\S+)$/, "<small> $1</small>"));
+      PB.stat("rc-o-i", fA(o.ipk).replace(/ (\S+)$/, "<small> $1</small>"));
+    }, { aspect: 0.7, minHeight: 340, maxHeight: 480 });
+  })();
+
+  /* ================================================== 6. CDM 영역 경계 */
+  (function () {
+    const F2 = 0.4, BV = 4;
+    let cv; const rr = () => cv && cv.redraw();
+    const gV = PB.range("cdm-v", (v) => v + " V", rr);
+    const gC = PB.range("cdm-c", (v) => v + " pF", rr);
+    const gP = PB.seg("cdm-p", rr);
+    const gR = PB.range("cdm-r", (v) => v.toFixed(1) + " Ω", rr);
+    function vox(i2, p, R) {
+      const a = Math.abs(i2);
+      if (p === "none") return Math.min(6, a * 100);
+      const vb = 0.8 * (1 - Math.exp(-a / 0.05)) + 0.5 * a + a * R;
+      if (p === "b2b" || vb <= 1.5) return vb;
+      return 1.5 + (vb - 1.5) * (5 / 205);
+    }
+    cv = PB.canvas("#cdm-cv", (ctx, w, h) => {
+      const P = PB.palette(), V = gV(), wv = cdmWave(gC()), p = gP(), R = gR(), tmax = Math.max(2, wv.end * 1.1), hh = (h - 24) / 2;
+      const ts = []; for (let k = 0; k <= 500; k++) ts.push((tmax * k) / 500);
+      const I = ts.map((t) => V * wv.f(t)), Vo = I.map((i) => vox(F2 * i, p, R));
+      const ip = Math.max(...I.map(Math.abs)), vp = Math.max(...Vo);
+      PB.chart(ctx, { x: 58, y: 10, w: w - 72, h: hh - 30 }, { x: [0, tmax], y: [-0.4 * ip, ip * 1.15], yLabel: "I_CDM (A)", xTicks: [],
+        series: [{ data: ts.map((t, k) => [t, I[k]]), color: P.bad, width: 2.4 }, { data: ts.map((t, k) => [t, F2 * I[k]]), color: P.accent2, width: 1.6, dash: [5, 3] }] });
+      PB.chart(ctx, { x: 58, y: hh + 4, w: w - 72, h: hh - 24 }, { x: [0, tmax], y: [0, 6.2], xLabel: "시간 (ns)", yLabel: "게이트 전압 (V)",
+        series: [{ data: ts.map((t, k) => [t, Vo[k]]), color: vp >= BV ? P.bad : P.ok, width: 2.6 }],
+        hlines: [{ y: BV, color: P.bad, label: "코어 산화막 BV (ns)" }] });
+      const el = document.getElementById("cdm-vd");
+      if (vp >= BV) el.innerHTML = "<span class='bad-t'><b>수신 게이트 파괴.</b></span> " + (p === "none" ? "영역 경계 전류가 갈 곳이 게이트뿐이다." : "B2B 다이오드와 버스의 I·R 강하가 " + vp.toFixed(1) + " V다. R<sub>bus</sub>를 줄이거나 로컬 클램프를 더하라.");
+      else if (vp > 0.9 * BV) el.innerHTML = "<span class='warn-t'><b>여유 부족.</b></span> 게이트 정점 " + vp.toFixed(2) + " V.";
+      else el.innerHTML = "<span class='ok-t'><b>통과.</b></span> 게이트 정점 " + vp.toFixed(2) + " V로 BV 4 V 아래다.";
+      PB.stat("cdm-o-i", small(ip.toFixed(2), " A"));
+      PB.stat("cdm-o-i2", small((F2 * ip).toFixed(2), " A"));
+      PB.stat("cdm-o-v", small(vp.toFixed(2), " V") + " <small>/ " + BV + " V</small>");
+    }, { aspect: 0.65, minHeight: 320, maxHeight: 460 });
+  })();
+
+  /* ================================================== 7. 래치업 */
+  (function () {
+    const VBR = 14, RON = 3, ITEST = 0.1;
+    let c1, c2; const rr = () => { c1 && c1.redraw(); c2 && c2.redraw(); };
+    const gS = PB.range("lu-s", (v) => v + " µm", rr);
+    const gD = PB.range("lu-d", (v) => v.toFixed(1) + " µm", rr);
+    const gG = PB.seg("lu-g", rr), gVd = PB.seg("lu-v", rr);
+    function calc(sOver) {
+      const s = sOver || gS(), d = gD(), gr = gG() === "1", VDD = Number(gVd());
+      const Rs = 25 * s, Rw = 60 * s, f = gr ? 0.02 : 0.3;
+      const bn = 25 * Math.exp(-d / 5) * (gr ? 0.08 : 1), bp = 15 * (gr ? 0.3 : 1), bb = bn * bp;
+      const iRs = 0.7 / Rs, iRw = 0.7 / Rw;
+      const IH = bb > 1 ? iRs + ((bn + 1) * (bp * iRw + iRs)) / (bb - 1) : Infinity;
+      const VH = 1.0 + 0.12 * d, Itrig = 0.7 / (f * Rs);
+      const Ilatch = bb > 1 && VDD > VH ? IH + (VDD - VH) / RON : 0;
+      return { s, d, gr, VDD, Rs, Rw, bn, bp, bb, IH, VH, Itrig, Ilatch };
+    }
+    c1 = PB.canvas("#lu-cv1", (ctx, w, h) => {
+      const P = PB.palette(), o = calc(), ser = [];
+      if (o.bb > 1) {
+        const ih = Math.max(o.IH, 1e-6);
+        ser.push({ data: [[0, 1e-7], [VBR, 2e-7], [VBR, ih * 0.5], [o.VH, ih], [o.VH + (10 - ih) * RON, 10]], color: P.accent, width: 2.6 });
+      } else ser.push({ data: [[0, 1e-7], [VBR, 2e-7], [VBR, 1]], color: P.accent, width: 2.6 });
+      PB.chart(ctx, { x: 58, y: 14, w: w - 72, h: h - 60 }, { x: [0, 16], y: [1e-7, 10], logY: true, xLabel: "V_DD–V_SS 전압 (V)", yLabel: "pnpn 전류 (A)", yFmt: lgFmt,
+        series: ser, vlines: [{ x: o.VDD, color: P.warn, label: "V_DD" }],
+        points: o.Ilatch ? [{ x: o.VDD, y: Math.min(o.Ilatch, 10), color: P.bad, r: 6, label: "래치 " + fA(o.Ilatch) }] : (o.bb > 1 && isFinite(o.IH) ? [{ x: o.VH, y: Math.max(o.IH, 1.2e-7), color: P.ok, r: 5, label: "(V_H, I_H)" }] : []) });
+    }, { aspect: 0.85, minHeight: 280, maxHeight: 380 });
+    c2 = PB.canvas("#lu-cv2", (ctx, w, h) => {
+      const P = PB.palette(), o = calc(), d = [];
+      for (let s = 2; s <= 50; s++) d.push([s, calc(s).Itrig]);
+      PB.chart(ctx, { x: 58, y: 14, w: w - 72, h: h - 60 }, { x: [2, 50], y: [1e-3, 10], logY: true, xLabel: "탭 간격 s (µm)", yLabel: "트리거 주입 전류 (A)", yFmt: lgFmt,
+        series: [{ data: d, color: P.accent, width: 2.4 }], hlines: [{ y: ITEST, color: P.bad, label: "JESD78 ±100 mA" }],
+        points: [{ x: o.s, y: o.Itrig, color: o.Itrig >= ITEST ? P.ok : P.bad, r: 5 }] });
+      const el = document.getElementById("lu-vd");
+      if (o.bb <= 1) el.innerHTML = "<span class='ok-t'><b>래치 불가.</b></span> β<sub>n</sub>β<sub>p</sub> = " + o.bb.toFixed(2) + " &lt; 1이라 되먹임이 유지되지 않는다.";
+      else if (o.VH >= o.VDD) el.innerHTML = "<span class='ok-t'><b>유지되지 않음.</b></span> 유지 전압 " + o.VH.toFixed(2) + " V가 V<sub>DD</sub> " + o.VDD + " V보다 높아 트리거되어도 스스로 꺼진다.";
+      else if (o.Itrig >= ITEST) el.innerHTML = "<span class='warn-t'><b>I 시험 통과.</b></span> 트리거에 " + fA(o.Itrig) + " 이상이 필요하다. 다만 래치 경로 자체는 남아 있다(β곱 " + o.bb.toFixed(1) + ").";
+      else el.innerHTML = "<span class='bad-t'><b>래치업.</b></span> " + fA(o.Itrig) + " 주입으로 트리거되고 V<sub>DD</sub>에서 " + fA(o.Ilatch) + "가 계속 흐른다. 탭을 촘촘히, 가드 링을 둘러라.";
+      PB.stat("lu-o-b", small(o.bb.toFixed(o.bb < 10 ? 2 : 0), ""));
+      PB.stat("lu-o-t", fA(o.Itrig).replace(/ (\S+)$/, "<small> $1</small>"));
+      PB.stat("lu-o-h", (isFinite(o.IH) ? fA(o.IH) : "∞") + " <small>/ " + o.VH.toFixed(2) + " V</small>");
+    }, { aspect: 0.85, minHeight: 280, maxHeight: 380 });
+  })();
+
+  /* ================================================== 8. SEED */
+  (function () {
+    const RT = 0.1, CHIP = { dio: { von: 1.5, r: 1.2 }, snap: { vt1: 10, vh: 4.5, r: 1.5 } }, IT2 = 1.0, IT2F = 2.5;
+    let cv; const rr = () => cv && cv.redraw();
+    const gV = PB.range("seed-v", (v) => v.toFixed(1) + " kV", rr);
+    const gT = PB.seg("seed-t", rr);
+    const gR = PB.range("seed-r", (v) => v.toFixed(1) + " Ω", rr);
+    const gC = PB.seg("seed-c", rr);
+    function run() {
+      const kv = gV(), vbr = Number(gT()), Rs = gR(), c = gC(), out = [];
+      let trig = false, cpk = 0, ok = true, qT = 0, qA = 0;
+      const ts = []; for (let t = 0; t <= 5; t += 0.02) ts.push(t); for (let t = 5.5; t <= 120; t += 0.5) ts.push(t);
+      ts.forEach((t, k) => {
+        const I = iec(t, kv * 1000);
+        const ich = (vn) => c === "dio" ? Math.max(0, (vn - CHIP.dio.von) / (Rs + CHIP.dio.r)) : trig ? Math.max(0, (vn - CHIP.snap.vh) / (Rs + CHIP.snap.r)) : 0;
+        const itv = (vn) => (vbr ? Math.max(0, (vn - vbr) / RT) : 0);
+        const solve = () => { let lo = 0, hi = 1e5; for (let n = 0; n < 60; n++) { const m = (lo + hi) / 2; if (ich(m) + itv(m) < I) lo = m; else hi = m; } return (lo + hi) / 2; };
+        let vn = solve();
+        if (c === "snap" && !trig && vn >= CHIP.snap.vt1) { trig = true; vn = solve(); }
+        const ic = ich(vn), it = itv(vn);
+        if (ic > cpk) cpk = ic;
+        if ((t <= 2 && ic > IT2F) || (t > 2 && ic > IT2)) ok = false;
+        const dt = k ? t - ts[k - 1] : 0; qT += it * dt; qA += I * dt;
+        out.push([t, I, it, ic]);
+      });
+      return { out, cpk, ok, frac: qA ? qT / qA : 0, ip: 3.75 * kv };
+    }
+    cv = PB.canvas("#seed-cv", (ctx, w, h) => {
+      const P = PB.palette(), o = run(), ymax = Math.max(4, o.ip * 1.1);
+      PB.chart(ctx, { x: 58, y: 14, w: w - 72, h: h - 60 }, { x: [0.1, 120], y: [0.01, ymax], logX: true, logY: true, xLabel: "시간 (ns)", yLabel: "전류 (A)", xFmt: lgFmt, yFmt: lgFmt, xTicks: [0.1, 1, 10, 100],
+        series: [{ data: o.out.map((p) => [p[0], p[1]]), color: P.dim, width: 1.6, dash: [5, 3] }, { data: o.out.map((p) => [p[0], p[2]]), color: P.accent2, width: 2.2 }, { data: o.out.map((p) => [p[0], p[3]]), color: P.bad, width: 2.8 }],
+        hlines: [{ y: IT2, color: P.bad, label: "칩 I_t2 (TLP)" }, { y: IT2F, color: P.faint, label: "vf-TLP" }] });
+      const el = document.getElementById("seed-vd");
+      if (o.ok) el.innerHTML = "<span class='ok-t'><b>통과.</b></span> 칩 정점 " + fA(o.cpk) + ", 전하의 " + (o.frac * 100).toFixed(0) + " %를 TVS가 받았다.";
+      else el.innerHTML = "<span class='bad-t'><b>칩 파괴.</b></span> 칩 전류가 " + fA(o.cpk) + "까지 오른다. " + (Number(gT()) ? "칩 보호가 TVS와 전류를 나눠 갖는다. 직렬 임피던스를 넣거나 TVS를 바꿔라." : "TVS 없이 칩 혼자 IEC 전류를 받을 수 없다.");
+      PB.stat("seed-o-i", small((o.ip).toFixed(1), " A"));
+      PB.stat("seed-o-c", fA(o.cpk).replace(/ (\S+)$/, "<small> $1</small>"));
+      PB.stat("seed-o-f", small((o.frac * 100).toFixed(0), " %"));
+    }, { aspect: 0.55, minHeight: 300, maxHeight: 420 });
+  })();
+
+  /* ================================================== 9. 고속 I/O 용량 예산 */
+  (function () {
+    const CF = 30 + 50, CD = 1.0, BUDGET = 2, HBMT = 500, CDMT = 250;
+    let cv; const rr = () => cv && cv.redraw();
+    const gR = PB.range("hs-r", (v) => Math.round(Math.pow(10, v)) + " Gb/s", rr);
+    const gM = PB.seg("hs-m", rr);
+    const gW = PB.range("hs-w", (v) => v + " µm", rr);
+    const gT = PB.seg("hs-t", rr);
+    function at(W) {
+      const rate = Math.pow(10, gR()), fN = rate / (gM() === "pam4" ? 4 : 2), C = CF + CD * W;
+      const f3 = (1 / (2 * Math.PI * 25 * C * 1e-15)) * 1e-9 * (gT() === "1" ? 1.8 : 1);
+      return { fN, C, f3, loss: 10 * Math.log10(1 + Math.pow(fN / f3, 2)), hbm: 0.02 * W * 1500, cdm: (0.05 * W) / 0.012 };
+    }
+    cv = PB.canvas("#hs-cv", (ctx, w, h) => {
+      const P = PB.palette(), W = gW(), o = at(W), hh = (h - 24) / 2, Ws = []; for (let x = 5; x <= 120; x++) Ws.push(x);
+      const A = Ws.map(at), ok = Ws.filter((x, i) => A[i].loss <= BUDGET && A[i].hbm >= HBMT && A[i].cdm >= CDMT);
+      const band = (ch) => { if (!ok.length) return; ctx.save(); ctx.globalAlpha = 0.16; ctx.fillStyle = P.ok; ctx.fillRect(ch.X(ok[0]), ch.box.y, ch.X(ok[ok.length - 1]) - ch.X(ok[0]), ch.box.h); ctx.restore(); };
+      band(PB.chart(ctx, { x: 58, y: 10, w: w - 72, h: hh - 30 }, { x: [5, 120], y: [0, 6], yLabel: "나이퀴스트 손실 (dB)", xTicks: [],
+        series: [{ data: Ws.map((x, i) => [x, A[i].loss]), color: P.accent, width: 2.4 }], hlines: [{ y: BUDGET, color: P.bad, label: "예산 2 dB" }], vlines: [{ x: W, color: P.text }] }));
+      band(PB.chart(ctx, { x: 58, y: hh + 4, w: w - 72, h: hh - 24 }, { x: [5, 120], y: [0, 1200], xLabel: "ESD 다이오드 폭 W (µm)", yLabel: "견딤 전압 (V)",
+        series: [{ data: Ws.map((x, i) => [x, A[i].hbm]), color: P.accent2, width: 2.2 }, { data: Ws.map((x, i) => [x, A[i].cdm]), color: P.warn, width: 2.2 }],
+        hlines: [{ y: HBMT, color: P.accent2, label: "HBM 500 V" }, { y: CDMT, color: P.warn, label: "CDM 250 V" }], vlines: [{ x: W, color: P.text }] }));
+      const el = document.getElementById("hs-vd"), fails = [];
+      if (o.loss > BUDGET) fails.push("손실 " + o.loss.toFixed(2) + " dB가 예산을 넘는다");
+      if (o.cdm < CDMT) fails.push("CDM " + Math.round(o.cdm) + " V &lt; 250 V");
+      if (o.hbm < HBMT) fails.push("HBM " + Math.round(o.hbm) + " V &lt; 500 V");
+      el.innerHTML = fails.length ? "<span class='bad-t'><b>미달.</b></span> " + fails.join(" · ") + (ok.length ? ". 초록 띠 안으로 W를 옮겨라." : ". 이 속도에서는 만족하는 폭이 없다.") : "<span class='ok-t'><b>통과.</b></span> 나이퀴스트 " + o.fN.toFixed(0) + " GHz에서 손실 " + o.loss.toFixed(2) + " dB, ESD 목표 충족.";
+      PB.stat("hs-o-c", small(Math.round(o.C), " fF"));
+      PB.stat("hs-o-l", small(o.loss.toFixed(2), " dB") + " <small>@ " + o.fN.toFixed(0) + " GHz</small>");
+      PB.stat("hs-o-h", small(Math.round(o.hbm), " V"));
+      PB.stat("hs-o-cdm", small(Math.round(o.cdm), " V"));
+    }, { aspect: 0.7, minHeight: 340, maxHeight: 480 });
+  })();
+})();
+</script>
+</body>
+</html>

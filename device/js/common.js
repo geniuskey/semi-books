@@ -27,8 +27,9 @@
     { slug: "power",     num: "14", title: "전력 반도체 소자",         desc: "항복 전압과 온저항의 트레이드오프, 드리프트층 설계, 전력 MOSFET·슈퍼정션·IGBT, SiC·GaN 와이드 밴드갭과 HEMT, 스위칭 손실.", tags: ["첨단", "sim"] },
     { slug: "rf",        num: "15", title: "고주파 소자와 잡음",       desc: "소신호 등가 회로와 y·S 파라미터, 차단 주파수 f_T와 최대 발진 주파수 f_max, 열·산탄·1/f 잡음과 잡음 지수, RF CMOS·HBT·HEMT 비교.", tags: ["첨단", "sim"] },
     { slug: "reliability", num: "16", title: "소자 신뢰성",            desc: "핫 캐리어, BTI, 산화막 TDDB와 와이블 통계, 가속 시험과 수명 외삽, 정전기 방전(ESD) 보호, 자가 발열과 변동성.", tags: ["MOS", "sim"] },
-    { slug: "lab",       num: "17", title: "소자 실험실",            desc: "1차원 드리프트–확산 솔버로 다이오드·저항·pin 구조를 직접 설계하고 바이어스를 걸어 밴드·캐리어·전류를 본다.", tags: ["샌드박스", "sim"] },
-    { slug: "glossary",  num: "18", title: "용어집 & 종합 퀴즈",       desc: "핵심 소자 물리 용어를 검색하고, 종합 퀴즈로 실력을 점검하자.", tags: ["정리"] },
+    { slug: "esd",       num: "17", title: "ESD와 래치업",            desc: "HBM·CDM·IEC 61000-4-2 펄스와 TLP, GGNMOS 스냅백과 실리사이드 블록, RC 트리거 레일 클램프, CDM 전원 영역 경계, CMOS 래치업과 JESD78, 시스템 수준 ESD와 고속 I/O.", tags: ["MOS", "sim"] },
+    { slug: "lab",       num: "18", title: "소자 실험실",            desc: "1차원 드리프트–확산 솔버로 다이오드·저항·pin 구조를 직접 설계하고 바이어스를 걸어 밴드·캐리어·전류를 본다.", tags: ["샌드박스", "sim"] },
+    { slug: "glossary",  num: "19", title: "용어집 & 종합 퀴즈",       desc: "핵심 소자 물리 용어를 검색하고, 종합 퀴즈로 실력을 점검하자.", tags: ["정리"] },
   ];
 
   const PB = (window.PB = {});
