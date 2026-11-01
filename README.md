@@ -66,9 +66,10 @@ tools/katex.mjs                       모든 책의 수식 빌드 렌더링
 tools/katex.test.mjs                  수식 렌더링·HTML의 < 거부 규칙 회귀 검사
 tools/migration.test.cjs              원본 보존·덮어쓰기 거부·집필 책 보호 회귀 검사
 tools/browser-check.cjs               데스크톱·모바일 브라우저 검사
+tools/og.mjs                         서가 공유 이미지(og.png) 생성, Playwright 필요
 ```
 
-`catalog.js`를 직접 수정하지 않고 `migration/books.json`의 책 정보를 수정한 후 생성합니다. 장 수와 시뮬레이터 수는 소스에서 셉니다. 원본 포털의 목록을 다시 참고할 때는 `python3 tools/sync-catalog.py ../books/data/books.json`도 사용할 수 있습니다. 
+`catalog.js`를 직접 수정하지 않고 `migration/books.json`의 책 정보를 수정한 후 생성합니다. 장 수와 시뮬레이터 수는 소스에서 셉니다. 원본 포털의 목록을 다시 참고할 때는 `python3 tools/sync-catalog.py ../books/data/books.json`도 사용할 수 있습니다. 책·장·시뮬레이터 수가 바뀌면 `node tools/og.mjs`로 공유 이미지의 숫자도 갱신합니다.
 
 표지 그림은 각 책의 `motif`로 고릅니다. ProcessBook의 `process`, EtchBook의 `etch`, InfraBook의 `fab`, CMPBook의 `cmp`, ThinFilmBook의 `film`, PlasmaBook의 `plasma`, PowerBook의 `power`는 이 저장소에서 만들어 books 포털에도 같은 코드로 반영한 표지입니다. 표지를 고칠 때는 `shared/js/covers.js`·`shared/css/cover-animations.css`와 books의 `js/covers.js`·`css/style.css`를 함께 맞춥니다. `npm test`는 서가의 모든 `motif`에 표지가 있는지도 확인합니다.
 
