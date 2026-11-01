@@ -33,10 +33,15 @@ for (const entry of book.books) {
   generated.set(slug, { ...meta, slug, chapters, image, title: decode(home.match(/<title>([^<]+)<\/title>/)[1]) });
 }
 const RESOURCE_TYPE = { glossary: '용어집, 퀴즈' };
-// Every page uses the SemiBooks icon set at the site root, whatever icon its book ships with.
+// Tabs show each book's own favicon.svg; the home-screen icon, manifest and favicon.ico are the SemiBooks set
+// at the site root. Every icon link a page ships with is replaced by these.
 const ICON_LINK = /<link\b[^>]*\brel=["'](?:shortcut icon|icon|apple-touch-icon|manifest)["'][^>]*>[ \t]*\n?/gi;
-const icons = ['<link rel="icon" href="/favicon.ico" sizes="32x32">', '<link rel="icon" type="image/svg+xml" href="/favicon.svg">',
-  '<link rel="apple-touch-icon" href="/apple-touch-icon.png">', '<link rel="manifest" href="/site.webmanifest">'].join('\n') + '\n';
+const siteIcons = '<link rel="apple-touch-icon" href="/apple-touch-icon.png">\n<link rel="manifest" href="/site.webmanifest">\n';
+function icons(rel) {
+  const slug = rel.includes('/') ? rel.split('/')[0] : '';
+  if (slug && existsSync(join(output, slug, 'favicon.svg'))) return `<link rel="icon" type="image/svg+xml" href="/${slug}/favicon.svg">\n` + siteIcons;
+  return '<link rel="icon" href="/favicon.ico" sizes="32x32">\n<link rel="icon" type="image/svg+xml" href="/favicon.svg">\n' + siteIcons;
+}
 const katexCss = `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@${katexVersion}/dist/katex.min.css">\n`;
 const mathErrors = [];
 
@@ -125,7 +130,7 @@ async function pages(directory) {
       if (existing && existing !== url) throw new Error(`Wrong canonical in ${rel}: ${existing} (expected ${url})`);
       if (!existing) html = html.replace(/<\/head>/i, `<link rel="canonical" href="${url}">\n</head>`);
     }
-    html = html.replace(ICON_LINK, '').replace(/<\/head>/i, icons + tag + '\n</head>');
+    html = html.replace(ICON_LINK, '').replace(/<\/head>/i, icons(rel) + tag + '\n</head>');
     await writeFile(file, html);
     urls.push(url);
   }
