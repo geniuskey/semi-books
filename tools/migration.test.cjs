@@ -31,7 +31,7 @@ test('imports preserve source repositories, normalize navigation, and refuse loc
     assert(html.includes('setAttribute("data-theme", "dark")'));
     assert(html.includes('id="sb-theme"'));
     assert(html.includes('../shared/js/book-shell.js'));
-    assert(html.includes('../shared/js/book-topbar.js'));
+    assert(html.includes('../shared/js/book-ui.js'));
     assert(!html.includes('cloudflareinsights')); assert(!fs.existsSync(path.join(target, 'sample/CNAME'))); assert(!fs.existsSync(path.join(target, 'sample/.git')));
     assert.equal(fs.readFileSync(path.join(source, 'index.html'), 'utf8'), sourceHtml);
     assert.equal(run('--check').status, 0);

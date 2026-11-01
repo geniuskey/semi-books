@@ -423,32 +423,19 @@
     const root = body.dataset.root != null ? body.dataset.root : body.dataset.chapter ? "../" : "";
     const curSlug = body.dataset.chapter || "";
     const href = (slug) => (slug ? `${root}chapters/${slug}.html` : `${root}index.html`);
-    const feedbackUrl = "https://books.euiyun.com/feedback.html?book=memorybook&page=" + encodeURIComponent(location.href);
 
     // favicon
     if (!document.querySelector('link[rel="icon"]')) { const fi = document.createElement("link"); fi.rel = "icon"; fi.type = "image/svg+xml"; fi.href = root + "favicon.svg"; document.head.appendChild(fi); }
 
-    // top bar: the series standard from @euiyun/book (shared/js/book-topbar.js)
+    // top bar: the series standard from @euiyun/book (shared/js/book-ui.js)
     const { bar } = EuiyunBook.topbar({
       name: "MemoryBook", subtitle: "메모리 반도체 교과서", logo: LOGO, home: href(""),
       chapters: CHAPTERS, chapterHref: href, feedback: "memorybook",
       theme: { isDark: () => MB.isDark(), set: (next) => { try { localStorage.setItem("semi-theme", next); } catch (e) {} applyTheme(next); } },
-      onMenu: () => toggleDrawer(true),
     });
 
-    // drawer
-    const drawer = document.createElement("nav");
-    drawer.className = "mb-drawer";
-    drawer.innerHTML = `<h4>Chapters</h4><ul class="mb-chlist">
-      <li><a href="${href("")}" class="${curSlug ? "" : "active"}"><span class="num">00</span><span>홈 · 로드맵</span></a></li>
-      ${CHAPTERS.map((c) => `<li><a href="${href(c.slug)}" class="${c.slug === curSlug ? "active" : ""}"><span class="num">${c.num}</span><span>${c.title}</span></a></li>`).join("")}
-    </ul>`;
-    const backdrop = document.createElement("div");
-    backdrop.className = "mb-drawer-backdrop";
-    body.append(backdrop, drawer);
-    const toggleDrawer = (o) => body.classList.toggle("drawer-open", o);
-    backdrop.addEventListener("click", () => toggleDrawer(false));
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleDrawer(false); });
+    // drawer, pager and footer: the series standard from @euiyun/book (shared/js/book-ui.js)
+    EuiyunBook.drawer({ home: href(""), homeLabel: "홈 · 로드맵", chapters: CHAPTERS, chapterHref: href, current: curSlug });
 
     // chapter page extras
     const main = document.querySelector("main.chapter");
@@ -481,28 +468,9 @@
         h2s.forEach((h) => io.observe(h.parentElement));
       }
 
-      // pager
-      const idx = CHAPTERS.findIndex((c) => c.slug === curSlug);
-      const prev = idx > 0 ? CHAPTERS[idx - 1] : null;
-      const next = idx >= 0 && idx < CHAPTERS.length - 1 ? CHAPTERS[idx + 1] : null;
-      const pager = document.createElement("nav");
-      pager.className = "mb-pager";
-      pager.innerHTML =
-        (prev ? `<a class="prev" href="${href(prev.slug)}"><small>← 이전 · ${prev.num}</small>${prev.title}</a>` : `<a class="prev" href="${href("")}"><small>← 처음으로</small>홈 · 로드맵</a>`) +
-        (next ? `<a class="next" href="${href(next.slug)}"><small>다음 · ${next.num} →</small>${next.title}</a>` : "");
-      layout.after(pager);
+      EuiyunBook.pager({ after: layout, home: href(""), homeLabel: "홈 · 로드맵", chapters: CHAPTERS, chapterHref: href, current: curSlug });
     }
-    const foot = document.createElement("footer");
-    foot.className = "mb-foot";
-    foot.innerHTML = `MemoryBook — 공학도를 위한 인터랙티브 메모리 반도체 교과서 · 수치는 교육용 근사 모델입니다.<br>
-      © 2026 geniuskey 및 MemoryBook 기여자 · 콘텐츠 <a rel="license" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a> · 코드 <a href="${root}LICENSE-MIT">MIT</a> · <a href="${root}LICENSE.md">라이선스 안내</a>`;
-    const feedbackLink = document.createElement("a");
-    feedbackLink.href = feedbackUrl;
-    feedbackLink.target = "_blank";
-    feedbackLink.rel = "noopener";
-    feedbackLink.textContent = "독자 의견";
-    foot.append(" · ", feedbackLink);
-    body.appendChild(foot);
+    EuiyunBook.footer({ name: "MemoryBook", note: "공학도를 위한 인터랙티브 메모리 반도체 교과서 · 수치는 교육용 근사 모델입니다.", root, feedback: "memorybook" });
 
     // quiz
     document.querySelectorAll(".quiz-q").forEach((q) => {

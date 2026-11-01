@@ -47,9 +47,8 @@ def transform(data, relative, book):
         text = BEACON.sub("", text)
         base = ROOT / book["slug"] / relative.parent
         shared = Path(os.path.relpath(ROOT / "shared", base)).as_posix()
-        adapter = (f'<link rel="stylesheet" href="{shared}/css/book-topbar.css">\n'
-                   f'<script defer src="{shared}/js/book-topbar.js"></script>\n'
-                   f'<link rel="stylesheet" href="{shared}/css/book-shell.css">\n'
+        adapter = (f'<link rel="stylesheet" href="{shared}/css/book-ui.css">\n'
+                   f'<script defer src="{shared}/js/book-ui.js"></script>\n'
                    f'<script defer src="{shared}/js/book-shell.js" data-book="{book["slug"]}"></script>\n')
         text = text.replace("</head>", adapter + "</head>", 1)
     if relative.suffix in {".js", ".html"}:

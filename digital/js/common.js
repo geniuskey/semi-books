@@ -448,29 +448,16 @@
     // favicon
     if (!document.querySelector('link[rel="icon"]')) { const fi = document.createElement("link"); fi.rel = "icon"; fi.type = "image/svg+xml"; fi.href = root + "favicon.svg"; document.head.appendChild(fi); }
 
-    const feedbackHref = () => `https://books.euiyun.com/feedback.html?book=digitalbook&page=${encodeURIComponent(location.href)}`;
 
-    // top bar: the series standard from @euiyun/book (shared/js/book-topbar.js)
+    // top bar: the series standard from @euiyun/book (shared/js/book-ui.js)
     const { bar } = EuiyunBook.topbar({
       name: "DigitalBook", subtitle: "디지털 회로 설계 교과서", logo: LOGO, home: href(""),
       chapters: CHAPTERS, chapterHref: href, feedback: "digitalbook",
       theme: { isDark: () => SB.isDark(), set: (next) => { try { localStorage.setItem("semi-theme", next); } catch (e) {} applyTheme(next); } },
-      onMenu: () => toggleDrawer(true),
     });
 
-    // drawer
-    const drawer = document.createElement("nav");
-    drawer.className = "pb-drawer";
-    drawer.innerHTML = `<h4>Chapters</h4><ul class="pb-chlist">
-      <li><a href="${href("")}" class="${curSlug ? "" : "active"}"><span class="num">00</span><span>홈 · 로드맵</span></a></li>
-      ${CHAPTERS.map((c, i) => (i === 0 || CHAPTERS[i - 1].part !== c.part ? `<li class="pb-part">${c.part}</li>` : "") + `<li><a href="${href(c.slug)}" class="${c.slug === curSlug ? "active" : ""}"><span class="num">${c.num}</span><span>${c.title}</span></a></li>`).join("")}
-    </ul>`;
-    const backdrop = document.createElement("div");
-    backdrop.className = "pb-drawer-backdrop";
-    body.append(backdrop, drawer);
-    const toggleDrawer = (o) => body.classList.toggle("drawer-open", o);
-    backdrop.addEventListener("click", () => toggleDrawer(false));
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleDrawer(false); });
+    // drawer, pager and footer: the series standard from @euiyun/book (shared/js/book-ui.js)
+    EuiyunBook.drawer({ home: href(""), homeLabel: "홈 · 로드맵", chapters: CHAPTERS, chapterHref: href, current: curSlug });
 
     // chapter page extras
     const main = document.querySelector("main.chapter");
@@ -506,25 +493,9 @@
         h2s.forEach((h) => io.observe(h.parentElement));
       }
 
-      // pager
-      const idx = CHAPTERS.findIndex((c) => c.slug === curSlug);
-      const prev = idx > 0 ? CHAPTERS[idx - 1] : null;
-      const next = idx >= 0 && idx < CHAPTERS.length - 1 ? CHAPTERS[idx + 1] : null;
-      const pager = document.createElement("nav");
-      pager.className = "pb-pager";
-      pager.innerHTML =
-        (prev ? `<a class="prev" href="${href(prev.slug)}"><small>← 이전 · ${prev.num}</small>${prev.title}</a>` : `<a class="prev" href="${href("")}"><small>← 처음으로</small>홈 · 로드맵</a>`) +
-        (next ? `<a class="next" href="${href(next.slug)}"><small>다음 · ${next.num} →</small>${next.title}</a>` : "");
-      layout.after(pager);
+      EuiyunBook.pager({ after: layout, home: href(""), homeLabel: "홈 · 로드맵", chapters: CHAPTERS, chapterHref: href, current: curSlug });
     }
-    const foot = document.createElement("footer");
-    foot.className = "pb-foot";
-    foot.innerHTML = `DigitalBook — 공학도를 위한 인터랙티브 디지털 회로 설계 교과서 · 수치는 교육용 근사 모델입니다.<br>
-      시리즈: <a href="/device/">DeviceBook</a> · <a href="/design/">DesignBook</a> · <a href="/soc/">SoCBook</a> · <a href="/memory/">MemoryBook</a> · <a href="https://computerbook.euiyun.com/">ComputerBook</a> · <a href="https://books.euiyun.com/">전체 책장</a> · <a class="pb-feedback" href="${feedbackHref()}">독자 의견 보내기</a><br>
-      © 2026 geniuskey 및 DigitalBook 기여자 · 콘텐츠 <a rel="license" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a> · 코드 <a href="${root}LICENSE-MIT">MIT</a> · <a href="${root}LICENSE.md">라이선스 안내</a>`;
-    body.appendChild(foot);
-    // 공유 링크처럼 주소가 바뀐 뒤에도 현재 위치를 의견 페이지에 넘긴다
-    body.addEventListener("click", (e) => { const a = e.target.closest && e.target.closest("a.pb-feedback"); if (a) a.href = feedbackHref(); });
+    EuiyunBook.footer({ name: "DigitalBook", note: "공학도를 위한 인터랙티브 디지털 회로 설계 교과서 · 수치는 교육용 근사 모델입니다.", related: [{ href: "/device/", label: "DeviceBook" }, { href: "/design/", label: "DesignBook" }, { href: "/soc/", label: "SoCBook" }, { href: "/memory/", label: "MemoryBook" }, { href: "https://computerbook.euiyun.com/", label: "ComputerBook" }], root, feedback: "digitalbook" });
 
     // quiz
     document.querySelectorAll(".quiz-q").forEach((q) => {

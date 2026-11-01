@@ -29,14 +29,8 @@
     { slug: "glossary",  num: "16", title: "용어집 & 종합 퀴즈",        desc: "핵심 설계 용어를 검색하고, 종합 퀴즈로 실력을 점검하자.", tags: ["정리"] },
   ];
   /** 시리즈의 다른 책 */
-  const SERIES = [
-    { name: "ProcessBook", sub: "반도체 제조 공정 교과서", url: "https://semi.euiyun.com/process/" },
-    { name: "DesignBook", sub: "반도체 설계 교과서", url: "https://semi.euiyun.com/design/", self: true },
-  ];
-
   const PB = (window.PB = {});
   PB.CHAPTERS = CHAPTERS;
-  PB.SERIES = SERIES;
   /** ProcessBook 챕터 링크: PB.pbook('litho') */
   PB.PBOOK = "https://semi.euiyun.com/process/";
   PB.pbook = (slug) => PB.PBOOK + (slug ? "chapters/" + slug + ".html" : "");
@@ -514,12 +508,11 @@
     const root = body.dataset.root != null ? body.dataset.root : body.dataset.chapter ? "../" : "";
     const curSlug = body.dataset.chapter || "";
     const href = (slug) => (slug ? `${root}chapters/${slug}.html` : `${root}index.html`);
-    const feedbackUrl = "https://books.euiyun.com/feedback.html?book=designbook&page=" + encodeURIComponent(location.href);
 
     // favicon
     if (!document.querySelector('link[rel="icon"]')) { const fi = document.createElement("link"); fi.rel = "icon"; fi.type = "image/svg+xml"; fi.href = root + "favicon.svg"; document.head.appendChild(fi); }
 
-    // top bar: the series standard from @euiyun/book (shared/js/book-topbar.js)
+    // top bar: the series standard from @euiyun/book (shared/js/book-ui.js)
     const { bar } = EuiyunBook.topbar({
       name: "DesignBook", subtitle: "반도체 설계 교과서", logo: LOGO, home: href(""),
       chapters: CHAPTERS, chapterHref: href, feedback: "designbook",
@@ -527,25 +520,10 @@
         { id: "pb-prog", className: "pb-prog", href: `${href("arcade")}#progress`, title: "학습 진행 · 배지", html: '🏅 <span id="pb-prog-n">0</span>', mobile: true },
       ],
       theme: { isDark: () => PB.isDark(), set: (next) => { try { localStorage.setItem("semi-theme", next); } catch (e) {} applyTheme(next); } },
-      onMenu: () => toggleDrawer(true),
     });
 
-    // drawer
-    const drawer = document.createElement("nav");
-    drawer.className = "pb-drawer";
-    drawer.innerHTML = `<h4>Chapters</h4><ul class="pb-chlist">
-      <li><a href="${href("")}" class="${curSlug ? "" : "active"}"><span class="num">00</span><span>홈 · 로드맵</span></a></li>
-      ${CHAPTERS.map((c) => `<li><a href="${href(c.slug)}" class="${c.slug === curSlug ? "active" : ""}"><span class="num">${c.num}</span><span>${c.title}</span></a></li>`).join("")}
-    </ul>
-    <h4 style="margin-top:22px">Book Series</h4><ul class="pb-chlist">
-      ${SERIES.map((b) => `<li><a href="${b.self ? href("") : b.url}" class="${b.self ? "self" : ""}"><span class="num">${b.self ? "●" : "↗"}</span><span>${b.name} <small style="color:var(--text-faint)">${b.sub}</small></span></a></li>`).join("")}
-    </ul>`;
-    const backdrop = document.createElement("div");
-    backdrop.className = "pb-drawer-backdrop";
-    body.append(backdrop, drawer);
-    const toggleDrawer = (o) => body.classList.toggle("drawer-open", o);
-    backdrop.addEventListener("click", () => toggleDrawer(false));
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleDrawer(false); });
+    // drawer, pager and footer: the series standard from @euiyun/book (shared/js/book-ui.js)
+    EuiyunBook.drawer({ home: href(""), homeLabel: "홈 · 로드맵", chapters: CHAPTERS, chapterHref: href, current: curSlug });
 
     trackPage(curSlug);
     const pn = bar.querySelector("#pb-prog-n"); const st0 = PB.progressStats(); pn.textContent = st0.badges + "/" + BADGES.length;
@@ -580,29 +558,9 @@
         h2s.forEach((h) => io.observe(h.parentElement));
       }
 
-      // pager
-      const idx = CHAPTERS.findIndex((c) => c.slug === curSlug);
-      const prev = idx > 0 ? CHAPTERS[idx - 1] : null;
-      const next = idx >= 0 && idx < CHAPTERS.length - 1 ? CHAPTERS[idx + 1] : null;
-      const pager = document.createElement("nav");
-      pager.className = "pb-pager";
-      pager.innerHTML =
-        (prev ? `<a class="prev" href="${href(prev.slug)}"><small>← 이전 · ${prev.num}</small>${prev.title}</a>` : `<a class="prev" href="${href("")}"><small>← 처음으로</small>홈 · 로드맵</a>`) +
-        (next ? `<a class="next" href="${href(next.slug)}"><small>다음 · ${next.num} →</small>${next.title}</a>` : "");
-      layout.after(pager);
+      EuiyunBook.pager({ after: layout, home: href(""), homeLabel: "홈 · 로드맵", chapters: CHAPTERS, chapterHref: href, current: curSlug });
     }
-    const foot = document.createElement("footer");
-    foot.className = "pb-foot";
-    foot.innerHTML = `DesignBook — 공학도를 위한 인터랙티브 반도체 설계 교과서 · 수치는 교육용 근사 모델입니다.<br>
-      시리즈: <a href="${PB.PBOOK}">ProcessBook · 제조 공정</a> · <a href="${href("")}">DesignBook · 설계</a><br>
-      © 2026 geniuskey 및 DesignBook 기여자 · 콘텐츠 <a rel="license" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a> · 코드 <a href="${root}LICENSE-MIT">MIT</a> · <a href="${root}LICENSE.md">라이선스 안내</a>`;
-    const feedbackLink = document.createElement("a");
-    feedbackLink.href = feedbackUrl;
-    feedbackLink.target = "_blank";
-    feedbackLink.rel = "noopener";
-    feedbackLink.textContent = "독자 의견";
-    foot.append(" · ", feedbackLink);
-    body.appendChild(foot);
+    EuiyunBook.footer({ name: "DesignBook", note: "공학도를 위한 인터랙티브 반도체 설계 교과서 · 수치는 교육용 근사 모델입니다.", related: [{ href: "/process/", label: "ProcessBook" }], root, feedback: "designbook" });
 
     // quiz
     document.querySelectorAll(".quiz-q").forEach((q) => {

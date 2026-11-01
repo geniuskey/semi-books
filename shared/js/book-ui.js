@@ -1,8 +1,9 @@
 /* Copyright (c) 2026 geniuskey. MIT. */
-/* @euiyun/book standard top bar.
-   Layout: [menu] [logo · name · subtitle]  [search]  [book actions] [shelf] [feedback] [theme]
-   A book calls EuiyunBook.topbar({...}) from its own layout code; a series sets EuiyunBook.shelf once.
-   Styles: runtime/topbar.css. It uses the book's --bg, --bg-elev, --text*, --border, --accent* variables. */
+/* @euiyun/book standard book UI: top bar, chapter drawer, previous/next pager and footer.
+   Top bar: [menu] [logo · name · subtitle]  [search]  [book actions] [shelf] [feedback] [theme]
+   A book calls EuiyunBook.topbar/drawer/pager/footer from its own layout code; a series sets EuiyunBook.shelf once.
+   Styles: runtime/ui.css. It uses the book's --bg, --bg-elev, --surface, --text*, --border, --accent*, --mono,
+   --radius and --maxw variables. */
 (function () {
   "use strict";
   const NS = (window.EuiyunBook = window.EuiyunBook || {});
@@ -17,7 +18,16 @@
   };
   NS.icons = ICONS;
   // Standalone books link to the portal. A series (e.g. semi.euiyun.com) overrides this with its own shelf.
-  const DEFAULT_SHELF = { href: "https://books.euiyun.com/", label: "전체 책", title: "전체 책 보기" };
+  // label: top bar button · title: tooltip · back: link at the bottom of the drawer.
+  const DEFAULT_SHELF = { href: "https://books.euiyun.com/", label: "전체 책", title: "전체 책 보기", back: "← 전체 책 보기" };
+  const shelfOf = (own) => Object.assign({}, DEFAULT_SHELF, NS.shelf, own);
+  const feedbackUrl = (book) => `https://books.euiyun.com/feedback.html?book=${encodeURIComponent(book)}&page=${encodeURIComponent(location.href)}`;
+  // The reader may have moved to another section since the page loaded, so the page URL is taken at click time.
+  function feedbackLink(node, book) {
+    Object.assign(node, { href: feedbackUrl(book), target: "_blank", rel: "noopener" });
+    node.addEventListener("click", () => { node.href = feedbackUrl(book); });
+    return node;
+  }
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
   function el(tag, cls, attrs) {
@@ -43,7 +53,7 @@
 
   function topbar(o) {
     const body = document.body;
-    const shelf = Object.assign({}, DEFAULT_SHELF, NS.shelf, o.shelf);
+    const shelf = shelfOf(o.shelf);
     const bar = el("header", "bk-topbar");
 
     const left = el("div", "bk-nav-left");
@@ -60,13 +70,8 @@
     (o.actions || []).filter(Boolean).forEach((a) => right.append(actionButton(a)));
     const shelfLink = el("a", "bk-btn bk-shelf", { href: shelf.href, title: shelf.title, "aria-label": shelf.title });
     shelfLink.innerHTML = ICONS.shelf + `<span class="bk-label">${esc(shelf.label)}</span>`;
-    const feedbackUrl = () => `https://books.euiyun.com/feedback.html?book=${encodeURIComponent(o.feedback)}&page=${encodeURIComponent(location.href)}`;
-    const feedback = el("a", "bk-btn icon bk-feedback", {
-      href: feedbackUrl(), target: "_blank", rel: "noopener", title: "독자 의견 보내기", "aria-label": "독자 의견 보내기",
-    });
+    const feedback = feedbackLink(el("a", "bk-btn icon bk-feedback", { title: "독자 의견 보내기", "aria-label": "독자 의견 보내기" }), o.feedback);
     feedback.innerHTML = ICONS.feedback;
-    // The reader may have moved to another section since the page loaded.
-    feedback.addEventListener("click", () => { feedback.href = feedbackUrl(); });
     const theme = el("button", "bk-btn icon", { id: "bk-theme", type: "button", "aria-label": "테마 전환" });
     right.append(shelfLink, feedback, theme);
 
@@ -74,7 +79,7 @@
     bar.append(left, search, right, progress);
     body.prepend(bar);
 
-    if (o.onMenu) menu.addEventListener("click", o.onMenu);
+    menu.addEventListener("click", o.onMenu || (() => setDrawer(true)));
     if (o.theme) {
       const setIcon = () => { theme.innerHTML = o.theme.isDark() ? ICONS.sun : ICONS.moon; };
       setIcon();
@@ -184,5 +189,64 @@
     }
   }
 
-  NS.topbar = topbar;
+  /* Chapter drawer: home, optional extra entries (e.g. a simulator gallery), chapters grouped by `part` when
+     chapters have one, and the shelf link that the phone top bar hides.
+     { home, homeLabel, chapters, chapterHref, current, extra: [{ href, num, label, active }] } — labels are trusted HTML. */
+  const setDrawer = (open) => document.body.classList.toggle("drawer-open", open);
+  function drawer(o) {
+    const shelf = shelfOf(o.shelf);
+    const chapters = o.chapters || [];
+    const extra = o.extra || [];
+    const item = (href, num, label, active) =>
+      `<li><a href="${href}"${active ? ' class="active" aria-current="page"' : ""}><span class="num">${num}</span><span>${label}</span></a></li>`;
+    const onHome = !o.current && !extra.some((x) => x.active);
+    const list = [item(o.home, "00", o.homeLabel || "홈 · 로드맵", onHome), ...extra.map((x) => item(x.href, x.num || "", x.label, x.active))];
+    chapters.forEach((c, i) => {
+      if (c.part && (i === 0 || chapters[i - 1].part !== c.part)) list.push(`<li class="bk-part">${c.part}</li>`);
+      list.push(item(o.chapterHref(c.slug), c.num, c.title, c.slug === o.current));
+    });
+    const nav = el("nav", "bk-drawer", { "aria-label": "챕터 목록" });
+    nav.innerHTML = `<h4>Chapters</h4><ul class="bk-chlist">${list.join("")}</ul>`;
+    const back = el("a", "bk-drawer-shelf", { href: shelf.href });
+    back.textContent = shelf.back;
+    nav.append(back);
+    const backdrop = el("div", "bk-drawer-backdrop");
+    document.body.append(backdrop, nav);
+    backdrop.addEventListener("click", () => setDrawer(false));
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") setDrawer(false); });
+    return { drawer: nav, open: () => setDrawer(true), close: () => setDrawer(false) };
+  }
+
+  /* Previous/next chapter links, placed after `after` (the chapter layout). The first chapter points back home. */
+  function pager(o) {
+    const chapters = o.chapters || [];
+    const i = chapters.findIndex((c) => c.slug === o.current);
+    if (i < 0) return null;
+    const prev = chapters[i - 1];
+    const next = chapters[i + 1];
+    const nav = el("nav", "bk-pager", { "aria-label": "이전·다음 챕터" });
+    nav.innerHTML =
+      (prev ? `<a class="prev" href="${o.chapterHref(prev.slug)}"><small>← 이전 · ${prev.num}</small>${prev.title}</a>`
+        : `<a class="prev" href="${o.home}"><small>← 처음으로</small>${o.homeLabel || "홈 · 로드맵"}</a>`) +
+      (next ? `<a class="next" href="${o.chapterHref(next.slug)}"><small>다음 · ${next.num} →</small>${next.title}</a>` : "");
+    o.after.after(nav);
+    return nav;
+  }
+
+  /* Footer: what the book is, related books, then rights, licences (the book's own files) and reader feedback.
+     { name, note, related: [{ href, label }], root, feedback, year } — note and labels are plain text. */
+  function footer(o) {
+    const root = o.root || "";
+    const lines = [esc(o.name) + (o.note ? ` — ${esc(o.note)}` : "")];
+    if (o.related && o.related.length) lines.push("관련 책: " + o.related.map((r) => `<a href="${r.href}">${esc(r.label)}</a>`).join(" · "));
+    lines.push(`© ${o.year || 2026} geniuskey 및 ${esc(o.name)} 기여자 · 콘텐츠 <a rel="license" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>` +
+      ` · 코드 <a href="${root}LICENSE-MIT">MIT</a> · <a href="${root}LICENSE.md">라이선스 안내</a> · <a class="bk-foot-feedback">독자 의견</a>`);
+    const foot = el("footer", "bk-foot");
+    foot.innerHTML = lines.join("<br>");
+    feedbackLink(foot.querySelector(".bk-foot-feedback"), o.feedback);
+    document.body.appendChild(foot);
+    return foot;
+  }
+
+  Object.assign(NS, { topbar, drawer, pager, footer });
 })();
