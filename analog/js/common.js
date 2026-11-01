@@ -512,9 +512,6 @@
   const LOGO = `<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="abg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--accent)"/><stop offset="1" stop-color="var(--accent-2)"/></linearGradient></defs><rect x="2" y="2" width="28" height="28" rx="8" fill="url(#abg)"/><path d="M8 8.5v15l13-7.5z" fill="none" stroke="#fff" stroke-width="1.7" stroke-linejoin="round"/><path d="M4.5 12.5h3.5M4.5 19.5h3.5M21 16h6" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/><path d="M10.2 16c.9-2.4 1.8-2.4 2.7 0s1.8 2.4 2.7 0" fill="none" stroke="#fff" stroke-width="1.4" stroke-linecap="round" opacity=".9"/></svg>`;
   const ICON_SIM = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>`;
   const ICON_GRID = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`;
-  const ICON_MENU = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>`;
-  const ICON_MOON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
-  const ICON_SUN = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
 
   function build() {
     const body = document.body;
@@ -526,28 +523,17 @@
     // favicon
     if (!document.querySelector('link[rel="icon"]')) { const fi = document.createElement("link"); fi.rel = "icon"; fi.type = "image/svg+xml"; fi.href = root + "favicon.svg"; document.head.appendChild(fi); }
 
-    // top bar
-    const bar = document.createElement("header");
-    bar.className = "ab-topbar";
-    bar.innerHTML = `
-      <button class="ab-btn icon" id="ab-menu" aria-label="챕터 목록">${ICON_MENU}</button>
-      <a class="ab-logo" href="${href("")}" aria-label="AnalogBook 홈">${LOGO}<span>AnalogBook <small>아날로그 회로설계</small></span></a>
-      <span class="spacer"></span>
-      <a class="ab-btn icon" href="https://books.euiyun.com/" aria-label="전체 책 보기" title="전체 책 보기"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5h6v14H4zM10 5.5h6v14h-6zM17 7l3-1 2 13-3 1z"/></svg></a>
-      <a class="ab-btn" href="${root}sims.html" aria-label="시뮬레이터 갤러리" title="시뮬레이터 갤러리">${ICON_GRID}<span class="lbl-wide">시뮬레이터</span></a>
-      ${curSlug ? `<button class="ab-btn toggle" id="ab-simonly" aria-pressed="false" title="글을 숨기고 시뮬레이터만 본다">${ICON_SIM}<span class="lbl-wide">시뮬레이터만</span></button>` : ""}
-      <button class="ab-btn icon" id="ab-theme" aria-label="테마 전환"></button>
-      <div class="ab-progress" id="ab-progress"></div>`;
-    const feedbackButton = document.createElement("a");
-    feedbackButton.className = "ab-btn icon";
-    feedbackButton.href = feedbackUrl;
-    feedbackButton.target = "_blank";
-    feedbackButton.rel = "noopener";
-    feedbackButton.setAttribute("aria-label", "독자 의견 보내기");
-    feedbackButton.title = "독자 의견 보내기";
-    feedbackButton.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 4V6a2 2 0 0 1 2-2z"/><path d="M8 9h8M8 13h5"/></svg>';
-    bar.querySelector("#ab-theme").before(feedbackButton);
-    body.prepend(bar);
+    // top bar: the series standard from @euiyun/book (shared/js/book-topbar.js)
+    const { bar } = EuiyunBook.topbar({
+      name: "AnalogBook", subtitle: "아날로그 회로설계", logo: LOGO, home: href(""),
+      chapters: CHAPTERS, chapterHref: href, feedback: "analogbook",
+      actions: [
+        { href: `${root}sims.html`, icon: ICON_GRID, label: "시뮬레이터", title: "시뮬레이터 갤러리" },
+        curSlug && { id: "ab-simonly", icon: ICON_SIM, label: "시뮬레이터만", title: "글을 숨기고 시뮬레이터만 본다", toggle: true, mobile: true },
+      ],
+      theme: { isDark: () => AB.isDark(), set: (next) => { try { localStorage.setItem("semi-theme", next); } catch (e) {} applyTheme(next); } },
+      onMenu: () => toggleDrawer(true),
+    });
 
     // drawer
     const drawer = document.createElement("nav");
@@ -561,24 +547,8 @@
     backdrop.className = "ab-drawer-backdrop";
     body.append(backdrop, drawer);
     const toggleDrawer = (o) => body.classList.toggle("drawer-open", o);
-    bar.querySelector("#ab-menu").addEventListener("click", () => toggleDrawer(true));
     backdrop.addEventListener("click", () => toggleDrawer(false));
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleDrawer(false); });
-
-    // theme toggle
-    const tbtn = bar.querySelector("#ab-theme");
-    const setIcon = () => (tbtn.innerHTML = AB.isDark() ? ICON_SUN : ICON_MOON);
-    setIcon();
-    tbtn.addEventListener("click", () => {
-      const next = AB.isDark() ? "light" : "dark";
-      try { localStorage.setItem("semi-theme", next); } catch (e) {}
-      applyTheme(next); setIcon();
-    });
-
-    // progress
-    const prog = bar.querySelector("#ab-progress");
-    const onScroll = () => { const h = document.documentElement.scrollHeight - innerHeight; prog.style.width = (h > 0 ? (scrollY / h) * 100 : 0) + "%"; };
-    addEventListener("scroll", onScroll, { passive: true }); onScroll();
 
     // chapter page extras
     const main = document.querySelector("main.chapter");

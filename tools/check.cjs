@@ -43,6 +43,8 @@ function checkPage(rel, opts = {}) {
   if (!/<meta name="description" content="[^"]+">/.test(html)) fail(`${rel}: no description`);
   if (/static\.cloudflareinsights\.com/.test(html)) fail(`${rel}: analytics beacon must be added by the build, not the source`);
   if (/<script[^>]*type="module"/.test(html)) fail(`${rel}: ES module scripts are not allowed (file:// must work)`);
+  if (rel.includes("/") && !/shared\/js\/book-topbar\.js"/.test(html)) fail(`${rel}: load ../shared/js/book-topbar.js (the @euiyun/book top bar)`);
+  if (rel.includes("/") && !/shared\/js\/book-shell\.js"/.test(html)) fail(`${rel}: load ../shared/js/book-shell.js (the SemiBooks shelf link)`);
   if (rel.startsWith("infra/") && /\bMB\.|class="mb-/.test(html)) fail(`${rel}: uses MemoryBook globals (MB / mb-) — use IB / ib-`);
   if (rel.startsWith("cmp/") && /\bIB\.|class="ib-/.test(html)) fail(`${rel}: uses InfraBook globals (IB / ib-) — use CB / cb-`);
   if (rel.startsWith("plasma/") && /\b(?:TF|CB|IB)\.|class="(?:tf|cb|ib)-/.test(html)) fail(`${rel}: uses ThinFilmBook/CMPBook/InfraBook globals (TF / CB / IB) — use PB / pb-`);
@@ -90,10 +92,17 @@ for (const book of BOOKS) {
   const js = fs.readFileSync(path.join(ROOT, book, "js/common.js"), "utf8");
   const slugs = [...js.matchAll(/\{ slug: "([^"]+)"/g)].map((m) => m[1]);
   if (!slugs.length) fail(`${book}: no CHAPTERS in js/common.js`);
+  if (!js.includes("EuiyunBook.topbar(") || /-topbar"/.test(js)) fail(`${book}: js/common.js must build its top bar with EuiyunBook.topbar, not its own markup`);
   const writing = WRITING.has(book);
   for (const slug of slugs) checkPage(`${book}/chapters/${slug}.html`, { chapter: slug, optional: writing });
   const files = fs.readdirSync(path.join(ROOT, book, "chapters")).filter((f) => f.endsWith(".html")).map((f) => f.slice(0, -5));
   for (const f of files) if (!slugs.includes(f)) fail(`${book}/chapters/${f}.html is not registered in CHAPTERS`);
+}
+// 상단 바는 @euiyun/book이 원본이다. shared/의 복사본은 설치된 버전과 같아야 한다(npm run sync:runtime).
+for (const [copy, original] of [["shared/js/book-topbar.js", "runtime/topbar.js"], ["shared/css/book-topbar.css", "runtime/topbar.css"]]) {
+  const installed = path.join(ROOT, "node_modules/@euiyun/book", original);
+  if (!fs.existsSync(installed)) { fail(`${original}: @euiyun/book is not installed or too old — run npm ci`); continue; }
+  if (fs.readFileSync(path.join(ROOT, copy), "utf8") !== fs.readFileSync(installed, "utf8")) fail(`${copy} differs from @euiyun/book/${original} — run npm run sync:runtime`);
 }
 try {
   // 모르는 motif는 조용히 격자 표지로 대체되므로, 서가의 모든 책이 자기 표지를 갖는지 확인한다.

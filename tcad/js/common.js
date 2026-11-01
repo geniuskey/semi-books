@@ -451,9 +451,6 @@
 
   /* ------------------------------------------------------------ layout build */
   const LOGO = `<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="tbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--accent)"/><stop offset="1" stop-color="var(--accent-2)"/></linearGradient></defs><rect x="2" y="2" width="28" height="28" rx="8" fill="url(#tbg)"/><path d="M7 12h18M7 17h18M7 22h18M12 8v17M17 8v17M22 8v17" stroke="#fff" stroke-width="1" opacity=".45"/><rect x="12" y="6" width="8" height="4" rx="1" fill="#fff"/><path d="M7 13c4 0 5 4 9 4s5-4 9-4" stroke="#fff" stroke-width="2" fill="none"/></svg>`;
-  const ICON_MENU = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>`;
-  const ICON_MOON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
-  const ICON_SUN = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
 
   function build() {
     const body = document.body;
@@ -465,26 +462,13 @@
     // favicon
     if (!document.querySelector('link[rel="icon"]')) { const fi = document.createElement("link"); fi.rel = "icon"; fi.type = "image/svg+xml"; fi.href = root + "favicon.svg"; document.head.appendChild(fi); }
 
-    // top bar
-    const bar = document.createElement("header");
-    bar.className = "tb-topbar";
-    bar.innerHTML = `
-      <button class="tb-btn icon" id="tb-menu" aria-label="챕터 목록">${ICON_MENU}</button>
-      <a class="tb-logo" href="${href("")}" aria-label="TCADBook 홈">${LOGO}<span>TCADBook <small>반도체 TCAD 교과서</small></span></a>
-      <span class="spacer"></span>
-      <a class="tb-btn icon" href="https://books.euiyun.com/" aria-label="전체 책 보기" title="전체 책 보기"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5h6v14H4zM10 5.5h6v14h-6zM17 7l3-1 2 13-3 1z"/></svg></a>
-      <button class="tb-btn icon" id="tb-theme" aria-label="테마 전환"></button>
-      <div class="tb-progress" id="tb-progress"></div>`;
-    const feedbackButton = document.createElement("a");
-    feedbackButton.className = "tb-btn icon";
-    feedbackButton.href = feedbackUrl;
-    feedbackButton.target = "_blank";
-    feedbackButton.rel = "noopener";
-    feedbackButton.setAttribute("aria-label", "독자 의견 보내기");
-    feedbackButton.title = "독자 의견 보내기";
-    feedbackButton.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 4V6a2 2 0 0 1 2-2z"/><path d="M8 9h8M8 13h5"/></svg>';
-    bar.querySelector("#tb-theme").before(feedbackButton);
-    body.prepend(bar);
+    // top bar: the series standard from @euiyun/book (shared/js/book-topbar.js)
+    const { bar } = EuiyunBook.topbar({
+      name: "TCADBook", subtitle: "반도체 TCAD 교과서", logo: LOGO, home: href(""),
+      chapters: CHAPTERS, chapterHref: href, feedback: "tcadbook",
+      theme: { isDark: () => TB.isDark(), set: (next) => { try { localStorage.setItem("semi-theme", next); } catch (e) {} applyTheme(next); } },
+      onMenu: () => toggleDrawer(true),
+    });
 
     // drawer
     const drawer = document.createElement("nav");
@@ -497,24 +481,8 @@
     backdrop.className = "tb-drawer-backdrop";
     body.append(backdrop, drawer);
     const toggleDrawer = (o) => body.classList.toggle("drawer-open", o);
-    bar.querySelector("#tb-menu").addEventListener("click", () => toggleDrawer(true));
     backdrop.addEventListener("click", () => toggleDrawer(false));
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleDrawer(false); });
-
-    // theme toggle
-    const tbtn = bar.querySelector("#tb-theme");
-    const setIcon = () => (tbtn.innerHTML = TB.isDark() ? ICON_SUN : ICON_MOON);
-    setIcon();
-    tbtn.addEventListener("click", () => {
-      const next = TB.isDark() ? "light" : "dark";
-      try { localStorage.setItem("semi-theme", next); } catch (e) {}
-      applyTheme(next); setIcon();
-    });
-
-    // progress
-    const prog = bar.querySelector("#tb-progress");
-    const onScroll = () => { const h = document.documentElement.scrollHeight - innerHeight; prog.style.width = (h > 0 ? (scrollY / h) * 100 : 0) + "%"; };
-    addEventListener("scroll", onScroll, { passive: true }); onScroll();
 
     // chapter page extras
     const main = document.querySelector("main.chapter");
