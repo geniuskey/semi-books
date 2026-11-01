@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderMath, version as katexVersion } from './katex.mjs';
+import { writeSearchIndex } from './search-index.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = join(root, '.book-dist');
 const book = JSON.parse(await readFile(join(root, 'book.json'), 'utf8'));
@@ -141,4 +142,6 @@ await writeFile(join(output, 'sitemap.xml'), '<?xml version="1.0" encoding="UTF-
   urls.sort().map((url) => `  <url><loc>${url}</loc></url>`).join('\n') + '\n</urlset>\n');
 await writeFile(join(output, 'robots.txt'), `User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`);
 await writeFile(join(output, '.nojekyll'), '');
+// The home page search reads every chapter, simulator and glossary term from these two files.
+console.log(await writeSearchIndex(root, output));
 console.log(`Built ${urls.length} pages across ${book.books.length} books for ${domain}`);

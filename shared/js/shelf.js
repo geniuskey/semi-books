@@ -36,7 +36,8 @@
 
   function card(book) {
     const title = titleOf(book), writing = book.status === "writing";
-    const meta = `<span>${book.chapters || 0}장</span>${writing ? '<span class="writing">집필 중</span>' : ""}<a href="${esc(book.url)}" aria-label="${esc(book.title)} 읽기">읽기 →</a>`;
+    const found = window.SEMI_SEARCH_HITS?.get(book.slug);
+    const meta = `${found ? `<span class="found">본문 ${found.toLocaleString("ko-KR")}건</span>` : ""}<span>${book.chapters || 0}장</span>${writing ? '<span class="writing">집필 중</span>' : ""}<a href="${esc(book.url)}" aria-label="${esc(book.title)} 읽기">읽기 →</a>`;
     return `<article class="book${writing ? " writing" : ""}" data-book="${esc(book.id)}" style="--c:${esc(book.color || "#2f5f96")}">
       <div class="book-stand"><a class="book-cover" href="${esc(book.url)}" aria-label="${esc(title)} · ${esc(book.title)}${writing ? " (집필 중)" : ""} 읽기">
         <span class="book-top"><small>${esc(groupOf(book).label)}</small>${writing ? "<b>집필 중</b>" : ""}</span>
@@ -61,22 +62,28 @@
   function render() {
     const group = groups.find((g) => g.id === selected);
     const words = search.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-    const hits = books.filter((b) => (selected === "all" || group.stages.includes(b.stage)) && words.every((word) =>
-      [b.title, b.subtitle, titleOf(b), b.headline, b.description, ...(b.topics || [])].join(" ").toLocaleLowerCase().includes(word)));
+    // 본문 검색(search.js)이 결과를 낸 책은 책 정보에 검색어가 없어도 남긴다.
+    const found = window.SEMI_SEARCH_HITS;
+    const hits = books.filter((b) => (selected === "all" || group.stages.includes(b.stage)) && (found?.get(b.slug) || words.every((word) =>
+      [b.title, b.subtitle, titleOf(b), b.headline, b.description, ...(b.topics || [])].join(" ").toLocaleLowerCase().includes(word))));
+    filtersEl.dataset.stages = group.stages.join(",");
     grid.innerHTML = hits.map(card).join("");
     fillShelf();
     document.getElementById("book-count").textContent = `${hits.length} / ${books.length}권`;
     document.getElementById("empty").hidden = hits.length !== 0;
     document.querySelectorAll("#filters button").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.filter === selected)));
   }
-  document.getElementById("filters").addEventListener("click", (event) => {
+  const filtersEl = document.getElementById("filters");
+  filtersEl.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-filter]");
     if (!button) return;
     selected = button.dataset.filter;
     render();
   });
-  search.addEventListener("input", render);
+  // 본문 검색(search.js)이 있으면 그 결과가 나올 때(semi:search) 다시 그린다.
+  search.addEventListener("input", () => { if (!window.SemiSearch) render(); });
   search.addEventListener("keydown", (event) => { if (event.key === "Escape") { search.value = ""; render(); } });
+  document.addEventListener("semi:search", render);
 
   // 실험 카드와 읽는 순서 칩에 책 색과 코드를 입힌다.
   document.querySelectorAll(".experiment[data-book], .path a[data-book]").forEach((el) => {
