@@ -46,6 +46,8 @@ function pages() {
     if (importedOnly && WRITTEN.has(book)) continue;
     list.push(`${book}/index.html`);
     for (const f of fs.readdirSync(path.join(ROOT, book, "chapters")).filter((f) => f.endsWith(".html")).sort()) list.push(`${book}/chapters/${f}`);
+    // 찾아보기 is generated (tools/search-index.mjs): there after npm run build (--dist) or a local index run.
+    if (fs.existsSync(path.join(serveRoot, book, "terms.html"))) list.push(`${book}/terms.html`);
   }
   return filters.length ? list.filter((p) => filters.some((f) => p.includes(f))) : list;
 }

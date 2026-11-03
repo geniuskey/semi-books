@@ -53,7 +53,10 @@ shared/js/shelf.js                    서가 홈의 책장 렌더링·필터·�
 shared/js/covers.js                   books 프로젝트의 SVG 책 표지와 공정·식각·인프라 표지
 shared/css/cover-animations.css       표지 애니메이션, 동작 줄이기 지원
 shared/img/sims/                      홈 ‘직접 해보기’의 시뮬레이터 화면
-shared/js/book-shell.js               기존 19권의 ‘반도체 서가’ 연결
+shared/js/book-shell.js               모든 책의 ‘반도체 서가’ 연결, 책 상단 바 검색(용어·본문), 서랍의 찾아보기
+shared/js/search-core.js              서가 홈과 책 상단 바가 함께 쓰는 검색 엔진(동의어·초성·한/영 교정)
+shared/js/search.js                   서가 홈 통합 검색 화면
+shared/js/terms.js, shared/css/terms.css  찾아보기(가나다 색인) 거르기와 모양
 {slug}/                              각 책의 본문, 실습, 용어 데이터, 집필 도구
 migration/books.json                 원본·slug·서가 정보와 이전 경로 별칭(가져오기 기록)
 migration/import-state.json          가져오기 상태(모든 책을 이 저장소에서 집필하므로 비어 있음)
@@ -61,6 +64,7 @@ tools/import-books.py                보호된 가져오기(meta가 있는 책�
 tools/sync-catalog.py                 서가 목록 생성, 기본 입력은 migration/books.json
 tools/sync-sitemap.py                 루트 사이트맵 생성
 tools/build.mjs                      하위 경로를 지원하는 정적 배포물 생성
+tools/search-index.mjs               검색 색인과 찾아보기 생성: search-index.json·search-text.json(홈), {slug}/search.json(책), {slug}/terms.html(찾아보기)
 tools/check.cjs                       메타데이터·링크·스크립트 정적 검사
 tools/katex.mjs                       모든 책의 수식 빌드 렌더링
 tools/katex.test.mjs                  수식 렌더링·HTML의 < 거부 규칙 회귀 검사

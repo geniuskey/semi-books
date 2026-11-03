@@ -89,9 +89,69 @@
     addEventListener("scroll", onScroll, { passive: true });
     onScroll();
 
-    wireSearch(search, o.chapters || [], o.chapterHref);
+    if (NS.search) wireProvider(search, NS.search); else wireSearch(search, o.chapters || [], o.chapterHref);
+    // "/" or Cmd/Ctrl+K jumps to the search box from anywhere on the page.
+    document.addEventListener("keydown", (e) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
+      if ((e.key === "/" && !typing) || (e.key === "k" && (e.metaKey || e.ctrlKey))) { e.preventDefault(); search.querySelector("input").focus(); }
+    });
     anchorChapter();
     return { bar, menu, theme, search };
+  }
+
+  /* Keyboard moves between the input and result links the same way for both search kinds. */
+  function wireKeys(search, input, results, close) {
+    input.addEventListener("keydown", (e) => {
+      if (e.isComposing) return;
+      const first = results.querySelector("a");
+      if (e.key === "Escape") { close(); input.blur(); }
+      else if (e.key === "ArrowDown" && first) { e.preventDefault(); first.focus(); }
+      else if (e.key === "Enter" && first) { e.preventDefault(); first.click(); }
+    });
+    results.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { close(); input.focus(); }
+      else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        const links = [...results.querySelectorAll("a")];
+        const next = links.indexOf(document.activeElement) + (e.key === "ArrowDown" ? 1 : -1);
+        e.preventDefault();
+        (links[next] || input).focus();
+      }
+    });
+    document.addEventListener("pointerdown", (e) => { if (!search.contains(e.target)) close(); });
+  }
+
+  /* A series can supply its own search (EuiyunBook.search), e.g. a prebuilt full-text index:
+     { placeholder, label, load() → Promise, run(query) → { items: [{ href, type, title, meta, text }], note, footer }, idle() → html }
+     title, text, note, footer and idle are trusted HTML (the provider escapes and marks them); type and meta are plain text.
+     run is called again whenever load settles, so it may answer from a partial index. */
+  function wireProvider(search, p) {
+    const input = search.querySelector("input");
+    const results = search.querySelector(".bk-search-results");
+    const close = () => { search.classList.remove("open"); results.replaceChildren(); };
+    if (p.placeholder) input.placeholder = p.placeholder;
+    if (p.label) input.setAttribute("aria-label", p.label);
+    let pending;
+    const load = () => { if (!pending && p.load) pending = Promise.resolve(p.load()).catch(() => {}).finally(render); };
+    function render() {
+      const query = input.value.trim();
+      if (!query) {
+        const idle = document.activeElement === input && p.idle && p.idle();
+        if (!idle) { close(); return; }
+        results.innerHTML = idle;
+        search.classList.add("open");
+        return;
+      }
+      const out = p.run(query) || {};
+      results.innerHTML = (out.items || []).map((r) =>
+        `<a href="${esc(r.href)}"><strong>${r.type ? `<span class="bk-sr-type">${esc(r.type)}</span>` : ""}${r.title}</strong>` +
+        `${r.meta ? `<small>${esc(r.meta)}</small>` : ""}${r.text ? `<span class="bk-sr-text">${r.text}</span>` : ""}</a>`).join("") +
+        (out.note ? `<p>${out.note}</p>` : "") + (out.footer ? `<div class="bk-sr-foot">${out.footer}</div>` : "");
+      search.classList.add("open");
+    }
+    let timer = 0;
+    input.addEventListener("focus", () => { load(); render(); });
+    input.addEventListener("input", () => { load(); clearTimeout(timer); timer = setTimeout(render, 60); });
+    wireKeys(search, input, results, close);
   }
 
   /* Search chapter metadata immediately; fetch section, simulator and figure titles on first use. */
@@ -160,22 +220,7 @@
       search.classList.add("open");
     }
     input.addEventListener("input", () => { if (input.value.trim()) load(); render(); });
-    input.addEventListener("keydown", (e) => {
-      const first = results.querySelector("a");
-      if (e.key === "Escape") { close(); input.blur(); }
-      else if (e.key === "ArrowDown" && first) { e.preventDefault(); first.focus(); }
-      else if (e.key === "Enter" && first) { e.preventDefault(); first.click(); }
-    });
-    results.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") { close(); input.focus(); }
-      else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        const links = [...results.querySelectorAll("a")];
-        const next = links.indexOf(document.activeElement) + (e.key === "ArrowDown" ? 1 : -1);
-        e.preventDefault();
-        (links[next] || input).focus();
-      }
-    });
-    document.addEventListener("pointerdown", (e) => { if (!search.contains(e.target)) close(); });
+    wireKeys(search, input, results, close);
   }
 
   /* Give search results stable anchors on a chapter page, then honour a search hash once the book has laid out. */
@@ -191,12 +236,13 @@
 
   /* Chapter drawer: home, optional extra entries (e.g. a simulator gallery), chapters grouped by `part` when
      chapters have one, and the shelf link that the phone top bar hides.
-     { home, homeLabel, chapters, chapterHref, current, extra: [{ href, num, label, active }] } — labels are trusted HTML. */
+     { home, homeLabel, chapters, chapterHref, current, extra: [{ href, num, label, active }] } — labels are trusted HTML.
+     A series can add entries to every book with EuiyunBook.drawerExtra (the same shape); they follow the book's own. */
   const setDrawer = (open) => document.body.classList.toggle("drawer-open", open);
   function drawer(o) {
     const shelf = shelfOf(o.shelf);
     const chapters = o.chapters || [];
-    const extra = o.extra || [];
+    const extra = [...(o.extra || []), ...(NS.drawerExtra || [])];
     const item = (href, num, label, active) =>
       `<li><a href="${href}"${active ? ' class="active" aria-current="page"' : ""}><span class="num">${num}</span><span>${label}</span></a></li>`;
     const onHome = !o.current && !extra.some((x) => x.active);

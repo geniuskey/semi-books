@@ -136,12 +136,13 @@ async function pages(directory) {
     urls.push(url);
   }
 }
+// Search indexes and each book's 찾아보기 (terms.html) first, so the pages pass below gives terms.html its tags.
+const searchReport = await writeSearchIndex(root, output);
 await pages(output);
 if (mathErrors.length) throw new Error(`KaTeX could not parse ${mathErrors.length} formula(s):\n${mathErrors.join('\n')}`);
 await writeFile(join(output, 'sitemap.xml'), '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
   urls.sort().map((url) => `  <url><loc>${url}</loc></url>`).join('\n') + '\n</urlset>\n');
 await writeFile(join(output, 'robots.txt'), `User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`);
 await writeFile(join(output, '.nojekyll'), '');
-// The home page search reads every chapter, simulator and glossary term from these two files.
-console.log(await writeSearchIndex(root, output));
+console.log(searchReport);
 console.log(`Built ${urls.length} pages across ${book.books.length} books for ${domain}`);
