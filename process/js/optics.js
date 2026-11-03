@@ -20,8 +20,10 @@
 
   /** 광원 점 목록 [{sx, sy}] (동공 좌표, NA로 정규화) */
   function source(s) {
-    const pts = [], st = s.step || 0.07;
-    for (let y = -1; y <= 1 + 1e-9; y += st) for (let x = -1; x <= 1 + 1e-9; x += st) {
+    // 0을 중심으로 대칭인 격자(k·step). -1에서 step씩 더해 가면 반올림 오차로 +쪽 끝이 빠져 ±1차 회절의 포착률이 달라진다.
+    const pts = [], st = s.step || 0.07, n = Math.floor(1 / st + 1e-9);
+    for (let ky = -n; ky <= n; ky++) for (let kx = -n; kx <= n; kx++) {
+      const x = kx * st, y = ky * st;
       const r = Math.hypot(x, y);
       let ok = false;
       if (s.type === "coh") { ok = false; }

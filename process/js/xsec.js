@@ -580,15 +580,21 @@
         for (const j of nbr(i)) { if (j < 0) continue; const mt = m[j]; if (mt === OX) nOx.push(j); else if (!mt && reach[j]) nGas++; else if (isSemi(mt)) nSi++; }
         return { i, nOx, den: nOx.length * a + nGas * 2 * a + nSi * b, src: nGas * 2 * a };
       });
-      const sweeps = it === 1 ? 120 : 24;
-      for (let s = 0; s < sweeps; s++) {
+      // SOR, 바뀐 값이 충분히 작아질 때까지(이전 단계 값에서 출발). 고정 횟수(24회)로는 산화막이 두꺼워질수록
+      // 농도장이 덜 수렴해 성장 속도가 Deal–Grove보다 10 % 남짓 느렸다.
+      const maxSweeps = it === 1 ? 600 : 300;
+      for (let s = 0; s < maxSweeps; s++) {
+        let dmax = 0;
         for (const o of info) {
           if (o.den <= 0) continue;
           let sum = o.src; for (const j of o.nOx) sum += a * C[j];
-          const v = sum / o.den;
-          C[o.i] += 1.7 * (v - C[o.i]);
-          if (C[o.i] < 0) C[o.i] = 0; else if (C[o.i] > 1) C[o.i] = 1;
+          const v = sum / o.den, old = C[o.i];
+          let c = old + 1.7 * (v - old);
+          if (c < 0) c = 0; else if (c > 1) c = 1;
+          C[o.i] = c;
+          const dd = c > old ? c - old : old - c; if (dd > dmax) dmax = dd;
         }
+        if (s >= 6 && dmax < 1e-6) break;
       }
       // 2) 실리콘 셀의 소모 속도 = 0.44 × Σ(면을 통한 산화막 성장 속도) / dx
       const list = [];
@@ -619,6 +625,15 @@
           expand[i] += 1.27;
           // 부피 팽창: 산화제가 들어온 쪽(가로 또는 위)으로 첫 빈 셀까지 고체를 한 칸 민다
           while (expand[i] >= 1) { expand[i] -= 1; this.push(i, list[q + 2], list[q + 3], OX); }
+          // 남은 몫(0.27…)은 다음에 산화될 안쪽 실리콘 셀로 넘긴다. 버리면 산화막이 2/2.27로 얇아지고 소모 비율이 44 % 대신 50 %가 된다.
+          if (expand[i] > 0) {
+            const gx = -list[q + 2], gy = -list[q + 3], x = i % W, y = (i / W) | 0;
+            const hz = y * W + ((x + (gx > 0 ? 1 : -1) + W) % W), vt = gy > 0 ? (y < H - 1 ? i + W : -1) : (y > 0 ? i - W : -1);
+            const order = Math.abs(gx) > Math.abs(gy) * 1.2 ? [hz, vt] : [vt, hz];
+            const j = order.find((k) => k >= 0 && isSemi(m[k]));
+            if (j != null) expand[j] += expand[i];
+            expand[i] = 0;
+          }
         }
       }
       t += dt;
@@ -760,122 +775,453 @@
   }
 
   /* ------------------------------------------------------------ 그리기 */
-  let off = null;
+  /*
+   * 렌더러(v2, 벡터). 셀 격자를 매끄러운 다각형으로 바꿔 그린다.
+   * 1) 다재질 마칭 스퀘어: 셀 중심을 꼭짓점으로 하는 작은 사각형마다, 재질이 다른 변의 가운데에 경계점을 둔다.
+   *    재질이 셋 이상 만나면 사각형 가운데에 접점을 둔다. 사각형 안의 영역은 그 재질의 작은 다각형이 된다.
+   * 2) 이완: 경계점을 자기 격자 변 위에서만(±0.45셀) 이웃 경계점의 평균 쪽으로 여러 번 옮긴다.
+   *    계단(디지털 직선)은 곧은 선·곡선이 되고, 1셀 두께 막과 2셀 이상의 실제 굴곡(스캘럽·정재파)은 남는다.
+   *    이웃한 두 재질이 같은 경계점을 쓰므로 틈이나 겹침이 생기지 않는다.
+   * 3) 그리기: 재질마다 하나의 경로로 채우고(위→아래 음영, style.css의 --m-<재질>-1/-2), 경계를 --m-<재질>-e 선으로 긋는다.
+   *    도핑은 셀 해상도 틴트 이미지를 매끄럽게 확대해 반도체 영역에만, p-n 접합은 순 도핑 0 등고선을 점선으로.
+   * 기하는 셀 단위로 캐시하므로 커서 이동·리사이즈 때 다시 계산하지 않는다.
+   */
+  let palCache = null;
+  if (window.PB && PB.onTheme) PB.onTheme(() => { palCache = null; });
+  function cssRGB(cs, name) { const v = cs.getPropertyValue(name).trim(); return v ? hex2rgb(toHex(v)) : null; }
+  const rgbStr = (c, a) => (a == null ? `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})` : `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`);
+  function palette() {
+    const theme = (PB.isDark() ? "d" : "l") + (document.documentElement.getAttribute("data-theme") || "");
+    if (palCache && palCache.theme === theme) return palCache;
+    const cs = getComputedStyle(document.documentElement);
+    const mats = MATS.map((m) => {
+      if (!m) return null;
+      const base = m.rgb;
+      const c1 = cssRGB(cs, `--m-${m.key}-1`) || base.map((v) => Math.min(255, v + 18));
+      const c2 = cssRGB(cs, `--m-${m.key}-2`) || base;
+      const e = cssRGB(cs, `--m-${m.key}-e`) || base.map((v) => v * 0.72);
+      return { c1, c2, e };
+    });
+    const bg = cssRGB(cs, "--canvas-bg") || [255, 255, 255];
+    const txt = cssRGB(cs, "--text") || [20, 26, 38];
+    const vd = bg.map((v, i) => v + (txt[i] - v) * 0.16);
+    mats.push({ c1: vd, c2: vd, e: bg.map((v, i) => v + (txt[i] - v) * 0.35) });   // VOID(닫힌 빈 공간)
+    palCache = {
+      theme, mats, bg, txt,
+      nTint: cssRGB(cs, "--m-np-2") || [61, 123, 224],
+      pTint: cssRGB(cs, "--m-pp-2") || [224, 87, 74],
+      junc: cssRGB(cs, "--junction") || [232, 177, 0],
+      dark: PB.isDark(),
+    };
+    return palCache;
+  }
+  /** 재질 색(CSS 문자열): XS.color('ox') → 아래쪽 색, XS.color('ox','1') → 위쪽 색, XS.color('ox','e') → 경계색 */
+  function matColor(k, which) {
+    const p = palette().mats[mid(k)]; if (!p) return "transparent";
+    return rgbStr(which === "e" ? p.e : which === "1" ? p.c1 : p.c2);
+  }
+
+  // 단면 해시: 재질·도핑이 같으면 같은 값(캐시 키)
+  function simHash(sim, r0, r1) {
+    let h = 2166136261 >>> 0;
+    const W = sim.W, m = sim.mat, a = r0 * W, b = r1 * W;
+    for (let i = a; i < b; i++) { h ^= m[i]; h = Math.imul(h, 16777619); }
+    const nd = new Uint32Array(sim.nd.buffer, sim.nd.byteOffset, sim.nd.length), na = new Uint32Array(sim.na.buffer, sim.na.byteOffset, sim.na.length);
+    for (let i = a; i < b; i++) { const v = nd[i] ^ Math.imul(na[i], 31); if (v) { h ^= v; h = Math.imul(h, 16777619); } }
+    return h >>> 0;
+  }
+
+  const SHORT = { si: "Si", ox: "SiO_2", nit: "Si_3N_4", poly: "poly-Si", pr: "PR", w: "W", cu: "Cu", al: "Al", tin: "TiN", hk: "HfO_2", sil: "NiSi", epi: "SiGe", lowk: "low-k", acl: "ACL", cfx: "CF_x" };
+  // 안장점(대각선 두 칸만 같은 재질)에서 어느 재질을 이어 줄지: 빈 공간 < 보이드 < 실리콘 < 나머지(얇은 막일 가능성이 큼)
+  const prio = (m, VOID) => (m === 0 ? -2 : m === VOID ? -1 : m === ID.si ? 0 : m);
+
   /**
-   * XS.draw(ctx, sim, {x,y,w,h}, opts)
-   * opts: { y0nm, y1nm (보이는 세로 범위), doping:true, junction:true, scale:true, outline:true, smooth:true }
-   * 셀 격자를 화면 해상도에 맞춰 부드럽게 보간(재질 경계는 가우시안 가중 다수결)해서 그린다.
-   * 반환: { X(nm), Y(nm), sc(px/nm), cell(px,py) }
+   * 셀 단위 기하. 좌표는 보이는 영역의 왼쪽 위가 (0,0), 셀 하나가 1.
+   * 반환 { mats:[{m, rects:[x,y,w,h…], polys:[[x,y,…]…]}], edges:[{a,b,pts:[x,y,…]}…], semi:Path 데이터, tint, junc:[[x,y,…]…] }
+   */
+  function geometry(sim, r0, r1, o) {
+    const W = sim.W, rows = r1 - r0, mat = sim.mat, NM = MATS.length, VOID = NM;
+    const PAD = 1, PW = W + 2 * PAD, PH = rows + 2 * PAD;
+    let enclosed = null;
+    if (o.voids !== false) {
+      const reach = sim.reach();
+      for (let y = r0; y < r1; y++) for (let x = 0; x < W; x++) { const i = y * W + x; if (!mat[i] && !reach[i]) { if (!enclosed) enclosed = new Uint8Array(mat.length); enclosed[i] = 1; } }
+    }
+    const L = new Uint8Array(PW * PH);
+    for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) {
+      const sx = Math.min(W - 1, Math.max(0, x - PAD)), sy = Math.min(rows - 1, Math.max(0, y - PAD)) + r0;
+      const i = sy * W + sx; let m = mat[i];
+      if (!m && enclosed && enclosed[i]) m = VOID;
+      L[y * PW + x] = m;
+    }
+    // 꼭짓점: H변(가로 이웃 셀 중심 사이) idx = y*PW+x, V변 idx = NE + y*PW+x, 사각형 중심 idx = 2NE + y*PW+x
+    const NE = PW * PH, NV = 3 * NE;
+    const VX = new Float32Array(NV), VY = new Float32Array(NV), used = new Uint8Array(NV);
+    const nb = new Int32Array(NV * 4).fill(-1), deg = new Uint8Array(NV);
+    const cx = (x) => x + 0.5 - PAD, cy = (y) => y + 0.5 - PAD;   // 셀 중심 좌표(보이는 영역 기준)
+    const hV = (x, y) => { const v = y * PW + x; if (!used[v]) { used[v] = 1; VX[v] = cx(x) + 0.5; VY[v] = cy(y); } return v; };
+    const vV = (x, y) => { const v = NE + y * PW + x; if (!used[v]) { used[v] = 2; VX[v] = cx(x); VY[v] = cy(y) + 0.5; } return v; };
+    const cV = (x, y) => { const v = 2 * NE + y * PW + x; if (!used[v]) { used[v] = 3; VX[v] = cx(x) + 0.5; VY[v] = cy(y) + 0.5; } return v; };
+    const link = (a, b) => { if (deg[a] < 4) nb[a * 4 + deg[a]++] = b; if (deg[b] < 4) nb[b * 4 + deg[b]++] = a; };
+    const segs = [];          // [a, b, matLeft?, matRight?] — 경계선 그리기용(양쪽 재질)
+    const regions = [];       // 재질별 다각형: {m, ring:[(-1-cornerIdx) | vertexIdx …]}
+    const pureRuns = [];      // [m, x0, x1, y]
+    for (let y = 0; y < PH - 1; y++) {
+      let run = -1, runM = -1;
+      for (let x = 0; x < PW - 1; x++) {
+        const a = L[y * PW + x], b = L[y * PW + x + 1], c = L[(y + 1) * PW + x + 1], d = L[(y + 1) * PW + x];
+        if (a === b && b === c && c === d) {
+          if (run >= 0 && runM === a) continue;
+          if (run >= 0) pureRuns.push(runM, run, x - 1, y);
+          run = x; runM = a; continue;
+        }
+        if (run >= 0) { pureRuns.push(runM, run, x - 1, y); run = -1; }
+        // 시계 방향: TL(a) · 위 변 · TR(b) · 오른 변 · BR(c) · 아래 변 · BL(d) · 왼 변
+        const corner = [a, b, c, d];
+        const cxy = [[x, y], [x + 1, y], [x + 1, y + 1], [x, y + 1]];
+        const mids = [];   // [slotIndex(0..3: 위,오른,아래,왼), vertex]
+        if (a !== b) mids.push([0, hV(x, y)]);
+        if (b !== c) mids.push([1, vV(x + 1, y)]);
+        if (c !== d) mids.push([2, hV(x, y + 1)]);
+        if (d !== a) mids.push([3, vV(x, y)]);
+        const cornerRef = (k) => -1 - ((cxy[k][1]) * PW + cxy[k][0]);
+        // 경계 하나(mi 뒤에서 mj 앞까지의 모서리들)를 영역 다각형으로
+        const regionFrom = (i, j, inner) => {
+          // mids[i] 다음부터 mids[j]까지 시계 방향으로 모서리를 모은다
+          const ring = [mids[i][1]];
+          let k = (mids[i][0] + 1) % 4;   // 변 s 다음 모서리 = (s+1)%4
+          const stop = mids[j][0];
+          let guard = 0;
+          while (guard++ < 5) { ring.push(cornerRef(k)); if (k === stop) break; k = (k + 1) % 4; }
+          ring.push(mids[j][1]);
+          if (inner) ring.push(...inner);
+          return ring;
+        };
+        const mOf = (i) => corner[(mids[i][0] + 1) % 4];
+        if (mids.length === 2) {
+          link(mids[0][1], mids[1][1]);
+          regions.push({ m: mOf(0), ring: regionFrom(0, 1) });
+          regions.push({ m: mOf(1), ring: regionFrom(1, 0) });
+          segs.push(mids[0][1], mids[1][1], mOf(0), mOf(1));
+        } else if (mids.length === 4 && a === c && b === d) {
+          // 안장점: 우선순위가 높은 재질을 대각선으로 잇는다
+          const keepAC = prio(a, VOID) >= prio(b, VOID);
+          if (keepAC) {   // b(TR), d(BL) 모서리를 잘라 낸다: 위–오른, 아래–왼
+            link(mids[0][1], mids[1][1]); link(mids[2][1], mids[3][1]);
+            regions.push({ m: b, ring: [mids[0][1], cornerRef(1), mids[1][1]] });
+            regions.push({ m: d, ring: [mids[2][1], cornerRef(3), mids[3][1]] });
+            regions.push({ m: a, ring: [mids[3][1], cornerRef(0), mids[0][1], mids[1][1], cornerRef(2), mids[2][1]] });
+            segs.push(mids[0][1], mids[1][1], b, a, mids[2][1], mids[3][1], d, a);
+          } else {        // a(TL), c(BR) 모서리를 잘라 낸다: 왼–위, 오른–아래
+            link(mids[3][1], mids[0][1]); link(mids[1][1], mids[2][1]);
+            regions.push({ m: a, ring: [mids[3][1], cornerRef(0), mids[0][1]] });
+            regions.push({ m: c, ring: [mids[1][1], cornerRef(2), mids[2][1]] });
+            regions.push({ m: b, ring: [mids[0][1], cornerRef(1), mids[1][1], mids[2][1], cornerRef(3), mids[3][1]] });
+            segs.push(mids[3][1], mids[0][1], a, b, mids[1][1], mids[2][1], c, b);
+          }
+        } else {
+          // 셋 이상 만나는 곳: 가운데 접점에서 부채꼴로 나눈다
+          const C = cV(x, y);
+          const n = mids.length;
+          for (let i = 0; i < n; i++) {
+            link(C, mids[i][1]);
+            const j = (i + 1) % n;
+            regions.push({ m: mOf(i), ring: regionFrom(i, j, [C]) });
+            segs.push(C, mids[i][1], corner[mids[i][0]], mOf(i));
+          }
+        }
+      }
+      if (run >= 0) pureRuns.push(runM, run, PW - 2, y);
+    }
+    // 이완: 경계점(차수 2)을 자기 변 위에서 이웃 평균 쪽으로
+    const T = o.smooth === false ? 0 : 0.45;
+    if (T > 0) {
+      const list = [];
+      for (let v = 0; v < 2 * NE; v++) if (used[v] && deg[v] === 2) list.push(v);
+      const OX = new Float32Array(list.length), OY = new Float32Array(list.length);
+      list.forEach((v, k) => { OX[k] = VX[v]; OY[k] = VY[v]; });
+      const nx = new Float32Array(list.length);
+      for (let it = 0; it < (o.relax || 28); it++) {
+        for (let k = 0; k < list.length; k++) {
+          const v = list[k], p = nb[v * 4], q = nb[v * 4 + 1];
+          if (used[v] === 1) nx[k] = MATH_clamp(VX[v] + 0.5 * ((VX[p] + VX[q]) / 2 - VX[v]), OX[k] - T, OX[k] + T);
+          else nx[k] = MATH_clamp(VY[v] + 0.5 * ((VY[p] + VY[q]) / 2 - VY[v]), OY[k] - T, OY[k] + T);
+        }
+        for (let k = 0; k < list.length; k++) { const v = list[k]; if (used[v] === 1) VX[v] = nx[k]; else VY[v] = nx[k]; }
+      }
+    }
+    // 재질별 경로 데이터(셀 단위 숫자 배열)
+    const per = new Map();
+    const get = (m) => { let e = per.get(m); if (!e) { e = { m, rects: [], polys: [] }; per.set(m, e); } return e; };
+    for (let k = 0; k < pureRuns.length; k += 4) {
+      const m = pureRuns[k]; if (!m) continue;
+      const x0 = pureRuns[k + 1], x1 = pureRuns[k + 2], y = pureRuns[k + 3];
+      get(m).rects.push(cx(x0), cy(y), x1 - x0 + 1, 1);
+    }
+    for (const r of regions) {
+      if (!r.m) continue;
+      const pts = [];
+      for (const v of r.ring) {
+        if (v < 0) { const ci = -1 - v, x = ci % PW, y = (ci / PW) | 0; pts.push(cx(x), cy(y)); }
+        else pts.push(VX[v], VY[v]);
+      }
+      get(r.m).polys.push(pts);
+    }
+    // 경계선(양쪽 재질별로 묶음)
+    const edges = new Map();
+    for (let k = 0; k < segs.length; k += 4) {
+      const a = segs[k], b = segs[k + 1], p = segs[k + 2], q = segs[k + 3];
+      if (p === q) continue;
+      const key = p < q ? p * 256 + q : q * 256 + p;
+      let arr = edges.get(key); if (!arr) { arr = []; edges.set(key, arr); }
+      arr.push(VX[a], VY[a], VX[b], VY[b]);
+    }
+    // 도핑 틴트(셀 해상도)와 접합 등고선
+    let tint = null, junc = null, semiMats = [];
+    MATS.forEach((m, i) => { if (m && m.semi && per.has(i)) semiMats.push(i); });
+    if (o.doping !== false && semiMats.length) {
+      const U = new Float32Array(W * rows), S = new Uint8Array(W * rows);
+      let any = false;
+      for (let y = 0; y < rows; y++) for (let x = 0; x < W; x++) {
+        const i = (y + r0) * W + x, m = mat[i];
+        if (!m || !MATS[m].semi) continue;
+        S[y * W + x] = 1;
+        const n = sim.nd[i] - sim.na[i];
+        if (n === 0) continue;
+        const q = n / 1e14; U[y * W + x] = Math.log(q + Math.sqrt(q * q + 1)) / Math.LN10; any = true;
+      }
+      if (any) {
+        // 반도체가 아닌 셀은 이웃 반도체 값으로 채운다(경계에서 틴트가 옅어지거나 가짜 접합이 생기지 않게)
+        for (let pass = 0; pass < 2; pass++) {
+          const S2 = S.slice(), U2 = U.slice();
+          for (let y = 0; y < rows; y++) for (let x = 0; x < W; x++) {
+            const i = y * W + x; if (S[i]) continue;
+            let s = 0, n = 0;
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const xx = (x + dx + W) % W, yy = y + dy; if (yy < 0 || yy >= rows) continue; const j = yy * W + xx; if (S[j]) { s += U[j]; n++; } }
+            if (n) { U2[i] = s / n; S2[i] = 1; }
+          }
+          S.set(S2); U.set(U2);
+        }
+        tint = U;
+        // 접합: U = 0 등고선(선형 보간 마칭 스퀘어), 선분을 이어 폴리라인으로
+        const key = (x, y, h) => (y * (W + 1) + x) * 2 + h;
+        const P = new Map(), nextOf = new Map();
+        const pt = (x, y, h) => { const k = key(x, y, h); if (!P.has(k)) { let px, py; if (h === 0) { const u0 = U[y * W + x], u1 = U[y * W + x + 1]; const t = u0 / (u0 - u1); px = x + 0.5 + t; py = y + 0.5; } else { const u0 = U[y * W + x], u1 = U[(y + 1) * W + x]; const t = u0 / (u0 - u1); px = x + 0.5; py = y + 0.5 + t; } P.set(k, [px, py]); } return k; };
+        const segsJ = [];
+        for (let y = 0; y < rows - 1; y++) for (let x = 0; x < W - 1; x++) {
+          const a = U[y * W + x], b = U[y * W + x + 1], c = U[(y + 1) * W + x + 1], d = U[(y + 1) * W + x];
+          const sa = a > 0, sb = b > 0, sc_ = c > 0, sd = d > 0;
+          const e = [];
+          if (sa !== sb) e.push(pt(x, y, 0));
+          if (sb !== sc_) e.push(pt(x + 1, y, 1));
+          if (sc_ !== sd) e.push(pt(x, y + 1, 0));
+          if (sd !== sa) e.push(pt(x, y, 1));
+          if (e.length === 2) segsJ.push(e[0], e[1]);
+          else if (e.length === 4) { if ((a + b + c + d) / 4 > 0 === sa) { segsJ.push(e[0], e[1], e[2], e[3]); } else { segsJ.push(e[3], e[0], e[1], e[2]); } }
+        }
+        // 이어 붙이기
+        const adj = new Map();
+        const addA = (p, q) => { if (!adj.has(p)) adj.set(p, []); adj.get(p).push(q); };
+        for (let k = 0; k < segsJ.length; k += 2) { addA(segsJ[k], segsJ[k + 1]); addA(segsJ[k + 1], segsJ[k]); }
+        const seen = new Set(); junc = [];
+        const walk = (start) => {
+          const line = [start]; seen.add(start);
+          let cur = start;
+          for (;;) { const nx_ = (adj.get(cur) || []).find((q) => !seen.has(q)); if (nx_ == null) break; seen.add(nx_); line.push(nx_); cur = nx_; }
+          return line;
+        };
+        for (const [k, list] of adj) if (list.length === 1 && !seen.has(k)) { const l = walk(k); junc.push(l.map((q) => P.get(q))); }
+        for (const [k] of adj) if (!seen.has(k)) { const l = walk(k); l.push(l[0]); junc.push(l.map((q) => P.get(q))); }
+        junc = junc.filter((l) => l.length > 1).map((l) => { const f = []; l.forEach((p) => f.push(p[0], p[1])); return f; });
+      }
+    }
+    return { W, rows, mats: [...per.values()], edges, tint, junc, semiMats, VOID };
+  }
+  const MATH_clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+
+  /** 재질 이름표 자리: 영역 안에서 가장 깊숙한 셀(거리 변환), 재질마다 큰 영역 1~2곳 */
+  function labelSpots(sim, r0, r1, sc, o) {
+    const W = sim.W, rows = r1 - r0, mat = sim.mat, N = W * rows;
+    const D = new Float32Array(N);
+    const INF = 1e9;
+    for (let y = 0; y < rows; y++) for (let x = 0; x < W; x++) D[y * W + x] = mat[(y + r0) * W + x] ? INF : 0;
+    const mAt = (i) => mat[(Math.floor(i / W) + r0) * W + (i % W)];
+    const at = (x, y) => (y < 0 || y >= rows ? -1 : y * W + ((x % W) + W) % W);
+    const pass = (y, x, dirs) => {
+      const i = y * W + x; if (!D[i]) return;
+      let v = y === 0 || y === rows - 1 ? 0.5 : D[i];
+      const mi = mAt(i);
+      for (const [dx, dy, c] of dirs) { const j = at(x + dx, y + dy); if (j < 0) continue; v = Math.min(v, mAt(j) === mi ? D[j] + c : c * 0.5); }
+      D[i] = v;
+    };
+    const F = [[-1, 0, 1], [0, -1, 1], [-1, -1, 1.414], [1, -1, 1.414]], B = [[1, 0, 1], [0, 1, 1], [1, 1, 1.414], [-1, 1, 1.414]];
+    for (let y = 0; y < rows; y++) for (let x = 0; x < W; x++) pass(y, x, F);
+    for (let y = rows - 1; y >= 0; y--) for (let x = W - 1; x >= 0; x--) pass(y, x, B);
+    const spots = [], perMat = {};
+    const idx = []; for (let i = 0; i < N; i++) if (D[i] < INF && D[i] * sc >= (o.minR || 9)) idx.push(i);
+    const key = (i) => D[i] - 0.004 * Math.abs((i % W) - W / 2);
+    idx.sort((a, b) => key(b) - key(a));
+    for (const i of idx) {
+      const m = mAt(i);
+      if (!m || (o.only && o.only.indexOf(MATS[m].key) < 0)) continue;
+      const x = i % W, y = Math.floor(i / W);
+      const list = perMat[m] || (perMat[m] = []);
+      if (list.length >= (o.perMat || 2)) continue;
+      let a = x, b = x; while (b - a < W && mat[(y + r0) * W + ((a - 1 + W) % W)] === m) a--; while (b - a < W && mat[(y + r0) * W + ((b + 1) % W)] === m) b++;
+      const run = b - a + 1;
+      const pt = { m, x, y, r: D[i], run, cx: run >= W ? W / 2 : (a + b + 1) / 2 };
+      // 이름표는 그 행의 같은 재질 구간 가운데에 그리므로, 그린 자리끼리 거리를 잰다(같은 재질 이름표가 겹치지 않게)
+      if (list.some((p) => Math.hypot(p.cx - pt.cx, p.y - y) * sc < 220)) continue;
+      list.push(pt); spots.push(pt);
+    }
+    return spots;
+  }
+
+  const cache = new WeakMap();
+  const tintCanvas = (g, pal) => {
+    if (!g.tint) return null;
+    const { W, rows } = g, cv = document.createElement("canvas");
+    cv.width = W; cv.height = rows;
+    const c = cv.getContext("2d"), im = c.createImageData(W, rows), d = im.data;
+    for (let i = 0; i < W * rows; i++) {
+      const u = g.tint[i], t = Math.min(1, Math.max(0, (Math.abs(u) - 1) / 5.5)) * 0.85;
+      const tc = u > 0 ? pal.nTint : pal.pTint;
+      d[i * 4] = tc[0]; d[i * 4 + 1] = tc[1]; d[i * 4 + 2] = tc[2]; d[i * 4 + 3] = Math.round(t * 255);
+    }
+    c.putImageData(im, 0, 0);
+    return cv;
+  };
+  /**
+   * XS.draw(ctx, sim, {x,y,w,h}, opts) → { X(nm), Y(nm), sc(px/nm), ox, oy, pw, ph, r0, cell(px,py), taken }
+   * opts: { y0nm, y1nm (보이는 세로 범위), doping:true, junction:true, scale:true|'tl'|'tr'|'bl'|'br'|false,
+   *         outline:true, smooth:true, alignTop:false, labels:false|true|{only:[재질], minR:9, perMat:2, names:{재질:이름}}, voids:true, border:true }
    */
   function draw(ctx, sim, box, o = {}) {
     const W = sim.W, H = sim.H, dx = sim.dx;
     const r0 = o.y0nm != null ? Math.max(0, sim.row(o.y0nm)) : 0;
     const r1 = o.y1nm != null ? Math.min(H, sim.row(o.y1nm)) : H;
-    const rows = r1 - r0;
+    const rows = Math.max(1, r1 - r0);
     const sc = Math.min(box.w / W, box.h / rows);  // px per cell
     const pw = W * sc, ph = rows * sc;
     const ox = box.x + (box.w - pw) / 2, oy = box.y + (o.alignTop ? 0 : (box.h - ph) / 2);
-    const dpr = (ctx.getTransform && ctx.getTransform().a) || 1;
-    const f = o.smooth === false ? 1 : Math.max(1, Math.min(5, Math.round(sc * dpr / 1.5)));
-    const showD = o.doping !== false;
-    const bg = hex2rgb(toHex(PB.color("canvas-bg")));
-    const mat = sim.mat;
-    // 셀 색 (도핑 틴트 포함)
-    const cr = new Float32Array(W * rows * 3), net = new Float32Array(W * rows);
-    for (let y = r0; y < r1; y++) for (let x = 0; x < W; x++) {
-      const i = y * W + x, j = (y - r0) * W + x, mt = mat[i];
-      let c = mt ? MATS[mt].rgb : bg, r = c[0], g = c[1], b = c[2];
-      if (mt && MATS[mt].semi) {
-        const n = sim.nd[i] - sim.na[i], a = Math.abs(n);
-        net[j] = a > 1e14 ? Math.sign(n) * (Math.log10(a) - 14) : 0;
-        if (showD && a > 1e15) {
-          const t = PB.clamp((Math.log10(a) - 15) / 5.5, 0, 1) * 0.85, tc = n > 0 ? [61, 123, 224] : [224, 87, 74];
-          r += (tc[0] - r) * t; g += (tc[1] - g) * t; b += (tc[2] - b) * t;
-        }
-      }
-      cr[j * 3] = r; cr[j * 3 + 1] = g; cr[j * 3 + 2] = b;
-    }
-    const OW = W * f, OH = rows * f;
-    if (!off) off = document.createElement("canvas");
-    off.width = OW; off.height = OH;
-    const octx = off.getContext("2d");
-    const im = octx.createImageData(OW, OH), d = im.data;
-    const lab = new Uint8Array(OW * OH), sgn = new Int8Array(OW * OH);
-    // 부분 픽셀 가중치: 주변 4×4 셀 중심까지의 가우시안
-    const sig2 = 2 * 0.62 * 0.62;
-    const score = new Float32Array(MATS.length);
-    const touched = [];
-    const getM = (x, y) => { y = y < r0 ? r0 : y >= r1 ? r1 - 1 : y; return mat[y * W + ((x % W) + W) % W]; };
-    for (let py = 0; py < OH; py++) {
-      const fy = r0 + (py + 0.5) / f - 0.5, y0 = Math.floor(fy);
-      for (let px = 0; px < OW; px++) {
-        const fx = (px + 0.5) / f - 0.5, x0 = Math.floor(fx);
-        let best = 0, bs = -1;
-        if (f === 1) best = getM(x0 + (fx - x0 > 0.5 ? 1 : 0), y0 + (fy - y0 > 0.5 ? 1 : 0));
-        else {
-          touched.length = 0;
-          for (let yy = y0 - 1; yy <= y0 + 2; yy++) for (let xx = x0 - 1; xx <= x0 + 2; xx++) {
-            const m = getM(xx, yy), ddx = xx - fx, ddy = yy - fy;
-            const w = Math.exp(-(ddx * ddx + ddy * ddy) / sig2);
-            if (score[m] === 0) touched.push(m);
-            score[m] += w;
-          }
-          for (const m of touched) { if (score[m] > bs) { bs = score[m]; best = m; } score[m] = 0; }
-        }
-        // 같은 재질인 가장 가까운 4셀의 색을 쌍선형 보간
-        let r = 0, g = 0, b = 0, ws = 0, nv = 0;
-        for (let k = 0; k < 4; k++) {
-          const xx = x0 + (k & 1), yy = y0 + (k >> 1);
-          const yc = yy < r0 ? r0 : yy >= r1 ? r1 - 1 : yy, xc = ((xx % W) + W) % W;
-          if (mat[yc * W + xc] !== best) continue;
-          const w = (1 - Math.abs(fx - xx)) * (1 - Math.abs(fy - yy)) + 1e-4;
-          const j = (yc - r0) * W + xc;
-          r += cr[j * 3] * w; g += cr[j * 3 + 1] * w; b += cr[j * 3 + 2] * w; nv += net[j] * w; ws += w;
-        }
-        const q = py * OW + px, p4 = q * 4;
-        if (ws > 0) { r /= ws; g /= ws; b /= ws; nv /= ws; }
-        else { const c = best ? MATS[best].rgb : bg; r = c[0]; g = c[1]; b = c[2]; }
-        lab[q] = best; sgn[q] = best && MATS[best].semi ? (nv > 0.0 ? 1 : nv < 0 ? -1 : 0) : 0;
-        d[p4] = r; d[p4 + 1] = g; d[p4 + 2] = b; d[p4 + 3] = 255;
-      }
-    }
-    // 경계선과 접합선
-    const dark = PB.isDark() ? 0.5 : 0.62;
-    const lw = Math.max(1, Math.round(f / 2.5));
-    for (let py = 0; py < OH; py++) for (let px = 0; px < OW; px++) {
-      const q = py * OW + px, a = lab[q];
-      let edge = false, junc = false;
-      for (let k = 1; k <= lw; k++) {
-        if (px + k < OW && lab[q + k] !== a) edge = true;
-        if (py + k < OH && lab[q + k * OW] !== a) edge = true;
-      }
-      if (o.outline === false) edge = false;
-      if (showD && o.junction !== false && sgn[q]) {
-        if ((px + 1 < OW && sgn[q + 1] && sgn[q + 1] !== sgn[q]) || (py + 1 < OH && sgn[q + OW] && sgn[q + OW] !== sgn[q])) junc = true;
-      }
-      const p4 = q * 4;
-      if (junc && ((px + py) % (3 * f) < 2 * f)) { d[p4] = 255; d[p4 + 1] = 214; d[p4 + 2] = 60; }
-      else if (edge) { d[p4] *= dark; d[p4 + 1] *= dark; d[p4 + 2] *= dark; }
-    }
-    octx.putImageData(im, 0, 0);
+    const cv = ctx.canvas;
+    const pal = palette();
+    const hash = simHash(sim, r0, r1);
+    const key = [hash, r0, r1, o.doping !== false, o.smooth !== false, o.voids !== false].join("|");
+    let ent = cache.get(cv);
+    if (!ent || ent.key !== key) { ent = { key, g: geometry(sim, r0, r1, o), tint: null, tintTheme: "", spots: null }; cache.set(cv, ent); }
+    const g = ent.g;
+    if (g.tint && ent.tintTheme !== pal.theme) { ent.tint = tintCanvas(g, pal); ent.tintTheme = pal.theme; }
     ctx.save();
-    ctx.imageSmoothingEnabled = f > 1;
-    ctx.drawImage(off, ox, oy, pw, ph);
-    ctx.imageSmoothingEnabled = true;
-    ctx.strokeStyle = PB.color("border"); ctx.lineWidth = 1; ctx.strokeRect(ox + 0.5, oy + 0.5, pw - 1, ph - 1);
-    // 축척 막대
+    ctx.beginPath(); ctx.rect(ox, oy, pw, ph); ctx.clip();
+    ctx.fillStyle = rgbStr(pal.bg); ctx.fillRect(ox, oy, pw, ph);
+    ctx.translate(ox, oy); ctx.scale(sc, sc);
+    // 재질 채우기
+    const pathOf = (e) => {
+      if (e.path) return e.path;
+      const p = new Path2D();
+      for (let k = 0; k < e.rects.length; k += 4) p.rect(e.rects[k], e.rects[k + 1], e.rects[k + 2], e.rects[k + 3]);
+      for (const q of e.polys) { p.moveTo(q[0], q[1]); for (let k = 2; k < q.length; k += 2) p.lineTo(q[k], q[k + 1]); p.closePath(); }
+      return (e.path = p);
+    };
+    const grads = {};
+    for (const e of g.mats) {
+      const c = pal.mats[e.m]; if (!c) continue;
+      const gr = ctx.createLinearGradient(0, 0, 0, rows);
+      gr.addColorStop(0, rgbStr(c.c1)); gr.addColorStop(1, rgbStr(c.c2));
+      grads[e.m] = gr;
+      ctx.fillStyle = gr; ctx.fill(pathOf(e));
+    }
+    // 도핑 틴트(반도체 영역 안만)
+    if (ent.tint) {
+      ctx.save();
+      const clip = new Path2D();
+      g.mats.forEach((e) => { if (g.semiMats.indexOf(e.m) >= 0) clip.addPath(pathOf(e)); });
+      ctx.clip(clip);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(ent.tint, 0, 0, g.W, g.rows);
+      ctx.restore();
+    }
+    // 경계선
+    if (o.outline !== false) {
+      ctx.lineJoin = "round"; ctx.lineCap = "round";
+      ctx.lineWidth = 1.1 / sc;
+      for (const [k, arr] of g.edges) {
+        const p = Math.floor(k / 256), q = k % 256;
+        const cp = pal.mats[p], cq = pal.mats[q];
+        let e;
+        if (!p || p === g.VOID) e = cq && cq.e; else if (!q || q === g.VOID) e = cp && cp.e;
+        else { const e1 = cp.e, e2 = cq.e; e = e1[0] + e1[1] + e1[2] < e2[0] + e2[1] + e2[2] ? e1 : e2; }
+        if (!e) continue;
+        ctx.strokeStyle = rgbStr(e, pal.dark ? 0.95 : 0.9);
+        ctx.beginPath();
+        for (let i = 0; i < arr.length; i += 4) { ctx.moveTo(arr[i], arr[i + 1]); ctx.lineTo(arr[i + 2], arr[i + 3]); }
+        ctx.stroke();
+      }
+    }
+    // p-n 접합
+    if (g.junc && g.junc.length && o.junction !== false) {
+      ctx.save();
+      const clip = new Path2D();
+      g.mats.forEach((e) => { if (g.semiMats.indexOf(e.m) >= 0) clip.addPath(pathOf(e)); });
+      ctx.clip(clip);
+      const jp = new Path2D();
+      g.junc.forEach((l) => { jp.moveTo(l[0], l[1]); for (let k = 2; k < l.length; k += 2) jp.lineTo(l[k], l[k + 1]); });
+      ctx.lineJoin = "round"; ctx.lineCap = "butt";
+      ctx.strokeStyle = pal.dark ? "rgba(0,0,0,.45)" : "rgba(20,26,38,.32)"; ctx.lineWidth = 3.4 / sc; ctx.setLineDash([]); ctx.stroke(jp);
+      ctx.strokeStyle = rgbStr(pal.junc); ctx.lineWidth = 1.7 / sc; ctx.setLineDash([5 / sc, 3.5 / sc]); ctx.stroke(jp);
+      ctx.restore();
+    }
+    ctx.restore();
+    ctx.save();
+    if (o.border !== false) { ctx.strokeStyle = PB.color("border"); ctx.lineWidth = 1; ctx.strokeRect(Math.round(ox) + 0.5, Math.round(oy) + 0.5, Math.round(pw) - 1, Math.round(ph) - 1); }
+    const P = PB.palette();
+    const isVac = (px, py) => { const cx = Math.floor((px - ox) / sc), cy = Math.floor((py - oy) / sc) + r0; if (cx < 0 || cx >= W || cy < 0 || cy >= H) return true; return !sim.mat[cy * W + cx]; };
+    const vacFrac = (x, y, w, h) => { let v = 0, n = 0; for (let yy = y; yy <= y + h; yy += Math.max(2, h / 4)) for (let xx = x; xx <= x + w; xx += Math.max(2, w / 8)) { n++; if (isVac(xx, yy)) v++; } return v / n; };
+    const taken = [];
+    // 축척 막대(빈 공간이 가장 많은 모서리)
     if (o.scale !== false) {
-      const P = PB.palette();
       const target = (W * dx) / 5, mag = Math.pow(10, Math.floor(Math.log10(target)));
       const len = [1, 2, 5, 10].map((v) => v * mag).filter((v) => v <= target).pop() || mag;
-      const lp = (len / dx) * sc, bx = ox + 10, by = oy + 14;
-      ctx.fillStyle = PB.isDark() ? "rgba(15,21,34,.75)" : "rgba(255,255,255,.8)";
-      ctx.fillRect(bx - 6, by - 10, lp + 12 + 50, 20);
-      ctx.strokeStyle = P.text; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + lp, by); ctx.moveTo(bx, by - 4); ctx.lineTo(bx, by + 4); ctx.moveTo(bx + lp, by - 4); ctx.lineTo(bx + lp, by + 4); ctx.stroke();
-      ctx.fillStyle = P.text; ctx.font = "11px " + getComputedStyle(document.body).getPropertyValue("--mono");
-      ctx.textAlign = "left"; ctx.textBaseline = "middle";
-      ctx.fillText(len >= 1000 ? len / 1000 + " µm" : len + " nm", bx + lp + 6, by);
+      const lp = (len / dx) * sc;
+      const label = len >= 1000 ? len / 1000 + " µm" : len + " nm";
+      ctx.font = PB.font(11, 600, true);
+      const tw = ctx.measureText(label).width, bw = lp + tw + 22, bh = 20;
+      const cands = { tl: [ox + 8, oy + 8], tr: [ox + pw - bw - 8, oy + 8], bl: [ox + 8, oy + ph - bh - 8], br: [ox + pw - bw - 8, oy + ph - bh - 8] };
+      let pos = typeof o.scale === "string" ? o.scale : null;
+      if (!pos) { let bestF = -1; ["tl", "tr", "bl", "br"].forEach((k) => { const [x, y] = cands[k]; const f = vacFrac(x, y, bw, bh) - (k[0] === "b" ? 0.05 : 0); if (f > bestF + 0.02) { bestF = f; pos = k; } }); }
+      const [bx, by] = cands[pos];
+      PB.rrect(ctx, bx, by, bw, bh, 6);
+      ctx.fillStyle = PB.alpha(P.bg, 0.86); ctx.fill();
+      ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.stroke();
+      const y = by + bh / 2, x0 = bx + 8;
+      ctx.strokeStyle = P.text; ctx.lineWidth = 1.6; ctx.lineCap = "butt";
+      ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0 + lp, y); ctx.moveTo(x0 + 0.8, y - 4); ctx.lineTo(x0 + 0.8, y + 4); ctx.moveTo(x0 + lp - 0.8, y - 4); ctx.lineTo(x0 + lp - 0.8, y + 4); ctx.stroke();
+      ctx.fillStyle = P.text; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText(label, x0 + lp + 6, y + 0.5);
+      taken.push([bx, by, bw, bh]);
+    }
+    // 재질 이름표
+    if (o.labels) {
+      const lo = o.labels === true ? {} : o.labels;
+      const sk = key + "|" + sc.toFixed(2);
+      if (!ent.spots || ent.spotKey !== sk) { ent.spots = labelSpots(sim, r0, r1, sc, lo); ent.spotKey = sk; }
+      ctx.font = PB.font(lo.size || 11, 600);
+      ent.spots.forEach((p) => {
+        const name = (lo.names && lo.names[MATS[p.m].key]) || SHORT[MATS[p.m].key] || MATS[p.m].name;
+        const tw = PB.textWidth(ctx, name, { font: ctx.font }), bw = tw + 12, bh = 17;
+        if (p.run * sc < bw + 8 || p.r * sc < bh / 2 + 4) return;
+        let cx = ox + p.cx * sc, cy = oy + (p.y + 0.5) * sc;
+        cx = PB.clamp(cx, ox + bw / 2 + 4, ox + pw - bw / 2 - 4); cy = PB.clamp(cy, oy + bh / 2 + 4, oy + ph - bh / 2 - 4);
+        const r = [cx - bw / 2, cy - bh / 2, bw, bh];
+        if (taken.some((t) => r[0] < t[0] + t[2] + 4 && r[0] + r[2] + 4 > t[0] && r[1] < t[1] + t[3] + 3 && r[1] + r[3] + 3 > t[1])) return;
+        taken.push(r);
+        const pm = pal.mats[p.m], lum = pm ? (pm.c2[0] * 0.3 + pm.c2[1] * 0.59 + pm.c2[2] * 0.11) : 200;
+        PB.rrect(ctx, r[0], r[1], bw, bh, 5);
+        ctx.fillStyle = lum < 110 ? "rgba(255,255,255,.16)" : PB.alpha(P.bg, pal.dark ? 0.5 : 0.62); ctx.fill();
+        ctx.fillStyle = lum < 110 ? "#fff" : P.text; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        PB.text(ctx, name, cx, cy + 0.5);
+      });
     }
     ctx.restore();
     return {
@@ -883,6 +1229,7 @@
       Y: (yn) => oy + (sim.row(0) + yn / dx - r0) * sc,
       sc: sc / dx, ox, oy, pw, ph, r0,
       cell: (px, py) => [Math.floor((px - ox) / sc), Math.floor((py - oy) / sc) + r0],
+      taken,
     };
   }
   function toHex(c) {
@@ -892,10 +1239,11 @@
     return "#" + m.slice(0, 3).map((v) => (+v | 0).toString(16).padStart(2, "0")).join("");
   }
 
-  /** 재질 범례 HTML: XS.legend(['si','ox','pr'], true) */
+  /** 재질 범례 HTML: XS.legend(['si','ox','pr'], true) — 견본은 그림과 같은 재질 그라데이션 */
   function legend(keys, doping) {
-    return keys.map((k) => { const m = MATS[mid(k)]; return `<span><i style="background:${m.color}"></i>${m.name}${m.en && m.en !== m.name ? ` <span class="en">${m.en}</span>` : ""}</span>`; }).join("") +
-      (doping ? `<span><i style="background:#3d7be0"></i>n형 도핑</span><span><i style="background:#e0574a"></i>p형 도핑</span><span><i style="background:transparent;border:1px dashed #d4a800"></i>p-n 접합</span>` : "");
+    const sw = (k) => `background:linear-gradient(var(--m-${k}-1),var(--m-${k}-2));border-color:var(--m-${k}-e)`;
+    return keys.map((k) => { const m = MATS[mid(k)]; return `<span><i style="${sw(m.key)}"></i><span>${m.name}${m.en && m.en !== m.name ? ` <span class="en">${m.en}</span>` : ""}</span></span>`; }).join("") +
+      (doping ? `<span><i style="${sw("np")}"></i><span>n형 도핑</span></span><span><i style="${sw("pp")}"></i><span>p형 도핑</span></span><span><i style="background:transparent;border:1.5px dashed var(--junction)"></i><span>p-n 접합</span></span>` : "");
   }
 
   /* ------------------------------------------------------------ 측정 도우미 */
@@ -911,6 +1259,13 @@
   /** 열 x에서 위에서부터 빈 공간이 끝나는 깊이(nm, 실리콘 표면 기준) */
   function depthAt(sim, x) { return sim.ynm(sim.surfRow(x)); }
 
+  /** 농도 HTML: 3.2×10<sup>18</sup> cm<sup>−3</sup> */
+  function concHTML(v) {
+    let e = Math.floor(Math.log10(v) + 1e-9), m = v / Math.pow(10, e);
+    if (m >= 9.95) { e++; m /= 10; }   // 1e15가 10.0×10¹⁴로 보이지 않게
+    return `${m.toFixed(1)}×10<sup>${e}</sup> cm<sup>−3</sup>`;
+  }
+
   /* ------------------------------------------------------------ 단계별 단면 위젯 */
   /**
    * XS.stepper(container, {
@@ -925,7 +1280,7 @@
     el.innerHTML = `
       <div class="sim-head"><span class="sim-tag">${o.tag || "CROSS-SECTION"}</span><h3>${o.title || "단면 시뮬레이터"}</h3></div>
       <div class="sim-body side">
-        <div class="sim-view"><canvas></canvas><span class="hint">단면 위에 마우스를 올리면 재질·깊이·도핑을 읽습니다</span></div>
+        <div class="sim-view"><canvas></canvas></div>
         <div class="sim-controls">
           <div class="ctrl"><span>단계 <output id="${uid}-k"></output></span><input type="range" id="${uid}-r" min="0" max="1" value="0"></div>
           <div class="btn-row"><button class="btn sm" data-a="first" title="처음으로" aria-label="처음으로">⏮</button><button class="btn sm" data-a="prev" title="이전 단계" aria-label="이전 단계">◀</button><button class="btn sm primary" data-a="next">다음 ▶</button><button class="btn sm" data-a="play">자동 재생</button></div>
@@ -935,7 +1290,7 @@
         </div>
       </div>
       ${o.below ? `<div class="sim-controls xs-below">${o.below}</div>` : ""}
-      <div class="mat-legend" id="${uid}-g"></div>
+      <div class="xs-legend-row"><div class="mat-legend" id="${uid}-g"></div><span class="xs-hint">단면 위를 가리키면 재질·깊이·도핑을 읽습니다</span></div>
       <div class="sim-readout">
         <div class="stat"><span class="k">현재 공정</span><span class="v" id="${uid}-o1" style="font-size:15px">—</span></div>
         <div class="stat"><span class="k">커서 위치 (x, 깊이)</span><span class="v" id="${uid}-o2" style="font-size:15px">—</span></div>
@@ -947,26 +1302,41 @@
     el.querySelector("#" + uid + "-g").innerHTML = legend(o.legend || ["si", "ox", "nit", "poly", "pr"], o.doping !== false);
     let steps = o.steps || [], shown = null, shownK = 0, prog = 1, map = null, hover = null, playing = false;
     const API = {};
-    const R = runner(o.make, steps, (sim, k, p) => { shown = sim; shownK = k; prog = p; cv.redraw(); sync(); if (p >= 1 && playing) setTimeout(() => { if (playing) { if (R.cur < steps.length) R.goto(R.cur + 1, true); else stopPlay(); } }, 380); });
+    const R = runner(o.make, steps, (sim, k, p) => { shown = sim; shownK = k; prog = p; sync(); cv.redraw(); if (p >= 1 && playing) setTimeout(() => { if (playing) { if (R.cur < steps.length) R.goto(R.cur + 1, true); else stopPlay(); } }, 380); });
     API.R = R;
+    // 높이 비율은 현재 단면(첫 스냅숏)의 보이는 행 수 / 폭으로 정한다. 리사이즈마다 다시 읽으므로 영역을 바꾸면 따라간다.
+    const cvOpts = { minHeight: o.minHeight || 260, maxHeight: o.maxHeight || 560 };
+    Object.defineProperty(cvOpts, "aspect", { enumerable: true, get() {
+      if (o.aspect) return o.aspect;
+      const s0 = R.sim(0), v = o.view || {};
+      const r0 = v.y0nm != null ? Math.max(0, s0.row(v.y0nm)) : 0, r1 = v.y1nm != null ? Math.min(s0.H, s0.row(v.y1nm)) : s0.H;
+      return PB.clamp((r1 - r0) / s0.W + 0.02, 0.45, 1.05);
+    } });
     const cv = PB.canvas(cvEl, (ctx, w, h) => {
       const sim = shown || R.sim(0);
-      map = draw(ctx, sim, { x: 6, y: 6, w: w - 12, h: h - 12 }, Object.assign({ doping: o.doping !== false }, o.view || {}));
+      map = draw(ctx, sim, { x: 6, y: 6, w: w - 12, h: h - 12 }, Object.assign({ doping: o.doping !== false, labels: o.labels != null ? o.labels : true }, o.view || {}));
       if (o.overlay) o.overlay(ctx, map, sim, shownK);
       if (prog < 1) {
-        ctx.fillStyle = PB.color("accent"); ctx.fillRect(map.ox, map.oy + map.ph - 4, map.pw * prog, 4);
+        const P = PB.palette(), bw = Math.min(map.pw - 24, 220), bx = map.ox + (map.pw - bw) / 2, by = map.oy + map.ph - 30;
+        PB.rrect(ctx, bx - 10, by - 18, bw + 20, 34, 9); ctx.fillStyle = PB.alpha(P.bg, 0.88); ctx.fill(); ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.stroke();
+        PB.text(ctx, "계산 중 · " + (steps[shownK - 1] ? steps[shownK - 1].label : ""), bx, by - 6, { size: 11, weight: 600, color: P.dim, align: "left", baseline: "middle" });
+        PB.rrect(ctx, bx, by + 4, bw, 5, 2.5); ctx.fillStyle = P.border; ctx.fill();
+        PB.rrect(ctx, bx, by + 4, Math.max(5, bw * prog), 5, 2.5); ctx.fillStyle = P.accent; ctx.fill();
       }
       // 단계 목록 높이를 단면 높이에 맞춘다(넓은 화면의 옆 배치일 때)
       const ctl = list.parentElement;
       if (ctl && getComputedStyle(ctl).borderLeftWidth !== "0px") {
         const avail = h + 12 - (list.offsetTop - ctl.offsetTop) - 18;
-        list.style.maxHeight = Math.max(150, avail) + "px";
+        list.style.maxHeight = Math.max(96, avail) + "px";
       } else list.style.maxHeight = "";
       if (hover) {
+        ctx.save(); ctx.globalAlpha = 0.75;
         ctx.strokeStyle = PB.color("accent-2"); ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(map.ox, hover[1]); ctx.lineTo(map.ox + map.pw, hover[1]); ctx.moveTo(hover[0], map.oy); ctx.lineTo(hover[0], map.oy + map.ph); ctx.stroke(); ctx.setLineDash([]);
+        ctx.beginPath(); ctx.moveTo(map.ox, Math.round(hover[1]) + 0.5); ctx.lineTo(map.ox + map.pw, Math.round(hover[1]) + 0.5); ctx.moveTo(Math.round(hover[0]) + 0.5, map.oy); ctx.lineTo(Math.round(hover[0]) + 0.5, map.oy + map.ph); ctx.stroke(); ctx.setLineDash([]);
+        ctx.restore();
+        ctx.beginPath(); ctx.arc(hover[0], hover[1], 3.5, 0, Math.PI * 2); ctx.fillStyle = PB.color("accent-2"); ctx.fill(); ctx.strokeStyle = PB.color("canvas-bg"); ctx.lineWidth = 1.5; ctx.stroke();
       }
-    }, { aspect: o.aspect || PB.clamp(((o.view && o.view.y1nm != null ? o.make().row(o.view.y1nm) : o.make().H) - (o.view && o.view.y0nm != null ? o.make().row(o.view.y0nm) : 0)) / o.make().W + 0.02, 0.45, 1.05), minHeight: o.minHeight || 260, maxHeight: o.maxHeight || 560 });
+    }, cvOpts);
     function sync() {
       rng.max = steps.length; rng.value = shownK;
       rng.style.setProperty("--fill", (steps.length ? (shownK / steps.length) * 100 : 0) + "%");
@@ -998,31 +1368,37 @@
       if (a === "next") API.go(Math.min(steps.length, R.cur + 1), true);
     }));
     API.go = (k, anim) => R.goto(k, anim !== false && o.animate !== false && anim);
-    API.setSteps = (s, k) => { steps = s; R.reset(s); renderList(); API.go(k != null ? k : 0); };
+    API.setSteps = (s, k) => { steps = s; R.reset(s); cv.resize(); renderList(); API.go(k != null ? k : 0); };
     API.add = (st) => { R.cancel(); R.truncate(R.cur); steps.splice(R.cur); steps.push(st); renderList(); R.goto(steps.length, true); };
     API.remove = (i) => { R.cancel(); steps.splice(i); R.truncate(i); renderList(); API.go(Math.min(i, steps.length)); };
     API.redraw = () => cv.redraw();
     API.cur = () => shown;
     API.steps = () => steps;
-    // 커서 읽기
+    // 커서 읽기: 십자선 + 떠 있는 정보 상자 + 아래 읽음표. 터치는 누른 곳을 읽는다.
+    const tip = PB.tip(cvEl);
     const onMove = (e) => {
       if (!map || !shown) return;
       const r = cvEl.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
       const [cx, cy] = map.cell(px, py);
-      if (cx < 0 || cx >= shown.W || cy < 0 || cy >= shown.H || px > map.ox + map.pw || py > map.oy + map.ph) { hover = null; cv.redraw(); return; }
+      if (cx < 0 || cx >= shown.W || cy < 0 || cy >= shown.H || px < map.ox || px > map.ox + map.pw || py < map.oy || py > map.oy + map.ph) { if (hover) { hover = null; tip.hide(); cv.redraw(); } return; }
       hover = [px, py];
       const i = cy * shown.W + cx, mt = shown.mat[i], net = shown.nd[i] - shown.na[i];
-      PB.stat(uid + "-o2", `${Math.round(cx * shown.dx)}, ${shown.ynm(cy)}<small>nm</small>`);
-      const dop = mt && MATS[mt].semi && Math.abs(net) > 1e14 ? ` · ${net > 0 ? "n" : "p"} ${Math.abs(net).toExponential(1).replace("e+", "e")}` : "";
-      PB.stat(uid + "-o3", (mt ? MATS[mt].name : "빈 공간") + `<small>${dop}</small>`);
+      const xn = Math.round(cx * shown.dx), yn = shown.ynm(cy);
+      PB.stat(uid + "-o2", `${xn}, ${yn}<small>nm</small>`);
+      const dop = mt && MATS[mt].semi && Math.abs(net) > 1e14 ? `${net > 0 ? "n" : "p"}형 ${concHTML(Math.abs(net))}` : "";
+      const name = mt ? MATS[mt].name : "빈 공간";
+      PB.stat(uid + "-o3", name + (dop ? `<small> · ${dop}</small>` : ""));
+      const sw = mt ? `<span class="sw" style="background:linear-gradient(var(--m-${MATS[mt].key}-1),var(--m-${MATS[mt].key}-2))"></span>` : "";
+      tip.show(px, py, `${sw}<b>${name}</b>${mt && MATS[mt].en !== MATS[mt].name ? ` <span class="k">${MATS[mt].en}</span>` : ""}<br><span class="num">x ${xn} nm · 깊이 ${yn} nm</span>${dop ? `<br>${dop}` : ""}`);
       cv.redraw();
     };
-    cvEl.addEventListener("mousemove", onMove);
-    cvEl.addEventListener("mouseleave", () => { hover = null; cv.redraw(); });
+    cvEl.addEventListener("pointermove", onMove);
+    cvEl.addEventListener("pointerdown", onMove);
+    cvEl.addEventListener("pointerleave", (e) => { if (e.pointerType === "touch") return; hover = null; tip.hide(); cv.redraw(); });
     renderList();
     API.go(o.start || 0);
     return API;
   }
 
-  window.XS = { stepper, MATS, ID, Sim, range, RANGE, diffusivity, DIFF, dealGrove, dgThickness, aerial, makeDist, runner, draw, legend, runs, depthAt, mid };
+  window.XS = { stepper, MATS, ID, Sim, range, RANGE, diffusivity, DIFF, dealGrove, dgThickness, aerial, makeDist, runner, draw, legend, runs, depthAt, mid, color: matColor, palette, concHTML, SHORT };
 })();
