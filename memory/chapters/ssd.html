@@ -40,6 +40,7 @@
       <li>가비지 컬렉션의 동작, victim 선택 정책, 쓰기 증폭 계수 \(\mathrm{WAF} = 1/(1-u)\)와 오버 프로비저닝의 관계를 이해한다.</li>
       <li>TBW·DWPD를 계산하고, SLC 캐시의 쓰기 속도 절벽과 TRIM의 효과를 설명할 수 있다.</li>
       <li>NVMe 큐 구조와 리틀의 법칙으로 큐 깊이–IOPS–지연의 관계를 설명하고, PCIe 세대별 대역폭과 ZNS·FDP의 의미를 안다.</li>
+      <li>KV 캐시를 다시 계산하는 시간과 SSD에서 불러오는 시간을 비교하고, 고대역폭 플래시(HBF)가 어떤 데이터에 맞는지 설명할 수 있다.</li>
     </ul>
   </header>
 
@@ -776,7 +777,76 @@
     <div class="callout deep"><strong>컴퓨테이셔널 스토리지와 CXL</strong>
       <p>SSD 컨트롤러는 이미 여러 개의 CPU 코어를 가진 컴퓨터다. 데이터를 호스트로 옮기지 않고 SSD 안에서 필터링·압축·검색하는 <span class="term">컴퓨테이셔널 스토리지</span>, 그리고 CXL 인터페이스로 SSD를 바이트 단위로 접근하는 메모리 확장 장치처럼 쓰려는 시도가 진행 중이다. 12장의 PIM(Processing-in-Memory)과 같은 문제 의식 — 데이터 이동이 계산보다 비싸다 — 에서 출발한다.</p>
     </div>
-    <div class="callout tip" id="xbooks"><strong>다른 책에서 이어 읽기</strong><ul><li>SoCBook <a href="../../soc/chapters/io.html">인터럽트</a>: PCIe와 DMA</li><li>ChipIndustryBook <a href="../../industry/chapters/demand.html">수요: 칩은 어디로 가는가</a>: SSD 수요를 만드는 데이터센터와 기기</li></ul></div>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="ai">
+    <h2>AI 시대의 스토리지: KV 캐시 오프로드와 고대역폭 플래시</h2>
+    <p>지금까지 SSD는 데이터를 '보관'하는 장치였다. LLM 추론이 퍼지면서 SSD에 새로운 일이 생겼다. 대화가 길어질수록 커지는 <span class="term">KV 캐시</span>(<a href="design.html#llm">13장</a>)를 GPU의 HBM에 다 담을 수 없게 되자, 잠시 쓰지 않는 KV 캐시를 CPU DRAM과 SSD로 내려 두었다가 다시 불러오는 <strong>KV 캐시 오프로드</strong>가 실제 서비스에 쓰이기 시작했다. vLLM·LMCache 같은 추론 소프트웨어가 이를 지원하고, 2026년에는 GPU 업체가 KV 캐시 전용 스토리지 계층을 제품으로 내놓았다. 같은 흐름에서 SSD 용량도 빠르게 커졌다. QLC 엔터프라이즈 SSD는 2025년에 122 TB급이 출하됐고 245~256 TB급이 발표됐다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="LLM 추론 서버의 KV 캐시 저장 계층">
+        <text x="20" y="22" class="t-acc">KV 캐시가 머무는 곳 (GPU 서버 한 대 기준, 2026년 대략값)</text>
+        <rect x="20" y="40" width="250" height="40" rx="6" class="f-acc-soft"/>
+        <text x="32" y="65" class="t">GPU HBM</text>
+        <text x="290" y="58" class="t-mono">수백 GB/GPU · 수 TB/s</text>
+        <text x="290" y="74" class="t-dim">지금 생성 중인 대화</text>
+        <rect x="20" y="88" width="330" height="40" rx="6" class="f-acc2-soft"/>
+        <text x="32" y="113" class="t">CPU DRAM (LPDDR·DDR5·CXL)</text>
+        <text x="370" y="106" class="t-mono">1~수 TB · 수십~수백 GB/s</text>
+        <text x="370" y="122" class="t-dim">곧 다시 쓸 대화</text>
+        <rect x="20" y="136" width="440" height="40" rx="6" class="f-ok-soft"/>
+        <text x="32" y="161" class="t">로컬 NVMe SSD (PCIe 5·6)</text>
+        <text x="480" y="154" class="t-mono">수십~수백 TB · 14~28 GB/s/개</text>
+        <text x="480" y="170" class="t-dim">잠시 멈춘 대화, 공통 프롬프트</text>
+        <rect x="20" y="184" width="540" height="40" rx="6" class="f-elev"/>
+        <text x="32" y="209" class="t">네트워크 스토리지</text>
+        <text x="580" y="202" class="t-mono">PB · 네트워크 속도</text>
+        <text x="580" y="218" class="t-dim">오래된 대화</text>
+        <text x="20" y="244" class="t-dim">아래로 갈수록 GB당 비용과 대역폭이 함께 떨어진다. 막대 길이는 용량의 느낌만 나타낸다.</text>
+      </svg>
+      <figcaption><b>그림 10-9.</b> LLM 추론 서버의 KV 캐시 저장 계층. 1장의 메모리 계층 피라미드(<a href="hierarchy.html#pyramid">1장</a>)가 KV 캐시라는 새 데이터에 그대로 적용된다. 추론 소프트웨어는 KV 캐시를 수십 토큰 단위의 블록으로 나눠, 자주 쓰는 블록은 위로 올리고 오래 안 쓴 블록은 아래로 내린다.</figcaption>
+    </figure>
+    <p>왜 SSD까지 내려 보낼 만한가? KV 캐시가 없으면 대화를 이어 갈 때 프롬프트 전체를 다시 프리필해야 한다. 그러니 비교 대상은 <em>다시 계산하는 시간</em>과 <em>저장된 KV를 읽어 오는 시간</em>이다. 문맥 길이를 \(s\)라 하면 다음과 같다.</p>
+    <div class="formula">$$t_{\text{re}} \approx \frac{2N_{\text{param}}\,s + 2L\,d_{\text{model}}\,s^2}{\pi},\qquad t_{\text{load}} = \frac{k_{\text{tok}}\,s}{\beta},\qquad \frac{t_{\text{re}}}{t_{\text{load}}} = \frac{\left(2N_{\text{param}} + 2L\,d_{\text{model}}\,s\right)\beta}{\pi\,k_{\text{tok}}}$$<div class="where">\(\pi\): GPU의 실효 연산 성능(FLOP/s), \(\beta\): 저장 계층에서 GPU까지의 대역폭, \(k_{\text{tok}} = 2Ln_{kv}d_{head}b_{KV}\): 토큰당 KV 바이트, 둘째 항은 인과 어텐션(causal attention)의 \(s^2\) 연산이다.</div></div>
+    <p>비율에서 \(s\)의 1차 항이 약분된다는 점이 핵심이다. 짧은 문맥에서도 비율은 \(2N_{\text{param}}\beta/(\pi k_{\text{tok}})\)로 일정하고, 문맥이 길어지면 어텐션 항 때문에 더 커진다. 70B 모델(\(k_{\text{tok}}\) = 320 KiB, FP16 KV), 실효 1,000 TFLOPS GPU, PCIe 5 SSD 한 개(14 GB/s)면 \(2\cdot 70\times10^9 \cdot 14\times10^9 / (10^{15}\cdot 3.3\times10^5) \approx 6\)이다. SSD 하나에서 읽어도 다시 계산하는 것보다 약 6배 빠르고, SSD를 4개 묶으면 20배를 넘는다. GQA·MLA·KV 양자화로 \(k_{\text{tok}}\)가 작아질수록 SSD가 더 유리해진다. 반대로 GPU가 빨라지면(\(\pi\) ↑) 다시 계산하는 쪽이 따라온다. 그래서 GPU 세대가 바뀔 때마다 SSD 대역폭도 함께 올라야 한다.</p>
+
+    <div class="sim" id="sim-kvs">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>KV 캐시: 다시 계산할까, SSD에서 불러올까</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="kvs-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>모델 (GQA, KV 헤드 8개)</span><div class="seg" id="kvs-model"><button data-value="8">8B</button><button data-value="70" class="on">70B</button><button data-value="405">405B</button></div></div>
+          <label class="ctrl"><span>문맥 길이 <output id="kvs-ctx-out"></output></span><input type="range" id="kvs-ctx" min="10" max="17" step="1" value="15"></label>
+          <div class="ctrl"><span>KV 정밀도</span><div class="seg" id="kvs-prec"><button data-value="2" class="on">FP16</button><button data-value="1">FP8</button></div></div>
+          <label class="ctrl"><span>GPU 실효 성능 <output id="kvs-tf-out"></output></span><input type="range" id="kvs-tf" min="200" max="4000" step="100" value="1000"></label>
+          <div class="ctrl"><span>SSD 링크 (×4)</span><div class="seg" id="kvs-gen"><button data-value="7">Gen4</button><button data-value="14" class="on">Gen5</button><button data-value="28">Gen6</button></div></div>
+          <label class="ctrl"><span>SSD 개수 <output id="kvs-n-out"></output></span><input type="range" id="kvs-n" min="1" max="8" step="1" value="1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">KV 캐시 (대화 1개)</span><span class="v" id="kvs-kv">—</span></div>
+        <div class="stat"><span class="k">다시 계산</span><span class="v" id="kvs-re">—</span></div>
+        <div class="stat"><span class="k">SSD에서 불러오기</span><span class="v" id="kvs-ld">—</span></div>
+        <div class="stat"><span class="k">불러오기 이득</span><span class="v" id="kvs-gain">—</span></div>
+        <div class="stat"><span class="k">61 TB SSD 하나에 담기는 대화</span><span class="v" id="kvs-cap">—</span></div>
+      </div>
+      <div class="sim-note">모델: 위 식 그대로이며, 커널 비효율과 SSD 읽기 지연(수십 µs)은 무시했다. 점선은 CPU DRAM에서 PCIe 5 ×16(약 50 GB/s)으로 불러오는 경우다. 해볼 것: ① 문맥 길이를 바꿔도 짧은 문맥 쪽에서는 두 선의 간격이 거의 일정한 것을 확인하자. 1차 항이 약분되기 때문이다. ② GPU 성능을 4,000 TFLOPS로 올리면 SSD 하나로는 이득이 얼마로 줄어드는가? SSD 개수나 세대를 올려 되찾아 보자. ③ FP8 KV로 바꾸면 불러오기 시간과 필요한 용량이 모두 절반이 된다.</div>
+    </div>
+
+    <h3>고대역폭 플래시(HBF): NAND를 HBM처럼 쌓는다</h3>
+    <p>KV 캐시 오프로드가 'SSD를 메모리 가까이' 끌어오는 방향이라면, 반대쪽에서 'NAND를 GPU 옆에' 붙이려는 시도도 있다. <span class="term">고대역폭 플래시</span><span class="en">(HBF: High Bandwidth Flash)</span>는 HBM(<a href="hbm.html">7장</a>)처럼 NAND 다이 여러 장을 TSV로 쌓고 로직 베이스 다이 위에 올려, GPU와 같은 인터포저에 HBM과 나란히 놓는 구조다. SanDisk가 2025년 2월에 발표했고, 같은 해 8월 SK하이닉스와 표준화 협약을 맺었다. 업체 계획으로는 2026년 하반기 샘플, 2027년 초 첫 탑재 제품이 목표다. 업체는 비슷한 비용에 HBM의 8~16배 용량을 내세운다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th></th><th>HBM (DRAM)</th><th>HBF (NAND)</th><th>무엇이 갈리나</th></tr></thead>
+      <tbody>
+        <tr><td>스택당 용량</td><td>수십 GB</td><td>수백 GB 이상(목표)</td><td>NAND 셀이 비트당 훨씬 작다(<a href="vnand.html#density">9장</a>)</td></tr>
+        <tr><td>읽기 지연</td><td>수십 ns</td><td>수 µs 이상</td><td>NAND 읽기 t<sub>R</sub>(<a href="nand.html#read">8장</a>)</td></tr>
+        <tr><td>쓰기</td><td>무제한, 빠름</td><td>느리고 P/E 수명 제한</td><td>3절의 세 가지 제약이 그대로 남는다</td></tr>
+        <tr><td>어울리는 데이터</td><td>KV 캐시, 활성값</td><td>모델 가중치처럼 <strong>읽기만 하는</strong> 데이터</td><td>추론 중 가중치는 바뀌지 않는다</td></tr>
+      </tbody>
+    </table></div>
+    <p>표의 마지막 줄이 HBF의 설계 철학이다. 추론하는 동안 가중치는 한 번도 쓰이지 않고 읽히기만 한다. 그러니 NAND의 약점(느린 쓰기, 제한된 수명)이 거의 문제가 되지 않고, 큰 용량과 넓은 버스만 남는다. 지연이 µs급이라도 가중치는 순서대로 크게 읽으므로 많은 다이를 동시에 읽어 대역폭을 채울 수 있다(<a href="#parallel">2절</a>의 병렬성과 같은 원리). 반면 매 토큰 새로 쓰이는 KV 캐시는 HBM에 남긴다. 결국 HBM은 '자주 쓰는 데이터', HBF는 '크고 읽기만 하는 데이터'를 나눠 맡는 계층이 된다. 실제 성능은 2027년 이후 제품이 나와야 확인할 수 있다.</p>
+    <div class="callout tip"><strong>SSD가 메모리 계층으로 올라온다</strong><p>KV 캐시 오프로드, CXL 메모리 확장(<a href="emerging.html#cxl">12장</a>), HBF는 모두 같은 질문에 답하려는 시도다. AI 모델이 필요로 하는 용량은 HBM만으로 감당하기에 너무 크고 비싸다. 그래서 DRAM과 NAND 사이의 경계가 흐려지고, 이 장에서 배운 병렬성·FTL·쓰기 증폭이 이제 AI 시스템 설계의 문제가 되었다.</p></div>
+    <div class="callout tip" id="xbooks"><strong>다른 책에서 이어 읽기</strong><ul><li>SoCBook <a href="../../soc/chapters/io.html">인터럽트·DMA·고속 I/O</a>: PCIe와 DMA</li><li>ChipIndustryBook <a href="../../industry/chapters/demand.html">수요: 칩은 어디로 가는가</a>: SSD 수요를 만드는 데이터센터와 기기</li></ul></div>
   </section>
 
   <!-- ============================================================ summary -->
@@ -791,6 +861,7 @@
       <li>Greedy는 당장 복사량을 최소화하고, Cost-Benefit은 데이터 나이를 고려해 핫/콜드 편중 워크로드에서 유리하다. 스트림 분리(ZNS·FDP 포함)는 수명이 비슷한 데이터를 모아 WAF를 1에 가깝게 한다.</li>
       <li>동적/정적 웨어 레벨링으로 소거를 고르게 분산한다. TBW ≈ C<sub>NAND</sub>·N<sub>PE</sub>/WAF, DWPD = TBW/(C·365·Y). TRIM은 무효 데이터를 알려 실질 OP를 늘리고 WAF를 낮춘다.</li>
       <li>SLC 캐시는 쓰기를 1비트 모드로 빠르게 받지만 소진되면 쓰기 속도 절벽이 온다. NVMe는 코어별 다중 큐(최대 64K × 64K)로 병렬성을 끌어내며, 리틀의 법칙 IOPS = QD/지연이 성능을 지배한다.</li>
+      <li>LLM 추론에서 SSD는 KV 캐시 계층이 된다. 다시 계산 대 불러오기 시간 비는 \((2N_{\text{param}} + 2Ld_{\text{model}}s)\beta/(\pi k_{\text{tok}})\)로, 70B 모델·PCIe 5 SSD 하나에서도 약 6배 불러오기가 빠르다. HBF는 NAND를 HBM처럼 쌓아 읽기만 하는 가중치를 담으려는 시도다.</li>
     </ol>
   </section>
 
@@ -839,6 +910,13 @@
         <button class="opt" data-correct>해당 페이지가 무효로 표시되어 GC 때 복사되지 않으므로, 실질 OP가 늘고 WAF가 낮아진다</button>
         <button class="opt">매핑 단위가 4 KB에서 16 KB로 커진다</button>
       </div><div class="quiz-exp">TRIM은 즉시 소거를 강제하지 않는다. 매핑을 지우고 페이지를 무효로 만들 뿐이며, 그 결과 GC 희생 블록의 유효 비율 u가 낮아져 WAF와 GC 부담이 줄어든다. P/E 카운트는 줄어들 수 없다.</div></div>
+
+      <div class="quiz-q"><p>7. LLM 추론에서 KV 캐시를 SSD에 내려 두었다가 불러오는 것이 다시 계산하는 것보다 얼마나 빠른지를 나타내는 비율에 대한 설명으로 옳은 것은?</p><div class="opts">
+        <button class="opt">문맥이 짧을수록 비율이 0에 가까워져 다시 계산하는 쪽이 유리하다</button>
+        <button class="opt" data-correct>짧은 문맥에서는 문맥 길이와 무관하게 거의 일정하고, 긴 문맥에서는 어텐션 연산 때문에 더 커진다</button>
+        <button class="opt">SSD 대역폭과 무관하고 GPU 성능에만 달려 있다</button>
+        <button class="opt">KV 양자화로 토큰당 KV 바이트를 줄이면 비율이 작아진다</button>
+      </div><div class="quiz-exp">다시 계산은 \(2N_{\text{param}}s + 2Ld_{\text{model}}s^2\) FLOP, 불러오기는 \(k_{\text{tok}}s\) 바이트라서 비율에서 \(s\)의 1차 항이 약분된다. 남는 \(s^2\) 어텐션 항 때문에 긴 문맥일수록 불러오기가 더 유리하다. \(k_{\text{tok}}\)를 줄이면 비율은 오히려 커진다.</div></div>
     </div>
   </section>
 </main>
@@ -1562,6 +1640,75 @@
     MB.stat("qd-lat", r.lat >= 1000 ? (r.lat / 1000).toFixed(2) + "<small>ms</small>" : r.lat.toFixed(0) + "<small>µs</small>");
     MB.stat("qd-busy", r.busy.toFixed(1) + " <small>/ " + p.D + "</small>");
     MB.stat("qd-bn", r.bn);
+    cv.redraw();
+  }
+  upd();
+})();
+/* ===================================================================
+   10) KV 캐시: 다시 계산 vs SSD에서 불러오기
+   =================================================================== */
+(function () {
+  "use strict";
+  var MODELS = {
+    8: { N: 8.0e9, L: 32, d: 4096 },
+    70: { N: 70.6e9, L: 80, d: 8192 },
+    405: { N: 405e9, L: 126, d: 16384 }
+  };
+  var NKV = 8, DH = 128, DRAM_BW = 50e9, SSD_CAP = 61.44e12;
+  var gModel = MB.seg("kvs-model", upd);
+  var gPrec = MB.seg("kvs-prec", upd);
+  var gGen = MB.seg("kvs-gen", upd);
+  var gCtx = MB.range("kvs-ctx", function (v) { return ctxLabel(Math.pow(2, v)); }, upd);
+  var gTf = MB.range("kvs-tf", function (v) { return v.toLocaleString() + " TFLOPS"; }, upd);
+  var gN = MB.range("kvs-n", function (v) { return v + "개"; }, upd);
+
+  function ctxLabel(s) { return s >= 1024 ? Math.round(s / 1024) + "k" : String(s); }
+  function params() {
+    var m = MODELS[gModel()];
+    return { m: m, k: 2 * m.L * NKV * DH * Number(gPrec()), pi: gTf() * 1e12, beta: Number(gGen()) * 1e9 * gN() };
+  }
+  function tRe(p, s) { return (2 * p.m.N * s + 2 * p.m.L * p.m.d * s * s) / p.pi; }
+  function tLoad(p, s, bw) { return p.k * s / bw; }
+  function fmtT(t) {
+    if (t >= 1) return t.toFixed(t >= 10 ? 0 : 1) + "<small>s</small>";
+    return (t * 1000).toFixed(t >= 0.01 ? 0 : 1) + "<small>ms</small>";
+  }
+  function fmtB(b) { return b >= 1e9 ? (b / 1e9).toFixed(b >= 1e10 ? 0 : 1) + "<small>GB</small>" : (b / 1e6).toFixed(0) + "<small>MB</small>"; }
+
+  function draw(ctx, w, h) {
+    var P = MB.palette(), p = params(), s0 = Math.pow(2, gCtx());
+    var re = [], ld = [], dr = [];
+    for (var e = 10; e <= 17.0001; e += 0.125) {
+      var s = Math.pow(2, e);
+      re.push([s, tRe(p, s)]); ld.push([s, tLoad(p, s, p.beta)]); dr.push([s, tLoad(p, s, DRAM_BW)]);
+    }
+    MB.chart(ctx, null, {
+      x: [1024, 131072], y: [1e-3, 1e3], logX: true, logY: true,
+      xTicks: [1024, 4096, 16384, 65536, 131072], xFmt: ctxLabel,
+      yFmt: function (v) { return v >= 1 ? v + " s" : Math.round(v * 1000) + " ms"; },
+      xLabel: "문맥 길이 (토큰)", yLabel: "시간",
+      series: [
+        { data: re, color: P.warn, width: 2.5 },
+        { data: ld, color: P.accent, width: 2.5 },
+        { data: dr, color: P.ok, width: 1.5, dash: [5, 4] }
+      ],
+      vlines: [{ x: s0, color: P.faint }],
+      points: [
+        { x: s0, y: tRe(p, s0), color: P.warn, label: "다시 계산" },
+        { x: s0, y: tLoad(p, s0, p.beta), color: P.accent, label: "SSD" }
+      ]
+    });
+  }
+  var cv = MB.canvas("#kvs-cv", draw, { aspect: 0.7, maxHeight: 420, minHeight: 300 });
+
+  function upd() {
+    var p = params(), s = Math.pow(2, gCtx());
+    var kv = p.k * s, a = tRe(p, s), b = tLoad(p, s, p.beta);
+    MB.stat("kvs-kv", fmtB(kv));
+    MB.stat("kvs-re", fmtT(a));
+    MB.stat("kvs-ld", fmtT(b));
+    MB.stat("kvs-gain", (a / b).toFixed(a / b >= 10 ? 0 : 1) + "<small>×</small>");
+    MB.stat("kvs-cap", Math.floor(SSD_CAP / kv).toLocaleString() + "<small>개</small>");
     cv.redraw();
   }
   upd();

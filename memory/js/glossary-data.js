@@ -144,6 +144,8 @@ window.BOOK_GLOSSARY = {
     {"ko":"존드 네임스페이스","en":"Zoned namespace","abbr":"ZNS","def":"LBA 공간을 순차 쓰기만 허용하는 존으로 나눈 NVMe 기능. 호스트가 데이터 배치를 맡아 GC와 OP, 매핑 DRAM을 크게 줄인다.","chapters":["ssd"]},
     {"ko":"유연한 데이터 배치","en":"Flexible data placement","abbr":"FDP","def":"호스트가 쓰기마다 배치 힌트를 주어 수명이 비슷한 데이터를 같은 블록에 모으게 하는 NVMe 기능. ZNS보다 도입이 쉬워 WAF를 낮추는 대안으로 쓰인다.","chapters":["ssd"]},
     {"ko":"SLC 캐시","en":"SLC cache","abbr":"","def":"TLC/QLC 블록 일부를 SLC 모드로 써서 쓰기를 빠르게 받아 두는 버퍼. 캐시가 가득 차면 쓰기 속도가 네이티브 TLC/QLC 수준으로 뚝 떨어진다.","chapters":["ssd"]},
+    {"ko":"KV 캐시 오프로드","en":"KV cache offloading","abbr":"","def":"GPU HBM에 다 담지 못하는 KV 캐시를 CPU DRAM이나 SSD로 내려 두었다가 다시 불러오는 기법. 프롬프트를 다시 프리필하는 것보다 저장된 KV를 읽는 편이 대개 수 배 이상 빠르다.","chapters":["ssd"]},
+    {"ko":"고대역폭 플래시","en":"High Bandwidth Flash","abbr":"HBF","def":"NAND 다이를 TSV로 쌓아 HBM처럼 GPU 옆 인터포저에 올리는 메모리. 쓰기는 느리고 수명이 제한되지만 용량이 커서 추론 중 읽기만 하는 모델 가중치를 담는 용도로 개발 중이다(2027년 이후 제품 목표).","chapters":["ssd"]},
     {"ko":"소프트 에러","en":"Soft error","abbr":"SER","def":"알파 입자나 중성자가 만든 전하가 저장 노드를 뒤집어 생기는 일시적 오류. 소자 손상은 없어 다시 쓰면 복구된다. 약어 SER은 그 발생률(soft error rate)로, 보통 FIT로 나타낸다.","chapters":["reliability"]},
     {"ko":"FIT","en":"Failures in time","abbr":"FIT","def":"10⁹ 소자-시간당 고장 수. 1 FIT는 10억 시간에 한 번 고장이며, 소프트 에러율과 하드 고장률을 표시하는 단위다.","chapters":["reliability"]},
     {"ko":"리텐션","en":"Data retention","abbr":"","def":"데이터를 잃지 않고 유지할 수 있는 시간. DRAM은 수십 ms~수 초(셀마다 다름), NAND는 수명 말기에도 규격상 약 1년(클라이언트, 30 °C) 이상을 요구한다.","chapters":["reliability"]},
