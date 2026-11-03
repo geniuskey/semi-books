@@ -166,7 +166,9 @@
           if (e > j) { t = str.slice(j + 1, e); j = e + 1; }
         } else {
           if (c === "^" && /[+\-−]/.test(str[j] || "")) { t += str[j]; j++; }
-          while (j < str.length && SUBCH.test(str[j])) { t += str[j]; j++; }
+          // 숫자로 시작하면 숫자만(화학식 Si_3N_4), 아니면 글자·숫자 묶음(V_DD, t_ox, V_t0)
+          const digitsOnly = /[0-9]/.test(str[j] || "");
+          while (j < str.length && (digitsOnly ? /[0-9]/.test(str[j]) : SUBCH.test(str[j]))) { t += str[j]; j++; }
         }
         if (t && !/^[+\-−]$/.test(t)) { flush(); out.push({ t, k: c === "_" ? 1 : -1 }); i = j; continue; }
       }
@@ -588,13 +590,14 @@
     ctx.textAlign = "center"; ctx.textBaseline = "top";
     xt.forEach((v) => { const px = X(v); if (px < box.x - 1 || px > box.x + box.w + 1) return; ctx.beginPath(); ctx.moveTo(crisp(px), box.y + box.h); ctx.lineTo(crisp(px), box.y + box.h + 4); ctx.stroke(); MB.text(ctx, xFmt(v), px, box.y + box.h + 7); });
     ctx.textAlign = "right"; ctx.textBaseline = "middle";
-    yt.forEach((v) => { const py = Y(v); if (py < box.y - 1 || py > box.y + box.h + 1) return; ctx.beginPath(); ctx.moveTo(box.x - 4, crisp(py)); ctx.lineTo(box.x, crisp(py)); ctx.stroke(); MB.text(ctx, yFmt(v), box.x - 7, py); });
+    let yTickW = 0;
+    yt.forEach((v) => { const py = Y(v); if (py < box.y - 1 || py > box.y + box.h + 1) return; ctx.beginPath(); ctx.moveTo(box.x - 4, crisp(py)); ctx.lineTo(box.x, crisp(py)); ctx.stroke(); yTickW = Math.max(yTickW, MB.text(ctx, yFmt(v), box.x - 7, py)); });
     ctx.strokeStyle = P.axis;
     ctx.beginPath(); ctx.moveTo(crisp(box.x), box.y); ctx.lineTo(crisp(box.x), crisp(box.y + box.h)); ctx.lineTo(box.x + box.w, crisp(box.y + box.h)); ctx.stroke();
     // axis labels
     ctx.fillStyle = P.dim; ctx.font = sansF;
     if (opts.xLabel) { ctx.textAlign = "center"; ctx.textBaseline = "bottom"; MB.text(ctx, opts.xLabel, box.x + box.w / 2, box.y + box.h + 40); }
-    if (opts.yLabel) { ctx.save(); ctx.translate(14, box.y + box.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.textBaseline = "middle"; MB.text(ctx, opts.yLabel, 0, 0); ctx.restore(); }
+    if (opts.yLabel) { ctx.save(); ctx.translate(Math.max(12, Math.min(box.x - 44, box.x - 7 - yTickW - 10)), box.y + box.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.textBaseline = "middle"; MB.text(ctx, opts.yLabel, 0, 0); ctx.restore(); }
     // clip plot area
     ctx.save(); ctx.beginPath(); ctx.rect(box.x, box.y - 2, box.w + 2, box.h + 4); ctx.clip();
     const valid = (x, y) => isFinite(y) && isFinite(x) && !(opts.logY && y <= 0) && !(opts.logX && x <= 0);
@@ -659,6 +662,10 @@
           ["tr", "tl", "br", "bl"].forEach((k) => {
             const [cx, cy] = cand[k]; let n = 0;
             series.forEach((s) => (s.data || []).forEach(([x, y], j) => { if (j % 2 && s.data.length > 200) return; if (!valid(x, y)) return; const px = X(x), py = Y(y); if (px >= cx - 4 && px <= cx + lw + 4 && py >= cy - 4 && py <= cy + lh + 4) n++; }));
+            const hit = (px, py) => px >= cx - 4 && px <= cx + lw + 4 && py >= cy - 4 && py <= cy + lh + 4;
+            (opts.vlines || []).forEach((l) => { if (l.label && hit(X(l.x), box.y + 10)) n += 40; });
+            (opts.hlines || []).forEach((l) => { if (l.label && hit(l.align === "left" ? box.x + 30 : box.x + box.w - 30, Y(l.y))) n += 40; });
+            (opts.points || []).forEach((p) => { if (hit(X(p.x), Y(p.y))) n += 20; });
             if (n < best) { best = n; at = cand[k]; }
           });
         }
@@ -819,6 +826,8 @@
     } else camera.lookAt(...(opts.target || [0, 0, 0]));
     // 환경광: 금속(TiN·W·Cu)이 주변을 비춰 재질감이 산다. 없으면 기존 3점 조명만.
     let frameEI = null;
+    // 색 관리: 재질의 16진 색을 sRGB로 해석해 지정한 색 그대로 보이게 한다(legacy 모드는 색이 옅게 뜬다).
+    if (THREE.ColorManagement && opts.legacyColor !== true) THREE.ColorManagement.legacyMode = false;
     const useEnv = opts.env !== false && !!THREE.RoomEnvironment && !!THREE.PMREMGenerator;
     if (useEnv) {
       try {
@@ -834,13 +843,15 @@
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.toneMappingExposure = opts.exposure || 1.05;
     }
-    if (envOn && opts.envIntensity == null) opts = Object.assign({}, opts, { envIntensity: 0.55 });
-    const LI = opts.lights || (envOn ? [0.42, 0.82, 0.25] : [0.75, 0.85, 0.35]);
+    const LI = opts.lights || (envOn ? [0.9, 1.5, 0.45] : [1.35, 1.6, 0.6]);
     const hemi = new THREE.HemisphereLight(0xffffff, 0x445066, LI[0]); scene.add(hemi);
     const d1 = new THREE.DirectionalLight(0xffffff, LI[1]); d1.position.set(5, 10, 7); scene.add(d1);
     const d2 = new THREE.DirectionalLight(0xbfd7ff, LI[2]); d2.position.set(-6, 4, -5); scene.add(d2);
-    if (envOn && opts.envIntensity != null) {
-      const setEI = () => scene.traverse((o) => { const ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : []; ms.forEach((m) => { if (m && "envMapIntensity" in m && !m.userData.mbEI) { m.envMapIntensity = opts.envIntensity; m.userData.mbEI = 1; } }); });
+    if (envOn) {
+      // 환경광 세기: 금속은 반사가 살도록 강하게, 유전체(산화막·기판·플라스틱)는 색이 바래지 않게 약하게.
+      // 재질에 userData.env = 값을 주면 그 값을 쓴다. 30프레임마다 새 재질을 찾아 적용한다.
+      const pick = (m) => (m.userData && m.userData.env != null ? m.userData.env : opts.envIntensity != null ? opts.envIntensity : m.metalness >= 0.4 ? 0.85 : m.metalness >= 0.15 ? 0.45 : 0.22);
+      const setEI = () => scene.traverse((o) => { const ms = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : []; ms.forEach((m) => { if (m && "envMapIntensity" in m && m.userData.mbEI !== m.metalness) { m.envMapIntensity = pick(m); m.userData.mbEI = m.metalness; } }); });
       let n = 0; frameEI = () => { if (n++ % 30 === 0) setEI(); };
     }
 
@@ -1101,7 +1112,7 @@
       b.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9.2 6.8M2.5 13.5l4.3-4.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
       b.addEventListener("click", () => openLightbox(fig));
       fig.appendChild(b);
-      fig.querySelectorAll(":scope > svg, :scope > .fig-row svg").forEach((s) => { s.classList.add("zoomable"); s.addEventListener("click", () => openLightbox(fig)); });
+      fig.querySelectorAll(":scope > svg, :scope > .fig-row svg, :scope > .fig-panels > svg").forEach((s) => { s.classList.add("zoomable"); s.addEventListener("click", () => openLightbox(fig)); });
     });
   }
   MB.openFigure = openLightbox;

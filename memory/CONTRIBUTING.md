@@ -121,6 +121,7 @@ SVG 안 유틸 클래스: `.t .t-dim .t-mono .t-acc`(텍스트), `.s-line .s-axi
 - 회로 기호는 표준 모양(MOSFET 게이트·채널 두 줄, 커패시터 두 판, 접점 점)으로 그린다. 블록도의 화살표는 굵은 도형 대신 `.arr*` 선을 쓴다.
 
 ### 캔버스 시뮬레이터
+- 첨자 규칙: `_`/`^` 뒤 글자·숫자 묶음이 첨자(`V_DD`), 숫자로 시작하면 숫자만(`Si_3N_4`), 여러 단어는 `_{…}`.
 - 글자는 `MB.text(ctx, s, x, y, {size, weight, mono, color, align, baseline, halo})`로 그린다(첨자 지원, `halo`는 선 위에서도 읽히게). **align/baseline을 주지 않으면 ctx의 현재 값을 따르므로** 눈금을 그린 뒤에는 꼭 지정한다. 글꼴은 `MB.font(size, weight, mono)`.
 - 차트는 `MB.chart`를 쓴다. 새 옵션: `legend: true`(자동 위치, 데이터를 가리지 않는 모서리) · 시리즈 `label`, `fill: true`(그라데이션), `dots`; `hbands`; 로그 축은 10ⁿ 눈금과 보조 격자가 자동. **`hover: true`** + `MB.canvas(…, {hover: true})`이면 십자선과 값 상자가 뜬다(그리기 함수가 난수를 쓰면 켜지 말 것). 반환값 `invX/invY`로 드래그 좌표를 값으로 바꾼다.
 - 기타 헬퍼: `MB.rrect`, `MB.arrow(ctx,x0,y0,x1,y1,{color,width,both,dash})`, `MB.badge(ctx, s, x, y, {bg,fg,border})`, `MB.alpha(color,a)`, `MB.mix(a,b,t)`, `MB.ease.*`, `MB.approach(x, target, dt, tau)`(부드러운 추종), `MB.drag(canvas, {hit, move, end})`, `MB.tip(canvas)`(DOM 툴팁), `MB.num(x)`(지수를 10^{n} 서식으로), `MB.wrapText`.
@@ -129,6 +130,7 @@ SVG 안 유틸 클래스: `.t .t-dim .t-mono .t-acc`(텍스트), `.s-line .s-axi
 - 판정·상태는 색만이 아니라 글자로도 보여 준다(색각 이상 대비).
 
 ### 3D (three.js)
-- `RoomEnvironment.js`를 head에서 불러오면(`three@0.147.0/examples/js/environments/RoomEnvironment.js`) 금속에 환경 반사가 생긴다. 재질은 `metalness`·`roughness`로 구분한다(금속 0.6~0.9/0.25~0.4, 산화막 0/0.6 반투명).
+- `RoomEnvironment.js`를 head에서 불러오면(`three@0.147.0/examples/js/environments/RoomEnvironment.js`) 금속에 환경 반사가 생긴다. 재질은 `metalness`·`roughness`로 구분한다(금속 0.6~0.9/0.25~0.4, 산화막 0/0.6 반투명). 환경광 세기는 금속성으로 정해진다(≥0.4 → 0.85, ≥0.15 → 0.45, 그 밖 0.22). 재질마다 바꾸려면 `material.userData.env = 값`.
+- 색 관리는 sRGB(`ColorManagement.legacyMode = false`)다. 재질의 16진 색이 화면에 그대로 나오므로 실제 재료색(구리 #b87333, 실리콘 다이 #4a5363, 유기 기판 #1f5a3f 등)을 그대로 쓰면 된다.
 - 라벨은 `T.label`이 겹치지 않게 비켜서 지시선을 긋는다. 중요한 라벨은 `L.priority = 1`. 문구를 바꿀 때는 `L.setText(html)`.
 - `T.fit(group, {pad})`로 모델이 뷰를 채우게 하고, `T.ground(y, size)`로 바닥 그림자를 깐다. `T.edges(mesh)`는 윤곽선, `T.pick(objs, {click, hover})`는 클릭·호버 선택.
