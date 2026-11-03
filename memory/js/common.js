@@ -1113,7 +1113,27 @@
       b.addEventListener("click", () => openLightbox(fig));
       fig.appendChild(b);
       fig.querySelectorAll(":scope > svg, :scope > .fig-row svg, :scope > .fig-panels > svg").forEach((s) => { s.classList.add("zoomable"); s.addEventListener("click", () => openLightbox(fig)); });
+      // 넓은 단일 그림: 좁은 화면에서는 글자를 읽을 만한 크기(약 72 %)로 두고 옆으로 밀어 보게 한다.
+      fig.querySelectorAll(":scope > svg").forEach((s) => {
+        const vb = s.viewBox && s.viewBox.baseVal;
+        if (!vb || vb.width < 560) return;
+        const w = document.createElement("div");
+        w.className = "fig-scroll";
+        s.style.setProperty("--fig-mw", Math.round(vb.width * 0.72) + "px");
+        s.parentNode.insertBefore(w, s); w.appendChild(s);
+        scrollers.push(w);
+        w.addEventListener("scroll", () => markScroll(w), { passive: true });
+      });
     });
+    scrollers.forEach(markScroll);
+    window.addEventListener("resize", () => scrollers.forEach(markScroll));
+  }
+  const scrollers = [];
+  function markScroll(w) {
+    const can = w.scrollWidth > w.clientWidth + 2;
+    w.classList.toggle("can-scroll", can);
+    w.classList.toggle("at-start", w.scrollLeft < 4);
+    w.classList.toggle("at-end", !can || w.scrollLeft + w.clientWidth >= w.scrollWidth - 4);
   }
   MB.openFigure = openLightbox;
 
