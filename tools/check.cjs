@@ -87,6 +87,7 @@ function checkPage(rel, opts = {}) {
 }
 
 checkPage("index.html");
+checkPage("terms.html");
 for (const book of BOOKS) {
   checkPage(`${book}/index.html`);
   const js = fs.readFileSync(path.join(ROOT, book, "js/common.js"), "utf8");

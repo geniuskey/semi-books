@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 meta = json.loads((ROOT / 'book.json').read_text())
-urls = ['https://' + meta['domain'] + '/']
+urls = ['https://' + meta['domain'] + '/', 'https://' + meta['domain'] + '/terms.html']
 for entry in meta['books']:
     directory = ROOT / Path(entry).parent
     for page in sorted(directory.rglob('*.html')):
