@@ -495,16 +495,21 @@
 
   /* ------------------------------------------------------------ 그리기 헬퍼 */
   /**
-   * 밴드 다이어그램. d = { x:[...], Ec, Ev, Ei?, Ef?|Efn?, Efp?, labels:true, fill:true }
-   * opts = { x:[min,max], y:[min,max], xLabel, yLabel, xFmt, box, carriers:{n,p,scale} }
-   * 내부적으로 PB.chart 축을 쓰고 { X, Y, box } 반환.
+   * 밴드 다이어그램. d = { x:[...], Ec, Ev, Ei?, Ef?|Efn?, Efp?, labels:true|'out'|false, labelEi:true, fill:true }
+   * opts = PB.chart 옵션(x, y, xLabel, yLabel, xFmt, vlines, bands, hover …)
+   * 라벨 E_C·E_V·E_F·E_{Fn}·E_{Fp}·E_i는 선 끝에 서식 글자(첨자)로, 서로 겹치지 않게 놓는다.
+   *   labels:true → 그림 영역 안쪽 끝(배경 테두리), 'out' → 그림 영역 오른쪽 바깥(box 오른쪽에 ~40px 여백 필요).
+   *   E_{Fn}은 전자가 다수인 쪽 끝, E_{Fp}는 정공이 다수인 쪽 끝에 붙는다.
+   * 내부적으로 PB.chart 축을 쓰고 { X, Y, invX, invY, box } 반환.
    */
   SC.drawBands = function (ctx, box, d, opts = {}) {
     const P = PB.palette();
     const xs = d.x, N = xs.length;
     const pts = (arr) => { const o = []; for (let i = 0; i < N; i++) o.push([xs[i], arr[i]]); return o; };
     let ymin = Infinity, ymax = -Infinity;
-    [d.Ec, d.Ev, d.Efn, d.Efp, d.Ef].forEach((a) => { if (!a) return; for (let i = 0; i < N; i++) { const v = typeof a === "number" ? a : a[i]; ymin = Math.min(ymin, v); ymax = Math.max(ymax, v); } });
+    // 범위: 비어 있거나 유한하지 않은 값(부분 준페르미 준위 등)은 건너뛴다. E_F = 0도 포함한다.
+    [d.Ec, d.Ev, d.Efn, d.Efp, d.Ef].forEach((a) => { if (a == null) return; for (let i = 0; i < N; i++) { const v = typeof a === "number" ? a : a[i]; if (!isFinite(v)) continue; ymin = Math.min(ymin, v); ymax = Math.max(ymax, v); } });
+    if (!isFinite(ymin) || !isFinite(ymax)) { ymin = -1; ymax = 1; }
     const pad = (ymax - ymin) * 0.12 + 0.05;
     const series = [];
     series.push({ data: pts(d.Ec), color: P.ec, width: 2.6 });
@@ -514,39 +519,96 @@
     if (d.Ef != null) series.push({ data: typeof d.Ef === "number" ? flat(d.Ef) : pts(d.Ef), color: P.ef, width: 2, dash: [7, 5] });
     if (d.Efn) series.push({ data: pts(d.Efn), color: P.e, width: 1.8, dash: [7, 4] });
     if (d.Efp) series.push({ data: pts(d.Efp), color: P.h, width: 1.8, dash: [7, 4] });
+    // opts.extraSeries: 밴드 선 위에 더할 시리즈(opts.series를 주면 밴드 선을 통째로 바꾼다)
+    if (opts.extraSeries) opts.extraSeries.forEach((x) => series.push(x));
     const ch = PB.chart(ctx, box, Object.assign({ x: [xs[0], xs[N - 1]], y: [ymin - pad, ymax + pad], xLabel: "위치", yLabel: "에너지 (eV)", series }, opts));
     if (d.fill !== false) {
       // 밴드갭 바깥을 은은하게 칠한다
       ctx.save(); ctx.beginPath(); ctx.rect(ch.box.x, ch.box.y, ch.box.w, ch.box.h); ctx.clip();
       ctx.globalAlpha = 0.07;
       ctx.fillStyle = P.ec; ctx.beginPath(); ctx.moveTo(ch.X(xs[0]), ch.box.y);
-      for (let i = 0; i < N; i++) ctx.lineTo(ch.X(xs[i]), ch.Y(d.Ec[i]));
+      for (let i = 0; i < N; i++) if (isFinite(d.Ec[i])) ctx.lineTo(ch.X(xs[i]), ch.Y(d.Ec[i]));
       ctx.lineTo(ch.X(xs[N - 1]), ch.box.y); ctx.closePath(); ctx.fill();
       ctx.fillStyle = P.ev; ctx.beginPath(); ctx.moveTo(ch.X(xs[0]), ch.box.y + ch.box.h);
-      for (let i = 0; i < N; i++) ctx.lineTo(ch.X(xs[i]), ch.Y(d.Ev[i]));
+      for (let i = 0; i < N; i++) if (isFinite(d.Ev[i])) ctx.lineTo(ch.X(xs[i]), ch.Y(d.Ev[i]));
       ctx.lineTo(ch.X(xs[N - 1]), ch.box.y + ch.box.h); ctx.closePath(); ctx.fill();
       ctx.restore();
     }
-    if (d.labels !== false) {
-      ctx.save(); ctx.font = PB.font(12, false, 700); ctx.textAlign = "left"; ctx.textBaseline = "bottom";
-      const lx = ch.box.x + ch.box.w - 4;
-      ctx.textAlign = "right";
-      ctx.fillStyle = P.ec; ctx.fillText("E꜀", lx, ch.Y(d.Ec[N - 1]) - 3);
-      ctx.fillStyle = P.ev; ctx.textBaseline = "top"; ctx.fillText("Eᵥ", lx, ch.Y(d.Ev[N - 1]) + 3);
-      ctx.textBaseline = "bottom";
-      if (d.Ef != null) { ctx.fillStyle = P.ef; ctx.fillText("E_F", lx, ch.Y(typeof d.Ef === "number" ? d.Ef : d.Ef[N - 1]) - 3); }
-      if (d.Efn) { ctx.fillStyle = P.e; ctx.fillText("E_Fn", lx - 40, ch.Y(d.Efn[N - 1]) - 3); }
-      if (d.Efp) { ctx.fillStyle = P.h; ctx.textBaseline = "top"; ctx.fillText("E_Fp", ch.box.x + 44, ch.Y(d.Efp[0]) + 3); }
-      ctx.restore();
-    }
+    if (d.labels !== false) SC.bandLabels(ctx, ch, d);
     return ch;
   };
-  /** 전자(채운 원)·정공(빈 원) 하나 그리기 */
+  /**
+   * 밴드 라벨만 그린다: SC.bandLabels(ctx, ch, d) — ch는 SC.drawBands/PB.chart의 반환값, d는 drawBands와 같은 자료.
+   * 입자를 밴드 위에 그리는 시뮬레이터는 drawBands에 labels:false를 주고, 입자를 그린 뒤 이것을 불러 라벨이 가려지지 않게 한다.
+   */
+  SC.bandLabels = function (ctx, ch, d) {
+    const P = PB.palette(), N = d.x.length;
+    const out = d.labels === "out", b = ch.box, N1 = N - 1;
+    const at = (a, i) => (typeof a === "number" ? a : a[i]);
+    const L = [], R = [];
+    const push = (end, text, v, color, dy) => { if (v == null || !isFinite(v)) return; (end === 0 ? L : R).push({ text, color, y: ch.Y(v) + dy }); };
+    push(1, "E_C", at(d.Ec, N1), P.ec, -9);
+    push(1, "E_V", at(d.Ev, N1), P.ev, 9);
+    if (d.Ei && d.labelEi !== false) push(1, "E_i", at(d.Ei, N1), P.dim, -8);
+    if (d.Ef != null) push(1, "E_F", at(d.Ef, N1), P.ef, -9);
+    // 준페르미 준위: 각자 다수 캐리어 쪽 끝(밴드에 더 가까운 끝)에 붙인다
+    if (d.Efn) { const e = at(d.Ec, 0) - at(d.Efn, 0) < at(d.Ec, N1) - at(d.Efn, N1) ? 0 : 1; push(out ? 1 : e, "E_{Fn}", at(d.Efn, e === 0 && !out ? 0 : N1), P.e, -9); }
+    if (d.Efp) { const e = at(d.Efp, 0) - at(d.Ev, 0) < at(d.Efp, N1) - at(d.Ev, N1) ? 0 : 1; push(out ? 1 : e, "E_{Fp}", at(d.Efp, e === 0 && !out ? 0 : N1), P.h, 9); }
+    const lo = { top: b.y + (out ? -4 : 2), bottom: b.y + b.h + (out ? 4 : -2), size: 12.5, weight: 700 };
+    if (out) PB.endLabels(ctx, R.concat(L), Object.assign({ x: b.x + b.w + 6, align: "left" }, lo));
+    else {
+      PB.endLabels(ctx, R, Object.assign({ x: b.x + b.w - 5, align: "right" }, lo));
+      if (L.length) PB.endLabels(ctx, L, Object.assign({ x: b.x + 5, align: "left" }, lo));
+    }
+  };
+  /* 캐리어 색(테마가 바뀌거나 0.3초가 지나면 다시 읽는다 — 점 수백 개를 그릴 때 getComputedStyle을 줄인다) */
+  let dotPal = null, dotPalT = 0;
+  PB.onTheme(() => { dotPal = null; dotCache.clear(); });
+  const dotColors = () => {
+    const now = performance.now();
+    if (!dotPal || now - dotPalT > 300) { dotPal = { e: PB.color("electron"), h: PB.color("hole"), bg: PB.color("canvas-bg") }; dotPalT = now; }
+    return dotPal;
+  };
+  const dotCache = new Map();
+  function dotSprite(kind, r, C, dpr) {
+    const key = kind + "|" + r + "|" + dpr + "|" + C.e + C.h + C.bg;
+    let sp = dotCache.get(key);
+    if (sp) return sp;
+    const m = r + 2, size = Math.ceil(m * 2 * dpr);
+    const c = document.createElement("canvas"); c.width = c.height = size;
+    const g = c.getContext("2d"); g.scale(dpr, dpr);
+    g.beginPath(); g.arc(m, m, kind === "e" ? r : r - 0.4, 0, Math.PI * 2);
+    if (kind === "e") {
+      const gr = g.createRadialGradient(m - r * 0.36, m - r * 0.4, r * 0.08, m, m, r);
+      gr.addColorStop(0, PB.mix(C.e, "#ffffff", 0.5)); gr.addColorStop(1, C.e);
+      g.fillStyle = gr; g.fill();
+      g.lineWidth = 0.7; g.strokeStyle = PB.mix(C.e, "#000000", 0.3); g.stroke();
+    } else { g.fillStyle = C.bg; g.fill(); g.lineWidth = 1.6; g.strokeStyle = C.h; g.stroke(); }
+    sp = { c, m };
+    dotCache.set(key, sp);
+    if (dotCache.size > 48) dotCache.delete(dotCache.keys().next().value);
+    return sp;
+  }
+  /** 전자(채운 원, 빛나는 구)·정공(빈 원) 하나 그리기. 같은 모양은 미리 그린 스프라이트를 찍어 빠르다. */
   SC.dot = function (ctx, x, y, kind, r = 4) {
-    const P = PB.palette();
-    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
-    if (kind === "e") { ctx.fillStyle = P.e; ctx.fill(); }
-    else { ctx.fillStyle = P.bg; ctx.fill(); ctx.lineWidth = 1.6; ctx.strokeStyle = P.h; ctx.stroke(); }
+    const C = dotColors();
+    const t = ctx.getTransform ? ctx.getTransform() : null;
+    const dpr = t ? Math.max(1, Math.round(Math.hypot(t.a, t.b) * 2) / 2) : 1;
+    const sp = dotSprite(kind === "e" ? "e" : "h", Math.round(r * 4) / 4, C, dpr);
+    ctx.drawImage(sp.c, x - sp.m, y - sp.m, sp.m * 2, sp.m * 2);
+  };
+  /** 이온화된 불순물(고정 전하): SC.ion(ctx, x, y, +1 | -1, size) — 둥근 사각형에 +/−. 양이온(도너) 빨강, 음이온(억셉터) 파랑 */
+  SC.ion = function (ctx, x, y, sign, s = 10) {
+    const C = dotColors(), col = sign > 0 ? C.h : C.e, h = s / 2;
+    ctx.save();
+    PB.rrect(ctx, x - h, y - h, s, s, s * 0.24);
+    ctx.fillStyle = PB.mix(C.bg, col, 0.1); ctx.fill();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = col; ctx.stroke();
+    ctx.beginPath(); ctx.lineWidth = 1.5; ctx.lineCap = "round";
+    ctx.moveTo(x - h * 0.55, y); ctx.lineTo(x + h * 0.55, y);
+    if (sign > 0) { ctx.moveTo(x, y - h * 0.55); ctx.lineTo(x, y + h * 0.55); }
+    ctx.stroke();
+    ctx.restore();
   };
   /** 10의 거듭제곱 표시: SC.sci(3.2e17) → "3.2×10¹⁷" (HTML 아닌 유니코드) */
   const SUP = { "-": "⁻", 0: "⁰", 1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶", 7: "⁷", 8: "⁸", 9: "⁹" };
@@ -559,6 +621,15 @@
     const ms = Number(mnt.toPrecision(d));
     return (ms === 1 ? "" : ms + "×") + "10" + es;
   };
+  /** PB.text 서식 버전(캔버스): SC.sciR(3.2e17) → "3.2×10^{17}" */
+  SC.sciR = function (v, d = 2) {
+    if (!isFinite(v)) return "—";
+    if (v === 0) return "0";
+    let e = Math.floor(Math.log10(Math.abs(v))), mnt = v / Math.pow(10, e);
+    if (Math.abs(Number(mnt.toPrecision(d))) >= 10) { mnt /= 10; e++; }
+    const ms = Number(mnt.toPrecision(d));
+    return (ms === 1 ? "" : ms === -1 ? "−" : String(ms).replace("-", "−") + "×") + "10^{" + String(e).replace("-", "−") + "}";
+  };
   /** HTML 위첨자 버전: SC.sciH(3.2e17) → "3.2×10<sup>17</sup>" */
   SC.sciH = function (v, d = 2) {
     if (!isFinite(v)) return "—";
@@ -566,6 +637,6 @@
     let e = Math.floor(Math.log10(Math.abs(v))), mnt = v / Math.pow(10, e);
     if (Math.abs(Number(mnt.toPrecision(d))) >= 10) { mnt /= 10; e++; }
     const ms = Number(mnt.toPrecision(d));
-    return (ms === 1 ? "" : ms + "×") + "10<sup>" + e + "</sup>";
+    return (ms === 1 ? "" : String(ms).replace("-", "−") + "×") + "10<sup>" + String(e).replace("-", "−") + "</sup>";
   };
 })();
