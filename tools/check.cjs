@@ -13,6 +13,8 @@ const bookJson = (book) => JSON.parse(fs.readFileSync(path.join(ROOT, book, "boo
 const WRITING = new Set(BOOKS.filter((book) => bookJson(book).status === "writing"));
 // book.json의 meta가 있는 책은 canonical·OG·JSON-LD를 빌드(tools/build.mjs)가 생성한다.
 const GENERATED = new Set(BOOKS.filter((book) => bookJson(book).meta));
+// tools/search-index.mjs writes these during the build; they are gitignored, so a fresh checkout lacks them.
+const BUILT = new RegExp(`^(?:${BOOKS.join("|")})/(?:terms\\.html|search\\.json)$`);
 const errors = [];
 const warn = [];
 const fail = (m) => errors.push(m);
@@ -79,7 +81,7 @@ function checkPage(rel, opts = {}) {
     const target = new URL(value, `${ORIGIN}/${rel}`);
     if (target.origin !== ORIGIN) continue;
     const local = decodeURIComponent(target.pathname).replace(/^\//, "") + (target.pathname.endsWith("/") ? "index.html" : "");
-    if (!fs.existsSync(path.join(ROOT, local))) {
+    if (!fs.existsSync(path.join(ROOT, local)) && !BUILT.test(local)) {
       const message = `${rel}: missing linked file ${value}`;
       if (WRITING.has(local.split("/")[0])) warn.push(message); else fail(message);
     }
