@@ -489,7 +489,7 @@
 
       EuiyunBook.pager({ after: layout, home: href(""), homeLabel: "홈 · 로드맵", chapters: CHAPTERS, chapterHref: href, current: curSlug });
     }
-    EuiyunBook.footer({ name: "SoCBook", note: "공학도를 위한 인터랙티브 시스템 온 칩 교과서 · 수치는 교육용 근사 모델입니다.", related: [{ href: "/process/", label: "ProcessBook" }, { href: "/design/", label: "DesignBook" }, { href: "/memory/", label: "MemoryBook" }, { href: "https://computerbook.euiyun.com/", label: "ComputerBook" }], root, feedback: "socbook" });
+    EuiyunBook.footer({ name: "SoCBook", note: "공학도를 위한 인터랙티브 시스템 온 칩 교과서 · 수치는 교육용 근사 모델입니다.", related: [{ href: "/process/", label: "ProcessBook" }, { href: "/design/", label: "DesignBook" }, { href: "/memory/", label: "MemoryBook" }, { href: "https://computing.euiyun.com/computer/", label: "ComputerBook" }], root, feedback: "socbook" });
 
     // quiz
     document.querySelectorAll(".quiz-q").forEach((q) => {

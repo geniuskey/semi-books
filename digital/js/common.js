@@ -495,7 +495,7 @@
 
       EuiyunBook.pager({ after: layout, home: href(""), homeLabel: "홈 · 로드맵", chapters: CHAPTERS, chapterHref: href, current: curSlug });
     }
-    EuiyunBook.footer({ name: "DigitalBook", note: "공학도를 위한 인터랙티브 디지털 회로 설계 교과서 · 수치는 교육용 근사 모델입니다.", related: [{ href: "/device/", label: "DeviceBook" }, { href: "/design/", label: "DesignBook" }, { href: "/soc/", label: "SoCBook" }, { href: "/memory/", label: "MemoryBook" }, { href: "https://computerbook.euiyun.com/", label: "ComputerBook" }], root, feedback: "digitalbook" });
+    EuiyunBook.footer({ name: "DigitalBook", note: "공학도를 위한 인터랙티브 디지털 회로 설계 교과서 · 수치는 교육용 근사 모델입니다.", related: [{ href: "/device/", label: "DeviceBook" }, { href: "/design/", label: "DesignBook" }, { href: "/soc/", label: "SoCBook" }, { href: "/memory/", label: "MemoryBook" }, { href: "https://computing.euiyun.com/computer/", label: "ComputerBook" }], root, feedback: "digitalbook" });
 
     // quiz
     document.querySelectorAll(".quiz-q").forEach((q) => {
