@@ -1,5 +1,5 @@
-/* Copyright (c) 2026 geniuskey and euiyun books contributors.
-   Reused from geniuskey/books under the MIT License (see ../../LICENSE-MIT). */
+/* Copyright (c) 2026 geniuskey and euiyun books contributors. MIT. 원본은 books 저장소 js/covers.js이며,
+   서가에는 tools/sync-shelf-kit.py가 shared/js/covers.js로 복사한다. */
 /* 책 표지 일러스트. books.json의 motif 이름 → SVG 문자열 (viewBox 0 0 200 130, 흰 선 위주).
    애니메이션은 css의 .cv-* 클래스가 담당하고, 카드에 마우스를 올렸을 때만 움직인다. */
 (function () {
@@ -11,6 +11,190 @@
   const rnd = (seed) => () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
 
   const M = {
+    // 이하 guitar·piano·drums는 MusicBooks 악기 표지다. 움직임은 .gt-·.pn-·.dr- 클래스가 맡고, 멈춘 첫 프레임도 완성된 그림이다.
+    // 기타: 비스듬히 놓인 어쿠스틱 기타. 프렛은 너트에서 줄 길이 × (1 − 2^(−n/12))만큼 떨어진 12평균율 자리에 놓인다.
+    // 피크는 8분음표로 쉬지 않고 오르내리며 오른쪽 아래의 ↓ ↓↑ ↑↓↑ 패턴을 치고, 친 박마다 여섯 줄의 진동 폭이 부풀었다 잦아든다.
+    guitar() {
+      const L = 101.5, nut = 136.3, saddle = nut - L, end = 73.5, f = (v) => +v.toFixed(2);
+      const fret = (n) => nut - L * (1 - 2 ** (-n / 12)), half = (x) => 4.7 - (1.1 * (x - end)) / (nut - end);
+      const lo = (k) => -6.25 + 2.5 * k, hi = (k) => -3 + 1.2 * k; // 새들·너트 위 k번째 줄(0: 저음 E)
+      const edge = (x) => 3.9 + (2.9 * (x - 137.7)) / 24.8; // 헤드 가장자리
+      let g = `<path d="M0 0C0-19 9-31 24-31C36-31 40-21 47-21C53-21 57-26 65-26C74-26 80-18 80-9V9C80 18 74 26 65 26C57 26 53 21 47 21C40 21 36 31 24 31C9 31 0 19 0 0Z" fill="url(#gt-top)" stroke="#fff4e0" stroke-width="1.5"/>`;
+      // 사운드홀과 로제트, 픽가드, 브리지와 새들
+      g += `<circle cx="61" cy="0" r="8.6" fill="#2b170c"/><circle cx="61" cy="0" r="10.6" fill="none" stroke="#fff4e0" stroke-width="1.1"/><circle cx="61" cy="0" r="11.8" fill="none" stroke="#7a3d17" stroke-dasharray=".9 .9"/><circle cx="61" cy="0" r="12.8" fill="none" stroke="#fff4e0" stroke-opacity=".7" stroke-width=".5"/>`;
+      g += `<path d="M71.3 8.7C72.5 16 67 23 58 23C51 23 46.5 18 47.5 12C48 9.8 48.6 8.2 49.3 6.75A13.5 13.5 0 0 0 71.3 8.7Z" fill="#4a230e" fill-opacity=".55"/>`;
+      g += `<rect x="${f(saddle - 5.2)}" y="-12" width="7" height="24" rx="3" fill="#2b170c"/><path d="M${f(saddle)} -8.2V8.2" stroke="#fff8ea" stroke-width="1.1" stroke-linecap="round"/>`;
+      range(6).forEach((k) => { g += `<circle cx="${f(saddle - 2.9)}" cy="${lo(k)}" r=".75" fill="#fff4e0"/>`; });
+      // 지판: 반음마다 좁아지는 프렛, 3·5·7·9·12·15 프렛 자리표
+      g += `<path d="M${end} ${-half(end)}L${nut} ${f(-half(nut))}V${f(half(nut))}L${end} ${half(end)}Z" fill="#2b170c" stroke="#fff4e0" stroke-width=".6"/>`;
+      range(16).forEach((i) => { const x = f(fret(i + 1)), h = f(half(x)); g += `<path d="M${x} ${-h}V${h}" stroke="#e9dcc8" stroke-width=".55"/>`; });
+      [3, 5, 7, 9, 12, 15].forEach((n) => {
+        const x = f((fret(n - 1) + fret(n)) / 2);
+        g += (n === 12 ? [-1.9, 1.9] : [0]).map((y) => `<circle cx="${x}" cy="${y}" r=".9" fill="#f6ecd9"/>`).join("");
+      });
+      // 너트와 헤드, 줄감개
+      g += `<path d="M137.7-3.9 162.5-6.8Q165.5-7.1 165.5-4V4Q165.5 7.1 162.5 6.8L137.7 3.9Z" fill="#2b170c" stroke="#fff4e0" stroke-width=".7"/><rect x="${nut}" y="-4" width="1.5" height="8" rx=".4" fill="#fff8ea"/>`;
+      [145, 152, 159].forEach((x) => [-1, 1].forEach((s) => {
+        const e = edge(x);
+        g += `<path d="M${x} ${f(s * e)}V${f(s * (e + 2.2))}" stroke="#e9dcc8"/><ellipse cx="${x}" cy="${f(s * (e + 3.4))}" rx="1.6" ry="1.9" fill="#f6ecd9"/><circle cx="${x}" cy="${f(s * (e - 1.7))}" r=".85" fill="#e9dcc8"/>`;
+      }));
+      // 여섯 줄은 새들에서 너트를 지나 줄감개로 간다. 줄마다 새들~너트 사이에 기본 진동의 폭(배 모양)을 겹쳐 둔다.
+      const posts = [145, 152, 159, 159, 152, 145];
+      range(6).forEach((k) => {
+        const px = posts[k], py = f((k < 3 ? -1 : 1) * (edge(px) - 1.7)), m = f((saddle + nut) / 2), y = (lo(k) + hi(k)) / 2;
+        g += `<path d="M${f(saddle)} ${lo(k)}L${nut} ${f(hi(k))}L${px} ${py}" fill="none" stroke="#fff6e4" stroke-width="${[1, 0.88, 0.76, 0.64, 0.54, 0.46][k]}" stroke-linejoin="round"/>`;
+        g += `<path class="gt-ring" opacity="0" style="animation-delay:${(0.13 + k * 0.012).toFixed(3)}s" d="M${f(saddle)} ${lo(k)}Q${m} ${f(y - 3.2)} ${nut} ${f(hi(k))}Q${m} ${f(y + 3.2)} ${f(saddle)} ${lo(k)}Z" fill="#fff6e4" fill-opacity=".45"/>`;
+      });
+      g += `<g transform="translate(58 -17.5)"><path class="gt-pick" style="--dy:35px" d="M-3.9-3Q0-5.1 3.9-3 3.9.9 0 4.8-3.9.9-3.9-3Z" fill="#e8590c" stroke="#fff4e0" stroke-width=".6"/></g>`;
+      let s = `<defs><radialGradient id="gt-top" cx=".5" cy=".5" r=".58"><stop offset="0" stop-color="#fff2d2"/><stop offset=".55" stop-color="#f4cd86"/><stop offset=".82" stop-color="#d0843b"/><stop offset="1" stop-color="#7a3d17"/></radialGradient></defs>`;
+      s += `<g transform="translate(19.8 93.2) rotate(-24) scale(1.08)">${g}</g>`;
+      // 왼쪽 위로 떠오르는 음표
+      const note = (x, y) => `<ellipse cx="${x}" cy="${y}" rx="3.9" ry="2.9" transform="rotate(-20 ${x} ${y})"/><path d="M${x + 3.5} ${y - 0.8}V${y - 15}" stroke="${W}" stroke-width="1.3"/>`;
+      s += `<g class="cv-bob" fill="${W}" fill-opacity=".92">${note(24, 36)}${note(40, 31)}<path d="M27 20.4 44.1 15.2V18L27 23.2Z"/></g>`;
+      s += `<g class="cv-bob" style="animation-delay:.6s" fill="${W}" fill-opacity=".92">${note(66, 22)}<path d="M69.5 7c.6 4 5.6 5 5 10.5c-.7-3.2-2.8-4.5-5-4.9z"/></g>`;
+      // 오른쪽 아래 스트로크 패턴: 피크가 지나는 박마다 화살표가 빛난다
+      [..."D-DU-UDU"].forEach((c, i) => {
+        const x = 122 + i * 10;
+        if (c === "-") { s += `<circle cx="${x}" cy="111" r="1.1" fill="${W}" fill-opacity=".45"/>`; return; }
+        const [a, b] = c === "D" ? [104, 118] : [118, 104], t = c === "D" ? -4 : 4;
+        s += `<path class="gt-beat" style="animation-delay:${(0.13 + i * 0.3).toFixed(2)}s" d="M${x} ${a}V${b}M${x - 3} ${b + t}L${x} ${b}L${x + 3} ${b + t}" fill="none" stroke="${W}" stroke-opacity=".7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`;
+      });
+      return svg(s);
+    },
+    // 피아노: 두 옥타브(C3–C5) 건반을 앞에서 살짝 내려다본 모습. 왼손은 C–Am–F–G 화음을 금빛으로 한 박씩 짚고,
+    // 오른손 선율은 하늘빛으로 8분음표마다 옮겨 가며 위 오선에서 같은 음표가 함께 빛난다. 멈춰 있을 때는 C 화음과 첫 음 E4.
+    piano() {
+      const x0 = 14, x1 = 186, w = (x1 - x0) / 15, top = 64, front = 112, f = (v) => +v.toFixed(1);
+      const X = (x, y) => f(100 + (x - 100) * (0.9 + (0.1 * (y - top)) / (front - top))); // 앞쪽이 넓은 원근
+      const quad = (a, b, y0, y1) => `M${X(a, y0)} ${y0}L${X(b, y0)} ${y0}L${X(b, y1)} ${y1}L${X(a, y1)} ${y1}Z`;
+      const wave = (x) => 3 * Math.sin(((x - 8) / 184) * Math.PI * 2);
+      const gold = "#ffd27a", sky = "#8fd3ff";
+      const melody = [[9, 8], [11, 6], [12, 5], [14, 3], [12, 5], [10, 7], [11, 6], [8, 9]]; // [흰 건반 번호, 오선 위치(위 줄 F5=0)]
+      let s = `<defs><linearGradient id="pn-fade" gradientUnits="userSpaceOnUse" x1="8" x2="192" y1="0" y2="0"><stop offset="0" stop-color="${W}" stop-opacity="0"/><stop offset=".15" stop-color="${W}" stop-opacity=".6"/><stop offset=".85" stop-color="${W}" stop-opacity=".6"/><stop offset="1" stop-color="${W}" stop-opacity="0"/></linearGradient></defs>`;
+      // 물결치는 오선과 선율
+      range(5).forEach((k) => { s += `<path d="M${range(37).map((i) => { const x = 8 + (i * 184) / 36; return `${f(x)} ${f(12 + k * 4.4 + wave(x))}`; }).join("L")}" fill="none" stroke="url(#pn-fade)" stroke-width=".7"/>`; });
+      const heads = melody.map(([, p], i) => { const x = 44 + i * 17.5; return [x, f(12 + p * 2.2 + wave(x))]; });
+      heads.forEach(([x, y], i) => {
+        const head = (fill, extra = "") => `<ellipse${extra} cx="${x}" cy="${y}" rx="2.8" ry="2" transform="rotate(-20 ${x} ${y})" fill="${fill}"/>`;
+        s += head(W) + `<path d="M${f(x + 2.5)} ${f(y - 0.6)}V${f(y - 12)}" stroke="${W}"/>` + head(sky, ` class="pn-note"${i ? ' opacity="0"' : ""} style="animation-delay:${(i * 0.4).toFixed(1)}s"`);
+        if (i % 2 === 0) { const [x2, y2] = heads[i + 1]; s += `<path d="M${f(x + 2)} ${f(y - 12)}L${f(x2 + 3)} ${f(y2 - 12)}V${f(y2 - 10.2)}L${f(x + 2)} ${f(y - 10.2)}Z" fill="${W}"/>`; }
+      });
+      // 케이스(뒤판·양옆·앞 레일), 금색 띠와 붉은 펠트
+      s += `<ellipse cx="100" cy="${front + 9}" rx="94" ry="2.6" fill="#000" fill-opacity=".22"/><path d="${quad(x0 - 7, x1 + 7, 54, front + 7)}" fill="#1d1631"/>`;
+      s += `<path d="M${X(x0 - 4, 57.5)} 57.5H${X(x1 + 4, 57.5)}" stroke="${gold}" stroke-opacity=".75" stroke-width=".6"/><path d="${quad(x0, x1, 62, top)}" fill="#b3214f"/>`;
+      const key = (i) => [x0 + i * w + 0.35, x0 + (i + 1) * w - 0.35];
+      range(15).forEach((i) => { const [a, b] = key(i); s += `<path d="${quad(a, b, top, front)}" fill="#fbf8f1"/><path d="${quad(a, b, front, front + 4.5)}" fill="#d6cce2"/>`; });
+      const press = (i, color, cls, delay, on) => { const [a, b] = key(i); return `<path class="${cls}"${on ? "" : ' opacity="0"'} style="animation-delay:${delay}s" d="${quad(a + 0.4, b - 0.4, top + 0.5, front - 0.4)}" fill="${color}" fill-opacity=".9"/>`; };
+      [[0, 2, 4], [0, 2, 5], [0, 3, 5], [1, 4, 6]].forEach((keys, j) => keys.forEach((i) => { s += press(i, gold, "pn-chord", (j * 0.8).toFixed(1), !j); }));
+      melody.forEach(([i], k) => { s += press(i, sky, "pn-note", (k * 0.4).toFixed(1), !k); });
+      // 검은 건반: 앞면이 보이도록 몸통 위에 밝은 윗면을 얹는다
+      const back = top + 0.62 * (front - top);
+      [0, 7].forEach((o) => [[1, -0.12], [2, 0.12], [4, -0.15], [5, 0], [6, 0.15]].forEach(([j, d]) => {
+        const c = x0 + (o + j + d) * w, h = 0.29 * w;
+        s += `<path d="${quad(c - h, c + h, top, back + 2.6)}" fill="#1d1631"/><path d="${quad(c - h + 0.7, c + h - 0.7, top, back - 0.4)}" fill="#3b3157"/>`;
+        s += `<path d="M${X(c - h + 1.3, top)} ${top}L${X(c - h + 1.3, back - 1.4)} ${f(back - 1.4)}" stroke="${W}" stroke-opacity=".3" stroke-width=".5"/>`;
+      }));
+      return svg(s);
+    },
+    // 드럼: 객석에서 본 드럼 세트. 오른손잡이 기준이라 하이햇·스네어·크래시는 오른쪽, 플로어 탐·라이드는 왼쪽에 놓이고
+    // 베이스 드럼 앞면에는 책 이름을 새겼다. 한 마디 2.4초(100 BPM)의 8비트: 하이햇은 8분음표마다, 킥은 1·3박,
+    // 스네어는 2·4박, 4박 뒤 두 탐으로 필인하고 다음 1박에 크래시가 흔들린다.
+    drums() {
+      const f = (v) => +v.toFixed(2), metal = "#c9ced6";
+      const ring = (shape, delay, dur = 2.4, stroke = 'stroke="#fff"') => `<${shape} class="dr-ring" opacity="0" style="animation-delay:${delay}s;animation-duration:${dur}s" fill="none" ${stroke} stroke-width="1.3"/>`;
+      const head = (cx, y, rx, ry) => `cx="${cx}" cy="${y}" rx="${rx}" ry="${ry}"`;
+      // 원통형 북: 셸, 아래 후프, 러그 세 개, 위 헤드와 후프
+      const drum = (cx, y, rx, ry, h) => `<path d="M${cx - rx} ${y}V${y + h}A${rx} ${ry} 0 0 0 ${cx + rx} ${y + h}V${y}Z" fill="url(#dr-shell)"/>`
+        + `<path d="M${cx - rx} ${y + h}A${rx} ${ry} 0 0 0 ${cx + rx} ${y + h}" fill="none" stroke="${metal}" stroke-width="1.1"/>`
+        + [-0.71, 0, 0.71].map((u) => `<rect x="${f(cx + u * rx - 0.8)}" y="${f(y + h * 0.3)}" width="1.6" height="${f(h * 0.42)}" rx=".8" fill="${metal}"/>`).join("")
+        + `<ellipse ${head(cx, y, rx, ry)} fill="#fffaf2" stroke="${metal}" stroke-width="1.4"/><ellipse ${head(cx, y, f(rx * 0.8), f(ry * 0.8))} fill="none" stroke="#000" stroke-opacity=".07"/>`;
+      const cymbal = (cx, cy, rx, ry) => `<ellipse ${head(cx, cy, rx, ry)} fill="url(#dr-brass)" stroke="#7a4c0c" stroke-opacity=".5" stroke-width=".5"/>`
+        + [0.72, 0.46].map((u) => `<ellipse ${head(cx, cy, f(rx * u), f(ry * u))} fill="none" stroke="#7a4c0c" stroke-opacity=".3" stroke-width=".5"/>`).join("")
+        + `<ellipse ${head(cx, f(cy - ry * 0.25), f(rx * 0.2), f(ry * 0.55))} fill="#ffe9a8"/><circle cx="${cx}" cy="${f(cy - ry * 0.45)}" r=".9" fill="#5c3a0a"/>`;
+      let s = `<defs><linearGradient id="dr-shell"><stop offset="0" stop-color="#3a0a14"/><stop offset=".22" stop-color="#7d1d2e"/><stop offset=".42" stop-color="#c44a5d"/><stop offset=".6" stop-color="#8d2536"/><stop offset="1" stop-color="#2e0810"/></linearGradient>`
+        + `<linearGradient id="dr-brass"><stop offset="0" stop-color="#a8741a"/><stop offset=".3" stop-color="#f2c14e"/><stop offset=".5" stop-color="#fff0b3"/><stop offset=".7" stop-color="#e6aa2e"/><stop offset="1" stop-color="#96620f"/></linearGradient></defs>`;
+      s += `<ellipse cx="100" cy="123" rx="92" ry="2.5" fill="#000" fill-opacity=".18"/><path d="M8 123H192" stroke="${W}" stroke-opacity=".25"/>`;
+      // 스탠드와 다리: 북보다 먼저 그려 뒤로 숨긴다
+      s += `<path d="M44 34 40 123M30 123 40 111 50 123M152 26 158 123M150 123 158 111 166 123M182 48V123M174 123 182 109 190 123M150 86V123M141 123 150 108 159 123M31 80 27 123M65 80 69 123M100 60V51M100 54 89 49M100 54 111 49M77 108 67 123M123 108 133 123" fill="none" stroke="${metal}" stroke-width="1.3" stroke-linecap="round"/>`;
+      // 라이드와 크래시: 기울기는 바깥 g가, 흔들림은 안쪽 g가 맡는다
+      s += `<g transform="rotate(-10 44 32)">${cymbal(44, 32, 25, 5.4)}</g>`;
+      s += `<g transform="rotate(14 152 24)"><g class="dr-crash" style="animation-delay:.01s">${cymbal(152, 24, 21, 4.8)}${ring(`ellipse ${head(152, 24, 21, 4.8)}`, 0.01, 2.4, 'stroke="#ffe9a8"')}</g></g>`;
+      // 랙 탐 둘: 바깥으로 살짝 기울고, 마디 끝 필인에서 차례로 울린다
+      [[84, -7, 2.1], [116, 7, 2.25]].forEach(([cx, a, t]) => { s += `<g transform="rotate(${a} ${cx} 52)">${drum(cx, 44, 14, 4.6, 15)}${ring(`ellipse ${head(cx, 44, 14, 4.6)}`, t)}</g>`; });
+      // 베이스 드럼: 나무 후프와 크롬 인레이, 클로, 검은 앞면 헤드의 금색 고리와 책 이름, 포트 구멍
+      let bd = `<circle cx="100" cy="90" r="30" fill="url(#dr-shell)"/>`;
+      range(8).forEach((k) => { bd += `<rect x="98.9" y="57.5" width="2.2" height="4.5" rx=".6" fill="${metal}" transform="rotate(${22.5 + k * 45} 100 90)"/>`; });
+      bd += `<circle cx="100" cy="90" r="27.6" fill="none" stroke="${metal}" stroke-width=".8"/><circle cx="100" cy="90" r="26.2" fill="#1d0b10"/>`;
+      bd += `<circle cx="100" cy="90" r="20.6" fill="none" stroke="#ffd27a" stroke-width="1.2"/><circle cx="100" cy="90" r="19" fill="none" stroke="#ffd27a" stroke-opacity=".6" stroke-width=".5"/>`;
+      bd += `<text x="100" y="92.4" text-anchor="middle" font-size="7" font-weight="800" font-style="italic" fill="#fffaf2">DrumBook</text><path d="M86 95.6H114" stroke="#ffd27a" stroke-width=".7"/>`;
+      bd += `<circle cx="116.7" cy="106.7" r="2.2" fill="#000" fill-opacity=".5" stroke="${metal}" stroke-width=".7"/>`;
+      s += `<g class="dr-kick" style="animation-delay:.01s">${bd}</g>${ring('circle cx="100" cy="90" r="13"', 0.01, 1.2, 'stroke="#ffd27a"')}`;
+      // 플로어 탐(왼쪽), 스네어(오른쪽)
+      s += drum(48, 72, 17, 5, 28) + drum(150, 76, 15, 4.5, 10) + ring(`ellipse ${head(150, 76, 15, 4.5)}`, 0.6, 1.2);
+      // 하이햇: 아래 심벌은 고정, 위 심벌은 8분음표마다 살짝 눌렸다 올라온다
+      s += cymbal(182, 61, 14, 2.4) + `<g class="dr-hat" style="animation-delay:.01s">${cymbal(182, 57.5, 14, 2.6)}</g>`;
+      return svg(s);
+    },
+    // 베이스: 비스듬히 놓인 4현 일렉 베이스(더블 컷어웨이 솔리드 바디, 34″ 롱 스케일).
+    // 프렛은 너트에서 줄 길이 × (1 − 2^(−n/12))만큼 떨어진 자리에 놓이고, 굵은 줄일수록 선이 두껍고 진폭도 크다.
+    // 오른손 두 손가락이 번갈아 뜯으며(0.3초마다 = 100 BPM의 8분음표), 뜯긴 줄의 진동 폭이 부풀었다 잦아든다.
+    // 오른쪽 아래에는 뜯는 음의 도수 R·5·8·5가 박마다 차례로 켜진다.
+    bass() {
+      const nut = 124, L = 124, f = (v) => +v.toFixed(2);
+      const fret = (n) => f(nut * 2 ** (-n / 12));
+      const half = (x) => 4.9 + (2.6 * (nut - x)) / (nut - 38); // 너트 4.9 → 힐 7.5
+      const lo = (k) => f(-4.5 + 3 * k); // 브리지 위 k번째 줄(0: 4번 줄 E)
+      const hi = (k) => f(-2.7 + 1.8 * k); // 너트 위
+      const chrome = "#c9ced6";
+      let g = "";
+      // 바디: 위·아래 컷어웨이가 있는 솔리드 바디. 넥이 지나는 구간은 직선으로 두고 넥이 덮는다.
+      g += `<path d="M-36 2C-37-15-27-28-11-29C-1-30 5-26 13-25C21-24 27-30 37-31C48-32 57-27 58-19C58-14 54-11 48-10L40-9V9L46 11C51 12 53 15 51 19C47 25 40 27 32 26C24 25 19 22 11 23C2 24-3 29-13 28C-28 27-36 16-36 2Z" fill="url(#bs-body)" stroke="#dff5ee" stroke-width="1.4"/>`;
+      // 픽업 둘과 브리지, 컨트롤 노브 셋
+      [[9, 11], [27, 9]].forEach(([x, h]) => {
+        g += `<rect x="${x - 3.2}" y="${-h}" width="6.4" height="${h * 2}" rx="1.6" fill="#17110f" stroke="${chrome}" stroke-width=".6"/>`;
+        range(4).forEach((k) => { g += `<circle cx="${x}" cy="${f(lo(k) * (h / 9))}" r=".9" fill="${chrome}"/>`; });
+      });
+      g += `<rect x="-5" y="-7.5" width="9" height="15" rx="1.4" fill="${chrome}"/>`;
+      range(4).forEach((k) => { g += `<path d="M-4 ${lo(k)}H3" stroke="#6d737c" stroke-width=".7"/>`; });
+      [[-7, 17], [-15, 20], [-23, 22]].forEach(([x, y]) => { g += `<circle cx="${x}" cy="${y}" r="2.9" fill="#1b1512" stroke="${chrome}" stroke-width=".7"/><path d="M${x} ${y - 2.4}V${y - .6}" stroke="#eef4f2" stroke-width=".8" stroke-linecap="round"/>`; });
+      // 지판: 20프렛과 3·5·7·9·12(쌍)·15·17·19 자리표
+      g += `<path d="M38 ${f(-half(38))}L${nut} ${f(-half(nut))}V${f(half(nut))}L38 ${f(half(38))}Z" fill="#2a1a12" stroke="#dff5ee" stroke-width=".6"/>`;
+      range(20).forEach((i) => { const x = fret(i + 1), h = f(half(x)); g += `<path d="M${x} ${-h}V${h}" stroke="#e9dcc8" stroke-width=".55"/>`; });
+      [3, 5, 7, 9, 12, 15, 17, 19].forEach((n) => {
+        const x = f((fret(n - 1) + fret(n)) / 2);
+        g += (n === 12 ? [-2.1, 2.1] : [0]).map((y) => `<circle cx="${x}" cy="${y}" r=".95" fill="#f6ecd9"/>`).join("");
+      });
+      // 너트와 헤드스톡(튜너 넷이 한쪽에), 큰 튜닝 키
+      g += `<rect x="${nut}" y="-5" width="1.6" height="10" rx=".4" fill="#fff8ea"/>`;
+      g += `<path d="M${nut} -5 154-8.4Q161-8.9 161-4V4.6Q161 7.6 156 7.2L${nut} 5Z" fill="#20362f" stroke="#dff5ee" stroke-width=".7"/>`;
+      const posts = [131, 139.5, 148, 156.5];
+      posts.forEach((x) => {
+        g += `<circle cx="${x}" cy="-5" r="1.5" fill="${chrome}"/><path d="M${x} -6.5V-10" stroke="${chrome}" stroke-width="1.1"/><ellipse cx="${x}" cy="-12.4" rx="2.1" ry="2.6" fill="#e3e8ee" stroke="#8d939b" stroke-width=".5"/>`;
+      });
+      // 네 줄: 브리지에서 너트를 지나 튜너로. 줄마다 기본 진동의 배(腹)를 겹쳐 둔다.
+      const widths = [1.7, 1.35, 1.05, 0.8], amp = [4.6, 4, 3.4, 2.8];
+      range(4).forEach((k) => {
+        const px = posts[3 - k], m = f(nut / 2), y = f((lo(k) + hi(k)) / 2);
+        g += `<path d="M0 ${lo(k)}L${nut} ${hi(k)}L${px} -5" fill="none" stroke="#fff6e4" stroke-width="${widths[k]}" stroke-linejoin="round"/>`;
+        g += `<path class="bs-ring" opacity="0" style="animation-delay:${(k * 0.3).toFixed(2)}s" d="M0 ${lo(k)}Q${m} ${f(y - amp[k])} ${nut} ${hi(k)}Q${m} ${f(y + amp[k])} 0 ${lo(k)}Z" fill="#aef0dc" fill-opacity=".5"/>`;
+      });
+      // 오른손 두 손가락이 픽업 위에서 번갈아 줄을 뜯는다
+      [0, 0.3].forEach((d, i) => {
+        g += `<g class="bs-finger" style="animation-delay:${d}s"><path d="M${13 + i * 7.4} 20V8.6a3.2 3.2 0 0 1 6.4 0V20Z" fill="#f6d9c2" stroke="#b9876a" stroke-width=".7" stroke-linejoin="round"/></g>`;
+      });
+      let s = `<defs><linearGradient id="bs-body" gradientUnits="userSpaceOnUse" x1="-30" y1="-28" x2="40" y2="26"><stop offset="0" stop-color="#0d2e28"/><stop offset=".35" stop-color="#2f7d6b"/><stop offset=".62" stop-color="#6fd8bb"/><stop offset=".85" stop-color="#2a6f5f"/><stop offset="1" stop-color="#0b2620"/></linearGradient></defs>`;
+      s += `<g transform="translate(40.4 90.4) rotate(-20) scale(.78)">${g}</g>`;
+      // 왼쪽 위로 떠오르는 낮은 음표와 낮은음자리표
+      const note = (x, y) => `<ellipse cx="${x}" cy="${y}" rx="3.9" ry="2.9" transform="rotate(-20 ${x} ${y})"/><path d="M${x - 3.5} ${y + 0.8}V${y - 13}" stroke="${W}" stroke-width="1.3"/>`;
+      s += `<g class="cv-bob" fill="${W}" fill-opacity=".92">${note(22, 30)}${note(38, 25)}<path d="M18.5 15.6 41.6 8.6V11.4L18.5 18.4Z"/></g>`;
+      s += `<g class="cv-bob" style="animation-delay:.6s" fill="${W}" fill-opacity=".92"><path d="M62 10a6 6 0 0 1 6 6c0 7-6 12-12 15 5-5 9-9 9-14a3 3 0 0 0-3-4 2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 1 0-7.8Z"/><circle cx="72" cy="14" r="1.4"/><circle cx="72" cy="19" r="1.4"/></g>`;
+      // 오른쪽 아래: 뜯는 음의 도수가 박마다 켜진다 (R 5 8 5)
+      ["R", "5", "8", "5"].forEach((c, i) => {
+        const x = 128 + i * 19;
+        s += `<g class="bs-beat" style="animation-delay:${(i * 0.6).toFixed(1)}s"><circle cx="${x}" cy="112" r="7.6" fill="none" stroke="${W}" stroke-opacity=".55" stroke-width="1.4"/><text x="${x}" y="115.4" text-anchor="middle" font-size="9" font-weight="700" fill="${W}" fill-opacity=".8">${c}</text></g>`;
+      });
+      return svg(s);
+    },
     // DRAM 셀 어레이: 워드라인·비트라인 위에서 비트가 깜박인다
     memory() {
       const r = rnd(7); let s = "";
@@ -181,8 +365,7 @@
       });
       return svg(s);
     },
-    // 플라즈마: 위아래 전극 사이에서 글로가 RF에 맞춰 숨 쉬고, 전자는 벌크에서 떠돌며,
-    // 이온은 아래 시스(점선 아래 어두운 띠)를 지나 웨이퍼로 곧게 떨어진다. 왼쪽 사인파는 RF 전원이다.
+    // 플라즈마: RF 전원이 위아래 전극 사이에 글로를 켜고, 전자는 떠돌며 이온은 시스를 지나 웨이퍼로 떨어진다.
     plasma() {
       let s = `<rect x="40" y="8" width="150" height="7" rx="2" fill="${W}" fill-opacity=".6"/>`;
       s += `<rect x="40" y="108" width="150" height="7" rx="2" fill="${W}" fill-opacity=".6"/><rect x="52" y="104" width="126" height="4" rx="1" fill="${W}" fill-opacity=".85"/>`;
@@ -375,6 +558,32 @@
       });
       return svg(s);
     },
+    // 카메라: 미러리스 바디 정면. 렌즈 속 조리개 날개가 열리고 닫히고, 빛줄기가 렌즈로 흘러든다
+    camera() {
+      const cx = 128, cy = 72; let s = "";
+      // 왼쪽에서 들어오는 빛줄기
+      [44, 60, 76, 92].forEach((y, k) => {
+        const d = `M8 ${y}L${cx - 40} ${(cy + (y - cy) * 0.55).toFixed(1)}`;
+        s += `<path d="${d}" stroke="${W}" stroke-opacity=".18" stroke-width="1.2"/><path class="cv-flow" style="animation-delay:-${(k * 0.23).toFixed(2)}s" d="${d}" stroke="#ffd27a" stroke-width="1.6" stroke-dasharray="4 10" stroke-linecap="round"/>`;
+      });
+      // 바디: 뷰파인더 혹, 그립, 셔터 버튼과 다이얼
+      s += `<path d="M66 34H104L110 22H146L152 34H190Q196 34 196 40V114Q196 120 190 120H72Q66 120 66 114Z" fill="${W}" fill-opacity=".26" stroke="${W}" stroke-opacity=".75" stroke-width="1.3" stroke-linejoin="round"/>`;
+      s += `<path d="M176 34V120" stroke="${W}" stroke-opacity=".35"/><rect x="178" y="28" width="12" height="6" rx="2" fill="${W}" fill-opacity=".85"/><rect x="160" y="29" width="13" height="5" rx="1.5" fill="${W}" fill-opacity=".5"/>`;
+      s += `<circle class="cv-blink" cx="84" cy="44" r="2.6" fill="#ff8a8a"/>`;
+      // 렌즈: 마운트 링, 경통, 앞 유리
+      s += `<circle cx="${cx}" cy="${cy}" r="40" fill="#000" fill-opacity=".22" stroke="${W}" stroke-width="2.4"/>`;
+      s += `<circle cx="${cx}" cy="${cy}" r="34" fill="none" stroke="${W}" stroke-opacity=".45" stroke-dasharray="2 3"/>`;
+      s += `<circle cx="${cx}" cy="${cy}" r="27" fill="${W}" fill-opacity=".14" stroke="${W}" stroke-opacity=".6"/>`;
+      const hex = range(7).map((k) => { const a = ((2 * Math.PI) / 7) * k + 0.3; return `${(cx + 13 * Math.cos(a)).toFixed(1)},${(cy + 13 * Math.sin(a)).toFixed(1)}`; }).join(" ");
+      let blades = "";
+      range(7).forEach((k) => {
+        const a = ((2 * Math.PI) / 7) * k + 0.3, b = a + 1.15;
+        blades += `<line x1="${(cx + 13 * Math.cos(a)).toFixed(1)}" y1="${(cy + 13 * Math.sin(a)).toFixed(1)}" x2="${(cx + 26 * Math.cos(b)).toFixed(1)}" y2="${(cy + 26 * Math.sin(b)).toFixed(1)}" stroke="${W}" stroke-opacity=".7" stroke-width="1.2"/>`;
+      });
+      s += `<g class="cv-iris" style="transform-origin:${cx}px ${cy}px"><polygon points="${hex}" fill="#000" fill-opacity=".45" stroke="${W}" stroke-width="1.3"/>${blades}</g>`;
+      s += `<path d="M${cx - 18} ${cy - 16}A24 24 0 0 1 ${cx + 4} ${cy - 24}" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="2" stroke-linecap="round"/>`;
+      return svg(s);
+    },
     // 소자 물리: pn 접합의 에너지 밴드가 휘고, 전자와 정공이 떠 있다
     band() {
       let s = "";
@@ -514,6 +723,22 @@
       range(4).forEach((k) => { s += `<path d="M10 ${30 + k * 24}H196" stroke="${W}" stroke-opacity=".1"/>`; });
       s += `<svg x="92" y="0" width="108" height="130" overflow="hidden"><g class="cv-slide" style="--dx:-73px;animation-duration:1.6s"><path d="M0 104${(beat + " ").repeat(4)}" fill="none" stroke="#ff8a9a" stroke-width="2" stroke-linejoin="round"/></g></svg>`;
       s += `<path class="cv-hit" d="M140 64 116 40c-14-14 4-34 18-20l6 6 6-6c14-14 32 6 18 20Z" fill="${W}" fill-opacity=".75" stroke="${W}" stroke-width="1.4"/>`;
+      return svg(s);
+    },
+    // 해부학: 뼈대 위로 CT 단면선이 오르내리고, 오른쪽에 가슴 높이 가로 단면이 보인다
+    skeleton() {
+      const A = ANATOMY, rest = 1, [px, py, pw, ph] = A.panel, y = A.slices[rest].y, scan = "#7ee0ec";
+      const ct = (v) => "#" + [3, 24, 30].map((c) => Math.round(c + (255 - c) * v).toString(16).padStart(2, "0")).join(""); // 검은 화면 → 흰 뼈
+      let s = `<rect x="${px}" y="${py}" width="${pw}" height="${ph}" rx="4" fill="${ct(0)}" fill-opacity=".9"/>`;
+      s += `<g transform="scale(${A.q})"><path d="${A.skin}" fill="${W}" fill-opacity=".16" stroke="${W}" stroke-opacity=".55" stroke-width="${0.7 / A.q}"/><path d="${A.bones}" fill="${W}" fill-opacity=".88"/>`;
+      A.slices.forEach((sl, k) => {
+        s += `<g class="an-slice" style="--k:${k - rest}"${k === rest ? "" : ' opacity="0"'}>`;
+        s += sl.layers.map(([v, d]) => `<path d="${d}" fill="${ct(v)}" fill-rule="evenodd"/>`).join("") + "</g>";
+      });
+      s += "</g>";
+      const to = A.slices.map((sl, k) => `;--y${k}:${(sl.y - y).toFixed(1)}px`).join("");
+      s += `<g class="an-scan" style="--k:${-rest}${to}"><path d="M${A.fig[0] - 5} ${y}H${px - 4}" stroke="${scan}" stroke-opacity=".3" stroke-width="4"/>`;
+      s += `<path d="M${A.fig[0] - 5} ${y}H${px - 4}" stroke="${scan}" stroke-width="1.3"/><circle cx="${px - 4}" cy="${y}" r="2" fill="${scan}"/></g>`;
       return svg(s);
     },
     // 오선과 음표, 아래에서 스펙트럼 막대가 출렁인다
@@ -783,6 +1008,286 @@
       return svg(s);
     },
   };
+
+  // 이하는 SciBook(science-books) 서가 표지를 그대로 옮긴 것이다. 책 id를 motif로 쓰고, 움직임은 .sc-* 클래스가 맡는다.
+  const hex = (cx, cy, r) => Array.from({ length: 6 }, (_, i) => { const a = Math.PI / 6 + (i * Math.PI) / 3; return `${(cx + r * Math.cos(a)).toFixed(1)},${(cy + r * Math.sin(a)).toFixed(1)}`; }).join(" ");
+  // 함수 y=f(x)를 x0..x1 구간에서 꺾은선 점 목록으로 (B파처럼 비스듬히 누이려면 skew)
+  const pts = (f, x0, x1, step = 2, skew = 0) => { const out = []; for (let x = x0; x <= x1; x += step) { const y = f(x); out.push(`${(x + (skew * (y - 68)) / 16).toFixed(1)},${y.toFixed(1)}`); } return out.join(" "); };
+  const CYCLE = "M122 24Q134 48 156 54Q172 66 184 92Q160 88 142 78Q128 58 122 24Z";
+  const CURVE = "M108 110L126 44Q132 36 144 33Q162 28 172 34Q182 42 186 56";
+  const SCI = {
+    // 삼각 플라스크와 피어오르는 기포, 옆에는 분자 고리
+    "general-chemistry": () => svg(
+      `<path d="M70 14h28M76 14v34l-30 58a6 6 0 0 0 5 9h66a6 6 0 0 0 5-9l-30-58V14" fill="none" stroke="${W}" stroke-width="3" stroke-linejoin="round"/>` +
+      `<path d="M56 86h56l11 20a6 6 0 0 1-5 9H50a6 6 0 0 1-5-9z" fill="${W}" fill-opacity=".3"/>` +
+      [[70, 98, 4, 0], [88, 92, 3, .5], [80, 76, 2.6, 1], [86, 58, 2.2, 1.4]].map(([x, y, r, d]) => `<circle class="sc-pulse" style="animation-delay:${d}s" cx="${x}" cy="${y}" r="${r}" fill="${W}"/>`).join("") +
+      `<polygon points="${hex(158, 48, 20)}" fill="none" stroke="${W}" stroke-width="2.4" stroke-opacity=".85"/><circle cx="158" cy="48" r="10" fill="none" stroke="${W}" stroke-opacity=".5" stroke-width="1.6"/>` +
+      `<path d="M158 28V12M175 58l12 7M141 58l-12 7" stroke="${W}" stroke-width="2" stroke-opacity=".6"/>`),
+    // 행성 둘레를 도는 위성과 던진 공의 포물선
+    "general-physics": () => svg(
+      `<ellipse cx="100" cy="65" rx="58" ry="58" fill="none" stroke="${W}" stroke-opacity=".35" stroke-dasharray="3 5"/>` +
+      `<circle cx="100" cy="65" r="22" fill="${W}" fill-opacity=".85"/><path d="M80 58q20 8 40 0M82 74q18 6 36 0" stroke="#0003" stroke-width="3" fill="none"/>` +
+      `<g class="sc-spin"><circle cx="158" cy="65" r="5.5" fill="${W}"/><path d="M158 65v-26" stroke="${W}" stroke-width="2.2"/><path d="M154 44l4-7 4 7" fill="${W}"/></g>` +
+      `<path class="sc-flow" d="M14 122q34-80 68 0" fill="none" stroke="${W}" stroke-width="2" stroke-dasharray="4 6" stroke-opacity=".7"/>`),
+    // 골격 구조식: 벤젠 고리에 이어진 사슬과 굽은 전자 화살표
+    "organic-chemistry": () => svg(
+      `<polygon points="${hex(62, 70, 26)}" fill="none" stroke="${W}" stroke-width="3"/><circle cx="62" cy="70" r="14" fill="none" stroke="${W}" stroke-width="2" stroke-opacity=".7"/>` +
+      `<path d="M84.5 57l22 13 22-13 22 13 22-13" fill="none" stroke="${W}" stroke-width="3" stroke-linejoin="round"/><path d="M128.5 57V34M126 57V34" stroke="${W}" stroke-width="2.4"/>` +
+      `<text x="121" y="28" fill="${W}" font-size="13" font-weight="700" font-family="sans-serif">O</text>` +
+      `<path class="sc-pulse" d="M150 88q14 22-12 26" fill="none" stroke="${W}" stroke-width="2.2"/><path d="M142 108l-6 6 9 2" fill="none" stroke="${W}" stroke-width="2.2"/>`),
+    // 원기둥을 돌아 흐르는 유선
+    "fluid-mechanics": () => svg(
+      [-46, -30, -16, -6, 6, 16, 30, 46].map((d) => { const y = (65 + Math.sign(d) * Math.hypot(d, 22)).toFixed(1); return `<path class="sc-flow" d="M4 ${65 + d}C60 ${65 + d} 70 ${y} 100 ${y}S140 ${65 + d} 196 ${65 + d}" fill="none" stroke="${W}" stroke-width="2" stroke-dasharray="10 10" stroke-opacity="${(0.4 + 12 / (Math.abs(d) + 20)).toFixed(2)}"/>`; }).join("") +
+      `<circle cx="100" cy="65" r="17" fill="${W}" fill-opacity=".85"/>`),
+    // 수소 원자 에너지 준위: 위 준위에서 떨어지는 전자와 튀어나가는 광자, 위에는 파속
+    "modern-physics": () => svg(
+      [1, 2, 3, 4, 99].map((n) => { const y = (112 - 72 * (1 - 1 / (n * n))).toFixed(1); return `<path d="M16 ${y}h76" stroke="${W}" stroke-width="${n === 1 ? 3 : 2}" stroke-opacity="${n === 99 ? .35 : .85}"${n === 99 ? ' stroke-dasharray="3 4"' : ""}/>`; }).join("") +
+      `<g class="sc-pulse"><path d="M54 52v52" stroke="${W}" stroke-width="2.2"/><path d="M48 98l6 10 6-10z" fill="${W}"/></g><circle cx="54" cy="48" r="4.5" fill="${W}"/>` +
+      `<polyline points="${pts((x) => 82 - 8 * Math.sin((x - 64) / 4.2), 64, 186)}" fill="none" stroke="${W}" stroke-width="1.6" stroke-opacity=".3"/>` +
+      `<polyline class="sc-run" pathLength="100" points="${pts((x) => 82 - 8 * Math.sin((x - 64) / 4.2), 64, 186)}" fill="none" stroke="${W}" stroke-width="2.6"/>` +
+      `<polyline points="${pts((x) => 34 - 20 * Math.exp(-((x - 150) ** 2) / 420) * Math.cos((x - 150) / 3.4), 108, 192)}" fill="none" stroke="${W}" stroke-width="2" stroke-opacity=".8"/>` +
+      `<path d="M108 34h84" stroke="${W}" stroke-opacity=".3" stroke-dasharray="2 4"/>`),
+    // 원자 격자를 지나가는 격자 진동(포논)과 띠 간격을 뛰어넘는 전자
+    "solid-state": () => svg(
+      `<path d="${[0, 1, 2, 3].map((j) => `M18 ${28 + 24 * j}h112`).join("")}${[0, 1, 2, 3, 4, 5].map((i) => `M${20 + 22 * i} 26v76`).join("")}" stroke="${W}" stroke-opacity=".25" stroke-width="1.4"/>` +
+      [0, 1, 2, 3, 4, 5].map((i) => `<g class="sc-sway" style="animation-delay:${(-i * 0.27).toFixed(2)}s">${[0, 1, 2, 3].map((j) => `<circle cx="${20 + 22 * i}" cy="${28 + 24 * j}" r="${(i + j) % 2 ? 4.2 : 6}" fill="${W}" fill-opacity="${(i + j) % 2 ? .6 : .95}"/>`).join("")}</g>`).join("") +
+      `<rect x="148" y="18" width="44" height="26" rx="2" fill="${W}" fill-opacity=".18" stroke="${W}" stroke-width="2"/><rect x="148" y="84" width="44" height="26" rx="2" fill="${W}" fill-opacity=".7"/>` +
+      `<path d="M140 46v36M137 49l3-5 3 5M137 79l3 5 3-5" fill="none" stroke="${W}" stroke-width="1.4" stroke-opacity=".6"/>` +
+      `<path d="M170 80V48" stroke="${W}" stroke-width="1.6" stroke-dasharray="2 4" stroke-opacity=".6"/><circle class="sc-hop" cx="170" cy="78" r="4.5" fill="${W}"/>`),
+    // 진행하는 평면 전자기파: 세로로 출렁이는 E, 비스듬히 누운 B
+    electromagnetics: () => svg(
+      `<defs><clipPath id="sc-em-clip"><rect x="10" y="0" width="180" height="130"/></clipPath></defs>` +
+      `<path d="M10 68h182M186 63l8 5-8 5" fill="none" stroke="${W}" stroke-width="2" stroke-opacity=".7"/>` +
+      `<g clip-path="url(#sc-em-clip)"><g class="sc-travel">` +
+      `<path d="${Array.from({ length: 30 }, (_, i) => { const x = -46 + i * 8; return `M${x} 68V${(68 - 40 * Math.sin((x - 10) * Math.PI / 28)).toFixed(1)}`; }).join("")}" stroke="${W}" stroke-width="1.2" stroke-opacity=".35"/>` +
+      `<polyline points="${pts((x) => 68 - 40 * Math.sin((x - 10) * Math.PI / 28), -46, 196)}" fill="none" stroke="${W}" stroke-width="2.6"/>` +
+      `<polyline points="${pts((x) => 68 + 16 * Math.sin((x - 10) * Math.PI / 28), -46, 196, 2, 14)}" fill="none" stroke="${W}" stroke-width="2" stroke-opacity=".6" stroke-dasharray="4 3"/>` +
+      `</g></g>` +
+      `<text x="14" y="20" fill="${W}" font-size="13" font-weight="700" font-style="italic" font-family="serif">E</text><text x="14" y="118" fill="${W}" fill-opacity=".7" font-size="13" font-weight="700" font-style="italic" font-family="serif">B</text>`),
+    // 쌓여 가는 히스토그램과 그 위의 정규 분포 곡선, 위에서 떨어지는 표본
+    "probability-statistics": () => svg(
+      Array.from({ length: 11 }, (_, i) => { const h = 76 * Math.exp(-((i - 5) ** 2) / (2 * 2.1 ** 2)); return `<rect class="sc-grow" style="animation-delay:${(-Math.abs(i - 5) * 0.25 - i * 0.07).toFixed(2)}s" x="${23 + i * 14}" y="${(112 - h).toFixed(1)}" width="12" height="${h.toFixed(1)}" fill="${W}" fill-opacity=".42"/>`; }).join("") +
+      `<path d="M14 112h172" stroke="${W}" stroke-width="2.4"/>` +
+      `<polyline points="${pts((x) => 112 - 82 * Math.exp(-((x - 100) ** 2) / (2 * 30 ** 2)), 14, 186)}" fill="none" stroke="${W}" stroke-width="2.6"/>` +
+      `<path d="M100 30v82" stroke="${W}" stroke-opacity=".45" stroke-dasharray="3 4"/>` +
+      [[86, 0], [100, .6], [114, 1.2], [93, 1.8]].map(([x, d]) => `<circle class="sc-fall" style="animation-delay:${d}s" cx="${x}" cy="14" r="3.2" fill="${W}"/>`).join("")),
+    // 기체를 가둔 실린더와 피스톤, 옆에는 P–V 그림 위를 도는 열기관 순환
+    "thermal-physics": () => svg(
+      `<path d="M18 30v82h62V30" fill="none" stroke="${W}" stroke-width="3" stroke-linejoin="round"/>` +
+      `<g class="sc-piston"><rect x="21" y="38" width="56" height="9" rx="1.5" fill="${W}"/><path d="M49 38V8" stroke="${W}" stroke-width="3.4"/></g>` +
+      [[30, 66, 0], [52, 60, .3], [68, 74, .6], [38, 88, .9], [60, 94, .2], [28, 102, .5], [70, 102, .8], [48, 80, .4]].map(([x, y, d]) => `<circle class="sc-jit" style="animation-delay:-${d}s" cx="${x}" cy="${y}" r="3.2" fill="${W}" fill-opacity=".85"/>`).join("") +
+      `<path class="sc-pulse" d="M28 124q4-6 0-10M44 124q4-6 0-10M60 124q4-6 0-10M76 124q4-6 0-10" fill="none" stroke="${W}" stroke-width="1.8" stroke-opacity=".7"/>` +
+      `<path d="M106 10v100h88" fill="none" stroke="${W}" stroke-width="2" stroke-opacity=".7"/>` +
+      `<path d="${CYCLE}" fill="${W}" fill-opacity=".14" stroke="${W}" stroke-width="2.4" stroke-linejoin="round"/>` +
+      `<circle class="sc-fly" style="offset-path:path('${CYCLE}');animation-duration:4s;animation-timing-function:linear" r="4.5" fill="${W}"/>` +
+      `<text x="110" y="18" fill="${W}" fill-opacity=".8" font-size="11" font-style="italic" font-family="serif">P</text><text x="184" y="124" fill="${W}" fill-opacity=".8" font-size="11" font-style="italic" font-family="serif">V</text>`),
+    // 체심입방 단위 격자와 응력–변형률 곡선을 따라 끝내 끊어지는 시편
+    "materials-science": () => svg(
+      `<path d="M16 54h50v50H16zM38 36h50v50M16 54l22-18M66 54l22-18M66 104l22-18" fill="none" stroke="${W}" stroke-width="2.2" stroke-linejoin="round"/>` +
+      `<path d="M38 36v50h50M16 104l22-18" fill="none" stroke="${W}" stroke-width="1.6" stroke-opacity=".45" stroke-dasharray="3 3"/>` +
+      `<path d="M16 54L88 86M66 54L38 86M16 104L88 36M66 104L38 36" stroke="${W}" stroke-width="1" stroke-opacity=".25"/>` +
+      [[16, 54], [66, 54], [16, 104], [66, 104], [38, 36], [88, 36], [38, 86], [88, 86]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="5.2" fill="${W}" fill-opacity="${x === 38 && y === 86 ? .55 : .95}"/>`).join("") +
+      `<circle class="sc-pulse" cx="52" cy="70" r="7.5" fill="${W}"/>` +
+      `<path d="M108 10v100h86" fill="none" stroke="${W}" stroke-width="2" stroke-opacity=".7"/>` +
+      `<path d="${CURVE}" fill="none" stroke="${W}" stroke-width="2.6" stroke-linejoin="round"/><path d="M182 52l8 8M190 52l-8 8" stroke="${W}" stroke-width="2"/>` +
+      `<path d="M126 44v66" stroke="${W}" stroke-opacity=".35" stroke-dasharray="2 4"/>` +
+      `<circle class="sc-fly" style="offset-path:path('${CURVE}');animation-duration:3.4s" r="4.5" fill="${W}"/>` +
+      `<text x="112" y="18" fill="${W}" fill-opacity=".8" font-size="11" font-style="italic" font-family="serif">σ</text><text x="184" y="124" fill="${W}" fill-opacity=".8" font-size="11" font-style="italic" font-family="serif">ε</text>`),
+    // 블로흐 구 위에서 세차하는 스핀과, 장벽에 부딪혀 투과·반사로 갈라지는 파속
+    "quantum-mechanics": () => svg(
+      `<circle cx="50" cy="66" r="40" fill="none" stroke="${W}" stroke-width="2.4"/>` +
+      `<ellipse cx="50" cy="66" rx="40" ry="11" fill="none" stroke="${W}" stroke-width="1.4" stroke-opacity=".45" stroke-dasharray="3 3"/>` +
+      `<path d="M50 20v92" stroke="${W}" stroke-width="1.2" stroke-opacity=".4" stroke-dasharray="2 4"/>` +
+      `<path d="M50 66L22 38M50 66L78 38" stroke="${W}" stroke-width="1.2" stroke-opacity=".35"/>` +
+      `<ellipse cx="50" cy="38" rx="28" ry="7" fill="none" stroke="${W}" stroke-width="1.8" stroke-opacity=".7"/>` +
+      `<circle class="sc-fly" style="offset-path:path('M22 38a28 7 0 1 0 56 0a28 7 0 1 0 -56 0');animation-duration:2.4s;animation-timing-function:linear" r="5" fill="${W}"/>` +
+      `<circle cx="50" cy="66" r="3.4" fill="${W}"/>` +
+      `<path d="M104 104h88" stroke="${W}" stroke-width="2" stroke-opacity=".7"/><rect x="146" y="48" width="7" height="56" fill="${W}" fill-opacity=".55"/>` +
+      `<polyline points="${pts((x) => 82 - 26 * Math.exp(-((x - 124) ** 2) / 70) * Math.cos((x - 124) / 2.6), 104, 144, 1.5)}" fill="none" stroke="${W}" stroke-width="2.4"/>` +
+      `<polyline class="sc-pulse" points="${pts((x) => 82 - 13 * Math.exp(-((x - 174) ** 2) / 60) * Math.cos((x - 174) / 2.6), 156, 194, 1.5)}" fill="none" stroke="${W}" stroke-width="2"/>`),
+  };
+  Object.assign(M, SCI);
+
+  // MathBooks covers (math-books), MIT: linear, calculus, ode, numerical.
+  const poly = (f, x0, x1, step = 2) => { const out = []; for (let x = x0; x <= x1 + 1e-9; x += step) out.push(`${+x.toFixed(1)},${+f(x).toFixed(1)}`); return out; };
+  const MATH = {
+    linear() {
+      // 단위원이 대칭 행렬 [[2,1],[1,2]]로 타원이 된다. 화면 좌표(y 아래)에서는 matrix(2,-1,-1,2)이고,
+      // 격자·단위원·벡터가 함께 변환되는 동안 두 고유벡터만 제 방향을 지킨 채 3배·1배로 늘어난다.
+      const cx = 112, cy = 66, u = 20, c = Math.SQRT1_2, ns = ' vector-effect="non-scaling-stroke"';
+      let s = "", g = "";
+      range(11).forEach((k) => { const d = (k - 5) * u; s += `<path d="M${cx + d} -10V140M10 ${cy + d}H214" stroke="${W}" stroke-opacity=".08"/>`; });
+      const ell = range(73).map((i) => { const t = (i / 72) * 2 * Math.PI, x = Math.cos(t), y = Math.sin(t); return `${(cx + u * (2 * x + y)).toFixed(1)},${(cy - u * (x + 2 * y)).toFixed(1)}`; }).join(" ");
+      s += `<polygon points="${ell}" fill="${W}" fill-opacity=".1" stroke="${W}" stroke-opacity=".45" stroke-dasharray="3 3"/>`;
+      s += `<path d="M${cx - 64 * c} ${cy + 64 * c}L${cx + 64 * c} ${cy - 64 * c}M${cx - 30 * c} ${cy - 30 * c}L${cx + 30 * c} ${cy + 30 * c}" stroke="${W}" stroke-opacity=".3" stroke-dasharray="5 4"/>`;
+      range(5).forEach((k) => { const d = (k - 2) * u; g += `<path d="M${cx + d} ${cy - 2 * u}V${cy + 2 * u}M${cx - 2 * u} ${cy + d}H${cx + 2 * u}" stroke="${W}" stroke-opacity=".28"${ns}/>`; });
+      g += `<circle cx="${cx}" cy="${cy}" r="${u}" fill="${W}" fill-opacity=".14" stroke="${W}" stroke-width="1.8"${ns}/>`;
+      const arrow = (x, y, col, w = 2.6) => `<path d="M${cx} ${cy}L${x} ${y}" stroke="${col}" stroke-width="${w}" stroke-linecap="round"${ns}/><circle cx="${x}" cy="${y}" r="2.4" fill="${col}"/>`;
+      g += arrow(cx + u * c, cy - u * c, "#ffd43b") + arrow(cx + u * c, cy + u * c, "#7deaa0") + arrow(cx + u, cy, W, 1.6);
+      s += `<g class="mt-map" style="transform-origin:${cx}px ${cy}px">${g}</g>`;
+      s += `<text x="${cx + 3 * u * c + 6}" y="${cy - 3 * u * c - 2}" fill="${W}" font-size="10" font-family="monospace">λ=3</text><text x="${cx + u * c + 8}" y="${cy + u * c + 12}" fill="${W}" font-size="10" font-family="monospace">λ=1</text>`;
+      return svg(s);
+    },
+    calculus() {
+      // 접선이 곡선을 따라 미끄러지며 기울기(f′)를 바꾸고, 그 아래 리만 합 막대가 차례로 넓이(∫)를 채운다.
+      const f = (x) => 104 - 62 * Math.exp(-((x - 112) ** 2) / 1800) - 0.12 * (x - 40);
+      let s = `<path d="M24 108H190M30 112V16" stroke="${W}" stroke-opacity=".45"/>`;
+      s += `<polygon points="70,108 ${poly(f, 70, 132).join(" ")} 132,108" fill="${W}" fill-opacity=".1"/>`;
+      range(8).forEach((i) => { const x = 70 + i * 8, y = f(x + 4); s += `<rect class="mt-sum" style="animation-delay:${(i * 0.18 - 1.6).toFixed(2)}s" x="${x}" y="${y.toFixed(1)}" width="7" height="${(108 - y).toFixed(1)}" fill="${W}" fill-opacity=".22"/>`; });
+      const curve = poly(f, 30, 188);
+      s += `<polyline points="${curve.join(" ")}" fill="none" stroke="${W}" stroke-width="2.4"/>`;
+      // 수평 접선 조각을 곡선 경로 위에 얹고 offset-rotate:auto로 곡선 방향을 따라 돌린다.
+      const track = "M" + poly(f, 40, 182).join("L");
+      s += `<g class="mt-tangent" style="offset-path:path('${track}')"><path d="M-30 0H30" stroke="#ffd43b" stroke-width="2"/><circle r="3.4" fill="#ffd43b"/></g>`;
+      s += `<text x="86" y="122" fill="${W}" font-size="10" font-family="monospace">∫f dx</text><text x="168" y="${(f(160) - 14).toFixed(1)}" fill="${W}" font-size="10" font-family="monospace">f′</text>`;
+      return svg(s);
+    },
+    ode() {
+      // 감쇠 진동자의 방향장과 궤적: x′ = y, y′ = −x − 0.35y. 점이 방향장을 따라 평형점으로 감겨 들어간다.
+      const cx = 100, cy = 65, k = 13 * 1.25; let s = "";
+      for (let i = -6; i <= 6; i++) for (let j = -4; j <= 4; j++) {
+        const x = i * 0.6, y = j * 0.6, dx = y, dy = -x - 0.35 * y, n = Math.hypot(dx, dy) || 1;
+        const px = cx + x * k, py = cy - y * k, L = 5;
+        s += `<path d="M${(px - L * dx / n).toFixed(1)} ${(py + L * dy / n).toFixed(1)}L${(px + L * dx / n).toFixed(1)} ${(py - L * dy / n).toFixed(1)}" stroke="${W}" stroke-opacity=".32" stroke-width="1.2"/>`;
+      }
+      let x = 3.2, y = 0; const path = [];
+      for (let n = 0; n < 900; n++) { if (n % 3 === 0) path.push(`${(cx + x * k).toFixed(1)},${(cy - y * k).toFixed(1)}`); const dx = y, dy = -x - 0.35 * y; x += dx * 0.02; y += dy * 0.02; }
+      const d = "M" + path.join("L");
+      s += `<path d="${d}" fill="none" stroke="#ffd43b" stroke-opacity=".3" stroke-width="1.6"/>`;
+      s += `<path class="mt-trace" style="animation-delay:-4.6s" pathLength="1" stroke-dasharray="1" d="${d}" fill="none" stroke="#ffd43b" stroke-width="2.2"/>`;
+      s += `<circle cx="${cx}" cy="${cy}" r="2.6" fill="${W}"/>`;
+      s += `<circle class="mt-ride" style="offset-path:path('${d}');animation-delay:-4.6s" r="3.4" fill="#ffd43b"/>`;
+      return svg(s);
+    },
+    numerical() {
+      // 뉴턴 방법으로 √2 찾기: f(x) = x² − 2의 접선이 x축과 만나는 곳이 다음 근삿값이다. 2.8 → 1.76 → 1.45 → 1.414.
+      const X = (x) => 30 + 66 * (x - 0.6), Y = (v) => 92 - 11 * v, f = (x) => x * x - 2;
+      let s = `<path d="M22 ${Y(0)}H194M${X(0.8)} 124V10" stroke="${W}" stroke-opacity=".45"/>`;
+      s += `<polyline points="${range(48).map((i) => { const x = 0.6 + i * 0.05; return `${X(x).toFixed(1)},${Y(f(x)).toFixed(1)}`; }).join(" ")}" fill="none" stroke="${W}" stroke-width="2.4"/>`;
+      let x = 2.8; const zig = [[X(x), Y(0)]], xs = [x];
+      for (let n = 0; n < 3; n++) { const nx = x - f(x) / (2 * x); zig.push([X(x), Y(f(x))], [X(nx), Y(0)]); x = nx; xs.push(x); }
+      const d = "M" + zig.map(([a, b]) => `${a.toFixed(1)} ${b.toFixed(1)}`).join("L");
+      // 접선은 곡선 위 점에서 x축 너머까지 조금 더 그어 둔다.
+      xs.slice(0, 3).forEach((x0) => { const m = 2 * x0, x1 = x0 - f(x0) / m - 0.25; s += `<path d="M${X(x0).toFixed(1)} ${Y(f(x0)).toFixed(1)}L${X(x1).toFixed(1)} ${Y(f(x0) + m * (x1 - x0)).toFixed(1)}" stroke="${W}" stroke-opacity=".3"/>`; });
+      s += `<path d="${d}" fill="none" stroke="#ffd43b" stroke-opacity=".3" stroke-width="1.4"/>`;
+      s += `<path class="mt-trace" style="animation-delay:-4.6s" pathLength="1" stroke-dasharray="1" d="${d}" fill="none" stroke="#ffd43b" stroke-width="2" stroke-linejoin="round"/>`;
+      xs.forEach((x0, i) => { s += `<circle cx="${X(x0).toFixed(1)}" cy="${Y(0)}" r="${i === 3 ? 3.2 : 2}" fill="${i === 3 ? "#7deaa0" : W}"/>`; });
+      s += `<circle class="mt-ride" style="offset-path:path('${d}');animation-delay:-4.6s" r="3.4" fill="#ffd43b"/>`;
+      s += `<text x="${X(Math.SQRT2) - 10}" y="${Y(0) + 15}" fill="${W}" font-size="10" font-family="monospace">√2</text>`;
+      s += `<text x="${X(xs[0]) - 8}" y="${Y(0) + 15}" fill="${W}" fill-opacity=".8" font-size="9" font-family="monospace">x₀</text>`;
+      s += `<text x="${X(0.8) + 6}" y="20" fill="${W}" fill-opacity=".85" font-size="10" font-family="monospace">x−f/f′</text>`;
+      return svg(s);
+    },
+  };
+  Object.assign(M, MATH);
+  // ConstructionBooks covers (construction-books), MIT: beam, concrete, soil, tower, rebar, bridge, crane, bim.
+  const CY = "#ffd43b";
+  const cf = (v) => +v.toFixed(1);
+  const CONSTRUCTION = {
+    // 구조역학: 등분포 하중이 내리누르는 단순보와 그 아래 포물선 휨모멘트도(wL²/8).
+    beam() {
+      const x0 = 22, x1 = 178, y = 58;
+      let s = `<g class="cs-press">`;
+      range(9).forEach((i) => { const x = cf(x0 + ((x1 - x0) * i) / 8); s += `<path d="M${x} 22V${y - 6}" stroke="${W}" stroke-width="1.6"/><path d="M${x - 3.5} ${y - 9}L${x} ${y - 3}L${x + 3.5} ${y - 9}" fill="${W}"/>`; });
+      s += `<path d="M${x0} 22H${x1}" stroke="${W}" stroke-width="1.6"/></g>`;
+      s += `<path d="M${x0} ${y}H${x1}" stroke="${W}" stroke-width="4.5" stroke-linecap="round"/>`;
+      s += `<path d="M${x0} ${y + 2}l-8 13h16z" fill="none" stroke="${W}" stroke-width="1.8"/><path d="M${x1} ${y + 2}l-8 11h16z" fill="none" stroke="${W}" stroke-width="1.8"/><circle cx="${x1 - 4}" cy="${y + 16}" r="2.4" fill="none" stroke="${W}" stroke-width="1.4"/><circle cx="${x1 + 4}" cy="${y + 16}" r="2.4" fill="none" stroke="${W}" stroke-width="1.4"/>`;
+      const pts = range(41).map((i) => { const t = i / 40, x = x0 + (x1 - x0) * t; return `${cf(x)},${cf(y + 24 + 34 * 4 * t * (1 - t))}`; }).join(" ");
+      s += `<path d="M${x0} ${y + 24}H${x1}" stroke="${W}" stroke-opacity=".45"/>`;
+      s += `<polygon class="cs-bmd" points="${x0},${y + 24} ${pts} ${x1},${y + 24}" fill="${CY}" fill-opacity=".28" stroke="${CY}" stroke-width="2"/>`;
+      s += `<text x="100" y="${y + 52}" text-anchor="middle" fill="${W}" font-size="10" font-family="monospace">M = wL²/8</text>`;
+      return svg(s);
+    },
+    // 건설재료: 공시체 압축 시험. 위아래 가압판이 누르고 원기둥에 사선 균열이 번쩍인다.
+    concrete() {
+      let s = `<g class="cs-squeeze"><rect x="62" y="12" width="76" height="9" rx="2" fill="${W}" fill-opacity=".85"/><path d="M100 2V12" stroke="${W}" stroke-width="3"/></g>`;
+      s += `<rect x="62" y="110" width="76" height="9" rx="2" fill="${W}" fill-opacity=".85"/>`;
+      s += `<rect x="72" y="22" width="56" height="88" rx="4" fill="${W}" fill-opacity=".1" stroke="${W}" stroke-width="2"/>`;
+      const rnd = ((seed) => () => ((seed = (seed * 16807) % 2147483647) / 2147483647))(7);
+      range(26).forEach(() => { const x = 76 + rnd() * 48, y = 27 + rnd() * 78, r = 1.4 + rnd() * 3; s += `<circle cx="${cf(x)}" cy="${cf(y)}" r="${cf(r)}" fill="${W}" fill-opacity="${cf(0.25 + rnd() * 0.35)}"/>`; });
+      s += `<path class="cs-crack" d="M84 30L96 52L90 66L104 88L100 104M118 34L108 58L116 78" fill="none" stroke="${CY}" stroke-width="2" stroke-linejoin="round"/>`;
+      s += `<text x="150" y="70" fill="${W}" font-size="10" font-family="monospace">f<tspan font-size="7" dy="2">ck</tspan></text>`;
+      return svg(s);
+    },
+    // 지반공학: 흙의 층 위에 놓인 기초가 내려앉고, 그 아래로 압력 구근이 퍼진다.
+    soil() {
+      let s = "";
+      [56, 76, 98].forEach((y, k) => { s += `<path d="M8 ${y}${range(8).map((i) => `Q${12 + i * 24} ${y - 4 + (k % 2) * 3} ${20 + i * 24} ${y}`).join("")}" fill="none" stroke="${W}" stroke-opacity="${0.55 - k * 0.12}" stroke-width="1.4"/>`; });
+      const rnd = ((seed) => () => ((seed = (seed * 16807) % 2147483647) / 2147483647))(3);
+      range(40).forEach(() => { s += `<circle cx="${cf(10 + rnd() * 180)}" cy="${cf(60 + rnd() * 64)}" r="${cf(0.8 + rnd() * 1.4)}" fill="${W}" fill-opacity=".35"/>`; });
+      [[16, 10], [30, 19], [46, 30]].forEach(([ry, dy], k) => { s += `<ellipse class="cs-bulb" style="animation-delay:${-k * 0.5}s" cx="100" cy="${52 + dy}" rx="${cf(ry * 1.25)}" ry="${ry}" fill="none" stroke="${CY}" stroke-width="1.6" stroke-opacity="${0.9 - k * 0.22}"/>`; });
+      s += `<g class="cs-settle"><rect x="78" y="34" width="44" height="18" fill="${W}" fill-opacity=".9"/><path d="M100 4V30" stroke="${W}" stroke-width="2.4"/><path d="M95 24L100 33L105 24" fill="${W}"/></g>`;
+      s += `<path d="M8 52H78M122 52H192" stroke="${W}" stroke-width="2"/>`;
+      return svg(s);
+    },
+    // 건축구조: 바람을 받아 흔들리는 고층 라멘 골조와 코어.
+    tower() {
+      let s = `<g class="cs-wind">`;
+      [30, 52, 74].forEach((y, k) => { s += `<path d="M6 ${y}H44" stroke="${W}" stroke-opacity=".6" stroke-width="1.6" stroke-dasharray="7 5"/><path d="M40 ${y - 4}L47 ${y}L40 ${y + 4}" fill="none" stroke="${W}" stroke-opacity=".6" stroke-width="1.6"/>`; });
+      s += `</g><g class="cs-sway">`;
+      const xs = [70, 100, 130], ys = range(11).map((i) => 120 - i * 10.5);
+      ys.forEach((y) => { s += `<path d="M70 ${cf(y)}H130" stroke="${W}" stroke-width="1.6"/>`; });
+      xs.forEach((x) => { s += `<path d="M${x} 120V${cf(ys[10])}" stroke="${W}" stroke-width="2.2"/>`; });
+      s += `<rect x="92" y="${cf(ys[10])}" width="16" height="${cf(120 - ys[10])}" fill="${CY}" fill-opacity=".3" stroke="${CY}" stroke-width="1.4"/>`;
+      s += `</g><path d="M50 121H150" stroke="${W}" stroke-width="2.4"/>`;
+      s += `<path d="M152 120Q160 70 172 18" fill="none" stroke="${W}" stroke-opacity=".5" stroke-dasharray="3 3"/><text x="156" y="12" fill="${W}" font-size="9" font-family="monospace">Δ</text>`;
+      return svg(s);
+    },
+    // 철근콘크리트: 보 단면의 철근·스터럽과 압축측 등가 응력 블록.
+    rebar() {
+      let s = `<rect x="56" y="12" width="64" height="106" rx="2" fill="${W}" fill-opacity=".1" stroke="${W}" stroke-width="2.2"/>`;
+      s += `<rect x="63" y="19" width="50" height="92" rx="5" fill="none" stroke="${W}" stroke-width="1.6" stroke-opacity=".8"/>`;
+      [70, 82, 94, 106].forEach((x) => { s += `<circle cx="${x}" cy="103" r="4.6" fill="${W}"/>`; });
+      s += `<circle cx="70" cy="27" r="3" fill="${W}" fill-opacity=".8"/><circle cx="106" cy="27" r="3" fill="${W}" fill-opacity=".8"/>`;
+      s += `<path d="M132 12V118" stroke="${W}" stroke-opacity=".5"/>`;
+      s += `<rect class="cs-block" x="132" y="12" width="30" height="30" fill="${CY}" fill-opacity=".35" stroke="${CY}" stroke-width="1.6"/>`;
+      s += `<path d="M132 103H176" stroke="${W}" stroke-width="2"/><path d="M170 99L177 103L170 107" fill="${W}"/>`;
+      s += `<text x="140" y="56" fill="${W}" font-size="9" font-family="monospace">0.85f<tspan font-size="6.5" dy="2">ck</tspan></text><text x="150" y="96" fill="${W}" font-size="9" font-family="monospace">T</text>`;
+      return svg(s);
+    },
+    // 교량: 사장교. 주탑에서 내려온 케이블이 상판을 잡고, 차 한 대가 건너간다.
+    bridge() {
+      let s = `<path d="M4 92H196" stroke="${W}" stroke-width="4" stroke-linecap="round"/>`;
+      s += `<path d="M100 92V14M100 92V122" stroke="${W}" stroke-width="5"/>`;
+      range(6).forEach((i) => { const d = 14 + i * 14; s += `<path d="M100 ${20 + i * 4}L${100 - d * 1.15} 92M100 ${20 + i * 4}L${100 + d * 1.15} 92" stroke="${W}" stroke-width="1.2" stroke-opacity=".85"/>`; });
+      s += `<path d="M4 118Q50 108 100 118T196 118" fill="none" stroke="${W}" stroke-opacity=".35" stroke-width="1.4"/>`;
+      s += `<g class="cs-drive"><rect x="8" y="80" width="20" height="9" rx="3" fill="${CY}"/><circle cx="13" cy="90" r="2.4" fill="${W}"/><circle cx="23" cy="90" r="2.4" fill="${W}"/></g>`;
+      return svg(s);
+    },
+    // 시공: 타워크레인의 트롤리가 지브를 오가고 갈고리가 부재를 들어 올린다.
+    crane() {
+      let s = `<path d="M58 124V22M70 124V22" stroke="${W}" stroke-width="2"/>`;
+      range(10).forEach((i) => { const y = 124 - i * 10.2; s += `<path d="M58 ${cf(y)}L70 ${cf(y - 10.2)}M70 ${cf(y)}L58 ${cf(y - 10.2)}" stroke="${W}" stroke-width="1" stroke-opacity=".7"/>`; });
+      s += `<path d="M30 22H190M30 30H190" stroke="${W}" stroke-width="2"/>`;
+      range(16).forEach((i) => { const x = 30 + i * 10; s += `<path d="M${x} 30L${x + 10} 22" stroke="${W}" stroke-width="1" stroke-opacity=".7"/>`; });
+      s += `<path d="M64 22L64 6L30 22M64 6L190 22" stroke="${W}" stroke-width="1.2" stroke-opacity=".8"/>`;
+      s += `<rect x="30" y="32" width="18" height="12" fill="${W}" fill-opacity=".8"/>`;
+      s += `<g class="cs-trolley"><rect x="118" y="30" width="12" height="5" fill="${W}"/><path class="cs-hoist" d="M124 35V78" stroke="${W}" stroke-width="1.2"/><g class="cs-load"><path d="M118 80H130L124 74z" fill="${W}"/><rect x="104" y="80" width="40" height="7" fill="${CY}"/></g></g>`;
+      s += `<path d="M20 125H180" stroke="${W}" stroke-width="2.4"/>`;
+      return svg(s);
+    },
+    // BIM·디지털 건설: 아이소메트릭 건물 모델의 층이 차례로 켜지고 스캔선이 지나간다.
+    bim() {
+      const iso = (x, y, z) => [100 + (x - y) * 0.87 * 1, 104 + (x + y) * 0.5 - z];
+      const P = (x, y, z) => iso(x, y, z).map(cf).join(",");
+      let s = "";
+      const w = 44, d = 34;
+      range(5).forEach((k) => {
+        const z = k * 16;
+        s += `<polygon class="cs-floor" style="animation-delay:${k * 0.35}s" points="${P(0, 0, z)} ${P(w, 0, z)} ${P(w, d, z)} ${P(0, d, z)}" fill="${CY}" fill-opacity=".12" stroke="${W}" stroke-width="1.3"/>`;
+      });
+      [[0, 0], [w, 0], [w, d], [0, d]].forEach(([x, y]) => { s += `<path d="M${P(x, y, 0)}L${P(x, y, 64)}" stroke="${W}" stroke-width="1.8"/>`; });
+      s += `<polygon points="${P(14, 10, 0)} ${P(28, 10, 0)} ${P(28, 22, 0)} ${P(14, 22, 0)}" fill="${W}" fill-opacity=".25"/>`;
+      s += `<path class="cs-scan" d="M18 70H182" stroke="${CY}" stroke-width="2" stroke-opacity=".9"/>`;
+      s += `<text x="150" y="18" fill="${W}" font-size="9" font-family="monospace">IFC</text>`;
+      return svg(s);
+    },
+  };
+  Object.assign(M, CONSTRUCTION);
+
+  // skeleton 표지의 몸·뼈·CT 단면 좌표. node tools/anatomy-cover.mjs가 이 줄을 다시 쓴다(직접 고치지 않음).
+  // Data: BodyParts3D, © The Database Center for Life Science, CC BY 4.0.
+  const ANATOMY = {"q":0.5,"fig":[17.1,62.9],"panel":[78,34,118,62],"skin":"M34 138l3-8 4-5 1-6 0-18 5-28 0-11 1-4 4-4 15-7 4-3 1-6-3-15 1-5 2-3 4-3 7 0 5 4 3 4-1 7-2 11 0 5 2 2 5 3 13 6 4 6 1 13 5 29 0 16 1 7 4 5 3 8-2 1-2-3 2 10-1 1-2-1-2-6 0 8-2-1-1-6-1 4 0 2-2-1-1-6-1 5-1-1 1-18-6-20-1-13-3-7-2 17 4 19 0 19-2 23-3 15 1 20-5 35 1 4 4 5 4 2 1 2-2 1-13 0-4-2 1-24-3-24 1-9-2-9 0-14-1-23-1 0-2 23 0 13-2 10 1 10-3 23 1 24-1 1-3 1-13 0-2-1 1-2 4-2 3-5 2-7-5-33 1-19-3-15-2-23 0-19 4-19-2-17-2 7-2 12-6 21 1 18-1 1-1-5-1 6-2 1 0-2-1-4-1 6-2 1 0-8-2 6-2 1-1-1 2-10-3 3z","bones":"M70 26l0-7 2-3 4-3 7 0 5 3 2 3 0 7-1 6-2 2-1 5-1 2-3 1-4 0-3-1-2-7-2-2zM76 36l2 2 4 0 3-4-2 2zM72 117l0-5 1-2 3 2 0-2-3-3 3 1 1-2-3-2 2 0 1-2-2-1 0-1 2 0 0-3-3 0 3-1 0-2-2-1 2-1 0-6-1-1 2-1-1-2-1 0 1-4-2-1 3-1-1-2-1 0 0-1 2-1-1-2-2 0 2-1 1-2-3-1 0-2 3 0 0-1-3-2 3-1-3-3 3 0-2-2 0-1 2 0-1-1-2-1 2-2-2-1 1-3 0-6 1-3 1-1-4-1 4-1 5 0 3 2-4 0 2 4-1 5 2 4-2 2 2 0 0 1-3 2 2 0 0 1-2 2 2 0 1 1-2 1-1 1 3 1 0 1-3 1 0 1 3 0 0 2-2 0-1 2 3 1 0 1-2 0-1 2 2 1 0 1-1 0-1 2 3 1-2 1 1 4-1 1 1 2-1 0 0 7 2 0 0 1-2 1 0 2 2 1-2 1 0 2 2 0 0 1-2 1 1 2 2 0-3 2 1 2 3-1-3 3 0 2 2-2 1 1 1 5-4 7-3 2 1 2-2 3-2-3 1-2zM61 80l2-11 2-9 4-6 6-5 3 1 0 1-2 0 2 1 0 1-5 0 0 1 4 0 3 2 2-1 0-1 4 0 0-1-4 0 0-1 2-1-2 0 0-1 3-1 8 6 4 13 2 12-1 3 0 4-2 10 0-4-13-13-2-3-1 0-1-1-2 4-13 13 0 4-1-2-1-12zM97 81l0-2-1 1zM97 84l-1 1 1 1zM97 75l0-2-1 1zM94 86l-2 0 4 5 1-1-2 0 1-3zM96 68l-1-1-1 1 2 2zM92 76l2 1 2 0-2-2zM91 70l3 2 1-1-2-2zM92 81l2 2 1-1-1-2zM90 66l2 1 2-1-2-1zM93 60l0-2-1 1zM91 60l-2 2 2 0 2-1zM88 76l-4-3 3 4 4 1zM83 70l4 4 4 0zM88 57l2 1 1-1-2-1zM83 67l3 2 4-1-3-1zM84 63l-1 0 2 1 4 0-3-1zM84 59l-1 1 2 1 4-2-3 0zM82 56l1 1 3-1zM74 56l2 1 2-1zM71 64l7 0 0-1-4 0zM70 68l4 1 3-2-4 0zM73 71l-4 3 6-2 2-2zM71 59l3 1 3 0-3-2zM69 78l3 0 5-5zM69 83l3-1 1-2zM69 57l1 1 2-1-1-1zM66 66l2 1 2-1-2-1zM69 62l1 0-1-2-2 1zM65 71l1 1 3-2-2-1zM65 90l-2-1 1 2 4-5-3 0-1 1zM64 77l2 1 2-2-2-1zM67 60l1-1-1-1zM65 82l1 1 2-2-2-1zM63 86l1-1-1-1zM63 79l0 2 1-1zM82 85l1-2 1 1 5 4 5 7 1 3-1 1-2-5zM82 88l6 4 4 6-5-5-4-3zM65 98l1-3 4-7 7-5 1 2-6 4-6 8 0 2zM68 98l4-6 6-4-1 2-4 3zM36 138l2-7 5-4-1-1 2-7 3-21 0-2 3 0-2-1-1-3 4-12 4-26 2 0 1-2 2 1 0-1 1-1 5 1 5 2 7 0 1 2-1 2-7-2 1 3 0 6-2 5-3 5-2-2-3-10-2-3-1 0-2 2-2 11-2 15 3 5-1 2-2 0-1 4-4 26-1 2 1 1 0 1 1 8 1 7-2-3-1-10-1 15-1-1 0-14-3 17-1-2 2-15-2 8-3 7-1 0 1-1 4-15-3 2-2 5-1 2zM61 53l4 1 1 2 2-1-1-1zM46 125l2-6 1-17-3 15zM81 56l1-2 7 0 8-3 3 0-1 2 1-1 2 0 1 2 2 0 4 27 4 12-1 2-2 1 3 0 0 3 5 27-1 0 6 5 2 7-2-1-3-6-2-1 0 2 5 14-4-7-2-8 1 17-2-9-1-8 0 15-1-1-1-2 0-12-2 12-1 1 1-7 2-8-1-1 1-1-1-2-3-26-2-4-2-2 2-5-2-17-3-10-1-1-2 2-4 11-2 2-2-3-2-6-1-7 1-3-4 0-3 2zM114 125l0-9-2-14 0 16zM94 54l-2 0 2 2 2-2 3-1zM80 128l1-1 3-1 4-4 0-3-2 0 0-3-1-2 3-6 3-2 3 0 4 1 2 3 0 1-5 11-4 6-1 5-5 1-3-3zM84 129l0 1 2 1 1-4zM60 111l2-3 2-2 5 0 3 2 3 6-1 2 0 3-2 0 0 3 3 4 5 1-1 3-2 3-4 1-3-2-1-4-4-6zM73 128l1 3 2-1-1-2-2-1zM57 247l5-2 4-5-1-47-1-3 2-4-1-3 1-5 0-9-4-31-3-8 2-4 3 0 2-3 2 0 3 1 0 2-3 5-1 4-1 2 2 17 4 20 1 4 3 4-1 3-1 2 1 1-3 7-1 7 0 25 1 5 2 4-2 5 2 4-1 1-1 1-2-1-1-1-1 1-1 1zM84 182l4-6 2-10 4-29-1-1 0-5-4-5 1-2 3-1 1 1 2 2 3 0 2 4-3 9-4 30 0 9 2 5-2 3 3 4-2 4-1 42 0 4 5 5 4 2-9 0-2-1 0-1-2 2-4-1 1-3 1-2-2-5 2-4 1-6 0-24-1-7-3-6 2-2-2-1zM78 27l-1-1-2 0-1 1-1 2 1 1 1 1 2 0 1-1 1-1zM86 27l-1-1-2 0-1 1-1 2 1 1 1 1 2 0 1-1 1-1z","slices":[{"z":1560,"y":11.6,"layers":[[0.24,"M260 96l-6 6-3 5-7 26-1 11 3 11 7 12 7 5 10 3 18-2 6-4 5-8 4-6 2-11-2-16-6-21-6-9-9-4-15-1z"],[0.96,"M264 97l-4 1-3 3-6 10 0 4-5 12-2 15 3 12 4 7 5 6 3 3 2-1-1 2 14 1 13-1 1 0 0-1 1 1 2-2 7-9 5-15 1-4-1-6-5-19 0-6-8-10-4-3-8-2zM261 169l-7-7-4-7-4-9-1-10 4-14 2-5 2-1 0-6 2-4 5-5 7-4 4 0 3 2 4-2 5 1 6 3 7 8-1 6 1 2 1-1 0 1 2 5 1 6 3 7 0 5-2 8-3 8-4 6-6 7-4 1-14 0-7 1-1-1-1 0 1 0-1-1 0 1z"],[0.5,"M265 103l6-2 1 1-2 3 2 2-4 1 2-3 0-2-6 8-1 4-2 0-2-5 3-1-3 0 0-3 1 0-4 1-2 5-1 9 3 1 4-3-3 3 0 4 1 8 2 3 1-15 2-2-1-2 4 1 5-5-3-2 1-4 0 2 4-1-1-9-4-1zM257 113l2 4-2-2-1 1 1-6zM269 110l3 5 0-5zM271 122l1 4 2-7-6-3zM266 122l1 5-5 10-1-4-1 6-5-10-3-1 1 2-2 3 1 4-2 1 2 2-2 2 7 2 1 2-5 2 6 3-10-2 0 2 9 13 4 2 0-3 1 2 5 0-1 2 1 2 6-4-1-16-9 2-2-3 0-4 5-13 3-3-4-10zM257 154l0 2 2 0-1 5 2 2-2-2 0-4-4-2 2-2-3-1 6 0zM261 157l4 4 2-2 2 2-1-1-3 3zM272 157l-3 3-4-3 1-2 2 3zM275 134l0-4-2 0 0 3zM264 142l1 3 2 0 3-3 0-3zM276 100l0 15 4-6-2 5 2 0 2 5-4 8 4 4 4 13-2 6-9-1 0 17 5 3 3-1-1-2 3-1 1-3 1 4 5-4 8-12-11 1 6-4-4-1 0-2 7-2-2-2 2-1-3-9 1-2-3 0-4 10-2 0 0-3 1 2 2-1 2-6-1-8-3-3 6 3 2-2-4-13-4-1 1 3-3 0 3 1-2 5-2 0 0-4-5-7-2-2 0 3-2-3 4-1 3 2-2-4zM286 136l-4-13 0-4 4-2 1 0-2 3 3 6-1 8 0-2zM291 113l0-3 1 6-1-1-2 2zM280 107l-4 0 2-2zM281 158l-1 1 2 2-3-1-2-3zM289 159l0-3 2-2-2-3 8 1-5 1 2 2-5 2 2 4zM275 119l1 7 4-10zM278 141l4 4 2-1-3-5-3 0z"],[0.34,"M279 116l-4 3 0 7 5-10zM268 116l5 10 1-6-3-4zM273 130l0 4 2 0 0-4zM271 139l-4 0-3 3 1 3 5-3zM278 139l1 4 4 2 1-3-3-3z"]]},{"z":1220,"y":34.9,"layers":[[0.24,"M180 140l0 11 7 8 5 4 6 1 5 1 5-2 7 9 7 5 8 4 9 1 15-1 20-7 24 8 10 0 10-1 13-7 9-11 9 2 11-5 6-5 3-10-2-10-4-8-9-8-5-1-9 0-5-15-9-14-14-7-19-4-9 1-10 3-14-4-9 0-15 4-10 4-5 5-6 8-7 19-9 0-7 2-8 9z"],[0.03,"M300 99l-4 4-8 29-1 12 2 7 9 5 5-1 8-4 8-16 1-6 0-8-3-8-10-10zM253 100l-8 1-15 21-1 5 4 15 3 7 5 7 20-4 9-24 0-3-7-18-4-7z"],[0.46,"M237 102l-5 6-5 12zM228 106l0 3 6-6-2-1zM231 107l-6 12 6-11 9-9zM220 115l4-8 23-15 13-2-10 3 12-3 8 2-8-3 10-1-8-6-7-2-19 3-14 11zM194 128l0 4-4 3 2 2-4 7 0 5 11 7 2-2 2-9-2-3-8 0 3-8-1-2 15 0 0-5-7-2 0 4-4-5zM204 138l4-1 2-4zM229 145l-3-16 0 11zM224 139l3 6-3-16zM201 140l7 1-3-2zM219 124l0 13 3 9 14 15-1 2-4-3-9-10-4 2 3 7 25 9 16-3-3-3-10 2 3 1-6 2-1-2 3-1-1-1-4 0 9-3-9 1-11-6-6-8-3-9 3-25-4 2zM205 154l8-1-3-9-5-1-2 2-1 6zM277 88l10 1-8 3 8-2 11 3-9-3 7 1 15 6 14 10 4 8-5-22-11-9-21-4-9 2zM278 163l3 1 3-2zM287 165l16 3 25-9 3-7-4-2-9 10-4 3-1-2 15-16 2-10 0-11-5-10-2-1 3 21-2 11-8 11 2-3-13 8-8-1 9 3-5 1 3 1-1 2-6-2 3-1-10-2zM270 166l-26 6 1 3 29-8 0-3-3 0zM278 165l-4-1 1 3 29 7 1-2zM311 102l11 18-6-14zM315 103l5 6 0-4-3-3zM345 129l0-3-7 1 1 5 8 1 8-1 0-4-5-4-5 4 1 3zM358 134l-5 0 3 8-2-2-7 2 0 11 3 3 8-7 2 1 1-4 0-4-5-6 2 2zM325 137l-1-7-1 11zM341 134l-2-1 1 3 5 2zM343 139l-2 1 2 2 5-1zM339 154l5 0 2-2-2-9-6 1-1 2-2 5z"],[0.96,"M251 89l1 1-1-1-3 2-6 5-4 5 1 0 8-6 6-2-1-2 1 1 5-2 7 0 1-1 2 2 3 1 11-1 1-2-1 0 1 0 8 1 10 4 8 7 1 0-6-7-12-6-9 0-5-2-8 0-3 1-1 1-1-1-9 1zM224 125l1 6 2-3 0-8-1-2-1 1zM194 138l3 4 5-2 1-4-1-2-5-2-2 2zM271 141l-2 3-1 12-6 1-2 2 0 1 1 1 7-3 6 2 8-2 5 3 2-1-3-3-3 0-3-2 0-11-2-2-2-2zM278 154l0 2-4 2-3-1-1-3 2-2 3-1zM227 145l3 8 4 4-2-9-4-4-1 0zM257 156l-6 2-1 2 8 1 2-2-1-3zM229 158l2 3 14 6 1 0-16-10zM273 162l1 3 1-3zM321 119l0 7 2 5 1-3 0-8-1-2zM351 132l-5 3 0 3 3 3 3 0 2-1 1-2-1-4zM318 145l-3 6-1 5 1 1 3-4 3-7 0-2zM288 158l2 3 8-1-1-2-6-2-1 0zM311 163l-8 4 15-6 2-1-1-3z"],[0.56,"M281 96l-13 7 0-1-1 0-6 9-1 10 1 4 2 2 6 0-3 5 1 0 4-5 9-4 1-5 16-13 2 1 2 4 0 5-1 5-5 6-6 3-2 3 0 3-19-1-2 0 0 2 23 0 3-4-1 0 8-4 4-4 1-4 1-9-1-5-3-3-2-2-3 0-7-5zM266 110l2-1 3-7 9-5 7 0 6 4 0 1-20 18 2 2-2 3-4 1-6 0-2-3 1-12 3-3z"],[0.6,"M282 97l-12 6-3 9-1-4-2 1-2 3-1 10 3 6 5 1 3-1 3-4-5-9 3 5 3-1 17-18-4-3zM296 105l-15 13-1 6 7 7 9-5 4-6 1-11-2-3zM278 125l-6 6 1 2 5 2 10-1-1-2-8-7z"],[0.8,"M210 134l-1 2 2 0 1-2zM338 134l-1 2 2 0 1-2zM279 136l-1 2 1 6 2 1 4 0 1-3 0-3z"],[0.7,"M270 139l-1 1 1 2 2-2z"],[0.02,"M253 118l1 3 2 1 0-4zM252 120l-9 3 7-1 3 2 1-1zM251 134l1 2 3 0-1-2zM255 138l2 2 2-1-1-3zM256 140l2-2-1-1 2 0-1 3zM307 121l2 1 1-2-2-1zM302 136l-1 2 2 0 2-1-2-2zM300 140l2 2 1-1 0-2z"],[0.45,"M275 134l-4 2 4 2 3 0 0-2z"]]},{"z":1060,"y":45.9,"layers":[[0.24,"M217 110l-2 12 3 10 5 12 7 12 7 7 6 4 6 2 13 0 14-4 8 4 12 0 11-3 9-7 8-12 9-24-2-12-12-17-16-10-12-5-18 1-14-1-11 3-17 10zM353 124l-5 3-4 5-2 6-1 6 2 6 5 6 6 3 6 0 5-1 5-5 7-9 1-4-4-9-5-6-7-2zM170 139l1 5 7 9 4 4 6 2 7 0 5-2 4-4 3-8 0-6-4-8-5-6-5-1-10 0-4 2-5 5z"],[0.46,"M233 97l-7 17 12-22zM253 81l-18 10-7 6-4 9-3 20 1 7 5 6-4-15 3-17 5-9 10-10 14-6 9-1 7 3-3-4zM230 110l-3 18 5 16-4-2 10 7-6-4 16 7 7-1 2-2-8 2-13-6-7-13 0-17 6-11 11-12-11 9zM225 121l0 10 3 6-1-17-1 4zM187 132l5 0-3-2zM183 134l4 4 10-3-1-3-13 0zM175 134l2 9 5 2-4-5 5-3-1-6-4-1zM193 142l-7 3 7 2-6-1 3 4 7-1 4-5-1-4zM281 124l1 7 4 6 1-6zM263 140l7-14-9 6zM259 153l-2 4 5 2-15 1-7-11 7 13 11 1 17-5 20 5 9-2 5-12-8 11-14-1 4-2-3-5 1-2-8 2-2 3 2 3-5-2-8 2 1-3-1-3-8-2-1 1 2 1zM316 98l6 16-4-13-7-9zM280 81l-2 3 11-3 13 4 16 14 7 15 0 16-3 9 5-5 1-9-3-19-5-9-24-16zM318 109l3 14-1 7-7 13-7 6-7 3-5-1 8 3-2-1 14-9 8-20-5-20-11-13zM322 126l-1 11 2-4 1-12-1 3-1-5zM359 132l-6 0-1 4 11 2 3-6-5 0 0-2-4 1 0 1zM367 130l-1 7 6 3-5 5 5-2 2-8-3-5zM317 146l3-4-5 3 4-3-12 7zM353 147l-3 0 2 2 4 2 5-5-6 1 8-2-14-5-2 5z"],[0.96,"M225 115l-1 5 1 2 2-2 2-6-3-2zM227 139l3 5 2 2-2-8-3-3zM190 138l-1-1-4 3-3-1-2 4 5 2 3-1 1-3 2-1 4 2 5-1 1-1 0-1-6-3zM268 144l0 3-2 0 2 0 2-4-1-1zM270 147l2 5 1 5 2 0 1-5 3-5-1-3-4 3-3-3zM257 150l-5 2 1 1 3 0 2-1 0-1zM240 151l5 4-1-3-5-3zM322 112l-2 2 2 6 2 2 0-7zM272 124l-4 4-2 3 2 7 2 2 1-2 4-1 4 3 3-7-1-5-6-4zM321 135l-5 9 0 2 6-7zM353 136l-6 3 1 2 5 1 4-2 4 4 3 1 5-3-2-3-4 0-2-1-4 0zM278 142l2 5 2 1-2-1 0-3-1-2zM307 149l-4 6 1 0 4-4 1-2zM291 153l4 1 2-2-6-2z"],[0.8,"M277 117l-3 3 0 3 3 1 3-1 2-2-2-3z"],[0.7,"M270 116l-3 2-1 2 1 2 2 2 3-1 1-3-1-3z"],[0.56,"M253 93l-7 2-7 6-6 10-2 8 1 8 4 10 4 5 3 0 2-9-2-6-1-18 3-3-1-1 2 0 3-6 6-5z"],[0.36,"M255 95l-5 4 0 7 2 3 3-2 4-8 0-3z"],[0.47,"M291 89l-13 2-7 2-8 12 3 4 3 0 3-4 11 2 11 6 11-3 3-5-2-6-7-7-3-2z"],[0.55,"M314 110l-1 1 0 10-6 7 4 12 7-7 1-5 0-6z"],[0.5,"M274 109l-8 4-4 6 13-3 3 1 10 7 7 2 4 0 0-2-7-3-9-9z"],[0.58,"M259 126l-6 1-5 4-2 3 1 3 5 0 6-4 3-5zM296 129l-8 3 0 2 2 4 4 3 6 1 4 0 3-2 2-4-3-4-4-3z"],[0.5,"M261 126l-3 0 1 6 3-3z"],[0.48,"M264 104l-13 13 0 3 4 3 4-1 10-13z"],[0.42,"M300 114l-1 5 4 4 3-3 0-3-3-3zM307 121l-3 3 4-1z"]]},{"z":880,"y":58.2,"layers":[[0.24,"M164 128l4 8 4 4 5 1 5 0 5-2 4-5 1-4-1-5-4-7-8-3-5 0-6 3-4 5zM369 115l-5 1-4 3-4 11 2 5 3 3 4 3 6 0 9-5 4-5 0-6-1-4-4-4-5-2zM228 98l-7 4-6 8-4 11 0 9 5 13 9 17 7 8 11 6 14 2 14-4 6 0 11 4 6 1 12-3 9-5 7-7 8-13 6-14 2-10-3-11-7-11-8-6-22-4-16-5-9 0z"],[0.46,"M176 118l-2 4 3 0 0 3 8 0 0-3-7-2 2-1 5 3 1-3-7-1 3-2-3 0-3 0 2 2zM215 126l8-13-6 2zM186 129l4-3-2-4zM180 127l0 3 3 0zM173 133l1 2 4-1-2-2 3-2-7 0zM181 131l1 3 3-1 0-4zM264 90l-30 11-8 6 9-6 27-9 10 3zM281 91l-4 3 11-2 34 15-6-5-29-12zM318 116l-8 5-5 15 7-4 13-17-3-2 1 2zM226 117l1-4-3 1zM238 133l6 2-1-5 2 5 5-1-3-11-5-1 0 5-5-8-11-4zM299 130l4 6 4-14-6 1zM317 132l-14 15 11 0-11 0-4 10 10 1 8-1 15-15 0-10-13-5zM222 129l-1 3-5 0-1 5 7 12 7 6 8 3 12-1-4-10-10 0 11 0-14-14-2-6zM245 168l14-4 3 3 6 2 4-7-4-1-2 1 4 1-3 2-3-1-4-1 1-3-3-2-4 4-10 1-17-9 3 6zM299 163l-8-5-3 2 1 3-4 1-6-1 3-1-2-1-3 2 5 6 6-2 1-4 14 5 15-8 4-6zM369 118l-6 2 2 2-1 3 10-2 0-3-4-2 2-2-5 0zM333 125l-1-10-6-2zM359 126l2 3 2 0-3-2 1-5zM372 125l6 2-4-4zM369 130l0-3-2 0-2 3zM376 130l-6 0 3 3-3 1 6 0-1-1 5-4zM364 133l4 0 0-2-5-2z"],[0.96,"M182 125l0 3 2 2 1-1 1-2-1-2zM363 127l2 3 2-2 0-2-3-1zM372 127l2 2 2 1 3-2-3-2zM170 127l1 2 1 1 4-3-4-1zM223 115l7 18 11 9 12 16 3 0 1-5 2 6 1 1 5-2 2-3 2 1 1 5 4 2 4-1 1-1 0-5 2 0 3 3 4 1 1 0 1-3 1-6 0-4 6-5-1-4-5 4-4 2-2 4-1 1-4 0-2-3-3-1-5 0-2 4-3 0-1 0-2-5-5-3-4-3-2 1 0 2 0-3-9-1-4-3-5-5-6-12-1-2zM257 149l-5-6 5 4zM323 115l-7 13-4 5-3 3-10 2-2 5-4 7 0 7 0 2 4-1 12-17 10-9 6-17z"],[0.48,"M278 97l-13 0-2 2 1 5-11-3-2 3 4 5 8-1 1-3 2 2 22-2 3-2 6 6 6 1 2 2 5-2-2-4-4 0-2-3-13-5-9 0zM278 106l0 3 2 1 2-3zM244 116l6 0 0-5-2-1-3 1z"],[0.42,"M314 114l-12-4-7 3-1 3 5 10 3 3 9 0 7-6-1-7zM244 111l1 6 5-1 0-5-3-1zM241 115l-7-3-6 4 1 6 4 6 4 0 6-4 0-4 2 0z"]]},{"z":620,"y":76.1,"layers":[[0.24,"M221 98l-5 5-4 6-3 11 3 13 8 18 5 6 10 6 11 2 11-4 7-6 6-11 2-10-3-10-9-14-8-8-9-4-8-2-7 0zM311 97l-12 3-8 6-12 19-2 5 0 11 5 10 9 10 8 3 15-1 11-8 7-11 7-19-1-13-3-5-5-6-8-5z"],[0.46,"M223 107l-5 2-6 13 1 10 4 4 11 6-1 4 2 4 7 7 12 1 2-8 3 6 7-2 2-5-4-3 9-2 1-8-18 4 1 7 2 0-2 2-2-7-8-4-8 2 2-8-5 0-4-3 3 1 0-2 6-5 2-4 1 13 7-5-10 7 20 4 13-3-1-3 3-2-3-6-3-4-7 2 1-4-2-1-5-1-7 4 2-7-9-3 1-2zM223 117l14-6 0 5-5-2-10 5-1-3zM247 113l9 0-11-3zM315 106l-4 2 0 2-2-1-6 4 0-3-10 2 10 1 1 7-5-4-6 1-2 1 0 4-6-2-3 3-3 7 3 6-2 3 2 6 11 1-7 1 4 8 6 1 3-4-2-5 2-6-16-5 9 2 18-2 4-2-11-7 8 5 1-12 1 4 7 4 0 2 6-6-8 8-4 0 1 7-11 0-4 3-2 5 1 9 4 2 8-1 9-7 2-5-2-3 12-6 5-6 0-8-7-13-5-3zM312 117l-1-6 11 4-6-1z"],[0.96,"M313 124l-3 2 0 4 1 2 4 2 5-4 0-4-2-2zM236 123l-5 1-2 2 0 4 4 4 2 0 4-4 0-3z"],[0.8,"M291 114l-2 2 3 2 2-2-1-2zM258 114l-3 1 0 2 3 1 1-3z"],[0.7,"M257 118l-2 1 1 3 3-1zM291 118l-1 3 3 1 1-3z"]]},{"z":300,"y":98.1,"layers":[[0.24,"M237 117l-8 4-5 5-4 11-1 12 2 7 5 7 8 5 8 2 8-2 7-6 7-13 1-9-3-7-12-11-6-4zM305 117l-5 3-14 13-2 5 0 6 2 10 6 9 6 5 9 2 9-3 9-8 4-7 0-8-1-9-6-11-6-5z"],[0.46,"M249 127l-2 11-5-4-1 2-4-1 0 3 4-1-2 8-10-1 2-3-3-4-2 1-1 4 2 5 2-1-1 4 5 11 8 0 7-1 1-3 6 1 8-6-3-14-4-5-5 6-3 13-2-5-3 1 4-9 3-2zM230 132l2 8 2-1-2-6 5-1 0-9-3 0zM301 126l-4 6 2-1 0 6 3 2 0 5 5 6-4-4 0 3-2 3-2-12-6-7-2 2-4 9-1 7 2 5 7 3 4-2 4 3 12 1 3-4 2-11 2 1 2-5-3-5-3 4 1 3-9 1-3-8 4 1 0-3-4 1 0-2-4 4 0-5-4-2zM311 132l5 1-1 6 1 1 4-8-5-8-4-1z"],[0.96,"M302 126l-3 4 2 4 2 2 6 0 2-4 2-7-1-3-4-1zM237 122l-1 2 1 8 2 2 3 2 7-2 1-2-2-6-7-5zM232 140l-1 3 2 1 2 0 0-4-2-1zM315 139l-2 3 1 2 1 1 3-1-1-4z"]]}]};
 
   window.coverArt = (motif) => (M[motif] || M.grid)();
 })();

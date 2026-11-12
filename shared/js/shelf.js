@@ -130,11 +130,15 @@
 
   const moon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
   const sun = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1"/></svg>';
-  const themeKey = (shelf.url ? new URL(shelf.url).hostname.split(".")[0] : "shelf") + "-theme";
+  // 테마 저장 키: 보통 서가 주소의 첫 이름(medical.euiyun.com → medical-theme), 다르면 book.json의 themeKey. index.html 첫 스크립트와 같아야 한다.
+  const themeKey = shelf.themeKey || (shelf.url ? new URL(shelf.url).hostname.split(".")[0] : "shelf") + "-theme";
   const theme = document.getElementById("theme");
   const dark = () => document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   function paintTheme() { theme.innerHTML = dark() ? sun : moon; theme.setAttribute("aria-label", dark() ? "라이트 모드로 전환" : "다크 모드로 전환"); }
-  theme.addEventListener("click", () => { const value = dark() ? "light" : "dark"; document.documentElement.dataset.theme = value; try { localStorage.setItem(themeKey, value); } catch (e) {} paintTheme(); });
+  function setTheme(value) { document.documentElement.dataset.theme = value; try { localStorage.setItem(themeKey, value); } catch (e) {} paintTheme(); }
+  theme.addEventListener("click", () => setTheme(dark() ? "light" : "dark"));
+  // 서가 검사 도구가 테마를 바꿔 볼 수 있게 연다(art-books tools/check.py 등).
+  window.ShelfHome = { setTheme };
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", paintTheme);
   paintTheme(); render();
 
