@@ -48,6 +48,7 @@
 ```text
 index.html, shelf.css                 서가 홈: 책장·분야 필터·검색, 대표 실험, 읽는 순서
 catalog.js                           생성된 책 목록
+catalog.json                         생성된 책 목록과 서가 지도(books.euiyun.com이 읽음)
 book.json                            서가 메타데이터, 각 책의 book.json 목록
 shared/js/shelf.js                    서가 홈의 책장 렌더링·필터·실험 카드
 shared/js/covers.js                   books 프로젝트의 SVG 책 표지와 공정·식각·인프라 표지
@@ -61,7 +62,7 @@ shared/js/terms.js, shared/css/terms.css  찾아보기(가나다 색인) 거르�
 migration/books.json                 원본·slug·서가 정보와 이전 경로 별칭(가져오기 기록)
 migration/import-state.json          가져오기 상태(모든 책을 이 저장소에서 집필하므로 비어 있음)
 tools/import-books.py                보호된 가져오기(meta가 있는 책은 건너뜀)
-tools/sync-catalog.py                 서가 목록 생성, 기본 입력은 migration/books.json
+tools/sync-catalog.py                 서가 목록·catalog.json 생성, 기본 입력은 migration/books.json + book.json의 map
 tools/sync-sitemap.py                 루트 사이트맵 생성
 tools/build.mjs                      하위 경로를 지원하는 정적 배포물 생성
 tools/search-index.mjs               검색 색인과 찾아보기 생성: search-index.json·search-text.json(홈), {slug}/search.json(책), {slug}/terms.html(찾아보기)
@@ -73,7 +74,7 @@ tools/browser-check.cjs               데스크톱·모바일 브라우저 검�
 tools/og.mjs                         서가 공유 이미지(og.png) 생성, Playwright 필요
 ```
 
-`catalog.js`를 직접 수정하지 않고 `migration/books.json`의 책 정보를 수정한 후 생성합니다. 장 수와 시뮬레이터 수는 소스에서 셉니다. 원본 포털의 목록을 다시 참고할 때는 `python3 tools/sync-catalog.py ../books/data/books.json`도 사용할 수 있습니다. 책·장·시뮬레이터 수가 바뀌면 `node tools/og.mjs`로 공유 이미지의 숫자도 갱신합니다.
+`catalog.js`를 직접 수정하지 않고 `migration/books.json`의 책 정보를 수정한 후 생성합니다. 장 수와 시뮬레이터 수는 소스에서 셉니다. 원본 포털의 목록을 다시 참고할 때는 `python3 tools/sync-catalog.py ../books/data/books.json`도 사용할 수 있습니다. 책·장·시뮬레이터 수가 바뀌면 `node tools/og.mjs`로 공유 이미지의 숫자도 갱신합니다. 서가 지도(분야 버튼과 ‘읽는 순서’ 위의 지도)는 `book.json`의 `map`에서 고칩니다. 묶음 하나가 stage 여러 개를 담을 수 있고(`stages`, 예: 제조·인프라 = process + infra), 모든 책은 한 묶음에 들어가야 합니다. books.euiyun.com 지식 지도에는 다음 날 자동 동기화로 반영되며, 바로 반영하려면 books 저장소에서 `python3 tools/sync-books.py`를 실행합니다.
 
 표지 그림은 각 책의 `motif`로 고릅니다. ProcessBook의 `process`, EtchBook의 `etch`, InfraBook의 `fab`, CMPBook의 `cmp`, ThinFilmBook의 `film`, PlasmaBook의 `plasma`, PowerBook의 `power`는 이 저장소에서 만들어 books 포털에도 같은 코드로 반영한 표지입니다. 표지를 고칠 때는 `shared/js/covers.js`·`shared/css/cover-animations.css`와 books의 `js/covers.js`·`css/style.css`를 함께 맞춥니다. `npm test`는 서가의 모든 `motif`에 표지가 있는지도 확인합니다.
 

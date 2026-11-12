@@ -4,15 +4,10 @@
   "use strict";
   const books = window.SEMI_BOOKS || [];
   const byId = new Map(books.map((b) => [b.id, b]));
-  const groups = [
-    { id: "all", label: "전체", stages: [] },
-    { id: "physics", label: "소자·광학", stages: ["physics"] },
-    { id: "design", label: "회로·설계", stages: ["design"] },
-    { id: "process", label: "제조·인프라", stages: ["process", "infra"] },
-    { id: "packaging", label: "패키징·테스트", stages: ["packaging"] },
-    { id: "device", label: "메모리·센서·전력", stages: ["device"] },
-    { id: "industry", label: "산업", stages: ["industry"] },
-  ];
+  // 분야 버튼과 서가 지도는 book.json의 map(catalog.js의 SEMI_MAP)에서 만든다. 묶음 하나가 stage 여러 개를 담을 수 있다.
+  const shelfMap = window.SEMI_MAP || { groups: [], links: [] };
+  const groups = [{ id: "all", label: "전체", stages: [] },
+    ...shelfMap.groups.map((g) => ({ id: g.id, label: g.name, stages: g.stages || [g.id] }))];
   // 세로 표지에는 books 포털처럼 짧은 이름을 쓴다.
   const coverTitles = {
     devicebook: "반도체 소자", digitalbook: "디지털 회로", designbook: "반도체 설계", socbook: "시스템 온 칩", analogbook: "아날로그 회로",
@@ -84,6 +79,18 @@
   search.addEventListener("input", () => { if (!window.SemiSearch) render(); });
   search.addEventListener("keydown", (event) => { if (event.key === "Escape") { search.value = ""; render(); } });
   document.addEventListener("semi:search", render);
+
+  // 서가 지도: 묶음을 읽는 순서대로 잇고, 책 사이 연결은 한 줄씩 적는다.
+  const mapEl = document.getElementById("shelf-map");
+  if (mapEl && shelfMap.groups.length) {
+    const chip = (id) => { const b = byId.get(id); return b ? `<a data-book="${esc(b.id)}" href="${esc(b.url)}">${esc(titleOf(b))}</a>` : ""; };
+    mapEl.innerHTML = `<ol class="map-groups${shelfMap.groups.length > 4 ? " wide" : ""}">${shelfMap.groups.map((g, i) => { const n = books.filter((b) => (g.stages || [g.id]).includes(b.stage)).length; return `<li${n > 6 ? ' class="big"' : ""} style="--n:${n}"><small>${String(i + 1).padStart(2, "0")} · ${esc(g.en)}</small><b>${esc(g.name)}</b><p>${esc(g.desc)}</p><div class="path">${books.filter((b) => (g.stages || [g.id]).includes(b.stage)).map((b) => chip(b.id)).join("")}</div></li>`; }).join("")}</ol>`
+      + (shelfMap.links.length ? (() => {
+        // 연결이 많으면 접어 두어 첫 화면을 지도 묶음에 쓴다.
+        const list = `<ul class="map-links">${shelfMap.links.map(([a, b, reason]) => `<li><span class="path">${chip(a)}<i aria-label="에서">→</i>${chip(b)}</span>${esc(reason)}</li>`).join("")}</ul>`;
+        return shelfMap.links.length > 6 ? `<details class="map-more"><summary>책 사이 연결 ${shelfMap.links.length}개</summary>${list}</details>` : list;
+      })() : "");
+  }
 
   // 실험 카드와 읽는 순서 칩에 책 색과 코드를 입힌다.
   document.querySelectorAll(".experiment[data-book], .path a[data-book]").forEach((el) => {

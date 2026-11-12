@@ -656,3 +656,401 @@ window.SEMI_BOOKS = [
   "url": "industry/"
  }
 ];
+window.SEMI_MAP = {
+ "title": "전자 하나에서 산업 전체까지",
+ "desc": "원리에서 설계·제조로, 완성된 칩에서 제품과 산업으로 이어집니다.",
+ "groups": [
+  {
+   "id": "physics",
+   "name": "소자·광학",
+   "en": "Physics",
+   "desc": "전자가 움직이는 원리와 빛을 받는 소자"
+  },
+  {
+   "id": "design",
+   "name": "회로·설계",
+   "en": "Design",
+   "desc": "회로와 칩을 그리는 단계"
+  },
+  {
+   "id": "process",
+   "name": "제조·인프라",
+   "en": "Fab",
+   "desc": "웨이퍼 위에 트랜지스터를 쌓는 공정과 팹을 돌리는 인프라",
+   "stages": [
+    "process",
+    "infra"
+   ]
+  },
+  {
+   "id": "packaging",
+   "name": "패키징·테스트",
+   "en": "Back-end",
+   "desc": "자르고, 잇고, 쌓고, 검사하는 단계"
+  },
+  {
+   "id": "device",
+   "name": "메모리·센서·전력",
+   "en": "Products",
+   "desc": "메모리·센서·전력 소자처럼 칩이 하는 일"
+  },
+  {
+   "id": "industry",
+   "name": "산업",
+   "en": "Industry",
+   "desc": "칩을 둘러싼 돈과 공급망"
+  }
+ ],
+ "links": [
+  [
+   "devicebook",
+   "digitalbook",
+   "소자에서 논리 회로로"
+  ],
+  [
+   "devicebook",
+   "analogbook",
+   "소자의 특성을 회로에 활용하기"
+  ],
+  [
+   "devicebook",
+   "processbook",
+   "소자 구조를 실제로 만들기"
+  ],
+  [
+   "devicebook",
+   "tcadbook",
+   "소자의 동작을 수치로 해석하기"
+  ],
+  [
+   "opticsbook",
+   "sensorbook",
+   "빛의 원리에서 이미지 센서로"
+  ],
+  [
+   "digitalbook",
+   "designbook",
+   "논리 회로에서 칩 설계로"
+  ],
+  [
+   "designbook",
+   "socbook",
+   "설계한 블록을 시스템으로 통합하기"
+  ],
+  [
+   "socbook",
+   "memorybook",
+   "캐시·DRAM 컨트롤러와 메모리 타이밍·대역폭"
+  ],
+  [
+   "analogbook",
+   "sensorbook",
+   "센서 신호를 읽는 회로"
+  ],
+  [
+   "processbook",
+   "lithobook",
+   "회로 패턴을 웨이퍼에 옮기기"
+  ],
+  [
+   "processbook",
+   "etchbook",
+   "필요한 형상을 깎아 만들기"
+  ],
+  [
+   "processbook",
+   "dopingbook",
+   "불순물로 전기적 특성 바꾸기"
+  ],
+  [
+   "processbook",
+   "yieldbook",
+   "공정 결과를 수율로 읽기"
+  ],
+  [
+   "yieldbook",
+   "failurebook",
+   "수율 손실에서 불량 원인으로"
+  ],
+  [
+   "processbook",
+   "packagingbook",
+   "웨이퍼에서 연결된 칩으로"
+  ],
+  [
+   "packagingbook",
+   "testbook",
+   "연결한 칩의 동작 검사하기"
+  ],
+  [
+   "memorybook",
+   "packagingbook",
+   "메모리를 연결하고 쌓기"
+  ],
+  [
+   "sensorbook",
+   "displaybook",
+   "센서의 색 신호와 디스플레이의 색역·재현"
+  ],
+  [
+   "devicebook",
+   "powerbook",
+   "전력을 다루는 소자"
+  ],
+  [
+   "powerbook",
+   "packagingbook",
+   "전력 모듈의 다이 접합·와이어 본딩·열 경로"
+  ],
+  [
+   "powerbook",
+   "failurebook",
+   "파워 사이클링·단락·우주선 소손 같은 전력 소자 고장"
+  ],
+  [
+   "analogbook",
+   "powerbook",
+   "LDO·피드백 제어에서 스위칭 컨버터로"
+  ],
+  [
+   "powerbook",
+   "infrabook",
+   "팹 전력·UPS와 고효율 전력 변환"
+  ],
+  [
+   "testbook",
+   "chipindustrybook",
+   "패키징·테스트를 맡는 OSAT와 테스트 비용"
+  ],
+  [
+   "memorybook",
+   "processbook",
+   "DRAM·3D NAND의 셀 구조와 제조 공정"
+  ],
+  [
+   "memorybook",
+   "designbook",
+   "메모리 주변 회로의 설계·타이밍·배치"
+  ],
+  [
+   "opticsbook",
+   "yieldbook",
+   "광학 검사의 분해능·산란과 결함 검출"
+  ],
+  [
+   "lithobook",
+   "yieldbook",
+   "노광 공정 윈도·확률적 결함과 수율"
+  ],
+  [
+   "packagingbook",
+   "failurebook",
+   "접합·열·응력에 의한 패키지 불량과 분석"
+  ],
+  [
+   "memorybook",
+   "chipindustrybook",
+   "DRAM·NAND·HBM의 기술 차이와 메모리 시장·공급 사이클"
+  ],
+  [
+   "designbook",
+   "chipindustrybook",
+   "EDA·IP와 팹리스의 설계 가치사슬"
+  ],
+  [
+   "processbook",
+   "chipindustrybook",
+   "공정 기술과 장비·소재·파운드리의 역할"
+  ],
+  [
+   "infrabook",
+   "processbook",
+   "공정 장비를 지탱하는 초순수·가스·전력·냉각 공급"
+  ],
+  [
+   "infrabook",
+   "lithobook",
+   "노광 정밀도를 지키는 클린룸·온습도·진동 관리"
+  ],
+  [
+   "infrabook",
+   "etchbook",
+   "식각 장비의 가스 공급과 배기·스크러버 처리"
+  ],
+  [
+   "infrabook",
+   "yieldbook",
+   "청정도·공급 품질의 변동이 결함과 수율에 미치는 영향"
+  ],
+  [
+   "infrabook",
+   "chipindustrybook",
+   "팹 건설·유틸리티 투자와 운영비·생산 능력"
+  ],
+  [
+   "packagingbook",
+   "chipindustrybook",
+   "첨단 패키징·HBM 공급망과 OSAT의 역할"
+  ],
+  [
+   "processbook",
+   "cmpbook",
+   "STI·다마신 공정 흐름 속의 평탄화와 세정"
+  ],
+  [
+   "lithobook",
+   "cmpbook",
+   "평탄도와 초점 심도·패턴 밀도의 관계"
+  ],
+  [
+   "cmpbook",
+   "yieldbook",
+   "스크래치·잔류물·디싱이 결함과 수율에 미치는 영향"
+  ],
+  [
+   "cmpbook",
+   "packagingbook",
+   "하이브리드 본딩을 위한 표면 평탄화와 세정"
+  ],
+  [
+   "infrabook",
+   "cmpbook",
+   "슬러리 공급과 초순수·폐수 처리"
+  ],
+  [
+   "processbook",
+   "thinfilmbook",
+   "공정 흐름 속 산화·증착을 장비 조건과 막질로 깊이 보기"
+  ],
+  [
+   "thinfilmbook",
+   "cmpbook",
+   "갭필·과증착한 막을 평탄화하기"
+  ],
+  [
+   "thinfilmbook",
+   "yieldbook",
+   "균일도·피복성·막질 변동이 결함과 수율에 미치는 영향"
+  ],
+  [
+   "infrabook",
+   "thinfilmbook",
+   "전구체·특수 가스 공급과 진공 배기"
+  ],
+  [
+   "processbook",
+   "plasmabook",
+   "식각·증착 장비 속 플라즈마의 생성과 제어"
+  ],
+  [
+   "plasmabook",
+   "etchbook",
+   "방전·시스와 플라즈마 식각의 이온·라디칼 제어"
+  ],
+  [
+   "plasmabook",
+   "thinfilmbook",
+   "PECVD·스퍼터링·PEALD의 이온 충격과 래디컬 공급"
+  ],
+  [
+   "plasmabook",
+   "tcadbook",
+   "전역 모델·PIC와 공정 모사의 플럭스 입력"
+  ],
+  [
+   "yieldbook",
+   "chipindustrybook",
+   "수율이 양품 칩의 원가와 생산 능력에 미치는 영향"
+  ],
+  [
+   "designbook",
+   "processbook",
+   "표준 셀·배선·마스크를 실제 공정 단면으로 구현하기"
+  ],
+  [
+   "designbook",
+   "lithobook",
+   "마스크·OPC와 인쇄 가능한 패턴의 조건"
+  ],
+  [
+   "designbook",
+   "testbook",
+   "설계 단계의 스캔·DFT와 제조 후 테스트"
+  ],
+  [
+   "devicebook",
+   "memorybook",
+   "MOS 소자에서 SRAM·DRAM·플래시 셀로"
+  ],
+  [
+   "devicebook",
+   "sensorbook",
+   "광흡수·포토다이오드에서 픽셀의 전하 수집으로"
+  ],
+  [
+   "devicebook",
+   "dopingbook",
+   "도핑 농도·접합 깊이가 소자 특성에 미치는 영향"
+  ],
+  [
+   "digitalbook",
+   "memorybook",
+   "SRAM 셀의 읽기·쓰기와 메모리 배열"
+  ],
+  [
+   "processbook",
+   "tcadbook",
+   "공정 레시피를 모사해 구조와 전기 특성 예측하기"
+  ],
+  [
+   "dopingbook",
+   "tcadbook",
+   "이온 주입·확산·활성화의 공정 조건과 수치 모사"
+  ],
+  [
+   "opticsbook",
+   "lithobook",
+   "회절·해상도·초점으로 이해하는 노광 한계"
+  ],
+  [
+   "opticsbook",
+   "displaybook",
+   "편광·박막·광학계로 이해하는 LCD·OLED·XR"
+  ],
+  [
+   "lithobook",
+   "etchbook",
+   "레지스트 패턴을 식각 형상으로 전사하기"
+  ],
+  [
+   "testbook",
+   "failurebook",
+   "전기적 불량 검출·진단에서 물리적 원인 분석으로"
+  ],
+  [
+   "testbook",
+   "yieldbook",
+   "웨이퍼 테스트·빈 분류 결과를 수율과 맵으로 해석하기"
+  ],
+  [
+   "memorybook",
+   "testbook",
+   "메모리 BIST·불량 검출·신뢰성 평가"
+  ],
+  [
+   "memorybook",
+   "etchbook",
+   "3D NAND의 깊은 채널 홀과 고종횡비 식각"
+  ],
+  [
+   "socbook",
+   "sensorbook",
+   "센서의 RAW 신호를 SoC의 ISP에서 처리하기"
+  ],
+  [
+   "socbook",
+   "analogbook",
+   "SoC의 클럭·전원에 쓰이는 PLL·LDO"
+  ]
+ ]
+};
