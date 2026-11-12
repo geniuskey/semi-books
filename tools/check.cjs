@@ -103,7 +103,7 @@ for (const book of BOOKS) {
   for (const f of files) if (!slugs.includes(f)) fail(`${book}/chapters/${f}.html is not registered in CHAPTERS`);
 }
 // 상단 바·서랍·이전/다음·푸터는 @euiyun/book이 원본이다. shared/의 복사본은 설치된 버전과 같아야 한다(npm run sync:runtime).
-for (const [copy, original] of [["shared/js/book-ui.js", "runtime/ui.js"], ["shared/css/book-ui.css", "runtime/ui.css"]]) {
+for (const [copy, original] of [["shared/js/book-ui.js", "runtime/ui.js"], ["shared/css/book-ui.css", "runtime/ui.css"], ["shared/js/book-experiments.js", "runtime/experiments.js"]]) {
   const installed = path.join(ROOT, "node_modules/@euiyun/book", original);
   if (!fs.existsSync(installed)) { fail(`${original}: @euiyun/book is not installed or too old — run npm ci`); continue; }
   if (fs.readFileSync(path.join(ROOT, copy), "utf8") !== fs.readFileSync(installed, "utf8")) fail(`${copy} differs from @euiyun/book/${original} — run npm run sync:runtime`);
