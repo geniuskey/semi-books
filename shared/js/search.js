@@ -57,7 +57,7 @@
 
   let tab = "all", shown = PAGE, last = null, fixed = null;
   function stagesNow() { const s = filters?.dataset.stages; return s ? s.split(",") : null; }
-  function publish(counts) { window.SEMI_SEARCH_HITS = counts; document.dispatchEvent(new CustomEvent("semi:search")); }
+  function publish(counts) { window.SHELF_SEARCH_HITS = counts; document.dispatchEvent(new CustomEvent("shelf:search")); }
   function idle() {
     let recent = [];
     try { recent = JSON.parse(localStorage.getItem("semi-search-recent") || "[]"); } catch (e) {}
@@ -157,4 +157,5 @@
   const initial = new URLSearchParams(location.search).get("q");
   if (initial) { input.value = initial; load(); run(); }
   window.SemiSearch = { search: (q, stages) => (load(), engine ? engine.search(q, keepStages(stages)) : { hits: [], terms: [], vars: [] }), hangul: window.SemiSearchCore.hangul, norm, ready: () => load() };
+  window.ShelfSearch = window.SemiSearch; // 공통 서가 코드(shelf.js)가 찾는 이름
 })();
