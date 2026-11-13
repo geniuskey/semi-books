@@ -34,7 +34,8 @@
     const used = new Set();
     let started = false, explored = false;
     const onUse = (event) => {
-      if (explored) return;
+      // Only the reader's own actions count: values a page sets by script (e.g. a settings link) do not.
+      if (explored || !event.isTrusted) return;
       const control = controlOf(sim, event.target);
       if (!control) return;
       if (!started) { started = true; send("experiment_start", sim); }
