@@ -133,7 +133,7 @@ async function pages(directory) {
     }
     html = html.replace(ICON_LINK, '').replace(/<\/head>/i, icons(rel) + tag + '\n</head>');
     await writeFile(file, html);
-    urls.push(url);
+    if (!/<meta name="robots" content="noindex"/i.test(html)) urls.push(url);
   }
 }
 // Search indexes and each book's 찾아보기 (terms.html) first, so the pages pass below gives terms.html its tags.
