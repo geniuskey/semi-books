@@ -1207,7 +1207,7 @@
   const trLn1pe = (x) => (x > 35 ? x : Math.log1p(Math.exp(x)));
   /** 탄도 MOSFET(Natori / Rahman–Lundstrom 장벽 꼭대기 모델, (100) Si 2D 부띠, 페르미-디랙).
    *  {Vg=1, Vd=1, T=300, Vt=0.3, Cox | EOT=1.2 nm, n=1.2(αG=1/n), dibl=0, mt=0.19, ml=0.916, valleys "2f"|"all", dE4=0.1 eV, m, gv=2}
-   *  → {I (A/µm), N (cm⁻², 장벽 꼭대기), vinj (cm/s = I/qN), vT (+k 주입 속도), Ef_minus_Ec (eV), etaS} */
+   *  → {I (A/µm), N (cm⁻², 장벽 꼭대기), vinj (기존 필드명, 전체 전자 평균 속도 cm/s = I[A/µm]·1e4/qN), vT (+k 주입 속도 cm/s), Ef_minus_Ec (eV), etaS} */
   TC.ballistic = function (o = {}) {
     const T = o.T || 300, kT = TC.kB * T, Vg = o.Vg ?? 1, Vd = o.Vd ?? 1, Vt = o.Vt ?? 0.3;
     const q = TC.q, hb = TC.hbar, m0 = TC.m0;
