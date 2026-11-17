@@ -57,8 +57,32 @@ function checkPage(rel, opts = {}) {
   const ids = new Map();
   for (const m of markup.matchAll(/\sid="([^"]+)"/g)) ids.set(m[1], (ids.get(m[1]) || 0) + 1);
   for (const [id, n] of ids) if (n > 1) fail(`${rel}: duplicate id "${id}" ×${n}`);
+  // 한 문항에 정답 표시가 없으면 모든 보기가 오답으로 처리된다.
+  let question = 0;
+  for (const m of markup.matchAll(/<div class="quiz-q"[^>]*>([\s\S]*?)(?=<div class="quiz-q"[^>]*>|<\/section>|$)/g)) {
+    question++;
+    const options = [...m[1].matchAll(/<button\b(?=[^>]*\bclass="opt")[^>]*>/g)];
+    const correct = options.filter((o) => /\sdata-correct(?:\s|=|>)/.test(o[0])).length;
+    if (options.length < 2 || correct !== 1 || !/class="quiz-exp"/.test(m[1])) {
+      fail(`${rel}: quiz ${question} needs at least two options, exactly one data-correct, and an explanation (options=${options.length}, correct=${correct})`);
+    }
+  }
   for (const m of html.matchAll(/<script(?![^>]*\bsrc=)(?![^>]*application\/ld\+json)[^>]*>([\s\S]*?)<\/script>/g)) {
     try { new vm.Script(m[1], { filename: rel }); } catch (e) { fail(`${rel}: script syntax — ${e.message}`); }
+    if (rel.endsWith('/chapters/glossary.html')) {
+      const bank = m[1].match(/(?:var|const|let) (?:QUIZ|BANK)\s*=\s*(\[[\s\S]*?\n\s*\]);/);
+      if (bank) {
+        try {
+          const questions = vm.runInNewContext(`(${bank[1]})`, {}, { timeout: 1000 });
+          questions.forEach((q, i) => {
+            // AnalogBook과 TCADBook은 첫 보기가 정답이며 화면에서 순서를 섞는다.
+            const answer = /^(?:analog|tcad)\//.test(rel) ? 0 : q.a;
+            if (!q.q || !q.e || !Array.isArray(q.o) || q.o.length < 2 || !Number.isInteger(answer) || answer < 0 || answer >= q.o.length) fail(`${rel}: question bank item ${i + 1} has invalid options, answer or explanation`);
+            if (!q.ch || !fs.existsSync(path.join(path.dirname(file), `${q.ch}.html`))) fail(`${rel}: question bank item ${i + 1} refers to missing chapter ${q.ch}`);
+          });
+        } catch (e) { fail(`${rel}: question bank — ${e.message}`); }
+      }
+    }
   }
   for (const m of html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)) {
     try { JSON.parse(m[1]); } catch (e) { fail(`${rel}: JSON-LD — ${e.message}`); }
@@ -92,6 +116,7 @@ checkPage("index.html");
 checkPage("terms.html");
 for (const book of BOOKS) {
   checkPage(`${book}/index.html`);
+  for (const f of fs.readdirSync(path.join(ROOT, book)).filter((f) => f.endsWith('.html') && !['index.html', 'terms.html'].includes(f))) checkPage(`${book}/${f}`);
   const js = fs.readFileSync(path.join(ROOT, book, "js/common.js"), "utf8");
   const slugs = [...js.matchAll(/\{ slug: "([^"]+)"/g)].map((m) => m[1]);
   if (!slugs.length) fail(`${book}: no CHAPTERS in js/common.js`);

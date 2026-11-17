@@ -69,6 +69,7 @@ tools/search-index.mjs               검색 색인과 찾아보기 생성: searc
 tools/check.cjs                       메타데이터·링크·스크립트 정적 검사
 tools/katex.mjs                       모든 책의 수식 빌드 렌더링
 tools/katex.test.mjs                  수식 렌더링·HTML의 < 거부 규칙 회귀 검사
+tools/physics.test.cjs                물리 엔진의 수치 경계·전하 중성 회귀 검사
 tools/migration.test.cjs              원본 보존·덮어쓰기 거부·집필 책 보호 회귀 검사
 tools/browser-check.cjs               데스크톱·모바일 브라우저 검사
 tools/og.mjs                         서가 공유 이미지(og.png) 생성, Playwright 필요
@@ -89,7 +90,7 @@ node tools/browser-check.cjs --offline  # Playwright 필요
 node tools/browser-check.cjs --dist --mobile cmp/ infra/  # 배포물의 360px 화면·툴팁 검사(책 경로로 거르기)
 ```
 
-브라우저 검사에는 Playwright를 설치하거나 `PW_PATH`로 모듈 위치를 지정합니다. `CHROME`으로 브라우저 실행 파일을 지정할 수 있습니다. 인자로 경로 일부를 주면 해당 페이지만 검사합니다. `--dist`는 빌드 결과인 `.book-dist/`를 열고, `--mobile`은 폭 360px만 검사합니다. 모든 책의 장에서 용어 툴팁의 로딩·포커스·클릭·Escape 동작도 확인합니다. CDN을 사용할 수 있는 환경에서는 `--offline`을 생략해 수식·폰트·3D 라이브러리까지 확인합니다.
+브라우저 검사에는 Playwright를 설치하거나 `PW_PATH`로 모듈 위치를 지정합니다. `CHROME`으로 브라우저 실행 파일을 지정할 수 있습니다. 인자로 경로 일부를 주면 해당 페이지만 검사합니다. `--dist`는 빌드 결과인 `.book-dist/`를 열고, `--mobile`은 폭 360px만 검사합니다. 책 홈·장·실습 모음·찾아보기와 루트 페이지를 검사하며, 모든 책의 장에서 용어 툴팁의 로딩·포커스·클릭·Escape 동작도 확인합니다. 슬라이더 경계·선택 메뉴·체크박스·모드 버튼은 조작 직후마다 비정상 수치가 생기는지 확인합니다. 수치 발산 자체를 가르치는 실습은 상태 요소의 `data-expected-nonfinite`에 정확한 예상 문구를 지정할 수 있습니다. `--offline`은 배포 수식의 KaTeX CSS·폰트를 설치된 패키지에서 제공하고 나머지 외부 요청을 차단합니다. CDN을 사용할 수 있는 환경에서는 `--offline`을 생략해 외부 폰트·3D 라이브러리까지 확인합니다.
 
 빌드와 테스트에는 이전 개별 저장소나 books 프로젝트의 체크아웃이 필요하지 않습니다. 생성된 파일과 SVG 표지를 이 저장소에 포함합니다. KaTeX·three.js·웹 폰트는 각 책에서 사용하던 CDN을 계속 사용합니다. 단, 수식은 빌드가 `katex` 패키지로 미리 렌더링하고 배포물에는 KaTeX 스타일시트만 붙입니다. canonical·OG·구조화 데이터는 소스에 두지 않습니다. `book.json`에 `meta`가 있는 책(지금은 모든 책)은 빌드가 `<title>`·description·`CHAPTERS`·git 커밋 날짜로 생성합니다. 책 폴더에 `og.png`(1200×630)가 있으면 공유 이미지로도 씁니다. 애널리틱스 비컨은 빌드할 때 배포물에만 한 번 추가합니다.
 

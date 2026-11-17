@@ -78,8 +78,8 @@
     Nband = Nband || TC.Nc(T);
     const kt = TC.kB * T, c = (g / Nband) * Math.exp(dE / kt);
     // N+ = N/(1 + c·N+)  → c·N+² + N+ − N = 0
-    const Np = (-1 + Math.sqrt(1 + 4 * c * N)) / (2 * c);
-    return Np / N;
+    // 양의 근을 유리화해 희박한 도핑에서의 뺄셈 소거와 N=0의 0/0을 피한다.
+    return 2 / (1 + Math.sqrt(1 + 4 * c * N));
   };
   /** 중성 영역의 평형 캐리어(볼츠만): net = Nd − Na (cm⁻³) → {n, p, psi(V, Ei 기준 전위)} */
   TC.equil = function (net, T = 300, ni) {
