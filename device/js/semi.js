@@ -116,9 +116,9 @@
     const mumin = mu * 0.06, Nref = 1e17;
     return (mumin + (mu - mumin) / (1 + Math.pow(Math.max(N, 1) / Nref, 0.7))) * Math.pow(Tn, -1.8);
   };
-  /** 전기장 E(V/cm)에서의 드리프트 속도 — Caughey–Thomas 속도 포화 (β: 전자 2, 정공 1) */
+  /** 전기장 E(V/cm) 방향을 양으로 잡은 드리프트 속도(전자 실제 속도는 반대) — Caughey–Thomas 속도 포화 (β: 전자 2, 정공 1) */
   SC.vdrift = function (mu, E, vsat, beta = 2) { const v0 = mu * Math.abs(E); return (Math.sign(E) * v0) / Math.pow(1 + Math.pow(v0 / vsat, beta), 1 / beta); };
-  /** 아인슈타인 관계 D = μkT/q (cm²/s) */
+  /** 비축퇴·등온 아인슈타인 관계 D = μkT/q (cm²/s) */
   SC.diff = (mu, T = 300) => mu * kBeV * T;
   /** 비저항 (Ω·cm) */
   SC.resistivity = function (Nd, Na, mat = "Si", T = 300) {
@@ -188,50 +188,63 @@
     const Vfb = phims - (o.Qox || 0) / Cox;
     const LD = Math.sqrt((es * Vt) / (q * N));
     const r = (ni * ni) / (N * N);
+    const chargeScale = Math.SQRT2 * es * Vt / LD;
     // p형 기준으로 계산하고 n형이면 부호 반전. u = ψs/Vt (p형: 반전은 u>0)
-    const Fm = (u) => Math.sqrt(Math.max(0, Math.exp(-u) + u - 1));
-    const Fmin = (u) => Math.max(0, Math.exp(u) - u - 1);
+    // exp(x) − 1 − x: 평탄대 근처에서도 2차 항이 반올림으로 사라지지 않게 한다.
+    const expRest = (x) => Math.abs(x) < 1e-3
+      ? x * x * (0.5 + x * (1 / 6 + x * (1 / 24 + x * (1 / 120 + x / 720))))
+      : Math.expm1(x) - x;
+    const fieldSquared = (u, mode) => Math.max(0, expRest(-u) + (mode === "dd" ? 0 : r * expRest(u)));
     function Qs(psis, mode) { // 반도체 전하 (C/cm²), p형 기준 부호: 반전·공핍에서 음
       const u = psis / Vt;
-      const F2 = Math.max(0, Math.exp(-u) + u - 1) + (mode === "dd" ? 0 : r * Fmin(u));
-      const F = Math.sqrt(F2);
-      return -Math.sign(u) * Math.SQRT2 * (es * Vt / LD) * F;
+      return -Math.sign(u) * chargeScale * Math.sqrt(fieldSquared(u, mode));
     }
-    function VgOf(psis, mode) { return Vfb + psis - Qs(psis, mode) / Cox; }
-    function psisOf(Vg, mode) { // p형 기준 Vg' = sgn*(Vg−Vfb)+Vfb
-      const target = sgn * (Vg - Vfb) + Vfb;
-      let lo = -40 * Vt, hi = mode === "dd" ? 400 : 2 * phiF + 40 * Vt;
-      if (mode === "dd") hi = Math.max(hi, 50);
-      for (let i = 0; i < 120; i++) { const mid = 0.5 * (lo + hi); if (VgOf(mid, mode) < target) lo = mid; else hi = mid; }
+    function overdrive(psis, mode) { return psis - Qs(psis, mode) / Cox; }
+    function psisOf(Vg, mode) {
+      const target = sgn * (Vg - Vfb);
+      // Surface and oxide voltage drops have the same sign in the ideal MOS stack.
+      let lo = Math.min(0, target), hi = Math.max(0, target);
+      for (let i = 0; i < 56; i++) {
+        const mid = (lo + hi) / 2;
+        if (overdrive(mid, mode) < target) lo = mid; else hi = mid;
+      }
       return 0.5 * (lo + hi);
     }
     const Wmax = Math.sqrt((2 * es * 2 * phiF) / (q * N));
     const Qdmax = q * N * Wmax;
     const Vth = Vfb + sgn * (2 * phiF + Qdmax / Cox);
-    function Cap(Vg, mode) {
-      const dV = 1e-3;
-      if (mode === "lf" || mode === "dd") {
-        const md = mode === "dd" ? "dd" : "lf";
-        const p = psisOf(Vg, md), dQ = Qs(p + dV, md) - Qs(p - dV, md);
-        const Cs = Math.abs(dQ / (2 * dV));
-        return 1 / (1 / Cox + 1 / Math.max(Cs, 1e-30));
-      }
-      // 고주파: 표면 전위는 평형값, 소수 캐리어는 응답하지 않음
-      const p = psisOf(Vg, "lf");
-      const dQ = Qs(p + dV, "dd") - Qs(p - dV, "dd");
-      let Cs = Math.abs(dQ / (2 * dV));
-      if (p > 2 * phiF) Cs = es / Wmax; // 강반전 이후 공핍폭 고정
-      return 1 / (1 / Cox + 1 / Math.max(Cs, 1e-30));
+    function capAtSurface(p, mode) {
+      const u = p / Vt, minority = mode === "lf" ? r : 0;
+      const minoritySlope = minority ? minority * Math.expm1(u) : 0;
+      const slope = u === 0 ? es / LD * Math.sqrt(1 + minority)
+        : chargeScale * Math.abs(-Math.expm1(-u) + minoritySlope) /
+          (2 * Vt * Math.sqrt(fieldSquared(u, mode === "lf" ? "lf" : "dd")));
+      // HF uses the equilibrium DC point, with majority response and a fixed maximum depletion width.
+      const Cs = mode === "hf" && p > 0 ? Math.max(slope, es / Wmax) : slope;
+      return 1 / (1 / Cox + 1 / Cs);
     }
     return {
       Cox, Vfb, Vth, phiF, phims, Wmax, Qdmax, LD, ni, Vt, es, eox, sgn, N, T, mat,
       gamma: Math.sqrt(2 * q * es * N) / Cox,
       Qs: (ps, mode) => sgn * Qs(sgn * ps, mode),
-      Vg: (ps, mode) => Vfb + sgn * (VgOf(sgn * ps, mode) - Vfb),
+      Vg: (ps, mode) => Vfb + sgn * overdrive(sgn * ps, mode),
       psis: (Vg, mode) => sgn * psisOf(Vg, mode || "lf"),
-      C: Cap,
-      /** 반전 전하 (C/cm², 크기) */
-      Qinv(Vg) { const p = psisOf(Vg, "lf"); return Math.abs(Qs(p, "lf") - Qs(p, "dd")); },
+      C: (Vg, mode = "hf") => capAtSurface(psisOf(Vg, mode === "dd" ? "dd" : "lf"), mode),
+      CAtSurface: (ps, mode = "hf") => capAtSurface(sgn * ps, mode),
+      /** 반전 방향의 과잉 소수 캐리어 면전하 |q∫(n−n0)dx| (C/cm²).
+       * 평형·깊은 공핍의 총전하 차이는 서로 다른 공간 분포를 빼므로 이 적분과 다르다.
+       * dψ/dx = Qs(ψ)/ε로 변수를 u=ψ/Vt로 바꿔 동일한 평형 분포를 적분한다.
+       */
+      Qinv(Vg) {
+        const u = psisOf(Vg, "lf") / Vt;
+        if (u <= 0) return 0;
+        const steps = 2 * Math.ceil(Math.max(16, 4 * u)), du = u / steps;
+        const integrand = (v) => v === 0 ? Math.SQRT2 / Math.sqrt(1 + r)
+          : Math.expm1(v) / Math.sqrt(fieldSquared(v, "lf"));
+        let sum = integrand(0) + integrand(u);
+        for (let i = 1; i < steps; i++) sum += (i % 2 ? 4 : 2) * integrand(i * du);
+        return q * es * (ni * ni / N) * Vt / (Math.SQRT2 * es * Vt / LD) * sum * du / 3;
+      },
       /** 공핍 근사 표면 전위에서의 전위 분포 ψ(x) (x cm, 반도체 안 0≤x) */
       W(psis) { const ps = Math.abs(psis); return Math.sqrt((2 * es * Math.min(ps, 2 * phiF + 6 * Vt)) / (q * N)); },
     };
@@ -240,9 +253,9 @@
   /* ------------------------------------------------------------ MOSFET */
   /**
    * EKV형 연속 모델. 문턱 이하(지수)부터 강반전(제곱)까지 매끄럽다.
-   * p: { W, L (cm), tox (cm), mu0, Vth0, n(기울기 계수, 생략 시 바디 계수로 계산), Nsub, Vsb,
+   * p: { W, L (cm), tox (cm), mu0, Vth0(양의 문턱 크기; pMOS도 양수), n(기울기 계수, 생략 시 바디 계수로 계산), Nsub, Vsb,
    *      theta(이동도 열화 1/V), vsat(cm/s), lambda(CLM 1/V), dibl(V/V), type:'n'|'p', T }
-   * SC.mosfet(p, Vgs, Vds) → { Id (A), Vth, n, gm?, regime }
+   * SC.mosfet(p, Vgs, Vds) → { Id (A), Vth, n, regime, Cox, beta, phiF, gamma }
    */
   SC.mosfet = function (p, Vgs, Vds) {
     const T = p.T || 300, Vt = kBeV * T, eox = 3.9 * eps0, Cox = eox / p.tox;
@@ -259,18 +272,26 @@
     const Vov = Vgs - Vth;
     const mu = (p.mu0 || 400) / (1 + (p.theta || 0) * Math.max(0, Vov));
     const beta = mu * Cox * (p.W / p.L);
-    const Fi = (x) => { const l = x > 40 ? x / 2 : Math.log(1 + Math.exp(x / 2)); return l * l; };
-    const If = Fi(Vov / (n * Vt)), Ir = Fi((Vov - n * Vds) / (n * Vt));
+    const softplus = (x) => Math.max(0, x) + Math.log1p(Math.exp(-Math.abs(x)));
+    const a = Vov / (2 * n * Vt), forward = softplus(a);
+    function transfer(Vd) {
+      const d = Vd / (2 * Vt);
+      const backward = softplus(a - d);
+      // log((1 + exp(a)) / (1 + exp(a-d))) as a small finite difference.
+      const reverseOccupation = 1 / (1 + Math.exp(d - a));
+      const difference = d < 1 ? Math.log1p(reverseOccupation * Math.expm1(d)) : forward - backward;
+      return difference * (forward + backward);
+    }
     const Ispec = 2 * n * beta * Vt * Vt;
-    let Id = Ispec * (If - Ir);
+    let Id = Ispec * transfer(Vds);
     // 속도 포화: 유효 Vds 감소 (간단 보정)
     if (p.vsat) {
       const Ec = (2 * p.vsat) / mu;
       // 긴 채널 Vdsat: 강반전에서 Vov/n, 문턱 이하에서 약 Vt. max() 대신 매끄럽게 이어 gm에 꺾임이 생기지 않게 한다.
-      const VdsatLong = Vt * (1 + 2 * Math.log(1 + Math.exp(Math.min(40, Vov / (2 * n * Vt)))));
+      const VdsatLong = Vt * (1 + 2 * forward);
       const Vdsat = (VdsatLong * Ec * p.L) / (VdsatLong + Ec * p.L);
       const Vdeff = Vds / Math.pow(1 + Math.pow(Vds / Vdsat, 4), 0.25);
-      Id = (Ispec * (If - Fi((Vov - n * Vdeff) / (n * Vt)))) / (1 + Vdeff / (Ec * p.L));
+      Id = Ispec * transfer(Vdeff) / (1 + Vdeff / (Ec * p.L));
     }
     Id *= 1 + (p.lambda || 0) * Vds;
     const regime = Vov < -2 * n * Vt ? "문턱 이하" : Vds < Vov / n ? "선형" : "포화";
@@ -283,14 +304,19 @@
   /** 열전자 방출 J = A** T² exp(−φB/kT)(exp(V/nkT)−1), A** 기본 Si n형 112 A/cm²K² */
   SC.schottkyJ = function (phiB, V, T = 300, Astar = 112, nIdeal = 1) {
     const kT = kBeV * T, Js = Astar * T * T * Math.exp(-phiB / kT);
-    return { J: Js * (Math.exp(V / (nIdeal * kT)) - 1), Js };
+    return { J: Js * Math.expm1(V / (nIdeal * kT)), Js };
   };
   /** 영상력 장벽 저하 Δφ = √(qE/4πεs) (V), E: V/cm */
   SC.imageLowering = (E, mat = "Si") => Math.sqrt((q * Math.abs(E)) / (4 * Math.PI * M(mat).eps * eps0));
 
   /* ------------------------------------------------------------ 광 */
   /** Si 흡수 계수 α(λ) (cm⁻¹), λ: nm. Green(2008) 표 값의 로그 보간 */
-  const ALPHA_SI = [[300, 1.73e6], [350, 1.04e6], [370, 7.37e5], [400, 9.52e4], [450, 2.41e4], [500, 1.11e4], [550, 6.39e3], [600, 4.14e3], [650, 2.81e3], [700, 1.9e3], [750, 1.3e3], [800, 8.5e2], [850, 5.35e2], [900, 3.06e2], [950, 1.57e2], [1000, 64], [1050, 16.3], [1100, 3.5], [1150, 0.68], [1200, 0.022]];
+  const ALPHA_SI = [
+    [300, 1.77e6], [350, 1.06e6], [370, 7.37e5], [380, 3.13e5], [390, 1.43e5], [400, 9.30e4],
+    [450, 2.41e4], [500, 1.11e4], [550, 6.39e3], [600, 4175], [650, 2790], [700, 1890],
+    [750, 1310], [800, 850], [850, 534], [900, 303], [950, 156], [1000, 64], [1050, 16.3],
+    [1100, 3.5], [1140, 1], [1150, 0.68], [1170, 0.22], [1180, 0.065], [1200, 0.022],
+  ];
   SC.alphaSi = function (nm) {
     const t = ALPHA_SI;
     if (nm <= t[0][0]) return t[0][1];
