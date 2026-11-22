@@ -350,7 +350,7 @@ ${body}
 <footer class="foot">
   <div class="wrap">
     <p><a class="foot-brand" href="./">SemiBooks</a><span>직접 만져 보며 배우는 반도체</span></p>
-    <small>© 2026 geniuskey 및 각 책 기여자 · <a href="LICENSE.md">콘텐츠 CC BY 4.0 · 코드 MIT</a></small>
+    <small>© 2026 <a href="https://euiyun.com">Euiyun Lab</a> 및 각 책 기여자 · <a href="LICENSE.md">콘텐츠 CC BY 4.0 · 코드 MIT</a></small>
   </div>
 </footer>
 <script>
