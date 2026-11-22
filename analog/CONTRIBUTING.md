@@ -123,9 +123,9 @@
 - 엔진으로 확인한 값(300 K):
 ```js
 const r = AN.ota2Open();             // AB-1 OTA 기본값: Cc 1 pF, Rz 2 kΩ, CL 2 pF, 꼬리 20 µA, 2단 80 µA
-// r.a0 ≈ 71.8 dB(1단 약 102배 + 2단 약 38배), r.gbw ≈ 23.5 MHz, r.m.pm ≈ 67.5°, 이득 여유 약 52 dB
+// r.a0 ≈ 71.8 dB(1단 약 102배 × 2단 약 38배), r.gbw ≈ 23.5 MHz, r.m.pm ≈ 67.5°, 이득 여유 약 52 dB
 // Rz = 0이면 PM ≈ 51°, Rz = 0 & Cc 0.6 pF면 PM ≈ 40°(GBW 35 MHz), CL 5 pF면 PM ≈ 50°
-// 전원 전류 약 121 µA → 약 218 µW. 슬루율 ≈ 18 V/µs (꼬리 20 µA / Cc 1 pF = 20 V/µs의 근사)
+// 전원 전류 약 121 µA → 약 218 µW. 0.6 V 버퍼 계단의 최대 기울기 상승 18.4, 하강 17.5 V/µs (I_tail/Cc 근사: 20 V/µs)
 // 동작점: M1 gm ≈ 169 µS, gm/ID ≈ 17(중간 반전), M6 gm ≈ 761 µS, gm/ID ≈ 9.3. 모든 소자 포화.
 // 입력 환산 잡음 ≈ 54 nV/√Hz @1 kHz(1/f, 코너 약 14 kHz), 15 @100 kHz, 14 @1 MHz
 // 몬테카를로 200회(M1~M4 펠그롬 부정합) 오프셋 σ ≈ 2.1 mV → 3σ ≈ 6.2 mV (사양 5 mV 초과)
@@ -145,15 +145,15 @@ const nm = AN.mos({type: "n", W: 10e-6, L: 1e-6}, 0.65, 0.9);   // id ≈ 62 µA
 | 07 주파수 응답 | 보상 없는 2단 OTA의 두 극점이 붙어 있다는 것. 밀러 효과로 Cc가 1단 출력에서 (1+A2)배로 보인다. |
 | 08 피드백 | PGA 이득 40을 피드백으로: β = 1/40, DC 루프 이득 약 3,900/40 ≈ 97 → 이득 오차 약 1%. 폐루프 대역 ≈ GBW/40 ≈ 590 kHz ≫ 10 kHz. |
 | 09 연산 증폭기 | AB-1 OTA 전체 설계를 손으로 하고 엔진으로 검증: 71.8 dB, 23.5 MHz, 약 218 µW, SR 약 18 V/µs. Rz 없이는 PM 약 51°(다음 장 문제). 시스템적 오프셋 조건 (W/L)6/(W/L)4 = 2(W/L)7/(W/L)5. |
-| 10 안정도 | Rz = 2 kΩ로 우반면 영점을 옮겨 PM 약 68°. Rz 1 kΩ면 약 60°, Cc 0.6 pF·Rz 0이면 약 40°(울림). CL이 5 pF로 늘면 약 50°. 단위 이득 버퍼 계단 응답의 오버슈트. |
-| 11 잡음 | OTA 입력 환산 잡음 14 nV/√Hz @1 MHz, 1/f 때문에 약 54 nV/√Hz @1 kHz. 10 kHz 대역 센서 신호에는 1/f가 문제 → 초핑 언급. 샘플링 커패시터 1 pF의 kT/C 잡음 약 64 µV rms가 12비트 LSB(293 µV)의 몇 분의 일인지. |
+| 10 안정도 | Rz = 2 kΩ로 우반면 영점을 옮겨 PM 약 68°. Rz 1 kΩ면 약 60°, Cc 0.6 pF·Rz 0이면 약 40°(울림). CL이 5 pF로 늘면 약 50°. 0.1 V 단위 이득 버퍼 계단에서 오버슈트 2.2%, 1% 정착 28.7 ns. |
+| 11 잡음 | OTA 입력 환산 잡음 14 nV/√Hz @1 MHz, 1/f 때문에 약 54 nV/√Hz @1 kHz. 센서 ±10 mV 명목 신호의 SNR 60.9 dB, 이상 초핑에서 67.0 dB. ADC 풀스케일 기준의 잡음 한정 환산은 10.41 → 11.43비트. 샘플링 커패시터 1 pF의 kT/C 잡음 약 64 µV rms가 12비트 LSB(293 µV)의 몇 분의 일인지. |
 | 12 부정합 | 몬테카를로 오프셋 σ ≈ 2.1 mV, 3σ ≈ 6.2 mV > 사양 5 mV. M1~M4 면적을 키우면 σ ∝ 1/√(WL). 입력 쌍 공통 중심 배치. |
 | 13 밴드갭 | PNP ΔVbe(1:8) 53.8 mV, +0.179 mV/K. Vbe 기울기 약 −1.8 mV/K를 상쇄하려면 ΔVbe를 약 10배 → 약 1.2 V. 목표 20 ppm/°C, 곡률. |
 | 14 LDO | 배터리 2.5~3.6 V → 1.8 V, 10 mA, 드롭아웃 200 mV. PMOS 패스 소자 크기, 부하 과도, PSRR 40 dB @1 MHz 목표. 오차 증폭기는 AB-1 OTA 변형. |
-| 15 스위치드 커패시터 | ADC 앞 샘플러: Cs 1 pF, kT/C 64 µV rms. 스위치 Ron과 트래킹 대역, 전하 주입, 부트스트랩. OTA의 정착 시간(1 MS/s에서 반 주기 안에 12비트 정착). |
+| 15 스위치드 커패시터 | ADC 앞 샘플러: Cs 1 pF, kT/C 64 µV rms. 스위치 Ron과 트래킹 대역, 전하 주입, 부트스트랩. OTA의 ½ LSB 정착 시간. 실습의 500 ns 반 주기와 AB-1 SAR의 187.5 ns 추적 예산을 구분한다. |
 | 16 ADC | 12비트 1 MS/s SAR: LSB 293 µV, 이상 SNDR 74 dB, 목표 ENOB ≥ 10.5. 커패시터 DAC 부정합, 비교기 잡음, 클록 16+ 사이클. |
-| 17 ΔΣ | 온도 채널: 2차 1비트 변조기, OSR 128 → 이상 SQNR 약 100 dB, 실제 변조기(−6 dBFS) 측정 약 84 dB. 16비트 목표와의 차이, 데시메이션. |
-| 18 PLL | 4 MHz → 32 MHz(N = 8). 지터 10 ps rms가 ADC SNR을 얼마나 깎는가(입력 500 kHz에서 약 90 dB 한계). 루프 대역과 위상 여유. |
+| 17 ΔΣ | 온도 채널: 2차 1비트 변조기, OSR 128 → 이상 SQNR 약 100 dB, 실제 변조기(−6 dBFS) 측정 약 84 dB. 16비트 목표와의 차이, CIC ↓32와 FIR ↓2를 거친 32 kS/s 출력. |
+| 18 PLL | 4 MHz → 32 MHz(N = 8). 기본 모형의 약 17 ps rms 지터는 500 kHz 사인에서 약 86 dB의 SNR 한계를 준다. 루프 대역과 위상 여유. |
 | 19 실험실 | 독자가 AB-1 신호 사슬을 직접 조립·조정한다. 회로도 편집기 + AN.circuit. |
 
 ## JS 헬퍼 (`AB`, `js/common.js`)
@@ -193,6 +193,7 @@ const tr = c.tran({ tstop: 5e-6, dt: 5e-9 });     // tr.t, tr.v("out"), tr.i("Vd
 const nz = c.noise("out", { f0: 1, f1: 1e9, n: 100, input: "Vin" }); // nz.f, nz.out, nz.inp(V²/Hz), nz.contrib.M1, nz.thermal, nz.flicker, nz.total(arr, f0, f1)
 const sw = c.dc(AN.linspace(0, 1.8, 61), (c, v) => c.set("Vin", "dc", v));  // sw.v("out"), sw.dev("M1", "gm")
 ```
+- 잡음 적분: `nz.total(arr, f0, f1)`는 주어진 주파수 표본의 PSD를 선형 보간해 지정 범위와 겹치는 부분을 적분하고 rms를 돌려준다.
 - 소자: `R(a, b, r)`, `C(a, b, c, {ic})`, `L(a, b, l)`, `V(a, b, 값)`(a가 +), `I(a, b, 값)`(소스 안을 a → b로 흐른다. 즉 b로 들어간다), `E(a, b, cp, cn, gain | {fn: vd => vout})`(전압 제어 전압원. fn이면 비선형: `v => 0.9 + 0.9 * Math.tanh(1e4 * v / 0.9)` 같은 포화 증폭기·비교기), `G(a, b, cp, cn, gm)`, `M(d, g, s, b, dev)`, `D(a, k, {is, n, area} | {pnp: true, area})`(pnp는 `AN.PROC.pnp` 온도 모델), `S(a, b, ctrl(t) → bool | {cp, cn, vt}, {ron, roff})` 스위치.
 - 값: 숫자(dc) 또는 `{dc, ac, acPh(도), wave(t)}`. `op()`는 dc를, `tran()`은 wave를 쓴다(시작점은 wave(0)의 동작점). 파형: `AN.wave.sin(off, amp, f, td, ph)`, `.pulse(v1, v2, td, tr, tf, pw, per)`, `.step(v0, v1, t0, tr)`, `.pwl([[t, v], …])`, `.clock(per, duty, vh, vl, td)`.
 - 값 바꾸기: `c.set("RD", "r", 20e3)`, `c.set("M1", "W", 20e-6)`, `c.set("Vin", "dc", 0.7)`, `c.T = 350`. 다음 `op()`는 직전 해에서 출발하므로 슬라이더를 움직여도 빠르다. 마디 목록 `c.nodes()`.

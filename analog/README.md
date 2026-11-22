@@ -13,12 +13,14 @@
 배포 주소: https://semi.euiyun.com/analog/
 
 ## 실행
-빌드 과정이 없는 정적 사이트입니다.
+브라우저에서 실행되는 정적 사이트입니다. 아래 명령은 SemiBooks 저장소 루트에서 실행합니다.
 
 ```bash
-python -m http.server 8000   # → http://localhost:8000
+npm ci
+npm run build
+python3 -m http.server 8000 --directory .book-dist   # http://localhost:8000/analog/
 ```
-`index.html`을 브라우저로 바로 열어도 동작합니다. KaTeX와 폰트는 CDN에서 불러오므로 인터넷 연결이 필요합니다.
+빌드가 수식을 KaTeX HTML로 렌더링합니다. 수식 스타일과 웹 폰트는 CDN에서 불러옵니다.
 
 ## 구성
 
@@ -57,7 +59,7 @@ python -m http.server 8000   # → http://localhost:8000
 시뮬레이터의 수치는 교육용 근사 모델(가상 공정 AB180, 제곱 법칙 + 약반전 연속 MOSFET 모델)이며, 타깃 칩 AB-1은 가상입니다.
 
 ## 배포 (GitHub Pages)
-저장소 루트가 그대로 사이트입니다. `CNAME`에 `analogbook.euiyun.com`이 들어 있고, `.nojekyll`로 Jekyll 처리를 끕니다. `main` 브랜치에 푸시하면 배포됩니다.
+SemiBooks의 GitHub Pages 워크플로가 `npm run build`로 만든 `.book-dist/`를 배포합니다. 도메인은 저장소 루트의 `CNAME`에 있는 `semi.euiyun.com`입니다.
 
 ## 용어집과 본문 뜻풀이
 

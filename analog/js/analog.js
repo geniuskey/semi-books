@@ -666,7 +666,17 @@
       }
     });
     const inp = inEl ? outPsd.map((p, k) => p / Math.max(gain[k] * gain[k], 1e-60)) : null;
-    const total = (arr, f0 = f[0], f1 = f[f.length - 1]) => { let s = 0; for (let k = 1; k < f.length; k++) { if (f[k] < f0 || f[k - 1] > f1) continue; s += 0.5 * (arr[k] + arr[k - 1]) * (f[k] - f[k - 1]); } return Math.sqrt(s); };
+    const total = (arr, f0 = f[0], f1 = f[f.length - 1]) => {
+      let variance = 0;
+      for (let k = 1; k < f.length; k++) {
+        const lo = Math.max(f[k - 1], f0), hi = Math.min(f[k], f1);
+        if (hi <= lo) continue;
+        const slope = (arr[k] - arr[k - 1]) / (f[k] - f[k - 1]);
+        const midpoint = (lo + hi) * 0.5;
+        variance += (arr[k - 1] + slope * (midpoint - f[k - 1])) * (hi - lo);
+      }
+      return Math.sqrt(variance);
+    };
     return { f, out: outPsd, inp, gain, contrib, thermal, flicker, total, op };
   };
 
