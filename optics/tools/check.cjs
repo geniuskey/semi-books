@@ -6,13 +6,16 @@ const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
 
+// 장 페이지가 ../../shared/ 런타임을 쓰므로 저장소 최상위를 서빙하고 책은 /optics/ 아래에서 연다.
 const root = path.resolve(__dirname, "..");
+const siteRoot = path.resolve(root, "..");
+const base = "/" + path.basename(root);
 const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json" };
 const server = http.createServer((req, res) => {
   let p = decodeURIComponent(req.url.split("?")[0]);
   if (p.endsWith("/")) p += "index.html";
-  const f = path.join(root, p);
-  if (!f.startsWith(root) || !fs.existsSync(f)) { res.writeHead(404); return res.end(); }
+  const f = path.join(siteRoot, p);
+  if (!f.startsWith(siteRoot) || !fs.existsSync(f)) { res.writeHead(404); return res.end(); }
   res.writeHead(200, { "content-type": types[path.extname(f)] || "application/octet-stream" });
   fs.createReadStream(f).pipe(res);
 });
@@ -26,7 +29,7 @@ const server = http.createServer((req, res) => {
   const browser = await chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
   let bad = 0;
   for (const slug of slugs) {
-    const url = slug === "index" ? `http://localhost:${port}/index.html` : `http://localhost:${port}/chapters/${slug}.html`;
+    const url = slug === "index" ? `http://localhost:${port}${base}/index.html` : `http://localhost:${port}${base}/chapters/${slug}.html`;
     if (slug !== "index" && !fs.existsSync(path.join(root, "chapters", slug + ".html"))) { console.log(`✗ ${slug}: 파일 없음`); bad++; continue; }
     const out = [];
     for (const width of [1280, 360]) {
