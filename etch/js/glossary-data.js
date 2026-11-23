@@ -66,7 +66,7 @@ window.BOOK_GLOSSARY = {
     {"ko":"이온 그림자","en":"Ion shadowing","abbr":"","def":"깊은 홈의 바닥이 입구를 좁은 입체각으로만 보아 비스듬한 이온이 벽에 가려지는 현상.","chapters":["arde"],"category":"transport"},
     {"ko":"역 RIE 지연","en":"Inverse RIE lag","abbr":"","def":"좁은 홈이 오히려 빨리 깎이는 현상. 좁은 홈에는 고분자 전구체가 덜 들어가 바닥 보호막이 얇기 때문이다.","chapters":["arde"],"category":"transport"},
     {"ko":"로딩","en":"Loading effect","abbr":"","def":"열린 면적이 클수록 반응종이 소모돼 식각 속도가 떨어지는 현상. 웨이퍼 전체(매크로)와 칩 안 국부(마이크로)로 나눈다.","chapters":["arde"],"category":"transport"},
-    {"ko":"체류 시간","en":"Residence time","abbr":"","def":"기체 분자가 챔버에 머무는 평균 시간. 부피 × 압력 / 유량. 짧으면 생성물이 빨리 빠지고 라디칼 조성이 바뀐다.","chapters":["reactors"],"category":"transport"},
+    {"ko":"체류 시간","en":"Residence time","abbr":"","def":"기체 분자가 챔버에 머무는 평균 시간. 부피 × 압력 / 유량. 짧으면 생성물이 빨리 빠지고 라디칼 조성이 바뀐다.","chapters":["plasma"],"category":"transport"},
     {"ko":"프로파일","en":"Etch profile","abbr":"","def":"식각된 홈의 단면 모양. 측벽 각, 보잉, 언더컷, 풋팅, 마이크로트렌치 같은 말로 기술한다.","chapters":["profile"],"category":"profile"},
     {"ko":"측벽 각","en":"Sidewall angle","abbr":"","def":"측벽이 바닥 평면과 이루는 각. 90°가 수직이고 작으면 테이퍼, 크면 역테이퍼다. EB-20 규격은 88.5° 이상.","chapters":["profile"],"category":"profile"},
     {"ko":"테이퍼","en":"Taper","abbr":"","def":"아래로 갈수록 좁아지는 측벽. 고분자 증착이 식각보다 우세하면 생긴다.","chapters":["profile"],"category":"profile"},
