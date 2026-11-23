@@ -251,7 +251,7 @@
         <div class="stat"><span class="k">눈 폭 (Q≥3)</span><span class="v" id="ey-w">—</span></div>
         <div class="stat"><span class="k">추정 BER</span><span class="v" id="ey-ber">—</span></div>
       </div>
-      <div class="sim-note">무작위 심볼 1,500개를 송신 진폭 ±400 mV로 보내 2극 저역 통과 채널(손실은 주파수에 대략 비례해 커진다), 가우스 잡음, 랜덤 지터를 거친 뒤 겹쳐 그렸다. 아래 막대는 비트 하나만 보냈을 때의 <b>펄스 응답</b>을 UI 간격으로 잰 값(커서)이다. h₀이 신호, h₋₁·h₁·h₂…가 이웃 비트로 번지는 ISI다. 후 탭을 음수로 키우면 h₁이 줄어든다. BER은 가장 좋은 표본 위치에서 0과 1(PAM4는 이웃 레벨) 분포의 \(Q=(\mu_1-\mu_0)/(\sigma_1+\sigma_0)\)로 \(\tfrac12\operatorname{erfc}(Q/\sqrt2)\)를 계산한 추정치다. 실제 PCIe·USB 수신기는 여기에 CTLE와 DFE를 더한다.</div>
+      <div class="sim-note">무작위 심볼 1,500개를 송신 진폭 ±400 mV로 보내 2극 저역 통과 채널(손실은 주파수에 대략 비례해 커진다), 가우스 잡음, 랜덤 지터를 거친 뒤 겹쳐 그렸다. 아래 막대는 비트 하나만 보냈을 때의 <b>펄스 응답</b>을 UI 간격으로 잰 값(커서)이다. h₀이 신호, h₋₁·h₁·h₂…가 이웃 비트로 번지는 ISI다. 후 탭을 음수로 키우면 h₁이 줄어든다. BER은 가장 좋은 표본 위치에서, ISI와 지터로 흩어진 표본 하나하나에 가우스 잡음이 더해져 판정 문턱(이웃 두 레벨 평균의 가운데)을 넘을 확률을 평균한 추정치다(잡음만 있는 경우 아래 식과 같다). 눈 높이는 가장 나쁜 표본에서 잡음 ±3σ를 뺀 값이다. 실제 PCIe·USB 수신기는 여기에 CTLE와 DFE를 더한다.</div>
     </div>
     <div class="predict"><strong>NRZ 32 Gb/s에서 눈이 감겼다. PAM4로 바꾸면 나아질까?</strong>
       <p>PAM4는 한 심볼에 2비트를 싣는다. 같은 비트 속도에서 나이퀴스트 주파수와 레벨 간격이 어떻게 변하는지 생각해 보자.</p>
@@ -318,7 +318,7 @@
           <button class="opt">폴링은 CPU를 전혀 쓰지 않아서</button>
           <button class="opt" data-correct>이벤트마다 인터럽트 진입·복귀 오버헤드가 붙어 CPU가 처리기만 돌다 끝나므로</button>
         </div>
-        <div class="quiz-exp">오버헤드 2 µs × 50만 번 = 1초. CPU 하나가 통째로 인터럽트 진입·복귀에만 쓰인다. 이벤트가 잦으면 어차피 매번 할 일이 있으므로 폴링이 낫다.</div></div>
+        <div class="quiz-exp">진입·복귀 오버헤드를 2 µs로만 잡아도 2 µs × 50만 번 = 1초다. CPU 하나가 통째로 인터럽트 진입·복귀에만 쓰인다. 이벤트가 잦으면 어차피 매번 할 일이 있으므로 폴링이 낫다.</div></div>
       <div class="quiz-q"><p>Q3. GIC에서 중첩(선점)을 허용하면 좋아지는 것은?</p>
         <div class="opts">
           <button class="opt" data-correct>긴 저우선순위 처리기 도중에도 고우선순위 인터럽트가 바로 처리되어 그 지연이 짧아진다</button>
@@ -870,7 +870,7 @@
       // fold into eye: window [pk - OS, pk + OS) relative to symbol start
       var COLS = 2 * OS, ROWS = 96, VM = A * 1.35;
       var H = new Uint16Array(COLS * ROWS), vals = [];
-      for (var c = 0; c < COLS; c++) vals.push(lev.map(function () { return { s: 0, ss: 0, n: 0 }; }));
+      for (var c = 0; c < COLS; c++) vals.push(lev.map(function () { return []; }));
       var nsg = st.n * 1e-3, jsig = st.j * 1e-12 / Ts;
       for (var k3 = 4; k3 < NS - 4; k3++) {
         var d = Math.round(randn() * jsig);
@@ -879,21 +879,29 @@
           var ix = base + c2; if (ix < 0 || ix >= wv.length) continue;
           var vv = wv[ix] + randn() * nsg;
           var row = Math.floor((VM - vv) / (2 * VM) * ROWS); if (row >= 0 && row < ROWS) H[row * COLS + c2]++;
-          var acc = vals[c2][sym[k3]]; acc.s += vv; acc.ss += vv * vv; acc.n++;
+          vals[c2][sym[k3]].push(wv[ix]); // 잡음 전 값(ISI·지터만 반영)
         }
       }
-      // metrics per column
-      var bestQ = -1, bestC = OS, bestH = 0, qcol = [];
+      // 통계적 아이: 각 표본(ISI·지터로 흩어진 값)에 가우스 잡음 σ가 더해져 판정 문턱을 넘을 확률을 평균한다
+      var sg = Math.max(1e-6, nsg);
+      var Qf = function (x) { if (x < 0) return 1 - Qf(-x); return x > 7 ? Math.exp(-x * x / 2) / (x * Math.sqrt(2 * Math.PI)) : 0.5 * SB.erfc(x / Math.SQRT2); };
+      var mean = function (a) { var m = 0; a.forEach(function (v) { m += v; }); return a.length ? m / a.length : 0; };
+      var bestB = 2, bestC = OS, bestH = -1e9, colB = [];
       for (var c3 = 0; c3 < COLS; c3++) {
-        var st2 = vals[c3].map(function (o) { var mu = o.s / o.n, sd = Math.sqrt(Math.max(1e-12, o.ss / o.n - mu * mu)); return [mu, sd]; });
-        var qmin = 1e9, hmin = 1e9;
-        for (var e = 0; e < st2.length - 1; e++) { var lo = st2[e], hi = st2[e + 1]; var q = (hi[0] - lo[0]) / (hi[1] + lo[1]); if (q < qmin) qmin = q; var hh = (hi[0] - 3 * hi[1]) - (lo[0] + 3 * lo[1]); if (hh < hmin) hmin = hh; }
-        qcol.push(qmin);
-        if (qmin > bestQ) { bestQ = qmin; bestC = c3; bestH = hmin; }
+        var L3 = vals[c3], err = 0, tot = 0, hmin = 1e9;
+        L3.forEach(function (a) { tot += a.length; });
+        for (var e = 0; e < L3.length - 1; e++) {
+          var lo = L3[e], hi = L3[e + 1], thr = (mean(lo) + mean(hi)) / 2, mxLo = -1e9, mnHi = 1e9;
+          lo.forEach(function (v) { err += Qf((thr - v) / sg); if (v > mxLo) mxLo = v; });
+          hi.forEach(function (v) { err += Qf((v - thr) / sg); if (v < mnHi) mnHi = v; });
+          var hh = (mnHi - 3 * nsg) - (mxLo + 3 * nsg); if (hh < hmin) hmin = hh;
+        }
+        var b0 = tot ? err / tot * (pam ? 0.5 : 1) : 1; // PAM4: 그레이 부호라 심볼 오류 하나 ≈ 비트 오류 하나(2비트 중)
+        colB.push(b0);
+        if (b0 < bestB || (b0 === bestB && hmin > bestH)) { bestB = b0; bestC = c3; bestH = hmin; }
       }
-      var wcnt = qcol.filter(function (q) { return q >= 3; }).length;
-      var ber = 0.5 * SB.erfc(Math.max(0, bestQ) / Math.SQRT2) * (pam ? 0.75 : 1);
-      if (bestQ > 9) ber = 0.5 * Math.exp(-bestQ * bestQ / 2) / (bestQ * Math.sqrt(2 * Math.PI)) * (pam ? 0.75 : 1);
+      var wcnt = colB.filter(function (b) { return b <= 1.35e-3; }).length; // Q ≥ 3에 해당
+      var ber = bestB, bestQ = 0;
       return { H: H, COLS: COLS, ROWS: ROWS, VM: VM, curs: curs, bestC: bestC, bestQ: bestQ, eyeH: bestH, eyeW: wcnt / OS, ber: ber, fN: fN, loss: loss, lev: lev, pam: pam };
     }
     var cv = SB.canvas("#cv-eye", function (ctx, w, h) {
