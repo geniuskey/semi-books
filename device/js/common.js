@@ -76,7 +76,7 @@
   /** 이진 접두사 바이트 포맷: PB.bytes(3*2**30) → "3 GiB" (bin=false면 10진 GB) */
   PB.bytes = function (x, digits = 3, bin = true) {
     if (!isFinite(x)) return "—";
-    const base = bin ? 1024 : 1000, units = bin ? ["B", "KiB", "MiB", "GiB", "TiB", "PiB"] : ["B", "KB", "PB", "GB", "TB", "PB"];
+    const base = bin ? 1024 : 1000, units = bin ? ["B", "KiB", "MiB", "GiB", "TiB", "PiB"] : ["B", "KB", "MB", "GB", "TB", "PB"];
     let i = 0, a = Math.abs(x);
     while (a >= base * 0.9995 && i < units.length - 1) { a /= base; i++; }
     return Number((Math.sign(x) * a).toPrecision(digits)) + " " + units[i];
