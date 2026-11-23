@@ -39,7 +39,7 @@ EtchBook의 [CONTRIBUTING.md](https://github.com/geniuskey/etchbook/blob/main/CO
 
 - 타깃: 가상의 로직 칩 pMOS의 **소스·드레인 익스텐션**. 붕소, 도즈 1×10¹⁵ cm⁻², 배경(할로 + n웰) 1×10¹⁸ cm⁻³. 실제 회사·제품과 무관하다.
 - 규격(이 책이 정한 것): 접합 깊이 x_j ≤ 20 nm(배경 10¹⁸ 기준), 면저항 R_s ≤ 700 Ω/□.
-- 엔진 기준값(`DP.implant` + `DP.anneal`, 0.5 keV B 1e15, 배경 1e18): 주입 직후 x_j 약 12.5 nm(비정질), 결정 7°/22°면 약 24 nm(채널링). Ge PAI 10 keV 1e15 → 비정질 약 16 nm. PAI 포함 스파이크 1050 °C: TED 없음 약 27 nm, TED 약 37 nm, R_s 약 245 Ω/□. 플래시 1300 °C: TED 약 17.5 nm / 233 Ω/□, 탄소(TED 원천 1/4) 약 13.9 nm / 291 Ω/□. 레이저 1350 °C: 약 12.8 nm / 320 Ω/□. 최종 DB-20 = Ge PAI + C + B 0.5 keV + 플래시 1300 °C.
+- 엔진 기준값(`DP.implant` + `DP.anneal`, 0.5 keV B 1e15, 배경 1e18): 주입 직후 x_j 약 12.5 nm(비정질), 결정 7°/22°면 약 24 nm(채널링). Ge PAI 10 keV 1e15 → 비정질 약 16 nm. PAI 포함 스파이크 1050 °C: TED 없음 약 27 nm, TED 약 37 nm, R_s 약 245 Ω/□. 플래시 1300 °C: TED 약 17.5 nm / 233 Ω/□, 탄소(TED 원천 1/4) 약 13.9 nm / 291 Ω/□. 레이저 1350 °C: 약 12.7 nm / 326 Ω/□. 최종 DB-20 = Ge PAI + C + B 0.5 keV + 플래시 1300 °C.
 
 | 장 | 이 장에서 다루는 것 |
 |---|---|
@@ -53,7 +53,7 @@ EtchBook의 [CONTRIBUTING.md](https://github.com/geniuskey/etchbook/blob/main/CO
 | 08 저지 | Rp 약 3 nm. 주입 직후 x_j 약 12 nm. |
 | 09 채널링 | 저에너지 B의 채널링 꼬리가 x_j를 밀어낸다. 틸트·트위스트, PAI. |
 | 10 손상 | 붕소는 스스로 비정질화하지 않는다. Ge PAI와 EOR 결함. |
-| 11 어닐 | 스파이크는 x_j 약 26 nm. 플래시는 13 nm대. 활성화율. |
+| 11 어닐 | 스파이크는 x_j 약 37 nm(TED 없으면 약 27 nm). 플래시는 13 nm대. 활성화율. |
 | 12 확산 | TED가 몇 nm를 더한다. 농도 의존 확산. |
 | 13 써멀 버짓 | x_j–R_s 지도에서 규격 상자에 들어가는 방법은 ms 어닐뿐. |
 | 14 계측 | SIMS로 x_j를, 4점 탐침으로 R_s를 잰다. SIMS 깊이 분해능. |
