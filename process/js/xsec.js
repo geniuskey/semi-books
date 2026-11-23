@@ -71,13 +71,14 @@
   const DIFF = { B: [0.76, 3.46], P: [3.85, 3.66], As: [0.066, 3.44], Sb: [0.214, 3.65] };
   const kB = 8.617e-5;
   function diffusivity(sp, Tc) { const d = DIFF[sp]; return d[0] * Math.exp(-d[1] / (kB * (Tc + 273.15))); }
-  // Deal–Grove 계수 (100) 실리콘. B: µm²/h, B/A: µm/h
+  // Deal–Grove 계수. B: µm²/h, B/A: µm/h. C₂는 (111) 값(Plummer·Deal·Griffin 표 6-2)이므로
+  // 기본인 (100) 실리콘은 B/A를 1.68로 나눈다(B는 방향과 무관).
   function dealGrove(Tc, ambient, orient) {
     const T = Tc + 273.15;
     let B, BA;
     if (ambient === "wet") { B = 386 * Math.exp(-0.78 / (kB * T)); BA = 1.63e8 * Math.exp(-2.05 / (kB * T)); }
     else { B = 772 * Math.exp(-1.23 / (kB * T)); BA = 6.23e6 * Math.exp(-2.0 / (kB * T)); }
-    if (orient === "111") BA *= 1.68;
+    if (orient !== "111") BA /= 1.68;
     return { B, BA, A: B / BA };
   }
   /** 주어진 시간(h) 후 산화막 두께(µm), 초기 두께 xi(µm) */

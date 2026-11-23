@@ -73,3 +73,13 @@ for(const sign of [-1,1]){
 }
 assert(!rules(Array(8).fill(0)).viol.includes('한쪽 8연속'));
 console.log({planarRK4Cases:planarCases,planarConservationPoints:36*601,spcWindows,spcRunFixtures:7});
+
+// Follow-up: Deal–Grove C2 constants are (111) values (Plummer Table 6-2); (100) divides B/A by 1.68, B is orientation-independent.
+{
+ const d100=XS.dealGrove(1000,'dry','100'),d111=XS.dealGrove(1000,'dry','111'),dDef=XS.dealGrove(1000,'dry');
+ assert(Math.abs(d111.BA/d100.BA-1.68)<1e-9&&Math.abs(d111.B-d100.B)<1e-12&&dDef.BA===d100.BA,'Deal–Grove orientation');
+ assert(Math.abs(d111.BA-6.23e6*Math.exp(-2.0/(8.617e-5*1273.15)))<1e-9,'Deal–Grove (111) C2');
+ const w=XS.dealGrove(1000,'wet'),x=XS.dgThickness(w.B,w.A,1)*1000,y=XS.dgThickness(d100.B,d100.A,1)*1000;
+ assert(x>370&&x<410&&y>35&&y<42,`(100) 1000 °C 1 h: wet ${x}, dry ${y}`);
+ console.log({dealGroveOrientation:'ok',wet1h:Math.round(x),dry1h:Math.round(y)});
+}

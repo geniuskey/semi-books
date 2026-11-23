@@ -130,7 +130,7 @@ window.BOOK_GLOSSARY = {
     {"ko":"High-k 메탈 게이트","en":"High-k metal gate","abbr":"HKMG","def":"HfO₂ 고유전 절연막과 금속 게이트 전극. 게이트 누설을 줄이고 EOT를 낮춘다.","chapters":["advanced"]},
     {"ko":"등가 산화막 두께","en":"Equivalent oxide thickness","abbr":"EOT","def":"같은 커패시턴스를 내는 SiO₂ 두께. t × 3.9/k.","chapters":["advanced"]},
     {"ko":"게이트 라스트","en":"Replacement metal gate","abbr":"RMG","def":"더미 폴리 게이트로 고온 공정을 마친 뒤 금속 게이트로 바꿔 끼우는 공정.","chapters":["advanced"]},
-    {"ko":"FinFET","en":"Fin field-effect transistor","abbr":"FinFET","def":"세운 실리콘 핀의 세 면을 게이트가 감싸는 트랜지스터. 22~5 nm 세대의 주력.","chapters":["advanced"]},
+    {"ko":"FinFET","en":"Fin field-effect transistor","abbr":"FinFET","def":"세운 실리콘 핀의 세 면을 게이트가 감싸는 트랜지스터. 22~3 nm 세대의 주력(TSMC·인텔은 3 nm급까지 FinFET).","chapters":["advanced"]},
     {"ko":"GAA 나노시트","en":"Gate-all-around nanosheet","abbr":"GAA","def":"적층한 Si 시트의 네 면을 게이트가 모두 감싸는 트랜지스터. 3~2 nm 세대.","chapters":["advanced"]},
     {"ko":"내부 스페이서","en":"Inner spacer","abbr":"","def":"나노시트 사이 SiGe를 옆으로 파고 채운 절연막. 게이트와 소스·드레인을 띄운다.","chapters":["advanced"]},
     {"ko":"후면 전력 공급","en":"Backside power delivery network","abbr":"BSPDN","def":"전원망을 웨이퍼 뒷면으로 옮겨 앞면 배선은 신호만 담당하게 하는 구조.","chapters":["advanced"]},
