@@ -57,6 +57,11 @@ function checkPage(rel, opts = {}) {
   const ids = new Map();
   for (const m of markup.matchAll(/\sid="([^"]+)"/g)) ids.set(m[1], (ids.get(m[1]) || 0) + 1);
   for (const [id, n] of ids) if (n > 1) fail(`${rel}: duplicate id "${id}" ×${n}`);
+  // 닫히지 않은 수식은 빌드가 오류 없이 지나가고 뒤따르는 본문을 통째로 수식으로 삼킨다.
+  const prose = markup.replace(/<(pre|code)\b[^>]*>[\s\S]*?<\/\1>/gi, "");
+  if ((prose.match(/\$\$/g) || []).length % 2) fail(`${rel}: unbalanced $$ display math`);
+  const opens = (prose.match(/\\\(/g) || []).length, closes = (prose.match(/\\\)/g) || []).length;
+  if (opens !== closes) fail(`${rel}: inline math \\( ×${opens} but \\) ×${closes}`);
   // 한 문항에 정답 표시가 없으면 모든 보기가 오답으로 처리된다.
   let question = 0;
   for (const m of markup.matchAll(/<div class="quiz-q"[^>]*>([\s\S]*?)(?=<div class="quiz-q"[^>]*>|<\/section>|$)/g)) {
