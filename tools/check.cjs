@@ -110,6 +110,27 @@ function checkPage(rel, opts = {}) {
       if (WRITING.has(local.split("/")[0])) warn.push(message); else fail(message);
     }
   }
+  // 링크의 #조각이 가리키는 id가 대상 페이지에 있어야 한다. 스크립트가 만드는 id도 소스에 문자열로 있으므로 스크립트까지 본다.
+  for (const m of markup.matchAll(/<a\b[^>]*?\bhref=["']([^"']*#[^"']+)["']/g)) {
+    const value = m[1].replace(/&amp;/g, "&");
+    if (value.includes("${")) continue;
+    const target = new URL(value, `${ORIGIN}/${rel}`);
+    if (target.origin !== ORIGIN) continue;
+    const frag = decodeURIComponent(target.hash.slice(1)).split(":~:")[0];
+    if (!frag) continue;
+    const local = decodeURIComponent(target.pathname).replace(/^\//, "") + (target.pathname.endsWith("/") ? "index.html" : "");
+    const ids = idsOf(local);
+    if (ids && !ids.has(frag)) fail(`${rel}: link ${value} points to a missing id "${frag}"`);
+  }
+}
+
+const idCache = new Map();
+function idsOf(local) {
+  if (!idCache.has(local)) {
+    const file = path.join(ROOT, local);
+    idCache.set(local, fs.existsSync(file) ? new Set([...fs.readFileSync(file, "utf8").matchAll(/\s(?:id|name)="([^"]+)"/g)].map((m) => m[1])) : null);
+  }
+  return idCache.get(local);
 }
 
 checkPage("index.html");
