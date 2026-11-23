@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const sandbox = { window: {} };
+process.chdir(require('node:path').resolve(__dirname, '..'));
 vm.runInNewContext(fs.readFileSync('js/industry.js', 'utf8'), sandbox);
 const IND = sandbox.window.IND;
 let checks = 0, scripts = 0;

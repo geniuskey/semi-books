@@ -20,9 +20,9 @@ for(const w of [.05,2,50])for(const rho of [.1,.5,.9])for(const oe of [0,30,100]
 assert(c.calc(2,.9,100,2).open);assert(!c.calc(2,.5,30,10).open);
 const anneal=read('chapters/anneal.html');const range=anneal.match(/<input[^>]*id="rt-s"[^>]*>/)[0];
 assert(range.includes('min="-1"')&&range.includes('max="7"')&&range.includes('step="any"'));
-let values={},callback;const PB={seg:(id,cb)=>{callback=cb;return()=>''},range:(id)=>{const g=()=>values[id];g.set=v=>values[id]=v;return g}};
+let values={},callback;const PB={seg:(id,cb)=>{callback=cb;return()=>''},range:(id)=>{const g=()=>values[id];g.set=v=>values[id]=v;return g},fmt:x=>String(x)};
 const a=anneal.indexOf('    var PRE = { furn:'),b=anneal.indexOf('    cv = PB.canvas',a);
-const ac={PB,Math,tf:x=>String(x),rr:()=>{}};vm.createContext(ac);vm.runInContext(anneal.slice(a,b),ac);
+const ac={PB,Math,tf:x=>String(x),pow10H:x=>String(x),rr:()=>{},document:{getElementById:()=>({innerHTML:''})}};vm.createContext(ac);vm.runInContext(anneal.slice(a,b),ac);
 for(const [name,hold] of [['furn',1800],['rta',10],['spike',0],['flash',.001]]){
  callback(name);const p=ac.profile();assert(Math.abs(p.hold-hold)<=Math.max(1e-12,hold*1e-12));assert(p.total>=hold);
 }
@@ -58,7 +58,8 @@ for(const density of [.1,.2,.5,.9])for(const initial of [100,120,500])for(const 
 }
 // Execute the original SPC rule block with deterministic standardized fixtures.
 const metrology=read('chapters/metrology.html');
-const sa=metrology.indexOf('      var viol = [], flag ='),sb=metrology.indexOf('      var box =',sa);
+const sa=metrology.indexOf('      var why = v.map('),sb=metrology.indexOf('      var all = v.slice(40)',sa);
+assert(sa>0&&sb>sa,'SPC rule block not found in metrology.html');
 function rules(values){const ctx={v:values,m:0,sd:1,UCL:3,LCL:-3};vm.createContext(ctx);vm.runInContext(metrology.slice(sa,sb),ctx);return ctx;}
 let spcWindows=0;
 for(const a of [-2.2,-2,-.5,0,.5,2,2.2])for(const b of [-2.2,-2,-.5,0,.5,2,2.2])for(const d of [-2.2,-2,-.5,0,.5,2,2.2]){
@@ -66,7 +67,7 @@ for(const a of [-2.2,-2,-.5,0,.5,2,2.2])for(const b of [-2.2,-2,-.5,0,.5,2,2.2])
  assert.equal(rules(v).viol.includes('3점 중 2점 2σ 밖'),expected);spcWindows++;
 }
 for(const sign of [-1,1]){
- assert(rules([2.1*sign,2.2*sign,-.5*sign]).flag[2]);
+ assert(rules([2.1*sign,2.2*sign,-.5*sign]).why[2].length);
  assert(rules(Array(8).fill(sign)).viol.includes('한쪽 8연속'));
  assert(!rules([...Array(7).fill(sign),0,sign]).viol.includes('한쪽 8연속'));
 }
