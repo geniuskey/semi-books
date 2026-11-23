@@ -512,7 +512,9 @@
       let v;
       if (!isFinite(R)) v = c.Ion === 0 ? 0 : Infinity * Math.sign(c.Ion);
       else { const tau = R * n.C; v = c.Ion * R * Math.expm1(-n.npx * c.td / tau) / Math.expm1(-FRAME * c.td / tau); }
-      const Vs = v >= 0 ? 4 : 12;
+      // 자기 제한 전위는 σ가 1에서 멀수록 크다. E₂ 근처(σ ≈ 1)에서는 떠 있는 조각도 거의 대전되지 않는다
+      const Vs = (v >= 0 ? 4 : 12) * Math.min(1, Math.abs(c.s - 1) / 0.3);
+      if (!(Vs > 0)) return 0;
       return Math.sign(v) * Vs * (1 - Math.exp(-Math.abs(v) / Vs));
     }
     const bright = (v) => (v >= 0 ? 0.62 * Math.exp(-v / 1.2) + 0.03 : 0.65 * (1 + 0.5 * (1 - Math.exp(v / 4))));
@@ -634,18 +636,19 @@
     function metrics(p) {
       let vt = NaN, ss = Infinity, prev = null;
       for (let vg = 0; vg <= 1.2001; vg += 0.005) {
-        const i = Math.abs(dev(vg, 0.05, p).id) + 1e-14;
+        const t = dev(vg, 0.05, p), i = Math.abs(t.id) + 1e-14, fl = Math.abs(t.ig) + Math.abs(t.ib);
         if (prev) {
           if (isNaN(vt) && prev.i < 1e-7 && i >= 1e-7) vt = prev.vg + 0.005 * Math.log(1e-7 / prev.i) / Math.log(i / prev.i);
-          const sl = 0.005 / Math.log10(i / prev.i); if (sl > 0 && sl < ss) ss = sl;
+          // SS는 문턱 아래(1 µA 미만)에서 채널 전류가 누설 바닥보다 충분히 큰 구간에서만 잰다(전류 방향이 바뀌는 패임은 제외)
+          const sl = 0.005 / Math.log10(i / prev.i); if (sl > 0 && sl < ss && prev.i > 10 * prev.fl && i > 10 * fl && i < 1e-6) ss = sl;
         }
-        prev = { vg, i };
+        prev = { vg, i, fl };
       }
       return { vt, ss: ss * 1000, ion: dev(1, 1, p).id, ioff: Math.abs(dev(0, 1, p).id) };
     }
     const REF = params("ok", 0), MREF = metrics(REF);
     // 비아: 얇은 장벽(asinh) + 직렬 저항. 0.8 V에서 V/I ≈ 4.2 kΩ
-    const VIA = { ok: (i) => 3 * i, case: (i) => 0.03 * Math.asinh(i / 9.6e-15) + 370 * i, open: (i) => 2e11 * i };
+    const VIA = { ok: (i) => 3 * i, case: (i) => 0.03 * Math.asinh(i / 9.6e-15) + 356 * i, open: (i) => 2e11 * i };
     const RC = 35, ILIM = 250e-6;
     const vvia = (k, pt, i) => VIA[k](i) + (pt === "2" ? 2 * RC * i : 0);
     function ivia(k, pt, v) { let lo = 0, hi = ILIM; if (vvia(k, pt, hi) <= v) return hi; for (let n = 0; n < 60; n++) { const m = (lo + hi) / 2; if (vvia(k, pt, m) < v) lo = m; else hi = m; } return (lo + hi) / 2; }
@@ -733,7 +736,7 @@
         FB.stat("np-o-1", isNaN(m.vt) ? "—" : small(m.vt.toFixed(3), "V") + dlt(m.vt, MREF.vt, " V", 2));
         FB.stat("np-o-2", small((m.ion * 1e6).toFixed(1), "µA") + dlt(m.ion / MREF.ion * 100, 100, "%", 0));
         FB.stat("np-o-3", FB.si(m.ioff, "A", 2));
-        FB.stat("np-o-4", small(m.ss.toFixed(0), "mV/dec"));
+        FB.stat("np-o-4", isFinite(m.ss) ? small(m.ss.toFixed(0), "mV/dec") : "—");
       } else {
         const k = gVk(), pt = gPt();
         drawVia(ctx, P, w, top, sh, pt);

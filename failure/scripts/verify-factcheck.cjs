@@ -38,3 +38,5 @@ for(const file of fs.readdirSync(path.join(root,'chapters')).filter(n=>n.endsWit
  chapters++;
 }
 console.log(`FailureBook: ${scenarios} acceleration probability/render scenarios passed; sample-size references 65/1072 passed; ${chapters} chapter scripts compiled.`);
+// FAI-LIT: lock-in depth readout unwraps phase like the phase image, so deep sources never read as negative depth.
+assert.ok(read('laser').includes('ph = sol.ph0 < -0.5 ? sol.ph0 + 2 * Math.PI : sol.ph0'),'lock-in phase readout must be unwrapped');
