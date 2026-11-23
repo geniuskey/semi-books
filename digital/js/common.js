@@ -89,7 +89,12 @@
     const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
     return s * y;
   };
-  SB.erfc = (x) => 1 - SB.erf(x);
+  /** 여오차 함수: 1 − erf(x)를 빼서 구하면 x ≳ 5.9에서 0이 되므로 꼬리 항을 직접 쓴다 (먼 꼬리에서도 상대 오차 수 % 이내) */
+  SB.erfc = function (x) {
+    if (x < 0) return 2 - SB.erfc(-x);
+    const t = 1 / (1 + 0.3275911 * x);
+    return ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  };
   /** 캔버스 글꼴 문자열: SB.font(12) / SB.font(11, true) */
   SB.font = function (px, mono, weight) {
     const cs = getComputedStyle(document.body);
