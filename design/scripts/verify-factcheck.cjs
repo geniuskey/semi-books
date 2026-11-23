@@ -70,3 +70,9 @@ for(const file of fs.readdirSync(path.join(root,'chapters')).filter(f=>f.endsWit
  chapters++;
 }
 console.log(`DesignBook: ${cases} geometry/flow regressions passed; ${chapters} chapter scripts compiled.`);
+// DES optics: symmetric source grid (no ±1st-order capture bias) and sub-sample mask edges (no CD staircase at wide pitch).
+{const o={window:{}};vm.createContext(o);vm.runInContext(fs.readFileSync(path.join(root,'js','optics.js'),'utf8'),o);const OPT=o.window.OPT,T=OPT.TOOLS.arfi;
+ const src=OPT.source({type:'annular',si:0.6,so:0.9,step:0.16});assert.ok(Math.abs(src.reduce((s,p)=>s+p.sx,0))<1e-9,'annular source must be symmetric');
+ const cdOf=w=>OPT.cd(OPT.image({pitch:800,cd:w,type:'binary',tone:'line',wl:T.wl,NA:T.NA,n:T.n,N:128},src),0.32,'line');
+ const a=cdOf(84),b=cdOf(85),c2=cdOf(86);assert.ok(b>a+0.3&&c2>b+0.3,'CD must track 1 nm mask-width steps at 800 nm pitch');
+ console.log('DesignBook: optics source symmetry and mask-edge resolution regressions passed.');}

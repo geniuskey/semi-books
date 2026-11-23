@@ -43,7 +43,7 @@
       note: "NP와 PP는 서로 겹치면 안 된다. 보통 셀 가운데 한 선에서 맞닿는다." },
     { key: "co", name: "콘택", en: "CONTACT (CO)", gds: "15/0", color: "#495057", fill: 0.85, width: 1, cross: true,
       masks: [9], what: "실리콘(소스·드레인)이나 폴리를 M1에 잇는 텅스텐 기둥.",
-      steps: ["CESL 질화막 + PMD 산화막, CMP", "콘택 노광(EUV)", "산화막 식각 → CESL 개방", "Ti/TiN 라이너 + 텅스텐 CVD", "텅스텐 CMP"],
+      steps: ["CESL 질화막 + PMD 산화막, CMP", "콘택 노광", "산화막 식각 → CESL 개방", "Ti/TiN 라이너 + 텅스텐 CVD", "텅스텐 CMP"],
       pb: [["deposition", "7장 증착"], ["etch", "6장 식각"], ["cmp", "10장 CMP"], ["integration", "12장 공정 통합"]],
       note: "콘택은 고정 크기 정사각형만 허용된다. 큰 면적이 필요하면 여러 개를 배열한다." },
     { key: "m1", name: "금속 1", en: "METAL1 (M1)", gds: "19/0", color: "#4263eb", fill: 0.36, width: 1.4, hatch: 1,

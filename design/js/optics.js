@@ -20,8 +20,10 @@
 
   /** 광원 점 목록 [{sx, sy}] (동공 좌표, NA로 정규화) */
   function source(s) {
-    const pts = [], st = s.step || 0.07;
-    for (let y = -1; y <= 1 + 1e-9; y += st) for (let x = -1; x <= 1 + 1e-9; x += st) {
+    // 0을 중심으로 대칭인 격자(k·step). -1에서 step씩 더해 가면 반올림 오차로 +쪽 끝이 빠져 ±1차 회절의 포착률이 달라진다.
+    const pts = [], st = s.step || 0.07, n = Math.floor(1 / st + 1e-9);
+    for (let ky = -n; ky <= n; ky++) for (let kx = -n; kx <= n; kx++) {
+      const x = kx * st, y = ky * st;
       const r = Math.hypot(x, y);
       let ok = false;
       if (s.type === "coh") { ok = false; }
@@ -41,18 +43,25 @@
     const P = type === "alt" ? 2 * p : p;
     const t = new Float64Array(Nf);
     const a = type === "att" ? -Math.sqrt(m.att || 0.06) : 0;
+    // 각 샘플 칸을 SS개로 나눠 평균(면적 가중): 넓은 피치에서 마스크 폭이 칸 단위로 양자화되어 CD가 계단처럼 뛰지 않게
+    const SS = 16;
     for (let i = 0; i < Nf; i++) {
-      const x = ((i + 0.5) / Nf) * P;   // 0 ~ P, 라인 중심은 0 (와 p)
-      const xm = ((x % p) + p) % p, d = Math.min(xm, p - xm);
-      let inLine = d < w / 2;
-      if (m.sraf && Math.abs(d - (w / 2 + m.sraf.d + m.sraf.w / 2)) < m.sraf.w / 2 && w / 2 + m.sraf.d + m.sraf.w < p / 2) inLine = true;
-      if (m.tone === "space") { // 어두운 배경에 밝은 스페이스(트렌치)
-        t[i] = inLine ? 1 : a;
-        if (type === "alt" && inLine && Math.floor(x / p + 0.5) % 2 === 1) t[i] = -1;
-      } else {
-        t[i] = inLine ? a : 1;
-        if (type === "alt" && !inLine && Math.floor(x / p) % 2 === 1) t[i] = -1;
+      let sum = 0;
+      for (let q = 0; q < SS; q++) {
+        const x = ((i + (q + 0.5) / SS) / Nf) * P;   // 0 ~ P, 라인 중심은 0 (와 p)
+        const xm = ((x % p) + p) % p, d = Math.min(xm, p - xm);
+        let inLine = d < w / 2, v;
+        if (m.sraf && Math.abs(d - (w / 2 + m.sraf.d + m.sraf.w / 2)) < m.sraf.w / 2 && w / 2 + m.sraf.d + m.sraf.w < p / 2) inLine = true;
+        if (m.tone === "space") { // 어두운 배경에 밝은 스페이스(트렌치)
+          v = inLine ? 1 : a;
+          if (type === "alt" && inLine && Math.floor(x / p + 0.5) % 2 === 1) v = -1;
+        } else {
+          v = inLine ? a : 1;
+          if (type === "alt" && !inLine && Math.floor(x / p) % 2 === 1) v = -1;
+        }
+        sum += v;
       }
+      t[i] = sum / SS;
     }
     return { t, P };
   }
