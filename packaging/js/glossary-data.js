@@ -166,7 +166,7 @@ window.BOOK_GLOSSARY = {
     {"ko":"전원 분배망","en":"Power Delivery Network","abbr":"PDN","def":"전압 조정기에서 보드, 패키지, 범프를 거쳐 칩의 트랜지스터까지 전류를 공급하는 경로 전체. 넓은 주파수 범위에서 임피던스를 목표값 아래로 유지하도록 설계한다.","chapters":["thermal"]},
     {"ko":"목표 임피던스","en":"Target impedance","abbr":"Z_target","def":"허용 전압 변동을 과도 전류로 나눈 값. 전원 1 V, 허용 리플 5 %, 과도 전류 50 A라면 1 mΩ이다.","chapters":["thermal"]},
     {"ko":"디커플링 커패시터","en":"Decoupling capacitor","abbr":"decap","def":"전원과 접지 사이에 두어 급한 전류 수요를 가까이에서 공급하는 커패시터. 칩에 가까울수록 루프 인덕턴스가 작아 높은 주파수까지 효과가 있다.","chapters":["thermal"]},
-    {"ko":"동시 스위칭 잡음","en":"Simultaneous Switching Noise","abbr":"SSN","def":"여러 출력이 동시에 바뀔 때 전원·접지 경로의 인덕턴스에 V = L·di/dt의 전압이 걸려 생기는 잡음. 그라운드 바운스라고도 한다.","chapters":["thermal"]},
+    {"ko":"동시 스위칭 잡음","en":"Simultaneous Switching Noise","abbr":"SSN","def":"여러 출력이 동시에 바뀔 때 전원·접지 경로의 인덕턴스에 V = L·di/dt의 전압이 걸려 생기는 잡음. 이 가운데 접지 쪽의 출렁임을 따로 그라운드 바운스라 부른다.","chapters":["thermal"]},
     {"ko":"기생 인덕턴스","en":"Parasitic inductance","abbr":"","def":"와이어, 범프, 비아 같은 접속 경로가 원치 않게 갖는 인덕턴스. 본딩 와이어는 대략 1 mm당 1 nH 수준이며, 경로가 짧은 플립칩은 훨씬 작다.","chapters":["thermal"]},
     {"ko":"ATE","en":"Automatic Test Equipment","abbr":"ATE","def":"소자에 전원과 신호를 넣고 응답을 측정해 양·불량을 판정하는 자동 시험 장비. 웨이퍼 테스트에서는 프로버와, 패키지 테스트에서는 핸들러와 함께 쓴다.","chapters":["test"]},
     {"ko":"핸들러","en":"Handler","abbr":"","def":"패키지를 트레이에서 집어 테스트 소켓에 꽂고, 온도를 맞춰 주며, 결과 등급에 따라 분류하는 자동 이송 장비.","chapters":["test"]},
