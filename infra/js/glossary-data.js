@@ -84,7 +84,7 @@ window.BOOK_GLOSSARY = {
     {"ko":"가스 캐비닛","en":"gas cabinet","abbr":"","def":"특수가스 실린더를 담아 환기하는 금속 함. 감압·퍼지·자동 절체·누출 감지·자동 차단을 맡는다.","chapters":["gas","safety"]},
     {"ko":"밸브 매니폴드 박스","en":"Valve Manifold Box","abbr":"VMB","def":"가스 캐비닛이나 케미컬 공급에서 온 주 배관을 여러 장비로 나누는 분기 함. 비독성 유체는 패널형 VMP를 쓴다.","chapters":["gas","chemical","safety"]},
     {"ko":"질량유량제어기","en":"Mass Flow Controller","abbr":"MFC","def":"장비 가스 박스에서 열식 센서로 질량 유량을 재고 밸브로 설정값에 맞추는 장치.","chapters":["gas"]},
-    {"ko":"흡착형 저압 용기","en":"Sub-atmospheric Delivery System","abbr":"SDS","def":"도펀트 가스를 흡착재에 붙잡아 용기 압력을 대기압 이하로 유지하는 실린더. 누출 시 가스가 밖으로 밀려 나오지 않는다.","chapters":["gas","safety"]},
+    {"ko":"흡착형 저압 용기","en":"Safe Delivery Source (sub-atmospheric delivery)","abbr":"SDS","def":"도펀트 가스를 흡착재에 붙잡아 용기 압력을 대기압 이하로 유지하는 실린더. 누출 시 가스가 밖으로 밀려 나오지 않는다.","chapters":["gas","safety"]},
     {"ko":"제한 오리피스","en":"Restrictive Flow Orifice","abbr":"RFO","def":"실린더 밸브 안의 작은 구멍. 질식(초크) 유동으로 배관 파손 시 최악 방출 유량을 제한해 배기·감지 설계의 기준을 만든다.","chapters":["safety","gas"]},
     {"ko":"전해연마","en":"electropolishing","abbr":"EP","def":"스테인리스 내면을 전기화학적으로 녹여 매끈하고 크롬이 많은 부동태막을 만드는 처리. 고순도 가스·용제 배관에 316L EP관을 쓴다.","chapters":["gas","chemical"]},
     {"ko":"이중관","en":"double containment, coaxial tubing","abbr":"","def":"독성 가스·케미컬 배관을 바깥관으로 한 번 더 감싼 배관. 안쪽 관이 새도 바깥관과 감지기가 가둔다.","chapters":["gas","chemical","safety"]},
