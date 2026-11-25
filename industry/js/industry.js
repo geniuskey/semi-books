@@ -71,7 +71,7 @@
     { id: "sifive", name: "SiFive", ko: "사이파이브", rg: "us", country: "미국", seg: "ip", model: "ip", rev: 0.1, note: "RISC-V 코어 IP" },
     { id: "empyrean", name: "Empyrean", ko: "엠피리언", rg: "cn", country: "중국", seg: "ip", model: "eda", rev: 0.15, note: "중국 최대 EDA" },
     // 팹리스 (로직 설계)
-    { id: "nvidia", name: "NVIDIA", ko: "엔비디아", rg: "us", country: "미국", seg: "design", model: "fabless", rev: 124, note: "GPU·AI 가속기. 데이터센터 매출이 대부분" },
+    { id: "nvidia", name: "NVIDIA", ko: "엔비디아", rg: "us", country: "미국", seg: "design", model: "fabless", rev: 124, note: "GPU·AI 가속기. 데이터센터 매출이 대부분. 매출은 2024년 달력 연도 근사(2025 회계연도는 약 1,305억 달러)" },
     { id: "broadcom", name: "Broadcom", ko: "브로드컴", rg: "us", country: "미국", seg: "design", model: "fabless", rev: 30, note: "네트워크 칩·맞춤형 AI 칩(ASIC). 반도체 부문" },
     { id: "qualcomm", name: "Qualcomm", ko: "퀄컴", rg: "us", country: "미국", seg: "design", model: "fabless", rev: 33, note: "스마트폰 AP·모뎀. 특허 라이선스 별도" },
     { id: "amd", name: "AMD", ko: "AMD", rg: "us", country: "미국", seg: "design", model: "fabless", rev: 25.8, note: "CPU·GPU. 2009년 팹을 분사(현 GlobalFoundries)" },

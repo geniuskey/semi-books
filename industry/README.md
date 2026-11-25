@@ -8,7 +8,7 @@
 - **시뮬레이터 갤러리**(`sims.html`): 모든 시뮬레이터를 카드로 모아 검색하고 바로 엽니다.
 - **시뮬레이터만 보기**: 챕터 상단 버튼 하나로 글·퀴즈를 숨기고 시뮬레이터만 남깁니다.
 
-반도체 시리즈([ProcessBook](https://semi.euiyun.com/process/), [LithoBook](https://semi.euiyun.com/litho/), [MemoryBook](https://semi.euiyun.com/memory/), [PackagingBook](https://semi.euiyun.com/packaging/), [YieldBook](https://semi.euiyun.com/yield/), [FailureBook](https://semi.euiyun.com/failure/), [SensorBook](https://semi.euiyun.com/sensor/), [TCADBook](https://semi.euiyun.com/tcad/))의 마지막 권입니다.
+반도체 시리즈([ProcessBook](https://semi.euiyun.com/process/), [LithoBook](https://semi.euiyun.com/litho/), [MemoryBook](https://semi.euiyun.com/memory/), [PackagingBook](https://semi.euiyun.com/packaging/), [YieldBook](https://semi.euiyun.com/yield/), [FailureBook](https://semi.euiyun.com/failure/), [SensorBook](https://semi.euiyun.com/sensor/), [TCADBook](https://semi.euiyun.com/tcad/)) 가운데 산업 편입니다.
 
 배포 주소: https://semi.euiyun.com/industry/
 
