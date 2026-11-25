@@ -218,7 +218,7 @@ window.BOOK_GLOSSARY = {
     {"ko":"고스트","en":"Ghost image","abbr":"","def":"두 면 사이 짝수 번 반사로 생기는 이차 상. 면이 N개면 2회 반사 경로가 N(N−1)/2개다. 센서 표면 ↔ IR 필터·렌즈 반사가 대표적이다.","chapters":["stray"]},
     {"ko":"플레어","en":"Flare","abbr":"","def":"밝은 광원 때문에 영상에 생기는 원치 않는 빛 무늬와 대비 저하의 총칭. 고스트, 회절 스파이크, 베일링 글레어를 포함한다.","chapters":["stray"]},
     {"ko":"베일링 글레어","en":"Veiling glare","abbr":"","def":"산란·다중 반사가 화면 전체에 넓게 깔려 어두운 부분을 들뜨게 하고 대비를 떨어뜨리는 성분. 글레어 지수로 측정한다.","chapters":["stray"]},
-    {"ko":"꽃잎 · 레드 닷 플레어","en":"Petal / red-dot flare","abbr":"","def":"주기적인 센서 표면(ML·그리드 배열)이 반사형 회절 격자로 작동해 생긴 회절 차수가 IR 필터·렌즈에서 다시 반사되어 센서에 격자 모양 점이나 꽃잎 무늬로 돌아오는 플레어. 레이저나 적색 광원 주변에서 붉은 점들로 잘 보인다.","chapters":["stray"]},
+    {"ko":"꽃잎 · 레드 닷 플레어","en":"Petal / red-dot flare","abbr":"","def":"주기적인 센서 표면(ML·그리드 배열)이 반사형 회절 격자로 작동해 생긴 회절 차수가 IR 필터·렌즈에서 다시 반사되어 센서에 격자 모양 점이나 꽃잎 무늬로 돌아오는 플레어. 반사형 IR 컷 필터가 큰 입사각에서 적색을 강하게 반사하므로 백색 광원 주변에서도 붉은 점들로 잘 보인다.","chapters":["stray"]},
     {"ko":"회절 스파이크","en":"Diffraction spikes (starburst)","abbr":"","def":"다각형 조리개 날개나 직선 구조의 회절로 밝은 점 광원에서 뻗어 나오는 빛줄기. 날개 수가 짝수면 같은 수, 홀수면 두 배의 줄기가 생긴다.","chapters":["stray"]},
     {"ko":"산란","en":"Scattering","abbr":"","def":"표면 거칠기·입자·결함으로 빛이 여러 방향으로 퍼지는 현상. BSDF(BRDF/BTDF)로 각도 분포를 기술한다.","chapters":["stray"]},
     {"ko":"총 적분 산란","en":"Total integrated scatter","abbr":"TIS","def":"RMS 거칠기 σ인 표면의 반사 산란 비율 TIS ≈ R₀(4πσcosθ/λ)². σ = 2 nm, 550 nm에서 반사광의 약 0.2 %가 산란된다.","chapters":["stray"]},
