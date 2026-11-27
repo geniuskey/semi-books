@@ -150,7 +150,7 @@ window.SEMI_BOOKS = [
   "stage": "process",
   "status": "published",
   "chapters": 16,
-  "simulators": 44,
+  "simulators": 108,
   "color": "#c2550c",
   "colorDark": "#fb9a4b",
   "topics": [
