@@ -1,0 +1,1074 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2.5D·3D 패키징 · GPUBook</title>
+<meta name="description" content="GPU는 왜 HBM을 다이 바로 옆 실리콘 인터포저 위에 두는가. 연결 밀도의 사다리, 쇼어라인 대역폭, 레티클 3배짜리 인터포저와 스티칭, 버퍼 없는 수 mm 배선, 휨과 언더필, 1,000 A를 나르는 범프, 하이브리드 본딩 3D 적층을 계산 모델과 GX-1 패키지 3D 분해 모델로 익힌다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+.pk-uf { fill: color-mix(in srgb, var(--warn) 20%, transparent); stroke: color-mix(in srgb, var(--warn) 60%, transparent); stroke-width: .8; }
+.pk-poly { fill: color-mix(in srgb, var(--ok) 16%, transparent); stroke: color-mix(in srgb, var(--ok) 55%, transparent); }
+.pk-cut { stroke: var(--accent-2); stroke-width: 1.4; stroke-dasharray: 6 4; fill: none; }
+figure.diagram svg .t-mono { font-size: 12px; }
+td.pk-good { color: var(--ok); font-weight: 600; } td.pk-bad { color: var(--bad); font-weight: 600; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="package">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 11</div>
+    <h1>2.5D·3D 패키징</h1>
+    <p class="lead">GX-1의 로직 다이는 HBM 스택 여섯 개와 3 mm 남짓 떨어져 있다. 둘 사이에는 선폭 0.4 µm 배선을 새긴 실리콘 판, 곧 인터포저가 있다. 7.37 TB/s를 내려면 데이터선 6,144개가 필요한데, 보드나 유기 기판으로는 이만한 배선을 다이 가장자리에서 끌어낼 수 없다. 이 장은 패키지 공정 자체보다 <b>왜 GPU가 이 패키지를 고르는가</b>를 계산한다. 연결 밀도, 가장자리 길이, 배선 RC, 인터포저 면적과 원가, 휨, 전력 범프, 그리고 그다음 단계인 3D 적층을 차례로 본다.</p>
+    <ul class="objectives">
+      <li>PCB·유기 기판·RDL·실리콘 인터포저·하이브리드 본딩의 배선 피치와 범프 피치로 mm당 배선 수와 mm²당 I/O 수를 계산한다.</li>
+      <li>쇼어라인(다이 가장자리) 밀도 × 핀 속도로 패키지가 낼 수 있는 메모리 대역폭을 구하고, HBM이 다이 옆에 와야 하는 이유를 설명한다.</li>
+      <li>로직 다이와 HBM 배치로 인터포저 크기·레티클 배수·웨이퍼당 개수·면적 원가를 계산한다.</li>
+      <li>수 mm 인터포저 배선의 RC 지연과 비트당 에너지를 구해, 종단·SerDes 없이 동작하는 조건을 안다.</li>
+      <li>열팽창 계수 불일치로 생기는 휨과 범프 전단 변형을 바이메탈 근사로 추정하고, 언더필·리드의 역할을 설명한다.</li>
+      <li>1,000 A를 나르는 범프 수와 하이브리드 본딩 3D 적층의 대역폭·열 대가를 계산한다.</li>
+    </ul>
+  </header>
+
+  <section id="why">
+    <h2>왜 HBM을 다이 옆에 두는가</h2>
+    <p>메모리 대역폭은 핀 수와 핀 속도의 곱이다. 핀 속도를 올리는 데는 한계가 있으므로(8장), 큰 대역폭은 결국 <b>배선 수</b>로 만든다. 그런데 배선은 칩 안에서 칩 밖으로 나갈수록 굵어진다. 다이 안의 금속층은 피치가 수십 nm이고, 보드 위 배선은 피치가 100 µm가 넘는다. 한 단계 바깥으로 나갈 때마다 같은 길이의 가장자리에서 끌어낼 수 있는 배선 수가 한 자릿수씩 줄어든다.</p>
+    <div class="formula">$$BW = \frac{N_{pin}\, f_{pin}}{8} \qquad \text{GX-1: } \frac{6 \times 1024 \times 9.6\ \text{Gb/s}}{8} = 7{,}373\ \text{GB/s}$$<div class="where">\(N_{pin}\): 데이터 핀 수, \(f_{pin}\): 핀당 전송률(Gb/s). 명령·주소·스트로브까지 치면 실제 신호선은 약 30 % 더 많다.</div></div>
+    <p>GX-1은 이 6,144개 데이터선을 어떻게 놓는가. 그림 11-1이 단면이다. 로직 다이와 HBM 스택이 <span class="term">마이크로범프</span><span class="en">(microbump)</span>로 <span class="term">실리콘 인터포저</span><span class="en">(silicon interposer)</span>에 붙고, 인터포저는 <span class="term">실리콘 관통 전극</span>(TSV)으로 아래의 C4 범프와 유기 기판에, 기판은 BGA 볼로 보드에 이어진다. 다이를 인터포저에 나란히 얹는다고 해서 <span class="term">2.5D 패키징</span>이라 부르고, 다이 위에 다이를 쌓으면 3D다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="GX-1 패키지 단면 개략도. 아래부터 BGA 볼, 유기 기판, C4 범프와 언더필, TSV가 뚫린 실리콘 인터포저, 마이크로범프, 가운데 로직 다이와 양옆 HBM 스택, TIM, 구리 리드">
+        <rect x="50" y="98" width="580" height="18" class="m-lid"/>
+        <rect x="50" y="116" width="14" height="106" class="m-lid"/><rect x="616" y="116" width="14" height="106" class="m-lid"/>
+        <rect x="110" y="116" width="460" height="8" class="m-tim"/>
+        <rect x="40" y="222" width="600" height="36" class="m-sub"/>
+        <g class="m-sol"><circle cx="70" cy="266" r="7"/><circle cx="110" cy="266" r="7"/><circle cx="150" cy="266" r="7"/><circle cx="190" cy="266" r="7"/><circle cx="230" cy="266" r="7"/><circle cx="270" cy="266" r="7"/><circle cx="310" cy="266" r="7"/><circle cx="350" cy="266" r="7"/><circle cx="390" cy="266" r="7"/><circle cx="430" cy="266" r="7"/><circle cx="470" cy="266" r="7"/><circle cx="510" cy="266" r="7"/><circle cx="550" cy="266" r="7"/><circle cx="590" cy="266" r="7"/><circle cx="610" cy="266" r="0"/></g>
+        <path d="M96 222V211H584V222Z" class="pk-uf"/>
+        <g class="m-sol"><circle cx="112" cy="216.5" r="4.5"/><circle cx="134" cy="216.5" r="4.5"/><circle cx="156" cy="216.5" r="4.5"/><circle cx="178" cy="216.5" r="4.5"/><circle cx="200" cy="216.5" r="4.5"/><circle cx="222" cy="216.5" r="4.5"/><circle cx="244" cy="216.5" r="4.5"/><circle cx="266" cy="216.5" r="4.5"/><circle cx="288" cy="216.5" r="4.5"/><circle cx="310" cy="216.5" r="4.5"/><circle cx="332" cy="216.5" r="4.5"/><circle cx="354" cy="216.5" r="4.5"/><circle cx="376" cy="216.5" r="4.5"/><circle cx="398" cy="216.5" r="4.5"/><circle cx="420" cy="216.5" r="4.5"/><circle cx="442" cy="216.5" r="4.5"/><circle cx="464" cy="216.5" r="4.5"/><circle cx="486" cy="216.5" r="4.5"/><circle cx="508" cy="216.5" r="4.5"/><circle cx="530" cy="216.5" r="4.5"/><circle cx="552" cy="216.5" r="4.5"/><circle cx="574" cy="216.5" r="4.5"/></g>
+        <rect x="100" y="196" width="480" height="16" class="m-interp"/>
+        <g class="m-cu"><rect x="132" y="196" width="3" height="16"/><rect x="176" y="196" width="3" height="16"/><rect x="220" y="196" width="3" height="16"/><rect x="264" y="196" width="3" height="16"/><rect x="308" y="196" width="3" height="16"/><rect x="352" y="196" width="3" height="16"/><rect x="396" y="196" width="3" height="16"/><rect x="440" y="196" width="3" height="16"/><rect x="484" y="196" width="3" height="16"/><rect x="528" y="196" width="3" height="16"/></g>
+        <path d="M232 199H250V203H262M418 199H430V203H452" style="fill:none;stroke:var(--m-cu-e);stroke-width:1.6"/>
+        <path d="M107 196V189H573V196Z" class="pk-uf"/>
+        <g class="m-sol"><rect x="114" y="189" width="4" height="7"/><rect x="126" y="189" width="4" height="7"/><rect x="138" y="189" width="4" height="7"/><rect x="150" y="189" width="4" height="7"/><rect x="162" y="189" width="4" height="7"/><rect x="174" y="189" width="4" height="7"/><rect x="186" y="189" width="4" height="7"/><rect x="198" y="189" width="4" height="7"/><rect x="210" y="189" width="4" height="7"/><rect x="222" y="189" width="4" height="7"/>
+          <rect x="254" y="189" width="4" height="7"/><rect x="266" y="189" width="4" height="7"/><rect x="278" y="189" width="4" height="7"/><rect x="290" y="189" width="4" height="7"/><rect x="302" y="189" width="4" height="7"/><rect x="314" y="189" width="4" height="7"/><rect x="326" y="189" width="4" height="7"/><rect x="338" y="189" width="4" height="7"/><rect x="350" y="189" width="4" height="7"/><rect x="362" y="189" width="4" height="7"/><rect x="374" y="189" width="4" height="7"/><rect x="386" y="189" width="4" height="7"/><rect x="398" y="189" width="4" height="7"/><rect x="410" y="189" width="4" height="7"/><rect x="422" y="189" width="4" height="7"/>
+          <rect x="454" y="189" width="4" height="7"/><rect x="466" y="189" width="4" height="7"/><rect x="478" y="189" width="4" height="7"/><rect x="490" y="189" width="4" height="7"/><rect x="502" y="189" width="4" height="7"/><rect x="514" y="189" width="4" height="7"/><rect x="526" y="189" width="4" height="7"/><rect x="538" y="189" width="4" height="7"/><rect x="550" y="189" width="4" height="7"/><rect x="562" y="189" width="4" height="7"/></g>
+        <rect x="250" y="124" width="180" height="65" class="m-si"/>
+        <text x="340" y="160" class="t t-b t-c">로직 다이</text>
+        <g><rect x="110" y="178" width="120" height="11" class="m-si"/><rect x="110" y="124" width="120" height="6" class="m-dram"/><rect x="110" y="131" width="120" height="6" class="m-dram"/><rect x="110" y="138" width="120" height="6" class="m-dram"/><rect x="110" y="145" width="120" height="6" class="m-dram"/><rect x="110" y="152" width="120" height="6" class="m-dram"/><rect x="110" y="159" width="120" height="6" class="m-dram"/><rect x="110" y="166" width="120" height="5" class="m-dram"/><rect x="110" y="172" width="120" height="5" class="m-dram"/></g>
+        <g><rect x="450" y="178" width="120" height="11" class="m-si"/><rect x="450" y="124" width="120" height="6" class="m-dram"/><rect x="450" y="131" width="120" height="6" class="m-dram"/><rect x="450" y="138" width="120" height="6" class="m-dram"/><rect x="450" y="145" width="120" height="6" class="m-dram"/><rect x="450" y="152" width="120" height="6" class="m-dram"/><rect x="450" y="159" width="120" height="6" class="m-dram"/><rect x="450" y="166" width="120" height="5" class="m-dram"/><rect x="450" y="172" width="120" height="5" class="m-dram"/></g>
+        <text x="170" y="156" class="t t-b t-c t-halo">HBM</text><text x="510" y="156" class="t t-b t-c t-halo">HBM</text>
+        <path d="M230 201H250M430 201H450" class="ks-data" style="stroke-width:2.4"/>
+        <text x="340" y="292" class="t-dim t-c">개략도(두께 과장). 실제 총 높이 약 4.3 mm, 기판 75 mm 폭</text>
+        <g class="t">
+          <path d="M630 106H668" class="lead"/><text x="674" y="110">구리 리드 (열 분산·휨 억제)</text>
+          <path d="M570 120H668" class="lead"/><text x="674" y="128">TIM (열 계면 물질)</text>
+          <path d="M520 150H668" class="lead"/><text x="674" y="152">HBM: DRAM 8단 + 베이스 다이</text>
+          <path d="M566 192H668" class="lead"/><text x="674" y="180">마이크로범프 약 45 µm 피치</text>
+          <path d="M450 201H668" class="lead"/><text x="674" y="202">실리콘 인터포저 + TSV</text>
+          <path d="M576 216H668" class="lead"/><text x="674" y="224">C4 범프 약 150 µm + 언더필</text>
+          <path d="M640 240H668" class="lead"/><text x="674" y="246">유기 기판 (빌드업 20층)</text>
+          <path d="M597 266H668" class="lead"/><text x="674" y="270">BGA 볼 1 mm 피치</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 11-1.</b> GX-1 패키지 단면 개략. 로직 다이와 HBM 사이의 데이터선(굵은 선)은 인터포저 안에서 수 mm만 달린다. 전력과 느린 신호는 TSV를 지나 C4 → 기판 → BGA로 내려간다. 공정은 PackagingBook <a href="../../packaging/chapters/interposer.html">인터포저</a>·<a href="../../packaging/chapters/hbm.html">HBM 패키징</a> 장을 본다.</figcaption>
+    </figure>
+    <p>대안과 비교하면 이유가 분명해진다(그림 11-2). 보드 위 GDDR은 칩 하나가 32비트이고, 패키지에서 수십 mm 떨어져 있으며, 긴 선을 종단 저항과 이퀄라이저로 달래야 한다. HBM은 스택 하나가 1,024비트이고 수 mm 거리에 있어서 선 하나는 느리게(9.6 Gb/s) 달려도 된다. 3D 적층은 거리를 수십 µm로 줄인다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 210" role="img" aria-label="세 가지 메모리 배치 비교. 보드 위 GDDR은 25 mm 이상 거리와 32비트, 인터포저 위 HBM은 약 3 mm와 1024비트, 3D 적층은 수십 마이크로미터 거리와 수만 개 연결">
+        <rect x="10" y="10" width="270" height="190" rx="8" class="chip"/>
+        <rect x="295" y="10" width="270" height="190" rx="8" class="chip"/>
+        <rect x="580" y="10" width="270" height="190" rx="8" class="chip"/>
+        <text x="145" y="32" class="t t-b t-c">보드 위 GDDR</text><text x="430" y="32" class="t t-b t-c">인터포저 위 HBM (2.5D)</text><text x="715" y="32" class="t t-b t-c">3D 적층</text>
+        <rect x="24" y="112" width="242" height="14" class="m-pcb"/>
+        <rect x="40" y="82" width="70" height="30" class="m-sub"/><rect x="55" y="68" width="40" height="14" class="m-si"/>
+        <rect x="190" y="92" width="50" height="20" class="m-dram"/>
+        <path d="M110 108H190" class="ks-data" style="stroke-width:2"/><path d="M110 104H190" class="ks-data" style="stroke-width:1;opacity:.6"/>
+        <text x="150" y="100" class="t-dim t-c">25 mm 이상</text>
+        <text x="145" y="150" class="t t-c">칩당 32비트 × 28 Gb/s</text>
+        <text x="145" y="170" class="t-dim t-c">종단·이퀄라이저 필요</text>
+        <text x="145" y="190" class="t-dim t-c">약 6 pJ/bit</text>
+        <rect x="310" y="112" width="240" height="14" class="m-sub"/><rect x="320" y="100" width="220" height="12" class="m-interp"/>
+        <rect x="335" y="72" width="70" height="28" class="m-si"/><rect x="420" y="70" width="40" height="30" class="m-dram"/>
+        <path d="M405 104H420" class="ks-data" style="stroke-width:3"/>
+        <text x="482" y="90" class="t-dim">약 3 mm</text>
+        <text x="430" y="150" class="t t-c">스택당 1,024비트 × 9.6 Gb/s</text>
+        <text x="430" y="170" class="t-dim t-c">버퍼·종단 없이 직접 구동</text>
+        <text x="430" y="190" class="t-dim t-c">약 3 pJ/bit (DRAM 코어 포함)</text>
+        <rect x="610" y="112" width="210" height="14" class="m-sub"/><rect x="650" y="90" width="130" height="22" class="m-si"/><rect x="650" y="66" width="130" height="22" class="kf-sram" style="opacity:.75"/>
+        <path d="M665 88V90M680 88V90M695 88V90M710 88V90M725 88V90M740 88V90M755 88V90M770 88V90" style="stroke:var(--m-cu-e);stroke-width:3"/>
+        <text x="715" y="82" class="t t-c" style="fill:var(--bg)">SRAM 다이</text><text x="715" y="105" class="t t-c">로직 다이</text>
+        <text x="715" y="150" class="t t-c">수직 연결 수십만 개 이상</text>
+        <text x="715" y="170" class="t-dim t-c">거리 수십 µm, 피치 10 µm 이하</text>
+        <text x="715" y="190" class="t-dim t-c">약 0.1 pJ/bit 이하 (연결부)</text>
+      </svg>
+      <figcaption><b>그림 11-2.</b> 메모리를 연산 다이에 가까이 둘수록 배선 수는 늘고 선 하나의 속도 부담과 비트당 에너지는 준다. pJ/bit는 이 책의 에너지 표 대표값이다.</figcaption>
+    </figure>
+    <div class="callout fab"><strong>GDDR로 7.37 TB/s를 만든다면</strong> GDDR7 칩 하나는 32비트 × 28 Gb/s = 112 GB/s다. 7.37 TB/s를 내려면 칩 약 66개, 데이터핀 약 2,110개가 보드 위에서 패키지 가장자리로 들어와야 한다. 75 mm 기판의 둘레는 300 mm인데, 보드 배선(mm당 수 개)으로는 이 정도 신호선을 들일 수 없다. 에너지도 6 pJ/bit × 7.37 TB/s × 8 ≈ 354 W로, HBM의 약 3 pJ/bit(≈ 177 W, 표의 약 180 W)의 두 배다. 그래서 GX-G(게이밍, 256비트 GDDR7, 896 GB/s)는 보드 메모리를 쓰고 GX-1은 HBM과 인터포저를 쓴다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 연산은 싸고 데이터 이동은 비싸다. 대역폭은 배선 수로 사고, 배선 수는 거리와 피치로 정해진다. 메모리를 다이 옆 수 mm로 당기고 배선 피치를 µm 이하로 줄이면, 대역폭은 몇 배 늘고 비트당 에너지는 절반이 된다. 그 대가가 인터포저 원가와 큰 패키지의 기계적 문제이며, 이 장의 나머지가 그 대가를 계산한다.</p>
+  </section>
+
+  <section id="anatomy">
+    <h2>3D로 보는 GX-1 패키지</h2>
+    <p>층을 위아래로 벌려 보면 각 층이 무엇을 나르는지 보인다. 신호는 다이 → 마이크로범프 → 인터포저 배선 → 마이크로범프 → HBM으로 옆으로 간다. 전력은 BGA → 기판 → C4 → TSV → 마이크로범프로 아래에서 올라온다. 열은 다이 → TIM → 리드 → 냉각판으로 위로 빠진다. 세 흐름이 지나는 층이 서로 다르다.</p>
+    <div class="sim" id="sim-p3">
+      <div class="sim-head"><span class="sim-tag three">3D</span><h3>GX-1 패키지 분해 모델</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view three" id="p3-v"></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>분해 간격 <output id="p3-ex-out"></output></span><input type="range" id="p3-ex" min="0" max="100" step="1" value="45"></label>
+          <div class="ctrl"><span>강조</span><div class="seg" id="p3-hi"><button data-value="all" class="on">전체</button><button data-value="sig">신호</button><button data-value="pwr">전력</button><button data-value="heat">열</button></div></div>
+          <label class="check"><input type="checkbox" id="p3-sec"> 단면 보기 (앞쪽 자르기)</label>
+          <label class="ctrl"><span>단면 위치 <output id="p3-cut-out"></output></span><input type="range" id="p3-cut" min="-36" max="36" step="1" value="0"></label>
+          <label class="check"><input type="checkbox" id="p3-lab" checked> 이름표</label>
+          <div class="step-desc" id="p3-d">부품을 누르면 크기와 개수가 여기에 나온다.</div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">실제 총 높이</span><span class="v" id="p3-o-h">—</span></div>
+        <div class="stat"><span class="k">세로 표시 배율</span><span class="v" id="p3-o-v">—</span></div>
+        <div class="stat"><span class="k">강조한 경로</span><span class="v" id="p3-o-p">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 분해 간격 0 %에서 "열"을 고르면 다이 → TIM → 리드만 남는다. 열이 지나는 층은 세 개뿐이다. ② "단면 보기"를 켜고 위치 0 mm에서 보면 가운데 HBM 스택의 8단 DRAM과 베이스 다이, 인터포저의 TSV가 보인다. ③ "전력"을 고르면 BGA(실제 약 4,500개)·C4·TSV·마이크로범프가 남는다. 범프와 볼은 실제보다 성기게 그렸다(C4 실제 약 11만 개).</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 신호·전력·열이 각자 짧은 길을 갖게 층을 나눈다. 신호는 가장 미세한 인터포저 배선으로 짧게 옆으로 가고, 전력은 굵은 범프를 병렬로 많이 써서 수직으로 올라오며, 열은 반대쪽 면으로 빠진다. 다이를 뒤집어 붙이는 플립칩 덕분에 다이 뒷면 전체가 냉각면이 된다(<a href="../../packaging/chapters/flipchip.html">PackagingBook 플립칩</a>).</p>
+  </section>
+
+  <section id="density">
+    <h2>연결 밀도의 사다리</h2>
+    <p>연결 밀도는 두 가지로 잰다. 가장자리를 따라 옆으로 나가는 배선 수(개/mm)는 선폭 \(L\)과 간격 \(S\), 신호층 수가 정한다. 면을 통해 위아래로 지나는 I/O 수(개/mm²)는 범프 피치 \(p\)가 정한다.</p>
+    <div class="formula">$$n_{wire} = N_{layer}\cdot\frac{1000}{L+S}\ [\text{개/mm}], \qquad n_{IO} = \frac{10^{6}}{p^{2}}\ [\text{개/mm}^2]$$<div class="where">\(L, S, p\)는 µm. 정사각 격자 범프를 가정했다. 실리콘 인터포저 0.4/0.4 µm·신호층 2개면 \(n_{wire}\) = 2,500 /mm, 45 µm 마이크로범프면 \(n_{IO}\) ≈ 494 /mm².</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="로그 눈금 위의 배선 피치와 범프 피치 사다리. 배선 피치는 PCB 150 µm, 유기 기판 20 µm, RDL 4 µm, 실리콘 인터포저 0.8 µm. 범프 피치는 BGA 1000 µm, C4 150 µm, 마이크로범프 45 µm, 하이브리드 본딩 9 µm와 1 µm">
+        <path d="M80 70H820M80 170H820" class="s-axis"/>
+        <g class="t-mono t-c">
+          <text x="80" y="92">0.1</text><text x="228" y="92">1</text><text x="376" y="92">10</text><text x="524" y="92">100</text><text x="672" y="92">1,000</text><text x="820" y="92">10,000 µm</text>
+          <text x="80" y="192">0.1</text><text x="228" y="192">1</text><text x="376" y="192">10</text><text x="524" y="192">100</text><text x="672" y="192">1,000</text><text x="820" y="192">10,000 µm</text>
+        </g>
+        <path d="M80 66V74M228 66V74M376 66V74M524 66V74M672 66V74M820 66V74M80 166V174M228 166V174M376 166V174M524 166V174M672 166V174M820 166V174" class="s-axis"/>
+        <text x="20" y="40" class="t t-b">배선 피치 L+S</text><text x="20" y="140" class="t t-b">범프·패드 피치 p</text>
+        <g class="kf-data"><circle cx="550" cy="70" r="6"/><circle cx="420" cy="70" r="6"/><circle cx="317" cy="70" r="6"/><circle cx="214" cy="70" r="6"/><circle cx="80" cy="70" r="6" style="opacity:.5"/></g>
+        <g class="t t-c"><text x="550" y="58">PCB 150</text><text x="420" y="58">유기 기판 20</text><text x="317" y="58">RDL 4</text><text x="214" y="58">실리콘 인터포저 0.8</text><text x="96" y="58">다이 금속 ~0.05</text></g>
+        <g class="kf-link"><circle cx="672" cy="170" r="6"/><circle cx="550" cy="170" r="6"/><circle cx="469" cy="170" r="6"/><circle cx="369" cy="170" r="6"/><circle cx="228" cy="170" r="6"/></g>
+        <g class="t t-c"><text x="672" y="158">BGA 1,000</text><text x="550" y="158">C4 150</text><text x="469" y="158">마이크로범프 45</text><text x="362" y="158">하이브리드 9</text><text x="228" y="158">하이브리드 1</text></g>
+        <text x="450" y="222" class="t-dim t-c">피치가 10배 줄면 가장자리 밀도는 10배, 면 밀도는 100배</text>
+      </svg>
+      <figcaption><b>그림 11-3.</b> 배선 피치와 범프 피치의 사다리(로그 눈금, 대표값). 다이 안 → 인터포저 → 기판 → 보드로 나갈수록 피치가 한 자릿수씩 커진다. 범프 공정은 <a href="../../packaging/chapters/bump.html">PackagingBook 범프</a> 장에서 다룬다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-dn">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>연결 밀도 비교</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="dn-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>기술 프리셋</span><div class="seg" id="dn-t"><button data-value="pcb">PCB</button><button data-value="sub">기판</button><button data-value="rdl">RDL</button><button data-value="si" class="on">Si 인터포저</button><button data-value="hb">하이브리드</button></div></div>
+          <label class="ctrl"><span>선폭 = 간격 <output id="dn-ls-out"></output></span><input type="range" id="dn-ls" min="-0.7" max="2" step="0.01" value="-0.4"></label>
+          <label class="ctrl"><span>신호층 수 <output id="dn-ly-out"></output></span><input type="range" id="dn-ly" min="1" max="6" step="1" value="2"></label>
+          <label class="ctrl"><span>범프 피치 <output id="dn-p-out"></output></span><input type="range" id="dn-p" min="0" max="3" step="0.01" value="1.65"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">가장자리 배선</span><span class="v" id="dn-o-w">—</span></div>
+        <div class="stat"><span class="k">면 I/O</span><span class="v" id="dn-o-io">—</span></div>
+        <div class="stat"><span class="k">1,024비트에 필요한 가장자리</span><span class="v" id="dn-o-e">—</span></div>
+        <div class="stat"><span class="k">PCB 대비 면 밀도</span><span class="v" id="dn-o-r">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① "Si 인터포저"(0.4 µm, 2층, 45 µm)는 2,500 /mm·494 /mm²다. HBM 1,024비트 데이터선은 배선만 보면 가장자리 0.41 mm에 들어간다. ② "기판"(10 µm, 150 µm)으로 바꾸면 100 /mm·44 /mm²로, 같은 1,024비트에 10 mm가 필요하다. ③ 범프 피치를 45 µm에서 9 µm로 줄이면 면 밀도가 25배(12,346 /mm²)가 된다. 점은 왼쪽 아래(PCB)에서 오른쪽 위(3D)로 거의 한 직선 위에 놓인다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 배선 밀도는 공정이 정한다. 보드와 유기 기판은 큰 판을 싸게 만들지만 선폭이 10 µm를 넘고, 실리콘은 노광 장비로 µm 이하 선을 그릴 수 있다. 인터포저는 트랜지스터 없이 배선만 만드는 오래된 공정(65 nm급)이라 싸다. 미세 배선이 필요한 곳(다이 사이 수 mm)에만 실리콘을 쓰고 나머지는 기판에 맡기면 밀도와 원가를 둘 다 맞출 수 있다.</p>
+  </section>
+
+  <section id="shoreline">
+    <h2>쇼어라인: 가장자리 길이가 대역폭을 정한다</h2>
+    <p>다이 옆에 메모리를 두면 데이터선은 다이의 <span class="term">쇼어라인</span><span class="en">(shoreline, 가장자리)</span>을 넘어 나가야 한다. 가장자리 1 mm에서 나갈 수 있는 신호 수는 두 한계 가운데 작은 쪽이다. 첫째는 배선 한계 \(n_{wire}\)다. 둘째는 범프 한계로, 가장자리 안쪽 깊이 \(D\)의 PHY 띠에 들어가는 범프 수에 신호 비율 \(\eta\)를 곱한 값이다. 범프의 나머지 절반쯤은 전원·접지다.</p>
+    <div class="formula">$$s = \min\!\left(n_{wire},\ \eta\, D\, \frac{10^{6}}{p^{2}}\right), \qquad BW_{edge} = \frac{s}{1+o}\cdot f_{pin}\cdot \ell_{edge}$$<div class="where">\(s\): mm당 신호 수, \(D\): PHY 띠 깊이(mm), \(\eta\) ≈ 0.5, \(o\) ≈ 0.3(데이터 외 신호), \(\ell_{edge}\): HBM을 둘 수 있는 가장자리 길이. GX-1은 긴 변 두 개, 30 mm × 2 = 60 mm.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="쇼어라인 개념도. 로직 다이 오른쪽 가장자리에 깊이 D의 PHY 띠가 있고 범프 격자에서 나온 배선이 인터포저를 건너 HBM 스택의 범프 격자로 이어진다">
+        <rect x="30" y="30" width="250" height="190" class="m-si"/>
+        <rect x="210" y="30" width="70" height="190" class="kf-link" style="opacity:.25"/>
+        <text x="120" y="130" class="t t-b t-c">로직 다이</text>
+        <text x="245" y="24" class="t t-c">PHY 띠</text>
+        <g class="m-sol">
+          <circle cx="222" cy="50" r="4"/><circle cx="240" cy="50" r="4"/><circle cx="258" cy="50" r="4"/><circle cx="222" cy="68" r="4"/><circle cx="240" cy="68" r="4"/><circle cx="258" cy="68" r="4"/><circle cx="222" cy="86" r="4"/><circle cx="240" cy="86" r="4"/><circle cx="258" cy="86" r="4"/><circle cx="222" cy="104" r="4"/><circle cx="240" cy="104" r="4"/><circle cx="258" cy="104" r="4"/><circle cx="222" cy="122" r="4"/><circle cx="240" cy="122" r="4"/><circle cx="258" cy="122" r="4"/><circle cx="222" cy="140" r="4"/><circle cx="240" cy="140" r="4"/><circle cx="258" cy="140" r="4"/><circle cx="222" cy="158" r="4"/><circle cx="240" cy="158" r="4"/><circle cx="258" cy="158" r="4"/><circle cx="222" cy="176" r="4"/><circle cx="240" cy="176" r="4"/><circle cx="258" cy="176" r="4"/><circle cx="222" cy="194" r="4"/><circle cx="240" cy="194" r="4"/><circle cx="258" cy="194" r="4"/>
+        </g>
+        <rect x="300" y="20" width="160" height="210" class="m-interp" style="opacity:.55"/>
+        <text x="380" y="244" class="t-dim t-c">인터포저 배선 (선폭 0.4–2 µm)</text>
+        <g class="ks-data" style="stroke-width:1.3;fill:none">
+          <path d="M258 50H480M258 68H480M258 86H480M258 104H480M258 122H480M258 140H480M258 158H480M258 176H480M258 194H480"/>
+          <path d="M240 59H480M240 77H480M240 95H480M240 113H480M240 131H480M240 149H480M240 167H480M240 185H480" style="opacity:.55"/>
+        </g>
+        <rect x="480" y="40" width="160" height="170" class="m-dram"/>
+        <text x="560" y="130" class="t t-b t-c">HBM 스택</text>
+        <path d="M290 30V220" class="dimline"/><text x="296" y="216" class="t" style="font-size:12px">ℓ</text>
+        <path d="M210 228H280" class="dimline"/><text x="245" y="244" class="t t-c">D</text>
+        <path d="M268 50V68" class="dimline"/><text x="274" y="64" class="t-dim">p</text>
+        <text x="660" y="70" class="t">mm당 신호 수 s</text>
+        <text x="660" y="92" class="t-dim">= min(배선, 범프)</text>
+        <text x="660" y="130" class="t">대역폭</text>
+        <text x="660" y="152" class="t-dim">= s × 핀 속도 × ℓ</text>
+      </svg>
+      <figcaption><b>그림 11-4.</b> 쇼어라인. 가장자리 길이 ℓ, PHY 띠 깊이 D, 범프 피치 p가 다이 밖으로 나갈 수 있는 신호 수를 정한다. 띠를 깊게 하면 범프는 늘지만 그만큼 배선이 범프 사이를 빠져나가야 한다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-sh">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>쇼어라인 대역폭</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sh-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>다이 옆 매체</span><div class="seg" id="sh-t"><button data-value="sub">유기 기판</button><button data-value="rdl">RDL</button><button data-value="si" class="on">Si 인터포저</button></div></div>
+          <label class="ctrl"><span>PHY 띠 깊이 D <output id="sh-d-out"></output></span><input type="range" id="sh-d" min="0.2" max="3" step="0.1" value="1"></label>
+          <label class="ctrl"><span>핀 속도 <output id="sh-r-out"></output></span><input type="range" id="sh-r" min="2" max="32" step="0.2" value="9.6"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">mm당 신호</span><span class="v" id="sh-o-s">—</span></div>
+        <div class="stat"><span class="k">한계</span><span class="v" id="sh-o-lim">—</span></div>
+        <div class="stat"><span class="k">스택 하나(1,331 신호)에 필요한 가장자리</span><span class="v" id="sh-o-e">—</span></div>
+        <div class="stat"><span class="k">60 mm 가장자리 최대 대역폭</span><span class="v" id="sh-o-bw">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(Si 인터포저, D = 1 mm, 9.6 Gb/s)은 247 신호/mm, 범프 한계, 스택당 5.4 mm, 최대 13.7 TB/s로 GX-1의 7.37 TB/s를 넉넉히 덮는다. ② "유기 기판"(C4 150 µm)으로 바꾸면 22 신호/mm, 스택 하나에 60 mm가 필요해 HBM 하나도 제대로 붙지 않는다(1.23 TB/s). ③ "RDL"은 범프 피치가 같아 D = 1 mm에서는 Si와 같다. D를 3 mm로 키우면 RDL은 배선 한계 500 /mm에 걸리고 Si는 741 /mm까지 간다.</div>
+    </div>
+    <p>GX-1은 가장자리 하나에 스택 세 개, 약 3,990개 신호를 30 mm에 놓으므로 133 신호/mm가 필요하다. 실리콘 인터포저의 범프 한계(247 /mm)의 약 54 %다. 남는 여유가 클럭·전원 범프와 배선 우회에 쓰인다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> 다이 면적은 길이의 제곱으로 늘지만 가장자리는 길이에 비례해서만 는다. 연산(면적)이 늘수록 대역폭(가장자리)이 상대적으로 모자란다. 그래서 GX-1은 다이를 레티클 한계 가까이 키우고 긴 변 두 쪽을 모두 HBM PHY에 준다. 가장자리가 더 모자라면 핀 속도를 올리거나(HBM 세대), 인터페이스 폭을 두 배로 늘리거나(HBM4의 2,048비트), 메모리를 위로 쌓아야 한다(3D).</p>
+  </section>
+
+  <section id="interposer">
+    <h2>실리콘 인터포저: TSV·미세 배선·스티칭</h2>
+    <p>실리콘 인터포저는 트랜지스터가 없는 실리콘 판이다. 위쪽에 구리 배선 3–4층(선폭 약 0.4 µm부터)을 만들고, 두께 약 100 µm로 갈아 낸 판에 지름 약 10 µm의 TSV를 뚫어 아래 C4와 잇는다(<a href="../../packaging/chapters/tsv.html">PackagingBook TSV</a>). 배선층 사이에 <span class="term">깊은 트렌치 커패시터</span><span class="en">(deep trench capacitor)</span>를 넣어 다이 바로 밑에서 전원 잡음을 거르기도 한다(12장).</p>
+    <p>문제는 크기다. 로직 다이(26 × 30 mm)와 HBM 여섯 개(각 약 11 × 11 mm)를 나란히 얹으면 인터포저가 노광 한 번에 찍을 수 있는 <span class="term">레티클</span> 한계 26 × 33 mm(858 mm²)를 훌쩍 넘는다. 그래서 여러 노광 영역을 경계에서 배선이 이어지도록 맞춰 찍는 <span class="term">스티칭</span><span class="en">(stitching)</span>을 쓴다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 356" role="img" aria-label="GX-1 인터포저 평면 배치. 58 × 43 mm 인터포저 가운데 로직 다이, 좌우에 HBM 스택 3개씩, 점선으로 레티클 노광 영역 2 × 2와 스티칭 경계">
+        <rect x="40" y="40" width="348" height="258" class="m-interp"/>
+        <rect x="16" y="13" width="198" height="156" class="pk-cut"/><rect x="214" y="13" width="198" height="156" class="pk-cut"/>
+        <rect x="16" y="169" width="198" height="156" class="pk-cut"/><rect x="214" y="169" width="198" height="156" class="pk-cut"/>
+        <path d="M214 40V298M40 169H388" style="stroke:var(--accent-2);stroke-width:2.4"/>
+        <rect x="136" y="79" width="156" height="180" class="m-si"/>
+        <text x="214" y="160" class="t t-b t-c t-halo">로직 다이</text><text x="214" y="190" class="t-dim t-c t-halo">26 × 30 mm</text>
+        <g class="m-dram"><rect x="64" y="64" width="66" height="66"/><rect x="64" y="136" width="66" height="66"/><rect x="64" y="208" width="66" height="66"/><rect x="298" y="64" width="66" height="66"/><rect x="298" y="136" width="66" height="66"/><rect x="298" y="208" width="66" height="66"/></g>
+        <g class="t t-c"><text x="97" y="101">HBM</text><text x="97" y="173">HBM</text><text x="97" y="245">HBM</text><text x="331" y="101">HBM</text><text x="331" y="173">HBM</text><text x="331" y="245">HBM</text></g>
+        <path d="M40 336H388" class="dimline"/><text x="214" y="352" class="t-dim t-c">58 mm</text>
+        <path d="M6 40V298" class="dimline"/><text x="0" y="0" class="t-dim t-c" transform="translate(28 330)">43 mm</text>
+        <text x="430" y="50" class="t t-b">면적 58 × 43 ≈ 2,494 mm²</text>
+        <text x="430" y="74" class="t-dim">= 레티클(858 mm²)의 약 2.9배</text>
+        <text x="430" y="104" class="t">노광 영역 33 × 26 mm (돌려 찍음)</text>
+        <text x="430" y="128" class="t-dim">2 × 2 = 4개 영역을 이어 붙임</text>
+        <path d="M430 166H470" style="stroke:var(--accent-2);stroke-width:2.4"/><text x="478" y="170" class="t">스티칭 경계: 배선이 건너가야 함</text>
+        <path d="M430 196H470" class="pk-cut"/><text x="478" y="200" class="t">레티클 노광 영역</text>
+        <text x="430" y="240" class="t">가장자리 여유 4 mm</text>
+        <text x="430" y="264" class="t-dim">봉인 링·금지 영역·조립 공차</text>
+        <text x="430" y="294" class="t-dim">HBM-다이 간격 1 mm, HBM 사이 1 mm</text>
+      </svg>
+      <figcaption><b>그림 11-5.</b> GX-1 인터포저 배치(이 책의 배치 가정). 면적은 GX-1 표의 약 2,500 mm²(50 × 50 mm 정사각형과 같은 면적)에 맞지만, 실제 배치는 HBM이 긴 변에 붙으므로 가로로 길다. 경계선을 건너는 배선은 두 노광의 정렬 오차를 견디도록 넓게 그린다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-ip">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>인터포저 크기 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ip-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>로직 다이 수</span><div class="seg" id="ip-n"><button data-value="1" class="on">1개</button><button data-value="2">2개 (칩렛)</button></div></div>
+          <label class="ctrl"><span>긴 변 한쪽의 HBM 수 <output id="ip-k-out"></output></span><input type="range" id="ip-k" min="1" max="6" step="1" value="3"></label>
+          <label class="ctrl"><span>다이–HBM 간격 <output id="ip-g-out"></output></span><input type="range" id="ip-g" min="0.5" max="3" step="0.5" value="1"></label>
+          <label class="ctrl"><span>가장자리 여유 <output id="ip-m-out"></output></span><input type="range" id="ip-m" min="1" max="8" step="0.5" value="4"></label>
+          <label class="ctrl"><span>인터포저 웨이퍼 원가 <output id="ip-c-out"></output></span><input type="range" id="ip-c" min="2000" max="10000" step="500" value="5000"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">인터포저</span><span class="v" id="ip-o-a">—</span></div>
+        <div class="stat"><span class="k">레티클 배수 · 노광 영역</span><span class="v" id="ip-o-x">—</span></div>
+        <div class="stat"><span class="k">300 mm 웨이퍼당 (배치 · 식)</span><span class="v" id="ip-o-w">—</span></div>
+        <div class="stat"><span class="k">양품 인터포저당 원가</span><span class="v" id="ip-o-c">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값은 58 × 43 mm, 2,494 mm², 레티클 2.9배, 노광 영역 4개, 웨이퍼당 20개(식으로는 약 14개), 수율 90 %에서 약 $280다. ② HBM을 한쪽 4개(총 8개)로 늘리면 58 × 55 mm(3,190 mm²), 웨이퍼당 12개로 줄고 원가가 약 $460이 된다. ③ 로직 다이 2개 + 한쪽 6개(HBM 12개)면 58 × 79 mm, 레티클 5.3배, 웨이퍼당 8개다. 웨이퍼 한 장에서 나오는 패키지 수가 생산량의 병목이 된다.</div>
+    </div>
+    <div class="formula">$$N_{wafer} \approx \frac{\pi d^{2}}{4A} - \frac{\pi d}{\sqrt{2A}}, \qquad C_{interposer} = \frac{C_{wafer}}{N\cdot Y}$$<div class="where">\(d\) = 300 − 2 × 3 mm(가장자리 제외), \(A\): 인터포저 면적(스크라이브 0.2 mm 포함). 이 식은 작은 다이용이라 큰 직사각형에서는 개수를 적게 센다. 시뮬레이터는 격자를 반 칸씩 밀어 실제로 들어가는 개수도 센다. 수율 \(Y\)는 90 %로 가정했다(수율 모델은 <a href="die.html">10장</a>).</div></div>
+    <div class="callout fab"><strong>인터포저 면적 원가</strong> 배선 전용 65 nm급 웨이퍼를 약 $5,000로 가정하면(교육용), 웨이퍼당 20개 × 수율 90 %에서 인터포저 하나는 약 $280, mm²당 약 $0.11이다. 4 nm급 로직 웨이퍼(약 $18,000)의 mm²당 원가(약 $0.25, 가장자리 손실 전)보다 싸지만 면적이 로직 다이의 3.2배다. GX-1 표의 "인터포저·조립·테스트 약 $1,000" 가운데 약 30 %가 인터포저 실리콘 몫이다. 다이·HBM까지 합친 패키지 원가는 <a href="die.html">10장</a>이 계산한다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 인터포저는 다이와 HBM을 모두 담아야 하므로 HBM 스택을 하나 늘릴 때마다 면적과 원가가 계단처럼 오른다. 레티클을 넘는 순간 스티칭이 필요하고, 면적이 커질수록 웨이퍼당 개수가 빠르게 줄어 생산 능력이 병목이 된다. 이 압력이 아래의 RDL·브리지·패널 대안을 낳았다.</p>
+  </section>
+
+  <section id="wire">
+    <h2>인터포저 배선: 버퍼 없는 수 mm</h2>
+    <p>HBM 신호선은 인터포저 위에서 수 mm를 달린다. 이 정도 길이면 신호가 빛의 속도로 건너는 시간(약 20 ps)보다 배선을 충전하는 RC 시간이 길어서, 선은 전송선이 아니라 분포 RC로 보면 된다. 구동기 저항 \(R_d\)가 배선 \(R_w, C_w\)와 수신단 \(C_L\)을 충전하는 엘모어 지연은 다음과 같다(배선 RC 모델은 <a href="noc.html">9장</a>).</p>
+    <div class="formula">$$t_{50} \approx 0.69R_d(C_w+C_L) + 0.38R_wC_w + 0.69R_wC_L, \quad R_w = \frac{\rho L}{w\,t}, \quad E_{bit} \approx \tfrac{1}{4}(C_w+C_L)V^{2}$$<div class="where">\(\rho\) ≈ 2.2 × 10⁻⁸ Ω·m, 두께 \(t\) = 1 µm, \(C_w\) ≈ 0.2 pF/mm(선폭과 간격을 같이 키우면 거의 일정), \(R_d\) = 30 Ω, \(C_L\) = 0.2 pF(범프·ESD·수신기), 신호 진폭 \(V\) ≈ 0.4 V. 무작위 데이터는 비트당 0 → 1 전환 확률이 1/4이다. 상승 시간 \(t_r \approx 2.2\tau\)(\(\tau\): 엘모어 시정수)이 한 비트 시간보다 짧으면 이퀄라이저 없이 눈이 열린다고 보고, 최대 속도를 \(1/t_r\)로 잡는다.</div></div>
+    <div class="sim" id="sim-wr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>인터포저 배선 RC와 신호 전송</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="wr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>배선 길이 <output id="wr-l-out"></output></span><input type="range" id="wr-l" min="0.5" max="20" step="0.5" value="3"></label>
+          <label class="ctrl"><span>선폭 (간격 같음) <output id="wr-w-out"></output></span><input type="range" id="wr-w" min="0.4" max="5" step="0.1" value="2"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">배선 R · C</span><span class="v" id="wr-o-rc">—</span></div>
+        <div class="stat"><span class="k">지연 t₅₀ · 상승 tr</span><span class="v" id="wr-o-t">—</span></div>
+        <div class="stat"><span class="k">버퍼 없이 최대 속도</span><span class="v" id="wr-o-f">—</span></div>
+        <div class="stat"><span class="k">배선 충전 에너지</span><span class="v" id="wr-o-e">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(3 mm, 2 µm)은 33 Ω·0.6 pF, 상승 시간 89 ps로 최대 약 11 Gb/s다. 9.6 Gb/s HBM 채널이 종단 없이 돈다. ② 선폭을 최소 0.4 µm로 줄이면 저항이 165 Ω이 되어 최대 약 4.3 Gb/s로 떨어진다. 고속 신호선은 최소 선폭보다 넓게 그린다. ③ 길이를 10 mm로 늘리면(2 µm) 최대 약 2.3 Gb/s다. 다이를 멀리 두면 리피터·종단·SerDes가 필요해진다.</div>
+    </div>
+    <p>배선 자체의 충전 에너지는 3 mm에서 약 0.03 pJ/bit로 작다. HBM의 약 3 pJ/bit 대부분은 DRAM 코어 동작과 PHY 회로(클럭, 수신기, 직렬·병렬 변환)의 몫이다. 반대로 보드와 기판을 건너는 칩간 링크는 손실 많은 수십 mm 채널을 이겨야 해서 SerDes가 약 5 pJ/bit를 쓴다(<a href="scale.html">14장</a>).</p>
+    <p><b>왜 이렇게 설계하는가.</b> 거리가 짧으면 선 하나를 느리고 넓게 쓸 수 있다. 수 mm 배선은 구동기 하나로 직접 몰 수 있어서 종단 저항, 이퀄라이저, 클럭 복원 회로가 필요 없다. 그만큼 PHY 면적과 전력이 준다. HBM 인터페이스가 "넓고 느린" 방식인 이유가 이것이고, 이 방식은 인터포저가 길이를 수 mm로 묶어 줄 때만 성립한다.</p>
+  </section>
+
+  <section id="alt">
+    <h2>대안: RDL 인터포저, 로컬 실리콘 브리지, 패널</h2>
+    <p>미세 배선이 정말 필요한 곳은 다이와 HBM이 마주 보는 몇 mm 폭의 띠뿐이다. 그렇다면 인터포저 전체를 실리콘으로 만들 이유가 없다. 두 대안이 여기서 나온다. <span class="term">RDL 인터포저</span>는 폴리머 절연막과 구리 재배선층(RDL)을 쌓아 만든 유기 인터포저로, 선폭 약 2 µm가 한계지만 크게 만들기 쉽다. <span class="term">로컬 실리콘 브리지</span>는 다이 사이 경계 밑에만 작은 실리콘 조각을 묻어 그 부분만 실리콘 밀도를 낸다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 240" role="img" aria-label="세 구조의 단면 비교. 실리콘 인터포저 전체, RDL 인터포저와 그 안에 묻힌 작은 실리콘 브리지, 그리고 300 mm 원형 웨이퍼와 직사각형 패널의 비교">
+        <text x="140" y="24" class="t t-b t-c">(a) 실리콘 인터포저</text>
+        <rect x="20" y="150" width="240" height="22" class="m-sub"/><rect x="30" y="126" width="220" height="16" class="m-interp"/>
+        <g class="m-cu"><rect x="60" y="126" width="3" height="16"/><rect x="100" y="126" width="3" height="16"/><rect x="140" y="126" width="3" height="16"/><rect x="180" y="126" width="3" height="16"/><rect x="220" y="126" width="3" height="16"/></g>
+        <rect x="40" y="80" width="60" height="40" class="m-dram"/><rect x="108" y="76" width="134" height="44" class="m-si"/>
+        <text x="140" y="196" class="t-dim t-c">전체가 실리콘, TSV 필요</text><text x="140" y="216" class="t-dim t-c">레티클 약 3–4배에서 원가·수급 부담</text>
+        <text x="430" y="24" class="t t-b t-c">(b) RDL 인터포저 + 로컬 브리지</text>
+        <rect x="310" y="150" width="240" height="22" class="m-sub"/><rect x="320" y="122" width="220" height="20" class="pk-poly"/>
+        <path d="M320 128H540M320 134H540" style="stroke:var(--m-cu-e);stroke-width:1;opacity:.7"/>
+        <rect x="372" y="124" width="56" height="12" class="m-interp"/>
+        <rect x="330" y="80" width="60" height="40" class="m-dram"/><rect x="398" y="76" width="134" height="44" class="m-si"/>
+        <path d="M400 112L400 88" class="lead-a"/><text x="356" y="64" class="t-acc">실리콘 브리지 (다이 경계 밑만)</text>
+        <text x="430" y="196" class="t-dim t-c">브리지 밖은 RDL 2 µm 배선</text><text x="430" y="216" class="t-dim t-c">큰 크기에 유리, 브리지 정렬이 관건</text>
+        <text x="720" y="24" class="t t-b t-c">(c) 웨이퍼 vs 패널</text>
+        <circle cx="650" cy="110" r="62" class="m-interp" style="opacity:.7"/>
+        <rect x="726" y="48" width="114" height="124" class="pk-poly"/>
+        <g style="fill:none;stroke:var(--text-dim);stroke-width:1">
+          <rect x="610" y="78" width="38" height="28"/><rect x="652" y="78" width="38" height="28"/><rect x="610" y="110" width="38" height="28"/><rect x="652" y="110" width="38" height="28"/>
+          <rect x="732" y="54" width="32" height="24"/><rect x="767" y="54" width="32" height="24"/><rect x="802" y="54" width="32" height="24"/><rect x="732" y="81" width="32" height="24"/><rect x="767" y="81" width="32" height="24"/><rect x="802" y="81" width="32" height="24"/><rect x="732" y="108" width="32" height="24"/><rect x="767" y="108" width="32" height="24"/><rect x="802" y="108" width="32" height="24"/><rect x="732" y="135" width="32" height="24"/><rect x="767" y="135" width="32" height="24"/><rect x="802" y="135" width="32" height="24"/>
+        </g>
+        <text x="650" y="196" class="t-dim t-c">300 mm 원판</text><text x="783" y="196" class="t-dim t-c">직사각 패널</text>
+        <text x="720" y="216" class="t-dim t-c">큰 직사각형은 사각 판에서 덜 버린다</text>
+      </svg>
+      <figcaption><b>그림 11-6.</b> 인터포저의 세 갈래. (b)는 실리콘 밀도가 필요한 곳에만 실리콘을 쓰고, (c)는 판의 모양을 바꿔 큰 인터포저의 가장자리 손실을 줄인다. (c)의 사각형 개수는 개념도다.</figcaption>
+    </figure>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>구조</th><th>최소 L/S</th><th>범프 피치</th><th>크기 한계</th><th>TSV</th><th>원가 경향</th><th>주된 약점</th></tr></thead>
+        <tbody>
+          <tr><td>실리콘 인터포저 (CoWoS류 2.5D)</td><td>약 0.4/0.4 µm</td><td>약 40–45 µm</td><td>레티클 3–4배 (스티칭)</td><td>있음</td><td>면적에 비례해 높음</td><td>대면적 원가·웨이퍼당 개수·휨</td></tr>
+          <tr><td>RDL(유기) 인터포저</td><td>약 2/2 µm</td><td>약 40–45 µm</td><td>더 크게 가능</td><td>없음</td><td>중간</td><td>층수·선폭 한계, 고밀도 영역 부족</td></tr>
+          <tr><td>RDL + 로컬 실리콘 브리지</td><td>브리지 0.4 µm, 그 밖 2 µm</td><td>약 40–45 µm</td><td>레티클 수 배 이상</td><td>브리지에 따라</td><td>실리콘은 작은 조각만</td><td>브리지 정렬·내장 공정, 전력 공급 경로</td></tr>
+          <tr><td>패널 레벨 (유리·유기 패널)</td><td>약 2 µm (유리 코어는 더 미세화 중)</td><td>약 40 µm 이상</td><td>패널 500 mm급</td><td>유리 관통 전극</td><td>판당 개수↑로 개당 낮음</td><td>패널 휨·장비 생태계·미세 선폭 균일도</td></tr>
+          <tr><td>하이브리드 본딩 3D</td><td>(수직 연결)</td><td>약 1–10 µm</td><td>위 다이 크기</td><td>위 다이 쪽</td><td>공정 높음</td><td>열·표면 평탄도·KGD 수율</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>쇼어라인 시뮬레이터에서 보았듯 범프 피치가 같으면 RDL도 범프 한계까지는 실리콘과 같은 신호 수를 낸다. 차이는 배선 층수와 선폭에서 오는 배선 한계, 그리고 긴 배선의 저항이다. 그래서 다이와 HBM이 마주 보는 짧은 구간만 실리콘 브리지에 맡기고, 전력 분배와 긴 배선은 두꺼운 RDL로 처리하는 조합이 나왔다. 패널은 판의 모양 문제다. 2,500 mm²짜리 직사각형은 원판 가장자리에서 많이 버려지지만, 직사각 패널에서는 덜 버려진다(<a href="../../packaging/chapters/substrate.html">PackagingBook 기판</a>).</p>
+    <p><b>왜 이렇게 설계하는가.</b> 비싼 실리콘 미세 배선은 대역폭이 실제로 오가는 몇 mm에만 쓰고, 넓은 면적은 싼 재료로 채운다. 인터포저가 레티클 여러 배로 커질수록 이 분할이 원가와 생산 능력에서 이득이다. 대가는 공정 복잡도와 정렬 공차다.</p>
+  </section>
+
+  <section id="warpage">
+    <h2>휨과 열팽창 불일치, 언더필</h2>
+    <p>실리콘의 <span class="term">열팽창 계수</span>(CTE)는 약 2.6 ppm/K, 유기 기판은 약 15 ppm/K다. 솔더가 굳는 약 220 °C에서 실온으로 식으면 기판이 실리콘보다 더 줄어든다. 둘이 붙어 있으니 판 전체가 바이메탈처럼 휜다. 이것이 <span class="term">휨</span><span class="en">(warpage)</span>이다. 휨이 크면 BGA 볼이 보드에 고르게 닿지 않고, 큰 실리콘 판이 깨지거나 범프가 들뜬다.</p>
+    <div class="formula">$$\kappa = \frac{6(1+m)^{2}\,\Delta\alpha\,\Delta T}{h\left[3(1+m)^{2} + (1+mn)\left(m^{2} + \frac{1}{mn}\right)\right]}, \qquad \delta = \frac{\kappa L^{2}}{8}, \qquad \gamma \approx \frac{\Delta\alpha\,\Delta T\cdot \mathrm{DNP}}{h_b}$$<div class="where">티모셴코 바이메탈 식. \(m = h_1/h_2\)(두께 비), \(n = E_1/E_2\)(탄성률 비, 실리콘 130 GPa, 기판 약 25 GPa), \(h = h_1+h_2\), \(\delta\): 길이 \(L\)에 걸친 휨(활 높이). \(\gamma\): 언더필이 없을 때 모서리 범프의 전단 변형, DNP는 중심에서 모서리 범프까지 거리(반대각선), \(h_b\) = 80 µm(C4 높이).</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 230" role="img" aria-label="휨의 원리. 왼쪽은 고온에서 평평한 실리콘과 기판, 오른쪽은 실온으로 식은 뒤 기판이 더 줄어 가운데가 솟은 모양과 모서리 범프의 전단">
+        <text x="170" y="24" class="t t-b t-c">솔더가 굳는 약 220 °C: 평평</text>
+        <rect x="40" y="70" width="260" height="20" class="m-interp"/><rect x="30" y="96" width="280" height="30" class="m-sub"/>
+        <g class="m-sol"><circle cx="52" cy="93" r="3"/><circle cx="100" cy="93" r="3"/><circle cx="150" cy="93" r="3"/><circle cx="200" cy="93" r="3"/><circle cx="250" cy="93" r="3"/><circle cx="290" cy="93" r="3"/></g>
+        <text x="170" y="150" class="t-dim t-c">실리콘 2.6 ppm/K · 기판 약 15 ppm/K</text>
+        <path d="M330 95H400" class="arr"/><text x="365" y="85" class="t-dim t-c">식음</text>
+        <text x="580" y="24" class="t t-b t-c">실온: 기판이 더 줄어 휨</text>
+        <path d="M440 98Q580 40 720 98L720 118Q580 60 440 118Z" class="m-interp"/>
+        <path d="M430 128Q580 70 730 128L730 160Q580 102 430 160Z" class="m-sub"/>
+        <path d="M455 126L462 118" style="stroke:var(--m-sol-e);stroke-width:5;stroke-linecap:round"/><path d="M705 126L698 118" style="stroke:var(--m-sol-e);stroke-width:5;stroke-linecap:round"/>
+        <path d="M440 190H720" class="dimline"/><text x="580" y="208" class="t-dim t-c">L</text>
+        <path d="M740 78V128" class="dimline"/><text x="748" y="108" class="t">δ</text>
+        <path d="M470 150L440 150" class="arr-warn"/><path d="M690 150L720 150" class="arr-warn"/>
+        <text x="455" y="182" class="t-warn" style="font-size:12px">모서리 범프 전단 γ</text>
+        <text x="170" y="190" class="t-dim t-c">언더필은 범프 주변을 채워</text><text x="170" y="210" class="t-dim t-c">변형을 판 전체에 나눈다</text>
+      </svg>
+      <figcaption><b>그림 11-7.</b> 휨의 원리(과장). 열팽창 차이가 판을 굽히고(δ), 중심에서 먼 모서리 범프일수록 크게 비틀린다(γ). 실제 패키지는 리드·보강 링·언더필이 휨을 줄인다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-wp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>휨과 열팽창 불일치 (바이메탈 근사)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="wp-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>아래 재료</span><div class="seg" id="wp-m"><button data-value="sub" class="on">유기 기판</button><button data-value="mold">몰드</button><button data-value="glass">유리 코어</button></div></div>
+          <label class="ctrl"><span>온도 변화 ΔT <output id="wp-dt-out"></output></span><input type="range" id="wp-dt" min="0" max="250" step="5" value="195"></label>
+          <label class="ctrl"><span>실리콘 두께 h₁ <output id="wp-h1-out"></output></span><input type="range" id="wp-h1" min="0.1" max="1.5" step="0.05" value="0.8"></label>
+          <label class="ctrl"><span>아래 재료 두께 h₂ <output id="wp-h2-out"></output></span><input type="range" id="wp-h2" min="0.4" max="3" step="0.1" value="1.6"></label>
+          <label class="ctrl"><span>실리콘 한 변 L <output id="wp-l-out"></output></span><input type="range" id="wp-l" min="10" max="80" step="1" value="50"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">휨 δ (구속 없음)</span><span class="v" id="wp-o-b">—</span></div>
+        <div class="stat"><span class="k">곡률 반지름</span><span class="v" id="wp-o-r">—</span></div>
+        <div class="stat"><span class="k">모서리 자유 팽창 차</span><span class="v" id="wp-o-d">—</span></div>
+        <div class="stat"><span class="k">언더필 없을 때 범프 전단 γ</span><span class="v" id="wp-o-g">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(유기 기판, ΔT 195 K, 0.8/1.6 mm, 50 mm)은 휨 약 0.47 mm, 모서리 팽창 차 약 86 µm로 C4 높이(80 µm)와 맞먹는다(γ ≈ 1.1). 언더필 없이는 첫 냉각에서 범프가 버티지 못한다. ② L을 70 mm로 키우면 휨이 (70/50)² ≈ 2배가 된다. ③ "유리 코어"(약 5 ppm/K, 70 GPa)로 바꾸면 Δα가 12.4에서 2.4 ppm/K로 줄어 휨이 약 1/3 아래로 준다. 이 근사는 구속이 없는 두 층의 상한이다. 실제 패키지는 리드와 보강 링으로 수분의 1로 줄인다.</div>
+    </div>
+    <p>로직 다이와 HBM은 실리콘 인터포저 위에 있어서 마이크로범프 층에는 CTE 차이가 거의 없다(실리콘 대 실리콘). 불일치는 인터포저와 기판 사이 C4 층에 몰린다. 그래서 C4 층에 <span class="term">언더필</span><span class="en">(underfill)</span>을 채워 범프 몇 개가 아니라 면 전체가 응력을 나누어 받게 한다. 구리 <span class="term">리드</span><span class="en">(lid)</span>는 다이 열을 퍼뜨리는 동시에 기판 위에 붙어 판이 휘지 않게 잡아 준다(<a href="../../packaging/chapters/flipchip.html">PackagingBook 플립칩·언더필</a>).</p>
+    <p><b>왜 이렇게 설계하는가.</b> 휨은 크기의 제곱으로 는다. 인터포저를 레티클 3배에서 5배로 키우면 기계 문제가 전기 문제보다 먼저 한계가 된다. 실리콘 인터포저는 다이 쪽 CTE를 맞춰 주는 대신 큰 실리콘 판과 유기 기판 사이에 불일치를 남긴다. 이 문제가 CTE가 실리콘에 가까운 유리 코어 기판, 더 두꺼운 리드와 보강 링, 언더필 재료 개발로 이어졌다.</p>
+  </section>
+
+  <section id="power">
+    <h2>기판·C4·BGA와 1,000 A의 범프</h2>
+    <p>유기 기판은 코어 양쪽에 빌드업 층을 쌓은 다층 배선판이다(GX-1은 20층, <a href="../../packaging/chapters/substrate.html">PackagingBook 기판</a>). 신호는 조금이고 일은 대부분 전력 분배다. 로직 다이는 0.75 V에서 약 1,000 A를 먹는다(760 W ÷ 0.75 V). 이 전류가 보드 → BGA → 기판 → C4 → TSV → 마이크로범프 → 다이로 올라오는데, 층마다 범프 하나가 견디는 전류에 한계가 있다(전자 이동, electromigration). 그래서 범프 수가 곧 전류 용량이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 190" role="img" aria-label="전력 공급 경로. 보드 전압 레귤레이터에서 BGA 약 4500개, 기판, C4 약 3만 5천 개, 인터포저 TSV, 마이크로범프 약 38만 개를 거쳐 로직 다이 1000 A">
+        <g class="k-volt"><rect x="10" y="50" width="110" height="80" rx="8"/><rect x="150" y="50" width="120" height="80" rx="8"/><rect x="300" y="50" width="120" height="80" rx="8"/><rect x="450" y="50" width="120" height="80" rx="8"/><rect x="600" y="50" width="120" height="80" rx="8"/></g>
+        <rect x="750" y="50" width="100" height="80" rx="8" class="m-si"/>
+        <g class="t t-b t-c"><text x="65" y="76">보드 VRM</text><text x="210" y="76">BGA 볼</text><text x="360" y="76">기판 20층</text><text x="510" y="76">C4 (다이 아래)</text><text x="660" y="76">마이크로범프</text><text x="800" y="76">로직 다이</text></g>
+        <g class="t-dim t-c"><text x="65" y="98">0.75 V, 약 20상</text><text x="210" y="98">약 4,500개</text><text x="360" y="98">전원면·비아</text><text x="510" y="98">약 3.5만 개</text><text x="660" y="98">약 38만 개</text><text x="800" y="98">약 1,000 A</text></g>
+        <g class="t-dim t-c"><text x="65" y="118">상당 약 60 A</text><text x="210" y="118">1 mm 피치</text><text x="360" y="118">TSV 지나</text><text x="510" y="118">150 µm 피치</text><text x="660" y="118">45 µm 피치</text><text x="800" y="118">780 mm²</text></g>
+        <path d="M120 90H150M270 90H300M420 90H450M570 90H600M720 90H750" class="arr" style="stroke:var(--volt)"/>
+        <text x="430" y="30" class="t t-c">전류는 같고(1,000 A), 층마다 범프 수와 범프 하나의 굵기가 다르다</text>
+        <text x="430" y="168" class="t-dim t-c">VDD 비율 30 %이면 범프 하나: BGA 약 0.74 A · C4 약 96 mA · 마이크로범프 약 8.7 mA</text>
+      </svg>
+      <figcaption><b>그림 11-8.</b> 1,000 A가 올라가는 길. 범프 수는 다이 면적(780 mm²) ÷ 피치²로 셌다. 전력 공급망 전체의 임피던스와 IR 드롭은 <a href="power.html">12장</a>이 다룬다.</figcaption>
+    </figure>
+    <div class="formula">$$I_{bump} = \frac{I}{N f_V}, \quad N = \frac{A}{p^{2}}, \quad I_{max} = J_{max}\frac{\pi}{4}(0.5p)^{2} \ \Rightarrow\ \frac{I_{max}}{I_{bump}} = \frac{\pi J_{max} A f_V}{16\, I}$$<div class="where">\(f_V\): 범프 가운데 VDD에 쓰는 비율(접지도 비슷한 수), 범프 지름은 피치의 절반으로 가정. \(J_{max}\): 솔더 C4 약 6 × 10³ A/cm², 구리 필러 마이크로범프 약 10⁴ A/cm²(고온 장기 신뢰성 기준의 대표값). BGA 볼은 발열·패드 한계로 약 1 A로 잡았다. 마지막 식에서 피치가 사라진다.</div></div>
+    <div class="sim" id="sim-bp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>범프 피치 · 범프 수 · 전류</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>코어 전류 <output id="bp-i-out"></output></span><input type="range" id="bp-i" min="100" max="1500" step="50" value="1000"></label>
+          <label class="ctrl"><span>VDD 범프 비율 f<sub>V</sub> <output id="bp-f-out"></output></span><input type="range" id="bp-f" min="0.1" max="0.5" step="0.01" value="0.3"></label>
+          <label class="ctrl"><span>C4 피치 <output id="bp-c4-out"></output></span><input type="range" id="bp-c4" min="100" max="250" step="5" value="150"></label>
+          <label class="ctrl"><span>마이크로범프 피치 <output id="bp-ub-out"></output></span><input type="range" id="bp-ub" min="10" max="60" step="1" value="45"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">BGA 볼당</span><span class="v" id="bp-o-bga">—</span></div>
+        <div class="stat"><span class="k">C4당</span><span class="v" id="bp-o-c4">—</span></div>
+        <div class="stat"><span class="k">마이크로범프당</span><span class="v" id="bp-o-ub">—</span></div>
+        <div class="stat"><span class="k">최소 VDD 볼 수 (BGA)</span><span class="v" id="bp-o-n">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(1,000 A, 30 %)에서 BGA 볼 1,350개가 각 0.74 A로 한계의 74 %다. 가장 빠듯한 층은 다이 근처가 아니라 보드 쪽 BGA다. ② 마이크로범프 피치를 45 µm에서 20 µm로 줄이면 범프 수는 5배(약 195만 개)가 되고 범프당 전류는 1/5이 되지만, 한계 대비 사용률은 22 %로 그대로다. 피치가 아니라 VDD에 주는 면적이 용량을 정한다. ③ 전류를 1,500 A로 올리면 BGA가 111 %로 넘친다. 볼 수를 늘리거나 패키지 위·아래에서 전압을 한 번 더 낮춰(수직 전력 공급) 전류를 줄여야 한다.</div>
+    </div>
+    <div class="callout fab"><strong>1,000 A를 위한 볼 개수</strong> 볼 하나에 약 1 A면 VDD 볼이 최소 1,000개, 돌아오는 접지도 그만큼 필요하다. BGA 약 4,500개 가운데 절반 가까이가 코어 전원 하나에 쓰인다. 남은 볼로 HBM 전원(약 150 W), I/O 전원, GX-Link 18개와 PCIe 신호를 처리한다. 75 × 75 mm 기판이 패키지 원가와 무게에서 큰 몫을 차지하는 이유다.</div>
+    <p>리드와 <span class="term">TIM</span><span class="en">(thermal interface material)</span>은 열 쪽 끝을 맡는다. 다이 뒷면과 리드 사이의 TIM은 미세한 요철을 메우는 층인데, 760 W가 7.8 cm²를 지나므로 TIM 열저항 0.01 cm²·K/W마다 약 1 K가 더해진다. HBM 스택은 로직 다이와 높이를 맞추도록 갈아서 리드 하나가 둘을 함께 덮는다. 열 경로 계산은 <a href="thermal.html">13장</a>과 <a href="../../packaging/chapters/thermal.html">PackagingBook 열</a> 장이 다룬다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> 낮은 전압·큰 전류는 범프 수를 요구한다. 다이 쪽 미세 범프는 수가 많아 여유가 있지만, 굵고 적은 BGA 쪽이 빠듯하다. 그래서 전력 소모가 늘수록 패키지 안이나 바로 밑에 전압 변환기를 두어 높은 전압으로 들여오는 수직 전력 공급이 중요해진다(<a href="power.html">12장</a>).</p>
+  </section>
+
+  <section id="hybrid">
+    <h2>하이브리드 본딩과 3D 적층</h2>
+    <p>마이크로범프는 솔더가 녹아 붙는 방식이라 피치를 약 20–30 µm 아래로 줄이기 어렵다. 솔더가 옆으로 번지고, 범프 높이가 고르지 않기 때문이다. <span class="term">하이브리드 본딩</span><span class="en">(hybrid bonding)</span>은 솔더를 없앤다. 두 다이 표면을 원자 수준으로 평탄하게 갈고, 산화막끼리 먼저 붙인 뒤 열처리로 구리 패드끼리 확산 결합시킨다. 피치 10 µm 이하, 연구 수준으로는 1 µm 안팎까지 간다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="마이크로범프와 하이브리드 본딩 단면 비교, 그리고 로직 다이 위에 SRAM 다이를 하이브리드 본딩으로 쌓은 구조">
+        <text x="140" y="22" class="t t-b t-c">마이크로범프 (약 45 µm)</text>
+        <rect x="30" y="36" width="220" height="40" class="m-si"/><rect x="30" y="124" width="220" height="40" class="m-si"/>
+        <path d="M30 76V124H250V76Z" class="pk-uf"/>
+        <g><rect x="55" y="76" width="22" height="26" class="m-cu"/><rect x="55" y="102" width="22" height="22" class="m-sol"/><rect x="129" y="76" width="22" height="26" class="m-cu"/><rect x="129" y="102" width="22" height="22" class="m-sol"/><rect x="203" y="76" width="22" height="26" class="m-cu"/><rect x="203" y="102" width="22" height="22" class="m-sol"/></g>
+        <text x="140" y="186" class="t-dim t-c">구리 필러 + 솔더, 틈은 언더필</text><text x="140" y="206" class="t-dim t-c">약 500 /mm²</text>
+        <text x="430" y="22" class="t t-b t-c">하이브리드 본딩 (약 9 µm)</text>
+        <rect x="320" y="36" width="220" height="48" class="m-si"/><rect x="320" y="92" width="220" height="48" class="m-si"/>
+        <rect x="320" y="76" width="220" height="24" class="m-ox"/>
+        <g class="m-cu"><rect x="332" y="76" width="10" height="24"/><rect x="362" y="76" width="10" height="24"/><rect x="392" y="76" width="10" height="24"/><rect x="422" y="76" width="10" height="24"/><rect x="452" y="76" width="10" height="24"/><rect x="482" y="76" width="10" height="24"/><rect x="512" y="76" width="10" height="24"/></g>
+        <path d="M320 88H540" class="pk-cut"/>
+        <text x="430" y="166" class="t-dim t-c">산화막끼리 + 구리끼리 직접 결합</text><text x="430" y="186" class="t-dim t-c">솔더·언더필 없음, 접합면 평탄도 수 nm</text><text x="430" y="206" class="t-dim t-c">약 12,000 /mm² (피치 9 µm)</text>
+        <text x="720" y="22" class="t t-b t-c">SRAM-on-로직 적층</text>
+        <rect x="610" y="140" width="220" height="18" class="m-interp"/>
+        <rect x="625" y="96" width="190" height="40" class="m-si"/><text x="720" y="122" class="t t-c">로직 다이</text>
+        <rect x="660" y="60" width="120" height="34" class="kf-sram" style="opacity:.8"/><text x="720" y="82" class="t t-c" style="fill:var(--bg)">SRAM 다이</text>
+        <path d="M660 95H780" style="stroke:var(--m-cu-e);stroke-width:3;stroke-dasharray:2 3"/>
+        <path d="M720 58V36" class="arr" style="stroke:var(--heat)"/><text x="728" y="42" class="t kt-heat">열</text>
+        <text x="720" y="186" class="t-dim t-c">로직 열이 SRAM 다이를 지나 위로</text><text x="720" y="206" class="t-dim t-c">위 다이도 열을 내면 열속이 더해진다</text>
+      </svg>
+      <figcaption><b>그림 11-9.</b> 마이크로범프와 하이브리드 본딩. 피치가 1/5이 되면 면 밀도는 25배다. 오른쪽처럼 SRAM 다이를 로직 위에 쌓으면 캐시 용량과 대역폭을 다이 평면 밖에서 얻는다.</figcaption>
+    </figure>
+    <div class="formula">$$BW_{3D} = \eta\,\frac{A}{p^{2}}\,f, \qquad \Delta T \approx q_{top}\,R''_{up} + q_{bot}\,\frac{t_{top}}{k_{Si}}$$<div class="where">\(A\): 겹친 면적, \(\eta\) = 0.5(신호 비율), \(f\): 연결당 속도(다이 간 연결은 짧아서 수 Gb/s면 충분). \(R''_{up}\) ≈ 0.39 cm²·K/W(GX-1 접합–냉각수 0.05 K/W × 7.8 cm²), \(q_{bot}\) = 97 W/cm²(로직 평균), \(t_{top}\) = 50 µm, \(k_{Si}\) ≈ 120 W/m·K.</div></div>
+    <div class="sim" id="sim-hb">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>하이브리드 본딩 3D 적층</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="hb-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>접합 피치 p <output id="hb-p-out"></output></span><input type="range" id="hb-p" min="1" max="50" step="0.5" value="9"></label>
+          <label class="ctrl"><span>겹친 면적 A <output id="hb-a-out"></output></span><input type="range" id="hb-a" min="10" max="400" step="10" value="100"></label>
+          <label class="ctrl"><span>연결당 속도 <output id="hb-r-out"></output></span><input type="range" id="hb-r" min="0.5" max="8" step="0.5" value="2"></label>
+          <label class="ctrl"><span>위 다이 발열 q<sub>top</sub> <output id="hb-q-out"></output></span><input type="range" id="hb-q" min="0" max="100" step="1" value="5"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">수직 연결 밀도</span><span class="v" id="hb-o-d">—</span></div>
+        <div class="stat"><span class="k">수직 대역폭</span><span class="v" id="hb-o-bw">—</span></div>
+        <div class="stat"><span class="k">같은 대역폭의 2.5D 가장자리</span><span class="v" id="hb-o-e">—</span></div>
+        <div class="stat"><span class="k">적층 부위 추가 온도</span><span class="v" id="hb-o-t">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(9 µm, 100 mm², 2 Gb/s)은 12,346 /mm², 수직 대역폭 약 154 TB/s로 L2 대역폭(약 13 TB/s)의 10배가 넘는다. 같은 대역폭을 2.5D 가장자리(247 신호/mm × 9.6 Gb/s)로 내려면 약 520 mm가 필요하다. 다이 둘레는 112 mm다. ② 피치를 45 µm(마이크로범프)로 올리면 밀도와 대역폭이 1/25로 줄어 약 6 TB/s다. ③ 위 다이 발열을 SRAM 수준 5 W/cm²에서 로직 수준 97 W/cm²로 올리면 추가 온도가 약 2.4 K에서 약 38 K로 뛴다. 로직 위에 로직을 쌓는 데는 열이 가장 큰 벽이다.</div>
+    </div>
+    <p>계산 결과는 분명하다. 수직 연결은 대역폭이 남아돈다. 3D 적층의 한계는 대역폭이 아니라 열, 전력 공급(아래 다이를 지나는 전원 TSV), 그리고 두 다이가 모두 양품이어야 한다는 수율 조건(KGD, <a href="die.html">10장</a>)이다. 발열이 적은 SRAM을 로직 위에 쌓는 조합이 먼저 나온 이유다. 같은 기술은 HBM 안쪽 DRAM 다이 사이의 접합(<a href="hbm.html">8장</a>)과, 로직 다이 위에 HBM을 바로 쌓는 구조로도 이어진다(<a href="roadmap.html">16장</a>).</p>
+    <p><b>왜 이렇게 설계하는가.</b> 2.5D는 가장자리(길이)로 대역폭을 사고, 3D는 면(넓이)으로 산다. 면은 가장자리보다 수백 배 많은 연결을 담는다. 그 대신 열과 전력이 같은 면을 다퉈야 한다. 그래서 첫 3D 적층은 열이 적고 대역폭이 많이 필요한 캐시 SRAM이다.</p>
+  </section>
+
+  <section id="knobs">
+    <h2>손잡이와 결과</h2>
+    <p>이 장의 시뮬레이터 결과를 한 표에 모았다. 모두 위 모델로 계산한 값이다.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>조건 변화</th><th>직접 결과</th><th>칩·패키지에 미치는 결과</th></tr></thead>
+        <tbody>
+          <tr><td>다이 옆 매체: 유기 기판 → 실리콘 인터포저</td><td>쇼어라인 22 → 247 신호/mm (D = 1 mm)</td><td class="pk-good">60 mm 가장자리 최대 1.23 → 13.7 TB/s, HBM 6개 가능</td></tr>
+          <tr><td>마이크로범프 피치 45 → 25 µm</td><td>면 I/O 494 → 1,600 /mm² (3.2배)</td><td>범프 한계 쇼어라인 3.2배, 범프당 전류 1/3.2 (사용률은 같음)</td></tr>
+          <tr><td>HBM 6 → 8개 (한쪽 3 → 4개)</td><td>인터포저 2,494 → 3,190 mm²</td><td class="pk-bad">웨이퍼당 20 → 12개, 인터포저 원가 약 $280 → $460</td></tr>
+          <tr><td>HBM 채널 3 → 10 mm (선폭 2 µm)</td><td>상승 시간 89 → 436 ps</td><td class="pk-bad">버퍼 없는 최대 속도 11 → 2.3 Gb/s, 리피터·SerDes 필요</td></tr>
+          <tr><td>고속 신호 선폭 2 → 0.4 µm</td><td>배선 저항 33 → 165 Ω (3 mm)</td><td class="pk-bad">최대 속도 11 → 4.3 Gb/s</td></tr>
+          <tr><td>실리콘 한 변 50 → 70 mm</td><td>휨 약 2배 (L²)</td><td class="pk-bad">리드·보강 링·저CTE 기판 필요</td></tr>
+          <tr><td>유기 기판 → 유리 코어 (Δα 12.4 → 2.4 ppm/K)</td><td>휨 약 1/3 이하</td><td class="pk-good">더 큰 인터포저 허용</td></tr>
+          <tr><td>코어 전류 1,000 → 1,500 A (VDD 30 %)</td><td>BGA 볼당 0.74 → 1.11 A</td><td class="pk-bad">BGA 한계 초과, 수직 전력 공급 필요</td></tr>
+          <tr><td>마이크로범프 45 µm → 하이브리드 9 µm</td><td>수직 연결 밀도 25배</td><td class="pk-good">100 mm²에서 약 154 TB/s (2.5D 가장자리 약 520 mm 분량)</td></tr>
+          <tr><td>위 다이 발열 5 → 97 W/cm²</td><td>적층 부위 +2.4 → +38 K</td><td class="pk-bad">로직-on-로직은 열 스로틀링 위험(13장)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>대역폭은 배선 수 × 핀 속도이고, 배선 수는 피치가 정한다. 배선 밀도는 \(N_{layer}\cdot 1000/(L+S)\) 개/mm, 범프 밀도는 \(10^6/p^2\) 개/mm². 보드 → 기판 → 인터포저 → 3D로 갈수록 한 자릿수씩 오른다.</li>
+      <li>HBM을 다이 옆 수 mm에 두면 스택당 1,024비트를 쇼어라인 약 5 mm에 넣을 수 있다(실리콘 인터포저, 247 신호/mm). 유기 기판(C4 150 µm)으로는 스택 하나에 60 mm가 필요하다.</li>
+      <li>GX-1 인터포저는 58 × 43 ≈ 2,494 mm², 레티클의 약 2.9배라 노광 영역 4개를 스티칭한다. 웨이퍼당 약 20개, 개당 약 $280(가정)이다. HBM을 늘리면 면적·원가가 계단처럼 오른다.</li>
+      <li>수 mm 인터포저 배선은 RC 상승 시간이 한 비트 시간보다 짧아 종단·SerDes 없이 9.6 Gb/s로 직접 구동된다. 배선 충전 에너지는 약 0.03 pJ/bit다. 거리가 길어지면 이 방식이 무너진다.</li>
+      <li>실리콘(2.6 ppm/K)과 유기 기판(약 15 ppm/K)의 차이가 휨을 만들고, 휨은 크기의 제곱으로 는다. 언더필·리드·보강 링·저CTE 기판이 대응책이다.</li>
+      <li>1,000 A는 범프를 병렬로 많이 써야 나를 수 있다. 피치를 줄여도 전류 용량은 VDD에 쓰는 면적이 정하고, 가장 빠듯한 층은 BGA다.</li>
+      <li>RDL 인터포저 + 로컬 실리콘 브리지는 미세 배선을 필요한 곳에만 쓰고, 패널 레벨은 큰 직사각형의 손실을 줄인다. 하이브리드 본딩 3D는 면으로 대역폭을 사서 2.5D보다 수십 배를 내지만 열과 KGD 수율이 한계다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. GX-1이 HBM을 보드가 아니라 인터포저 위 다이 옆에 두는 가장 근본적인 이유는?</p><div class="opts">
+        <button class="opt">DRAM 셀이 로직 공정으로만 만들어지기 때문</button>
+        <button class="opt" data-correct>다이 가장자리에서 끌어낼 수 있는 배선 수가 피치에 반비례해 인터포저에서만 수천 개 신호가 나가기 때문</button>
+        <button class="opt">보드 배선은 빛의 속도보다 느리기 때문</button>
+        <button class="opt">HBM은 냉각이 필요 없기 때문</button>
+      </div><div class="quiz-exp">대역폭 = 배선 수 × 핀 속도. 6,144개 데이터선(+약 30 %)을 60 mm 가장자리로 내보내려면 mm당 100개 넘는 신호가 필요하고, 이 밀도는 µm급 배선과 45 µm 범프의 인터포저에서만 나온다.</div></div>
+
+      <div class="quiz-q"><p>2. 선폭·간격 0.4/0.4 µm, 신호층 2개인 실리콘 인터포저의 mm당 배선 수는?</p><div class="opts">
+        <button class="opt">250개</button>
+        <button class="opt">1,250개</button>
+        <button class="opt" data-correct>2,500개</button>
+        <button class="opt">5,000개</button>
+      </div><div class="quiz-exp">\(2 \times 1000 / 0.8 = 2{,}500\) 개/mm. 한 층은 1,250개다.</div></div>
+
+      <div class="quiz-q"><p>3. 마이크로범프 피치를 45 µm에서 25 µm로 줄이면 mm²당 I/O 수는 약 몇 배가 되는가?</p><div class="opts">
+        <button class="opt">1.8배</button>
+        <button class="opt">2.5배</button>
+        <button class="opt" data-correct>3.2배</button>
+        <button class="opt">5.6배</button>
+      </div><div class="quiz-exp">면 밀도는 \(1/p^2\)에 비례한다. \((45/25)^2 = 3.24\).</div></div>
+
+      <div class="quiz-q"><p>4. GX-1 인터포저(약 2,494 mm²)를 만들 때 스티칭이 필요한 이유는?</p><div class="opts">
+        <button class="opt" data-correct>노광 한 번에 찍을 수 있는 레티클(26 × 33 mm = 858 mm²)보다 약 2.9배 커서 여러 노광 영역을 이어야 하기 때문</button>
+        <button class="opt">TSV를 뚫으려면 웨이퍼를 여러 장 붙여야 하기 때문</button>
+        <button class="opt">HBM 스택마다 별도 인터포저가 필요하기 때문</button>
+        <button class="opt">인터포저가 트랜지스터를 포함하기 때문</button>
+      </div><div class="quiz-exp">인터포저는 레티클보다 크므로 2 × 2 노광 영역의 경계에서 배선이 이어지도록 정렬해 찍는다. 면적이 커질수록 웨이퍼당 개수도 빠르게 준다.</div></div>
+
+      <div class="quiz-q"><p>5. HBM 신호가 인터포저 위에서 종단 저항이나 SerDes 없이 9.6 Gb/s로 동작하는 조건으로 가장 알맞은 것은?</p><div class="opts">
+        <button class="opt">배선이 최소 선폭 0.4 µm일 것</button>
+        <button class="opt">배선 길이가 25 mm 이상일 것</button>
+        <button class="opt">신호 진폭을 1.2 V 이상으로 높일 것</button>
+        <button class="opt" data-correct>배선이 수 mm로 짧고 충분히 넓어서 RC 상승 시간이 한 비트 시간(약 104 ps)보다 짧을 것</button>
+      </div><div class="quiz-exp">3 mm·2 µm에서 상승 시간 약 89 ps, 최대 약 11 Gb/s. 0.4 µm면 저항이 5배라 약 4.3 Gb/s, 10 mm면 약 2.3 Gb/s로 떨어진다.</div></div>
+
+      <div class="quiz-q"><p>6. 다른 조건이 같을 때 실리콘 판의 한 변을 50 mm에서 70 mm로 키우면, 바이메탈 근사의 휨 δ는?</p><div class="opts">
+        <button class="opt">1.4배</button>
+        <button class="opt" data-correct>약 2배</button>
+        <button class="opt">약 2.7배</button>
+        <button class="opt">변하지 않는다</button>
+      </div><div class="quiz-exp">곡률 \(\kappa\)는 크기와 무관하고 \(\delta = \kappa L^2/8\)이므로 \((70/50)^2 \approx 1.96\)배.</div></div>
+
+      <div class="quiz-q"><p>7. VDD에 쓰는 범프 비율과 전류 밀도 한계가 같을 때 마이크로범프 피치를 절반으로 줄이면 범프의 전류 여유(한계/실제)는?</p><div class="opts">
+        <button class="opt">4배 커진다</button>
+        <button class="opt">2배 커진다</button>
+        <button class="opt" data-correct>변하지 않는다</button>
+        <button class="opt">1/4로 준다</button>
+      </div><div class="quiz-exp">범프 수는 \(1/p^2\)로 4배가 되고 범프 하나의 단면적(한계 전류)은 \(p^2\)로 1/4이 된다. 여유는 \(\pi J_{max} A f_V/(16I)\)로 피치와 무관하다.</div></div>
+
+      <div class="quiz-q"><p>8. 로직 다이 위에 하이브리드 본딩(9 µm)으로 다이를 쌓을 때 가장 먼저 한계가 되는 것은?</p><div class="opts">
+        <button class="opt">수직 연결 대역폭</button>
+        <button class="opt" data-correct>위 다이도 열을 많이 내면 같은 면을 지나는 열속이 더해지는 열 문제</button>
+        <button class="opt">신호 배선의 RC 지연</button>
+        <button class="opt">레티클 크기</button>
+      </div><div class="quiz-exp">100 mm²만 겹쳐도 수직 대역폭은 약 154 TB/s로 남는다. 위 다이 발열이 97 W/cm²면 추가 온도가 약 38 K라, SRAM(약 5 W/cm², +2.4 K)처럼 열이 적은 다이를 먼저 쌓는다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+/* ===================================================== 모델 (DOM과 분리, scripts/package-sims.cjs가 잘라 검사) */
+/* model:density */
+var DN_TECH = {
+  pcb: { name: "PCB", ls: 75, layers: 2, pitch: 1000 },
+  sub: { name: "유기 기판", ls: 10, layers: 2, pitch: 150 },
+  rdl: { name: "RDL 인터포저", ls: 2, layers: 2, pitch: 45 },
+  si:  { name: "Si 인터포저", ls: 0.4, layers: 2, pitch: 45 },
+  hb:  { name: "하이브리드 본딩", ls: 0.4, layers: 2, pitch: 9 }
+};
+function dnCalc(ls, layers, pitch) {
+  var wires = layers * 1000 / (2 * ls);          // 선폭 = 간격 = ls µm
+  var io = 1e6 / (pitch * pitch);                // 정사각 격자, 개/mm²
+  return { wires: wires, io: io, hbmEdge: 1024 / wires, vsPcb: io / 1 };
+}
+/* /model:density */
+
+/* model:shoreline */
+var SH = { eta: 0.5, ovh: 0.3, bits: 1024, edge: 60, need: 7.3728 };
+var SH_TECH = { sub: { name: "유기 기판", ls: 10, layers: 2, pitch: 150 }, rdl: { name: "RDL", ls: 2, layers: 2, pitch: 45 }, si: { name: "Si 인터포저", ls: 0.4, layers: 2, pitch: 45 } };
+function shCalc(t, D, rate) {
+  var wire = t.layers * 1000 / (2 * t.ls);
+  var bump = SH.eta * D * 1e6 / (t.pitch * t.pitch);
+  var s = Math.min(wire, bump);
+  var sigStack = SH.bits * (1 + SH.ovh);
+  var gbpsPerMm = s / (1 + SH.ovh) * rate;       // 데이터 Gb/s per mm
+  return { wire: wire, bump: bump, s: s, wireLimited: wire < bump, sigStack: sigStack, edgeStack: sigStack / s,
+    gbpsPerMm: gbpsPerMm, totalTB: gbpsPerMm * SH.edge / 8 / 1000, stackTB: SH.bits * rate / 8 / 1000 };
+}
+/* /model:shoreline */
+
+/* model:interposer */
+var IP = { lx: 26, ly: 30, hx: 11, hy: 11, gh: 1, rw: 26, rh: 33, wafer: 300, edgeEx: 3, scribe: 0.2, yld: 0.9 };
+function ipLayout(nLogic, perSide, gap, margin) {
+  var coreY = nLogic * IP.ly + (nLogic - 1) * 0.5;
+  var hbmY = perSide * IP.hy + (perSide - 1) * IP.gh;
+  var X = IP.lx + 2 * (gap + IP.hx) + 2 * margin, Y = Math.max(coreY, hbmY) + 2 * margin;
+  var A = X * Y;
+  var f1 = Math.ceil(X / IP.rw) * Math.ceil(Y / IP.rh), f2 = Math.ceil(Y / IP.rw) * Math.ceil(X / IP.rh);
+  return { X: X, Y: Y, A: A, mult: A / (IP.rw * IP.rh), fields: Math.min(f1, f2), hbm: 2 * perSide, coreY: coreY, hbmY: hbmY, nLogic: nLogic, perSide: perSide, gap: gap, margin: margin };
+}
+function ipFormula(X, Y) {
+  var d = IP.wafer - 2 * IP.edgeEx, A = (X + IP.scribe) * (Y + IP.scribe);
+  return Math.max(0, Math.PI * d * d / 4 / A - Math.PI * d / Math.sqrt(2 * A));
+}
+function ipGrid(X, Y) {
+  var R = IP.wafer / 2 - IP.edgeEx, px = X + IP.scribe, py = Y + IP.scribe, best = { n: 0, pos: [] };
+  var nx = Math.ceil(R / px) + 1, ny = Math.ceil(R / py) + 1;
+  [0, 0.5].forEach(function (ox) { [0, 0.5].forEach(function (oy) {
+    var pos = [];
+    for (var i = -nx; i <= nx; i++) for (var j = -ny; j <= ny; j++) {
+      var x0 = (i - ox) * px, y0 = (j - oy) * py, x1 = x0 + X, y1 = y0 + Y;
+      var fx = Math.max(Math.abs(x0), Math.abs(x1)), fy = Math.max(Math.abs(y0), Math.abs(y1));
+      if (fx * fx + fy * fy <= R * R) pos.push([x0, y0]);
+    }
+    if (pos.length > best.n) best = { n: pos.length, pos: pos };
+  }); });
+  return best;
+}
+function ipCost(waferCost, n) { return n > 0 ? waferCost / (n * IP.yld) : null; }
+/* /model:interposer */
+
+/* model:wire */
+var WR = { rho: 2.2e-8, t: 1e-6, cpm: 0.2e-12, Rd: 30, CL: 0.2e-12, V: 0.4, v: 1.5e8 };
+function wrCalc(Lmm, wum) {
+  var Rw = WR.rho * Lmm * 1e-3 / (wum * 1e-6 * WR.t), Cw = WR.cpm * Lmm;
+  var t50 = 0.69 * WR.Rd * (Cw + WR.CL) + 0.38 * Rw * Cw + 0.69 * Rw * WR.CL;
+  var tau = WR.Rd * (Cw + WR.CL) + Rw * (Cw / 2 + WR.CL);
+  var tr = 2.2 * tau;
+  return { Rw: Rw, Cw: Cw, t50: t50, tr: tr, maxGbps: 1e-9 / tr, Ebit: 0.25 * (Cw + WR.CL) * WR.V * WR.V, flight: Lmm * 1e-3 / WR.v };
+}
+/* /model:wire */
+
+/* model:warp */
+var WP = { Esi: 130, asi: 2.6, hb: 0.08, mats: { sub: { name: "유기 기판", a: 15, E: 25 }, mold: { name: "몰드", a: 10, E: 20 }, glass: { name: "유리 코어", a: 5, E: 70 } } };
+function wpCalc(mat, dT, h1, h2, L) {
+  var M = WP.mats[mat], da = (M.a - WP.asi) * 1e-6, m = h1 / h2, n = WP.Esi / M.E, h = (h1 + h2) * 1e-3;
+  var k = 6 * (1 + m) * (1 + m) * da * dT / (h * (3 * (1 + m) * (1 + m) + (1 + m * n) * (m * m + 1 / (m * n))));
+  var Lm = L * 1e-3, dnp = L / Math.SQRT2;                     // mm, 반대각선
+  var disp = da * dT * dnp;                                    // mm
+  return { k: k, R: k > 0 ? 1 / k : null, bowUm: k * Lm * Lm / 8 * 1e6, dispUm: disp * 1e3, gamma: disp / WP.hb, da: da };
+}
+/* /model:warp */
+
+/* model:bump */
+var BP = { dieA: 780, bga: 4500, bgaLim: 1.0, Jsol: 6e3, Jcu: 1e4 };
+function bpLim(pUm, J) { var d = 0.5 * pUm * 1e-4; return J * Math.PI * d * d / 4; }   // A (d: cm)
+function bpCalc(I, f, c4p, ubp) {
+  var lv = [
+    { k: "bga", name: "BGA 볼", n: BP.bga, lim: BP.bgaLim },
+    { k: "c4", name: "C4", n: BP.dieA * 1e6 / (c4p * c4p), lim: bpLim(c4p, BP.Jsol) },
+    { k: "ub", name: "마이크로범프", n: BP.dieA * 1e6 / (ubp * ubp), lim: bpLim(ubp, BP.Jcu) }
+  ];
+  lv.forEach(function (L) { L.nv = L.n * f; L.i = I / L.nv; L.use = L.i / L.lim; L.need = I / L.lim; });
+  return lv;
+}
+/* /model:bump */
+
+/* model:hybrid */
+var HB = { eta: 0.5, qBot: 97, Rup: 0.39, tTop: 50e-6, kSi: 120, edgeSig: 247, edgeRate: 9.6, l2TB: 13.1 };
+function hbCalc(p, A, rate, qTop) {
+  var dens = 1e6 / (p * p), links = HB.eta * dens * A, gbps = links * rate;
+  var dT = qTop * HB.Rup + HB.qBot * (HB.tTop / HB.kSi) * 1e4;   // cm²K/W로 환산
+  return { dens: dens, links: links, bwTB: gbps / 8 / 1000, edgeMm: gbps / (HB.edgeSig * HB.edgeRate), dT: dT };
+}
+/* /model:hybrid */
+
+/* model:stack3d */
+// 실제 두께(mm). 'die' 층에 로직 다이와 HBM 스택(갈아서 같은 높이)이 함께 놓인다.
+var ST = [
+  { k: "bga", t: 0.45 }, { k: "sub", t: 1.6 }, { k: "c4", t: 0.08 }, { k: "interp", t: 0.1 },
+  { k: "ub", t: 0.03 }, { k: "die", t: 0.78 }, { k: "tim", t: 0.1 }, { k: "lid", t: 1.2 }
+];
+var ST_VS = 4, ST_MIN = 0.3;
+function stLayout(ex) {        // ex: 층 사이 벌림(mm, 표시 단위)
+  var y = 0, out = {};
+  ST.forEach(function (L, i) { var th = Math.max(L.t * ST_VS, ST_MIN); out[L.k] = { y0: y + ex * i, th: th }; y += th; });
+  out.total = ST.reduce(function (a, L) { return a + L.t; }, 0);
+  return out;
+}
+/* /model:stack3d */
+
+/* ===================================================== 화면 */
+var PKF = {
+  n: function (x, d) {
+    if (!isFinite(x)) return "—";
+    if (Math.abs(x) >= 1e4) return Math.round(x).toLocaleString("en-US");
+    return Number(x.toPrecision(d || 3)).toLocaleString("en-US", { maximumFractionDigits: 6 });
+  },
+  sm: function (v, u) { return v + ' <small>' + u + '</small>'; },
+  int: function (x) { return Math.round(x).toLocaleString("en-US"); }
+};
+
+/* ---- 3D 패키지 분해 모델 */
+(function () {
+  var el = document.getElementById("p3-v");
+  var T = null;
+  var gEx = GP.range("p3-ex", function (v) { return v + " %"; }, function () { if (T) place(); });
+  var gCut = GP.range("p3-cut", function (v) { return v + " mm"; }, function () { if (T) applyCut(); });
+  var gHi = GP.seg("p3-hi", function () { if (T) applyHi(); });
+  var cSec = document.getElementById("p3-sec"), cLab = document.getElementById("p3-lab"), desc = document.getElementById("p3-d");
+  var PATH = { all: "전체", sig: "다이 → 마이크로범프 → 인터포저 → HBM", pwr: "BGA → 기판 → C4 → TSV → 마이크로범프", heat: "다이 → TIM → 리드" };
+  var HI = { all: null, sig: ["die", "dram", "ub", "interp"], pwr: ["bga", "sub", "c4", "tsv", "ub", "die"], heat: ["die", "dram", "tim", "lid"] };
+  var INFO = {
+    bga: "<b>BGA 볼</b> 1 mm 피치, 약 4,500개(그림은 67 × 67). 보드와 패키지를 잇고 코어 전류 1,000 A의 입구다.",
+    sub: "<b>유기 기판</b> 75 × 75 mm, 빌드업 20층. 인터포저의 C4 피치(150 µm)를 BGA 피치(1 mm)로 넓히며 전력을 분배한다.",
+    c4: "<b>C4 범프 + 언더필</b> 피치 약 150 µm, 인터포저 아래 약 11만 개(그림은 2 mm 간격). CTE 불일치가 가장 큰 층이다.",
+    interp: "<b>실리콘 인터포저</b> 58 × 43 mm ≈ 2,494 mm², 두께 약 100 µm, 배선 4층(0.4/0.4 µm), 레티클 약 2.9배를 스티칭.",
+    tsv: "<b>TSV</b> 인터포저를 관통하는 구리 기둥(지름 약 10 µm). 전력과 느린 신호를 C4로 내린다.",
+    ub: "<b>마이크로범프</b> 피치 약 45 µm, 로직 다이 아래만 약 38만 개(그림은 1 mm 간격). HBM 신호와 전력이 모두 지난다.",
+    die: "<b>로직 다이</b> 26 × 30 mm = 780 mm², 4 nm급, 약 920억 트랜지스터, 약 760 W.",
+    dram: "<b>HBM 스택</b> 11 × 11 mm, DRAM 다이 8단(24 Gb) + 베이스 다이, 24 GB, 1,024비트 × 9.6 Gb/s = 1,228.8 GB/s.",
+    tim: "<b>TIM</b> 다이 뒷면과 리드 사이의 열 계면 물질. 760 W가 지나므로 0.01 cm²·K/W마다 약 1 K.",
+    lid: "<b>구리 리드</b> 열을 퍼뜨려 냉각판으로 넘기고, 기판에 붙어 휨을 잡는다."
+  };
+  var lay0 = stLayout(0);
+  GP.stat("p3-o-h", PKF.sm(lay0.total.toFixed(2), "mm"));
+  GP.stat("p3-o-v", PKF.sm("× " + ST_VS, "(얇은 층은 최소 " + ST_MIN + " mm)"));
+  GP.stat("p3-o-p", PATH[gHi()]);
+  T = GP.three(el, { camera: [55, 60, 95], target: [0, 8, 0], fov: 34 });
+  if (!T) { [document.getElementById("p3-ex"), document.getElementById("p3-cut"), cSec, cLab].forEach(function (x) { if (x) x.disabled = true; }); return; }
+  var THREE = T.THREE;
+  T.renderer.localClippingEnabled = true;
+  var plane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+  var KINDS = ["bga", "sub", "c4", "uf", "interp", "tsv", "ub", "die", "base", "dram", "tim", "lid"];
+  var MATK = { bga: "sol", sub: "sub", c4: "sol", uf: "mold", interp: "interp", tsv: "cu", ub: "cu", die: "si", base: "si", dram: "dram", tim: "tim", lid: "lid" };
+  var M = {};
+  KINDS.forEach(function (k) {
+    M[k] = new THREE.MeshStandardMaterial({ roughness: k === "lid" || k === "tsv" || k === "ub" ? 0.32 : 0.55, metalness: k === "lid" || k === "tsv" || k === "ub" || k === "c4" || k === "bga" ? 0.6 : 0.08, side: THREE.DoubleSide });
+    M[k].userData.grp = k === "uf" ? "c4" : k === "base" ? "dram" : k;
+  });
+  M.uf.transparent = true; M.uf.opacity = 0.35; M.uf.depthWrite = false;
+  function paint() {
+    var dark = GP.isDark();
+    KINDS.forEach(function (k) { var c = GP.matColor(MATK[k], "1"); M[k].color.set(dark ? GP.mix(c, GP.color("text"), 0.12) : c); });
+    M.base.color.set(GP.matColor("si", "2"));
+  }
+  paint(); GP.onTheme(paint);
+  var root = new THREE.Group(); T.scene.add(root);
+  var G = {}, pick = [], edges = [];
+  ST.forEach(function (L) { G[L.k] = new THREE.Group(); root.add(G[L.k]); });
+  function box(g, kind, w, h, d, x, y, z, part) {
+    var me = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), M[kind]);
+    me.position.set(x, y + h / 2, z); me.userData.part = part || kind; g.add(me);
+    if (kind !== "uf") { var e = T.edges(me, undefined, 0.18); e.userData.kind = kind; edges.push(e); }
+    pick.push(me); return me;
+  }
+  function inst(g, kind, geo, pts, y, part) {
+    var im = new THREE.InstancedMesh(geo, M[kind], pts.length), m4 = new THREE.Matrix4();
+    pts.forEach(function (p, i) { m4.makeTranslation(p[0], y, p[1]); im.setMatrixAt(i, m4); });
+    im.instanceMatrix.needsUpdate = true; im.userData.part = part || kind; g.add(im); pick.push(im); return im;
+  }
+  function grid(w, d, step) { var a = []; for (var x = -w / 2 + step / 2; x < w / 2; x += step) for (var z = -d / 2 + step / 2; z < d / 2; z += step) a.push([x, z]); return a; }
+  var HBX = IP.lx / 2 + 1 + IP.hx / 2, HBZ = [-12, 0, 12];
+  var dies = [[0, 0, IP.lx, IP.ly]];
+  HBZ.forEach(function (z) { dies.push([-HBX, z, IP.hx, IP.hy]); dies.push([HBX, z, IP.hx, IP.hy]); });
+  var L0 = stLayout(0), th = function (k) { return L0[k].th; };
+  // BGA
+  var bgaGeo = new THREE.SphereGeometry(0.32, 10, 6); bgaGeo.scale(1, th("bga") / 0.64, 1);
+  inst(G.bga, "bga", bgaGeo, grid(67, 67, 1), th("bga") / 2, "bga");
+  box(G.sub, "sub", 75, th("sub"), 75, 0, 0, 0);
+  var c4Geo = new THREE.CylinderGeometry(0.42, 0.42, th("c4"), 10);
+  var c4pts = grid(58, 43, 2);
+  inst(G.c4, "c4", c4Geo, c4pts, th("c4") / 2, "c4");
+  box(G.c4, "uf", 59.2, th("c4"), 44.2, 0, 0, 0, "c4");
+  box(G.interp, "interp", 58, th("interp"), 43, 0, 0, 0);
+  var tsvGeo = new THREE.CylinderGeometry(0.16, 0.16, th("interp") * 1.02, 8);
+  inst(G.interp, "tsv", tsvGeo, c4pts, th("interp") / 2, "tsv");
+  var ubGeo = new THREE.CylinderGeometry(0.26, 0.26, th("ub"), 8), ubpts = [];
+  dies.forEach(function (d) { grid(d[2], d[3], 1).forEach(function (p) { ubpts.push([p[0] + d[0], p[1] + d[1]]); }); box(G.ub, "uf", d[2] + 0.8, th("ub"), d[3] + 0.8, d[0], 0, d[1], "ub"); });
+  inst(G.ub, "ub", ubGeo, ubpts, th("ub") / 2, "ub");
+  box(G.die, "die", IP.lx, th("die"), IP.ly, 0, 0, 0);
+  var sl = th("die") / 9;
+  dies.slice(1).forEach(function (d) {
+    box(G.die, "base", d[2], sl * 0.92, d[3], d[0], 0, d[1], "dram");
+    for (var i = 1; i < 9; i++) box(G.die, "dram", d[2], sl * 0.86, d[3], d[0], i * sl, d[1], "dram");
+  });
+  dies.forEach(function (d) { box(G.tim, "tim", d[2], th("tim"), d[3], d[0], 0, d[1]); });
+  box(G.lid, "lid", 72, th("lid"), 72, 0, 0, 0);
+  var wallH = L0.tim.y0 + th("tim") - (L0.sub.y0 + th("sub"));
+  [[0, 34.5, 72, 3], [0, -34.5, 72, 3], [34.5, 0, 3, 66], [-34.5, 0, 3, 66]].forEach(function (w) { box(G.lid, "lid", w[2], wallH, w[3], w[0], -wallH, w[1], "lid"); });
+  T.ground(-0.6, 160, 0.3);
+  // 이름표
+  var labs = [];
+  function lab(k, text, pos) { var Lb = T.label(text, pos); Lb.obj = G[k]; labs.push(Lb); return Lb; }
+  lab("bga", "BGA 볼 약 4,500개", [37, 0, 30]);
+  lab("sub", "유기 기판 75 × 75 mm", [37, th("sub") / 2, 10]);
+  lab("c4", "C4 150 µm + 언더필", [29, th("c4"), 22]);
+  lab("interp", "실리콘 인터포저 + TSV", [-29, th("interp"), 21]);
+  lab("ub", "마이크로범프 45 µm", [13, 0, 15]);
+  lab("die", "로직 다이 780 mm²", [0, th("die"), 15]).priority = 3;
+  lab("die", "HBM 스택 × 6", [HBX, th("die"), 17.5]).priority = 2;
+  lab("tim", "TIM", [-13, th("tim"), 15]);
+  lab("lid", "구리 리드", [0, th("lid"), 36]).priority = 1;
+  function place() {
+    var ex = gEx() / 100 * 9, Ly = stLayout(ex);
+    ST.forEach(function (L) { G[L.k].position.y = Ly[L.k].y0; });
+  }
+  function applyHi() {
+    var h = HI[gHi()];
+    KINDS.forEach(function (k) {
+      var on = !h || h.indexOf(M[k].userData.grp) >= 0 || (k === "uf" && h.indexOf("c4") >= 0);
+      var op = on ? (k === "uf" ? 0.35 : k === "lid" && !h ? 0.4 : 1) : 0.08;
+      M[k].transparent = op < 1; M[k].opacity = op; M[k].depthWrite = op >= 1; M[k].needsUpdate = true;
+    });
+    edges.forEach(function (e) { var g = M[e.userData.kind].userData.grp; e.material.opacity = !h || h.indexOf(g) >= 0 ? 0.18 : 0.03; });
+    GP.stat("p3-o-p", PATH[gHi()]);
+  }
+  function applyCut() {
+    plane.constant = gCut();
+    var cp = cSec.checked ? [plane] : [];
+    KINDS.forEach(function (k) { M[k].clippingPlanes = cp; M[k].needsUpdate = true; });
+    edges.forEach(function (e) { e.material.clippingPlanes = cp; e.material.needsUpdate = true; });
+    gCut.el.disabled = !cSec.checked;
+  }
+  cSec.addEventListener("change", applyCut);
+  cLab.addEventListener("change", function () { labs.forEach(function (Lb) { Lb.setVisible(cLab.checked); }); });
+  T.pick(function () { return pick; }, { click: function (obj) { desc.innerHTML = obj ? (INFO[obj.userData.part] || "") : "부품을 누르면 크기와 개수가 여기에 나온다."; } });
+  place(); applyHi(); applyCut();
+  T.fit(root, { pad: 1.04, dir: [0.55, 0.62, 1] });
+})();
+
+/* ---- 연결 밀도 */
+(function () {
+  var cv = document.getElementById("dn-cv"), lsFmt = function (v) { return PKF.n(Math.pow(10, v), 2) + " µm"; };
+  var exact = DN_TECH.si, setting = false;   // 프리셋을 고른 직후에는 슬라이더 눈금 반올림 없이 프리셋 값을 쓴다
+  function moved() { if (!setting) exact = null; c.redraw(); out(); }
+  var gT = GP.seg("dn-t", function (k) { var t = DN_TECH[k]; setting = true; gLs.set(Math.log10(t.ls)); gLy.set(t.layers); gP.set(Math.log10(t.pitch)); setting = false; exact = t; c.redraw(); out(); });
+  var gLs = GP.range("dn-ls", lsFmt, moved);
+  var gLy = GP.range("dn-ly", function (v) { return v + "층"; }, moved);
+  var gP = GP.range("dn-p", lsFmt, moved);
+  function cur() { return exact ? dnCalc(exact.ls, exact.layers, exact.pitch) : dnCalc(Math.pow(10, gLs()), gLy(), Math.pow(10, gP())); }
+  function out() {
+    var r = cur();
+    GP.stat("dn-o-w", PKF.sm(PKF.int(r.wires), "개/mm"));
+    GP.stat("dn-o-io", PKF.sm(PKF.int(r.io), "개/mm²"));
+    GP.stat("dn-o-e", PKF.sm(PKF.n(r.hbmEdge, 3), "mm"));
+    GP.stat("dn-o-r", PKF.sm(PKF.n(r.vsPcb, 3), "배"));
+  }
+  var c = GP.canvas(cv, function (ctx, w, h) {
+    var P = GP.palette(), r = cur(), pts = [], cols = { pcb: P.dim, sub: P.warn, rdl: P.ok, si: P.accent, hb: P.tensor };
+    Object.keys(DN_TECH).forEach(function (k) { var t = DN_TECH[k], q = dnCalc(t.ls, t.layers, t.pitch); pts.push({ x: q.wires, y: q.io, color: cols[k], label: t.name, r: 5 }); });
+    pts.push({ x: r.wires, y: r.io, color: P.accent2, r: 7, label: exact ? null : "현재 설정" });
+    GP.chart(ctx, null, { x: [3, 3e4], y: [0.3, 1e6], logX: true, logY: true, xLabel: "가장자리 배선 밀도 (개/mm)", yLabel: "면 I/O 밀도 (개/mm²)",
+      series: [{ data: [[3, 0.3], [3e4, 1e6]], color: GP.alpha(P.faint, 0.5), dash: [4, 4], width: 1, hover: false }], points: pts });
+  }, { aspect: 0.62, maxHeight: 400 });
+  out();
+})();
+
+/* ---- 쇼어라인 대역폭 */
+(function () {
+  var gT = GP.seg("sh-t", function () { c.redraw(); out(); });
+  var gD = GP.range("sh-d", function (v) { return v.toFixed(1) + " mm"; }, function () { c.redraw(); out(); });
+  var gR = GP.range("sh-r", function (v) { return v.toFixed(1) + " Gb/s"; }, function () { c.redraw(); out(); });
+  function out() {
+    var r = shCalc(SH_TECH[gT()], gD(), gR());
+    GP.stat("sh-o-s", PKF.sm(PKF.int(r.s), "/mm"));
+    GP.stat("sh-o-lim", r.wireLimited ? "배선 (" + PKF.int(r.wire) + "/mm)" : "범프 (" + PKF.int(r.bump) + "/mm)");
+    GP.stat("sh-o-e", PKF.sm(PKF.n(r.edgeStack, 3), "mm") + (r.edgeStack > 11 ? ' <small class="t-bad">스택 폭 11 mm 초과</small>' : ""));
+    GP.stat("sh-o-bw", PKF.sm(PKF.n(r.totalTB, 3), "TB/s") + (r.totalTB >= SH.need ? "" : ' <small>(GX-1 7.37 미달)</small>'));
+  }
+  var c = GP.canvas(document.getElementById("sh-cv"), function (ctx) {
+    var P = GP.palette(), rate = gR(), cols = { sub: P.warn, rdl: P.ok, si: P.accent }, ser = [];
+    Object.keys(SH_TECH).forEach(function (k) {
+      var d = []; for (var D = 0.2; D <= 3.0001; D += 0.05) d.push([D, shCalc(SH_TECH[k], D, rate).totalTB]);
+      ser.push({ data: d, color: cols[k], label: SH_TECH[k].name, width: k === gT() ? 3 : 1.6, fmt: function (y) { return PKF.n(y, 3) + " TB/s"; } });
+    });
+    var r = shCalc(SH_TECH[gT()], gD(), rate), top = Math.max(20, shCalc(SH_TECH.si, 3, rate).totalTB * 1.1);
+    GP.chart(ctx, null, { x: [0.2, 3], y: [0.1, top], logY: true, xLabel: "PHY 띠 깊이 D (mm)", yLabel: "60 mm 가장자리 대역폭 (TB/s)", series: ser, legend: "br", hover: { xFmt: function (x) { return "D " + x.toFixed(2) + " mm"; } },
+      hlines: [{ y: SH.need, color: P.data, label: "GX-1 7.37 TB/s" }], points: [{ x: gD(), y: r.totalTB, color: cols[gT()], r: 5 }] });
+  }, { aspect: 0.6, maxHeight: 380, hover: true });
+  out();
+})();
+
+/* ---- 인터포저 크기 */
+(function () {
+  var gN = GP.seg("ip-n", function () { c.redraw(); out(); });
+  var gK = GP.range("ip-k", function (v) { return v + "개 (총 " + 2 * v + "개)"; }, function () { c.redraw(); out(); });
+  var gG = GP.range("ip-g", function (v) { return v.toFixed(1) + " mm"; }, function () { c.redraw(); out(); });
+  var gM = GP.range("ip-m", function (v) { return v.toFixed(1) + " mm"; }, function () { c.redraw(); out(); });
+  var gC = GP.range("ip-c", function (v) { return "$" + PKF.int(v); }, function () { out(); });
+  function lay() { return ipLayout(Number(gN()), gK(), gG(), gM()); }
+  function out() {
+    var L = lay(), g = ipGrid(L.X, L.Y), cost = ipCost(gC(), g.n);
+    GP.stat("ip-o-a", PKF.sm(L.X.toFixed(1) + " × " + L.Y.toFixed(1), "mm") + " · " + PKF.sm(PKF.int(L.A), "mm²"));
+    GP.stat("ip-o-x", PKF.sm(L.mult.toFixed(2), "배") + " · " + PKF.sm(L.fields, "영역"));
+    GP.stat("ip-o-w", PKF.sm(g.n, "개") + " · " + PKF.sm(ipFormula(L.X, L.Y).toFixed(1), "개"));
+    GP.stat("ip-o-c", cost == null ? "—" : PKF.sm("$" + PKF.int(cost), "(수율 90 %)"));
+  }
+  var c = GP.canvas(document.getElementById("ip-cv"), function (ctx, w, h) {
+    var P = GP.palette(), L = lay(), g = ipGrid(L.X, L.Y), wide = w > 520;
+    var bw = wide ? w * 0.56 : w, bh = wide ? h : h * 0.56, bx = 0, by = 0;
+    // 레티클 노광 영역: 돌린 방향 가운데 영역 수가 적은 쪽
+    var rot = Math.ceil(L.Y / IP.rw) * Math.ceil(L.X / IP.rh) < Math.ceil(L.X / IP.rw) * Math.ceil(L.Y / IP.rh);
+    var fwm = rot ? IP.rh : IP.rw, fhm = rot ? IP.rw : IP.rh, nx = Math.ceil(L.X / fwm - 1e-9), ny = Math.ceil(L.Y / fhm - 1e-9);
+    var sc = Math.min((bw - 24) / Math.max(L.X, nx * fwm), (bh - 40) / Math.max(L.Y, ny * fhm));
+    var cx = bx + bw / 2, cy = by + 24 + (bh - 24) / 2, ox = cx - L.X * sc / 2, oy = cy - L.Y * sc / 2;
+    GP.matRect(ctx, ox, oy, L.X * sc, L.Y * sc, "interp");
+    var top = oy + L.margin * sc, inner = L.Y - 2 * L.margin;
+    var dy0 = top + (inner - L.coreY) / 2 * sc;
+    for (var i = 0; i < L.nLogic; i++) GP.matRect(ctx, cx - IP.lx / 2 * sc, dy0 + i * (IP.ly + 0.5) * sc, IP.lx * sc, IP.ly * sc, "si");
+    var hy0 = top + (inner - L.hbmY) / 2 * sc;
+    for (var s2 = -1; s2 <= 1; s2 += 2) for (var j = 0; j < L.perSide; j++) {
+      var hx = cx + s2 * (IP.lx / 2 + L.gap + IP.hx / 2) * sc - IP.hx / 2 * sc;
+      GP.matRect(ctx, hx, hy0 + j * (IP.hy + IP.gh) * sc, IP.hx * sc, IP.hy * sc, "dram");
+    }
+    var fx0 = cx - nx * fwm * sc / 2, fy0 = cy - ny * fhm * sc / 2;
+    ctx.save(); ctx.strokeStyle = P.accent2; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.2;
+    ctx.strokeRect(fx0, fy0, nx * fwm * sc, ny * fhm * sc);
+    ctx.setLineDash([]); ctx.lineWidth = 2.2; ctx.beginPath();
+    for (var a2 = 1; a2 < nx; a2++) { ctx.moveTo(fx0 + a2 * fwm * sc, oy); ctx.lineTo(fx0 + a2 * fwm * sc, oy + L.Y * sc); }
+    for (var b2 = 1; b2 < ny; b2++) { ctx.moveTo(ox, fy0 + b2 * fhm * sc); ctx.lineTo(ox + L.X * sc, fy0 + b2 * fhm * sc); }
+    ctx.stroke(); ctx.restore();
+    GP.text(ctx, "인터포저 " + L.X.toFixed(0) + " × " + L.Y.toFixed(0) + " mm · 노광 영역 " + nx + " × " + ny + " (실선 = 스티칭 경계)", bx + bw / 2, 12, { align: "center", size: 12, color: P.dim, baseline: "middle" });
+    // 오른쪽(아래): 웨이퍼
+    var wx = wide ? bw : 0, wy = wide ? 0 : bh, ww = wide ? w - bw : w, wh = wide ? h : h - bh;
+    var R = Math.min(ww, wh - 30) / 2 - 8, wcx = wx + ww / 2, wcy = wy + 22 + R + 4, k = R / (IP.wafer / 2);
+    ctx.beginPath(); ctx.arc(wcx, wcy, R, 0, Math.PI * 2); ctx.fillStyle = GP.alpha(P.dim, 0.12); ctx.fill(); ctx.strokeStyle = P.border; ctx.stroke();
+    ctx.beginPath(); ctx.arc(wcx, wcy, R * (IP.wafer / 2 - IP.edgeEx) / (IP.wafer / 2), 0, Math.PI * 2); ctx.setLineDash([3, 3]); ctx.strokeStyle = P.faint; ctx.stroke(); ctx.setLineDash([]);
+    g.pos.forEach(function (p) { GP.matRect(ctx, wcx + p[0] * k, wcy + p[1] * k, L.X * k, L.Y * k, "interp", { alpha: 0.95 }); });
+    GP.text(ctx, "300 mm 웨이퍼: " + g.n + "개", wcx, wy + 12, { align: "center", size: 12, color: P.dim });
+  }, { height: function (w) { return w > 520 ? Math.min(360, w * 0.5) : 560; } });
+  out();
+})();
+
+/* ---- 인터포저 배선 RC */
+(function () {
+  var gL = GP.range("wr-l", function (v) { return v.toFixed(1) + " mm"; }, function () { c.redraw(); out(); });
+  var gW = GP.range("wr-w", function (v) { return v.toFixed(1) + " µm"; }, function () { c.redraw(); out(); });
+  function out() {
+    var r = wrCalc(gL(), gW());
+    GP.stat("wr-o-rc", PKF.sm(PKF.n(r.Rw, 3), "Ω") + " · " + PKF.sm(PKF.n(r.Cw * 1e12, 3), "pF"));
+    GP.stat("wr-o-t", PKF.sm(PKF.int(r.t50 * 1e12), "ps") + " · " + PKF.sm(PKF.int(r.tr * 1e12), "ps"));
+    GP.stat("wr-o-f", PKF.sm(PKF.n(r.maxGbps, 3), "Gb/s") + (r.maxGbps >= 9.6 ? ' <small>HBM 9.6 가능</small>' : ' <small class="t-bad">9.6 불가</small>'));
+    GP.stat("wr-o-e", PKF.sm(PKF.n(r.Ebit * 1e12, 2), "pJ/bit"));
+  }
+  var c = GP.canvas(document.getElementById("wr-cv"), function (ctx) {
+    var P = GP.palette(), ws = [0.4, 1, gW(), 4], cols = [P.bad, P.warn, P.accent, P.ok], ser = [];
+    ws.forEach(function (w, i) {
+      if (i === 2 && (Math.abs(w - 1) < 0.05 || Math.abs(w - 4) < 0.05 || Math.abs(w - 0.4) < 0.05)) return;
+      var d = []; for (var L = 0.5; L <= 20.0001; L += 0.25) d.push([L, wrCalc(L, w).maxGbps]);
+      ser.push({ data: d, color: cols[i], width: i === 2 ? 3 : 1.6, dash: i === 2 ? null : [5, 4], label: "선폭 " + w.toFixed(1) + " µm", fmt: function (y) { return PKF.n(y, 3) + " Gb/s"; } });
+    });
+    var r = wrCalc(gL(), gW());
+    GP.chart(ctx, null, { x: [0.5, 20], y: [0.3, 60], logX: true, logY: true, xLabel: "배선 길이 (mm)", yLabel: "버퍼 없는 최대 속도 (Gb/s)", series: ser, legend: "bl",
+      hover: { xFmt: function (x) { return PKF.n(x, 3) + " mm"; } }, hlines: [{ y: 9.6, color: P.data, label: "HBM 9.6 Gb/s" }], points: [{ x: gL(), y: r.maxGbps, color: P.accent, r: 5 }] });
+  }, { aspect: 0.6, maxHeight: 380, hover: true });
+  out();
+})();
+
+/* ---- 휨 */
+(function () {
+  var gM = GP.seg("wp-m", function () { c.redraw(); out(); });
+  var gDt = GP.range("wp-dt", function (v) { return v + " K"; }, function () { c.redraw(); out(); });
+  var gH1 = GP.range("wp-h1", function (v) { return v.toFixed(2) + " mm"; }, function () { c.redraw(); out(); });
+  var gH2 = GP.range("wp-h2", function (v) { return v.toFixed(1) + " mm"; }, function () { c.redraw(); out(); });
+  var gL = GP.range("wp-l", function (v) { return v + " mm"; }, function () { c.redraw(); out(); });
+  function out() {
+    var r = wpCalc(gM(), gDt(), gH1(), gH2(), gL());
+    GP.stat("wp-o-b", PKF.sm(PKF.int(r.bowUm), "µm"));
+    GP.stat("wp-o-r", r.R == null ? "∞ (평평)" : PKF.sm(PKF.n(r.R, 3), "m"));
+    GP.stat("wp-o-d", PKF.sm(PKF.n(r.dispUm, 3), "µm"));
+    GP.stat("wp-o-g", PKF.n(r.gamma, 3) + (r.gamma > 0.1 ? ' <small class="t-bad">언더필 필수</small>' : ""));
+  }
+  var c = GP.canvas(document.getElementById("wp-cv"), function (ctx) {
+    var P = GP.palette(), cols = { sub: P.warn, mold: P.ok, glass: P.accent }, ser = [];
+    Object.keys(WP.mats).forEach(function (k) {
+      var d = []; for (var L = 10; L <= 80; L += 1) d.push([L, wpCalc(k, gDt(), gH1(), gH2(), L).bowUm]);
+      ser.push({ data: d, color: cols[k], width: k === gM() ? 3 : 1.6, label: WP.mats[k].name + " (" + WP.mats[k].a + " ppm/K)", fmt: function (y) { return PKF.int(y) + " µm"; } });
+    });
+    var r = wpCalc(gM(), gDt(), gH1(), gH2(), gL()), top = Math.max(200, wpCalc("sub", gDt(), gH1(), gH2(), 80).bowUm * 1.05);
+    GP.chart(ctx, null, { x: [10, 80], y: [0, top], xLabel: "실리콘 한 변 L (mm)", yLabel: "휨 δ (µm, 구속 없음)", series: ser, legend: "tl",
+      hbands: [{ y0: 100, y1: 200, color: GP.alpha(P.ok, 0.1), label: "대형 BGA 평탄도 관리 범위 예시 0.1–0.2 mm" }],
+      hover: { xFmt: function (x) { return "L " + x.toFixed(0) + " mm"; } }, points: [{ x: gL(), y: r.bowUm, color: cols[gM()], r: 5 }] });
+  }, { aspect: 0.6, maxHeight: 380, hover: true });
+  out();
+})();
+
+/* ---- 범프 전류 */
+(function () {
+  var gI = GP.range("bp-i", function (v) { return PKF.int(v) + " A"; }, function () { c.redraw(); out(); });
+  var gF = GP.range("bp-f", function (v) { return Math.round(v * 100) + " %"; }, function () { c.redraw(); out(); });
+  var gC4 = GP.range("bp-c4", function (v) { return v + " µm"; }, function () { c.redraw(); out(); });
+  var gUb = GP.range("bp-ub", function (v) { return v + " µm"; }, function () { c.redraw(); out(); });
+  function lv() { return bpCalc(gI(), gF(), gC4(), gUb()); }
+  function cur(i) { return i >= 1 ? PKF.n(i, 3) + " A" : PKF.n(i * 1000, 3) + " mA"; }
+  function out() {
+    var L = lv(), ids = { bga: "bp-o-bga", c4: "bp-o-c4", ub: "bp-o-ub" };
+    L.forEach(function (x) { GP.stat(ids[x.k], cur(x.i) + ' <small>' + Math.round(x.use * 100) + ' %</small>'); });
+    GP.stat("bp-o-n", PKF.sm(PKF.int(L[0].need), "개") + ' <small>(전체 ' + PKF.int(BP.bga) + ')</small>');
+  }
+  var c = GP.canvas(document.getElementById("bp-cv"), function (ctx, w, h) {
+    var P = GP.palette(), L = lv(), x0 = Math.min(150, w * 0.32), x1 = w - 20, top = 26, rh = (h - top - 34) / L.length, umax = 1.6;
+    var X = function (u) { return x0 + Math.min(u, umax) / umax * (x1 - x0); };
+    ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+    [0, 0.5, 1, 1.5].forEach(function (u) { ctx.beginPath(); ctx.moveTo(X(u), top - 6); ctx.lineTo(X(u), h - 30); ctx.stroke(); GP.text(ctx, Math.round(u * 100) + " %", X(u), h - 16, { align: "center", size: 11, color: P.dim }); });
+    L.forEach(function (x, i) {
+      var y = top + i * rh + rh * 0.2, bh = rh * 0.6, col = x.use > 1 ? P.bad : x.use > 0.8 ? P.warn : P.volt;
+      ctx.fillStyle = GP.alpha(col, 0.75); ctx.fillRect(x0, y, X(x.use) - x0, bh);
+      GP.text(ctx, x.name, 8, y + bh * 0.32, { size: 12.5, weight: 600, color: P.text, baseline: "middle" });
+      GP.text(ctx, "VDD " + PKF.int(x.nv) + "개", 8, y + bh * 0.82, { size: 11.5, color: P.dim, baseline: "middle" });
+      GP.text(ctx, cur(x.i) + " / 한계 " + cur(x.lim), Math.min(X(x.use) + 6, x1 - 150), y + bh / 2, { size: 12, color: P.text, baseline: "middle", halo: true });
+    });
+    ctx.strokeStyle = P.bad; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(X(1), top - 8); ctx.lineTo(X(1), h - 30); ctx.stroke(); ctx.setLineDash([]);
+    GP.text(ctx, "범프당 전류 / 한계 (전자 이동)", (x0 + x1) / 2, 10, { align: "center", size: 12, color: P.dim, baseline: "middle" });
+  }, { aspect: 0.5, minHeight: 230, maxHeight: 320 });
+  out();
+})();
+
+/* ---- 하이브리드 본딩 3D */
+(function () {
+  var gP = GP.range("hb-p", function (v) { return v.toFixed(1) + " µm"; }, function () { c.redraw(); out(); });
+  var gA = GP.range("hb-a", function (v) { return v + " mm²"; }, function () { c.redraw(); out(); });
+  var gR = GP.range("hb-r", function (v) { return v.toFixed(1) + " Gb/s"; }, function () { c.redraw(); out(); });
+  var gQ = GP.range("hb-q", function (v) { return v + " W/cm²"; }, function () { out(); });
+  function out() {
+    var r = hbCalc(gP(), gA(), gR(), gQ());
+    GP.stat("hb-o-d", PKF.sm(PKF.int(r.dens), "/mm²"));
+    GP.stat("hb-o-bw", PKF.sm(PKF.n(r.bwTB, 3), "TB/s"));
+    GP.stat("hb-o-e", PKF.sm(PKF.int(r.edgeMm), "mm") + ' <small>(다이 둘레 112)</small>');
+    GP.stat("hb-o-t", PKF.sm("+" + PKF.n(r.dT, 3), "K"));
+  }
+  var c = GP.canvas(document.getElementById("hb-cv"), function (ctx) {
+    var P = GP.palette(), d = [];
+    for (var p = 1; p <= 50.001; p *= 1.05) d.push([p, hbCalc(p, gA(), gR(), 0).bwTB]);
+    var r = hbCalc(gP(), gA(), gR(), 0);
+    GP.chart(ctx, null, { x: [1, 50], y: [0.1, 1e5], logX: true, logY: true, xLabel: "접합 피치 p (µm)", yLabel: "수직 대역폭 (TB/s)",
+      series: [{ data: d, color: P.link, width: 2.5, label: "겹친 면적 " + gA() + " mm²", fmt: function (y) { return PKF.n(y, 3) + " TB/s"; } }], legend: "bl",
+      hover: { xFmt: function (x) { return "p " + PKF.n(x, 3) + " µm"; } },
+      hlines: [{ y: HB.l2TB, color: P.sram, label: "L2 약 13 TB/s" }, { y: SH.need, color: P.dram, label: "HBM 7.37 TB/s", labelPos: "below" }],
+      vlines: [{ x: 45, color: P.faint, label: "마이크로범프 45" }], points: [{ x: gP(), y: r.bwTB, color: P.link, r: 5 }] });
+  }, { aspect: 0.6, maxHeight: 380, hover: true });
+  out();
+})();
+</script>
+</body>
+</html>

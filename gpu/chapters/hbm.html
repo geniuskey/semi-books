@@ -1,0 +1,1335 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HBM과 메모리 대역폭 · GPUBook</title>
+<meta name="description" content="GPU가 왜 HBM을 쓰고, 몇 개를 어디에 두는가. 대역폭 = 핀 수 × 핀 속도, 넓고 느린 버스의 에너지, HBM 스택·채널·뱅크·행 버퍼, 리프레시와 온도, 스택 높이와 용량, 쇼어라인이 정하는 스택 수, HBM 전력과 원가를 시뮬레이터와 3D 스택 모델로 계산한다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+figure.diagram svg .t-mono { font-size: 12px; }
+.hb-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.hb-two > div { min-width: 0; position: relative; }
+.sim-readout .v.ok { color: var(--ok); } .sim-readout .v.bad { color: var(--bad); }
+td.up { color: var(--bad); font-weight: 700; } td.dn { color: var(--ok); font-weight: 700; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="hbm">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 08</div>
+    <h1>HBM과 메모리 대역폭</h1>
+    <p class="lead">GX-1의 텐서 코어는 1초에 BF16 연산을 약 944조 번 한다. 이 연산에 데이터를 대는 것은 로직 다이 옆에 붙은 HBM 스택 여섯 개다. 합쳐서 6,144개의 데이터 선이 핀당 9.6 Gb/s로 초당 7.37 TB를 나른다. 이 장은 GPU 설계자 쪽에서 세 가지를 묻는다. 왜 GDDR이 아니라 HBM인가, 스택은 몇 개를 둘 수 있나, 그리고 왜 하필 다이 바로 옆인가. 답은 핀 수, 배선 길이, 다이 가장자리 길이, 그리고 비트당 에너지라는 네 숫자에서 나온다. DRAM 셀의 물리는 <a href="../../memory/chapters/dram-cell.html">MemoryBook DRAM 셀</a>에서, 적층 공정은 11장과 <a href="../../packaging/chapters/hbm.html">PackagingBook HBM 패키징</a>에서 다룬다.</p>
+    <ul class="objectives">
+      <li>대역폭 = 핀 수 × 핀 속도로 GDDR·HBM·LPDDR을 비교하고 GX-1 7.37 TB/s와 GX-G 896 GB/s를 계산한다.</li>
+      <li>짧은 배선과 낮은 스윙 전압이 비트당 에너지를 줄이는 이유를 \(C V^2\)로 설명한다.</li>
+      <li>HBM 스택(베이스 다이·코어 다이·TSV·마이크로범프)과 채널·의사 채널·뱅크 구조를 안다.</li>
+      <li>행 버퍼 적중과 tRCD·tRP·tCL로 유효 대역폭을 계산하고, 접근 패턴과 동시 요청 수의 영향을 본다.</li>
+      <li>리프레시·온도·스택 높이·쇼어라인이 용량, 대역폭, 스택 수를 어떻게 제한하는지 계산한다.</li>
+      <li>모델 크기에서 필요한 스택 수, 대역폭, HBM 원가를 함께 따진다.</li>
+    </ul>
+  </header>
+
+  <section id="pins">
+    <h2>대역폭 = 핀 수 × 핀 속도</h2>
+    <p>메모리 대역폭을 늘리는 방법은 두 가지뿐이다. 선을 늘리거나 선 하나를 빨리 돌리거나다. <span class="term">GDDR</span><span class="en">(graphics DDR)</span>은 칩 하나에 데이터 선 32개를 두고 핀당 수십 Gb/s로 돌린다. 보드(PCB) 위 수 cm 거리를 달려야 하므로 선을 많이 깔 수 없고, 대신 신호를 빨리 보낸다. <span class="term">고대역폭 메모리</span><span class="en">(HBM, high bandwidth memory)</span>는 반대로 간다. DRAM 다이를 수직으로 쌓은 스택 하나가 데이터 선 1,024개(HBM4급은 2,048개)를 가지고, 핀당 속도는 GDDR의 약 1/3이다. 선이 많아도 되는 이유는 이 선들이 PCB가 아니라 <span class="term">실리콘 인터포저</span><span class="en">(silicon interposer)</span> 위의 수 mm 미세 배선이기 때문이다. 휴대 기기용 <span class="term">LPDDR</span><span class="en">(low-power DDR)</span>은 패키지당 64비트 정도로 좁고, 전력과 원가를 우선한다.</p>
+    <div class="formula">$$BW = \frac{N_{pin} \cdot r_{pin}}{8} \cdot N_{dev}\qquad [\text{GB/s}]$$
+      <div class="where">\(N_{pin}\)은 장치(스택·칩) 하나의 데이터 핀 수, \(r_{pin}\)은 핀당 속도(Gb/s), \(N_{dev}\)는 장치 수. 8로 나누어 비트를 바이트로 바꾼다. 이 장의 GB와 TB/s는 10진 단위다(1 GB = \(10^9\) B).</div>
+    </div>
+    <p>GX-1: 스택당 \(1{,}024 \times 9.6 / 8 = 1{,}228.8\) GB/s, 스택 6개면 7,372.8 GB/s ≈ <b>7.37 TB/s</b>. GX-G: GDDR7급 칩 8개 × 32비트 = 256비트, \(256 \times 28 / 8 = 896\) GB/s. 핀 속도는 GDDR이 약 3배 빠르지만 핀 수가 24배 적어서 대역폭은 약 8배 차이가 난다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 820 300" role="img" aria-label="세 가지 메모리 버스 비교. GDDR은 PCB 위 수 cm 배선으로 좁고 빠르고, HBM은 인터포저 위 수 mm 배선으로 넓고 느리고, LPDDR은 패키지 근처의 좁은 버스다">
+        <text x="20" y="24" class="t t-b">GDDR: 좁고 빠름 (PCB)</text>
+        <rect x="20" y="40" width="110" height="80" rx="6" class="k-compute"/><text x="75" y="85" class="t t-c">GPU</text>
+        <rect x="200" y="58" width="60" height="44" rx="4" class="k-dram"/><text x="230" y="85" class="t t-sm t-c">GDDR</text>
+        <path d="M130 66H200M130 74H200M130 82H200M130 90H200" class="ks-data" style="stroke-width:1.6"/>
+        <text x="165" y="58" class="t-dim t-c">32비트</text>
+        <text x="165" y="116" class="t-dim t-c">약 2–5 cm</text>
+        <text x="20" y="142" class="t-dim">28 Gb/s × 32 = 112 GB/s/칩, 종단·이퀄라이저</text>
+
+        <text x="300" y="24" class="t t-b">HBM: 넓고 느림 (인터포저)</text>
+        <rect x="300" y="38" width="260" height="96" rx="6" class="m-interp"/>
+        <rect x="312" y="48" width="120" height="76" rx="4" class="k-compute"/><text x="372" y="90" class="t t-c">로직 다이</text>
+        <rect x="470" y="48" width="76" height="76" rx="4" class="k-dram"/><text x="508" y="84" class="t t-sm t-c">HBM</text><text x="508" y="100" class="t-dim t-c">스택</text>
+        <g class="ks-data" style="stroke-width:0.9"><path d="M432 56H470M432 61H470M432 66H470M432 71H470M432 76H470M432 81H470M432 86H470M432 91H470M432 96H470M432 101H470M432 106H470M432 111H470M432 116H470"/></g>
+        <text x="451" y="146" class="t-dim t-c">약 3–5 mm</text>
+        <text x="300" y="168" class="t-dim">9.6 Gb/s × 1,024 = 1,228.8 GB/s/스택, 종단 없음</text>
+
+        <text x="610" y="24" class="t t-b">LPDDR: 좁고 저전력</text>
+        <rect x="610" y="40" width="96" height="80" rx="6" class="k-compute"/><text x="658" y="85" class="t t-c">SoC</text>
+        <rect x="740" y="58" width="60" height="44" rx="4" class="k-dram"/><text x="770" y="85" class="t t-sm t-c">LPDDR</text>
+        <path d="M706 70H740M706 80H740M706 90H740" class="ks-data" style="stroke-width:1.6"/>
+        <text x="723" y="116" class="t-dim t-c">약 1 cm</text>
+        <text x="610" y="142" class="t-dim">8.5 Gb/s × 64 ≈ 68 GB/s/패키지</text>
+
+        <rect x="20" y="196" width="780" height="92" rx="8" class="card"/>
+        <text x="36" y="220" class="t t-b">면적으로 보면 BW = 폭 × 높이</text>
+        <rect x="40" y="232" width="9.4" height="48" class="kf-data"/><text x="58" y="262" class="t-dim">GDDR7 칩: 폭 32 × 높이 28</text>
+        <rect x="290" y="264" width="300" height="16" class="kf-data" style="opacity:.75"/><text x="290" y="256" class="t-dim">HBM3E 스택: 폭 1,024 × 높이 9.6</text>
+        <rect x="620" y="265.4" width="18.75" height="14.6" class="kf-data" style="opacity:.6"/><text x="646" y="280" class="t-dim">LPDDR: 64 × 8.5</text>
+      </svg>
+      <figcaption><b>그림 8-1.</b> 세 가지 메모리 버스. 대역폭은 핀 수와 핀 속도의 곱이다. 직사각형의 면적이 대역폭이다(폭: 핀 수, 높이: 핀 속도). HBM 스택 하나의 면적이 GDDR 칩 하나의 약 11배다. HBM은 선을 많이 깔 수 있는 실리콘 인터포저 위에서만 성립한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-bw">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>메모리 대역폭 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bw-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>인터페이스</span><div class="seg" id="bw-k"><button data-value="gddr7">GDDR7</button><button data-value="hbm3e" class="on">HBM3E</button><button data-value="hbm4">HBM4</button><button data-value="lpddr">LPDDR</button></div></div>
+          <label class="ctrl"><span>장치당 폭 <output id="bw-w-out"></output></span><input type="range" id="bw-w" min="16" max="2048" step="16" value="1024"></label>
+          <label class="ctrl"><span>핀 속도 <output id="bw-r-out"></output></span><input type="range" id="bw-r" min="1" max="40" step="0.1" value="9.6"></label>
+          <label class="ctrl"><span>장치 수 <output id="bw-n-out"></output></span><input type="range" id="bw-n" min="1" max="16" step="1" value="6"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">장치당</span><span class="v" id="bw-o-per">—</span></div>
+        <div class="stat"><span class="k">총 대역폭</span><span class="v" id="bw-o-tot">—</span></div>
+        <div class="stat"><span class="k">데이터 핀 합계</span><span class="v" id="bw-o-pin">—</span></div>
+        <div class="stat"><span class="k">최대 대역폭 전력</span><span class="v" id="bw-o-w">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① HBM3E, 1,024비트·9.6 Gb/s·6개 → 7,372.8 GB/s(GX-1). ② GDDR7을 누르면 32비트·28 Gb/s·8개 → 896 GB/s(GX-G). 개수를 16으로 올려도 1.79 TB/s에 그친다. ③ HBM4(2,048비트·8 Gb/s)는 스택당 2,048 GB/s로, 핀 속도를 낮추고도 HBM3E보다 약 1.7배다. 그래프의 사선은 같은 대역폭을 내는 (핀 수, 핀 속도) 조합이다.</div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>인터페이스(대표값)</th><th class="num">장치당 폭</th><th class="num">핀 속도</th><th class="num">장치당 BW</th><th>배선 매체·거리</th><th class="num">비트당 에너지</th></tr></thead>
+        <tbody>
+          <tr><td>GDDR7급</td><td class="num">32비트</td><td class="num">약 28–32 Gb/s</td><td class="num">112–128 GB/s</td><td>PCB, 수 cm</td><td class="num">약 6 pJ/bit</td></tr>
+          <tr><td>HBM3E급 (GX-1)</td><td class="num">1,024비트</td><td class="num">약 9.6 Gb/s</td><td class="num">1,228.8 GB/s</td><td>실리콘 인터포저, 수 mm</td><td class="num">약 3 pJ/bit</td></tr>
+          <tr><td>HBM4급</td><td class="num">2,048비트</td><td class="num">약 8 Gb/s</td><td class="num">약 2,048 GB/s</td><td>실리콘 인터포저, 수 mm</td><td class="num">약 2.5 pJ/bit</td></tr>
+          <tr><td>LPDDR5X급</td><td class="num">64비트</td><td class="num">약 8.5 Gb/s</td><td class="num">약 68 GB/s</td><td>패키지·PCB, 약 1 cm</td><td class="num">약 4 pJ/bit</td></tr>
+          <tr><td>DDR5 (서버 CPU, 채널)</td><td class="num">64비트</td><td class="num">약 4.8 Gb/s</td><td class="num">약 38 GB/s</td><td>DIMM 슬롯, 10 cm 이상</td><td class="num">약 10 pJ/bit 이상</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>표의 값은 세대 안에서도 넓게 퍼지는 대표 범위다(JEDEC 표준과 공개 발표의 일반적인 범위). 서버 CPU SC-64의 DDR5 12채널 약 460 GB/s와 비교하면 GX-1은 약 16배다. 핀 인터페이스 회로 자체는 <a href="../../memory/chapters/interface.html">MemoryBook 인터페이스 장</a>에서 다룬다.</p>
+
+    <div class="callout fab"><strong>7.37 TB/s를 채우려면 몇 바이트가 날아다녀야 하나</strong>2장(<a href="throughput.html">처리량 기계</a>)의 리틀의 법칙을 HBM 숫자로만 다시 쓰면, HBM 왕복 지연 약 500 ns 동안 \(7.37\,\text{TB/s} \times 500\,\text{ns} \approx 3.7\) MB의 읽기 요청이 동시에 떠 있어야 한다. 스택 하나에 약 614 KB, 의사 채널 192개(6 × 32) 하나에 약 19 KB, 32 B 요청으로 약 600개다. 이 지연의 대부분은 SM에서 L2를 거쳐 HBM 컨트롤러까지 가는 온칩 경로다. DRAM 장치 안의 지연(약 30 ns)만 놓고 보면 의사 채널 하나에 32 B 요청 약 36개가 필요하다. 이 수를 4절 시뮬레이터에서 확인한다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 연산은 다이 면적에 비례해 늘지만 PCB 위 고속 핀은 한 칩에 수백 개가 한계다. 7.37 TB/s를 28 Gb/s 핀으로 내려면 데이터 핀이 약 2,100개(32비트 칩 66개) 필요하고, 이 칩들을 GPU 주위 수 cm 안에 놓을 수 없다. 그래서 핀 속도 대신 핀 수를 택하고, 그 핀 수를 감당할 배선 매체(인터포저)까지 함께 택했다. 결과는 대역폭 약 8배, 그 대가는 인터포저 원가와 패키지 크기다.</p>
+  </section>
+
+  <section id="energy">
+    <h2>넓고 느린 버스가 에너지가 적은 이유</h2>
+    <p>비트 하나를 보내는 에너지는 대부분 선을 충전하는 데 든다. 선의 커패시턴스는 길이에 비례한다. 송신기가 선을 스윙 전압 \(V_{sw}\)까지 올릴 때 I/O 전원 \(V_{DDQ}\)에서 \(C V_{sw} V_{DDQ}\)의 에너지가 빠져나간다. 데이터가 무작위면 비트의 절반 정도에서 전이가 일어나므로 활동도 \(\alpha \approx 0.5\)를 곱한다. 긴 PCB 선은 반사를 막으려고 끝에 <span class="term">종단 저항</span><span class="en">(on-die termination)</span>을 달아야 하므로, 정적 전류가 비트 시간 내내 흐른다. 핀 속도가 높으면 채널 손실을 보상하는 이퀄라이저와 정밀한 클럭 회로가 필요하고, 그 전력은 속도에 따라 초선형으로 늘어난다.</p>
+    <div class="formula">$$E_{bit} = \underbrace{\alpha\,(c_w L + C_{pad})\,V_{sw}V_{DDQ}}_{\text{배선 충전}} + \underbrace{\frac{V_{DDQ}V_{sw}}{2R_t}\cdot\frac{1}{r_{pin}}}_{\text{종단}} + \underbrace{e_0 + k\,r_{pin}^2}_{\text{송수신 회로}} + E_{core}$$
+      <div class="where">\(c_w\): 단위 길이당 배선 커패시턴스(인터포저 약 0.2 pF/mm, PCB 약 0.1 pF/mm), \(L\): 배선 길이, \(C_{pad}\): 패드·ESD·범프 커패시턴스, \(R_t\): 종단 저항(없으면 항 0), \(e_0 = 0.1\) pJ, \(k = 0.003\) pJ/(Gb/s)², \(E_{core}\): DRAM 안의 행 활성화·내부 데이터 경로(약 2.5 pJ/bit, 두 방식이 비슷하다고 가정). 교육용 단순 모델이다.</div>
+    </div>
+    <p>HBM 쪽(\(L\) = 3 mm, \(C\) = 0.85 pF, \(V_{sw} = V_{DDQ} = 0.4\) V, 종단 없음, 9.6 Gb/s)은 배선 충전 0.068 pJ + 회로 0.38 pJ = I/O 약 0.44 pJ, 코어를 더해 <b>약 2.9 pJ/bit</b>다. GDDR 쪽(\(L\) = 20 mm, \(C\) = 3 pF, 0.5 V 스윙·1.2 V, 80 Ω 경로, 28 Gb/s)은 충전 0.90 + 종단 0.13 + 회로 2.45 = I/O 약 3.5 pJ, 합계 <b>약 6.0 pJ/bit</b>다. 에너지 표의 HBM 약 3, GDDR7 약 6 pJ/bit가 이렇게 나온다. I/O만 비교하면 약 8배 차이다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 760 270" role="img" aria-label="비트당 에너지 분해 막대 그래프. HBM은 코어 2.5, 회로 0.38, 배선 0.07 pJ로 합 약 2.9 pJ, GDDR은 코어 2.5, 회로 2.45, 종단 0.13, 배선 0.90 pJ로 합 약 6.0 pJ">
+        <path d="M120 30V220H730" class="s-axis"/>
+        <g class="t-mono t-c"><text x="120" y="238">0</text><text x="220" y="238">1</text><text x="320" y="238">2</text><text x="420" y="238">3</text><text x="520" y="238">4</text><text x="620" y="238">5</text><text x="720" y="238">6 pJ/bit</text></g>
+        <path d="M220 30V220M320 30V220M420 30V220M520 30V220M620 30V220M720 30V220" style="stroke:var(--grid);stroke-width:1"/>
+        <text x="110" y="88" class="t t-b t-e">HBM3E급</text>
+        <rect x="120" y="66" width="250" height="34" class="kf-dram"/>
+        <rect x="370" y="66" width="37.6" height="34" class="kf-ctrl"/>
+        <rect x="407.6" y="66" width="6.8" height="34" class="kf-data"/>
+        <text x="245" y="88" class="t t-c" style="fill:#fff">코어 2.5</text>
+        <text x="424" y="88" class="t t-b">합 약 2.9</text>
+        <text x="110" y="164" class="t t-b t-e">GDDR7급</text>
+        <rect x="120" y="142" width="250" height="34" class="kf-dram"/>
+        <rect x="370" y="142" width="245.2" height="34" class="kf-ctrl"/>
+        <rect x="615.2" y="142" width="13.4" height="34" class="kf-volt"/>
+        <rect x="628.6" y="142" width="90" height="34" class="kf-data"/>
+        <text x="245" y="164" class="t t-c" style="fill:#fff">코어 2.5</text>
+        <text x="492" y="164" class="t t-c" style="fill:#fff">송수신·클럭 2.45</text>
+        <text x="673" y="164" class="t t-c" style="fill:#fff">배선 0.90</text>
+        <text x="720" y="198" class="t-dim t-e">합 약 6.0 (종단 0.13 포함)</text>
+        <g transform="translate(120 252)">
+          <rect x="0" y="-10" width="12" height="12" class="kf-dram"/><text x="18" y="0" class="t-dim">DRAM 코어</text>
+          <rect x="110" y="-10" width="12" height="12" class="kf-ctrl"/><text x="128" y="0" class="t-dim">송수신·클럭 회로</text>
+          <rect x="270" y="-10" width="12" height="12" class="kf-volt"/><text x="288" y="0" class="t-dim">종단</text>
+          <rect x="340" y="-10" width="12" height="12" class="kf-data"/><text x="358" y="0" class="t-dim">배선 충전 αCV²</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 8-2.</b> 비트당 에너지 분해(위 모델의 기본값). 코어 에너지는 같다고 놓았다. 차이는 거의 전부 I/O에서 나온다. GDDR은 핀 속도가 높아 송수신 회로 항(\(k r^2\))이 커지고, 긴 PCB 배선과 큰 패드 때문에 충전 항도 HBM의 약 13배다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-en">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>넓고 느린 버스 vs 좁고 빠른 버스: 비트당 에너지</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="en-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>출발점</span><div class="seg" id="en-p"><button data-value="hbm" class="on">HBM(인터포저)</button><button data-value="gddr">GDDR(PCB)</button></div></div>
+          <label class="ctrl"><span>배선 길이 L <output id="en-L-out"></output></span><input type="range" id="en-L" min="0.5" max="60" step="0.5" value="3"></label>
+          <label class="ctrl"><span>패드·범프 C<sub>pad</sub> <output id="en-c-out"></output></span><input type="range" id="en-c" min="0.05" max="2" step="0.05" value="0.25"></label>
+          <label class="ctrl"><span>스윙 V<sub>sw</sub> <output id="en-v-out"></output></span><input type="range" id="en-v" min="0.1" max="1.2" step="0.05" value="0.4"></label>
+          <label class="ctrl"><span>I/O 전원 V<sub>DDQ</sub> <output id="en-q-out"></output></span><input type="range" id="en-q" min="0.3" max="1.5" step="0.05" value="0.4"></label>
+          <label class="ctrl"><span>핀 속도 <output id="en-r-out"></output></span><input type="range" id="en-r" min="1" max="40" step="0.2" value="9.6"></label>
+          <label class="check"><input type="checkbox" id="en-t"> 종단 저항 80 Ω</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">선 커패시턴스</span><span class="v" id="en-o-C">—</span></div>
+        <div class="stat"><span class="k">I/O 에너지</span><span class="v" id="en-o-io">—</span></div>
+        <div class="stat"><span class="k">합계 (코어 2.5 포함)</span><span class="v" id="en-o-tot">—</span></div>
+        <div class="stat"><span class="k">1.23 TB/s에 필요한 핀</span><span class="v" id="en-o-pin">—</span></div>
+        <div class="stat"><span class="k">7.37 TB/s 전력</span><span class="v" id="en-o-w">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① HBM 출발점에서 핀 속도만 28 Gb/s로 올리면 회로 항이 0.38 → 2.45 pJ로 뛴다. 넓은 버스를 빨리 돌리지 않는 이유다. ② 배선 길이를 20 mm, 패드를 1 pF로 늘리고 종단을 켜면(스윙 0.4 V 그대로) I/O가 HBM의 몇 배가 되는지 보자. ③ GDDR 출발점에서 V<sub>DDQ</sub>를 1.2 → 0.6 V로 낮추면 충전·종단 항이 절반이 된다. 낮은 전압은 짧은 배선에서만 잡음 여유가 남는다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 같은 1.23 TB/s를 9.6 Gb/s 핀 1,024개로 보내면 28 Gb/s 핀 352개보다 선은 약 3배 많지만, 선마다 짧고 느리고 스윙이 작아 비트당 I/O 에너지가 약 1/8이다. GX-1이 7.37 TB/s를 GDDR 방식으로 냈다면 메모리 전력만 약 350 W였을 것이다. HBM으로 약 180 W에 그친다. 줄인 약 170 W는 TDP 1,000 W 안에서 로직 다이 클럭으로 돌아간다.</p>
+  </section>
+
+  <section id="stack">
+    <h2>HBM 스택의 구조</h2>
+    <p>HBM 스택은 맨 아래 <span class="term">베이스 다이</span><span class="en">(base die, logic die)</span> 하나와 그 위에 쌓은 <span class="term">DRAM 코어 다이</span><span class="en">(core die)</span> 4–16장으로 이루어진다. 코어 다이에는 DRAM 셀 배열과 감지 증폭기가 있고, 베이스 다이에는 인터포저 쪽 PHY, 테스트 회로, 신호 재구동 버퍼가 있다. 다이 사이의 연결은 다이를 수직으로 뚫은 <span class="term">실리콘 관통 전극</span><span class="en">(TSV, through-silicon via)</span>과 다이 사이의 <span class="term">마이크로범프</span><span class="en">(microbump)</span>가 맡는다. TSV 기둥은 신호 약 1,700개에 전원·접지를 더해 스택당 수천 개이고, 대개 다이 가운데 띠에 모인다. 다이를 다 지나므로 8단이면 각 기둥이 다이 8장을 관통한다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 -14 820 330" role="img" aria-label="HBM 스택과 로직 다이가 실리콘 인터포저 위에 나란히 놓인 단면도. 스택은 베이스 다이 위에 DRAM 코어 다이 8장이 마이크로범프로 쌓이고, 가운데를 TSV 기둥이 관통한다. 인터포저 배선이 로직 다이 PHY와 베이스 다이 PHY를 잇는다">
+        <rect x="20" y="262" width="780" height="40" class="m-sub"/><text x="30" y="290" class="t-dim">유기 기판</text>
+        <rect x="60" y="226" width="700" height="30" class="m-interp"/><text x="70" y="246" class="t-dim">실리콘 인터포저</text>
+        <g class="m-sol"><circle cx="100" cy="259" r="3"/><circle cx="160" cy="259" r="3"/><circle cx="220" cy="259" r="3"/><circle cx="280" cy="259" r="3"/><circle cx="340" cy="259" r="3"/><circle cx="400" cy="259" r="3"/><circle cx="460" cy="259" r="3"/><circle cx="520" cy="259" r="3"/><circle cx="580" cy="259" r="3"/><circle cx="640" cy="259" r="3"/><circle cx="700" cy="259" r="3"/></g>
+        <rect x="90" y="150" width="300" height="70" class="m-si"/>
+        <text x="200" y="182" class="t t-b t-c">로직 다이</text><text x="200" y="200" class="t-dim t-c">SM·L2·HBM 컨트롤러</text>
+        <rect x="330" y="200" width="56" height="18" class="k-data"/><text x="358" y="213" class="t-dim t-c">PHY</text>
+        <!-- stack -->
+        <rect x="470" y="196" width="230" height="22" class="m-si"/><text x="585" y="211" class="t t-sm t-c">베이스 다이 (PHY·버퍼·테스트)</text>
+        <rect x="474" y="200" width="44" height="14" class="k-data" style="opacity:.8"/>
+        <g>
+          <rect x="476" y="173" width="218" height="17" class="m-dram"/><rect x="476" y="150" width="218" height="17" class="m-dram"/>
+          <rect x="476" y="127" width="218" height="17" class="m-dram"/><rect x="476" y="104" width="218" height="17" class="m-dram"/>
+          <rect x="476" y="81" width="218" height="17" class="m-dram"/><rect x="476" y="58" width="218" height="17" class="m-dram"/>
+          <rect x="476" y="35" width="218" height="17" class="m-dram"/><rect x="476" y="12" width="218" height="17" class="m-dram"/>
+        </g>
+        <g class="m-cu"><rect x="570" y="12" width="3" height="200"/><rect x="580" y="12" width="3" height="200"/><rect x="590" y="12" width="3" height="200"/><rect x="600" y="12" width="3" height="200"/></g>
+        <g class="m-sol"><rect x="566" y="190" width="40" height="6"/><rect x="566" y="167" width="40" height="6"/><rect x="566" y="144" width="40" height="6"/><rect x="566" y="121" width="40" height="6"/><rect x="566" y="98" width="40" height="6"/><rect x="566" y="75" width="40" height="6"/><rect x="566" y="52" width="40" height="6"/><rect x="566" y="29" width="40" height="6"/></g>
+        <g class="m-sol"><circle cx="120" cy="223" r="2.5"/><circle cx="160" cy="223" r="2.5"/><circle cx="200" cy="223" r="2.5"/><circle cx="240" cy="223" r="2.5"/><circle cx="280" cy="223" r="2.5"/><circle cx="340" cy="223" r="2.5"/><circle cx="352" cy="223" r="2.5"/><circle cx="364" cy="223" r="2.5"/><circle cx="376" cy="223" r="2.5"/><circle cx="480" cy="222" r="2.5"/><circle cx="492" cy="222" r="2.5"/><circle cx="504" cy="222" r="2.5"/><circle cx="516" cy="222" r="2.5"/><circle cx="600" cy="222" r="2.5"/><circle cx="650" cy="222" r="2.5"/></g>
+        <path d="M358 228V236H496V228" class="ks-data"/><path d="M370 228V242H508V228" class="ks-data"/>
+        <text x="430" y="252" class="t-dim t-c">인터포저 배선 약 3–5 mm</text>
+        <path d="M462 12V196" class="dimline"/><text x="454" y="100" class="t t-sm t-e">높이 ≤ 720 µm</text>
+        <text x="454" y="118" class="t-dim t-e">(높이 과장)</text>
+        <path d="M612 60H700" class="lead"/><text x="702" y="64" class="t-dim">TSV</text>
+        <path d="M640 166H700" class="lead"/><text x="702" y="170" class="t-dim">마이크로범프</text>
+        <text x="470" y="8" class="t-dim">DRAM 코어 다이 × 8 (24 Gb씩)</text>
+      </svg>
+      <figcaption><b>그림 8-3.</b> GX-1 HBM 스택의 단면(높이 방향 크게 과장). 코어 다이 8장이 마이크로범프로 이어지고 TSV 기둥이 다이 가운데를 관통한다. 베이스 다이의 PHY와 로직 다이의 PHY는 인터포저 배선 수 mm로 이어진다. 범프 피치는 약 45 µm다. TSV·범프의 공정은 <a href="../../packaging/chapters/tsv.html">PackagingBook TSV 장</a>에서 다룬다.</figcaption>
+    </figure>
+    <p>3D 모델에서 단수를 바꾸고 분해해 본다. 모델은 다이 크기 약 11 × 10 mm를 그대로 두고 높이 방향만 약 6배 키웠다. 높이와 TSV 수는 6절의 스택 모델로 계산한다.</p>
+
+    <div class="sim" id="sim-3d">
+      <div class="sim-head"><span class="sim-tag three">3D</span><h3>HBM 스택 분해 모델</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view three" id="s3-v"><span class="hint">드래그로 회전 · 휠로 확대</span></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>코어 다이 단수</span><div class="seg" id="s3-n"><button data-value="4">4</button><button data-value="8" class="on">8</button><button data-value="12">12</button><button data-value="16">16</button></div></div>
+          <label class="ctrl"><span>분해 <output id="s3-x-out"></output></span><input type="range" id="s3-x" min="0" max="100" step="1" value="35"></label>
+          <label class="check"><input type="checkbox" id="s3-tsv" checked> TSV 기둥·마이크로범프 보기</label>
+          <label class="check"><input type="checkbox" id="s3-ip" checked> 인터포저·로직 다이 보기</label>
+          <label class="check"><input type="checkbox" id="s3-lab" checked> 이름표</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">스택 용량</span><span class="v" id="s3-o-gb">—</span></div>
+        <div class="stat"><span class="k">스택 높이 (50 µm 다이)</span><span class="v" id="s3-o-h">—</span></div>
+        <div class="stat"><span class="k">TSV 관통 수</span><span class="v" id="s3-o-tsv">—</span></div>
+        <div class="stat"><span class="k">스택당 대역폭</span><span class="v" id="s3-o-bw">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 분해를 100으로 올리면 다이마다 아랫면의 범프 배열과 TSV 기둥이 드러난다. 데이터 1,024비트는 모두 이 기둥을 타고 내려가 베이스 다이에서 인터포저로 나간다. ② 단수를 16으로 바꾸면 용량은 48 GB로 두 배지만 대역폭은 1,228.8 GB/s 그대로다. 단을 쌓으면 용량이 늘고, 대역폭은 인터페이스 폭과 핀 속도로 정해진다. ③ 높이 읽음값이 720 µm를 넘으면 빨간색이 된다. 12단부터 50 µm 다이로는 넘는다(6절).</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 다이를 쌓으면 같은 인터포저 면적에 용량이 단수만큼 늘고, 1,024개 선은 그대로다. 수직 연결은 TSV 길이(다이 두께 수십 µm)만큼이라 수평 배선보다 짧다. 베이스 다이를 따로 두면 PHY를 DRAM 공정이 아닌 별도 공정으로 만들 수 있다. 대가는 TSV가 차지하는 다이 면적(수 %), 얇은 다이를 쌓는 공정 원가, 그리고 높이와 열이다.</p>
+  </section>
+
+  <section id="banks">
+    <h2>채널·의사 채널·뱅크와 행 버퍼</h2>
+    <p>1,024비트는 한 덩어리로 움직이지 않는다. GX-1 스택은 64비트 <span class="term">채널</span><span class="en">(channel)</span> 16개로 나뉘고, 각 채널은 다시 32비트 <span class="term">의사 채널</span><span class="en">(pseudo channel)</span> 2개로 나뉜다. 의사 채널은 명령·주소 버스를 일부 공유하지만 데이터는 따로 움직이는 독립 단위다. 스택당 32개, GX-1 전체로 192개다. 의사 채널 안에는 <span class="term">뱅크</span><span class="en">(bank)</span>가 16–48개 있고(뱅크 그룹으로 묶임), 뱅크마다 행 수만 개 × 행당 1 KB 정도의 셀 배열과 <span class="term">행 버퍼</span><span class="en">(row buffer)</span>(감지 증폭기 줄)가 있다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 820 250" role="img" aria-label="HBM 주소 계층. GX-1 패키지의 스택 6개, 스택당 채널 16개, 채널당 의사 채널 2개, 의사 채널당 뱅크 16개 이상, 뱅크마다 행 배열과 행 버퍼">
+        <rect x="10" y="40" width="130" height="150" rx="8" class="k-compute"/><text x="75" y="70" class="t t-b t-c">GX-1</text><text x="75" y="92" class="t-dim t-c">스택 6개</text><text x="75" y="112" class="t-dim t-c">7.37 TB/s</text><text x="75" y="132" class="t-dim t-c">의사 채널 192</text>
+        <rect x="170" y="40" width="130" height="150" rx="8" class="k-dram"/><text x="235" y="70" class="t t-b t-c">스택</text><text x="235" y="92" class="t-dim t-c">채널 16 × 64비트</text><text x="235" y="112" class="t-dim t-c">1,228.8 GB/s</text>
+        <rect x="330" y="40" width="130" height="150" rx="8" class="k-dram"/><text x="395" y="70" class="t t-b t-c">채널</text><text x="395" y="92" class="t-dim t-c">의사 채널 2개</text><text x="395" y="112" class="t-dim t-c">76.8 GB/s</text>
+        <rect x="490" y="40" width="130" height="150" rx="8" class="k-dram"/><text x="555" y="70" class="t t-b t-c">의사 채널</text><text x="555" y="92" class="t-dim t-c">32비트, 뱅크 16+</text><text x="555" y="112" class="t-dim t-c">38.4 GB/s</text><text x="555" y="132" class="t-dim t-c">BL8 → 32 B</text>
+        <path d="M140 115H170M300 115H330M460 115H490M620 115H650" class="arr"/>
+        <!-- bank -->
+        <rect x="650" y="20" width="160" height="200" rx="8" class="card"/>
+        <text x="730" y="40" class="t t-b t-c">뱅크</text>
+        <g class="k-dram" style="stroke-width:.6"><rect x="668" y="50" width="124" height="14"/><rect x="668" y="64" width="124" height="14"/><rect x="668" y="78" width="124" height="14"/><rect x="668" y="92" width="124" height="14"/><rect x="668" y="106" width="124" height="14"/><rect x="668" y="120" width="124" height="14"/></g>
+        <rect x="668" y="92" width="124" height="14" class="kf-data" style="opacity:.55"/>
+        <text x="730" y="148" class="t-dim t-c">행 수만 개 × 1 KB</text>
+        <rect x="668" y="158" width="124" height="22" class="k-sram"/><text x="730" y="174" class="t t-sm t-c">행 버퍼(감지 증폭기)</text>
+        <path d="M730 106V158" class="arr-a"/>
+        <text x="730" y="206" class="t-dim t-c">ACT로 행 하나를 연다</text>
+      </svg>
+      <figcaption><b>그림 8-4.</b> HBM 주소 계층. 주소의 일부 비트가 스택·채널·의사 채널·뱅크를 고르고, 나머지가 행과 열을 고른다. 컨트롤러는 연속 주소를 여러 의사 채널과 뱅크에 흩어(인터리빙) 모두를 동시에 바쁘게 한다.</figcaption>
+    </figure>
+    <p>읽기 하나는 세 단계를 거친다. 뱅크가 닫혀 있으면 행 활성화(ACT)로 행 하나 전체(1 KB)를 행 버퍼로 읽어 들이고 \(t_{RCD}\)를 기다린다. 열 읽기(RD) 명령 뒤 \(t_{CL}\)이 지나면 데이터 32 B가 버스에 실린다(32비트 × 버스트 8, 9.6 Gb/s에서 0.83 ns). 다른 행이 열려 있으면 먼저 프리차지(PRE)로 닫고 \(t_{RP}\)를 기다려야 한다. 행이 열린 뒤 최소 \(t_{RAS}\)는 닫을 수 없다. 이미 열린 행을 다시 읽으면 <span class="term">행 버퍼 적중</span><span class="en">(row buffer hit)</span>, 다른 행이면 <span class="term">행 충돌</span><span class="en">(row conflict)</span>이다.</p>
+    <div class="formula">$$t_{hit} = t_{CL},\quad t_{miss} = t_{RCD} + t_{CL},\quad t_{conflict} = t_{RP} + t_{RCD} + t_{CL},\qquad \eta = \frac{N\,t_{burst}}{T_{total}}$$
+      <div class="where">이 장의 가정치: \(t_{RCD} = t_{RP} = t_{CL} = 14\) ns, \(t_{RAS} = 33\) ns, 서로 다른 뱅크 ACT 사이 \(t_{RRD} = 2\) ns, \(t_{burst} = 0.83\) ns. \(\eta\)는 데이터 버스가 실제로 데이터를 나른 시간의 비율(유효 대역폭 ÷ 피크).</div>
+    </div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 820 220" role="img" aria-label="DRAM 명령 타이밍도. 적중은 RD 뒤 tCL 만에 데이터, 충돌은 PRE, tRP, ACT, tRCD, RD, tCL을 거쳐 데이터. 데이터 버스트는 0.83 ns">
+        <g class="t-mono t-c"><text x="120" y="210">0</text><text x="260" y="210">14</text><text x="400" y="210">28</text><text x="540" y="210">42 ns</text></g>
+        <path d="M120 196H780" class="s-axis"/>
+        <text x="110" y="46" class="t t-b t-e">적중</text>
+        <rect x="120" y="30" width="20" height="24" class="kf-dram"/><text x="130" y="24" class="t-dim t-c">RD</text>
+        <path d="M140 42H260" class="dimline"/><text x="200" y="66" class="t-dim t-c">tCL</text>
+        <rect x="260" y="30" width="8.3" height="24" class="kf-data"/><text x="276" y="46" class="t-dim">데이터 32 B</text>
+        <text x="110" y="104" class="t t-b t-e">닫힘</text>
+        <rect x="120" y="88" width="20" height="24" class="kf-ctrl"/><text x="130" y="82" class="t-dim t-c">ACT</text>
+        <path d="M140 100H260" class="dimline"/><text x="200" y="124" class="t-dim t-c">tRCD</text>
+        <rect x="260" y="88" width="20" height="24" class="kf-dram"/>
+        <path d="M280 100H400" class="dimline"/><text x="340" y="124" class="t-dim t-c">tCL</text>
+        <rect x="400" y="88" width="8.3" height="24" class="kf-data"/>
+        <text x="110" y="162" class="t t-b t-e">충돌</text>
+        <rect x="120" y="146" width="20" height="24" class="kf-heat"/><text x="130" y="140" class="t-dim t-c">PRE</text>
+        <path d="M140 158H260" class="dimline"/><text x="200" y="182" class="t-dim t-c">tRP</text>
+        <rect x="260" y="146" width="20" height="24" class="kf-ctrl"/>
+        <path d="M280 158H400" class="dimline"/><text x="340" y="182" class="t-dim t-c">tRCD</text>
+        <rect x="400" y="146" width="20" height="24" class="kf-dram"/>
+        <path d="M420 158H540" class="dimline"/><text x="480" y="182" class="t-dim t-c">tCL</text>
+        <rect x="540" y="146" width="8.3" height="24" class="kf-data"/>
+        <text x="570" y="160" class="t-dim">약 43 ns 동안 데이터는 0.83 ns</text>
+        <text x="420" y="46" class="t-dim">다른 뱅크의 PRE·ACT를 겹쳐 실행하면</text>
+        <text x="420" y="64" class="t-dim">버스는 쉬지 않는다(뱅크 병렬성).</text>
+      </svg>
+      <figcaption><b>그림 8-5.</b> 적중·닫힘·충돌의 명령 순서(가정치, 축척은 대략). 충돌 한 번에 데이터 버스트 약 50개 분량의 시간이 지나간다. 이 시간을 다른 뱅크의 작업으로 메우는 것이 뱅크 수와 동시 요청 수가 하는 일이다. 명령 순서와 셀 동작은 <a href="../../memory/chapters/dram-ops.html">MemoryBook DRAM 동작 장</a>에 자세하다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-dr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>의사 채널 하나의 뱅크·행 버퍼 시뮬레이터</h3></div>
+      <div class="sim-body">
+        <div class="sim-view"><canvas id="dr-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>접근 패턴</span><div class="seg" id="dr-p"><button data-value="stream" class="on">스트리밍</button><button data-value="reuse">좁은 영역 반복</button><button data-value="random">무작위</button><button data-value="onebank">한 뱅크 행 충돌</button></div></div>
+          <div class="ctrl"><span>스케줄러</span><div class="seg" id="dr-s"><button data-value="frfcfs" class="on">적중 우선(FR-FCFS)</button><button data-value="fcfs">도착 순서(FCFS)</button></div></div>
+          <label class="ctrl"><span>뱅크 수 <output id="dr-b-out"></output></span><input type="range" id="dr-b" min="1" max="64" step="1" value="16"></label>
+          <label class="ctrl"><span>동시 요청 수 Q <output id="dr-q-out"></output></span><input type="range" id="dr-q" min="1" max="64" step="1" value="48"></label>
+          <label class="ctrl"><span>tRCD = tRP = tCL <output id="dr-t-out"></output></span><input type="range" id="dr-t" min="6" max="24" step="1" value="14"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">버스 효율 η</span><span class="v" id="dr-o-e">—</span></div>
+        <div class="stat"><span class="k">의사 채널 BW</span><span class="v" id="dr-o-bw">—</span></div>
+        <div class="stat"><span class="k">GX-1 환산 (×192)</span><span class="v" id="dr-o-gx">—</span></div>
+        <div class="stat"><span class="k">적중 / 닫힘 / 충돌</span><span class="v" id="dr-o-h">—</span></div>
+        <div class="stat"><span class="k">평균 지연</span><span class="v" id="dr-o-l">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 스트리밍, 뱅크 16, Q를 1로 내리면 η가 약 5 %다(요청마다 tCL + 버스트를 혼자 기다림). Q를 48로 올리면 약 94 %. 리틀의 법칙 그대로, 지연 × 대역폭만큼 요청이 떠 있어야 한다. ② 무작위로 바꾸면 Q 32·뱅크 16에서 약 22 %, 뱅크 48에서 약 39 %. 뱅크를 64로 늘려도 tRRD(ACT 간격 2 ns) 때문에 0.83/2 ≈ 42 %를 넘지 못한다. ③ 한 뱅크 행 충돌은 뱅크·Q와 무관하게 약 1.8 %(0.83 ns ÷ tRAS + tRP 47 ns). 무작위에서 스케줄러를 FCFS로 바꾸면 순서에 묶여 약 8 %로 떨어진다. 그림에는 앞부분 요청만 그린다.</div>
+    </div>
+    <p>시뮬레이터는 요청 1,200개(32 B씩)를 열린 페이지 정책으로 처리한다. 스케줄러는 대기 중인 Q개 가운데 데이터를 가장 먼저 낼 수 있는 요청을 고른다(적중이 먼저 뽑힌다). 실제 컨트롤러는 여기에 tFAW(ACT 4개 창), 읽기·쓰기 전환, 리프레시, 뱅크 그룹 간격까지 지킨다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> DRAM은 행을 여는 데 수십 ns가 들고, 한 번 연 1 KB를 다 읽어야 그 비용이 아깝지 않다. 그래서 GPU는 메모리 접근을 병합해(6장) 연속된 큰 덩어리로 보내고, HBM은 뱅크와 의사 채널을 많이 두어 행 여는 시간을 겹친다. GPU 쪽 HBM 컨트롤러는 의사 채널마다 수십 개 요청을 담을 큐와 재정렬 논리를 갖는다. 그 큐의 SRAM과 논리는 로직 다이 면적에서 나온다.</p>
+  </section>
+
+  <section id="refresh">
+    <h2>리프레시, 온도, HBM 전력</h2>
+    <p>DRAM 셀은 커패시터의 전하로 비트를 기억하고, 전하는 누설로 샌다. 그래서 모든 행을 주기적으로 다시 읽어 쓰는 <span class="term">리프레시</span><span class="en">(refresh)</span>가 필요하다. 컨트롤러는 평균 \(t_{REFI}\) = 3.9 µs마다 REF 명령을 보내고, 그동안 해당 뱅크(전체 뱅크 리프레시면 의사 채널 전체)는 \(t_{RFC}\)(다이 용량이 클수록 길다, 여기서는 약 350 ns) 동안 쓸 수 없다. 누설은 온도에 따라 지수적으로 늘기 때문에 85 °C를 넘으면 \(t_{REFI}\)를 절반으로 줄여 리프레시를 두 배로 한다. 이 장의 모델은 95 °C 위에서 다시 절반으로 줄인다고 가정한다.</p>
+    <div class="formula">$$f_{ref} = \frac{t_{RFC}}{t_{REFI}(T)},\qquad P_{HBM} = u \cdot BW_{max}(1 - f_{ref}) \cdot E_{bit} + N_{stack}\,\big(P_{bg} + P_{ref}(T)\big)$$
+      <div class="where">\(f_{ref}\): 리프레시로 채널이 막히는 시간 비율(뱅크별 리프레시는 다른 뱅크가 계속 일하므로 영향이 약 0.15배라고 가정), \(u\): 대역폭 활용률, \(E_{bit}\) = 3 pJ/bit, \(P_{bg}\): 스택당 대기 전력(약 1.2 W), \(P_{ref}\): 스택당 리프레시 전력(85 °C 이하 약 0.3 W, 리프레시 횟수에 비례).</div>
+    </div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="온도에 따른 리프레시 간격과 채널이 막히는 비율. 85도 이하 tREFI 3.9 마이크로초, 9퍼센트, 85에서 95도 1.95 마이크로초, 18퍼센트, 95도 위 0.975 마이크로초, 36퍼센트">
+        <path d="M90 20V200H720" class="s-axis"/>
+        <g class="t-mono t-c"><text x="90" y="218">40</text><text x="240" y="218">60</text><text x="390" y="218">80</text><text x="465" y="218">90</text><text x="540" y="218">100 °C</text></g>
+        <text x="405" y="242" class="t-dim t-c">DRAM 온도</text>
+        <g class="t-mono t-e"><text x="84" y="204">0</text><text x="84" y="154">10 %</text><text x="84" y="104">20 %</text><text x="84" y="54">30 %</text></g>
+        <path d="M90 150H720M90 100H720M90 50H720" style="stroke:var(--grid)"/>
+        <path d="M90 155H427.5V110.5H502.5V21H577.5" class="ks-heat"/>
+        <path d="M90 193.3H427.5V186.6H502.5V173.1H577.5" class="ks-ok"/>
+        <path d="M427.5 20V200M502.5 20V200" style="stroke:var(--warn);stroke-dasharray:4 3"/>
+        <text x="300" y="146" class="t t-sm t-c">전체 뱅크 REF 9 %</text>
+        <text x="465" y="100" class="t t-sm t-c">18 %</text>
+        <text x="560" y="16" class="t t-sm t-c">36 %</text>
+        <text x="300" y="186" class="t t-sm t-c" style="fill:var(--ok)">뱅크별 REF 약 1.3 %</text>
+        <text x="586" y="176" class="t-dim">약 5.4 %</text>
+        <text x="432" y="36" class="t-dim">85 °C: tREFI 3.9 → 1.95 µs</text>
+        <text x="586" y="60" class="t-dim">95 °C 위: 0.975 µs</text><text x="586" y="78" class="t-dim">(가정)</text>
+      </svg>
+      <figcaption><b>그림 8-6.</b> 온도와 리프레시 손실(\(t_{RFC}\) = 350 ns 가정). 전체 뱅크 리프레시는 85 °C를 넘으면 채널 시간의 약 18 %를 빼앗는다. 그래서 HBM은 뱅크별 리프레시로 손실을 줄이고, 냉각은 DRAM을 85 °C 아래에 두도록 설계한다. DRAM의 허용 상한은 대략 85–95 °C로 로직 다이(105 °C)보다 낮다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-pw">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>HBM 전력과 리프레시 손실</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pw-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>스택 수 <output id="pw-n-out"></output></span><input type="range" id="pw-n" min="1" max="8" step="1" value="6"></label>
+          <label class="ctrl"><span>대역폭 활용률 <output id="pw-u-out"></output></span><input type="range" id="pw-u" min="0" max="100" step="1" value="80"></label>
+          <label class="ctrl"><span>비트당 에너지 <output id="pw-e-out"></output></span><input type="range" id="pw-e" min="1.5" max="6" step="0.1" value="3"></label>
+          <label class="ctrl"><span>DRAM 온도 <output id="pw-t-out"></output></span><input type="range" id="pw-t" min="40" max="105" step="1" value="80"></label>
+          <label class="check"><input type="checkbox" id="pw-pb" checked> 뱅크별 리프레시</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">HBM 전력</span><span class="v" id="pw-o-p">—</span></div>
+        <div class="stat"><span class="k">동적 / 대기 / 리프레시</span><span class="v" id="pw-o-s">—</span></div>
+        <div class="stat"><span class="k">리프레시 손실</span><span class="v" id="pw-o-f">—</span></div>
+        <div class="stat"><span class="k">쓰는 대역폭</span><span class="v" id="pw-o-bw">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(6스택·80 %·3 pJ/bit·80 °C)이 약 149 W, GX-1 전력 표의 HBM 약 150 W다. ② 활용률 100 %면 약 184 W(동적 약 175 W). ③ 뱅크별 리프레시를 끄고 온도를 90 °C로 올리면 채널 시간의 약 18 %가 리프레시에 묶여 쓸 수 있는 대역폭이 약 6.05 TB/s로 준다.</div>
+    </div>
+    <div class="callout fab"><strong>HBM 150 W는 어디서 오나</strong>GX-1 HBM 6스택의 피크는 7,372.8 GB/s × 8 bit/B × 3 pJ/bit ≈ 177 W(전력 표의 "최대 대역폭에서 약 180 W")다. 실제 부하의 평균 활용률을 80 %로 두면 동적 약 140 W, 대기 7.2 W, 리프레시 1.8 W로 <b>약 149 W</b>가 되어 TDP 분해의 "HBM 6개 약 150 W"와 맞는다. 스택 하나로는 약 25 W이고, 이 열이 스택 위쪽 냉각면까지 다이 8장을 지나 올라가야 한다(6절).</div>
+    <p><b>왜 이렇게 설계하는가.</b> HBM 전력은 대부분 쓰는 대역폭에 비례한다. 대역폭을 두 배로 하려면 pJ/bit를 절반으로 줄이지 않는 한 메모리 전력도 두 배다. 세대마다 pJ/bit를 낮추는 것(낮은 \(V_{DDQ}\), 짧은 배선, HBM4의 로직 공정 베이스 다이)이 대역폭 증가만큼 중요한 이유다. 온도는 리프레시를 통해 대역폭과 전력을 함께 깎으므로, 냉각판은 로직 다이뿐 아니라 HBM 스택 위도 덮는다.</p>
+  </section>
+
+  <section id="height">
+    <h2>스택 높이와 용량</h2>
+    <p>스택 용량 = 단수 × 다이 용량이다. 24 Gb 다이 8단이면 24 GB, 12단이면 36 GB, 16단이면 48 GB다. 단을 늘리는 데는 두 가지 제약이 있다. 첫째, 높이. 패키지 안에서 HBM 스택은 로직 다이와 윗면 높이를 맞춰 냉각판에 닿아야 하고, 표준은 스택 높이를 약 720 µm(HBM4급은 약 775 µm)로 묶는다. 둘째, 열. 맨 아래 베이스 다이의 열은 위의 다이를 모두 지나 냉각면까지 올라가야 하고, 다이 사이의 범프·접착층은 실리콘보다 열전도가 100배쯤 나쁘다.</p>
+    <div class="formula">$$H = t_{base} + n\,(t_{die} + t_{bond}) \le H_{max}\;\Rightarrow\; t_{die} \le \frac{H_{max} - t_{base}}{n} - t_{bond},\qquad \Delta T_{base} = \sum_{k=1}^{n} R_{layer}\Big(P_{base} + (n-k)\,P_{core}\Big)$$
+      <div class="where">\(t_{base}\) = 60 µm, \(t_{bond}\): 마이크로범프 + 비전도성 필름 약 15 µm(하이브리드 본딩은 약 1 µm). \(R_{layer} = t_{bond}/(k_{bond}A) + t_{die}/(k_{Si}A)\), \(k_{bond}\) ≈ 1.5 W/(m·K), \(k_{Si}\) ≈ 150 W/(m·K), 면적 \(A\) ≈ 110 mm². 스택 전력의 40 %가 베이스 다이, 나머지는 코어 다이에 고르게 난다고 가정. 냉각면은 맨 위다.</div>
+    </div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 290" role="img" aria-label="스택 높이 예산 막대. 높이 제한 720 마이크로미터 선. 8단 50 마이크로미터 다이는 580, 12단은 840으로 넘고, 12단 40 마이크로미터는 720, 16단 마이크로범프는 26 마이크로미터 다이가 필요, 16단 하이브리드 본딩은 40 마이크로미터 다이로 가능">
+        <path d="M80 250H790" class="s-axis"/>
+        <g class="t-mono t-e"><text x="74" y="254">0</text><text x="74" y="182">200</text><text x="74" y="114">400</text><text x="74" y="46">600 µm</text></g>
+        <path d="M80 182H790M80 114H790M80 46H790" style="stroke:var(--grid)"/>
+        <path d="M80 5.2H790" style="stroke:var(--bad);stroke-width:1.6;stroke-dasharray:6 4"/><text x="684" y="26" class="t t-sm" style="fill:var(--bad)">한계 720 µm</text>
+        <!-- bar: base 60 -> 20.4 px ; scale 0.34 px/µm -->
+        <g>
+          <rect x="110" y="229.6" width="80" height="20.4" class="m-si"/><rect x="110" y="52.8" width="80" height="176.8" class="m-dram"/>
+          <text x="150" y="44" class="t t-sm t-c">580</text><text x="150" y="272" class="t-dim t-c">8단, 50 µm</text>
+        </g>
+        <g>
+          <rect x="230" y="229.6" width="80" height="20.4" class="m-si"/><rect x="230" y="0" width="80" height="229.6" class="m-dram"/>
+          <text x="270" y="40" class="t t-sm t-c t-b" style="fill:var(--bad)">840 초과</text><text x="270" y="272" class="t-dim t-c">12단, 50 µm</text>
+        </g>
+        <g>
+          <rect x="350" y="229.6" width="80" height="20.4" class="m-si"/><rect x="350" y="5.2" width="80" height="224.4" class="m-dram"/>
+          <text x="390" y="40" class="t t-sm t-c">720</text><text x="390" y="272" class="t-dim t-c">12단, 40 µm</text>
+        </g>
+        <g>
+          <rect x="470" y="229.6" width="80" height="20.4" class="m-si"/><rect x="470" y="5.2" width="80" height="224.4" class="m-dram"/>
+          <text x="510" y="40" class="t t-sm t-c">716</text><text x="510" y="272" class="t-dim t-c">16단, 26 µm</text>
+        </g>
+        <g>
+          <rect x="590" y="229.6" width="80" height="20.4" class="m-si"/><rect x="590" y="5.2" width="80" height="224.4" class="m-dram"/>
+          <text x="630" y="40" class="t t-sm t-c">716</text><text x="630" y="272" class="t-dim t-c">16단, 40 µm·HB</text>
+        </g>
+        <text x="510" y="140" class="t t-sm t-c" style="fill:#fff">범프 15 µm</text>
+        <text x="630" y="140" class="t t-sm t-c" style="fill:#fff">본딩 1 µm</text>
+      </svg>
+      <figcaption><b>그림 8-7.</b> 높이 예산(베이스 다이 60 µm, 아래 회색). 12단부터는 코어 다이를 40 µm 이하로 갈아야 하고, 16단을 마이크로범프로 쌓으면 약 26 µm까지 얇아져야 한다. 접합층을 하이브리드 본딩(HB, 약 1 µm)으로 바꾸면 같은 높이에 16단을 40 µm 다이로 넣을 수 있다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-st">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>스택 높이·용량·열</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="st-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>단수</span><div class="seg" id="st-n"><button data-value="4">4</button><button data-value="8" class="on">8</button><button data-value="12">12</button><button data-value="16">16</button></div></div>
+          <div class="ctrl"><span>코어 다이 용량</span><div class="seg" id="st-g"><button data-value="16">16 Gb</button><button data-value="24" class="on">24 Gb</button><button data-value="32">32 Gb</button></div></div>
+          <label class="ctrl"><span>코어 다이 두께 <output id="st-d-out"></output></span><input type="range" id="st-d" min="20" max="80" step="1" value="50"></label>
+          <label class="ctrl"><span>접합층 두께 <output id="st-b-out"></output></span><input type="range" id="st-b" min="1" max="25" step="1" value="15"></label>
+          <div class="ctrl"><span>높이 한계</span><div class="seg" id="st-l"><button data-value="720" class="on">720 µm</button><button data-value="775">775 µm</button></div></div>
+          <label class="ctrl"><span>스택 전력 <output id="st-p-out"></output></span><input type="range" id="st-p" min="5" max="40" step="1" value="25"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">스택 용량 / ×6</span><span class="v" id="st-o-gb">—</span></div>
+        <div class="stat"><span class="k">높이</span><span class="v" id="st-o-h">—</span></div>
+        <div class="stat"><span class="k">허용 다이 두께</span><span class="v" id="st-o-t">—</span></div>
+        <div class="stat"><span class="k">TSV 관통 수</span><span class="v" id="st-o-tsv">—</span></div>
+        <div class="stat"><span class="k">베이스 다이 온도</span><span class="v" id="st-o-T">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값 8단·24 Gb·50 µm → 24 GB, 580 µm, 베이스 다이 약 82 °C(맨 위 70 °C 가정). 6스택이면 144 GB(GX-1). ② 12단으로 올리면 840 µm로 넘는다. 다이를 40 µm로 갈면 딱 720 µm, 베이스 다이 약 89 °C. ③ 16단·26 µm·범프 15 µm면 베이스 다이가 약 95 °C로 DRAM 한계에 닿는다. 접합층을 1 µm로 바꾸면 약 72 °C. 하이브리드 본딩은 높이와 열을 함께 푼다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 단수를 올리면 인터포저 면적과 대역폭은 그대로 두고 용량만 늘릴 수 있다. 큰 모델을 한 패키지에 담으려면 가장 싼 손잡이다. 하지만 다이는 얇을수록 휘고 깨지기 쉬워 적층 수율이 떨어진다. 접합층마다 열저항이 쌓여 베이스 다이가 뜨거워지고, 뜨거우면 리프레시가 늘어난다. 12단까지는 얇은 다이와 범프로, 16단부터는 하이브리드 본딩 같은 새 접합 방식으로 넘어가는 이유다(11장).</p>
+  </section>
+
+  <section id="shoreline">
+    <h2>쇼어라인: 스택 수를 정하는 다이 가장자리</h2>
+    <p>HBM 스택은 로직 다이 바로 옆에 붙어야 한다. 인터포저 배선이 수 mm를 넘으면 HBM의 저에너지 이점이 사라지기 때문이다. 그러면 스택을 몇 개 붙일 수 있는지는 로직 다이 <span class="term">쇼어라인</span><span class="en">(shoreline, beachfront)</span>, 곧 가장자리 길이가 정한다. 스택 하나가 차지하는 가장자리 길이는 로직 다이 쪽 PHY 폭과 스택 자체의 폭 가운데 큰 쪽이다. PHY 폭은 신호 수와 범프 피치로 계산한다.</p>
+    <div class="formula">$$w_{PHY} = \frac{N_{sig}\cdot p_{bump}}{n_{row}},\qquad N_{stack} = n_{side}\cdot\left\lfloor \frac{L_{side}}{\max(w_{PHY},\,w_{stack})} \right\rfloor$$
+      <div class="where">\(N_{sig}\): 스택당 신호 수(HBM3E급 약 1,700, HBM4급 약 3,200), \(p_{bump}\): 마이크로범프 피치(45 µm), \(n_{row}\): PHY 깊이 방향 범프 줄 수(8), \(w_{stack}\): 스택 폭(약 10 mm), \(n_{side}\): HBM에 쓰는 변의 수.</div>
+    </div>
+    <p>GX-1: \(w_{PHY} = 1{,}700 \times 45\,\mu\text{m} / 8 \approx 9.6\) mm, 스택 폭 10 mm가 더 크므로 한 자리는 10 mm. 긴 변 30 mm에 3개씩, 긴 변 둘에 6개다. 짧은 변 26 mm 두 쪽은 GX-Link SerDes 18개와 PCIe에 쓴다. 가장자리 112 mm 가운데 60 mm(54 %)가 HBM이다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 760 330" role="img" aria-label="GX-1 패키지 평면도. 26 곱하기 30 밀리미터 로직 다이의 긴 변 양쪽에 HBM 스택이 3개씩 모두 6개, 다이 쪽에 PHY 띠, 짧은 변에 링크와 PCIe">
+        <rect x="40" y="10" width="440" height="310" rx="6" class="m-interp"/><text x="50" y="30" class="t-dim">실리콘 인터포저 약 50 × 50 mm</text>
+        <!-- die 30 (vertical) x 26 (horizontal), scale 8 px/mm -->
+        <rect x="156" y="45" width="208" height="240" class="m-si"/>
+        <text x="260" y="160" class="t t-b t-c">로직 다이</text><text x="260" y="180" class="t-dim t-c">26 × 30 mm = 780 mm²</text>
+        <g class="k-data"><rect x="156" y="45" width="12" height="76"/><rect x="156" y="125" width="12" height="76"/><rect x="156" y="205" width="12" height="76"/>
+          <rect x="352" y="45" width="12" height="76"/><rect x="352" y="125" width="12" height="76"/><rect x="352" y="205" width="12" height="76"/></g>
+        <g class="k-link"><rect x="176" y="45" width="168" height="10"/><rect x="176" y="275" width="168" height="10"/></g>
+        <text x="260" y="70" class="t-dim t-c">GX-Link·PCIe</text><text x="260" y="268" class="t-dim t-c">GX-Link·PCIe</text>
+        <g class="m-dram"><rect x="64" y="45" width="84" height="76" rx="3"/><rect x="64" y="125" width="84" height="76" rx="3"/><rect x="64" y="205" width="84" height="76" rx="3"/>
+          <rect x="372" y="45" width="84" height="76" rx="3"/><rect x="372" y="125" width="84" height="76" rx="3"/><rect x="372" y="205" width="84" height="76" rx="3"/></g>
+        <g class="t t-sm t-c"><text x="106" y="87">HBM</text><text x="106" y="167">HBM</text><text x="106" y="247">HBM</text><text x="414" y="87">HBM</text><text x="414" y="167">HBM</text><text x="414" y="247">HBM</text></g>
+        <!-- annotations -->
+        <rect x="500" y="20" width="250" height="290" rx="8" class="card"/>
+        <rect x="514" y="38" width="12" height="12" class="k-data"/><text x="534" y="49" class="t t-sm">HBM PHY 약 9.6 mm × 6</text>
+        <rect x="514" y="62" width="12" height="12" class="k-link"/><text x="534" y="73" class="t t-sm">링크 SerDes·PCIe (짧은 변)</text>
+        <text x="514" y="104" class="t t-b">한 자리 = max(9.6, 10) mm</text>
+        <text x="514" y="126" class="t-dim">긴 변 30 mm → 3개</text>
+        <text x="514" y="146" class="t-dim">긴 변 2개 → 스택 6개</text>
+        <text x="514" y="166" class="t-dim">HBM 쇼어라인 60 / 112 mm</text>
+        <text x="514" y="198" class="t t-b">가장자리 ∝ √면적</text>
+        <text x="514" y="220" class="t-dim">면적 4배 → 연산 4배,</text>
+        <text x="514" y="240" class="t-dim">가장자리 2배 → HBM 2배</text>
+        <text x="514" y="272" class="t-dim">다이가 커질수록</text>
+        <text x="514" y="292" class="t-dim">FLOP/B 리지가 오른쪽으로</text>
+      </svg>
+      <figcaption><b>그림 8-8.</b> GX-1 평면 배치(축척 대략). 로직 다이의 긴 변 두 쪽에 PHY 띠와 스택이 3개씩 붙는다. 짧은 변은 칩간 링크와 호스트 인터페이스가 쓴다. 다이 안쪽의 배치(SM 배열·L2·PHY 위치)는 9장에서 다룬다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-sh">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>쇼어라인 계산기: 다이 크기와 최대 스택 수</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><div class="hb-two"><div><canvas id="sh-cv"></canvas></div><div><canvas id="sh-cv2"></canvas></div></div></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>다이 긴 변 <output id="sh-L-out"></output></span><input type="range" id="sh-L" min="10" max="33" step="0.5" value="30"></label>
+          <label class="ctrl"><span>다이 짧은 변 <output id="sh-S-out"></output></span><input type="range" id="sh-S" min="10" max="26" step="0.5" value="26"></label>
+          <div class="ctrl"><span>HBM에 쓰는 변</span><div class="seg" id="sh-sd"><button data-value="1">긴 변 1</button><button data-value="2" class="on">긴 변 2</button><button data-value="4">네 변</button></div></div>
+          <div class="ctrl"><span>스택 세대</span><div class="seg" id="sh-g"><button data-value="hbm3e" class="on">HBM3E급</button><button data-value="hbm4">HBM4급</button></div></div>
+          <label class="ctrl"><span>범프 피치 <output id="sh-p-out"></output></span><input type="range" id="sh-p" min="25" max="55" step="1" value="45"></label>
+          <label class="ctrl"><span>PHY 범프 줄 수 <output id="sh-r-out"></output></span><input type="range" id="sh-r" min="4" max="20" step="1" value="8"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">PHY 폭 / 한 자리</span><span class="v" id="sh-o-w">—</span></div>
+        <div class="stat"><span class="k">최대 스택 수</span><span class="v" id="sh-o-n">—</span></div>
+        <div class="stat"><span class="k">대역폭 · 용량(24 GB/스택)</span><span class="v" id="sh-o-bw">—</span></div>
+        <div class="stat"><span class="k">BF16 리지 포인트(면적 비례 연산)</span><span class="v" id="sh-o-ri">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(30 × 26 mm, 긴 변 2개)이 GX-1의 6스택, 리지 약 128 FLOP/B다. ② 다이를 GX-G 크기(약 21 × 18 mm, 380 mm²)로 줄이면 4스택, 리지 약 93 FLOP/B. 면적은 절반인데 스택은 2/3다. ③ HBM4급으로 바꾸면 신호가 약 3,200개라 PHY가 18 mm로 길어져 긴 변에 하나밖에 안 들어간다. 범프 줄을 16으로 늘리면(PHY를 깊게) 9 mm로 돌아온다.</div>
+    </div>
+    <div class="callout fab"><strong>GX-1이 HBM을 6개에서 멈춘 이유</strong>네 변을 모두 HBM에 주면 긴 변 3개 × 2 + 짧은 변 26 mm에 2개 × 2 = 10스택(12.3 TB/s)까지 들어간다. 대신 GX-Link 18개(방향당 900 GB/s)와 PCIe를 둘 가장자리가 없어진다. 인터포저도 스택 10개를 담으려면 레티클 약 3배(2,500 mm²)를 넘어 더 커져야 한다. GX-1은 긴 변 둘을 HBM, 짧은 변 둘을 링크에 나누었다. 그 결과가 리지 포인트 128 FLOP/B다. 대역폭이 더 필요하면 HBM4급(스택당 약 2 TB/s)처럼 스택 하나의 폭을 넓히는 쪽이 다음 수단이다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 연산은 면적(\(A\))에 비례하고 HBM 스택 수는 둘레(\(\sqrt{A}\))에 비례한다. 다이를 키울수록 FLOP당 대역폭이 줄어 리지 포인트가 \(\sqrt{A}\)에 비례해 오른쪽으로 간다. 큰 GPU가 L2를 키우고(6장) 데이터 재사용을 늘리는 타일링(7장)에 기대는 이유가 여기 있다. 레티클 한계에 닿은 다이를 칩렛 둘로 나누면 둘레가 늘어 HBM을 더 붙일 수 있다(10장).</p>
+  </section>
+
+  <section id="tradeoff">
+    <h2>용량·대역폭·원가의 줄다리기</h2>
+    <p>GX-LM-70B를 GX-1 하나로 추론한다고 하자. 가중치는 FP8에서 70 GB, BF16에서 140 GB이고, 문맥 8,192토큰의 KV 캐시는 시퀀스당 320 KiB × 8,192 ≈ 2.68 GB다. 배치 1 디코드는 토큰 하나마다 가중치 전부와 KV 캐시를 한 번 읽는다. 그러면 필요한 용량과 토큰 속도가 둘 다 스택 수에 묶인다.</p>
+    <div class="formula">$$M_{need} = W + B \cdot KV_{seq},\qquad \text{토큰/s} \approx \frac{B \cdot BW}{W + B \cdot KV_{seq}},\qquad \text{HBM 원가} = N_{stack}\cdot C_{stack}\cdot \$/\text{GB}$$
+      <div class="where">\(W\): 가중치 바이트, \(B\): 배치, \(KV_{seq}\): 시퀀스당 KV 캐시, \(BW\): 총 HBM 대역폭. 연산 시간과 온칩 재사용은 무시한 상한(15장이 프리필·디코드 모델로 정밀하게 다룬다).</div>
+    </div>
+    <p>FP8·배치 1이면 72.7 GB가 필요하다. 24 GB 스택 3개(72 GB)로는 0.7 GB가 모자라 4개가 필요하다. 용량만 보면 4스택으로 충분하지만 그때 대역폭은 4.9 TB/s, 토큰 속도는 약 68 토큰/s다. 6스택이면 약 101 토큰/s(가중치만 보면 7.37 TB/s ÷ 70 GB ≈ 105)다. 스택을 늘리는 이유가 용량이 아니라 대역폭일 때가 많다.</p>
+
+    <div class="sim" id="sim-fit">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>GX-LM-70B를 담는 데 필요한 스택: 용량 vs 대역폭 vs 원가</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="fit-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>가중치 정밀도</span><div class="seg" id="fit-p"><button data-value="2">BF16</button><button data-value="1" class="on">FP8</button><button data-value="0.5">FP4</button></div></div>
+          <label class="ctrl"><span>배치 <output id="fit-b-out"></output></span><input type="range" id="fit-b" min="1" max="64" step="1" value="1"></label>
+          <div class="ctrl"><span>문맥</span><div class="seg" id="fit-c"><button data-value="2048">2K</button><button data-value="8192" class="on">8K</button><button data-value="32768">32K</button></div></div>
+          <label class="ctrl"><span>스택 수 <output id="fit-n-out"></output></span><input type="range" id="fit-n" min="1" max="8" step="1" value="6"></label>
+          <div class="ctrl"><span>스택 용량</span><div class="seg" id="fit-g"><button data-value="16">16 GB</button><button data-value="24" class="on">24 GB</button><button data-value="36">36 GB</button><button data-value="48">48 GB</button></div></div>
+          <label class="ctrl"><span>HBM 단가 <output id="fit-usd-out"></output></span><input type="range" id="fit-usd" min="5" max="30" step="1" value="15"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">필요 용량 / 보유</span><span class="v" id="fit-o-m">—</span></div>
+        <div class="stat"><span class="k">용량상 최소 스택</span><span class="v" id="fit-o-s">—</span></div>
+        <div class="stat"><span class="k">사용자당 토큰/s</span><span class="v" id="fit-o-u">—</span></div>
+        <div class="stat"><span class="k">합계 토큰/s</span><span class="v" id="fit-o-t">—</span></div>
+        <div class="stat"><span class="k">HBM 원가</span><span class="v" id="fit-o-c">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(FP8·배치 1·8K·6스택)은 72.7 / 144 GB, 약 101 토큰/s, HBM $2,160(스택당 $360). ② BF16로 바꾸면 142.7 GB로 6스택에 1.3 GB 여유, 토큰 속도는 절반인 약 52. ③ FP8에서 배치를 32로 올리면 KV 캐시가 86 GB가 되어 156 GB로 넘친다. 합계 처리량은 약 1,500 토큰/s로 크지만 담을 수 없다. 36 GB 스택(12단)으로 바꾸면 216 GB에 들어간다. 원가가 대역폭이 아니라 용량에 비례해 오르는 것도 보자.</div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>메모리(교육용 가정)</th><th class="num">$/GB</th><th class="num">144 GB 원가</th><th class="num">144 GB를 담을 때 대역폭</th><th>비고</th></tr></thead>
+        <tbody>
+          <tr><td>HBM3E급 24 GB 스택</td><td class="num">약 15</td><td class="num">약 $2,160</td><td class="num">7.37 TB/s (6스택)</td><td>TSV·적층·KGD 시험 비용, 인터포저 별도</td></tr>
+          <tr><td>GDDR7급 (16 Gb 칩)</td><td class="num">약 4</td><td class="num">약 $580</td><td class="num">칩 72개, 보드에 둘 수 없음</td><td>GX-G는 16 GB, 896 GB/s</td></tr>
+          <tr><td>LPDDR5X급 패키지</td><td class="num">약 3</td><td class="num">약 $430</td><td class="num">약 0.5–1 TB/s</td><td>용량은 싸게, 대역폭은 낮게</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>가격은 시장 상황에 따라 크게 움직이므로 비율만 본다. HBM은 GB당 GDDR의 약 3–4배다. HBM 6스택 $2,160은 GX-1 모듈 BOM에서 로직 다이 다음으로 큰 항목이다(10장 원가 모델). 그래도 대역폭당 원가로는 HBM이 가장 싸다: 1 TB/s당 HBM 약 $290, GDDR7은 칩 하나 112 GB/s × 2 GB로 1 TB/s당 칩 9개 약 $70이지만 그만큼의 칩을 GPU 옆에 둘 수 없다. 메모리 산업 쪽 시각은 <a href="../../memory/chapters/hbm.html">MemoryBook HBM 장</a>에 있다.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>손잡이 (조건)</th><th>대역폭</th><th>용량</th><th>전력</th><th>원가·기타</th></tr></thead>
+        <tbody>
+          <tr><td>스택 수 6 → 8 (쇼어라인이 허락하면)</td><td class="dn">+33 %</td><td class="dn">+33 %</td><td class="up">+33 %</td><td class="up">HBM·인터포저 원가↑, 링크 가장자리↓</td></tr>
+          <tr><td>단수 8 → 12 (같은 스택 수)</td><td>그대로</td><td class="dn">+50 %</td><td>소폭↑</td><td class="up">얇은 다이, 적층 수율↓, 베이스 다이 온도↑</td></tr>
+          <tr><td>핀 속도 9.6 → 12 Gb/s</td><td class="dn">+25 %</td><td>그대로</td><td class="up">pJ/bit↑(회로 항 ∝ r²)</td><td>신호 무결성 여유↓</td></tr>
+          <tr><td>폭 1,024 → 2,048비트 (HBM4급)</td><td class="dn">약 2배 (같은 핀 속도)</td><td>그대로</td><td class="up">전력↑, pJ/bit↓</td><td class="up">PHY·범프 수 2배, 쇼어라인↑</td></tr>
+          <tr><td>DRAM 온도 80 → 90 °C</td><td class="up">리프레시 손실 2배</td><td>그대로</td><td class="up">리프레시 전력 2배</td><td>냉각 요구↑</td></tr>
+          <tr><td>무작위 32 B 접근 (스트리밍 대비)</td><td class="up">효율 약 94 % → 22–40 %</td><td>그대로</td><td class="up">행 활성화 에너지↑</td><td>병합·타일링으로 피함(6·7장)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> HBM 스택 수는 용량·대역폭·원가 세 요구 가운데 가장 큰 쪽이 정한다. LLM 디코드는 대역폭이 먼저 차고, 긴 문맥과 큰 배치는 용량이 먼저 찬다. 단수(용량)와 스택 수·폭(대역폭)을 따로 돌릴 수 있게 한 것이 HBM 세대 설계의 핵심이다. GPU 설계자는 쇼어라인과 전력 예산 안에서 이 둘을 고른다.</p>
+  </section>
+
+  <section id="hbm4">
+    <h2>HBM4: 더 넓게, 베이스 다이는 로직 공정으로</h2>
+    <p>HBM4급은 스택당 인터페이스를 2,048비트로 두 배 넓히고 핀 속도는 약 8 Gb/s 근처로 유지해 스택당 약 2 TB/s를 낸다. 채널도 32개로 늘어난다. 또 하나의 변화는 베이스 다이다. 지금까지 베이스 다이는 DRAM 공정으로 만들었지만, HBM4급에서는 로직 파운드리 공정(12–5 nm급)으로 만들 수 있다. 신호 수가 두 배인 PHY를 같은 면적에 넣고, 전력을 줄이고, 고객이 컨트롤러 일부나 맞춤 논리를 베이스 다이에 넣을 여지가 생긴다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 260" role="img" aria-label="HBM3E급과 HBM4급 비교. 인터페이스 1024비트 대 2048비트, 스택당 1.23 대 약 2 테라바이트 매초, 베이스 다이 DRAM 공정 대 로직 공정, 높이 한계 720 대 775 마이크로미터">
+        <rect x="20" y="20" width="360" height="226" rx="8" class="card"/>
+        <text x="200" y="44" class="t t-b t-c">HBM3E급 (GX-1)</text>
+        <g class="m-dram"><rect x="60" y="60" width="120" height="12"/><rect x="60" y="76" width="120" height="12"/><rect x="60" y="92" width="120" height="12"/><rect x="60" y="108" width="120" height="12"/><rect x="60" y="124" width="120" height="12"/><rect x="60" y="140" width="120" height="12"/><rect x="60" y="156" width="120" height="12"/><rect x="60" y="172" width="120" height="12"/></g>
+        <rect x="56" y="190" width="128" height="16" class="m-si"/><text x="120" y="202" class="t t-sm t-c">DRAM 공정 베이스</text>
+        <path d="M70 210V232M80 210V232M90 210V232M100 210V232M110 210V232M120 210V232M130 210V232M140 210V232M150 210V232M160 210V232M170 210V232" class="ks-data" style="stroke-width:1"/>
+        <text x="200" y="76" class="t t-sm">1,024비트 · 9.6 Gb/s</text>
+        <text x="200" y="98" class="t t-sm">1,228.8 GB/s/스택</text>
+        <text x="200" y="120" class="t-dim">채널 16 · 의사 채널 32</text>
+        <text x="200" y="142" class="t-dim">8–12단, ≤ 720 µm</text>
+        <text x="200" y="164" class="t-dim">약 3 pJ/bit</text>
+        <text x="200" y="186" class="t-dim">신호 약 1,700</text>
+
+        <rect x="420" y="20" width="360" height="226" rx="8" class="card"/>
+        <text x="600" y="44" class="t t-b t-c">HBM4급</text>
+        <g class="m-dram"><rect x="460" y="60" width="120" height="8"/><rect x="460" y="70" width="120" height="8"/><rect x="460" y="80" width="120" height="8"/><rect x="460" y="90" width="120" height="8"/><rect x="460" y="100" width="120" height="8"/><rect x="460" y="110" width="120" height="8"/><rect x="460" y="120" width="120" height="8"/><rect x="460" y="130" width="120" height="8"/><rect x="460" y="140" width="120" height="8"/><rect x="460" y="150" width="120" height="8"/><rect x="460" y="160" width="120" height="8"/><rect x="460" y="170" width="120" height="8"/></g>
+        <rect x="456" y="190" width="128" height="16" class="k-compute"/><text x="520" y="202" class="t t-sm t-c">로직 공정 베이스</text>
+        <path d="M465 210V232M470 210V232M475 210V232M480 210V232M485 210V232M490 210V232M495 210V232M500 210V232M505 210V232M510 210V232M515 210V232M520 210V232M525 210V232M530 210V232M535 210V232M540 210V232M545 210V232M550 210V232M555 210V232M560 210V232M565 210V232M570 210V232M575 210V232" class="ks-data" style="stroke-width:1"/>
+        <text x="600" y="76" class="t t-sm">2,048비트 · 약 8 Gb/s</text>
+        <text x="600" y="98" class="t t-sm">약 2,048 GB/s/스택</text>
+        <text x="600" y="120" class="t-dim">채널 32 · 의사 채널 64</text>
+        <text x="600" y="142" class="t-dim">12–16단, ≤ 775 µm</text>
+        <text x="600" y="164" class="t-dim">약 2.5 pJ/bit (가정)</text>
+        <text x="600" y="186" class="t-dim">신호 약 3,200</text>
+      </svg>
+      <figcaption><b>그림 8-9.</b> HBM3E급과 HBM4급(대표값). 폭을 두 배로 하고 핀 속도는 낮게 유지한다. 넓고 느린 버스라는 HBM의 방향을 한 번 더 민 것이다. 베이스 다이가 로직 공정으로 바뀌면 DRAM 회사와 파운드리, GPU 회사가 한 스택을 함께 설계하게 된다(16장).</figcaption>
+    </figure>
+    <p>GX-1과 같은 6스택을 HBM4급으로 바꾸면 총 약 12.3 TB/s, 리지 포인트는 943.7 / 12.3 ≈ 77 FLOP/B로 내려간다. 같은 연산에 대역폭이 1.7배다. 대가는 쇼어라인이다. 신호 약 3,200개를 45 µm 피치·8줄로 깔면 PHY가 18 mm가 되어 긴 변에 하나밖에 안 들어간다. PHY를 16줄로 깊게 하거나 범프 피치를 줄여야 한다. 이것이 HBM4급이 더 미세한 범프와 로직 공정 베이스 다이를 함께 들고 오는 이유다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> 핀 속도를 올리면 pJ/bit가 \(r^2\)으로 늘지만, 폭을 넓히면 PHY 면적과 범프 수가 늘 뿐 비트당 에너지는 거의 그대로다. 전력에 묶인 GPU에게는 폭이 더 싼 손잡이다. 그 폭을 감당할 배선 밀도(인터포저·범프 피치)와 쇼어라인을 패키징이 마련하는 한 HBM은 계속 넓어진다.</p>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>대역폭 = 핀 수 × 핀 속도 ÷ 8 × 장치 수. GX-1: 1,024 × 9.6 ÷ 8 × 6 = 7,372.8 GB/s. GX-G: 256 × 28 ÷ 8 = 896 GB/s.</li>
+      <li>비트당 에너지는 배선 충전(\(\alpha C V_{sw} V_{DDQ}\)), 종단, 고속 송수신 회로(∝ 속도²), DRAM 코어의 합이다. 짧은 인터포저 배선·낮은 스윙·느린 핀 덕분에 HBM 약 3 pJ/bit, GDDR7 약 6 pJ/bit다.</li>
+      <li>HBM 스택은 베이스 다이 + DRAM 코어 다이 8–16장을 TSV와 마이크로범프로 잇는다. 단을 쌓으면 용량이 늘고 대역폭은 그대로다.</li>
+      <li>스택 = 채널 16 × 의사 채널 2. 행 적중은 tCL, 충돌은 tRP + tRCD + tCL. 스트리밍은 약 94 %의 버스 효율, 무작위 32 B는 22–40 %다. 지연 × 대역폭만큼 요청이 떠 있어야 한다.</li>
+      <li>85 °C를 넘으면 리프레시가 두 배다. HBM 6스택은 80 % 활용률에서 약 150 W, 피크에서 약 180 W다.</li>
+      <li>높이 한계(약 720 µm) 때문에 12단은 40 µm, 16단은 약 26 µm 다이가 필요하다. 하이브리드 본딩은 높이와 열저항을 함께 줄인다.</li>
+      <li>스택 수는 쇼어라인이 정한다. 한 자리 약 10 mm, GX-1 긴 변 2개 → 6스택. 연산 ∝ 면적, HBM ∝ 둘레라서 다이가 클수록 리지 포인트가 오른쪽으로 간다.</li>
+      <li>스택 수는 용량·대역폭·원가 가운데 가장 큰 요구가 정한다. GX-LM-70B FP8는 용량으로 4스택, 속도로는 6스택(약 101 토큰/s)을 원한다. HBM4급은 폭 2,048비트와 로직 공정 베이스 다이로 같은 방향을 더 민다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>HBM 스택 하나가 2,048비트 폭, 핀당 8 Gb/s이면 스택당 대역폭은?</p><div class="opts">
+        <button class="opt">256 GB/s</button><button class="opt">1,024 GB/s</button><button class="opt" data-correct>2,048 GB/s</button><button class="opt">16,384 GB/s</button>
+      </div><div class="quiz-exp">2,048 × 8 Gb/s = 16,384 Gb/s, 8로 나누면 2,048 GB/s. 16,384는 비트 단위를 바이트로 바꾸지 않은 값이다.</div></div>
+      <div class="quiz-q"><p>HBM이 GDDR보다 비트당 I/O 에너지가 작은 가장 큰 이유는?</p><div class="opts">
+        <button class="opt" data-correct>배선이 짧고(수 mm) 스윙이 낮으며 핀 속도가 낮아 종단·이퀄라이저가 필요 없다</button><button class="opt">DRAM 셀 커패시터가 더 작다</button><button class="opt">데이터를 압축해서 보낸다</button><button class="opt">핀 수가 적어 전체 커패시턴스가 작다</button>
+      </div><div class="quiz-exp">비트당 에너지는 선 하나의 \(C V_{sw} V_{DDQ}\)와 고속 회로 비용으로 정해진다. HBM은 핀이 훨씬 많지만 선마다 짧고 느리다. 셀 크기는 코어 에너지 문제이고 두 방식이 비슷하다.</div></div>
+      <div class="quiz-q"><p>tRCD = tRP = tCL = 14 ns일 때 행 충돌 한 번에서 데이터가 나오기까지(PRE부터)는?</p><div class="opts">
+        <button class="opt">14 ns</button><button class="opt">28 ns</button><button class="opt">33 ns</button><button class="opt" data-correct>42 ns</button>
+      </div><div class="quiz-exp">충돌은 프리차지(tRP) → 활성화(tRCD) → 읽기(tCL)를 모두 거친다. 14 × 3 = 42 ns. 적중이면 14 ns, 닫힌 뱅크면 28 ns다.</div></div>
+      <div class="quiz-q"><p>12단 HBM 스택을 720 µm에 넣으려 한다. 베이스 다이 60 µm, 접합층 15 µm면 코어 다이는 최대 몇 µm?</p><div class="opts">
+        <button class="opt">25 µm</button><button class="opt" data-correct>40 µm</button><button class="opt">55 µm</button><button class="opt">60 µm</button>
+      </div><div class="quiz-exp">(720 − 60) / 12 − 15 = 55 − 15 = 40 µm. 55 µm는 접합층을 빼지 않은 값이다.</div></div>
+      <div class="quiz-q"><p>DRAM 온도가 85 °C를 넘으면 일어나는 일로 옳은 것은?</p><div class="opts">
+        <button class="opt">핀 속도가 자동으로 두 배가 된다</button><button class="opt">tCL이 절반이 된다</button><button class="opt" data-correct>리프레시 간격이 절반이 되어 리프레시 손실과 전력이 늘어난다</button><button class="opt">용량이 절반으로 줄어든다</button>
+      </div><div class="quiz-exp">누설이 빨라져 전하를 더 자주 채워야 하므로 tREFI가 3.9 → 1.95 µs. 전체 뱅크 리프레시라면 채널 시간 손실이 약 9 → 18 %가 된다.</div></div>
+      <div class="quiz-q"><p>다이 면적을 4배로 키우고(정사각에 가깝게) 연산도 4배가 되었다. 가장자리에 붙일 수 있는 HBM 스택 수와 리지 포인트는 대략?</p><div class="opts">
+        <button class="opt">스택 4배, 리지 그대로</button><button class="opt" data-correct>스택 2배, 리지 2배</button><button class="opt">스택 2배, 리지 절반</button><button class="opt">스택 그대로, 리지 4배</button>
+      </div><div class="quiz-exp">둘레는 \(\sqrt{A}\)에 비례해 2배, 그래서 스택과 대역폭이 2배다. 연산이 4배이므로 FLOP/B 리지 포인트는 4/2 = 2배로 오른쪽으로 간다.</div></div>
+      <div class="quiz-q"><p>GX-1에서 의사 채널 하나(32비트, 9.6 Gb/s)의 피크 대역폭과 GX-1 전체 의사 채널 수는?</p><div class="opts">
+        <button class="opt">76.8 GB/s, 96개</button><button class="opt">38.4 GB/s, 32개</button><button class="opt">9.6 GB/s, 1,024개</button><button class="opt" data-correct>38.4 GB/s, 192개</button>
+      </div><div class="quiz-exp">32 × 9.6 / 8 = 38.4 GB/s. 스택당 채널 16 × 2 = 32개, 스택 6개로 192개. 38.4 × 192 = 7,372.8 GB/s다. 76.8은 64비트 채널 하나의 값이다.</div></div>
+      <div class="quiz-q"><p>GX-LM-70B를 FP8로 배치 1 추론할 때(문맥 8K) 24 GB 스택이 용량상 최소 4개면 되는데 GX-1이 6개를 쓰는 주된 이득은?</p><div class="opts">
+        <button class="opt">KV 캐시를 BF16 대신 FP32로 저장할 수 있다</button><button class="opt">리프레시가 필요 없어진다</button><button class="opt">로직 다이의 수율이 오른다</button><button class="opt" data-correct>대역폭이 1.5배가 되어 디코드 토큰 속도가 약 68 → 101 토큰/s로 오른다</button>
+      </div><div class="quiz-exp">디코드는 토큰마다 가중치와 KV 캐시를 다 읽으므로 대역폭에 비례한다. 4스택 4.9 TB/s → 6스택 7.37 TB/s. 용량은 4스택으로 충분하다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+/* model:bw */
+var HBM_IF = {
+  gddr7: { name: "GDDR7급", width: 32, gbps: 28, count: 8, pj: 6, minC: 1, maxC: 16, medium: "PCB" },
+  hbm3e: { name: "HBM3E급", width: 1024, gbps: 9.6, count: 6, pj: 3, minC: 1, maxC: 12, medium: "실리콘 인터포저" },
+  hbm4: { name: "HBM4급", width: 2048, gbps: 8, count: 6, pj: 2.5, minC: 1, maxC: 12, medium: "실리콘 인터포저" },
+  lpddr: { name: "LPDDR5X급", width: 64, gbps: 8.533, count: 8, pj: 4, minC: 1, maxC: 16, medium: "패키지·PCB" },
+};
+/** 대역폭 = 폭(비트) × 핀 속도(Gb/s) / 8 × 개수 → GB/s(10진). 전력 = 대역폭 × 8 × pJ/bit */
+function bwCalc(widthBits, gbps, count, pj) {
+  var w = Math.max(0, widthBits), r = Math.max(0, gbps), n = Math.max(0, Math.round(count));
+  var per = w * r / 8;                 // GB/s per device
+  var total = per * n;                 // GB/s
+  var pins = w * n;
+  var watts = total * 1e9 * 8 * Math.max(0, pj) * 1e-12;
+  return { per: per, total: total, pins: pins, watts: watts };
+}
+/* /model:bw */
+
+/* model:energy */
+/** 한 비트를 보내는 에너지(pJ). 배선·패드 커패시턴스를 스윙 전압까지 충전(α·C·Vsw·VDDQ),
+    종단 저항의 DC 전류(VDDQ·Vsw/(2R)을 비트 시간 동안), 송수신·클럭 회로(e0 + k·속도²), DRAM 코어. */
+var EN_PRESET = {
+  hbm: { L: 3, cw: 0.2, cpad: 0.25, vsw: 0.4, vddq: 0.4, gbps: 9.6, rt: 0 },
+  gddr: { L: 20, cw: 0.1, cpad: 1.0, vsw: 0.5, vddq: 1.2, gbps: 28, rt: 80 },
+};
+var EN_K = { alpha: 0.5, e0: 0.1, k: 0.003, core: 2.5 };
+function ioEnergy(p) {
+  var C = Math.max(0, p.L) * Math.max(0, p.cw) + Math.max(0, p.cpad);      // pF
+  var r = Math.max(0.1, p.gbps);
+  var eCap = EN_K.alpha * C * p.vsw * p.vddq;                             // pF·V² = pJ
+  var eTerm = p.rt > 0 ? (p.vddq * p.vsw / (2 * p.rt)) / (r * 1e9) * 1e12 : 0; // W / (bit/s) → pJ
+  var eCkt = EN_K.e0 + EN_K.k * r * r;
+  var io = eCap + eTerm + eCkt;
+  return { C: C, eCap: eCap, eTerm: eTerm, eCkt: eCkt, io: io, total: io + EN_K.core, core: EN_K.core };
+}
+/** 같은 총 대역폭 BW(GB/s)를 핀 속도 r로 낼 때 필요한 데이터 핀 수 */
+function pinsFor(bwGBs, gbps) { return Math.ceil(bwGBs * 8 / Math.max(0.1, gbps)); }
+/* /model:energy */
+
+/* model:shore */
+/** 쇼어라인: 스택 하나가 다이 가장자리에서 차지하는 길이 = max(PHY 폭, 스택 폭).
+    PHY 폭 = 신호 수 × 범프 피치 / 범프 줄 수 */
+function phyWidth(signals, pitchUm, rows) { return signals * pitchUm / 1000 / Math.max(1, rows); }
+function shoreline(o) {
+  var wPhy = phyWidth(o.signals, o.pitch, o.rows);
+  var slot = Math.max(wPhy, o.stackW);
+  var longS = Math.max(o.dieL, o.dieS), shortS = Math.min(o.dieL, o.dieS);
+  var per = function (len) { return Math.max(0, Math.floor(len / slot + 1e-9)); };
+  var nLong = per(longS), nShort = per(shortS);
+  var stacks = o.sides === 4 ? 2 * nLong + 2 * nShort : o.sides === 1 ? nLong : 2 * nLong;
+  var perim = 2 * (o.dieL + o.dieS);
+  return { wPhy: wPhy, slot: slot, stacks: stacks, perSide: nLong, used: stacks * slot, perim: perim, frac: stacks * slot / perim, area: o.dieL * o.dieS };
+}
+/* /model:shore */
+
+/* model:dram */
+/** 의사 채널 하나의 DRAM 뱅크·행 버퍼 시뮬레이터(열린 페이지 정책, 순서대로 데이터 반환).
+    t = {rcd, rp, cl, ras, rrd, burst}(ns), banks, q(동시에 떠 있을 수 있는 요청 수), pattern, n */
+function dramRng(seed) { var s = seed >>> 0 || 1; return function () { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; }; }
+function dramStream(pattern, n, banks, colsPerRow, seed) {
+  var rnd = dramRng(seed || 7), out = [];
+  for (var i = 0; i < n; i++) {
+    if (pattern === "stream") { var rowIdx = Math.floor(i / colsPerRow); out.push({ b: rowIdx % banks, r: Math.floor(rowIdx / banks) }); }
+    else if (pattern === "random") out.push({ b: Math.floor(rnd() * banks), r: Math.floor(rnd() * 65536) });
+    else if (pattern === "reuse") { var rb = Math.floor(rnd() * banks); out.push({ b: rb, r: Math.floor(rnd() * 4) }); }
+    else out.push({ b: 0, r: i });   // "onebank": 한 뱅크에서 매번 다른 행
+  }
+  return out;
+}
+function dramSim(o) {
+  var t = o.t, B = Math.max(1, Math.round(o.banks)), Q = Math.max(1, Math.round(o.q)), fr = o.sched !== "fcfs";
+  var reqs = dramStream(o.pattern, o.n, B, o.colsPerRow || 32, o.seed);
+  var open = [], bankFree = [], lastAct = [];
+  for (var b = 0; b < B; b++) { open.push(-1); bankFree.push(0); lastAct.push(-1e9); }
+  var st = { busFree: 0, lastActAny: -1e9 };
+  /* 요청 하나를 지금 상태에서 처리하면 언제 데이터가 나오나(상태는 바꾸지 않음) */
+  function plan(q, ready) {
+    var bk = q.b, p = { b: bk, r: q.r, pre: null, act: null };
+    if (open[bk] === q.r) { p.kind = "hit"; p.col = Math.max(bankFree[bk], ready, st.busFree - t.cl); }
+    else {
+      if (open[bk] < 0) { p.kind = "miss"; p.act = Math.max(bankFree[bk], ready, st.lastActAny + t.rrd); }
+      else {
+        p.kind = "conf";
+        p.pre = Math.max(bankFree[bk], ready, lastAct[bk] + t.ras);
+        p.act = Math.max(p.pre + t.rp, st.lastActAny + t.rrd);
+      }
+      p.col = Math.max(p.act + t.rcd, st.busFree - t.cl);
+    }
+    p.ds = p.col + t.cl; p.de = p.ds + t.burst;
+    return p;
+  }
+  function commit(p) {
+    if (p.act != null) { lastAct[p.b] = p.act; st.lastActAny = p.act; open[p.b] = p.r; }
+    st.busFree = p.de; bankFree[p.b] = p.col + t.burst;
+  }
+  var pool = [], next = 0, ev = [], cnt = { hit: 0, miss: 0, conf: 0 }, latSum = 0, T = 0;
+  while (next < reqs.length && pool.length < Q) pool.push({ q: reqs[next++], ready: 0 });
+  while (pool.length) {
+    var bi = 0, bp = plan(pool[0].q, pool[0].ready);
+    if (fr) for (var j = 1; j < pool.length; j++) {
+      var pj = plan(pool[j].q, pool[j].ready);
+      if (pj.ds < bp.ds - 1e-9 || (Math.abs(pj.ds - bp.ds) <= 1e-9 && pj.kind === "hit" && bp.kind !== "hit")) { bi = j; bp = pj; }
+    }
+    commit(bp); cnt[bp.kind]++; latSum += bp.de - pool[bi].ready; T = Math.max(T, bp.de);
+    ev.push(bp);
+    pool.splice(bi, 1);
+    if (next < reqs.length) pool.push({ q: reqs[next++], ready: bp.de });
+  }
+  var n = reqs.length;
+  return { ev: ev, T: T || 1, bw: n * o.bytes / (T || 1), eff: n * t.burst / (T || 1), hits: cnt.hit, miss: cnt.miss, conf: cnt.conf, lat: latSum / Math.max(1, n) };
+}
+var DRAM_T = { rcd: 14, rp: 14, cl: 14, ras: 33, rrd: 2, burst: 0.8333 };
+/* /model:dram */
+
+/* model:stack */
+/** 스택 높이·용량·열. 높이 = 베이스 + n × (코어 다이 + 접합층). 열: 냉각면(맨 위)에서 아래로 층마다 R_layer, 각 층을 지나는 열은 그 아래의 발열 합 */
+function stackCalc(o) {
+  var n = Math.max(1, Math.round(o.layers));
+  var gb = n * o.gbit / 8;                                  // GB per stack
+  var h = o.base + n * (o.tdie + o.tbond);                   // µm
+  var tmax = (o.limit - o.base) / n - o.tbond;               // 높이 제한 안에서 허용되는 코어 두께
+  var A = o.area * 1e-6;                                     // mm² → m²
+  var rBond = o.tbond * 1e-6 / (o.kbond * A), rSi = o.tdie * 1e-6 / (150 * A), rL = rBond + rSi;
+  var pCore = o.pstack * (1 - o.baseFrac) / n, pBase = o.pstack * o.baseFrac;
+  var dT = 0;                                                // 베이스 다이 온도 상승(맨 위 냉각면 기준)
+  for (var k = 1; k <= n; k++) dT += rL * (pBase + (n - k) * pCore);
+  var tsv = n * o.tsvPerDie;
+  /* 층별 온도: prof[0] = 베이스 다이, prof[n] = 맨 위 코어 다이(= 냉각면 온도) */
+  var prof = [];
+  for (var j = 0; j <= n; j++) { var tj = o.ttop; for (var i = j + 1; i <= n; i++) tj += rL * (pBase + (i - 1) * pCore); prof.push(tj); }
+  return { gb: gb, h: h, tmax: tmax, fits: h <= o.limit + 1e-9, rLayer: rL, dT: dT, tBase: o.ttop + dT, tsv: tsv, prof: prof };
+}
+var STACK_DEF = { layers: 8, gbit: 24, base: 60, tdie: 50, tbond: 15, limit: 720, area: 110, kbond: 1.5, pstack: 25, baseFrac: 0.4, ttop: 70, tsvPerDie: 4000 };
+/* /model:stack */
+
+/* model:power */
+/** HBM 전력 = 활용률 × 대역폭 × pJ/bit + 스택 수 × (대기 + 리프레시). 리프레시 간격 tREFI는 85 °C를 넘으면 절반 */
+function trefi(T) { return T <= 85 ? 3.9 : T <= 95 ? 1.95 : 0.975; }   // µs
+function hbmPower(o) {
+  var bwMax = o.stacks * o.perStack;                         // GB/s
+  var ti = trefi(o.temp);
+  var block = (o.trfc / 1000) / ti * (o.perBank ? 0.15 : 1); // 채널을 막는 시간 비율
+  block = Math.min(0.95, block);
+  var bwAvail = bwMax * (1 - block);
+  var used = Math.min(o.util, 1) * bwAvail;
+  var dyn = used * 1e9 * 8 * o.pj * 1e-12;
+  var ref = o.stacks * o.pref * (3.9 / ti);
+  var stat = o.stacks * o.pbg;
+  return { bwMax: bwMax, bwAvail: bwAvail, used: used, dyn: dyn, ref: ref, stat: stat, total: dyn + ref + stat, block: block, trefi: ti };
+}
+var PWR_DEF = { stacks: 6, perStack: 1228.8, util: 0.8, pj: 3, temp: 80, trfc: 350, perBank: true, pref: 0.3, pbg: 1.2 };
+/* /model:power */
+
+/* model:fit */
+/** GX-LM-70B를 담는 데 필요한 용량·대역폭·원가. 디코드 한 단계는 가중치 전부 + 배치의 KV 캐시를 한 번 읽는다 */
+var FIT_COST = { hbm: 15, gddr: 4, lpddr: 3 };   // $/GB (교육용 가정)
+function fitCalc(o) {
+  var wBytes = o.params * o.bytesPerParam;                          // B
+  var kvSeq = 327680 * o.context;                                   // B (BF16 KV 캐시, 토큰당 320 KiB)
+  var need = wBytes + o.batch * kvSeq;                              // B
+  var capB = o.stacks * o.stackGB * 1e9;
+  var bw = o.stacks * o.perStack * 1e9;                             // B/s
+  var stacksNeeded = Math.ceil(need / (o.stackGB * 1e9));
+  var step = wBytes + o.batch * kvSeq;                              // B per decode step
+  var tokS = o.batch * bw / step;
+  var perUser = bw / step;
+  return { wBytes: wBytes, kvSeq: kvSeq, need: need, cap: capB, fits: need <= capB, stacksNeeded: stacksNeeded, tokS: tokS, perUser: perUser, cost: o.stacks * o.stackGB * o.costGB, bw: bw };
+}
+/* /model:fit */
+
+/* ================================================================ 시뮬레이터 UI */
+var HB_F = function (x, d) { return GP.fmt(x, d || 3); };
+var HB_GB = function (gbs) { return gbs >= 1000 ? HB_F(gbs / 1000, 3) + " TB/s" : HB_F(gbs, 4) + " GB/s"; };
+
+/* ---------------------------------------------------------------- 1. 대역폭 계산기 */
+(function () {
+  var kind = "hbm3e";
+  var cv;
+  var draw = function () { if (cv) cv.redraw(); readout(); };
+  var gW = GP.range("bw-w", function (v) { return v.toLocaleString("en-US") + "비트"; }, draw);
+  var gR = GP.range("bw-r", function (v) { return v.toFixed(1) + " Gb/s"; }, draw);
+  var gN = GP.range("bw-n", function (v) { return v + "개"; }, draw);
+  GP.seg("bw-k", function (k) {
+    kind = k; var I = HBM_IF[k];
+    gW.set(I.width); gR.set(I.gbps); gN.set(I.count);
+  });
+  function readout() {
+    var r = bwCalc(gW(), gR(), gN(), HBM_IF[kind].pj);
+    GP.stat("bw-o-per", HB_GB(r.per));
+    GP.stat("bw-o-tot", HB_GB(r.total));
+    GP.stat("bw-o-pin", r.pins.toLocaleString("en-US") + "개");
+    GP.stat("bw-o-w", HB_F(r.watts, 3) + " W (" + HBM_IF[kind].pj + " pJ/bit)");
+  }
+  cv = GP.canvas(document.getElementById("bw-cv"), function (ctx, w, h) {
+    var P = GP.palette();
+    var iso = [0.1, 1, 10], series = [];
+    iso.forEach(function (tb) {
+      var d = [];
+      for (var i = 0; i <= 40; i++) { var x = Math.pow(10, 1 + i * (Math.log10(40000) - 1) / 40); d.push([x, tb * 1000 * 8 / x]); }
+      series.push({ data: d, color: P.faint, width: 1.2, dash: [5, 4], legend: false, hover: false });
+    });
+    var pts = [];
+    Object.keys(HBM_IF).forEach(function (k, i) {
+      var I = HBM_IF[k];
+      pts.push({ x: I.width * I.count, y: I.gbps, color: k === "gddr7" ? P.compute : k === "lpddr" ? P.ok : P.dram, r: 4.5, label: I.name + " ×" + I.count });
+    });
+    var cur = bwCalc(gW(), gR(), gN(), 0);
+    pts.push({ x: Math.max(10, cur.pins), y: GP.clamp(gR(), 1, 50), color: P.accent, r: 7, ring: true, label: "현재 " + HB_GB(cur.total) });
+    GP.chart(ctx, null, {
+      x: [10, 40000], y: [1, 50], logX: true, logY: true,
+      xLabel: "데이터 핀 합계(개)", yLabel: "핀 속도 (Gb/s)",
+      series: series, points: pts,
+      after: function (c, A) {
+        iso.forEach(function (tb) {
+          var x = 25000, y = tb * 8000 / x;
+          if (y < 1) { y = 1.25; x = tb * 8000 / y; }
+          GP.text(c, (tb < 1 ? tb * 1000 + " GB/s" : tb + " TB/s"), A.X(x), A.Y(y) - 4, { size: 11, color: P.dim, align: "center", halo: true });
+        });
+      },
+    });
+  }, { aspect: 0.62, maxHeight: 380, minHeight: 240 });
+  readout();
+})();
+
+/* ---------------------------------------------------------------- 2. 비트당 에너지 */
+(function () {
+  var cv, preset = "hbm";
+  var draw = function () { if (cv) cv.redraw(); readout(); };
+  var gL = GP.range("en-L", function (v) { return v + " mm"; }, draw);
+  var gC = GP.range("en-c", function (v) { return v.toFixed(2) + " pF"; }, draw);
+  var gV = GP.range("en-v", function (v) { return v.toFixed(2) + " V"; }, draw);
+  var gQ = GP.range("en-q", function (v) { return v.toFixed(2) + " V"; }, draw);
+  var gR = GP.range("en-r", function (v) { return v.toFixed(1) + " Gb/s"; }, draw);
+  var cT = document.getElementById("en-t");
+  cT.addEventListener("change", draw);
+  GP.seg("en-p", function (k) {
+    preset = k; var p = EN_PRESET[k];
+    cT.checked = p.rt > 0;
+    gL.set(p.L); gC.set(p.cpad); gV.set(p.vsw); gQ.set(p.vddq); gR.set(p.gbps);
+  });
+  function cur(rate) {
+    return { L: gL(), cw: EN_PRESET[preset].cw, cpad: gC(), vsw: gV(), vddq: gQ(), gbps: rate == null ? gR() : rate, rt: cT.checked ? 80 : 0 };
+  }
+  function readout() {
+    var e = ioEnergy(cur());
+    GP.stat("en-o-C", HB_F(e.C, 3) + " pF");
+    GP.stat("en-o-io", HB_F(e.io, 3) + " pJ/bit");
+    GP.stat("en-o-tot", HB_F(e.total, 3) + " pJ/bit");
+    GP.stat("en-o-pin", pinsFor(1228.8, gR()).toLocaleString("en-US") + "개");
+    GP.stat("en-o-w", HB_F(7372.8e9 * 8 * e.total * 1e-12, 3) + " W");
+  }
+  cv = GP.canvas(document.getElementById("en-cv"), function (ctx, w, h) {
+    var P = GP.palette();
+    var bw = Math.min(150, w * 0.26), box = { x: 56, y: 16, w: w - 56 - bw - 26, h: h - 16 - 46 };
+    var tot = [], io = [], other = [];
+    var op = EN_PRESET[preset === "hbm" ? "gddr" : "hbm"];
+    for (var r = 1; r <= 40; r += 0.5) {
+      var e = ioEnergy(cur(r)); tot.push([r, e.total]); io.push([r, e.io]);
+      other.push([r, ioEnergy(Object.assign({}, op, { gbps: r })).total]);
+    }
+    var eNow = ioEnergy(cur());
+    var yMax = Math.max(8, Math.ceil(eNow.total + 1));
+    GP.chart(ctx, box, {
+      x: [1, 40], y: [0, Math.min(14, yMax)], xLabel: "핀 속도 (Gb/s)", yLabel: "pJ/bit",
+      series: [
+        { data: tot, color: P.dram, width: 2.4, label: "합계(현재)" },
+        { data: io, color: P.data, width: 2, label: "I/O만(현재)" },
+        { data: other, color: P.dim, width: 1.4, dash: [5, 4], label: preset === "hbm" ? "GDDR 기본값 합계" : "HBM 기본값 합계" },
+      ],
+      vlines: [{ x: gR(), color: P.accent, label: gR().toFixed(1) + " Gb/s" }],
+      points: [{ x: gR(), y: eNow.total, color: P.dram, r: 5 }],
+      legend: "tl",
+    });
+    // 오른쪽: 현재 값의 분해 막대
+    var x0 = w - bw - 4, y0 = 22, hh = h - 70, scale = hh / Math.max(eNow.total, 3);
+    var parts = [["코어", EN_K.core, P.dram], ["회로", eNow.eCkt, P.ctrl], ["종단", eNow.eTerm, P.volt], ["배선 αCV²", eNow.eCap, P.data]];
+    var y = y0 + hh;
+    GP.text(ctx, "현재 분해", x0 + bw / 2, 12, { size: 12, weight: 700, color: P.text, align: "center", baseline: "middle" });
+    parts.forEach(function (p) {
+      var ph = p[1] * scale;
+      ctx.fillStyle = p[2]; ctx.fillRect(x0 + 8, y - ph, bw * 0.36, ph);
+      if (ph > 0.5) GP.text(ctx, p[0] + " " + HB_F(p[1], 2), x0 + 14 + bw * 0.36, y - ph / 2, { size: 11.5, color: P.text, baseline: "middle" });
+      y -= ph;
+    });
+    GP.text(ctx, "합 " + HB_F(eNow.total, 3) + " pJ", x0 + bw / 2, h - 18, { size: 12, weight: 700, color: P.text, align: "center", baseline: "middle" });
+  }, { aspect: 0.6, maxHeight: 380, minHeight: 260 });
+  readout();
+})();
+
+/* ---------------------------------------------------------------- 3. 3D HBM 스택 */
+(function () {
+  var el = document.getElementById("s3-v");
+  var nNow = 8;
+  var T = null;
+  var gX = GP.range("s3-x", function (v) { return v + " %"; }, function () { if (T) layout(); });
+  var gN = GP.seg("s3-n", function (v) { nNow = +v; if (T) build(); readout(); });
+  var cTsv = document.getElementById("s3-tsv"), cIp = document.getElementById("s3-ip"), cLab = document.getElementById("s3-lab");
+  function readout() {
+    var r = stackCalc(Object.assign({}, STACK_DEF, { layers: nNow }));
+    GP.stat("s3-o-gb", r.gb + " GB (" + nNow + " × 24 Gb)");
+    GP.stat("s3-o-h", r.h + " µm" + (r.fits ? "" : " (720 초과)"));
+    document.getElementById("s3-o-h").className = "v " + (r.fits ? "ok" : "bad");
+    GP.stat("s3-o-tsv", r.tsv.toLocaleString("en-US") + "개");
+    GP.stat("s3-o-bw", "1,228.8 GB/s");
+  }
+  readout();
+  T = GP.three(el, { camera: [15, 11, 17], target: [1, 2, 0], fov: 36, minDistance: 6, maxDistance: 80 });
+  if (!T) { [cTsv, cIp, cLab, document.getElementById("s3-x")].forEach(function (c) { if (c) c.disabled = true; }); return; }
+  var THREE = T.THREE;
+  var VS = 6 / 1000;                                   // 높이 µm → 화면 단위(가로 1 단위 = 1 mm, 세로 약 6배 과장)
+  var IP_T = 100 * VS, BUMP = 15 * VS, BASE = 60 * VS, CORE = 50 * VS, GAP = 0.9;
+  var SX = 11, SZ = 10, CX = 6.5;                       // 스택 크기(mm)와 중심 x
+  var M = {
+    ip: T.material(0xb7a98c, { roughness: 0.45, metalness: 0.2 }),
+    logic: T.material(0x7d8696, { roughness: 0.4, metalness: 0.3 }),
+    base: T.material(0x8f99aa, { roughness: 0.4, metalness: 0.3 }),
+    core: T.material(0x5f8fd6, { roughness: 0.42, metalness: 0.15, transparent: true, opacity: 0.6 }),
+    bump: T.material(0xc9ccd4, { roughness: 0.3, metalness: 0.7 }),
+    tsv: T.material(0xc8814a, { roughness: 0.35, metalness: 0.8 }),
+    wire: T.material(0xd9a441, { roughness: 0.35, metalness: 0.7 }),
+    phy: T.material(0x22a39f, { roughness: 0.5, metalness: 0.1 }),
+  };
+  T.ground(-0.05, 50, 0.3);
+  // 고정 부분: 인터포저, 로직 다이(일부), 인터포저 배선
+  var fixed = new THREE.Group(); T.scene.add(fixed);
+  function box(g, m, w, hgt, d, x, y, z) {
+    var me = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, d), m); me.position.set(x, y, z); g.add(me); T.edges(me, undefined, 0.22); return me;
+  }
+  var ip = box(fixed, M.ip, 26, IP_T, 16, -1, IP_T / 2, 0);
+  var logicH = 720 * VS;
+  var logic = box(fixed, M.logic, 10, logicH, 13, -8.5, IP_T + BUMP + logicH / 2, 0);
+  var phy = box(fixed, M.phy, 1.6, 0.04, 10, -3.6, IP_T + BUMP + logicH + 0.02, 0);
+  var wires = new THREE.Group(); fixed.add(wires);
+  for (var i = 0; i < 12; i++) {
+    var z = -4.4 + i * 0.8;
+    var wm = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.03, 0.18), M.wire); wm.position.set(-1.2, IP_T + 0.016, z); wires.add(wm);
+  }
+  // 스택(단수가 바뀌면 다시 만든다)
+  var stack = new THREE.Group(); T.scene.add(stack);
+  var layers = [], bumps = null, tsvs = null, labels = [];
+  var BX = [], BZ = [];
+  for (var bx = 0; bx < 16; bx++) for (var bz = 0; bz < 4; bz++) { BX.push(-3.75 + bx * 0.5); BZ.push(-0.75 + bz * 0.5); }
+  var NB = BX.length;
+  var lab = function (text, obj, pos, pri) { var L = T.label(text, pos); L.obj = obj; L.priority = pri || 0; labels.push(L); return L; };
+  var fixedLabels = [
+    lab("실리콘 인터포저", ip, [-10, IP_T / 2, 7.5], 1),
+    lab("로직 다이 (일부)", logic, [-2, logicH / 2, 5.5], 1),
+    lab("인터포저 배선 약 3–5 mm", wires, [-1.2, 0.05, 4.6], 2),
+  ];
+  function build() {
+    labels.filter(function (L) { return fixedLabels.indexOf(L) < 0; }).forEach(function (L) { L.remove(); });
+    labels = fixedLabels.slice();
+    while (stack.children.length) { var c = stack.children.pop(); if (c.geometry) c.geometry.dispose(); }
+    layers = [];
+    var n = nNow;
+    layers.push(box(stack, M.base, SX + 0.4, BASE, SZ + 0.4, 0, 0, 0));
+    for (var k = 1; k <= n; k++) layers.push(box(stack, M.core, SX, CORE, SZ, 0, 0, 0));
+    var cyl = new THREE.CylinderGeometry(0.11, 0.11, 1, 10);
+    bumps = new THREE.InstancedMesh(cyl, M.bump, (n + 1) * NB); stack.add(bumps);
+    tsvs = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.05, 0.05, 1, 8), M.tsv, (n + 1) * NB); stack.add(tsvs);
+    lab("베이스 다이 (PHY·버퍼·테스트)", layers[0], [SX / 2, 0, SZ / 2], 3);
+    lab("DRAM 코어 다이 × " + n + " (24 Gb씩)", layers[n], [SX / 2, CORE / 2, -SZ / 2], 3);
+    lab("TSV 기둥 (가운데 띠)", layers[Math.max(1, Math.round(n / 2))], [3.75, 0, 0.75], 2);
+    lab("마이크로범프 (피치 약 45 µm)", layers[1], [-3.75, -CORE / 2 - BUMP / 2, 0.75], 2);
+    layout();
+  }
+  var mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3();
+  function layout() {
+    if (!bumps) return;
+    var e = gX() / 100, n = nNow, y = IP_T, idx = 0;
+    for (var k = 0; k <= n; k++) {
+      var gap = BUMP + e * GAP, th = k === 0 ? BASE : CORE;
+      var by = y + gap / 2;                                  // 범프는 아래 틈 가운데
+      y += gap;
+      layers[k].position.set(CX, y + th / 2, 0);
+      for (var b = 0; b < NB; b++) {
+        ps.set(CX + BX[b], by, BZ[b]); sc.set(1, BUMP, 1); mtx.compose(ps, q, sc); bumps.setMatrixAt(idx, mtx);
+        ps.set(CX + BX[b], y + th / 2, BZ[b]); sc.set(1, th + 0.02, 1); mtx.compose(ps, q, sc); tsvs.setMatrixAt(idx, mtx);
+        idx++;
+      }
+      y += th;
+    }
+    bumps.instanceMatrix.needsUpdate = true; tsvs.instanceMatrix.needsUpdate = true;
+    vis();
+  }
+  function vis() {
+    var showT = cTsv.checked;
+    if (bumps) { bumps.visible = showT; tsvs.visible = showT; }
+    M.core.opacity = showT ? 0.6 : 1; M.core.transparent = showT; M.core.depthWrite = !showT; M.core.needsUpdate = true;
+    fixed.visible = cIp.checked;
+    labels.forEach(function (L) {
+      var on = cLab.checked && (fixedLabels.indexOf(L) < 0 || cIp.checked);
+      if (/TSV|범프/.test(L.el.textContent)) on = on && showT;
+      L.setVisible(on);
+    });
+  }
+  [cTsv, cIp, cLab].forEach(function (c) { c.addEventListener("change", vis); });
+  build();
+  T.fit(new THREE.Box3(new THREE.Vector3(-14, 0, -8), new THREE.Vector3(12.5, 7, 8)), { dir: [0.62, 0.5, 0.62], pad: 1.05 });
+})();
+
+/* ---------------------------------------------------------------- 4. DRAM 뱅크·행 버퍼 */
+(function () {
+  var cv, res = null;
+  var run = function () {
+    var tt = gT();
+    var t = { rcd: tt, rp: tt, cl: tt, ras: DRAM_T.ras, rrd: DRAM_T.rrd, burst: DRAM_T.burst };
+    res = dramSim({ t: t, banks: gB(), q: gQ(), pattern: gP(), sched: gS(), n: 1200, bytes: 32, colsPerRow: 32, seed: 7 });
+    GP.stat("dr-o-e", HB_F(res.eff * 100, 3) + " %");
+    GP.stat("dr-o-bw", HB_F(res.bw, 3) + " GB/s / 38.4");
+    GP.stat("dr-o-gx", HB_GB(res.bw * 192));
+    GP.stat("dr-o-h", res.hits + " / " + res.miss + " / " + res.conf);
+    GP.stat("dr-o-l", HB_F(res.lat, 3) + " ns");
+    if (cv) cv.redraw();
+  };
+  var gB = GP.range("dr-b", function (v) { return v + "개"; }, run);
+  var gQ = GP.range("dr-q", function (v) { return v + "개"; }, run);
+  var gT = GP.range("dr-t", function (v) { return v + " ns"; }, run);
+  var gP = GP.seg("dr-p", run), gS = GP.seg("dr-s", run);
+  var ROWS = function () { return Math.min(16, gB()); };
+  cv = GP.canvas(document.getElementById("dr-cv"), function (ctx, w, h) {
+    if (!res) return;
+    var P = GP.palette();
+    var nr = ROWS(), L = 70, R = 12, top = 24, rh = Math.max(9, Math.min(16, (h - top - 56) / (nr + 1.6)));
+    var show = Math.min(48, res.ev.length), tEnd = 0, i;
+    for (i = 0; i < show; i++) tEnd = Math.max(tEnd, res.ev[i].de);
+    var tmax = tEnd * 1.03, X = function (t) { return L + (t / tmax) * (w - L - R); };
+    ctx.font = GP.font(11, 400);
+    // 행 이름
+    for (var b = 0; b < nr; b++) {
+      var y = top + b * rh;
+      if (b % 2 === 0) { ctx.fillStyle = GP.alpha(P.grid, 0.35); ctx.fillRect(L, y, w - L - R, rh); }
+      GP.text(ctx, "뱅크 " + b, L - 6, y + rh / 2, { size: 11, color: P.dim, align: "right", baseline: "middle" });
+    }
+    var yBus = top + (nr + 0.6) * rh;
+    GP.text(ctx, "데이터 버스", L - 6, yBus + rh / 2, { size: 11, color: P.text, align: "right", baseline: "middle", weight: 700 });
+    ctx.fillStyle = GP.alpha(P.data, 0.08); ctx.fillRect(L, yBus, w - L - R, rh);
+    var tt = gT();
+    for (i = 0; i < show; i++) {
+      var e = res.ev[i];
+      if (e.b >= nr) continue;
+      var yb = top + e.b * rh + 1, hb = rh - 2;
+      if (e.pre != null) { ctx.fillStyle = P.heat; ctx.fillRect(X(e.pre), yb, Math.max(1, X(e.pre + tt) - X(e.pre)), hb); }
+      if (e.act != null) { ctx.fillStyle = P.ctrl; ctx.fillRect(X(e.act), yb, Math.max(1, X(e.act + tt) - X(e.act)), hb); }
+      ctx.fillStyle = P.dram; ctx.fillRect(X(e.col), yb, Math.max(2, X(e.col + DRAM_T.burst) - X(e.col)), hb);
+      ctx.fillStyle = e.kind === "hit" ? P.data : e.kind === "miss" ? P.ctrl : P.heat;
+      ctx.fillRect(X(e.ds), yBus + 1, Math.max(1.5, X(e.de) - X(e.ds) - 0.5), rh - 2);
+    }
+    // 시간 축
+    var ya = yBus + rh + 6;
+    ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(L, ya); ctx.lineTo(w - R, ya); ctx.stroke();
+    GP.ticks(0, tmax, false, 6, 6).forEach(function (t) {
+      ctx.beginPath(); ctx.moveTo(X(t), ya); ctx.lineTo(X(t), ya + 4); ctx.stroke();
+      GP.text(ctx, String(Math.round(t)), X(t), ya + 14, { size: 11, color: P.dim, align: "center", baseline: "middle" });
+    });
+    GP.text(ctx, "시간 (ns) · 앞 " + show + "개 요청" + (gB() > nr ? " · 뱅크 0–15만 표시" : ""), (L + w - R) / 2, ya + 30, { size: 11.5, color: P.dim, align: "center", baseline: "middle" });
+    // 범례
+    var lx = L, items = [["PRE (tRP)", P.heat], ["ACT (tRCD)", P.ctrl], ["RD", P.dram], ["데이터(적중)", P.data]];
+    items.forEach(function (it) {
+      ctx.fillStyle = it[1]; ctx.fillRect(lx, 7, 10, 10);
+      lx += 14 + GP.text(ctx, it[0], lx + 14, 12, { size: 11, color: P.dim, baseline: "middle" }) + 12;
+    });
+  }, { height: function (w) { return w < 500 ? 330 : 360; } });
+  run();
+})();
+
+/* ---------------------------------------------------------------- 5. HBM 전력과 리프레시 */
+(function () {
+  var cv;
+  var draw = function () { if (cv) cv.redraw(); readout(); };
+  var gN = GP.range("pw-n", function (v) { return v + "개"; }, draw);
+  var gU = GP.range("pw-u", function (v) { return v + " %"; }, draw);
+  var gE = GP.range("pw-e", function (v) { return v.toFixed(1) + " pJ/bit"; }, draw);
+  var gT = GP.range("pw-t", function (v) { return v + " °C"; }, draw);
+  var cB = document.getElementById("pw-pb"); cB.addEventListener("change", draw);
+  function opt(extra) { return Object.assign({}, PWR_DEF, { stacks: gN(), util: gU() / 100, pj: gE(), temp: gT(), perBank: cB.checked }, extra || {}); }
+  function readout() {
+    var r = hbmPower(opt());
+    GP.stat("pw-o-p", HB_F(r.total, 3) + " W");
+    GP.stat("pw-o-s", HB_F(r.dyn, 3) + " / " + HB_F(r.stat, 2) + " / " + HB_F(r.ref, 2) + " W");
+    GP.stat("pw-o-f", HB_F(r.block * 100, 3) + " % (tREFI " + r.trefi + " µs)");
+    GP.stat("pw-o-bw", HB_GB(r.used) + " / " + HB_GB(r.bwAvail));
+  }
+  cv = GP.canvas(document.getElementById("pw-cv"), function (ctx, w, h) {
+    var P = GP.palette(), narrow = w < 520;
+    var b1 = narrow ? { x: 54, y: 22, w: w - 72, h: h / 2 - 66 } : { x: 54, y: 22, w: w / 2 - 80, h: h - 70 };
+    var b2 = narrow ? { x: 54, y: h / 2 + 22, w: w - 72, h: h / 2 - 66 } : { x: w / 2 + 44, y: 22, w: w / 2 - 62, h: h - 70 };
+    var tot = [], dyn = [];
+    for (var u = 0; u <= 100; u += 2) { var r = hbmPower(opt({ util: u / 100 })); tot.push([u, r.total]); dyn.push([u, r.dyn]); }
+    var now = hbmPower(opt()), yMax = Math.max(200, Math.ceil(tot[tot.length - 1][1] / 50) * 50);
+    GP.chart(ctx, b1, {
+      x: [0, 100], y: [0, yMax], xLabel: "대역폭 활용률 (%)", yLabel: "HBM 전력 (W)",
+      series: [{ data: tot, color: P.heat, width: 2.4, label: "합계" }, { data: dyn, color: P.data, width: 1.6, dash: [5, 4], label: "동적" }],
+      hlines: [{ y: 150, color: P.dim, label: "GX-1 표 150 W" }],
+      points: [{ x: gU(), y: now.total, color: P.heat, r: 5 }], legend: "tl",
+    });
+    var all = [], pb = [];
+    for (var T = 40; T <= 105; T += 0.5) { all.push([T, hbmPower(opt({ temp: T, perBank: false })).block * 100]); pb.push([T, hbmPower(opt({ temp: T, perBank: true })).block * 100]); }
+    GP.chart(ctx, b2, {
+      x: [40, 105], y: [0, 40], xLabel: "DRAM 온도 (°C)", yLabel: "리프레시 손실 (%)",
+      series: [{ data: all, color: P.heat, width: 2.2, label: "전체 뱅크 REF" }, { data: pb, color: P.ok, width: 2.2, label: "뱅크별 REF" }],
+      vlines: [{ x: gT(), color: P.accent, label: gT() + " °C" }], legend: "tl",
+    });
+  }, { height: function (w) { return w < 520 ? 520 : 320; } });
+  readout();
+})();
+
+/* ---------------------------------------------------------------- 6. 스택 높이·용량·열 */
+(function () {
+  var cv;
+  var draw = function () { if (cv) cv.redraw(); readout(); };
+  var gN = GP.seg("st-n", draw), gG = GP.seg("st-g", draw), gL = GP.seg("st-l", draw);
+  var gD = GP.range("st-d", function (v) { return v + " µm"; }, draw);
+  var gB = GP.range("st-b", function (v) { return v + " µm"; }, draw);
+  var gP = GP.range("st-p", function (v) { return v + " W"; }, draw);
+  function calc() { return stackCalc(Object.assign({}, STACK_DEF, { layers: +gN(), gbit: +gG(), tdie: gD(), tbond: gB(), limit: +gL(), pstack: gP() })); }
+  function readout() {
+    var r = calc();
+    GP.stat("st-o-gb", HB_F(r.gb, 3) + " GB / " + HB_F(r.gb * 6, 3) + " GB");
+    GP.stat("st-o-h", r.h + " µm" + (r.fits ? " ≤ " : " > ") + gL());
+    var hv = document.getElementById("st-o-h"); hv.className = "v " + (r.fits ? "ok" : "bad");
+    GP.stat("st-o-t", r.tmax > 0 ? "≤ " + HB_F(r.tmax, 3) + " µm" : "불가");
+    GP.stat("st-o-tsv", r.tsv.toLocaleString("en-US") + "개");
+    GP.stat("st-o-T", HB_F(r.tBase, 3) + " °C");
+    document.getElementById("st-o-T").className = "v " + (r.tBase > 95 ? "bad" : r.tBase > 85 ? "" : "ok");
+  }
+  cv = GP.canvas(document.getElementById("st-cv"), function (ctx, w, h) {
+    var P = GP.palette(), r = calc(), n = +gN(), lim = +gL();
+    var top = 20, bot = h - 46, Hm = Math.max(lim, r.h) * 1.06;
+    var Y = function (um) { return bot - (um / Hm) * (bot - top); };
+    var sx = 60, sw = Math.min(150, w * 0.3);
+    // 축
+    ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(sx - 8, top); ctx.lineTo(sx - 8, bot); ctx.stroke();
+    GP.ticks(0, Hm, false, 5, 5).forEach(function (v) { GP.text(ctx, String(Math.round(v)), sx - 12, Y(v), { size: 11, color: P.dim, align: "right", baseline: "middle" }); });
+    GP.text(ctx, "높이 (µm)", sx - 8, bot + 22, { size: 11.5, color: P.dim, align: "center" });
+    // 층
+    GP.matRect(ctx, sx, Y(STACK_DEF.base), sw, Y(0) - Y(STACK_DEF.base), "si");
+    var y = STACK_DEF.base;
+    for (var k = 1; k <= n; k++) {
+      if (gB() > 0) GP.matRect(ctx, sx + sw * 0.08, Y(y + gB()), sw * 0.84, Math.max(0.5, Y(y) - Y(y + gB())), "sol", { edge: false });
+      y += gB();
+      GP.matRect(ctx, sx, Y(y + gD()), sw, Math.max(0.5, Y(y) - Y(y + gD())), "dram", { edge: Y(y) - Y(y + gD()) > 3 });
+      y += gD();
+    }
+    // 한계선
+    ctx.strokeStyle = P.bad; ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(sx - 8, Y(lim)); ctx.lineTo(sx + sw + 10, Y(lim)); ctx.stroke(); ctx.setLineDash([]);
+    GP.text(ctx, "한계 " + lim + " µm", sx + sw / 2, Y(lim) - 8, { size: 11.5, color: P.bad, align: "center", halo: true });
+    GP.text(ctx, r.h + " µm", sx + sw / 2, Y(r.h) + (r.h > lim ? 14 : -22), { size: 12, weight: 700, color: r.fits ? P.text : P.bad, align: "center", halo: true });
+    GP.text(ctx, n + "단 · " + HB_F(r.gb, 3) + " GB", sx + sw / 2, bot + 22, { size: 12, color: P.text, align: "center", weight: 700 });
+    // 오른쪽: 층별 온도
+    var bx = sx + sw + 70, box = { x: bx, y: top, w: w - bx - 16, h: bot - top };
+    if (box.w > 80) {
+      var data = [], yy = STACK_DEF.base / 2;
+      data.push([r.prof[0], yy]);
+      yy = STACK_DEF.base;
+      for (var j = 1; j <= n; j++) { yy += gB() + gD() / 2; data.push([r.prof[j], yy]); yy += gD() / 2; }
+      var tMin = Math.floor((STACK_DEF.ttop - 2) / 5) * 5, tMax = Math.max(100, Math.ceil((r.tBase + 2) / 5) * 5);
+      GP.chart(ctx, box, {
+        x: [tMin, tMax], y: [0, Hm], xLabel: "다이 온도 (°C)", yTicks: [],
+        series: [{ data: data, color: P.heat, width: 2.2, dots: 3, label: "층별 온도" }],
+        vlines: [{ x: 85, color: P.warn, label: "85 °C" }, { x: 95, color: P.bad, label: "95" }],
+        bands: [{ x0: 95, x1: tMax, color: GP.alpha(P.bad, 0.07) }],
+      });
+    }
+  }, { height: function (w) { return w < 500 ? 340 : 360; } });
+  readout();
+})();
+
+/* ---------------------------------------------------------------- 7. 쇼어라인 */
+(function () {
+  var cv1, cv2;
+  var GEN = { hbm3e: { signals: 1700, bw: 1228.8 }, hbm4: { signals: 3200, bw: 2048 } };
+  var draw = function () { if (cv1) cv1.redraw(); if (cv2) cv2.redraw(); readout(); };
+  var gL = GP.range("sh-L", function (v) { return v + " mm"; }, draw);
+  var gS = GP.range("sh-S", function (v) { return v + " mm"; }, draw);
+  var gP = GP.range("sh-p", function (v) { return v + " µm"; }, draw);
+  var gR = GP.range("sh-r", function (v) { return v + "줄"; }, draw);
+  var gSd = GP.seg("sh-sd", draw), gG = GP.seg("sh-g", draw);
+  function opt(L, S) { return { dieL: L == null ? gL() : L, dieS: S == null ? gS() : S, signals: GEN[gG()].signals, pitch: gP(), rows: gR(), stackW: 10, sides: +gSd() }; }
+  function readout() {
+    var r = shoreline(opt()), bw = r.stacks * GEN[gG()].bw;
+    GP.stat("sh-o-w", HB_F(r.wPhy, 3) + " / " + HB_F(r.slot, 3) + " mm");
+    GP.stat("sh-o-n", r.stacks + "개 (변당 " + r.perSide + ")");
+    GP.stat("sh-o-bw", HB_GB(bw) + " · " + r.stacks * 24 + " GB");
+    var fl = 943.7 * r.area / 780;
+    GP.stat("sh-o-ri", r.stacks ? HB_F(fl * 1e12 / (bw * 1e9), 3) + " FLOP/B" : "—");
+  }
+  cv1 = GP.canvas(document.getElementById("sh-cv"), function (ctx, w, h) {
+    var P = GP.palette(), o = opt(), r = shoreline(o);
+    var L = Math.max(o.dieL, o.dieS), S = Math.min(o.dieL, o.dieS);
+    var tot = L + 2 * 12 + 2, sc = Math.min((h - 30) / tot, (w - 10) / (S + 2 * 12 + 4));
+    var cx = w / 2, cy = (h - 16) / 2 + 4;
+    var dx = cx - S * sc / 2, dy = cy - L * sc / 2;
+    GP.matRect(ctx, dx, dy, S * sc, L * sc, "si");
+    GP.text(ctx, S + " × " + L + " mm", cx, cy, { size: 12, weight: 700, color: P.text, align: "center", baseline: "middle", halo: true });
+    GP.text(ctx, HB_F(r.area, 3) + " mm²", cx, cy + 16, { size: 11, color: P.dim, align: "center", baseline: "middle", halo: true });
+    var slot = r.slot, wP = r.wPhy;
+    function side(nS, len, horizontal, s) {   // s: -1/+1 쪽
+      var used = nS * slot, start = (len - used) / 2;
+      for (var i = 0; i < nS; i++) {
+        var a = start + i * slot;
+        if (!horizontal) {   // 긴 변(세로), 스택은 왼쪽/오른쪽
+          var x = s < 0 ? dx - 11 * sc : dx + S * sc + 1 * sc;
+          GP.matRect(ctx, x, dy + (a + 0.3) * sc, 10 * sc, (slot - 0.6) * sc, "dram", { r: 2 });
+          ctx.fillStyle = GP.alpha(P.data, 0.55);
+          ctx.fillRect(s < 0 ? dx : dx + S * sc - 0.9 * sc, dy + (a + (slot - Math.min(wP, slot)) / 2) * sc, 0.9 * sc, Math.min(wP, slot) * sc);
+        } else {
+          var y = s < 0 ? dy - 11 * sc : dy + L * sc + 1 * sc;
+          GP.matRect(ctx, dx + (a + 0.3) * sc, y, (slot - 0.6) * sc, 10 * sc, "dram", { r: 2 });
+          ctx.fillStyle = GP.alpha(P.data, 0.55);
+          ctx.fillRect(dx + (a + (slot - Math.min(wP, slot)) / 2) * sc, s < 0 ? dy : dy + L * sc - 0.9 * sc, Math.min(wP, slot) * sc, 0.9 * sc);
+        }
+      }
+    }
+    var nL = Math.floor(L / slot + 1e-9), nS = Math.floor(S / slot + 1e-9);
+    side(nL, L, false, -1);
+    if (o.sides >= 2) side(nL, L, false, 1);
+    if (o.sides === 4) { side(nS, S, true, -1); side(nS, S, true, 1); }
+    if (wP > slot + 1e-9 || wP > 10) GP.text(ctx, "PHY " + HB_F(wP, 3) + " mm > 스택 폭", cx, h - 8, { size: 11.5, color: P.warn, align: "center", weight: 700 });
+    else GP.text(ctx, "청록 띠: PHY · 파랑: HBM 스택", cx, h - 8, { size: 11, color: P.dim, align: "center" });
+  }, { aspect: 1, maxHeight: 320, minHeight: 240 });
+  cv2 = GP.canvas(document.getElementById("sh-cv2"), function (ctx, w, h) {
+    var P = GP.palette(), ar = Math.max(gL(), gS()) / Math.min(gL(), gS());
+    var st = [], ri = [];
+    for (var A = 100; A <= 900; A += 5) {
+      var S = Math.sqrt(A / ar), L = S * ar;
+      var r = shoreline(opt(L, S));
+      st.push([A, r.stacks]);
+    }
+    var cur = shoreline(opt());
+    GP.chart(ctx, { x: 40, y: 16, w: w - 56, h: h - 62 }, {
+      x: [100, 900], y: [0, 12], xLabel: "다이 면적 (mm²)", yLabel: "최대 스택 수",
+      series: [{ data: st, color: P.dram, width: 2.2, label: "같은 가로세로비" }],
+      vlines: [{ x: 858, color: P.bad, label: "레티클" }],
+      points: [{ x: GP.clamp(cur.area, 100, 900), y: cur.stacks, color: P.accent, r: 6, ring: true, label: cur.stacks + "개" }],
+    });
+  }, { aspect: 1, maxHeight: 320, minHeight: 240 });
+  readout();
+})();
+
+/* ---------------------------------------------------------------- 8. 용량·대역폭·원가 */
+(function () {
+  var cv;
+  var draw = function () { if (cv) cv.redraw(); readout(); };
+  var gP = GP.seg("fit-p", draw), gC = GP.seg("fit-c", draw), gG = GP.seg("fit-g", draw);
+  var gB = GP.range("fit-b", function (v) { return v; }, draw);
+  var gN = GP.range("fit-n", function (v) { return v + "개"; }, draw);
+  var gD = GP.range("fit-usd", function (v) { return "$" + v + "/GB"; }, draw);
+  function opt(n) { return { params: 70e9, bytesPerParam: +gP(), context: +gC(), batch: gB(), stacks: n == null ? gN() : n, stackGB: +gG(), perStack: 1228.8, costGB: gD() }; }
+  function readout() {
+    var r = fitCalc(opt());
+    GP.stat("fit-o-m", HB_F(r.need / 1e9, 4) + " / " + HB_F(r.cap / 1e9, 4) + " GB");
+    document.getElementById("fit-o-m").className = "v " + (r.fits ? "ok" : "bad");
+    GP.stat("fit-o-s", r.stacksNeeded + "개" + (r.stacksNeeded > 8 ? " (패키지 하나로 불가)" : ""));
+    GP.stat("fit-o-u", r.fits ? HB_F(r.perUser, 3) : "담을 수 없음");
+    GP.stat("fit-o-t", r.fits ? HB_F(r.tokS, 4) : "—");
+    GP.stat("fit-o-c", "$" + Math.round(r.cost).toLocaleString("en-US"));
+  }
+  cv = GP.canvas(document.getElementById("fit-cv"), function (ctx, w, h) {
+    var P = GP.palette(), now = fitCalc(opt());
+    var b1 = { x: 56, y: 26, w: w - 76, h: h * 0.42 - 40 }, b2 = { x: 56, y: h * 0.42 + 30, w: w - 76, h: h * 0.58 - 76 };
+    var capMax = Math.max(8 * +gG(), now.need / 1e9) * 1.1;
+    GP.chart(ctx, b1, {
+      x: [0.5, 8.5], y: [0, capMax], xTicks: [1, 2, 3, 4, 5, 6, 7, 8], yLabel: "GB",
+      hlines: [{ y: now.need / 1e9, color: P.bad, label: "필요 " + HB_F(now.need / 1e9, 4) + " GB", dash: [6, 4], width: 1.6 }],
+      after: function (c, A) {
+        for (var n = 1; n <= 8; n++) {
+          var cap = n * +gG(), ok = cap * 1e9 >= now.need, x0 = A.X(n - 0.32), x1 = A.X(n + 0.32);
+          c.fillStyle = GP.alpha(ok ? P.dram : P.faint, n === gN() ? 0.95 : 0.45);
+          c.fillRect(x0, A.Y(cap), x1 - x0, A.Y(0) - A.Y(cap));
+        }
+      },
+    });
+    GP.text(ctx, "스택 수별 용량(막대)과 필요 용량", b1.x, 12, { size: 12, color: P.dim, baseline: "middle" });
+    var pu = [], tot = [], yM = 10;
+    for (var n = 1; n <= 8; n++) { var r = fitCalc(opt(n)); pu.push([n, r.perUser]); yM = Math.max(yM, r.perUser); }
+    GP.chart(ctx, b2, {
+      x: [0.5, 8.5], y: [0, Math.ceil(yM * 1.15 / 10) * 10], xTicks: [1, 2, 3, 4, 5, 6, 7, 8], xLabel: "HBM 스택 수", yLabel: "토큰/s (사용자당)",
+      series: [{ data: pu, color: P.data, width: 2.2, dots: 3.5, label: "대역폭 상한" }],
+      points: [{ x: gN(), y: now.perUser, color: now.fits ? P.accent : P.bad, r: 6, ring: true, label: HB_F(now.perUser, 3) + (now.fits ? "" : " (용량 부족)") }],
+    });
+  }, { height: function (w) { return w < 500 ? 400 : 420; } });
+  readout();
+})();
+</script>
+</body>
+</html>

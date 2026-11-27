@@ -1,0 +1,1243 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SM 해부: 워프와 레지스터 파일 · GPUBook</title>
+<meta name="description" content="GPU 연산의 기본 단위인 SM을 서브파티션·워프 스케줄러·스코어보드·레지스터 파일·L1으로 해부하고, GTO·LRR 발행 사이클 시뮬레이션, 지연과 ILP로 필요한 워프 수, 이중 발행과 실행 유닛 처리량, 레지스터 뱅크 충돌과 오퍼랜드 수집기, 점유율 계산기, 분기 발산과 재수렴, 3.2 mm² SM 면적 예산과 3D 평면도까지 계산 모델로 다룬다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+  svg .lb { fill: var(--text); font-family: var(--font); font-size: 13px; }
+  svg .lb-b { fill: var(--text); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lb-s { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .lb-m { fill: var(--text-dim); font-family: var(--mono); font-size: 12px; }
+  svg .lb-c { text-anchor: middle; }
+  svg .bx { fill: var(--bg-elev); stroke: var(--border); }
+  svg .on-m { fill: color-mix(in srgb, var(--compute) 70%, var(--bg-elev)); }
+  svg .off-m { fill: color-mix(in srgb, var(--text-faint) 18%, var(--bg-elev)); }
+  .v.ok { color: var(--ok); } .v.warn { color: var(--warn); } .v.bad { color: var(--bad); }
+  p.small { font-size: 14px; color: var(--text-dim); }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="sm">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 03</div>
+    <h1>SM 해부: 워프와 레지스터 파일</h1>
+    <p class="lead">GX-1 다이의 약 66 %는 같은 블록 160개를 복사해 붙인 것이다. 그 블록이 <span class="term">스트리밍 멀티프로세서</span><span class="en">(streaming multiprocessor, SM)</span>다. 면적 3.2 mm²의 SM 하나에 FP32 레인 128개, 텐서 코어 4개, 그리고 L1과 같은 256 KB짜리 <span class="term">레지스터 파일</span>이 들어 있다. <a href="throughput.html">2장</a>에서 지연은 캐시가 아니라 동시에 떠 있는 많은 워프로 숨긴다고 했다. 이 장은 그 원리가 SM 안에서 어떤 회로가 되는지, 그리고 왜 레지스터 파일이 이렇게 커야 하는지 계산한다. 핵심 도구는 <b>점유율 계산</b>이다.</p>
+    <ul class="objectives">
+      <li>SM의 서브파티션 구조와 명령어가 인출 → 디코드 → 스코어보드 → 발행 → 오퍼랜드 수집 → 실행을 거치는 길을 설명할 수 있다.</li>
+      <li>워프 스케줄러의 발행 정책(LRR·GTO)과 의존성 대기를 사이클 단위로 시뮬레이션하고 IPC를 잴 수 있다.</li>
+      <li>리틀의 법칙으로 평균 지연과 ILP에서 필요한 워프 수를 구하고, 그것이 레지스터 파일 크기를 정하는 과정을 설명할 수 있다.</li>
+      <li>레지스터 뱅크 충돌 확률과 오퍼랜드 수집기의 효과를 계산할 수 있다.</li>
+      <li>스레드당 레지스터·블록 크기·공유 메모리로부터 SM당 블록 수, 워프 수, 점유율, 제한 요인을 구할 수 있다.</li>
+      <li>분기 발산의 SIMT 효율을 계산하고, 재수렴 스택과 독립 스레드 스케줄링을 비교할 수 있다.</li>
+      <li>3.2 mm²의 SM 면적을 블록별로 나누고, 레지스터를 늘리면 무엇이 줄어드는지 처리량으로 따질 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="map">
+    <h2>SM 한 개의 지도</h2>
+    <p>SM은 네 개의 <span class="term">서브파티션</span><span class="en">(sub-partition, processing block)</span>으로 나뉜다. 각 서브파티션은 작은 독립 프로세서다. <span class="term">워프 스케줄러</span> 1개가 클럭마다 워프 하나의 명령어 하나를 발행하고, 그 명령어는 FP32 레인 32개(워프 32 스레드를 한 클럭에), INT32 레인 16개, FP64 레인 16개, 특수 함수 유닛(SFU) 4개, 텐서 코어 1개, 로드·스토어 유닛 8개 중 하나로 간다. 서브파티션마다 64 KB 레지스터 파일이 붙어 있다. 네 서브파티션은 명령어 캐시, <span class="term">L1/공유 메모리</span> 256 KB, 텍스처·주소 유닛을 함께 쓴다.</p>
+    <p>왜 SM 하나에 스케줄러를 네 개 두고 쪼개는가? 스케줄러 하나가 레인 128개를 먹이려면 클럭마다 워프 4개를 골라야 하고, 레지스터 파일은 그만큼 포트가 많아야 한다. 포트 수가 늘면 SRAM 면적과 배선이 대략 포트 수의 제곱으로 커진다. 그래서 "작은 스케줄러 + 작은 레지스터 파일 + 32 레인"을 한 묶음으로 만들고 네 번 복사한다. 각 묶음 안의 배선이 짧아 에너지도 적다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 400" role="img" aria-label="SM 블록도: 명령어 캐시 아래 서브파티션 4개, 각각 스케줄러·레지스터 파일·FP32·INT32·FP64·텐서 코어·LD/ST·SFU, 그 아래 공유 L1/공유 메모리와 텍스처 유닛">
+        <rect x="10" y="10" width="840" height="380" rx="10" class="f-surface"/>
+        <text x="24" y="32" class="lb-b">SM (약 3.2 mm²)</text>
+        <rect x="250" y="18" width="360" height="30" rx="6" class="k-ctrl"/>
+        <text x="430" y="38" class="lb lb-c">명령어 캐시 · 인출 · 블록 배정</text>
+        <g transform="translate(0,0)">
+          <rect x="24" y="60" width="196" height="232" rx="8" class="bx"/>
+          <text x="122" y="78" class="lb-s lb-c">서브파티션 0</text>
+          <rect x="34" y="86" width="176" height="28" rx="5" class="k-ctrl"/><text x="122" y="105" class="lb lb-c">워프 스케줄러 + 디스패치</text>
+          <rect x="34" y="120" width="176" height="34" rx="5" class="k-sram"/><text x="122" y="142" class="lb lb-c">레지스터 파일 64 KB</text>
+          <rect x="34" y="160" width="86" height="34" rx="5" class="k-compute"/><text x="77" y="182" class="lb lb-c">FP32 ×32</text>
+          <rect x="124" y="160" width="86" height="34" rx="5" class="k-compute"/><text x="167" y="182" class="lb lb-c">INT32 ×16</text>
+          <rect x="34" y="200" width="86" height="34" rx="5" class="k-compute"/><text x="77" y="222" class="lb lb-c">FP64 ×16</text>
+          <rect x="124" y="200" width="86" height="34" rx="5" class="k-tensor"/><text x="167" y="222" class="lb lb-c">텐서 코어</text>
+          <rect x="34" y="240" width="86" height="40" rx="5" class="k-data"/><text x="77" y="265" class="lb lb-c">LD/ST ×8</text>
+          <rect x="124" y="240" width="86" height="40" rx="5" class="k-compute"/><text x="167" y="265" class="lb lb-c">SFU ×4</text>
+                </g>
+        <g transform="translate(208,0)">
+          <rect x="24" y="60" width="196" height="232" rx="8" class="bx"/>
+          <text x="122" y="78" class="lb-s lb-c">서브파티션 1</text>
+          <rect x="34" y="86" width="176" height="28" rx="5" class="k-ctrl"/><text x="122" y="105" class="lb lb-c">워프 스케줄러 + 디스패치</text>
+          <rect x="34" y="120" width="176" height="34" rx="5" class="k-sram"/><text x="122" y="142" class="lb lb-c">레지스터 파일 64 KB</text>
+          <rect x="34" y="160" width="86" height="34" rx="5" class="k-compute"/><text x="77" y="182" class="lb lb-c">FP32 ×32</text>
+          <rect x="124" y="160" width="86" height="34" rx="5" class="k-compute"/><text x="167" y="182" class="lb lb-c">INT32 ×16</text>
+          <rect x="34" y="200" width="86" height="34" rx="5" class="k-compute"/><text x="77" y="222" class="lb lb-c">FP64 ×16</text>
+          <rect x="124" y="200" width="86" height="34" rx="5" class="k-tensor"/><text x="167" y="222" class="lb lb-c">텐서 코어</text>
+          <rect x="34" y="240" width="86" height="40" rx="5" class="k-data"/><text x="77" y="265" class="lb lb-c">LD/ST ×8</text>
+          <rect x="124" y="240" width="86" height="40" rx="5" class="k-compute"/><text x="167" y="265" class="lb lb-c">SFU ×4</text>
+                </g>
+        <g transform="translate(416,0)">
+          <rect x="24" y="60" width="196" height="232" rx="8" class="bx"/>
+          <text x="122" y="78" class="lb-s lb-c">서브파티션 2</text>
+          <rect x="34" y="86" width="176" height="28" rx="5" class="k-ctrl"/><text x="122" y="105" class="lb lb-c">워프 스케줄러 + 디스패치</text>
+          <rect x="34" y="120" width="176" height="34" rx="5" class="k-sram"/><text x="122" y="142" class="lb lb-c">레지스터 파일 64 KB</text>
+          <rect x="34" y="160" width="86" height="34" rx="5" class="k-compute"/><text x="77" y="182" class="lb lb-c">FP32 ×32</text>
+          <rect x="124" y="160" width="86" height="34" rx="5" class="k-compute"/><text x="167" y="182" class="lb lb-c">INT32 ×16</text>
+          <rect x="34" y="200" width="86" height="34" rx="5" class="k-compute"/><text x="77" y="222" class="lb lb-c">FP64 ×16</text>
+          <rect x="124" y="200" width="86" height="34" rx="5" class="k-tensor"/><text x="167" y="222" class="lb lb-c">텐서 코어</text>
+          <rect x="34" y="240" width="86" height="40" rx="5" class="k-data"/><text x="77" y="265" class="lb lb-c">LD/ST ×8</text>
+          <rect x="124" y="240" width="86" height="40" rx="5" class="k-compute"/><text x="167" y="265" class="lb lb-c">SFU ×4</text>
+                </g>
+        <g transform="translate(624,0)">
+          <rect x="24" y="60" width="196" height="232" rx="8" class="bx"/>
+          <text x="122" y="78" class="lb-s lb-c">서브파티션 3</text>
+          <rect x="34" y="86" width="176" height="28" rx="5" class="k-ctrl"/><text x="122" y="105" class="lb lb-c">워프 스케줄러 + 디스패치</text>
+          <rect x="34" y="120" width="176" height="34" rx="5" class="k-sram"/><text x="122" y="142" class="lb lb-c">레지스터 파일 64 KB</text>
+          <rect x="34" y="160" width="86" height="34" rx="5" class="k-compute"/><text x="77" y="182" class="lb lb-c">FP32 ×32</text>
+          <rect x="124" y="160" width="86" height="34" rx="5" class="k-compute"/><text x="167" y="182" class="lb lb-c">INT32 ×16</text>
+          <rect x="34" y="200" width="86" height="34" rx="5" class="k-compute"/><text x="77" y="222" class="lb lb-c">FP64 ×16</text>
+          <rect x="124" y="200" width="86" height="34" rx="5" class="k-tensor"/><text x="167" y="222" class="lb lb-c">텐서 코어</text>
+          <rect x="34" y="240" width="86" height="40" rx="5" class="k-data"/><text x="77" y="265" class="lb lb-c">LD/ST ×8</text>
+          <rect x="124" y="240" width="86" height="40" rx="5" class="k-compute"/><text x="167" y="265" class="lb lb-c">SFU ×4</text>
+                </g>
+        <rect x="24" y="304" width="620" height="40" rx="7" class="k-sram"/>
+        <text x="334" y="329" class="lb lb-c">L1 데이터 캐시 / 공유 메모리 통합 256 KB (공유 최대 228 KB, 뱅크 32개 × 4 B)</text>
+        <rect x="656" y="304" width="188" height="40" rx="7" class="k-data"/><text x="750" y="329" class="lb lb-c">텍스처 · 주소 유닛</text>
+        <path d="M334 344 V372" class="arr-t"/><text x="344" y="372" class="lb-s">크로스바 → L2 (9장)</text>
+        <path d="M77 280 V302" class="arr"/><path d="M285 280 V302" class="arr"/><path d="M493 280 V302" class="arr"/><path d="M701 280 V302" class="arr"/>
+      </svg>
+      <figcaption><b>그림 3-1.</b> GX-1 SM 블록도. 색은 책 전체 색 코드를 따른다(<span class="m-key ctrl">제어</span><span class="m-key sram">SRAM</span><span class="m-key compute">연산 레인</span><span class="m-key tensor">텐서</span><span class="m-key data">데이터 이동</span>). 같은 서브파티션이 네 번 복사되고, L1/공유 메모리는 네 개가 함께 쓴다.</figcaption>
+    </figure>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>자원</th><th>서브파티션 1개</th><th>SM 1개</th><th>칩(활성 SM 144개)</th></tr></thead>
+      <tbody>
+        <tr><td>워프 스케줄러 (클럭당 발행)</td><td>1 (명령어 1개)</td><td>4</td><td>576</td></tr>
+        <tr><td>FP32 레인</td><td>32</td><td>128</td><td>18,432 → 59.0 TFLOPS</td></tr>
+        <tr><td>텐서 코어 (클럭당 BF16 FMA 512개)</td><td>1</td><td>4</td><td>576 → 943.7 TFLOPS</td></tr>
+        <tr><td>레지스터 파일</td><td>64 KB (32비트 16,384개, 뱅크 4개)</td><td>256 KB (65,536개)</td><td>36 MB</td></tr>
+        <tr><td>상주 워프 / 스레드</td><td>16 / 512</td><td>64 / 2,048</td><td>9,216 / 294,912</td></tr>
+        <tr><td>L1/공유 메모리</td><td>(공유)</td><td>256 KB</td><td>36 MB</td></tr>
+      </tbody>
+    </table></div>
+    <p class="small">상주 스레드 294,912개는 2장 리틀의 법칙의 결론("HBM 7.37 TB/s × 500 ns ≈ 3.7 MB가 늘 날아다녀야 한다")을 하드웨어가 받아 내는 그릇이다. 스레드 하나가 4 B 로드를 몇 개만 띄워도 메가바이트 단위의 요청이 동시에 떠 있게 된다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="pipeline">
+    <h2>명령어가 발행되기까지: 스코어보드와 워프 스케줄러</h2>
+    <p>SM의 파이프라인은 CPU 코어보다 훨씬 단순하다. 분기 예측도, 비순차 실행도, 레지스터 이름 바꾸기도 없다. 대신 <b>워프가 많다</b>. 명령어 캐시에서 워프별 명령어를 인출해 디코드하고, 워프마다 두세 개짜리 <span class="term">명령어 버퍼</span>에 넣는다. 매 클럭 워프 스케줄러는 버퍼 맨 앞 명령어가 <b>발행 가능한</b> 워프 중 하나를 고른다. 발행 가능 여부는 <span class="term">스코어보드</span><span class="en">(scoreboard)</span>가 정한다. 스코어보드는 워프마다 "아직 결과가 안 돌아온 목적 레지스터" 목록을 들고 있다가, 명령어의 소스나 목적 레지스터가 그 목록에 있으면 그 워프를 막는다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 170" role="img" aria-label="SM 명령어 파이프라인: 인출, 디코드, 워프별 명령어 버퍼, 스코어보드 검사, 워프 스케줄러 선택, 오퍼랜드 수집, 실행, 쓰기">
+        <g class="lb lb-c">
+          <rect x="10" y="40" width="88" height="48" rx="7" class="k-ctrl"/><text x="54" y="60">인출</text><text x="54" y="78" class="lb-s lb-c">I-캐시</text>
+          <rect x="116" y="40" width="88" height="48" rx="7" class="k-ctrl"/><text x="160" y="60">디코드</text><text x="160" y="78" class="lb-s lb-c">명령어 → 제어</text>
+          <rect x="222" y="22" width="100" height="84" rx="7" class="k-ctrl"/><text x="272" y="42">명령어 버퍼</text>
+          <rect x="234" y="50" width="76" height="12" rx="2" class="bx"/><rect x="234" y="66" width="76" height="12" rx="2" class="bx"/><rect x="234" y="82" width="76" height="12" rx="2" class="bx"/>
+          <rect x="340" y="40" width="96" height="48" rx="7" class="k-ctrl"/><text x="388" y="60">스코어보드</text><text x="388" y="78" class="lb-s lb-c">의존성 검사</text>
+          <rect x="454" y="40" width="96" height="48" rx="7" class="k-ctrl"/><text x="502" y="60">스케줄러</text><text x="502" y="78" class="lb-s lb-c">워프 1개 선택</text>
+          <rect x="568" y="40" width="96" height="48" rx="7" class="k-sram"/><text x="616" y="60">오퍼랜드 수집</text><text x="616" y="78" class="lb-s lb-c">RF 뱅크 읽기</text>
+          <rect x="682" y="40" width="80" height="48" rx="7" class="k-compute"/><text x="722" y="60">실행</text><text x="722" y="78" class="lb-s lb-c">4–30+ 클럭</text>
+          <rect x="780" y="40" width="70" height="48" rx="7" class="k-sram"/><text x="815" y="60">쓰기</text><text x="815" y="78" class="lb-s lb-c">RF</text>
+        </g>
+        <path d="M98 64 H114" class="arr"/><path d="M204 64 H220" class="arr"/><path d="M322 64 H338" class="arr"/><path d="M436 64 H452" class="arr"/><path d="M550 64 H566" class="arr"/><path d="M664 64 H680" class="arr"/><path d="M762 64 H778" class="arr"/>
+        <path d="M815 90 V140 H388 V92" class="arr-a"/>
+        <text x="600" y="134" class="lb-s">결과가 돌아오면 스코어보드 비트를 지운다</text>
+        <text x="10" y="160" class="lb-s">앞 단(인출·디코드)은 워프 하나씩 차례로, 뒤 단은 클럭마다 발행된 명령어 하나씩. 지연이 있어도 다른 워프가 그 틈을 채운다.</text>
+      </svg>
+      <figcaption><b>그림 3-2.</b> 서브파티션 하나의 명령어 경로. 제어 부분(주황)이 CPU보다 작은 이유는 추측 실행을 하지 않기 때문이다. 대기는 스코어보드가 워프 단위로 처리하고, 대기하는 동안 다른 워프가 발행한다.</figcaption>
+    </figure>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 200" role="img" aria-label="스코어보드 예: 워프마다 대기 중 레지스터 비트, 워프 0은 r1 로드 대기로 막히고 워프 1이 발행된다">
+        <text x="10" y="22" class="lb-b">스코어보드 (레지스터 r0–r7, 1 = 결과 대기 중)</text>
+        <g class="lb-m">
+          <text x="10" y="52">워프 0</text><text x="10" y="86">워프 1</text><text x="10" y="120">워프 2</text>
+          <text x="92" y="36">r0</text><text x="126" y="36">r1</text><text x="160" y="36">r2</text><text x="194" y="36">r3</text><text x="228" y="36">r4</text><text x="262" y="36">r5</text><text x="296" y="36">r6</text><text x="330" y="36">r7</text>
+        </g>
+        <g>
+          <rect x="86" y="40" width="30" height="20" class="bx"/><rect x="120" y="40" width="30" height="20" class="kf-data"/><rect x="154" y="40" width="30" height="20" class="kf-data"/><rect x="188" y="40" width="30" height="20" class="bx"/><rect x="222" y="40" width="30" height="20" class="bx"/><rect x="256" y="40" width="30" height="20" class="bx"/><rect x="290" y="40" width="30" height="20" class="bx"/><rect x="324" y="40" width="30" height="20" class="bx"/>
+          <rect x="86" y="74" width="30" height="20" class="bx"/><rect x="120" y="74" width="30" height="20" class="bx"/><rect x="154" y="74" width="30" height="20" class="bx"/><rect x="188" y="74" width="30" height="20" class="kf-compute"/><rect x="222" y="74" width="30" height="20" class="bx"/><rect x="256" y="74" width="30" height="20" class="bx"/><rect x="290" y="74" width="30" height="20" class="bx"/><rect x="324" y="74" width="30" height="20" class="bx"/>
+          <rect x="86" y="108" width="30" height="20" class="bx"/><rect x="120" y="108" width="30" height="20" class="kf-data"/><rect x="154" y="108" width="30" height="20" class="bx"/><rect x="188" y="108" width="30" height="20" class="bx"/><rect x="222" y="108" width="30" height="20" class="bx"/><rect x="256" y="108" width="30" height="20" class="bx"/><rect x="290" y="108" width="30" height="20" class="bx"/><rect x="324" y="108" width="30" height="20" class="bx"/>
+        </g>
+        <g class="lb-m">
+          <text x="380" y="54">다음: FMA r3 ← r1·r2 + r3</text><text x="380" y="88">다음: IADD r5 ← r5 + 1</text><text x="380" y="122">다음: FMA r4 ← r1·r1 + r4</text>
+        </g>
+        <text x="640" y="54" class="lb kt-ctrl" style="fill:var(--bad)">막힘 (r1·r2 로드 대기)</text>
+        <text x="640" y="88" class="lb" style="fill:var(--ok)">발행 가능 → 선택</text>
+        <text x="640" y="122" class="lb" style="fill:var(--bad)">막힘 (r1 로드 대기)</text>
+        <text x="10" y="160" class="lb-s">워프 1의 r3는 대기 중이지만 다음 명령어가 r3를 쓰지 않으므로 막지 않는다.</text>
+        <text x="10" y="180" class="lb-s">비트표로 만들면 워프당 255비트라, 실제로는 대기 중 레지스터 번호 몇 개만 담는 작은 표로 면적을 줄인다.</text>
+      </svg>
+      <figcaption><b>그림 3-3.</b> 스코어보드는 워프마다 "결과 대기 중" 레지스터를 표시한다. 로드 결과(파랑)나 FMA 결과(초록)가 아직 없으면 그 레지스터를 읽는 명령어는 발행되지 않는다. 막힌 워프를 건너뛰는 비용은 0 클럭이다. 문맥이 모두 레지스터 파일에 상주하기 때문이다(2장).</figcaption>
+    </figure>
+
+    <p>여러 워프가 동시에 발행 가능하면 누구를 고를까? 대표적인 두 정책이 있다. <span class="term">느슨한 라운드 로빈</span><span class="en">(loose round-robin, LRR)</span>은 직전에 발행한 워프 다음 번호부터 차례로 찾는다. <span class="term">GTO</span><span class="en">(greedy-then-oldest)</span>는 직전 워프가 계속 발행 가능하면 그 워프를 고집하고, 막히면 가장 오래된(번호가 작은) 발행 가능 워프로 넘어간다. 아래 시뮬레이터는 서브파티션 하나를 사이클 단위로 돌린다. 각 워프는 같은 루프를 실행한다. "메모리 위주" 루프는 명령어 6개 중 로드가 2개(LD r1, LD r2 → FMA r3 ← r1·r2+r3 → FMA r4 ← r3… → IADD → FMA), "연산 위주" 루프는 8개 중 로드 1개다. FMA·IADD 지연은 4클럭, 로드 지연은 손잡이로 정한다. 로드·스토어 유닛은 8개라 워프 하나의 로드가 4클럭 동안 LSU를 점유한다.</p>
+
+    <div class="sim" id="sim-sched">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>워프 스케줄러 사이클 시뮬레이션: LRR vs GTO</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sch-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>워프 수 (서브파티션당) <output id="sch-n-out"></output></span><input type="range" id="sch-n" min="1" max="16" step="1" value="8"></label>
+          <label class="ctrl"><span>로드 지연 <output id="sch-lat-out"></output></span><input type="range" id="sch-lat" min="10" max="800" step="10" value="30"></label>
+          <div class="ctrl"><span>발행 정책</span><div class="seg" id="sch-pol"><button data-value="lrr" class="on">LRR</button><button data-value="gto">GTO</button></div></div>
+          <div class="ctrl"><span>루프</span><div class="seg" id="sch-prog"><button data-value="mem" class="on">메모리 위주</button><button data-value="alu">연산 위주</button></div></div>
+          <button class="btn" id="sch-play">재생 / 멈춤</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">IPC (이 정책)</span><span class="v" id="sch-ipc">—</span></div>
+        <div class="stat"><span class="k">IPC (다른 정책)</span><span class="v" id="sch-ipc2">—</span></div>
+        <div class="stat"><span class="k">빈 발행 슬롯</span><span class="v" id="sch-stall">—</span></div>
+        <div class="stat"><span class="k">첫 워프 완료</span><span class="v" id="sch-first">—</span></div>
+      </div>
+      <div class="sim-note">위 간트 차트: 행 = 워프, 칸 = 클럭(앞 구간), 색 = 발행된 명령어(<span class="m-key data">LD</span><span class="m-key compute">FMA</span><span class="m-key ctrl">IADD</span>). 맨 아래 줄은 빈 발행 슬롯(회색 = 의존성 대기, 주황 = LSU 사용 중). IPC는 워프마다 루프 32회를 끝낼 때까지 잰다.<br>해볼 것: ① 메모리 위주·로드 30클럭에서 워프 1 → 4 → 8로 늘리면 IPC가 약 0.14 → 0.54 → 0.75로 오르다 0.75에서 멈춘다. 명령어 6개당 LSU 8클럭이 상한(6/8)이다. ② 같은 조건에서 GTO로 바꾸면 워프 8개 IPC가 약 0.53으로 LRR보다 낮다. GTO가 몇 개 워프에 발행을 몰아 그 워프들이 같은 단계(로드)에서 LSU를 두고 부딪친다. 대신 첫 워프 완료는 훨씬 빠르다. ③ 로드 지연 800클럭이면 워프 16개로도 IPC가 약 0.12다. 서브파티션당 워프 16개로는 HBM 지연을 못 숨긴다. 다음 절에서 그 이유를 수로 본다.</div>
+    </div>
+
+    <p>이 모델에는 캐시가 없어서 GTO의 진짜 장점이 드러나지 않는다. 실제 칩에서 GTO가 널리 쓰이는 까닭은 소수의 워프를 먼저 끝까지 밀어 <b>그 워프들의 데이터가 L1에 남아 있을 때 다시 쓰게</b> 하고(캐시 지역성), 일찍 끝난 워프의 블록 자원(레지스터·공유 메모리)을 빨리 돌려주기 때문이다. 반대로 LRR은 워프들을 고르게 진행시켜 단계를 흩어 놓으므로 한 유닛에 요청이 몰리는 일이 적다. 두 정책 모두 회로 비용은 거의 같다(우선순위 인코더 하나). <b>왜 이렇게 설계하는가:</b> 스케줄러는 매 클럭 16개 워프 중 하나를 골라야 하므로 단순한 고정 우선순위 논리여야 한다. 복잡한 정책(지연 예측, 동적 우선순위)은 면적보다 <b>타이밍</b>에서 비싸다. 1.6 GHz에서 선택 논리는 한 클럭 안에 끝나야 한다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="latency">
+    <h2>파이프라인 지연, ILP, 그리고 필요한 워프 수</h2>
+    <p>스케줄러가 매 클럭 발행하려면 매 클럭 발행 가능한 워프가 하나는 있어야 한다. 이것은 2장의 <b>리틀의 법칙</b>을 명령어에 적용한 것이다. 서브파티션이 클럭당 명령어 1개를 처리하고, 명령어 하나가 결과를 낼 때까지 평균 \(\bar L\) 클럭이 걸리면, 동시에 \(\bar L\)개의 명령어가 떠 있어야 한다. 한 워프가 서로 독립인 명령어를 \(\text{ILP}\)개까지 연달아 띄울 수 있다면(<span class="term">명령어 수준 병렬성</span><span class="en">(instruction-level parallelism, ILP)</span>) 필요한 워프 수는</p>
+    <div class="formula">$$N_{warp} \ge \frac{\bar L}{\text{ILP}},\qquad \bar L = (1-m)\,L_{alu} + m\left[h_1 L_{1} + (1-h_1)\big(h_2 L_{2} + (1-h_2)\,L_{HBM}\big)\right]$$
+      <div class="where">\(m\)은 명령어 중 메모리 로드 비율, \(h_1, h_2\)는 L1·L2 적중률, GX-1 지연 \(L_{alu}\) = 4, \(L_1\) ≈ 30, \(L_2\) ≈ 200, \(L_{HBM}\) ≈ 800클럭(500 ns × 1.6 GHz). 활용률은 \(U = \min(1,\ N\cdot\text{ILP}/\bar L)\). 메모리 대역폭 한계(2장·7장)는 여기서 따로 두고 지연만 본다.</div></div>
+    <p>예를 들어 로드 비율 10 %, L1 적중 80 %, L2 적중 60 %이면 \(\bar L = 0.9\times4 + 0.1\times[0.8\times30 + 0.2\times(0.6\times200 + 0.4\times800)] = 3.6 + 11.2 = 14.8\)클럭이다. ILP가 1이면 서브파티션당 워프 약 15개, SM당 약 59개가 필요하다. SM의 상한 64개에 거의 닿는다. ILP를 2로 올리면 SM당 약 30개로 충분하다.</p>
+
+    <div class="sim" id="sim-ilp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>지연 × ILP → 필요한 워프 수와 레지스터 예산</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ilp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>ILP (워프당 독립 명령어) <output id="ilp-ilp-out"></output></span><input type="range" id="ilp-ilp" min="1" max="8" step="1" value="1"></label>
+          <label class="ctrl"><span>로드 비율 m <output id="ilp-m-out"></output></span><input type="range" id="ilp-m" min="0" max="30" step="1" value="10"></label>
+          <label class="ctrl"><span>L1 적중률 <output id="ilp-h1-out"></output></span><input type="range" id="ilp-h1" min="0" max="100" step="5" value="80"></label>
+          <label class="ctrl"><span>L2 적중률 <output id="ilp-h2-out"></output></span><input type="range" id="ilp-h2" min="0" max="100" step="5" value="60"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">평균 지연</span><span class="v" id="ilp-lavg">—</span></div>
+        <div class="stat"><span class="k">필요 워프 / 스케줄러</span><span class="v" id="ilp-need">—</span></div>
+        <div class="stat"><span class="k">필요 워프 / SM (최대 64)</span><span class="v" id="ilp-sm">—</span></div>
+        <div class="stat"><span class="k">허용 레지스터 / 스레드</span><span class="v" id="ilp-reg">—</span></div>
+      </div>
+      <div class="sim-note">그래프: 서브파티션당 워프 수에 따른 발행 활용률 \(U\). 굵은 선이 현재 ILP, 가는 선은 ILP 1·2·4. 세로선은 필요한 워프 수와 상한 16. "허용 레지스터"는 필요한 워프를 다 올렸을 때 스레드 하나가 쓸 수 있는 레지스터(65,536 ÷ 워프 수 ÷ 32, 8개 단위 내림).<br>해볼 것: ① 기본값(ILP 1)에서 SM당 약 59워프가 필요하고 레지스터는 스레드당 32개까지만 쓸 수 있다. ② ILP를 2로 올리면 필요 워프가 약 30개로 줄고 레지스터를 64개까지 쓸 수 있다. 컴파일러가 루프를 펼쳐 ILP를 만드는 대가가 레지스터라는 점과 맞물린다. ③ L1 적중률을 0 %로 내리면 \(\bar L\)이 약 48클럭으로 뛰어 ILP 1로는 SM당 워프가 190개 넘게 필요하다. 지연을 워프만으로 숨길 수 없을 때 L1이 그 몫을 한다.</div>
+    </div>
+
+    <p>지연 말고 다른 한계도 있다. 명령어 하나는 해당 실행 유닛을 \(32/n_u\) 클럭 점유한다(\(n_u\)는 레인 수). FP32는 32레인이라 1클럭, INT32·FP64는 16레인이라 2클럭, LD/ST는 8개라 4클럭, SFU는 4개라 8클럭이다. 명령어 비율이 \(f_u\)이면</p>
+    <div class="formula">$$\text{IPC} \le \min\!\left(W,\ \frac{1}{\max_u f_u\,(32/n_u)}\right)$$
+      <div class="where">\(W\)는 스케줄러가 클럭당 발행하는 명령어 수(GX-1은 1). 오른쪽 항은 가장 붐비는 유닛이 정하는 상한이다.</div></div>
+    <p><span class="term">이중 발행</span><span class="en">(dual issue)</span>은 한 워프에서 서로 독립이고 다른 유닛으로 가는 명령어 두 개를 한 클럭에 내보내 \(W\)를 2로 만든다. GX-1은 이중 발행을 하지 않는다. 아래 시뮬레이터로 왜 그런지 따져 보자.</p>
+
+    <div class="sim" id="sim-issue">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>발행 폭과 실행 유닛 점유: 이중 발행은 얼마나 버나</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="iss-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>FP32 비율 <output id="iss-fp-out"></output></span><input type="range" id="iss-fp" min="0" max="100" step="5" value="50"></label>
+          <label class="ctrl"><span>INT32 비율 <output id="iss-int-out"></output></span><input type="range" id="iss-int" min="0" max="100" step="5" value="20"></label>
+          <label class="ctrl"><span>LD/ST 비율 <output id="iss-ld-out"></output></span><input type="range" id="iss-ld" min="0" max="100" step="5" value="20"></label>
+          <label class="ctrl"><span>SFU 비율 <output id="iss-sfu-out"></output></span><input type="range" id="iss-sfu" min="0" max="50" step="5" value="5"></label>
+          <label class="ctrl"><span>FP64 비율 <output id="iss-f64-out"></output></span><input type="range" id="iss-f64" min="0" max="100" step="5" value="5"></label>
+          <label class="ctrl"><span>발행 가능한 워프 <output id="iss-w-out"></output></span><input type="range" id="iss-w" min="1" max="8" step="1" value="8"></label>
+          <label class="ctrl"><span>이웃 명령어 의존 확률 <output id="iss-dep-out"></output></span><input type="range" id="iss-dep" min="0" max="100" step="5" value="50"></label>
+          <div class="ctrl"><span>발행 폭</span><div class="seg" id="iss-dual"><button data-value="1" class="on">1 (GX-1)</button><button data-value="2">2 (이중 발행)</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">IPC (시뮬레이션)</span><span class="v" id="iss-ipc">—</span></div>
+        <div class="stat"><span class="k">IPC 상한 (식)</span><span class="v" id="iss-bound">—</span></div>
+        <div class="stat"><span class="k">병목</span><span class="v" id="iss-by">—</span></div>
+        <div class="stat"><span class="k">쌍으로 나간 비율</span><span class="v" id="iss-pair">—</span></div>
+      </div>
+      <div class="sim-note">그림: 유닛별 점유 간트(앞 60클럭, 색 = 워프). 맨 위 점은 그 클럭에 발행된 명령어 수. 명령어 3,000개를 무작위(고정 시드)로 뽑아 돌린다. 비율은 합으로 정규화한다.<br>해볼 것: ① 기본 혼합에서 단일 발행은 IPC 약 1.0, 이중 발행은 약 1.16이다. 상한 1.25는 LD/ST(20 % × 4클럭 = 0.8)가 정한다. 발행 논리를 두 배로 해도 16 %만 번다. ② FP32 100 %로 두면 이중 발행해도 IPC 1이다. 같은 유닛으로 가는 두 명령어는 짝이 될 수 없다. ③ 발행 가능한 워프를 1로 줄이면 단일 발행 IPC가 약 0.77로 떨어진다. 워프가 많으면 스케줄러가 비어 있는 유닛으로 갈 명령어를 고를 수 있어, 이중 발행 없이도 유닛 사이 균형이 맞는다.</div>
+    </div>
+
+    <p><b>왜 이렇게 설계하는가:</b> 이중 발행에는 디스패치 포트 두 개, 레지스터 파일 읽기 대역폭 두 배(오퍼랜드 6개), 짝 검사 논리가 필요하다. 레지스터 파일 포트는 SRAM 면적을 키우는 가장 비싼 손잡이다. 반면 이득은 가장 붐비는 유닛이 정하는 상한에 막혀 작다. 워프가 많은 GPU에서는 "다른 워프에서 다른 유닛으로 갈 명령어를 고르는" 것이 이중 발행의 역할을 공짜로 대신한다. 그래서 GX-1은 스케줄러를 단일 발행으로 단순하게 두고, 그 면적을 레지스터 용량과 레인에 쓴다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="regfile">
+    <h2>레지스터 파일: 왜 L1만큼 큰가</h2>
+    <p>CPU 코어의 정수 레지스터 파일은 수 KB다. GX-1 SM의 레지스터 파일은 256 KB로, 같은 SM의 L1/공유 메모리 통합 256 KB와 같고 공유 메모리 최대치 228 KB보다 크다. 이렇게 큰 까닭은 2장의 결론 그대로다. <b>워프 전환이 공짜인 것은 모든 워프의 문맥이 레지스터 파일에 상주하기 때문</b>이다. 지연을 숨기려면 워프가 많아야 하고, 워프가 많으려면 레지스터가 많아야 한다.</p>
+    <div class="formula">$$S_{RF} = N_{warp}\times 32\ \text{스레드} \times R \times 4\,\text{B} = 64 \times 32 \times 32 \times 4\,\text{B} = 256\,\text{KB}$$
+      <div class="where">\(N_{warp}\) = 64는 SM의 상주 워프 상한, \(R\) = 32는 스레드당 레지스터. 즉 256 KB는 "스레드당 레지스터 32개로 상한 64워프를 꽉 채우는" 크기다. 스레드당 64개를 쓰면 32워프만 올라간다.</div></div>
+    <p>용량만이 아니다. FMA 하나는 피연산자 3개를 읽고 1개를 쓴다. 서브파티션이 클럭마다 FMA를 발행하면 읽기 대역폭은 \(3\times32\times4\,\text{B}\) = 384 B/클럭, SM 전체로 1,536 B/클럭이다. 공유 메모리는 SM당 128 B/클럭이므로 레지스터 파일이 약 12배 넓다. 이 대역폭을 단일 포트 SRAM으로 내려면 <b>뱅크</b>로 나눠야 한다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="서브파티션 레지스터 파일: 뱅크 4개, 뱅크마다 1024비트 폭 행 128개, 레지스터 번호 mod 4로 뱅크가 정해지고 크로스바를 지나 오퍼랜드 수집기로 간다">
+        <text x="10" y="20" class="lb-b">서브파티션 레지스터 파일 64 KB = 뱅크 4개 × 16 KB</text>
+        <g>
+          <rect x="20" y="36" width="150" height="150" rx="6" class="k-sram"/><text x="95" y="58" class="lb lb-c">뱅크 0</text>
+          <rect x="210" y="36" width="150" height="150" rx="6" class="k-sram"/><text x="285" y="58" class="lb lb-c">뱅크 1</text>
+          <rect x="400" y="36" width="150" height="150" rx="6" class="k-sram"/><text x="475" y="58" class="lb lb-c">뱅크 2</text>
+          <rect x="590" y="36" width="150" height="150" rx="6" class="k-sram"/><text x="665" y="58" class="lb lb-c">뱅크 3</text>
+        </g>
+        <g class="lb-m">
+          <text x="34" y="84">r0, r4, r8 …</text><text x="224" y="84">r1, r5, r9 …</text><text x="414" y="84">r2, r6, r10 …</text><text x="604" y="84">r3, r7, r11 …</text>
+          <text x="34" y="108">행 128개</text><text x="224" y="108">행 128개</text><text x="414" y="108">행 128개</text><text x="604" y="108">행 128개</text>
+          <text x="34" y="130">행 폭 1,024비트</text><text x="224" y="130">(32 스레드 × 32비트)</text><text x="414" y="130">읽기 포트 1개</text><text x="604" y="130">클럭당 행 1개</text>
+        </g>
+        <rect x="30" y="144" width="130" height="10" class="kf-sram" opacity=".7"/><rect x="220" y="144" width="130" height="10" class="kf-sram" opacity=".35"/><rect x="410" y="144" width="130" height="10" class="kf-sram" opacity=".35"/><rect x="600" y="144" width="130" height="10" class="kf-sram" opacity=".35"/>
+        <text x="34" y="176" class="lb-s">워프 w의 r4 = 한 행</text>
+        <rect x="20" y="200" width="720" height="26" rx="5" class="k-data"/><text x="380" y="218" class="lb lb-c">크로스바 (뱅크 → 수집기)</text>
+        <path d="M95 186 V198" class="arr"/><path d="M285 186 V198" class="arr"/><path d="M475 186 V198" class="arr"/><path d="M665 186 V198" class="arr"/>
+        <rect x="60" y="244" width="190" height="40" rx="6" class="k-ctrl"/><text x="155" y="262" class="lb lb-c">수집기 A: FMA r7←r1·r5+r6</text><text x="155" y="278" class="lb-s lb-c">r1·r5 같은 뱅크 1 → 2클럭</text>
+        <rect x="280" y="244" width="190" height="40" rx="6" class="k-ctrl"/><text x="375" y="262" class="lb lb-c">수집기 B: FMA r3←r0·r2+r3</text><text x="375" y="278" class="lb-s lb-c">뱅크 0·2·3 → 1클럭</text>
+        <path d="M155 228 V242" class="arr"/><path d="M375 228 V242" class="arr"/>
+        <rect x="500" y="244" width="120" height="40" rx="6" class="k-compute"/><text x="560" y="268" class="lb lb-c">FP32 ×32</text>
+        <path d="M470 264 H498" class="arr-t"/>
+        <text x="760" y="60" class="lb-s">16,384개</text><text x="760" y="78" class="lb-s">÷ 32 레인</text><text x="760" y="96" class="lb-s">= 워프 레지스터</text><text x="760" y="114" class="lb-s">512개</text><text x="760" y="140" class="lb-s">= 16워프 × 32</text>
+      </svg>
+      <figcaption><b>그림 3-4.</b> 레지스터 파일의 뱅크 구조. 워프의 레지스터 하나는 32 스레드 값을 한 행(1,024비트)에 담는다. 뱅크는 레지스터 번호 mod 4로 정해진다. 한 명령어의 피연산자 둘이 같은 뱅크에 있으면 한 클럭에 다 읽지 못해 <span class="term">뱅크 충돌</span>이 난다. <span class="term">오퍼랜드 수집기</span>는 피연산자를 여러 클럭에 걸쳐 모으는 버퍼로, 수집기가 여럿이면 한 명령어가 기다리는 동안 다른 명령어가 빈 뱅크를 쓴다.</figcaption>
+    </figure>
+
+    <p>레지스터 번호가 무작위라면 3개 피연산자가 서로 다른 뱅크에 있을 확률은 \(4\cdot3\cdot2/4^3 = 37.5\,\%\)뿐이다. 셋이 모두 같은 뱅크일 확률은 \(4/64 = 6.25\,\%\), 나머지 56.25 %는 둘이 겹친다. 수집기가 하나뿐이라 충돌이 그대로 직렬화되면 명령어당 평균 읽기 클럭은</p>
+    <div class="formula">$$E[c] = 1\times0.375 + 2\times0.5625 + 3\times0.0625 = 1.6875\ \text{클럭}\ \Rightarrow\ \text{IPC} \approx 0.59$$</div>
+    <p>이다. 해법은 세 가지다. (1) 수집기를 여러 개 두어 뱅크 사용을 겹친다. (2) 컴파일러가 한 명령어의 피연산자를 서로 다른 뱅크에 배정한다. (3) 직전 명령어가 읽은 피연산자를 작은 <span class="term">오퍼랜드 재사용 캐시</span>에 남겨 다시 읽지 않는다(명령어에 재사용 비트를 둔다). 세 번째는 에너지도 줄인다.</p>
+
+    <div class="sim" id="sim-bank">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>레지스터 뱅크 충돌과 오퍼랜드 수집기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bk-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>뱅크 수</span><div class="seg" id="bk-banks"><button data-value="2">2</button><button data-value="4" class="on">4 (GX-1)</button><button data-value="8">8</button></div></div>
+          <div class="ctrl"><span>오퍼랜드 수집기</span><div class="seg" id="bk-col"><button data-value="1" class="on">1</button><button data-value="2">2</button><button data-value="4">4</button></div></div>
+          <div class="ctrl"><span>레지스터 배정</span><div class="seg" id="bk-alloc"><button data-value="random" class="on">무작위</button><button data-value="aware">뱅크 인식</button></div></div>
+          <label class="check"><input type="checkbox" id="bk-reuse"> 재사용 캐시 (첫 피연산자 50 %가 직전과 같음)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">IPC (FMA 흐름)</span><span class="v" id="bk-ipc">—</span></div>
+        <div class="stat"><span class="k">충돌 명령어 비율</span><span class="v" id="bk-conf">—</span></div>
+        <div class="stat"><span class="k">RF 읽기 에너지 / 명령어</span><span class="v" id="bk-e">—</span></div>
+        <div class="stat"><span class="k">생략한 읽기</span><span class="v" id="bk-saved">—</span></div>
+      </div>
+      <div class="sim-note">그림: 행 = 뱅크, 칸 = 클럭(앞 24클럭), 칸 안 번호 = 그 클럭에 그 뱅크를 읽은 명령어. 맨 아래 ▲는 수집기가 피연산자를 다 모아 FP32 유닛으로 내보낸 클럭. FMA 2,000개(피연산자 3개)를 흘린다. 에너지는 레지스터 읽기 32비트 0.5 pJ × 32 레인.<br>해볼 것: ① 뱅크 4·수집기 1·무작위에서 IPC 약 0.60(식 0.59), 충돌 약 61 %. ② 수집기를 4개로 늘리면 IPC 약 0.98. 뱅크 4개 × 클럭당 1행 = 클럭당 피연산자 4개로 FMA 하나(3개)를 넉넉히 먹인다. ③ 수집기 1개에서 재사용 캐시를 켜면 읽기가 약 17 % 줄어 IPC 약 0.69, 명령어당 에너지 48 → 약 40 pJ. 뱅크 2개는 무엇을 해도 IPC가 2/3를 넘지 못한다.</div>
+    </div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 260" role="img" aria-label="SM 하나가 보는 메모리 계층의 용량과 클럭당 대역폭: 레지스터 1536 B, L1 128 B, L2 몫 57 B, HBM 몫 32 B">
+        <text x="10" y="20" class="lb-b">SM 하나 기준: 용량과 클럭당 대역폭 (대역폭 막대는 로그 눈금, 왼쪽 끝 = 8 B)</text>
+        <g class="lb">
+          <text x="10" y="62">레지스터 파일</text><text x="10" y="112">L1/공유 메모리</text><text x="10" y="162">L2 (144 SM 몫)</text><text x="10" y="212">HBM (144 SM 몫)</text>
+        </g>
+        <rect x="140" y="46" width="300" height="24" class="kf-sram"/><text x="448" y="63" class="lb-m">1,536 B/클럭</text>
+        <rect x="140" y="96" width="158" height="24" class="kf-sram" opacity=".75"/><text x="306" y="113" class="lb-m">128 B/클럭</text>
+        <rect x="140" y="146" width="112" height="24" class="kf-sram" opacity=".5"/><text x="260" y="163" class="lb-m">약 57 B/클럭</text>
+        <rect x="140" y="196" width="79" height="24" class="kf-dram"/><text x="227" y="213" class="lb-m">약 32 B/클럭</text>
+        <g class="lb-m">
+          <text x="580" y="40" class="lb-b">용량 / 지연 / 32비트 에너지</text>
+          <text x="580" y="63">256 KB · 1클럭대 · 0.5 pJ</text>
+          <text x="580" y="113">256 KB · 약 30클럭 · 1.5 pJ</text>
+          <text x="580" y="163">약 455 KB · 약 200클럭 · 6 pJ</text>
+          <text x="580" y="213">약 1 GB · 약 800클럭 · 약 100 pJ</text>
+        </g>
+        <text x="10" y="248" class="lb-s">로그 눈금: 32 → 1,536 B는 48배. 레지스터 파일은 칩 전체로 1,536 B × 144 × 1.6 GHz ≈ 354 TB/s, HBM 7.37 TB/s의 약 48배다.</text>
+      </svg>
+      <figcaption><b>그림 3-5.</b> SM 하나가 보는 계층. 레지스터 파일은 용량이 L1과 같지만 대역폭은 12배, 에너지는 1/3이다. L2·HBM 몫은 전체 값(L2 64 MB·약 13 TB/s, HBM 144 GB·7.37 TB/s)을 활성 SM 144개로 나눈 것이다. 계층마다 대역폭이 줄어드는 만큼 데이터를 레지스터에서 여러 번 다시 써야 한다(7장 루프라인, 6장 온칩 메모리).</figcaption>
+    </figure>
+
+    <div class="callout fab"><strong>레지스터 파일 256 KB의 산수</strong>SM당 256 KB × 활성 144개 = <b>36 MB</b>로 L2(64 MB)의 절반을 넘는다. 레지스터 파일 읽기 대역폭은 SM당 1,536 B/클럭 × 1.6 GHz ≈ 2.46 TB/s, 칩 전체 약 354 TB/s다. FP32 FMA 워프 명령 하나의 에너지를 에너지 표로 나누면 연산 32 × 0.8 = 25.6 pJ, 피연산자 읽기 3 × 32 × 0.5 = 48 pJ, 결과 쓰기 16 pJ다. <b>계산보다 피연산자를 옮기는 데 에너지가 더 든다.</b> 오퍼랜드 재사용 캐시와, 피연산자 하나로 곱셈을 수십 번 하는 텐서 코어(5장)가 필요한 이유다. 레지스터 파일을 L1처럼 태그 달린 캐시로 만들지 않는 것도 같은 이유다. 컴파일러가 주소(레지스터 번호)를 정적으로 정하므로 태그 비교가 필요 없고, 그 몫의 에너지와 지연이 사라진다.</div>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="occupancy">
+    <h2>점유율 계산: 무엇이 워프 수를 막는가</h2>
+    <p><span class="term">점유율</span><span class="en">(occupancy)</span>은 SM에 실제로 올라간 워프 수를 상한 64로 나눈 값이다. 스레드 블록은 통째로 한 SM에 배정되고, 블록 하나가 쓰는 레지스터·공유 메모리·워프 슬롯이 모두 SM에 남아 있어야 올라간다. 그래서 SM당 블록 수는 네 한계 중 가장 작은 값이다.</p>
+    <div class="formula">$$B = \min\!\left(\left\lfloor\frac{65{,}536}{r_w\,w_b}\right\rfloor,\ \left\lfloor\frac{64}{w_b}\right\rfloor,\ 32,\ \left\lfloor\frac{228\,\text{KB}}{s_b}\right\rfloor\right),\qquad r_w = 256\left\lceil\frac{32R}{256}\right\rceil,\qquad \text{점유율} = \frac{B\,w_b}{64}$$
+      <div class="where">\(w_b = \lceil T/32\rceil\)는 블록당 워프 수(\(T\): 블록당 스레드), \(R\)은 스레드당 레지스터, \(r_w\)는 워프 하나에 할당되는 레지스터(256개 단위로 올림 — 스레드당 8개 단위와 같다), \(s_b\)는 블록당 공유 메모리(이 책은 1 KB 단위로 올림한다고 가정). 서브파티션별 레지스터 파일 16,384개 경계와 블록당 예약 공유 메모리는 무시하고 SM 전체를 한 풀로 본다(교육용 가정).</div></div>
+    <p>스레드당 레지스터가 늘면 워프 수는 계단처럼 떨어진다. 256 스레드 블록이면 32개까지 64워프(100 %), 40개면 48워프, 64개면 32워프(50 %), 128개면 16워프, 255개면 8워프(12.5 %)다. 1,024 스레드 블록은 더 거칠다. 레지스터 64개를 넘는 순간 블록 하나도 올라가지 못한다(\(80\times32\times32 = 81{,}920 \gt 65{,}536\)).</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 680 260" role="img" aria-label="스레드당 레지스터에 따른 SM당 워프 수 계단 그래프, 256 스레드 블록과 1024 스레드 블록">
+        <line x1="60" y1="220" x2="630" y2="220" class="s-line"/><line x1="60" y1="20" x2="60" y2="220" class="s-line"/>
+        <g class="lb-m">
+          <text x="54" y="34" text-anchor="end">64</text><text x="54" y="129" text-anchor="end">32</text><text x="54" y="177" text-anchor="end">16</text><text x="54" y="224" text-anchor="end">0</text>
+          <text x="60" y="238" text-anchor="middle">16</text><text x="99.7" y="238" text-anchor="middle">32</text><text x="174.3" y="238" text-anchor="middle">64</text><text x="323.7" y="238" text-anchor="middle">128</text><text x="617.7" y="238" text-anchor="middle">255</text>
+        </g>
+        <line x1="60" y1="125" x2="630" y2="125" class="s-faint dash"/><line x1="60" y1="172.5" x2="630" y2="172.5" class="s-faint dash"/>
+        <polyline points="60.0,30.0 99.7,30.0 99.7,77.5 118.3,77.5 118.3,101.3 137.0,101.3 137.0,125.0 174.3,125.0 174.3,148.8 211.7,148.8 211.7,172.5 323.7,172.5 323.7,196.3 617.7,196.3" fill="none" stroke="var(--sram)" stroke-width="2.6"/>
+        <polyline points="60.0,31.5 99.7,31.5 99.7,125.0 174.3,125.0 174.3,218.5 617.7,218.5" fill="none" stroke="var(--warn)" stroke-width="2" stroke-dasharray="6 4"/>
+        <text x="340" y="252" class="lb-s lb-c">스레드당 레지스터 R</text>
+        <text x="14" y="16" class="lb-s">SM당 워프</text>
+        <text x="380" y="190" class="lb-s" style="fill:var(--sram)">256 스레드 블록</text>
+        <text x="200" y="212" class="lb-s" style="fill:var(--warn)">1,024 스레드 블록 (R > 64면 0)</text>
+        <text x="104" y="70" class="lb-s">R = 40 → 48워프</text>
+        <text x="180" y="118" class="lb-s">R = 64 → 32워프 (50 %)</text>
+      </svg>
+      <figcaption><b>그림 3-6.</b> 레지스터 한계만 볼 때의 SM당 워프 수(공유 메모리 0). 계단은 두 가지 정수 효과에서 나온다. 레지스터를 워프 단위 256개로 묶어 할당하는 올림과, 블록이 통째로만 올라가는 내림이다. 블록이 클수록 계단이 굵다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-occ">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>점유율 계산기 (GX-1 SM 한계)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="occ-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>스레드당 레지스터 <output id="occ-r-out"></output></span><input type="range" id="occ-r" min="16" max="255" step="1" value="64"></label>
+          <label class="ctrl"><span>블록당 스레드 <output id="occ-t-out"></output></span><input type="range" id="occ-t" min="32" max="1024" step="32" value="256"></label>
+          <label class="ctrl"><span>블록당 공유 메모리 <output id="occ-s-out"></output></span><input type="range" id="occ-s" min="0" max="228" step="2" value="0"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">SM당 블록</span><span class="v" id="occ-b">—</span></div>
+        <div class="stat"><span class="k">SM당 워프</span><span class="v" id="occ-w">—</span></div>
+        <div class="stat"><span class="k">점유율</span><span class="v" id="occ-o">—</span></div>
+        <div class="stat"><span class="k">제한 요인</span><span class="v" id="occ-by">—</span></div>
+        <div class="stat"><span class="k">레지스터 사용</span><span class="v" id="occ-rf">—</span></div>
+      </div>
+      <div class="sim-note">위: 네 한계가 각각 허용하는 블록 수(가장 짧은 막대가 답). 아래: 그 블록 수에서 레지스터 파일·공유 메모리·워프 슬롯을 얼마나 쓰는지.<br>해볼 것: ① 레지스터 64개·256 스레드에서 블록 4개·32워프(50 %), 레지스터가 제한 요인이다. 32개로 내리면 100 %. ② 레지스터 32개에서 공유 메모리를 48 KB로 올리면 블록 4개·50 %로 공유 메모리가 제한 요인이 된다. ③ 블록당 32 스레드(워프 1개)로 두면 레지스터를 아무리 줄여도 블록 한계 32에 걸려 50 %를 넘지 못한다. 블록 1,024 스레드·레지스터 80개는 블록이 하나도 올라가지 않는다.</div>
+    </div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>손잡이</th><th>조건</th><th>결과 (GX-1 SM)</th></tr></thead>
+      <tbody>
+        <tr><td>스레드당 레지스터↑</td><td>32 → 64개, 256 스레드 블록</td><td>워프 64 → 32, 점유율 100 → 50 %, 필요 워프를 못 채우면 지연 노출</td></tr>
+        <tr><td>블록당 공유 메모리↑</td><td>0 → 48 KB (레지스터 32개)</td><td>블록 8 → 4, 점유율 50 % (공유 메모리 제한)</td></tr>
+        <tr><td>블록 크기↑</td><td>1,024 스레드, 레지스터 80개</td><td>블록 0개 — 실행 불가</td></tr>
+        <tr><td>블록 크기↓</td><td>32 스레드(워프 1개)</td><td>블록 한계 32 → 점유율 최대 50 %</td></tr>
+        <tr><td>ILP↑</td><td>1 → 2 (\(\bar L\) = 14.8클럭)</td><td>필요 워프 SM당 59 → 30, 허용 레지스터 32 → 64개</td></tr>
+        <tr><td>레지스터 뱅크↑</td><td>4 → 8개 (수집기 1개, 무작위)</td><td>충돌 61 → 34 %, IPC 0.60 → 0.74</td></tr>
+        <tr><td>분기 발산</td><td>조건 확률 0.5, if·else 같은 길이</td><td>SIMT 효율 50 %</td></tr>
+        <tr><td>레지스터 파일↑ (텐서 면적에서)</td><td>256 → 384 KB, 커널 레지스터 128개, 필요 워프 32</td><td>워프 16 → 24, 실효 BF16 약 472 → 522 TFLOPS</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="callout fab"><strong>점유율이 낮아도 빠른 커널</strong>행렬곱(GEMM) 커널은 큰 출력 타일을 레지스터에 누산하므로 스레드당 레지스터를 많이 쓴다. 128 스레드 블록에 레지스터 168개면 워프당 5,376개 → 블록 3개 → SM당 12워프, 점유율 18.75 %다. 그래도 피크에 가깝게 도는 이유는 ILP다. 텐서 코어 명령과 독립 누산기 여러 개가 겹쳐 ILP가 약 5이면, \(\bar L\) = 14.8클럭에서 필요한 워프는 스케줄러당 약 3개, SM당 약 12개로 맞아떨어진다. <b>점유율은 목표가 아니라 지연을 숨길 수단 중 하나</b>다. 점유율(워프 수)과 ILP(워프 안 병렬성)를 레지스터라는 같은 예산에서 나눠 쓴다.</div>
+    <p><b>왜 이렇게 설계하는가:</b> 상한 64워프·32블록·레지스터 65,536개·공유 메모리 228 KB는 서로 맞물려 있다. 워프 슬롯(스케줄러 상태·명령어 버퍼·스코어보드 항목)은 워프마다 수백 비트라 싸지만, 레지스터는 워프마다 4 KB(32개 기준)다. 워프 상한을 128로 올려도 레지스터 파일을 함께 키우지 않으면 레지스터를 32개 미만으로 쓰는 커널만 득을 본다. 그래서 설계자는 "대표 커널이 쓰는 레지스터 수 × 지연을 숨길 워프 수"로 레지스터 파일을 정하고, 워프 상한은 그보다 약간 넉넉하게 둔다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="divergence">
+    <h2>분기 발산과 재수렴</h2>
+    <p>워프의 32 스레드는 명령어 하나를 함께 실행한다(SIMT). 스레드마다 조건이 다르면 하드웨어는 if 쪽을 실행하는 동안 else 스레드를 끄고, 다시 else 쪽을 실행하는 동안 if 스레드를 끈다. 켜진 스레드 집합이 <span class="term">활성 마스크</span><span class="en">(active mask)</span>다. 두 경로가 끝나는 지점(재수렴 지점)에서 마스크가 다시 32개로 합쳐진다. 이것이 <span class="term">분기 발산</span><span class="en">(branch divergence)</span>이다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 280" role="img" aria-label="분기 발산: 왼쪽은 if else 의사 코드와 시간에 따른 활성 마스크, 오른쪽은 재수렴 스택의 항목">
+        <text x="10" y="20" class="lb-b">의사 코드</text>
+        <g class="lb-m">
+          <text x="10" y="44">A: x = load(i)</text>
+          <text x="10" y="64">if (x &gt; 0) {</text>
+          <text x="30" y="84">B: y = f(x)</text>
+          <text x="10" y="104">} else {</text>
+          <text x="30" y="124">C: y = g(x)</text>
+          <text x="10" y="144">}</text>
+          <text x="10" y="164">D: store(y)   ← 재수렴</text>
+        </g>
+        <text x="220" y="20" class="lb-b">시간 → 활성 마스크 (레인 0–15만 표시)</text>
+        <g transform="translate(250,34)"><rect x="0" y="0" width="12" height="12" class="on-m"/><rect x="14" y="0" width="12" height="12" class="on-m"/><rect x="28" y="0" width="12" height="12" class="on-m"/><rect x="42" y="0" width="12" height="12" class="on-m"/><rect x="56" y="0" width="12" height="12" class="on-m"/><rect x="70" y="0" width="12" height="12" class="on-m"/><rect x="84" y="0" width="12" height="12" class="on-m"/><rect x="98" y="0" width="12" height="12" class="on-m"/><rect x="112" y="0" width="12" height="12" class="on-m"/><rect x="126" y="0" width="12" height="12" class="on-m"/><rect x="140" y="0" width="12" height="12" class="on-m"/><rect x="154" y="0" width="12" height="12" class="on-m"/><rect x="168" y="0" width="12" height="12" class="on-m"/><rect x="182" y="0" width="12" height="12" class="on-m"/><rect x="196" y="0" width="12" height="12" class="on-m"/><rect x="210" y="0" width="12" height="12" class="on-m"/></g><text x="482" y="45" class="lb-m">A  16/16</text>
+        <g transform="translate(250,74)">
+          <rect x="0" y="0" width="12" height="12" class="on-m"/><rect x="14" y="0" width="12" height="12" class="off-m"/><rect x="28" y="0" width="12" height="12" class="on-m"/><rect x="42" y="0" width="12" height="12" class="on-m"/><rect x="56" y="0" width="12" height="12" class="off-m"/><rect x="70" y="0" width="12" height="12" class="off-m"/><rect x="84" y="0" width="12" height="12" class="on-m"/><rect x="98" y="0" width="12" height="12" class="off-m"/><rect x="112" y="0" width="12" height="12" class="on-m"/><rect x="126" y="0" width="12" height="12" class="off-m"/><rect x="140" y="0" width="12" height="12" class="on-m"/><rect x="154" y="0" width="12" height="12" class="on-m"/><rect x="168" y="0" width="12" height="12" class="off-m"/><rect x="182" y="0" width="12" height="12" class="on-m"/><rect x="196" y="0" width="12" height="12" class="off-m"/><rect x="210" y="0" width="12" height="12" class="off-m"/>
+        </g><text x="482" y="85" class="lb-m">B  8/16</text>
+        <g transform="translate(250,114)">
+          <rect x="0" y="0" width="12" height="12" class="off-m"/><rect x="14" y="0" width="12" height="12" class="on-m"/><rect x="28" y="0" width="12" height="12" class="off-m"/><rect x="42" y="0" width="12" height="12" class="off-m"/><rect x="56" y="0" width="12" height="12" class="on-m"/><rect x="70" y="0" width="12" height="12" class="on-m"/><rect x="84" y="0" width="12" height="12" class="off-m"/><rect x="98" y="0" width="12" height="12" class="on-m"/><rect x="112" y="0" width="12" height="12" class="off-m"/><rect x="126" y="0" width="12" height="12" class="on-m"/><rect x="140" y="0" width="12" height="12" class="off-m"/><rect x="154" y="0" width="12" height="12" class="off-m"/><rect x="168" y="0" width="12" height="12" class="on-m"/><rect x="182" y="0" width="12" height="12" class="off-m"/><rect x="196" y="0" width="12" height="12" class="on-m"/><rect x="210" y="0" width="12" height="12" class="on-m"/>
+        </g><text x="482" y="125" class="lb-m">C  8/16</text>
+        <g transform="translate(250,154)"><rect x="0" y="0" width="12" height="12" class="on-m"/><rect x="14" y="0" width="12" height="12" class="on-m"/><rect x="28" y="0" width="12" height="12" class="on-m"/><rect x="42" y="0" width="12" height="12" class="on-m"/><rect x="56" y="0" width="12" height="12" class="on-m"/><rect x="70" y="0" width="12" height="12" class="on-m"/><rect x="84" y="0" width="12" height="12" class="on-m"/><rect x="98" y="0" width="12" height="12" class="on-m"/><rect x="112" y="0" width="12" height="12" class="on-m"/><rect x="126" y="0" width="12" height="12" class="on-m"/><rect x="140" y="0" width="12" height="12" class="on-m"/><rect x="154" y="0" width="12" height="12" class="on-m"/><rect x="168" y="0" width="12" height="12" class="on-m"/><rect x="182" y="0" width="12" height="12" class="on-m"/><rect x="196" y="0" width="12" height="12" class="on-m"/><rect x="210" y="0" width="12" height="12" class="on-m"/></g><text x="482" y="165" class="lb-m">D  16/16</text>
+        <text x="220" y="196" class="lb-s">B와 C는 차례로 실행된다: 두 구간 모두 레인 절반이 논다 → 효율 50 %</text>
+        <text x="600" y="20" class="lb-b">재수렴 스택 (B 실행 중)</text>
+        <rect x="600" y="32" width="250" height="28" class="bx"/><text x="610" y="51" class="lb-m">PC=B  마스크=x&gt;0   복귀=D</text>
+        <rect x="600" y="60" width="250" height="28" class="bx"/><text x="610" y="79" class="lb-m">PC=C  마스크=x≤0   복귀=D</text>
+        <rect x="600" y="88" width="250" height="28" class="k-ctrl"/><text x="610" y="107" class="lb-m">PC=D  마스크=전체</text>
+        <text x="600" y="136" class="lb-s">맨 위 항목을 실행하고, 복귀 PC(D)에</text>
+        <text x="600" y="154" class="lb-s">닿으면 꺼내 다음 항목으로 간다.</text>
+        <text x="600" y="186" class="lb-s">독립 스레드 스케줄링: 스레드마다 PC를</text>
+        <text x="600" y="204" class="lb-s">두고, 스케줄러가 같은 PC 스레드를</text>
+        <text x="600" y="222" class="lb-s">묶어 발행. 경로 사이 교대가 가능해</text>
+        <text x="600" y="240" class="lb-s">스레드 간 대기(잠금)가 교착되지 않는다.</text>
+        <text x="10" y="264" class="lb-s">효율은 바뀌지 않는다. 같은 클럭에 실행되는 것은 여전히 PC 하나의 스레드뿐이다.</text>
+      </svg>
+      <figcaption><b>그림 3-7.</b> 분기 발산과 재수렴. 고전적 구현은 워프마다 재수렴 스택을 두고 (PC, 마스크, 복귀 PC)를 쌓는다. 독립 스레드 스케줄링은 스레드별 PC와 수렴 최적화기를 두어, 한 경로가 다른 경로를 기다리는(스핀 잠금 같은) 코드도 진행되게 한다. 그 대가는 스레드마다 PC·호출 스택 상태를 두는 면적이다.</figcaption>
+    </figure>
+
+    <p>조건이 스레드마다 확률 \(p\)로 독립이고, if 경로 \(A\)개, else 경로 \(B\)개 명령어라면 워프가 if를 실행할 확률은 \(1-(1-p)^{32}\)다. 32 스레드 중 하나만 조건을 만족해도 경로 전체를 실행해야 한다. <span class="term">SIMT 효율</span>은</p>
+    <div class="formula">$$\eta = \frac{pA + (1-p)B}{A\,[1-(1-p)^{32}] + B\,[1-p^{32}]}$$
+      <div class="where">분자는 스레드 하나가 실제로 하는 일, 분모는 워프가 쓰는 발행 클럭. \(p\) = 0.5, \(A = B\)이면 \(\eta\) = 50 %. 드물지만 긴 경로(\(p\) = 0.02, \(A\) = 20, \(B\) = 2)는 약 20 %까지 떨어진다. 워프의 약 48 %가 그 긴 경로를 돈다(\(1-0.98^{32}\)).</div></div>
+
+    <div class="sim" id="sim-div">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>분기 발산: 활성 마스크와 SIMT 효율</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="dv-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>if 조건 확률 p <output id="dv-p-out"></output></span><input type="range" id="dv-p" min="0" max="100" step="1" value="50"></label>
+          <label class="ctrl"><span>if 경로 길이 A <output id="dv-a-out"></output></span><input type="range" id="dv-a" min="1" max="32" step="1" value="8"></label>
+          <label class="ctrl"><span>else 경로 길이 B <output id="dv-b-out"></output></span><input type="range" id="dv-b" min="0" max="32" step="1" value="8"></label>
+          <div class="ctrl"><span>조건 모양</span><div class="seg" id="dv-pat"><button data-value="random" class="on">스레드마다 무작위</button><button data-value="index">레인 번호 순</button><button data-value="warp">워프 단위</button></div></div>
+          <label class="check"><input type="checkbox" id="dv-nest"> if 안에 중첩 if (확률 q, 길이 C)</label>
+          <label class="ctrl"><span>중첩 확률 q <output id="dv-q-out"></output></span><input type="range" id="dv-q" min="0" max="100" step="5" value="50"></label>
+          <label class="ctrl"><span>중첩 경로 길이 C <output id="dv-c-out"></output></span><input type="range" id="dv-c" min="1" max="32" step="1" value="8"></label>
+          <button class="btn" id="dv-new">다른 워프 보기</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">SIMT 효율 (워프 400개)</span><span class="v" id="dv-eff">—</span></div>
+        <div class="stat"><span class="k">분기 구간 발행 클럭</span><span class="v" id="dv-cyc">—</span></div>
+        <div class="stat"><span class="k">식 (무작위 조건)</span><span class="v" id="dv-th">—</span></div>
+      </div>
+      <div class="sim-note">그림: 가로 = 발행 순서(명령어), 세로 = 레인 32개, 칠한 칸 = 켜진 레인(<span class="m-key compute">if</span><span class="m-key tensor">중첩 if</span><span class="m-key ctrl">else</span>). 앞뒤 회색 열은 분기 전·재수렴 후 명령어. 효율은 워프 400개 평균.<br>해볼 것: ① p를 0.5에서 0.1로 내려도 효율은 약 51 %다. 워프의 97 %에 if 스레드가 하나는 있다. ② "워프 단위"로 바꾸면 효율 100 %. 조건이 워프 안에서 같도록 데이터를 정렬(예: 워프 번호로 분기)하는 것이 발산을 없애는 유일한 방법이다. ③ p = 2 %, A = 32, B = 2로 두면 효율이 약 14 %까지 떨어진다. 중첩을 켜고 q를 낮추면 더 떨어진다.</div>
+    </div>
+
+    <p><b>왜 이렇게 설계하는가:</b> 레인마다 독립된 명령어 인출·디코드를 두면(MIMD) 발산 비용은 사라지지만 제어 면적이 32배가 된다. GPU는 제어를 32 레인이 나눠 쓰는 대신 발산을 소프트웨어(데이터 배치)와 마스크 하드웨어에 맡긴다. 마스크는 레인당 1비트, 재수렴 스택은 워프당 수십 바이트라 싸다. 1장에서 본 "제어에 면적을 덜 쓰고 레인에 더 쓴다"는 선택의 대가가 분기 발산이다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="area">
+    <h2>SM 면적 예산: 3.2 mm²를 어떻게 나누나</h2>
+    <p>SM 하나 3.2 mm² × 물리 SM 160개 = 512 mm², 780 mm² 다이의 약 66 %다. 나머지는 L2·크로스바·HBM PHY·링크·I/O다(9장). SM 안을 교육용 대표값으로 나누면 아래와 같다. 4 nm급에서 레지스터 파일은 다중 포트·넓은 행 때문에 비트당 면적이 일반 SRAM의 2–5배다(주변 회로 포함 약 0.2 µm²/비트로 가정). L1은 태그와 크로스바를 포함해 약 0.13 µm²/비트로 가정했다. SRAM 자체는 <a href="onchip.html">6장</a>, 곱셈기 면적은 <a href="alu.html">4장</a>, 텐서 코어는 <a href="tensor.html">5장</a>에서 따진다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 216" role="img" aria-label="SM 면적 3.2 제곱밀리미터 분해 막대: 텐서 코어 0.80, FP32 INT32 0.45, 레지스터 파일 0.42, L1 0.35, FP64 0.35, 제어 0.30, 기타 0.28, LD/ST SFU 텍스처 0.25">
+        <text x="10" y="20" class="lb-b">SM 3.2 mm² (교육용 분해)</text>
+        <rect x="10" y="34" width="210" height="50" class="k-tensor"/><text x="115" y="55" class="lb lb-c">텐서 코어 ×4</text><text x="115" y="73" class="lb-m lb-c">0.80 (25 %)</text>
+        <rect x="220" y="34" width="118" height="50" class="k-compute"/><text x="279" y="55" class="lb lb-c">FP32·INT32</text><text x="279" y="73" class="lb-m lb-c">0.45 (14 %)</text>
+        <rect x="338" y="34" width="110" height="50" class="k-sram"/><text x="393" y="55" class="lb lb-c">레지스터</text><text x="393" y="73" class="lb-m lb-c">0.42 (13 %)</text>
+        <rect x="448" y="34" width="92" height="50" class="k-sram"/><text x="494" y="55" class="lb lb-c">L1/공유</text><text x="494" y="73" class="lb-m lb-c">0.35</text>
+        <rect x="540" y="34" width="92" height="50" class="k-compute"/><text x="586" y="55" class="lb lb-c">FP64</text><text x="586" y="73" class="lb-m lb-c">0.35</text>
+        <rect x="632" y="34" width="79" height="50" class="k-ctrl"/><text x="671" y="55" class="lb lb-c">제어</text><text x="671" y="73" class="lb-m lb-c">0.30</text>
+        <rect x="711" y="34" width="73" height="50" class="f-surface"/><text x="747" y="55" class="lb lb-c">기타</text><text x="747" y="73" class="lb-m lb-c">0.28</text>
+        <rect x="784" y="34" width="66" height="50" class="k-data"/><text x="817" y="55" class="lb lb-c">LSU</text><text x="817" y="73" class="lb-m lb-c">0.25</text>
+        <g class="lb-s">
+          <text x="10" y="108">텐서: 4 × 512 BF16 FMA + FP8·FP4 경로 + 누산기 · FP32·INT32: 레인 128 + 64</text>
+          <text x="10" y="126">레지스터: 256 KB × 약 0.2 µm²/비트 · L1/공유: 256 KB + 태그 + 뱅크 크로스바</text>
+          <text x="10" y="144">FP64: 레인 64(FP32 FMA의 약 3배 면적) · 제어: 명령어 캐시·디코드·스케줄러 4개·스코어보드·수집기</text>
+          <text x="10" y="162">기타: 클럭 트리·배선 채널·테스트·여백 · LSU: LD/ST 32 + SFU 16 + 텍스처·주소 유닛</text>
+        </g>
+        <rect x="10" y="176" width="420" height="12" class="kf-compute" opacity=".55"/><rect x="430" y="176" width="202" height="12" class="kf-sram" opacity=".7"/><rect x="632" y="176" width="218" height="12" class="kf-ctrl" opacity=".5"/>
+        <text x="10" y="206" class="lb-s">연산(텐서+FP32+FP64) 약 50 %</text><text x="430" y="206" class="lb-s">SRAM 약 24 %</text><text x="632" y="206" class="lb-s">제어·이동·기타 약 26 %</text>
+      </svg>
+      <figcaption><b>그림 3-8.</b> SM 면적 예산(교육용 가정, 합 3.20 mm²). 연산 유닛이 약 절반, 온칩 SRAM이 약 4분의 1이다. 서버 CPU(SC-64)는 연산 레인이 다이의 10–15 %에 그친다(1장). 레지스터 파일만으로 FP32·INT32 레인 전체와 비슷한 면적을 쓴다.</figcaption>
+    </figure>
+
+    <p>레지스터 파일을 키우면 무엇이 줄어드는가? SM 면적을 3.2 mm²로 고정하면 늘어난 레지스터 면적은 다른 블록에서 와야 한다. 아래 모델은 레지스터 파일 면적이 용량에 비례한다고 보고(256 KB = 0.42 mm²), 그 차이를 텐서·FP32·FP64 중 하나에서 뺀다. 레지스터가 늘면 같은 커널에서 워프가 늘어 활용률 \(U = \min(1, N/N_{need})\)이 오르고, 빼앗긴 블록의 피크는 면적 비율만큼 준다. 텐서 GEMM의 실효 처리량은 \(943.7\ \text{TFLOPS}\times(\text{텐서 면적 비율})\times U\)다.</p>
+
+    <div class="sim" id="sim-area">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>SM 면적 예산: 레지스터를 늘리면 무엇이 줄어드나</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ar-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>레지스터 파일 / SM <output id="ar-rf-out"></output></span><input type="range" id="ar-rf" min="64" max="512" step="32" value="256"></label>
+          <label class="ctrl"><span>커널의 스레드당 레지스터 <output id="ar-r-out"></output></span><input type="range" id="ar-r" min="16" max="255" step="8" value="128"></label>
+          <label class="ctrl"><span>지연을 숨길 워프 / SM <output id="ar-need-out"></output></span><input type="range" id="ar-need" min="8" max="64" step="4" value="32"></label>
+          <div class="ctrl"><span>면적을 내줄 블록</span><div class="seg" id="ar-vic"><button data-value="tensor" class="on">텐서</button><button data-value="fp32">FP32·INT32</button><button data-value="fp64">FP64</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">SM당 워프</span><span class="v" id="ar-w">—</span></div>
+        <div class="stat"><span class="k">활용률 U</span><span class="v" id="ar-u">—</span></div>
+        <div class="stat"><span class="k">실효 BF16 (칩)</span><span class="v" id="ar-bf16">—</span></div>
+        <div class="stat"><span class="k">피크 FP32 / FP64</span><span class="v" id="ar-fp">—</span></div>
+        <div class="stat"><span class="k">면적 검사</span><span class="v" id="ar-ok">—</span></div>
+      </div>
+      <div class="sim-note">위: 3.2 mm²의 블록별 막대(현재 설정). 아래: 레지스터 파일 크기에 따른 실효 BF16 처리량 곡선(현재 커널·희생 블록), 점이 현재 값. 워프는 레지스터 용량 ÷ 워프당 할당(256개 단위 올림)과 상한 64 중 작은 값.<br>해볼 것: ① 기본값(레지스터 128개 커널, 필요 워프 32)에서 256 KB는 16워프·U 0.5·약 472 TFLOPS. 384 KB로 늘리면 텐서 면적이 약 74 %로 줄지만 24워프·U 0.75로 약 522 TFLOPS가 되어 오히려 낫다. 512 KB는 약 448 TFLOPS로 다시 떨어진다. ② 커널 레지스터를 64개로 내리면 256 KB에서 이미 32워프·U 1이라, 레지스터를 늘릴수록 손해다. 최적 크기는 커널마다 다르다. ③ 희생 블록을 FP64로 바꾸고 384 KB로 두면 BF16 약 708 TFLOPS, FP64는 29.5 → 약 11.8 TFLOPS. 512 KB는 FP64 면적(0.35)을 넘어 불가능하다.</div>
+    </div>
+
+    <p><b>왜 이렇게 설계하는가:</b> 레지스터 파일 크기는 "대표 커널들의 레지스터 수 × 지연을 숨길 워프 수"의 타협이다. 레지스터를 적게 쓰는 커널에는 256 KB도 남고, GEMM처럼 많이 쓰는 커널은 ILP로 버틴다. 이 타협이 여러 세대에 걸쳐 SM당 256 KB 근처에 머문 이유다. 데이터센터 칩이 FP64를 줄이는 쪽으로 가는 것도 같은 면적 계산에서 나온다. FP64 0.35 mm²는 AI 워크로드에서는 거의 쉬는 면적이다(15장).</p>
+
+    <div class="callout fab"><strong>SM 160개의 면적과 칩 전체 숫자</strong>SM 3.2 mm² 안에서 텐서 코어 4개(0.80 mm²)가 BF16 클럭당 FMA 2,048개를 내므로 텐서 면적 밀도는 약 2,560 FMA/클럭/mm²다. FP32 레인은 128개가 0.45 mm²(INT32 포함)이므로 약 280 FMA/클럭/mm², 약 9배 차이다. 이 격차가 5장의 출발점이다. 레지스터 파일은 0.42 mm² × 160 = 약 67 mm²로, 다이의 약 9 %를 레지스터만으로 쓴다. 하베스팅으로 16개 SM을 끄면 그 레지스터 약 4 MB도 함께 꺼진다(10장).</div>
+
+    <p>마지막으로 SM을 위에서 내려다보자. 아래 3D 평면도는 블록 면적을 위 예산대로 배치했다(배선·여백 0.28 mm²는 블록 사이 틈으로 나눠 넣었다). 명령어 종류를 고르면 그 명령어가 지나가는 블록이 차례로 빛나고, 워프 명령 하나의 에너지를 에너지 표로 나눠 보여 준다.</p>
+
+    <div class="sim" id="sim-sm3d">
+      <div class="sim-head"><span class="sim-tag three">3D</span><h3>3D SM 평면도와 명령어 하나의 에너지 경로</h3></div>
+      <div class="sim-body">
+        <div class="sim-view three" id="sm3-v"><span class="hint">드래그: 회전 · 휠: 확대 · 블록 클릭: 정보</span></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>워프 명령 하나</span><div class="seg" id="sm3-op"><button data-value="fp32" class="on">FP32 FMA</button><button data-value="mma">텐서 MMA (BF16)</button><button data-value="smem">공유 메모리 로드</button><button data-value="hbm">HBM 로드</button></div></div>
+          <label class="check"><input type="checkbox" id="sm3-all" checked> 네 서브파티션 동시 발행</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">명령 하나 에너지</span><span class="v" id="sm3-e">—</span></div>
+        <div class="stat"><span class="k">그중 연산</span><span class="v" id="sm3-math">—</span></div>
+        <div class="stat"><span class="k">FLOP당 에너지</span><span class="v" id="sm3-pf">—</span></div>
+        <div class="stat"><span class="k">경로 / 선택 블록</span><span class="v" id="sm3-blk" style="font-size:13px">—</span></div>
+      </div>
+      <div class="sim-note">에너지 표(4 nm급 0.75 V)로 계산: FP32 FMA 0.8 pJ, BF16 FMA 0.2 pJ, 레지스터 32비트 0.5 pJ, L1/공유 1.5 pJ, L2 6 pJ, HBM 32비트 약 100 pJ. 명령어 인출·디코드·스케줄링은 워프 명령당 약 8 pJ로 가정. 텐서 MMA는 16×8×16 타일(FMA 2,048개, 텐서 코어 4클럭), 피연산자 A·B(BF16)·C(FP32) 1,280 B를 레지스터에서 읽는다고 본다.<br>해볼 것: ① FP32 FMA는 약 98 pJ 중 연산이 26 %뿐, FLOP당 약 1.5 pJ. ② 텐서 MMA는 약 642 pJ 중 연산 64 %, FLOP당 약 0.16 pJ로 약 10배 효율적이다. ③ HBM 로드 하나(워프 32 × 4 B)는 약 3,480 pJ로 FP32 FMA 35개 몫이다. 데이터를 레지스터에서 다시 써야 하는 이유다.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================ summary -->
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>SM은 서브파티션 4개(스케줄러 1·FP32 32·텐서 코어 1·RF 64 KB)를 복사하고 L1/공유 메모리 256 KB를 함께 쓴다. 쪼개는 이유는 레지스터 파일 포트와 스케줄러 선택 논리를 작게 두기 위해서다.</li>
+      <li>스코어보드는 워프별로 결과 대기 레지스터를 막고, 스케줄러는 매 클럭 발행 가능한 워프 하나를 고른다(LRR·GTO). 막힌 워프를 건너뛰는 비용은 0이다.</li>
+      <li>필요한 워프 수 \(N \ge \bar L/\text{ILP}\)(리틀의 법칙). GX-1에서 \(\bar L\) ≈ 15클럭이면 ILP 1로 SM당 약 59워프가 필요하다. 워프와 ILP는 같은 레지스터 예산을 나눠 쓴다.</li>
+      <li>레지스터 파일 256 KB = 64워프 × 32스레드 × 32개 × 4 B. L1과 같은 크기이고 대역폭은 12배(1,536 vs 128 B/클럭), 에너지는 1/3이다. FP32 FMA에서는 피연산자 읽기(48 pJ)가 연산(25.6 pJ)보다 비싸다.</li>
+      <li>뱅크 4개에 무작위 레지스터면 충돌 확률 62.5 %, 수집기 1개 IPC 약 0.59. 수집기 여러 개·뱅크 인식 배정·재사용 캐시가 이를 거의 1로 되돌린다.</li>
+      <li>점유율 = min(레지스터, 워프 슬롯, 블록 32, 공유 메모리 228 KB 한계) × 블록당 워프 ÷ 64. 레지스터 할당 256개 단위 올림과 블록 단위 내림이 계단을 만든다.</li>
+      <li>분기 발산의 효율은 \(\eta = [pA+(1-p)B]/[A(1-(1-p)^{32})+B(1-p^{32})]\). 32 스레드 중 하나만 들어가도 경로 전체를 실행하므로, 드문 긴 경로가 가장 비싸다.</li>
+      <li>SM 3.2 mm²는 연산 약 50 %, SRAM 약 24 %. 레지스터를 늘리면 워프가 늘지만 연산 면적이 준다. 최적 크기는 커널마다 다르며 256 KB는 그 타협이다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 스레드당 레지스터 32개로 SM의 상주 워프 상한 64개를 꽉 채우려면 레지스터 파일이 몇 KB여야 하나?</p><div class="opts">
+        <button class="opt">64 KB</button>
+        <button class="opt">128 KB</button>
+        <button class="opt" data-correct>256 KB</button>
+        <button class="opt">2 MB</button>
+      </div><div class="quiz-exp">\(64 \times 32 \times 32 \times 4\,\text{B} = 262{,}144\,\text{B} = 256\,\text{KB}\). GX-1 SM의 레지스터 파일 크기와 같다.</div></div>
+
+      <div class="quiz-q"><p>2. 256 스레드 블록, 스레드당 레지스터 64개, 공유 메모리 0일 때 GX-1 SM의 점유율은?</p><div class="opts">
+        <button class="opt" data-correct>50 %</button>
+        <button class="opt">75 %</button>
+        <button class="opt">100 %</button>
+        <button class="opt">25 %</button>
+      </div><div class="quiz-exp">워프당 \(64\times32 = 2{,}048\)개, 블록당 8워프 → 16,384개. \(\lfloor 65{,}536/16{,}384\rfloor = 4\)블록 = 32워프 → 32/64 = 50 %. 제한 요인은 레지스터다.</div></div>
+
+      <div class="quiz-q"><p>3. 1,024 스레드 블록에 스레드당 레지스터 80개를 쓰는 커널을 GX-1에 올리면?</p><div class="opts">
+        <button class="opt">블록 1개, 점유율 50 %</button>
+        <button class="opt">블록 2개, 점유율 100 %</button>
+        <button class="opt">공유 메모리가 제한 요인이 된다</button>
+        <button class="opt" data-correct>블록이 하나도 올라가지 않아 실행할 수 없다</button>
+      </div><div class="quiz-exp">블록 하나가 \(80\times32\times32 = 81{,}920\)개를 요구해 SM의 65,536개를 넘는다. 블록 크기를 줄이거나 레지스터를 64개 이하로 제한해야 한다.</div></div>
+
+      <div class="quiz-q"><p>4. 뱅크 4개 레지스터 파일에서 피연산자 3개의 레지스터 번호가 무작위일 때, 세 피연산자가 모두 다른 뱅크에 있을 확률은?</p><div class="opts">
+        <button class="opt">약 25 %</button>
+        <button class="opt" data-correct>37.5 %</button>
+        <button class="opt">약 56 %</button>
+        <button class="opt">75 %</button>
+      </div><div class="quiz-exp">\(4\cdot3\cdot2/4^3 = 24/64 = 0.375\). 나머지 62.5 %는 충돌이 있어 수집기 하나로는 2–3클럭이 걸린다.</div></div>
+
+      <div class="quiz-q"><p>5. 스레드마다 독립적으로 확률 0.5인 조건으로 if·else(길이 같음)를 나눌 때 SIMT 효율에 가장 가까운 것은?</p><div class="opts">
+        <button class="opt">약 97 %</button>
+        <button class="opt">약 75 %</button>
+        <button class="opt" data-correct>약 50 %</button>
+        <button class="opt">약 3 %</button>
+      </div><div class="quiz-exp">거의 모든 워프가 두 경로를 다 실행하고(\(1-0.5^{32} \approx 1\)), 각 경로에서 레인 절반만 일한다. \(\eta = (0.5A + 0.5A)/(2A) = 50\,\%\).</div></div>
+
+      <div class="quiz-q"><p>6. 평균 지연 \(\bar L\) = 20클럭, ILP = 2인 커널에서 GX-1 SM이 발행 슬롯을 다 채우려면 SM당 몇 워프가 필요한가?</p><div class="opts">
+        <button class="opt">10워프</button>
+        <button class="opt" data-correct>40워프</button>
+        <button class="opt">80워프</button>
+        <button class="opt">160워프</button>
+      </div><div class="quiz-exp">스케줄러당 \(20/2 = 10\)워프, 스케줄러가 4개이므로 SM당 40워프. 이때 레지스터는 스레드당 \(65{,}536/(40\times32) \approx 51\) → 8개 단위로 48개까지 쓸 수 있다.</div></div>
+
+      <div class="quiz-q"><p>7. 캐시가 없는 사이클 모델에서 워프가 많을 때 GTO가 LRR보다 IPC가 낮게 나오는 까닭과, 그래도 실제 칩이 GTO를 쓰는 이유로 맞는 것은?</p><div class="opts">
+        <button class="opt" data-correct>GTO는 소수 워프에 발행을 몰아 그들이 같은 단계(로드)에서 한 유닛에 부딪치지만, 실제로는 그 워프들의 데이터를 L1에 남겨 다시 쓰고 블록을 일찍 끝내 자원을 돌려준다</button>
+        <button class="opt">GTO는 스코어보드를 쓰지 않아 의존성을 무시하지만, 회로가 LRR보다 훨씬 작다</button>
+        <button class="opt">GTO는 클럭당 워프 두 개를 발행하므로 레지스터 포트가 부족하다</button>
+        <button class="opt">GTO는 분기 발산을 없애 주지만 메모리 지연은 숨기지 못한다</button>
+      </div><div class="quiz-exp">시뮬레이터(메모리 위주, 로드 30클럭, 워프 8)에서 LRR 약 0.75, GTO 약 0.53. GTO의 장점(캐시 지역성, 빠른 블록 완료)은 이 모델에 없는 효과다.</div></div>
+
+      <div class="quiz-q"><p>8. FP32 FMA 워프 명령 하나에서 에너지 표 기준으로 가장 큰 항은?</p><div class="opts">
+        <button class="opt">FMA 연산 32개 (약 26 pJ)</button>
+        <button class="opt">명령어 인출·디코드 (약 8 pJ)</button>
+        <button class="opt" data-correct>피연산자 레지스터 읽기 96개 (약 48 pJ)</button>
+        <button class="opt">결과 쓰기 32개 (약 16 pJ)</button>
+      </div><div class="quiz-exp">\(3\times32\times0.5 = 48\) pJ로 연산 \(32\times0.8 = 25.6\) pJ보다 크다. 텐서 코어는 레지스터에서 읽은 값 하나로 곱셈을 여러 번 해 이 비율을 뒤집는다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const pct = (x, d) => (x * 100).toFixed(d == null ? 0 : d) + " %";
+  const setV = (id, html, cls) => { const el = $(id); if (!el) return; el.innerHTML = html; el.className = "v" + (cls ? " " + cls : ""); };
+
+  /* model:util */
+  function smRng(seed) { var a = seed >>> 0; return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; var t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  /* /model:util */
+
+  /* model:sched */
+  var SCH_PROGS = {
+    mem: [{ k: "LD", d: 1, s: [] }, { k: "LD", d: 2, s: [] }, { k: "FMA", d: 3, s: [1, 2, 3] }, { k: "FMA", d: 4, s: [3, 4] }, { k: "INT", d: 5, s: [5] }, { k: "FMA", d: 6, s: [4, 6] }],
+    alu: [{ k: "LD", d: 1, s: [] }, { k: "FMA", d: 2, s: [1, 2] }, { k: "FMA", d: 3, s: [3] }, { k: "FMA", d: 2, s: [2] }, { k: "FMA", d: 3, s: [3] }, { k: "INT", d: 4, s: [4] }, { k: "FMA", d: 2, s: [2, 3] }, { k: "FMA", d: 5, s: [5] }],
+  };
+  /** 서브파티션 하나의 사이클 시뮬레이션. o: {warps, policy:'lrr'|'gto', memLat, aluLat, prog, iters, lsuOcc} */
+  function schedSim(o) {
+    var N = Math.max(1, Math.min(16, Math.round(o.warps || 1))), prog = SCH_PROGS[o.prog] || SCH_PROGS.mem, P = prog.length;
+    var iters = Math.max(1, Math.round(o.iters || 32)), total = N * P * iters;
+    var lat = { LD: Math.max(1, o.memLat || 30), FMA: o.aluLat || 4, INT: o.aluLat || 4 }, lsuOcc = o.lsuOcc || 4;
+    var ready = [], pc = [], fin = [], w;
+    for (w = 0; w < N; w++) { ready.push([0, 0, 0, 0, 0, 0, 0, 0]); pc.push(0); fin.push(-1); }
+    var lsuFree = 0, last = -1, done = 0, t = 0, trace = [], idle = 0, cap = 400000;
+    function can(w) {
+      if (pc[w] >= P * iters) return 0;
+      var ins = prog[pc[w] % P];
+      for (var i = 0; i < ins.s.length; i++) if (ready[w][ins.s[i]] > t) return -1;
+      if (ready[w][ins.d] > t) return -1;
+      if (ins.k === "LD" && lsuFree > t) return -2;
+      return 1;
+    }
+    while (done < total && t < cap) {
+      var pick = -1, i;
+      if (o.policy === "gto") { if (last >= 0 && can(last) === 1) pick = last; else for (w = 0; w < N; w++) if (can(w) === 1) { pick = w; break; } }
+      else for (i = 1; i <= N; i++) { w = (last + i) % N; if (can(w) === 1) { pick = w; break; } }
+      if (pick >= 0) {
+        var ins = prog[pc[pick] % P];
+        ready[pick][ins.d] = t + lat[ins.k];
+        if (ins.k === "LD") lsuFree = t + lsuOcc;
+        pc[pick]++; done++; last = pick;
+        if (pc[pick] === P * iters) fin[pick] = t + lat[ins.k];
+        if (trace.length < 400) trace.push({ w: pick, k: ins.k });
+      } else {
+        var lsu = false;
+        for (w = 0; w < N; w++) if (can(w) === -2) lsu = true;
+        idle++;
+        if (trace.length < 400) trace.push({ w: -1, k: lsu ? "lsu" : "dep" });
+      }
+      t++;
+    }
+    return { cycles: t, ipc: done / t, done: done, total: total, idle: idle / t, firstFin: Math.min.apply(null, fin), trace: trace, N: N };
+  }
+  /* /model:sched */
+
+  /* model:ilp */
+  var GX_LAT = { alu: 4, l1: 30, l2: 200, hbm: 800 };
+  function ilpModel(o) {
+    var ilp = Math.max(1, o.ilp), m = Math.min(1, Math.max(0, o.m)), h1 = Math.min(1, Math.max(0, o.h1)), h2 = Math.min(1, Math.max(0, o.h2));
+    var Lmem = h1 * GX_LAT.l1 + (1 - h1) * (h2 * GX_LAT.l2 + (1 - h2) * GX_LAT.hbm);
+    var Lavg = (1 - m) * GX_LAT.alu + m * Lmem;
+    var need = Lavg / ilp, needSM = 4 * need, wSM = Math.ceil(needSM - 1e-9);
+    var regMax = wSM <= 64 ? Math.min(255, Math.floor(65536 / (Math.max(1, wSM) * 32) / 8) * 8) : 0;
+    return { Lmem: Lmem, Lavg: Lavg, need: need, needSM: needSM, fits: wSM <= 64, regMax: regMax, U: function (n) { return Math.min(1, n * ilp / Lavg); } };
+  }
+  /* /model:ilp */
+
+  /* model:issue */
+  var ISS_UNITS = [{ k: "fp32", name: "FP32", lanes: 32 }, { k: "int", name: "INT32", lanes: 16 }, { k: "fp64", name: "FP64", lanes: 16 }, { k: "ldst", name: "LD/ST", lanes: 8 }, { k: "sfu", name: "SFU", lanes: 4 }];
+  ISS_UNITS.forEach(function (u) { u.occ = 32 / u.lanes; });
+  function issueBound(mix, width) {
+    var s = 0, worst = 0, by = "";
+    ISS_UNITS.forEach(function (u) { s += mix[u.k] || 0; });
+    if (!(s > 0)) return { ipc: 0, by: "", load: 0 };
+    ISS_UNITS.forEach(function (u) { var load = (mix[u.k] || 0) / s * u.occ; if (load > worst) { worst = load; by = u.k; } });
+    var b = Math.min(width, 1 / worst);
+    return { ipc: b, by: 1 / worst < width ? by : "issue", load: worst };
+  }
+  function issueSim(o) {
+    var mix = o.mix, keys = ISS_UNITS.map(function (u) { return u.k; }), tot = 0;
+    keys.forEach(function (k) { tot += mix[k] || 0; });
+    if (!(tot > 0)) return { ipc: 0, cycles: 0, pairs: 0, pairFrac: 0, trace: [], bound: issueBound(mix, o.dual ? 2 : 1) };
+    var R = smRng(o.seed || 5), n = o.n || 3000, W = Math.max(1, Math.min(8, Math.round(o.warps || 4))), dual = !!o.dual, dep = o.dep == null ? 0.5 : o.dep;
+    var occ = {}; ISS_UNITS.forEach(function (u) { occ[u.k] = u.occ; });
+    var draw = function () { var x = R() * tot; for (var i = 0; i < keys.length; i++) { x -= mix[keys[i]] || 0; if (x < 0) return keys[i]; } return keys[keys.length - 1]; };
+    var q = [], free = {}, done = 0, t = 0, pairs = 0, trace = [], w;
+    for (w = 0; w < W; w++) q.push({ id: w, a: draw(), b: draw(), dep: R() < dep });
+    keys.forEach(function (k) { free[k] = 0; });
+    while (done < n && t < n * 40) {
+      var row = [];
+      for (w = 0; w < q.length; w++) {
+        var x = q[w];
+        if (free[x.a] > t) continue;
+        free[x.a] = t + occ[x.a]; row.push({ w: x.id, u: x.a }); done++;
+        if (dual && !x.dep && x.b !== x.a && free[x.b] <= t) {
+          free[x.b] = t + occ[x.b]; row.push({ w: x.id, u: x.b }); done++; pairs++;
+          x.a = draw(); x.b = draw();
+        } else { x.a = x.b; x.b = draw(); }
+        x.dep = R() < dep;
+        q.push(q.splice(w, 1)[0]);   // 발행한 워프는 맨 뒤로(라운드 로빈)
+        break;
+      }
+      if (trace.length < 60) trace.push(row);
+      t++;
+    }
+    return { ipc: done / t, cycles: t, pairs: pairs, pairFrac: done ? 2 * pairs / done : 0, trace: trace, bound: issueBound(mix, dual ? 2 : 1) };
+  }
+  /* /model:issue */
+
+  /* model:bank */
+  function bankStream(o) {
+    var R = smRng(o.seed || 7), n = o.n || 2000, banks = o.banks || 4, out = [], prev = null, i, j;
+    for (i = 0; i < n; i++) {
+      var ops = [];
+      if (o.alloc === "aware") { var b0 = Math.floor(R() * banks); for (j = 0; j < 3; j++) ops.push(((b0 + j) % banks) + banks * Math.floor(R() * Math.floor(64 / banks))); }
+      else for (j = 0; j < 3; j++) ops.push(Math.floor(R() * 64));
+      if (o.reuseP && prev && R() < o.reuseP) ops[0] = prev[0];
+      out.push(ops); prev = ops;
+    }
+    return out;
+  }
+  /** 오퍼랜드 수집기 시뮬레이션: 뱅크마다 클럭당 읽기 1개, 수집기 배정·디스패치 각각 클럭당 1개 */
+  function bankSim(o) {
+    var banks = o.banks || 4, K = Math.max(1, o.collectors || 1), stream = bankStream(o), n = stream.length;
+    var col = [], next = 0, done = 0, t = 0, reads = 0, saved = 0, prev = null, conflict = 0, trace = [], k, j;
+    for (k = 0; k < K; k++) col.push(null);
+    while (done < n && t < n * 8 + 10) {
+      for (k = 0; k < K && next < n; k++) if (!col[k]) {
+        var ops = stream[next], need = [], cnt = {}, hit = false;
+        for (j = 0; j < ops.length; j++) { if (o.reuse && prev && j === 0 && prev[0] === ops[0]) { saved++; continue; } need.push(ops[j] % banks); }
+        need.forEach(function (b) { cnt[b] = (cnt[b] || 0) + 1; if (cnt[b] > 1) hit = true; });
+        if (hit) conflict++;
+        col[k] = { id: next, need: need }; prev = ops; next++; break;
+      }
+      var busy = {}, row = [], order = [];
+      for (k = 0; k < K; k++) if (col[k]) order.push(k);
+      order.sort(function (a, b) { return col[a].id - col[b].id; });
+      for (j = 0; j < banks; j++) row.push(-1);
+      order.forEach(function (i) { var c = col[i]; for (var q = 0; q < c.need.length; q++) { var b = c.need[q]; if (!busy[b]) { busy[b] = 1; row[b] = c.id; c.need.splice(q, 1); q--; reads++; } } });
+      var disp = -1;
+      for (j = 0; j < order.length; j++) { var c2 = col[order[j]]; if (c2.need.length === 0) { disp = c2.id; col[order[j]] = null; done++; break; } }
+      if (trace.length < 24) trace.push({ row: row, disp: disp });
+      t++;
+    }
+    return { cycles: t, ipc: done / t, conflictRate: conflict / n, reads: reads, saved: saved, readsPer: reads / n, energy: reads / n * 32 * 0.5, trace: trace };
+  }
+  /* /model:bank */
+
+  /* model:occ */
+  var OCC_LIM = { regsSM: 65536, warpsSM: 64, blocksSM: 32, smemSM: 228 * 1024, regUnit: 256, smemUnit: 1024, maxRegs: 255, maxThreads: 1024 };
+  function occCalc(o) {
+    var L = OCC_LIM;
+    var regs = Math.max(1, Math.min(L.maxRegs, Math.round(o.regs)));
+    var threads = Math.max(1, Math.min(L.maxThreads, Math.round(o.threads)));
+    var smem = Math.max(0, o.smem || 0);
+    var wpb = Math.ceil(threads / 32), rw = Math.ceil(regs * 32 / L.regUnit) * L.regUnit, smemA = Math.ceil(smem / L.smemUnit) * L.smemUnit;
+    var lim = { reg: Math.floor(L.regsSM / (rw * wpb)), warp: Math.floor(L.warpsSM / wpb), block: L.blocksSM, smem: smemA > 0 ? Math.floor(L.smemSM / smemA) : Infinity };
+    var blocks = Math.min(lim.reg, lim.warp, lim.block, lim.smem);
+    var by = Object.keys(lim).filter(function (k) { return lim[k] === blocks; });
+    var warps = blocks * wpb;
+    return { regs: regs, threads: threads, wpb: wpb, rw: rw, smemA: smemA, lim: lim, blocks: blocks, warps: warps, occ: warps / L.warpsSM, by: by, regsUsed: warps * rw, smemUsed: blocks * smemA, laneEff: threads / (wpb * 32) };
+  }
+  /* /model:occ */
+
+  /* model:div */
+  function divPop(m) { var c = 0; for (var i = 0; i < m.length; i++) if (m[i]) c++; return c; }
+  function divOutcome(o, R) {
+    var p = o.p, q = o.q == null ? 0.5 : o.q, a = [], b = [], wu = R(), wu2 = R(), i;
+    for (i = 0; i < 32; i++) {
+      if (o.pattern === "index") { a.push(i < Math.round(p * 32)); b.push(i < Math.round(q * 32)); }
+      else if (o.pattern === "warp") { a.push(wu < p); b.push(wu2 < q); }
+      else { a.push(R() < p); b.push(R() < q); }
+    }
+    return { c1: a, c2: b };
+  }
+  function divTrace(o, oc) {
+    var full = [], tr = [], k, i;
+    for (i = 0; i < 32; i++) full.push(true);
+    var tk = oc.c1, nt = tk.map(function (x) { return !x; });
+    tr.push({ seg: "pre", m: full });
+    if (divPop(tk)) {
+      for (k = 0; k < o.A; k++) tr.push({ seg: "if", m: tk });
+      if (o.nest) { var inner = tk.map(function (x, j) { return x && oc.c2[j]; }); if (divPop(inner)) for (k = 0; k < o.C; k++) tr.push({ seg: "inner", m: inner }); }
+    }
+    if (divPop(nt)) for (k = 0; k < o.B; k++) tr.push({ seg: "else", m: nt });
+    tr.push({ seg: "join", m: full });
+    var issued = 0, active = 0;
+    tr.forEach(function (s) { if (s.seg !== "pre" && s.seg !== "join") { issued++; active += divPop(s.m); } });
+    return { trace: tr, issued: issued, active: active, eff: issued ? active / (32 * issued) : 1 };
+  }
+  function divStats(o) {
+    var R = smRng(o.seed || 11), W = o.warps || 400, iss = 0, act = 0, first = null, w;
+    var show = o.show || 0;
+    for (w = 0; w < W; w++) { var t = divTrace(o, divOutcome(o, R)); if (w === show) first = t; iss += t.issued; act += t.active; }
+    var p = o.p, q = o.q == null ? 0.5 : o.q;
+    var cyc = o.A * (1 - Math.pow(1 - p, 32)) + o.B * (1 - Math.pow(p, 32)) + (o.nest ? o.C * (1 - Math.pow(1 - p * q, 32)) : 0);
+    var use = p * o.A + (1 - p) * o.B + (o.nest ? p * q * o.C : 0);
+    return { first: first, eff: iss ? act / (32 * iss) : 1, cycles: iss / W, effRand: cyc > 1e-12 ? use / cyc : 1, cycRand: cyc };
+  }
+  /* /model:div */
+
+  /* model:area */
+  var AREA_BASE = { tensor: 0.80, fp32: 0.45, rf: 0.42, l1: 0.35, fp64: 0.35, ctrl: 0.30, other: 0.28, lsu: 0.25 };
+  var AREA_PEAK = { tensor: 943.7, fp32: 59.0, fp64: 29.5 };
+  function areaModel(o) {
+    var rfKB = Math.max(32, o.rfKB), vic = o.victim || "tensor", r = Math.max(1, Math.min(255, Math.round(o.regs))), need = Math.max(1, o.need);
+    var rf = AREA_BASE.rf * rfKB / 256, delta = rf - AREA_BASE.rf;
+    var cap = { tensor: 1, fp32: 1, fp64: 1 }, area = {};
+    Object.keys(AREA_BASE).forEach(function (k) { area[k] = AREA_BASE[k]; });
+    area.rf = rf;
+    var left = AREA_BASE[vic] - delta, feasible = left >= 0;
+    area[vic] = Math.max(0, left); cap[vic] = area[vic] / AREA_BASE[vic];
+    var rw = Math.ceil(r * 32 / 256) * 256, warps = Math.min(64, Math.floor(rfKB * 1024 / 4 / rw));
+    var U = Math.min(1, warps / need);
+    var total = 0; Object.keys(area).forEach(function (k) { total += area[k]; });
+    return { area: area, total: total, feasible: feasible, cap: cap, warps: warps, U: U,
+      bf16: feasible ? AREA_PEAK.tensor * cap.tensor * U : 0, fp32: AREA_PEAK.fp32 * cap.fp32, fp64: AREA_PEAK.fp64 * cap.fp64 };
+  }
+  /* /model:area */
+
+  /* model:energy */
+  var EN = { fma32: 0.8, bf16: 0.2, rf: 0.5, l1: 1.5, l2: 6, hbm: 100, ctrl: 8 };
+  /** 워프 명령 하나가 지나가는 블록과 에너지(pJ). flop: 그 명령의 FLOP 수 */
+  function energyOp(op) {
+    var s;
+    if (op === "mma") s = { flop: 2 * 2048, steps: [["ctrl", "인출·발행", EN.ctrl], ["rf", "A·B·C 읽기 320워드", 320 * EN.rf], ["tensor", "BF16 FMA 2,048", 2048 * EN.bf16], ["rf", "D 쓰기 128워드", 128 * EN.rf]] };
+    else if (op === "smem") s = { flop: 0, steps: [["ctrl", "인출·발행", EN.ctrl], ["rf", "주소 읽기 32", 32 * EN.rf], ["lsu", "주소 계산", 0], ["l1", "공유 메모리 32워드", 32 * EN.l1], ["rf", "결과 쓰기 32", 32 * EN.rf]] };
+    else if (op === "hbm") s = { flop: 0, steps: [["ctrl", "인출·발행", EN.ctrl], ["rf", "주소 읽기 32", 32 * EN.rf], ["lsu", "주소 계산", 0], ["l1", "L1 조회·채움", 32 * EN.l1], ["l2", "L2 32워드", 32 * EN.l2], ["hbm", "HBM 128 B", 32 * EN.hbm], ["rf", "결과 쓰기 32", 32 * EN.rf]] };
+    else s = { flop: 64, steps: [["ctrl", "인출·발행", EN.ctrl], ["rf", "피연산자 읽기 96", 96 * EN.rf], ["fp32", "FP32 FMA 32", 32 * EN.fma32], ["rf", "결과 쓰기 32", 32 * EN.rf]] };
+    var tot = 0, math = 0;
+    s.steps.forEach(function (x) { tot += x[2]; if (x[0] === "fp32" || x[0] === "tensor") math += x[2]; });
+    s.total = tot; s.math = math; s.mathFrac = tot ? math / tot : 0; s.perFlop = s.flop ? tot / s.flop : 0;
+    return s;
+  }
+  /* /model:energy */
+
+  /* ====================================================== 1. 워프 스케줄러 */
+  (function () {
+    const cvEl = $("sch-cv"); if (!cvEl) return;
+    let res = null, other = null, shown = 999, playing = false;
+    const gN = GP.range("sch-n", (v) => v + "개", () => run());
+    const gL = GP.range("sch-lat", (v) => v + " 클럭", () => run());
+    const gP = GP.seg("sch-pol", () => run());
+    const gR = GP.seg("sch-prog", () => run());
+    const cv = GP.canvas(cvEl, draw, { height: (w) => (w < 520 ? 300 : 330) });
+    function run() {
+      const base = { warps: gN(), memLat: gL(), prog: gR(), iters: 32 };
+      res = schedSim(Object.assign({ policy: gP() }, base));
+      other = schedSim(Object.assign({ policy: gP() === "lrr" ? "gto" : "lrr" }, base));
+      setV("sch-ipc", res.ipc.toFixed(3));
+      setV("sch-ipc2", other.ipc.toFixed(3) + " <small>" + (gP() === "lrr" ? "GTO" : "LRR") + "</small>");
+      setV("sch-stall", pct(res.idle), res.idle > 0.5 ? "bad" : res.idle > 0.2 ? "warn" : "ok");
+      setV("sch-first", res.firstFin.toLocaleString() + " <small>클럭</small>");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!res) return;
+      const P = GP.palette(), N = res.N, x0 = 58, top = 22, cols = Math.max(40, Math.min(120, Math.floor((w - x0 - 10) / 5)));
+      const cw = (w - x0 - 10) / cols, rows = N + 1, rh = Math.min(16, (h - top - 34) / rows);
+      const col = { LD: P.data, FMA: P.compute, INT: P.ctrl, dep: GP.alpha(P.dim, 0.35), lsu: P.warn };
+      GP.text(ctx, "클럭 0 → " + cols + " (발행 슬롯 하나 = 칸 하나)", x0, 11, { size: 12, color: P.dim, baseline: "middle" });
+      for (let r = 0; r < N; r++) {
+        GP.text(ctx, "W" + r, x0 - 8, top + r * rh + rh / 2, { size: 11, color: P.dim, align: "right", baseline: "middle", mono: true });
+        ctx.fillStyle = GP.alpha(P.grid, 0.5); ctx.fillRect(x0, top + r * rh + rh - 0.5, cols * cw, 0.5);
+      }
+      GP.text(ctx, "빈칸", x0 - 8, top + N * rh + rh / 2 + 4, { size: 11, color: P.dim, align: "right", baseline: "middle" });
+      const lim = Math.min(cols, shown, res.trace.length);
+      for (let c = 0; c < lim; c++) {
+        const e = res.trace[c];
+        if (e.w >= 0) { ctx.fillStyle = col[e.k]; ctx.fillRect(x0 + c * cw + 0.5, top + e.w * rh + 1, Math.max(1, cw - 1), rh - 2); }
+        else { ctx.fillStyle = col[e.k]; ctx.fillRect(x0 + c * cw + 0.5, top + N * rh + 5, Math.max(1, cw - 1), rh - 2); }
+      }
+      if (lim < cols) { ctx.fillStyle = P.accent; ctx.fillRect(x0 + lim * cw, top - 4, 1.5, N * rh + rh + 10); }
+      const yb = top + rows * rh + 18;
+      GP.text(ctx, "IPC " + res.ipc.toFixed(3) + " · 전체 " + res.cycles.toLocaleString() + " 클럭 · 명령 " + res.done.toLocaleString() + "개", x0, yb, { size: 12, color: P.text, baseline: "middle" });
+    }
+    const loop = GP.loop(cvEl, (dt) => { if (!playing) return; shown += dt * 30; if (shown > 130) shown = 0; cv.redraw(); });
+    $("sch-play").addEventListener("click", () => { playing = !playing; if (playing) { shown = 0; loop.start(); } else { shown = 999; cv.redraw(); } });
+    run();
+  })();
+
+  /* ====================================================== 2. 지연 × ILP */
+  (function () {
+    const cvEl = $("ilp-cv"); if (!cvEl) return;
+    const gI = GP.range("ilp-ilp", (v) => String(v), () => upd());
+    const gM = GP.range("ilp-m", (v) => v + " %", () => upd());
+    const g1 = GP.range("ilp-h1", (v) => v + " %", () => upd());
+    const g2 = GP.range("ilp-h2", (v) => v + " %", () => upd());
+    let r = null;
+    const cv = GP.canvas(cvEl, draw, { aspect: 0.56, minHeight: 240, maxHeight: 360, hover: true });
+    function cur(ilp) { return ilpModel({ ilp: ilp, m: gM() / 100, h1: g1() / 100, h2: g2() / 100 }); }
+    function upd() {
+      r = cur(gI());
+      setV("ilp-lavg", r.Lavg.toFixed(1) + " <small>클럭</small>");
+      setV("ilp-need", r.need.toFixed(1), r.need > 16 ? "bad" : r.need > 12 ? "warn" : "ok");
+      setV("ilp-sm", r.needSM.toFixed(1), r.fits ? (r.needSM > 48 ? "warn" : "ok") : "bad");
+      setV("ilp-reg", r.fits ? r.regMax + "개" : "불가 (64워프 초과)", r.fits ? "" : "bad");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!r) return;
+      const P = GP.palette(), xs = [];
+      for (let n = 1; n <= 16; n += 0.25) xs.push(n);
+      const mk = (ilp) => { const m = cur(ilp); return xs.map((n) => [n, m.U(n)]); };
+      const series = [1, 2, 4].map((k, i) => ({ data: mk(k), color: GP.alpha(P.series[i], 0.55), width: 1.4, label: "ILP " + k }));
+      series.push({ data: mk(gI()), color: P.accent, width: 3, label: "현재 ILP " + gI() });
+      GP.chart(ctx, { x: 52, y: 26, w: w - 70, h: h - 72 }, {
+        x: [1, 16], y: [0, 1.05], xLabel: "워프 / 스케줄러", yLabel: "발행 활용률 U", series,
+        vlines: [{ x: Math.min(16, r.need), color: r.need > 16 ? P.bad : P.ok, label: "필요 " + r.need.toFixed(1), dash: [5, 4] }, { x: 16, color: P.dim, label: Math.abs(r.need - 16) < 3 ? "" : "상한 16" }],
+        legend: "above", yFmt: (v) => Math.round(v * 100) + "%", hover: { xFmt: (v) => v.toFixed(1) + "워프", yFmt: (v) => Math.round(v * 100) + " %" },
+      });
+    }
+    upd();
+  })();
+
+  /* ====================================================== 3. 이중 발행 */
+  (function () {
+    const cvEl = $("iss-cv"); if (!cvEl) return;
+    const ids = ["iss-fp", "iss-int", "iss-ld", "iss-sfu", "iss-f64"];
+    const gs = ids.map((id) => GP.range(id, (v) => v + "", () => upd()));
+    const gW = GP.range("iss-w", (v) => v + "개", () => upd());
+    const gD = GP.range("iss-dep", (v) => v + " %", () => upd());
+    const gX = GP.seg("iss-dual", () => upd());
+    let r = null;
+    const cv = GP.canvas(cvEl, draw, { height: 220 });
+    const unitName = { fp32: "FP32", int: "INT32", fp64: "FP64", ldst: "LD/ST", sfu: "SFU", issue: "발행 폭" };
+    function upd() {
+      const mix = { fp32: gs[0](), int: gs[1](), ldst: gs[2](), sfu: gs[3](), fp64: gs[4]() };
+      r = issueSim({ mix, warps: gW(), dual: gX() === "2", dep: gD() / 100 });
+      setV("iss-ipc", r.ipc.toFixed(3));
+      setV("iss-bound", r.bound.ipc.toFixed(3));
+      setV("iss-by", unitName[r.bound.by] || "—");
+      setV("iss-pair", pct(r.pairFrac));
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!r) return;
+      const P = GP.palette(), x0 = 60, top = 30, cols = 60, cw = (w - x0 - 10) / cols, rh = Math.min(30, (h - top - 30) / ISS_UNITS.length);
+      ISS_UNITS.forEach((u, i) => {
+        GP.text(ctx, u.name, x0 - 8, top + i * rh + rh / 2, { size: 11, color: P.dim, align: "right", baseline: "middle" });
+        ctx.fillStyle = GP.alpha(P.grid, 0.45); ctx.fillRect(x0, top + i * rh + rh - 0.5, cols * cw, 0.5);
+      });
+      GP.text(ctx, "발행", x0 - 8, 14, { size: 11, color: P.dim, align: "right", baseline: "middle" });
+      r.trace.forEach((row, c) => {
+        row.forEach((e, j) => {
+          const ui = ISS_UNITS.findIndex((u) => u.k === e.u), occ = ISS_UNITS[ui].occ;
+          ctx.fillStyle = GP.alpha(P.series[e.w % 5], 0.85);
+          ctx.fillRect(x0 + c * cw + 0.5, top + ui * rh + 3, Math.min(occ, cols - c) * cw - 1, rh - 6);
+          ctx.beginPath(); ctx.arc(x0 + c * cw + cw / 2, 10 + j * 7, 2.6, 0, 7); ctx.fillStyle = P.text; ctx.fill();
+        });
+      });
+      GP.text(ctx, "클럭 0 → 60 · IPC " + r.ipc.toFixed(3) + " (상한 " + r.bound.ipc.toFixed(2) + ")", x0, h - 10, { size: 12, color: P.text, baseline: "middle" });
+    }
+    upd();
+  })();
+
+  /* ====================================================== 4. 뱅크 충돌 */
+  (function () {
+    const cvEl = $("bk-cv"); if (!cvEl) return;
+    const gB = GP.seg("bk-banks", () => upd()), gC = GP.seg("bk-col", () => upd()), gA = GP.seg("bk-alloc", () => upd());
+    const chk = $("bk-reuse"); chk.addEventListener("change", () => upd());
+    let r = null;
+    const cv = GP.canvas(cvEl, draw, { height: (w) => (w < 520 ? 210 : 220) });
+    function upd() {
+      const reuse = chk.checked;
+      r = bankSim({ banks: Number(gB()), collectors: Number(gC()), alloc: gA(), reuse, reuseP: reuse ? 0.5 : 0 });
+      setV("bk-ipc", r.ipc.toFixed(3), r.ipc > 0.95 ? "ok" : r.ipc > 0.7 ? "warn" : "bad");
+      setV("bk-conf", pct(r.conflictRate));
+      setV("bk-e", r.energy.toFixed(1) + " <small>pJ</small>");
+      setV("bk-saved", pct(r.saved / (3 * 2000)));
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!r) return;
+      const P = GP.palette(), banks = Number(gB()), x0 = 58, top = 24, cols = 24, cw = (w - x0 - 10) / cols, rh = Math.min(26, (h - top - 50) / (banks + 1));
+      GP.text(ctx, "클럭 →", x0, 11, { size: 12, color: P.dim, baseline: "middle" });
+      for (let b = 0; b < banks; b++) GP.text(ctx, "뱅크 " + b, x0 - 6, top + b * rh + rh / 2, { size: 11, color: P.dim, align: "right", baseline: "middle" });
+      GP.text(ctx, "실행", x0 - 6, top + banks * rh + rh / 2, { size: 11, color: P.dim, align: "right", baseline: "middle" });
+      r.trace.forEach((tr, c) => {
+        for (let b = 0; b < banks; b++) {
+          const x = x0 + c * cw, y = top + b * rh;
+          ctx.strokeStyle = GP.alpha(P.grid, 0.8); ctx.strokeRect(x + 0.5, y + 0.5, cw - 1, rh - 1);
+          const id = tr.row[b];
+          if (id >= 0) {
+            ctx.fillStyle = GP.alpha(P.series[id % 5], 0.75); ctx.fillRect(x + 1.5, y + 1.5, cw - 3, rh - 3);
+            if (cw > 16) GP.text(ctx, String(id), x + cw / 2, y + rh / 2, { size: 10, color: P.text, align: "center", baseline: "middle", mono: true });
+          }
+        }
+        if (tr.disp >= 0) { const x = x0 + c * cw + cw / 2, y = top + banks * rh + rh / 2; ctx.fillStyle = P.series[tr.disp % 5]; ctx.beginPath(); ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y + 5); ctx.lineTo(x - 6, y + 5); ctx.closePath(); ctx.fill(); }
+      });
+      GP.text(ctx, "앞 24클럭 · IPC " + r.ipc.toFixed(3) + " · 명령어당 읽기 " + r.readsPer.toFixed(2) + "회", x0, h - 12, { size: 12, color: P.text, baseline: "middle" });
+    }
+    upd();
+  })();
+
+  /* ====================================================== 5. 점유율 */
+  (function () {
+    const cvEl = $("occ-cv"); if (!cvEl) return;
+    const gR = GP.range("occ-r", (v) => v + "개", () => upd());
+    const gT = GP.range("occ-t", (v) => v + " (" + Math.ceil(v / 32) + "워프)", () => upd());
+    const gS = GP.range("occ-s", (v) => v + " KB", () => upd());
+    let r = null;
+    const cv = GP.canvas(cvEl, draw, { height: (w) => (w < 520 ? 290 : 300) });
+    const nm = { reg: "레지스터", warp: "워프 슬롯", block: "블록 한계", smem: "공유 메모리" };
+    function upd() {
+      r = occCalc({ regs: gR(), threads: gT(), smem: gS() * 1024 });
+      setV("occ-b", String(r.blocks), r.blocks === 0 ? "bad" : "");
+      setV("occ-w", r.warps + " <small>/ 64</small>");
+      setV("occ-o", pct(r.occ, 1), r.occ >= 0.75 ? "ok" : r.occ >= 0.375 ? "warn" : "bad");
+      setV("occ-by", r.blocks === 0 ? "실행 불가 (" + r.by.map((k) => nm[k]).join("·") + ")" : r.by.map((k) => nm[k]).join(" · "), r.blocks === 0 ? "bad" : "");
+      setV("occ-rf", (r.regsUsed / 1024).toFixed(0) + "K <small>/ 64K</small>");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!r) return;
+      const P = GP.palette(), x0 = 92, bw = w - x0 - 60, keys = ["reg", "warp", "block", "smem"], maxB = 32;
+      GP.text(ctx, "한계별 허용 블록 수 (0–32)", x0, 12, { size: 12, color: P.dim, baseline: "middle" });
+      keys.forEach((k, i) => {
+        const y = 24 + i * 30, v = r.lim[k], vv = isFinite(v) ? Math.min(maxB, v) : maxB, on = r.by.indexOf(k) >= 0;
+        GP.text(ctx, nm[k], x0 - 8, y + 10, { size: 12, color: on ? P.text : P.dim, align: "right", baseline: "middle", weight: on ? 700 : 400 });
+        ctx.fillStyle = GP.alpha(P.grid, 0.5); ctx.fillRect(x0, y, bw, 20);
+        ctx.fillStyle = on ? P.bad : GP.alpha(k === "smem" ? P.sram : k === "reg" ? P.sram : P.ctrl, 0.55); ctx.fillRect(x0, y, bw * vv / maxB, 20);
+        GP.text(ctx, isFinite(v) ? (v > maxB ? v + " (>32)" : String(v)) : "∞", x0 + bw * vv / maxB + 6, y + 10, { size: 12, color: P.text, baseline: "middle", mono: true });
+      });
+      const y2 = 24 + 4 * 30 + 16;
+      GP.text(ctx, "SM 자원 사용 (블록 " + r.blocks + "개)", x0, y2, { size: 12, color: P.dim, baseline: "middle" });
+      const use = [["레지스터", r.regsUsed / 65536, P.sram], ["공유 메모리", r.smemUsed / (228 * 1024), P.sram], ["워프 슬롯", r.warps / 64, P.ctrl]];
+      use.forEach((u, i) => {
+        const y = y2 + 12 + i * 30;
+        GP.text(ctx, u[0], x0 - 8, y + 10, { size: 12, color: P.dim, align: "right", baseline: "middle" });
+        ctx.fillStyle = GP.alpha(P.grid, 0.5); ctx.fillRect(x0, y, bw, 20);
+        ctx.fillStyle = u[2]; ctx.fillRect(x0, y, bw * Math.min(1, u[1]), 20);
+        GP.text(ctx, Math.round(u[1] * 100) + " %", x0 + bw * Math.min(1, u[1]) + 6, y + 10, { size: 12, color: P.text, baseline: "middle", mono: true });
+      });
+      if (r.laneEff < 1) GP.text(ctx, "블록 스레드가 32의 배수가 아님: 레인 " + Math.round((1 - r.laneEff) * 100) + " %가 빈다", x0, h - 10, { size: 12, color: P.warn, baseline: "middle" });
+    }
+    upd();
+  })();
+
+  /* ====================================================== 6. 분기 발산 */
+  (function () {
+    const cvEl = $("dv-cv"); if (!cvEl) return;
+    let show = 0, r = null;
+    const gp = GP.range("dv-p", (v) => (v / 100).toFixed(2), () => upd());
+    const ga = GP.range("dv-a", (v) => v + "개", () => upd());
+    const gb = GP.range("dv-b", (v) => v + "개", () => upd());
+    const gq = GP.range("dv-q", (v) => (v / 100).toFixed(2), () => upd());
+    const gc = GP.range("dv-c", (v) => v + "개", () => upd());
+    const gpat = GP.seg("dv-pat", () => upd());
+    const nest = $("dv-nest"); nest.addEventListener("change", () => upd());
+    $("dv-new").addEventListener("click", () => { show = (show + 1) % 400; upd(); });
+    const cv = GP.canvas(cvEl, draw, { height: (w) => (w < 520 ? 270 : 290) });
+    function opts() { return { p: gp() / 100, A: ga(), B: gb(), q: gq() / 100, C: gc(), nest: nest.checked, pattern: gpat(), show }; }
+    function upd() {
+      r = divStats(opts());
+      setV("dv-eff", pct(r.eff, 1), r.eff > 0.85 ? "ok" : r.eff > 0.5 ? "warn" : "bad");
+      setV("dv-cyc", r.cycles.toFixed(1) + " <small>/ 워프</small>");
+      setV("dv-th", gpat() === "random" ? pct(r.effRand, 1) : "— <small>(무작위일 때만)</small>");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!r || !r.first) return;
+      const P = GP.palette(), tr = r.first.trace, x0 = 40, top = 22, n = tr.length, cw = Math.min(30, (w - x0 - 10) / n), lh = (h - top - 30) / 32;
+      const colOf = { pre: P.dim, join: P.dim, if: P.compute, inner: P.tensor, else: P.ctrl };
+      GP.text(ctx, "워프 #" + show + " · 발행 순서 → (" + n + "개)", x0, 11, { size: 12, color: P.dim, baseline: "middle" });
+      for (let l = 0; l < 32; l += 8) GP.text(ctx, "L" + l, x0 - 6, top + l * lh + lh / 2, { size: 10, color: P.dim, align: "right", baseline: "middle", mono: true });
+      tr.forEach((s, c) => {
+        for (let l = 0; l < 32; l++) {
+          ctx.fillStyle = s.m[l] ? colOf[s.seg] : GP.alpha(P.faint, 0.16);
+          ctx.fillRect(x0 + c * cw + 0.5, top + l * lh + 0.5, Math.max(1, cw - 1), Math.max(1, lh - 1));
+        }
+      });
+      GP.text(ctx, "이 워프 효율 " + pct(r.first.eff, 1) + " · 평균 " + pct(r.eff, 1), x0, h - 10, { size: 12, color: P.text, baseline: "middle" });
+    }
+    upd();
+  })();
+
+  /* ====================================================== 7. 면적 예산 */
+  (function () {
+    const cvEl = $("ar-cv"); if (!cvEl) return;
+    const gRF = GP.range("ar-rf", (v) => v + " KB", () => upd());
+    const gR = GP.range("ar-r", (v) => v + "개", () => upd());
+    const gN = GP.range("ar-need", (v) => v + "워프", () => upd());
+    const gV = GP.seg("ar-vic", () => upd());
+    let r = null;
+    const cv = GP.canvas(cvEl, draw, { height: (w) => (w < 520 ? 330 : 340) });
+    const NAMES = { tensor: "텐서", fp32: "FP32·INT", rf: "레지스터", l1: "L1", fp64: "FP64", ctrl: "제어", other: "기타", lsu: "LSU" };
+    const COLK = { tensor: "tensor", fp32: "compute", rf: "sram", l1: "sram", fp64: "compute", ctrl: "ctrl", other: "faint", lsu: "data" };
+    const opts = (rf) => ({ rfKB: rf, regs: gR(), need: gN(), victim: gV() });
+    function upd() {
+      r = areaModel(opts(gRF()));
+      setV("ar-w", r.warps + " <small>/ 64</small>");
+      setV("ar-u", r.U.toFixed(2), r.U >= 0.99 ? "ok" : r.U >= 0.6 ? "warn" : "bad");
+      setV("ar-bf16", r.feasible ? r.bf16.toFixed(0) + " <small>TFLOPS</small>" : "—", r.feasible ? "" : "bad");
+      setV("ar-fp", r.fp32.toFixed(1) + " / " + r.fp64.toFixed(1));
+      setV("ar-ok", r.feasible ? r.total.toFixed(2) + " mm²" : "불가 (블록 면적 부족)", r.feasible ? "ok" : "bad");
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      if (!r) return;
+      const P = GP.palette(), x0 = 14, bw = w - 28, keys = ["tensor", "fp32", "rf", "l1", "fp64", "ctrl", "other", "lsu"];
+      GP.text(ctx, "SM 3.2 mm² 분해 (현재)", x0, 12, { size: 12, color: P.dim, baseline: "middle" });
+      let x = x0; const sc = bw / 3.2;
+      keys.forEach((k) => {
+        const a = r.area[k], ww = a * sc; if (ww <= 0) return;
+        ctx.fillStyle = GP.alpha(P[COLK[k]] || P.dim, k === "other" ? 0.25 : 0.6); ctx.fillRect(x, 24, ww - 1, 34);
+        if (ww > 40) { GP.text(ctx, NAMES[k], x + ww / 2, 36, { size: 11, color: P.text, align: "center", baseline: "middle" }); GP.text(ctx, a.toFixed(2), x + ww / 2, 50, { size: 10, color: P.text, align: "center", baseline: "middle", mono: true }); }
+        x += ww;
+      });
+      const data = [];
+      for (let rf = 64; rf <= 512; rf += 16) { const m = areaModel(opts(rf)); if (m.feasible) data.push([rf, m.bf16]); }
+      const box = { x: 58, y: 96, w: w - 76, h: h - 140 };
+      GP.chart(ctx, box, {
+        x: [64, 512], y: [0, 1000], xLabel: "레지스터 파일 / SM (KB)", yLabel: "실효 BF16 (TFLOPS)",
+        series: [{ data, color: P.tensor, width: 2.4, label: "실효 BF16" }],
+        vlines: [{ x: 256, color: P.dim, label: "GX-1", dash: [4, 4] }],
+        points: r.feasible ? [{ x: gRF(), y: r.bf16, color: P.accent, r: 5, ring: true }] : [],
+        hover: { xFmt: (v) => Math.round(v) + " KB", yFmt: (v) => v.toFixed(0) },
+      });
+    }
+    upd();
+  })();
+
+  /* ====================================================== 8. 3D SM 평면도 */
+  (function () {
+    const el = $("sm3-v"); if (!el) return;
+    const gOp = GP.seg("sm3-op", () => setOp());
+    const allChk = $("sm3-all");
+    const BNAME = { tensor: "텐서 코어", fp32: "FP32·INT32 레인", fp64: "FP64 레인", rf: "레지스터 파일 64 KB", ctrl: "스케줄러·디스패치·수집기", lsu: "LD/ST·SFU", l1: "L1/공유 메모리 256 KB", icache: "명령어 캐시·인출", tex: "텍스처·주소 유닛", l2: "L2 (SM 밖)", hbm: "HBM (패키지 안)" };
+    const BAREA = { tensor: 0.20, fp32: 0.1125, fp64: 0.0875, rf: 0.105, ctrl: 0.06, lsu: 0.05, l1: 0.35, icache: 0.06, tex: 0.05 };
+    let cur = energyOp("fp32");
+    function setOp() {
+      cur = energyOp(gOp());
+      setV("sm3-e", cur.total.toFixed(1) + " <small>pJ</small>");
+      setV("sm3-math", pct(cur.mathFrac));
+      setV("sm3-pf", cur.flop ? cur.perFlop.toFixed(2) + " <small>pJ</small>" : "— <small>(FLOP 없음)</small>");
+      setV("sm3-blk", cur.steps.map((s) => BNAME[s[0]].split(" ")[0] + " " + s[2].toFixed(0)).join(" → "));
+    }
+    setOp();
+    const T = GP.three(el, { camera: [0, 11, 4.6], target: [0, 0, 0.4], fov: 36, minDistance: 4, maxDistance: 30 });
+    if (!T) return;
+    const THREE = T.THREE, U = 4, S = Math.sqrt(3.2) * U, half = S / 2;
+    const meshes = [];
+    const base = new THREE.Mesh(new THREE.BoxGeometry(S + 0.3, 0.12, S + 0.3), T.material(0x55606e, { roughness: 0.6, metalness: 0.3 }));
+    base.position.y = -0.06; T.scene.add(base);
+    T.ground(-0.2, 22, 0.3);
+    const HGT = { tensor: 0.38, fp32: 0.26, fp64: 0.22, rf: 0.4, ctrl: 0.32, lsu: 0.2, l1: 0.46, icache: 0.3, tex: 0.22 };
+    const CK = { tensor: "tensor", fp32: "compute", fp64: "compute", rf: "sram", ctrl: "ctrl", lsu: "data", l1: "sram", icache: "ctrl", tex: "data" };
+    function addBox(key, sp, x0, z0, w, d) {
+      const hgt = HGT[key], g = 0.06;
+      const m = new THREE.Mesh(new THREE.BoxGeometry(Math.max(0.05, w - g), hgt, Math.max(0.05, d - g)), T.material(0x888888, { roughness: 0.5, metalness: 0.08, emissive: 0x000000 }));
+      m.position.set(x0 + w / 2 - half, hgt / 2, z0 + d / 2 - half);
+      m.userData = { key, sp };
+      T.edges(m, 0x0b1220, 0.25);
+      T.scene.add(m); meshes.push(m);
+      return m;
+    }
+    // 위 띠: L1/공유 · 명령어 캐시 · 텍스처 (면적 비례 폭)
+    const bandA = BAREA.l1 + BAREA.icache + BAREA.tex, spA = 0.615, bandD = S * bandA / (bandA + 4 * spA);
+    let x = 0;
+    [["icache", BAREA.icache], ["l1", BAREA.l1], ["tex", BAREA.tex]].forEach(([k, a]) => { const w = S * a / bandA; addBox(k, -1, x, 0, w, bandD); x += w; });
+    // 서브파티션 2×2, 안은 면적 비례 띠
+    const spW = S / 2, spD = (S - bandD) / 2, order = [["ctrl", 0.06], ["rf", 0.105], ["fp32", 0.1125], ["fp64", 0.0875], ["tensor", 0.20], ["lsu", 0.05]];
+    for (let sp = 0; sp < 4; sp++) {
+      const sx = (sp % 2) * spW, sz = bandD + Math.floor(sp / 2) * spD;
+      let z = sz;
+      order.forEach(([k, a]) => { const d = spD * a / spA; addBox(k, sp, sx, z, spW, d); z += d; });
+    }
+    function paint() {
+      const dark = GP.isDark();
+      meshes.forEach((m) => { const c = GP.color(CK[m.userData.key]) || "#888"; m.material.color.set(dark ? GP.mix(c, "#000000", 0.15) : GP.mix(c, "#ffffff", 0.08)); m.material.emissive.set(c); });
+    }
+    paint(); GP.onTheme(paint);
+    const lbl = [];
+    const find = (k, sp) => meshes.find((m) => m.userData.key === k && m.userData.sp === sp);
+    [["l1", -1, "L1/공유 256 KB"], ["icache", -1, "명령어 캐시"], ["rf", 0, "레지스터 64 KB"], ["tensor", 0, "텐서 코어"], ["fp32", 0, "FP32·INT32"], ["ctrl", 0, "스케줄러"], ["lsu", 0, "LD/ST·SFU"]].forEach(([k, sp, t]) => {
+      const m = find(k, sp); if (!m) return;
+      const L = T.label(t, [m.position.x, m.position.y + HGT[k] / 2 + 0.05, m.position.z]); lbl.push(L);
+    });
+    const offLbl = T.label("→ L2 · HBM (SM 밖)", [-half - 0.2, 0.4, -half + bandD / 2]); offLbl.setVisible(false);
+    T.pick(meshes, { click(obj) {
+      if (!obj) return; const k = obj.userData.key;
+      setV("sm3-blk", BNAME[k] + (obj.userData.sp >= 0 ? " (서브파티션 " + obj.userData.sp + ")" : "") + " · " + BAREA[k] + " mm² (" + (BAREA[k] / 3.2 * 100).toFixed(1) + " %)");
+    } });
+    T.onFrame((dt, t) => {
+      const st = cur.steps, n = st.length, idx = Math.floor(t / 0.7) % n, key = st[idx][0];
+      const onPath = {}; st.forEach((s) => { onPath[s[0]] = 1; });
+      offLbl.setVisible(key === "l2" || key === "hbm");
+      meshes.forEach((m) => {
+        const k = m.userData.key, spOk = m.userData.sp < 0 || allChk.checked || m.userData.sp === 0;
+        const act = k === key && spOk, pulse = act ? 0.5 + 0.5 * Math.sin(t * 9) : 0;
+        m.material.emissiveIntensity = act ? 0.25 + 0.25 * pulse : onPath[k] && spOk ? 0.08 : 0;
+        const sy = act ? 1.4 + 0.4 * pulse : 1;
+        m.scale.y = GP.approach(m.scale.y, sy, dt, 0.06); m.position.y = HGT[k] * m.scale.y / 2;
+      });
+    });
+  })();
+})();
+</script>
+</body>
+</html>

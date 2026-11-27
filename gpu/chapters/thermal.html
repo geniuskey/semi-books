@@ -1,0 +1,1201 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>발열과 냉각 · GPUBook</title>
+<meta name="description" content="12장의 전력 760 W가 접합에서 냉각수까지 가는 열 경로를 1D 열저항과 열 퍼짐으로 계산하고, 2D 다이 열 지도, 포스터 과도 응답, 누설–온도 되먹임이 들어간 열 스로틀링 루프, 열 폭주 조건, 공랭·수냉·2상·액침 비교, HBM 온도 한계, 랙 전력과 PUE를 시뮬레이터로 다룬다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .lb { fill: var(--text); font-family: var(--font); font-size: 13px; }
+  svg .lb-b { fill: var(--text); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lb-s { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .lb-h { fill: var(--heat); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lb-d { fill: var(--data); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .lb-c { fill: var(--clock); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  svg .res { fill: none; stroke: var(--text); stroke-width: 1.7; stroke-linejoin: round; }
+  svg .hflow { fill: none; stroke: var(--heat); stroke-width: 2.2; marker-end: url(#gp-ah-red); }
+  svg .cflow { fill: none; stroke: var(--data); stroke-width: 2; marker-end: url(#gp-ah-blue); }
+  svg .water { fill: color-mix(in srgb, var(--data) 18%, transparent); stroke: var(--data); }
+  svg .cone { fill: color-mix(in srgb, var(--heat) 14%, transparent); stroke: var(--heat); stroke-dasharray: 4 3; }
+  .sim-view canvas { display: block; width: 100%; }
+  .th-row { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--text-dim); padding: 6px 2px 0; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="thermal">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 13</div>
+    <h1>발열과 냉각</h1>
+    <p class="lead"><a href="power.html">12장</a>에서 GX-1 로직 다이는 최대 부하에서 약 760 W를 쓴다. 그 전력은 모두 열이 되어 780 mm² 다이에서 빠져나가야 한다. 평균 열밀도는 약 97 W/cm²로, 전기 레인지 열판의 10배가 넘는다. 이 장은 그 열이 <strong>접합 → 다이 → TIM → 리드 → 냉각판 → 냉각수</strong>로 가는 길을 열저항으로 계산하고, 온도가 다시 전력(누설)과 클럭(스로틀링)을 바꾸는 되먹임까지 따라간다. 마지막에는 칩 하나의 열이 랙 50 kW와 데이터센터 PUE가 되는 과정까지 계산한다. 결론은 하나다. <strong>냉각 능력이 곧 지속 클럭이고, 지속 클럭이 곧 성능이다.</strong></p>
+    <ul class="objectives">
+      <li>층 구조의 1D 열저항을 합해 \(T_j\)를 구하고, 어느 층이 가장 큰지 말할 수 있다.</li>
+      <li>작은 열원 위 퍼짐 저항이 왜 커지는지, 퍼짐층 두께에 최적값이 있는 이유를 설명할 수 있다.</li>
+      <li>블록별 전력 밀도로 다이 열 지도를 풀고, 핫스팟이 평균보다 몇 K 높은지 계산할 수 있다.</li>
+      <li>포스터 RC 사다리로 전력 계단·펄스에 대한 \(T_j(t)\)와 시정수를 구할 수 있다.</li>
+      <li>열 스로틀링 루프와 누설–온도 되먹임을 모델링해 냉각수 온도·유량 → 지속 클럭을 계산할 수 있다.</li>
+      <li>열 폭주 조건 \(R_{th}\,dP/dT \lt 1\), 냉각 방식별 감당 전력, 랙 냉각수 유량과 PUE를 계산할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="path">
+    <h2>열 경로: 접합에서 냉각수까지</h2>
+    <p>GX-1은 플립칩이다. 트랜지스터가 있는 활성면은 아래(범프 쪽)를 보고, 열은 대부분 반대쪽인 다이 뒷면으로 올라간다. 아래쪽 범프·인터포저·기판으로 빠지는 열은 수 % 이하라 무시한다. 위로 가는 길은 실리콘 다이 → <span class="term">열 계면 물질</span><span class="en">(TIM, thermal interface material)</span> TIM1 → 구리 리드 → TIM2 → 냉각판 바닥 → 냉각판 안 미세 유로의 대류 → 냉각수다. 열 회로는 전기 회로와 같은 꼴이다. 온도 차가 전압, 열류(W)가 전류, <span class="term">열저항</span><span class="en">(thermal resistance, K/W)</span>이 저항이다.</p>
+    <div class="formula">$$T_j = T_f + P_{die}\,R_{int} + (P_{die} + P_{HBM})\,R_{ext},\qquad R = \frac{t}{kA}$$
+      <div class="where">\(T_f\)는 냉각판 입구 냉각수 온도, \(R_{int}\)는 다이·TIM1·리드(다이 열만 지나감), \(R_{ext}\)는 TIM2·냉각판·대류·냉각수 가열(다이와 HBM 열을 함께 받음). 판 하나의 열저항은 두께 \(t\), 열전도율 \(k\), 면적 \(A\)로 \(t/(kA)\). 리드와 냉각판에서는 열이 옆으로 퍼지며 면적이 커진다(다음 절).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 330" role="img" aria-label="GX-1 패키지 단면: 기판, 인터포저, 로직 다이와 HBM, TIM1, 구리 리드, TIM2, 냉각판과 냉각수. 오른쪽에 직렬 열저항 사다리">
+        <rect x="30" y="296" width="470" height="20" class="m-sub"/>
+        <rect x="60" y="278" width="410" height="14" class="m-interp"/>
+        <g class="m-sol"><circle cx="90" cy="294" r="2.5"/><circle cx="140" cy="294" r="2.5"/><circle cx="190" cy="294" r="2.5"/><circle cx="240" cy="294" r="2.5"/><circle cx="290" cy="294" r="2.5"/><circle cx="340" cy="294" r="2.5"/><circle cx="390" cy="294" r="2.5"/><circle cx="440" cy="294" r="2.5"/></g>
+        <rect x="175" y="240" width="180" height="36" class="m-si"/>
+        <rect x="175" y="268" width="180" height="8" class="kf-heat" opacity="0.55"/>
+        <rect x="72" y="240" width="92" height="36" class="m-dram"/><rect x="366" y="240" width="92" height="36" class="m-dram"/>
+        <rect x="175" y="233" width="180" height="7" class="m-tim"/>
+        <rect x="70" y="233" width="96" height="7" class="m-tim"/><rect x="364" y="233" width="96" height="7" class="m-tim"/>
+        <rect x="50" y="212" width="430" height="21" class="m-lid"/>
+        <rect x="50" y="206" width="430" height="6" class="m-tim"/>
+        <rect x="40" y="150" width="450" height="56" class="m-cu"/>
+        <g class="water"><rect x="60" y="166" width="410" height="26" rx="3"/></g>
+        <g class="m-cu"><rect x="80" y="166" width="6" height="26"/><rect x="120" y="166" width="6" height="26"/><rect x="160" y="166" width="6" height="26"/><rect x="200" y="166" width="6" height="26"/><rect x="240" y="166" width="6" height="26"/><rect x="280" y="166" width="6" height="26"/><rect x="320" y="166" width="6" height="26"/><rect x="360" y="166" width="6" height="26"/><rect x="400" y="166" width="6" height="26"/><rect x="440" y="166" width="6" height="26"/></g>
+        <path class="cflow" d="M10 130 H120"/><text x="10" y="122" class="lb-d">냉각수 40 °C, 2 L/min</text>
+        <path class="cflow" d="M410 130 H520"/><text x="420" y="122" class="lb-d">약 46.5 °C</text>
+        <path class="hflow" d="M265 266 V160"/><path class="hflow" d="M118 252 V176"/><path class="hflow" d="M412 252 V176"/>
+        <text x="178" y="262" class="lb-b">로직 다이 760 W</text>
+        <text x="76" y="262" class="lb-s">HBM 25 W</text><text x="370" y="262" class="lb-s">HBM 25 W</text>
+        <text x="60" y="227" class="lb-s">구리 리드</text><text x="56" y="162" class="lb-s">냉각판 · 미세 유로(대류)</text>
+        <text x="60" y="326" class="lb-s">유기 기판 · 실리콘 인터포저 · 범프 쪽 열은 무시(활성면은 다이 아래쪽)</text>
+        <g transform="translate(580,14)">
+          <text x="0" y="12" class="lb-b">T_j</text>
+          <path class="res" d="M30 18 v6 l7 3 l-14 6 l14 6 l-14 6 l7 3 v6"/><text x="50" y="42" class="lb">다이 0.0080</text>
+          <path class="res" d="M30 54 v5 l7 3 l-14 6 l14 6 l-7 3 v5"/><text x="50" y="72" class="lb">TIM1 0.0058</text>
+          <path class="res" d="M30 82 v5 l7 3 l-14 6 l14 6 l-7 3 v5"/><text x="50" y="100" class="lb">리드 0.0057</text>
+          <line x1="0" y1="114" x2="270" y2="114" class="dash s-faint"/>
+          <text x="150" y="42" class="lb-h">R_int 0.0195</text><text x="150" y="60" class="lb-s">× 760 W = 14.9 K</text>
+          <path class="res" d="M30 110 v5 l7 3 l-14 6 l14 6 l-7 3 v5"/><text x="50" y="128" class="lb">TIM2 0.0049</text>
+          <path class="res" d="M30 138 v5 l7 3 l-14 6 l14 6 l-7 3 v5"/><text x="50" y="156" class="lb">냉각판 0.0045</text>
+          <path class="res" d="M30 166 v6 l7 3 l-14 6 l14 6 l-14 6 l7 3 v6"/><text x="50" y="190" class="lb">대류 0.0119</text>
+          <path class="res" d="M30 202 v5 l7 3 l-14 6 l14 6 l-7 3 v5"/><text x="50" y="220" class="lb">냉각수 가열 0.0036</text>
+          <text x="150" y="148" class="lb-h">R_ext 0.0249</text><text x="150" y="166" class="lb-s">× 910 W = 22.7 K</text>
+          <line x1="14" y1="236" x2="46" y2="236" class="s-line"/><text x="54" y="241" class="lb-b">T_f 40 °C</text>
+          <text x="0" y="266" class="t-acc">T_j(평균) ≈ 40 + 14.9 + 22.7 ≈ 77.5 °C</text>
+          <text x="0" y="286" class="lb-s">단위 K/W. 실효 37.5 K / 760 W ≈ 0.049 K/W</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 13-1.</b> GX-1 열 경로(두께 과장). 열은 다이 아래쪽 활성면에서 생겨 위로 올라간다. 오른쪽은 다음 시뮬레이터 기본값으로 계산한 직렬 열저항. 위 세 층은 로직 다이 열 760 W만, 아래 네 층은 HBM 150 W까지 합친 910 W를 나른다. 가장 큰 항은 대류다.</figcaption>
+    </figure>
+
+    <p>층마다 열저항을 보면 설계의 우선순위가 보인다. 다이 자체(0.75 mm 실리콘)가 약 0.008 K/W, TIM1이 약 0.006, 리드가 약 0.006, 대류가 약 0.012 K/W다. 냉각수도 데워진다. 냉각수가 질량 유량 \(\dot m\)으로 흐르며 열 \(P\)를 받으면 출구 온도가 \(P/(\dot m c_p)\)만큼 오르고, 냉각판 평균 온도는 그 절반만큼 오른다. 이것을 열저항으로 쓰면 \(R_{cal} = 1/(2\dot m c_p)\)다. 물 2 L/min(\(\dot m c_p\) ≈ 139 W/K)에 910 W를 실으면 출구가 약 6.5 K 높아진다.</p>
+    <div class="formula">$$R_{cal} = \frac{1}{2\,\dot m\,c_p},\qquad R_{conv} = \frac{1}{h\,A},\qquad h \propto Q^{0.6}$$
+      <div class="where">\(h\)는 냉각판 바닥 면적 기준 실효 열전달 계수(핀 면적 확장 효과 포함, 미세 유로 냉각판 약 \(3\text{–}10 \times 10^4\) W/m²K), \(Q\)는 부피 유량. 유량을 줄이면 대류와 냉각수 가열 두 항이 함께 커진다. 지수 0.6은 미세 유로의 대표적인 근사다.</div></div>
+
+    <div class="sim" id="sim-ch">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>1D 열저항 사슬: 층마다 몇 K가 떨어지나</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ch-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>로직 다이 전력 <output id="ch-p-out"></output></span><input type="range" id="ch-p" min="100" max="1200" step="10" value="760"></label>
+          <label class="ctrl"><span>다이 두께 <output id="ch-d-out"></output></span><input type="range" id="ch-d" min="0.1" max="1" step="0.05" value="0.75"></label>
+          <div class="ctrl"><span>TIM1</span><div class="seg" id="ch-tim"><button data-value="grease">그리스</button><button data-value="indium" class="on">인듐 솔더</button><button data-value="lm">액체 금속</button></div></div>
+          <label class="ctrl"><span>리드 두께 <output id="ch-l-out"></output></span><input type="range" id="ch-l" min="0" max="5" step="0.25" value="2"></label>
+          <label class="ctrl"><span>냉각판 h(2 L/min 기준) <output id="ch-h-out"></output></span><input type="range" id="ch-h" min="5000" max="150000" step="5000" value="65000"></label>
+          <label class="ctrl"><span>냉각수 유량 <output id="ch-q-out"></output></span><input type="range" id="ch-q" min="0.3" max="6" step="0.1" value="2"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">평균 T<sub>j</sub></span><span class="v" id="ch-tj">—</span></div>
+        <div class="stat"><span class="k">R<sub>int</sub> / R<sub>ext</sub></span><span class="v" id="ch-r">—</span></div>
+        <div class="stat"><span class="k">실효 접합–냉각수</span><span class="v" id="ch-re">—</span></div>
+        <div class="stat"><span class="k">냉각수 출구 상승</span><span class="v" id="ch-rise">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① TIM1을 그리스로 바꾸면 실효 저항이 0.049 → 0.060 K/W, 평균 \(T_j\)가 약 77.5 → 85.8 °C로 오른다. 얇은 TIM 한 장이 다이 전체만큼 중요하다. ② 유량을 0.5 L/min으로 줄이면 대류·냉각수 가열이 함께 커져 \(T_j\)가 약 101 °C가 된다. ③ 다이를 0.3 mm로 얇게 갈면(후면 연마) 약 3.7 K 내려간다. 다이 두께도 냉각 설계 변수다.</div>
+    </div>
+
+    <div class="callout fab"><strong>760 W의 열 예산</strong>로직 다이 760 W ÷ 7.8 cm² ≈ <b>97 W/cm²</b>. 기본 사슬(인듐 TIM1, 구리 리드 2 mm, 미세 유로 냉각판, 물 40 °C·2 L/min)에서 \(R_{int}\) ≈ 0.0195, \(R_{ext}\) ≈ 0.0249 K/W이고, 평균 \(T_j \approx 40 + 760 \times 0.0195 + 910 \times 0.0249 \approx 77.5\) °C, 실효 접합–냉각수 열저항은 <b>약 0.049 K/W</b>(GX-1 표의 약 0.05)다. 스로틀 시작 95 °C까지 평균으로는 17 K가 남는다. 그 여유를 다음 절들의 핫스팟(약 +4 K), 냉각수 온도 상승, 누설 증가가 나누어 먹는다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 0.05 K/W 수준의 열저항은 공기로는 만들 수 없다(<a href="#cooling">8절</a>). 그래서 1,000 W급 패키지는 냉각판 수냉을 전제로 설계하고, TIM1에는 그리스 대신 금속(인듐 솔더·액체 금속)을 쓰며, 다이를 얇게 간다. 남은 가장 큰 항인 대류를 줄이려면 냉각판 핀을 촘촘하게 만들어야 하고, 그만큼 펌프 압력(전력)이 든다. 열저항 1 mK/W는 760 W에서 약 0.8 K이고, 스로틀이 걸리는 조건에서는 약 1 %의 지속 클럭이다(<a href="#throttle">6절</a>).</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="spread">
+    <h2>열 퍼짐: 작은 열원이 비싼 이유</h2>
+    <p>1D 식 \(t/(kA)\)는 열이 열원 면적 그대로 내려간다고 가정한다. 실제로는 리드나 냉각판처럼 열원보다 넓은 판에서 열이 옆으로 <span class="term">열 퍼짐</span><span class="en">(heat spreading)</span>을 한다. 반대로 넓은 판 위의 작은 열원에서 보면 열이 좁은 입구로 몰려 들어가야 하므로 추가 저항, 곧 <span class="term">퍼짐 저항</span><span class="en">(spreading/constriction resistance)</span>이 생긴다. 다이 전체가 균일하게 데워지면 이 항은 작지만, 텐서 코어 밀집부 같은 핫스팟이나 HBM PHY처럼 좁은 띠에서는 커진다.</p>
+    <p>설계 초기에 흔히 쓰는 근사는 두 가지다. 1절 사슬에서 쓴 <b>45° 근사</b>는 사각형 \(a \times b\)가 두께 \(t\) 층을 지나며 \((a+2z)(b+2z)\)로 넓어진다고 보고 적분한다. 원형 열원(반지름 \(a\))이 원판(반지름 \(b\), 바닥 열전달 \(h\)) 위에 있을 때는 해석해를 맞춘 <b>Lee·Song 근사</b>가 정확도가 높다.</p>
+    <div class="formula">$$R_{45} = \frac{1}{2k(b-a)}\ln\frac{(a+2t)\,b}{a\,(b+2t)},\qquad R_{sp} = \frac{(1-\varepsilon)^{3/2}}{2\sqrt{\pi}\,k\,a}\,\Phi,\quad \Phi = \frac{\tanh(\lambda\tau) + \lambda/Bi}{1 + (\lambda/Bi)\tanh(\lambda\tau)}$$
+      <div class="where">\(\varepsilon = a/b\), \(\tau = t/b\), \(Bi = hb/k\)(비오 수), \(\lambda = \pi + 1/(\sqrt{\pi}\,\varepsilon)\). 전체 저항은 \(R = t/(k\pi b^2) + 1/(h\pi b^2) + R_{sp}\)(평균 온도 기준). 열원 중심 최고 온도 기준 값은 조금 더 크다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="작은 열원과 큰 열원 아래의 열 퍼짐 원뿔과 열류선, 퍼짐층 두께의 최적값">
+        <g transform="translate(20,20)">
+          <text x="0" y="12" class="lb-b">작은 열원(a = 2 mm)</text>
+          <rect x="0" y="60" width="250" height="70" class="m-cu"/>
+          <rect x="105" y="50" width="40" height="10" class="kf-heat"/>
+          <path class="cone" d="M105 60 L35 130 L215 130 L145 60 Z"/>
+          <path d="M125 60 V128 M118 60 Q90 95 60 128 M132 60 Q160 95 190 128 M112 60 Q70 90 30 125 M138 60 Q180 90 220 125" class="s-line" style="stroke:var(--heat);fill:none;opacity:.8"/>
+          <rect x="0" y="130" width="250" height="22" class="water"/>
+          <text x="0" y="178" class="lb">열류선이 입구에 몰린다 → R ≈ 0.39 K/W</text>
+        </g>
+        <g transform="translate(300,20)">
+          <text x="0" y="12" class="lb-b">큰 열원(a = 10 mm)</text>
+          <rect x="0" y="60" width="250" height="70" class="m-cu"/>
+          <rect x="40" y="50" width="170" height="10" class="kf-heat"/>
+          <path class="cone" d="M40 60 L5 130 L245 130 L210 60 Z"/>
+          <path d="M70 60 V128 M100 60 V128 M125 60 V128 M150 60 V128 M180 60 V128 M50 60 L20 128 M200 60 L230 128" class="s-line" style="stroke:var(--heat);fill:none;opacity:.8"/>
+          <rect x="0" y="130" width="250" height="22" class="water"/>
+          <text x="0" y="178" class="lb">거의 1D → R ≈ 0.082 K/W</text>
+        </g>
+        <g transform="translate(600,20)">
+          <text x="0" y="12" class="lb-b">퍼짐층 두께 t의 최적값</text>
+          <line x1="20" y1="150" x2="230" y2="150" class="s-axis"/><line x1="20" y1="150" x2="20" y2="30" class="s-axis"/>
+          <path d="M28 40 Q60 110 110 128 Q160 134 225 118" class="ks-heat"/>
+          <circle cx="140" cy="131" r="4" class="kf-heat"/>
+          <text x="40" y="60" class="lb-s">얇으면 퍼지지 못함</text>
+          <text x="150" y="108" class="lb-s">두꺼우면 t/k 증가</text>
+          <text x="150" y="168" class="lb-s">t</text><text x="0" y="40" class="lb-s">R</text>
+          <text x="20" y="190" class="lb">Cu, h = 2×10⁴: 최적 약 6.6 mm</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 13-2.</b> 같은 구리판(반지름 20 mm, 두께 3 mm, 바닥 h = 20,000 W/m²K)이라도 열원이 작으면 열류선이 입구에 몰려 저항이 커진다(값은 Lee·Song 근사). 퍼짐층은 너무 얇으면 옆으로 퍼지지 못하고, 너무 두꺼우면 세로 전도 저항이 커지므로 두께에 최적값이 있다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-sp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>퍼짐 저항: 열원 크기와 퍼짐층 두께</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>열원 반지름 a <output id="sp-a-out"></output></span><input type="range" id="sp-a" min="1" max="15" step="0.5" value="5"></label>
+          <label class="ctrl"><span>퍼짐층 두께 t <output id="sp-t-out"></output></span><input type="range" id="sp-t" min="0.2" max="12" step="0.2" value="3"></label>
+          <div class="ctrl"><span>퍼짐층 재료</span><div class="seg" id="sp-k"><button data-value="120">실리콘</button><button data-value="390" class="on">구리</button><button data-value="1500">다이아몬드</button></div></div>
+          <label class="ctrl"><span>바닥 h <output id="sp-h-out"></output></span><input type="range" id="sp-h" min="2000" max="150000" step="1000" value="20000"></label>
+          <label class="ctrl"><span>열원 열밀도 <output id="sp-q-out"></output></span><input type="range" id="sp-q" min="20" max="500" step="10" value="250"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">열원 전력 q″πa²</span><span class="v" id="sp-p">—</span></div>
+        <div class="stat"><span class="k">전체 R(평균 / 최고)</span><span class="v" id="sp-r">—</span></div>
+        <div class="stat"><span class="k">퍼짐 저항 비중</span><span class="v" id="sp-f">—</span></div>
+        <div class="stat"><span class="k">온도 상승 / 최적 t</span><span class="v" id="sp-dt">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 열원 반지름을 5 → 2 mm로 줄이면 R이 약 0.17 → 0.39 K/W로 두 배 넘게 커진다. 열밀도가 같아도 전력이 6분의 1이라 상승 온도는 줄지만, <b>단위 전력당</b> 저항은 작은 열원이 훨씬 나쁘다. ② 재료를 실리콘으로 바꾸면 R이 약 0.40 K/W로 구리의 2.3배다. 다이만으로는 열을 잘 퍼뜨리지 못해 구리 리드가 필요하다. ③ 두께를 밀어 보면 h = 20,000에서 약 6.6 mm, h = 65,000에서 약 4.6 mm에 최소가 있다. 냉각이 강할수록 퍼짐층은 얇아야 한다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 퍼짐 저항 때문에 같은 평균 열밀도라도 열원이 몰려 있으면 손해다. 그래서 칩 평면 배치에서 텐서 코어처럼 뜨거운 블록을 한곳에 몰지 않고 SM마다 나누어 다이 전체에 흩는다(<a href="noc.html">9장</a>). 리드는 구리로 두껍게 만들되 냉각판이 강할수록 얇게 하고, 핫스팟이 심한 칩은 증기 챔버나 다이아몬드 같은 고열전도 퍼짐층을 검토한다. 퍼짐 일반론과 리드·TIM 재료는 <a href="../../packaging/chapters/thermal.html">PackagingBook 열 장</a>에서 자세히 다룬다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="map">
+    <h2>열밀도와 다이 열 지도</h2>
+    <p>평균 97 W/cm²는 다이 전체의 평균일 뿐이다. 블록마다 전력 밀도가 다르다. GX-1을 0.5 mm 칸으로 나누어 블록별 전력을 나누어 주면, BF16 행렬곱(GEMM)에서 텐서 코어 칸은 약 222 W/cm²(평균의 약 2.3배), 나머지 SM 칸은 약 74, L2·크로스바는 약 86, HBM PHY는 약 69, I/O·링크는 약 46 W/cm²다. 이 전력 지도로 정상 상태 열 방정식을 풀면 열 지도가 나온다.</p>
+    <div class="formula">$$\nabla\!\cdot\!\left(k t\,\nabla T\right) - \frac{T - T_b}{R''} + q'' = 0 \;\;\Rightarrow\;\; T_{i,j} = \frac{G\sum_{nb} T_{nb} + g\,T_{lid} + q_{i,j}}{G\,n_{nb} + g}$$
+      <div class="where">\(kt\)는 층의 면내 열전도(다이 0.75 mm 실리콘 ≈ 0.09 W/K, 구리 리드 2 mm ≈ 0.78 W/K), \(R''\)는 단위 면적 세로 열저항(K·m²/W), \(q''\)는 열밀도. 다이 층과 리드 층 두 장을 세로 컨덕턴스 \(g\)로 잇고, 리드는 다시 냉각수 쪽 \(T_b = T_f + P_{HBM}R_{ext}\)에 잇는다. 칸마다 이웃의 가중 평균으로 바꾸는 갱신을 수렴할 때까지 반복한다(SOR 완화법, 이완 계수 1.85, 보통 100회 안팎). 면내 퍼짐 길이 \(\sqrt{kt\,R''}\)는 다이 층에서 약 1 mm다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 330" role="img" aria-label="GX-1 다이 평면 배치: 위아래 긴 변의 HBM PHY와 HBM 스택 6개, 가운데 L2 띠, 위아래 GPC 4개씩, 좌우 I/O">
+        <g transform="translate(40,14)">
+          <rect x="30" y="0" width="100" height="48" rx="3" class="m-dram"/><rect x="150" y="0" width="100" height="48" rx="3" class="m-dram"/><rect x="270" y="0" width="100" height="48" rx="3" class="m-dram"/>
+          <rect x="30" y="268" width="100" height="48" rx="3" class="m-dram"/><rect x="150" y="268" width="100" height="48" rx="3" class="m-dram"/><rect x="270" y="268" width="100" height="48" rx="3" class="m-dram"/>
+          <text x="80" y="29" class="lb" text-anchor="middle">HBM</text><text x="200" y="29" class="lb" text-anchor="middle">HBM</text><text x="320" y="29" class="lb" text-anchor="middle">HBM</text>
+          <text x="80" y="297" class="lb" text-anchor="middle">HBM</text><text x="200" y="297" class="lb" text-anchor="middle">HBM</text><text x="320" y="297" class="lb" text-anchor="middle">HBM</text>
+          <rect x="20" y="58" width="360" height="200" class="m-si"/>
+          <rect x="32" y="58" width="96" height="12" class="k-dram"/><rect x="152" y="58" width="96" height="12" class="k-dram"/><rect x="272" y="58" width="96" height="12" class="k-dram"/>
+          <rect x="32" y="246" width="96" height="12" class="k-dram"/><rect x="152" y="246" width="96" height="12" class="k-dram"/><rect x="272" y="246" width="96" height="12" class="k-dram"/>
+          <rect x="20" y="70" width="18" height="176" class="k-link"/><rect x="362" y="70" width="18" height="176" class="k-link"/>
+          <rect x="38" y="70" width="81" height="80" class="k-compute"/><rect x="119" y="70" width="81" height="80" class="k-compute"/><rect x="200" y="70" width="81" height="80" class="k-compute"/><rect x="281" y="70" width="81" height="80" class="k-compute"/>
+          <rect x="38" y="174" width="81" height="72" class="k-compute"/><rect x="119" y="174" width="81" height="72" class="k-compute"/><rect x="200" y="174" width="81" height="72" class="k-compute"/><rect x="281" y="174" width="81" height="72" class="k-compute"/>
+          <g class="kf-tensor" opacity="0.75">
+            <rect x="44" y="76" width="10" height="10"/><rect x="68" y="76" width="10" height="10"/><rect x="92" y="76" width="10" height="10"/><rect x="44" y="100" width="10" height="10"/><rect x="68" y="100" width="10" height="10"/><rect x="92" y="100" width="10" height="10"/><rect x="44" y="124" width="10" height="10"/><rect x="68" y="124" width="10" height="10"/><rect x="92" y="124" width="10" height="10"/>
+          </g>
+          <rect x="38" y="150" width="324" height="24" class="k-sram"/>
+          <text x="200" y="166" class="lb" text-anchor="middle">L2 64 MB · 크로스바 (약 86 W/cm²)</text>
+          <text x="78" y="196" class="lb" text-anchor="middle">GPC</text><text x="159" y="196" class="lb" text-anchor="middle">GPC</text><text x="240" y="196" class="lb" text-anchor="middle">GPC</text><text x="321" y="196" class="lb" text-anchor="middle">GPC</text>
+          <text x="200" y="112" class="lb" text-anchor="middle">GPC × 4 (SM 20개씩)</text>
+          <text x="29" y="160" class="lb-s" text-anchor="middle" transform="rotate(-90 29 160)">I/O·링크</text>
+                  </g>
+        <g transform="translate(470,30)">
+          <text x="0" y="0" class="lb-b">GEMM(BF16) 전력 밀도, 0.5 mm 칸</text>
+          <rect x="0" y="16" width="16" height="14" class="kf-tensor"/><text x="24" y="28" class="lb">텐서 코어 300 W / 135 mm² ≈ 222 W/cm²</text>
+          <rect x="0" y="40" width="16" height="14" class="k-compute"/><text x="24" y="52" class="lb">SM 나머지 300 W / 405 mm² ≈ 74</text>
+          <rect x="0" y="64" width="16" height="14" class="k-sram"/><text x="24" y="76" class="lb">L2·크로스바 70 W / 81 mm² ≈ 86</text>
+          <rect x="0" y="88" width="16" height="14" class="k-dram"/><text x="24" y="100" class="lb">HBM PHY 50 W / 72 mm² ≈ 69</text>
+          <rect x="0" y="112" width="16" height="14" class="k-link"/><text x="24" y="124" class="lb">I/O·링크 40 W / 87 mm² ≈ 46</text>
+          <text x="0" y="156" class="lb">합 760 W / 780 mm² ≈ 97 W/cm²</text>
+          <text x="0" y="182" class="lb-s">텐서 코어 칸 = SM 칸(2 × 2 mm)마다 1 × 1 mm</text>
+          <text x="0" y="200" class="lb-s">PHY는 긴 변(30 mm) 두 쪽에 HBM 스택 3개씩 마주 봄</text>
+          <text x="0" y="218" class="lb-s">다이 30 × 26 mm, 그림은 GPC 하나만 텐서 칸을 표시</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 13-3.</b> 열 지도 시뮬레이터가 쓰는 GX-1 평면 배치(<a href="noc.html">9장</a>의 배치를 열 해석용으로 단순화). 위아래 긴 변에 HBM PHY와 스택 3개씩, 가운데 L2 띠, 위아래에 GPC 4개씩, 좌우 짧은 변에 I/O·칩간 링크가 있다. 텐서 코어 칸은 평균의 약 2.3배 열밀도다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-hm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2D 다이 열 지도: 핫스팟은 어디에, 몇 K</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="hm-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>워크로드</span><div class="seg" id="hm-wl"><button data-value="gemm" class="on">GEMM</button><button data-value="fp32">FP32</button><button data-value="mem">메모리 제한</button></div></div>
+          <div class="ctrl"><span>리드(퍼짐층)</span><div class="seg" id="hm-lid"><button data-value="thin">구리 0.5 mm</button><button data-value="cu" class="on">구리 2 mm</button><button data-value="vc">증기 챔버</button></div></div>
+          <label class="ctrl"><span>냉각수 온도 <output id="hm-tf-out"></output></span><input type="range" id="hm-tf" min="20" max="60" step="1" value="40"></label>
+          <label class="check"><input type="checkbox" id="hm-q"> 전력 밀도 지도 보기</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최고 T<sub>j</sub> (핫스팟)</span><span class="v" id="hm-max">—</span></div>
+        <div class="stat"><span class="k">평균 T<sub>j</sub></span><span class="v" id="hm-avg">—</span></div>
+        <div class="stat"><span class="k">핫스팟 − 평균</span><span class="v" id="hm-d">—</span></div>
+        <div class="stat"><span class="k">HBM 최고(베이스 다이)</span><span class="v" id="hm-hbm">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본(GEMM, 구리 2 mm, 40 °C)에서 핫스팟은 약 81.7 °C, 평균보다 약 4.2 K 높다. 열밀도는 2.3배인데 온도 차는 작다. 텐서 칸(1 mm)이 다이 층의 퍼짐 길이(약 1 mm)와 비슷해 상당 부분 평균되기 때문이다. ② "메모리 제한"을 고르면 전력은 500 W로 줄지만 핫스팟은 HBM PHY 띠(약 153 W/cm²)로 옮겨 평균보다 약 9 K 높다. 바로 옆 HBM도 데운다. ③ 냉각수를 55 °C로 올리면 핫스팟 약 96.7 °C(스로틀 시작), HBM 약 84 °C(85 °C 한계 직전)가 된다.</div>
+    </div>
+    <p>열 지도에서 두 가지를 읽는다. 첫째, 핫스팟의 초과 온도는 열밀도의 비가 아니라 <b>밀도 차 × 국부 세로 저항 × (퍼짐으로 덜어지는 비율)</b>로 정해진다. 1 mm보다 작은 블록은 다이 실리콘 안에서 대부분 평균되고, 수 mm 이상인 블록(GPC 배열, PHY 띠)의 밀도가 온도를 정한다. 실제 칩에서는 이 격자보다 작은 규모(수십 µm의 트랜지스터 자기 발열, 레지스터 파일 한 뱅크)의 국부 상승이 더 얹히므로, 온도 센서는 다이 곳곳에 수십 개를 두고 가장 높은 값을 스로틀에 쓴다. 둘째, 같은 칩이라도 워크로드에 따라 핫스팟의 <b>위치</b>가 바뀐다. 행렬곱은 SM 배열, 디코드처럼 메모리 대역폭이 많은 작업은 PHY 띠와 HBM이 뜨겁다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> 핫스팟이 스로틀 기준이 되므로, 평균 온도를 1 K 낮추는 것과 핫스팟을 1 K 낮추는 것은 같은 값이다. 설계자는 뜨거운 블록을 흩고(텐서 코어를 SM마다 나눔), PHY를 긴 변 전체에 펴서 띠의 밀도를 낮추며, 센서를 예상 핫스팟 위치(열 지도 시뮬레이션)에 둔다. 평면 배치를 정할 때 배선 길이(<a href="noc.html">9장</a>)와 함께 열 지도를 본다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="hbm">
+    <h2>HBM 온도 한계와 3D 적층의 열</h2>
+    <p>로직 다이는 105 °C까지 버티지만 DRAM은 더 낮다. DRAM 셀은 커패시터 전하로 비트를 저장하고, 누설은 온도가 약 10 K 오를 때마다 두 배쯤 커진다. 그래서 HBM은 보통 <b>85 °C 이하</b>에서 기본 리프레시(64 ms 안에 모든 행)로 동작하고, 85–95 °C 구간에서는 리프레시를 두 배로 늘려 대역폭과 전력을 잃으며, 그 위로는 데이터 보존을 보장하지 않는다(<a href="hbm.html">8장</a>, <a href="../../memory/chapters/hbm.html">MemoryBook HBM 장</a>). HBM 스택은 로직 다이에서 수 mm 떨어져 같은 인터포저와 같은 리드 아래 있으므로 로직 다이의 열을 함께 받는다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="HBM 스택 단면과 로직 다이 사이의 열 결합, 스택 내부 층의 직렬 저항">
+        <g transform="translate(20,10)">
+          <rect x="0" y="40" width="480" height="18" class="m-lid"/>
+          <rect x="0" y="58" width="480" height="5" class="m-tim"/>
+          <rect x="40" y="63" width="140" height="112" class="m-mold"/>
+          <g>
+            <rect x="50" y="66" width="120" height="11" class="m-dram"/><rect x="50" y="79" width="120" height="11" class="m-dram"/><rect x="50" y="92" width="120" height="11" class="m-dram"/><rect x="50" y="105" width="120" height="11" class="m-dram"/>
+            <rect x="50" y="118" width="120" height="11" class="m-dram"/><rect x="50" y="131" width="120" height="11" class="m-dram"/><rect x="50" y="144" width="120" height="11" class="m-dram"/><rect x="50" y="157" width="120" height="11" class="m-dram"/>
+            <rect x="46" y="168" width="128" height="9" class="m-si"/>
+          </g>
+          <g class="m-cu"><rect x="80" y="66" width="3" height="111"/><rect x="110" y="66" width="3" height="111"/><rect x="140" y="66" width="3" height="111"/></g>
+          <rect x="230" y="63" width="250" height="114" class="m-si"/>
+          <rect x="230" y="167" width="250" height="10" class="kf-heat" opacity="0.5"/>
+          <rect x="0" y="180" width="480" height="16" class="m-interp"/>
+          <rect x="230" y="167" width="24" height="10" class="kf-dram"/>
+          <path class="hflow" d="M360 165 V50"/><path class="hflow" d="M110 165 V50"/>
+          <path d="M240 186 Q205 196 170 178" class="ks-heat" marker-end="url(#gp-ah-red)"/>
+          <path d="M228 120 L182 120" class="ks-heat dash" marker-end="url(#gp-ah-red)"/>
+          <text x="52" y="226" class="lb">HBM 스택: DRAM 8단 + 베이스 다이</text>
+          <text x="250" y="226" class="lb">로직 다이(PHY 띠가 HBM 쪽)</text>
+          <text x="186" y="212" class="lb-h">인터포저·몰드·리드로 열 결합</text>
+          <text x="300" y="100" class="lb-b">760 W</text><text x="62" y="36" class="lb-b">스택당 약 25 W</text>
+        </g>
+        <g transform="translate(540,22)">
+          <text x="0" y="0" class="lb-b">교육용 HBM 온도 모델</text>
+          <text x="0" y="26" class="lb">T_HBM = T_f + P_스택 R_self + κ (T_PHY − T_f)</text>
+          <text x="0" y="50" class="lb-s">R_self ≈ 0.6 K/W: 스택 내부 접합층(언더필·범프)</text>
+          <text x="0" y="68" class="lb-s">+ 위로 TIM·리드·냉각판(스택 면적 약 1.1 cm²)</text>
+          <text x="0" y="86" class="lb-s">κ ≈ 0.4: 옆 PHY 띠 온도 상승이 전해지는 비율</text>
+          <text x="0" y="116" class="lb">GEMM, 냉각수 40 °C: 약 69 °C</text>
+          <text x="0" y="136" class="lb">냉각수 55 °C: 약 84 °C(85 °C 한계 직전)</text>
+          <text x="0" y="166" class="lb-s">층마다 언더필(k ≈ 0.5 W/mK) 수 µm가 끼어</text>
+          <text x="0" y="184" class="lb-s">세로 저항이 실리콘 덩어리보다 훨씬 크다.</text>
+          <text x="0" y="202" class="lb-s">더미 범프·TSV가 열 통로를 보탠다.</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 13-4.</b> HBM 스택은 위로 리드를 통해 식지만, 아래 베이스 다이는 인터포저와 몰드를 통해 로직 다이 가장자리(PHY 띠)와 열적으로 붙어 있다. DRAM 다이 사이의 접합층이 세로 열저항을 키워 가장 아래 베이스 다이가 가장 뜨겁다. 오른쪽은 열 지도 시뮬레이터가 HBM 온도를 내는 근사식(계수는 교육용 가정).</figcaption>
+    </figure>
+    <p>같은 문제가 모든 3D 적층에 있다. 로직 다이 위에 SRAM 다이를 하이브리드 본딩으로 얹으면(<a href="package.html">11장</a>) 아래 로직의 열은 위 다이와 접합층을 한 번 더 지나야 한다. 열밀도 \(q''\)에 대해 온도 상승이 \(\Delta T = q''\sum_i t_i/k_i\)만큼 더해진다. 예를 들어 100 W/cm²(10⁶ W/m²)에 실리콘 50 µm(4.2×10⁻⁷ K·m²/W)와 접합 산화막 2 µm(k ≈ 1.4, 1.4×10⁻⁶)를 더하면 약 1.8 K다. 적층 다이가 전력을 내면(SRAM 위 SRAM, 로직 위 로직) 두 층의 열이 같은 길을 쓰므로 더 나쁘다. 그래서 3D 적층은 보통 <b>뜨거운 로직을 냉각판 쪽(위)</b>에 두거나, 위에 얹는 다이를 전력이 낮은 SRAM·캐시로 한정한다. HBM도 단수가 8 → 12 → 16단으로 늘수록 위아래 온도 차가 커져, 단수 증가는 열이 제한한다.</p>
+    <div class="callout fab"><strong>HBM이 먼저 한계에 닿는다</strong>열 지도 시뮬레이터 기본값(GEMM, 냉각수 40 °C)에서 로직 핫스팟은 약 81.7 °C(한계 95 °C까지 13 K 여유), HBM 베이스 다이는 약 69 °C(85 °C까지 16 K 여유)다. 냉각수를 55 °C로 올리면 둘 다 약 15 K씩 올라 로직 약 96.7 °C, HBM 약 84 °C로 거의 동시에 한계에 닿는다. 메모리 제한 워크로드는 로직 전력이 500 W로 낮아도 PHY 띠가 뜨거워 HBM 온도가 GEMM과 비슷하다(약 68 °C). GX-1처럼 로직 다이 바로 옆에 HBM을 두는 2.5D 구조에서는 냉각수 온도 상한을 HBM이 정하는 경우가 많다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> HBM을 다이 옆에 두는 이유는 배선 길이와 에너지(<a href="package.html">11장</a>)지만, 그 대가로 열 결합이 생긴다. 그래서 PHY 띠의 열밀도를 낮추고(PHY를 넓게 편다), HBM 스택 높이를 로직 다이와 맞추어 같은 리드·냉각판에 평평하게 닿게 하며, 스택 사이에 열 더미 범프를 넣는다. 냉각수 온도를 높이면 데이터센터 냉각은 싸지지만(<a href="#rack">9절</a>) HBM 여유가 먼저 사라진다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="transient">
+    <h2>과도 열: 열용량과 시정수</h2>
+    <p>전력이 갑자기 바뀌면 온도는 곧바로 따라가지 못한다. 층마다 <span class="term">열용량</span><span class="en">(heat capacity, J/K)</span> \(C = \rho c_p V\)가 있어 열이 차오르는 데 시간이 걸린다. 다이(0.75 mm 실리콘)는 약 1 J/K로 열저항 약 0.014 K/W와 곱하면 시정수 약 10 ms, 구리 리드는 약 7 J/K로 수십 ms, 냉각판과 그 안의 물은 100 J/K 이상으로 수 초다. 이렇게 시정수가 몇 자릿수씩 다른 층들을 측정하면 <span class="term">열 임피던스</span> \(Z_{th}(t)\)(단위 전력 계단에 대한 온도 상승)가 나오고, 이것을 지수 항의 합으로 맞춘 것이 <span class="term">포스터 사다리</span><span class="en">(Foster network)</span>다.</p>
+    <div class="formula">$$Z_{th}(t) = \sum_{i=1}^{n} R_i\left(1 - e^{-t/\tau_i}\right),\qquad \tau_i = R_i C_i,\qquad T_j(t) = T_f + \int_0^t P(s)\,\frac{dZ_{th}}{dt}(t-s)\,ds$$
+      <div class="where">GX-1 기본값: \((R_i, \tau_i)\) = (0.0138 K/W, 12 ms) 다이+TIM1, (0.0057, 50 ms) 리드, (0.0255, 2 s) TIM2+냉각판+대류, (0.0043, 5 s) 냉각수, 그리고 핫스팟 항 (0.0055, 3 ms). 외부 두 항은 HBM 열까지 실으므로 \(1 + 150/760\)배로 키웠다. 시간 계단마다 \(x_i \leftarrow x_i e^{-\Delta t/\tau_i} + P R_i (1 - e^{-\Delta t/\tau_i})\)로 정확히 적분한다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 210" role="img" aria-label="카우어 사다리(물리 층 순서)와 포스터 사다리(측정 맞춤)의 회로 비교">
+        <g transform="translate(20,20)">
+          <text x="0" y="0" class="lb-b">카우어(Cauer): 층 순서 그대로</text>
+          <line x1="0" y1="40" x2="390" y2="40" class="s-line"/>
+          <path class="res" d="M30 40 l6 -6 l12 12 l12 -12 l12 12 l6 -6"/><path class="res" d="M130 40 l6 -6 l12 12 l12 -12 l12 12 l6 -6"/><path class="res" d="M230 40 l6 -6 l12 12 l12 -12 l12 12 l6 -6"/><path class="res" d="M330 40 l6 -6 l12 12 l12 -12 l12 12 l6 -6"/>
+          <g class="s-line"><line x1="100" y1="40" x2="100" y2="80"/><line x1="200" y1="40" x2="200" y2="80"/><line x1="300" y1="40" x2="300" y2="80"/><line x1="388" y1="40" x2="388" y2="80"/></g>
+          <g class="s-line" style="stroke-width:2.2"><line x1="88" y1="80" x2="112" y2="80"/><line x1="88" y1="88" x2="112" y2="88"/><line x1="188" y1="80" x2="212" y2="80"/><line x1="188" y1="88" x2="212" y2="88"/><line x1="288" y1="80" x2="312" y2="80"/><line x1="288" y1="88" x2="312" y2="88"/></g>
+          <line x1="0" y1="110" x2="390" y2="110" class="s-faint"/>
+          <text x="40" y="24" class="lb-s">다이</text><text x="140" y="24" class="lb-s">TIM·리드</text><text x="240" y="24" class="lb-s">냉각판</text><text x="340" y="24" class="lb-s">대류</text>
+          <text x="0" y="140" class="lb">마디 = 층 온도. 층마다 물리 의미가 있다.</text>
+          <text x="0" y="160" class="lb-s">열용량은 기준(바닥)에 연결</text>
+        </g>
+        <g transform="translate(450,20)">
+          <text x="0" y="0" class="lb-b">포스터(Foster): RC 병렬 쌍을 직렬로</text>
+          <line x1="0" y1="50" x2="20" y2="50" class="s-line"/>
+          <g transform="translate(20,0)"><rect x="0" y="30" width="80" height="40" fill="none" class="s-line"/><path class="res" d="M12 30 l4 -5 l8 10 l8 -10 l8 10 l8 -10 l8 10 l4 -5"/><line x1="30" y1="70" x2="30" y2="62" class="s-line"/><line x1="50" y1="70" x2="50" y2="62" class="s-line"/><text x="14" y="90" class="lb-s">12 ms</text></g>
+          <g transform="translate(110,0)"><rect x="0" y="30" width="80" height="40" fill="none" class="s-line"/><path class="res" d="M12 30 l4 -5 l8 10 l8 -10 l8 10 l8 -10 l8 10 l4 -5"/><line x1="30" y1="70" x2="30" y2="62" class="s-line"/><line x1="50" y1="70" x2="50" y2="62" class="s-line"/><text x="14" y="90" class="lb-s">50 ms</text></g>
+          <g transform="translate(200,0)"><rect x="0" y="30" width="80" height="40" fill="none" class="s-line"/><path class="res" d="M12 30 l4 -5 l8 10 l8 -10 l8 10 l8 -10 l8 10 l4 -5"/><line x1="30" y1="70" x2="30" y2="62" class="s-line"/><line x1="50" y1="70" x2="50" y2="62" class="s-line"/><text x="22" y="90" class="lb-s">2 s</text></g>
+          <g transform="translate(290,0)"><rect x="0" y="30" width="80" height="40" fill="none" class="s-line"/><path class="res" d="M12 30 l4 -5 l8 10 l8 -10 l8 10 l8 -10 l8 10 l4 -5"/><line x1="30" y1="70" x2="30" y2="62" class="s-line"/><line x1="50" y1="70" x2="50" y2="62" class="s-line"/><text x="22" y="90" class="lb-s">5 s</text></g>
+          <text x="0" y="140" class="lb">마디는 물리 층이 아니다. 계산이 쉽다.</text>
+          <text x="0" y="160" class="lb-s">Z_th(t) 측정 곡선을 지수 합으로 맞춘 결과</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 13-5.</b> 두 열 회로. 카우어 사다리는 층 순서대로 R과 C를 잇는 물리 모델이고, 포스터 사다리는 측정한 \(Z_{th}(t)\)를 지수 항 합으로 맞춘 수학 모델이다. 접합 온도만 필요하면 포스터가 간단하다(항마다 독립적인 1차 계). 열 회로 일반론은 <a href="../../power/chapters/thermal.html">PowerBook 열 장</a>에 있다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-tr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>과도 열 응답: 전력 계단과 주기 펄스</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="tr-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>입력</span><div class="seg" id="tr-m"><button data-value="step" class="on">계단</button><button data-value="pulse">주기 펄스</button></div></div>
+          <label class="ctrl"><span>높은 전력 <output id="tr-hi-out"></output></span><input type="range" id="tr-hi" min="200" max="1200" step="10" value="760"></label>
+          <label class="ctrl"><span>낮은 전력 <output id="tr-lo-out"></output></span><input type="range" id="tr-lo" min="0" max="600" step="10" value="100"></label>
+          <label class="ctrl"><span>펄스 주기 <output id="tr-per-out"></output></span><input type="range" id="tr-per" min="-2" max="2" step="0.1" value="0"></label>
+          <label class="ctrl"><span>듀티(높은 전력 비율) <output id="tr-du-out"></output></span><input type="range" id="tr-du" min="0.1" max="0.9" step="0.05" value="0.7"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k" id="tr-k1">최종 T<sub>j</sub></span><span class="v" id="tr-o1">—</span></div>
+        <div class="stat"><span class="k" id="tr-k2">10 ms 후</span><span class="v" id="tr-o2">—</span></div>
+        <div class="stat"><span class="k" id="tr-k3">1 s 후</span><span class="v" id="tr-o3">—</span></div>
+        <div class="stat"><span class="k" id="tr-k4">63 % 도달 시간</span><span class="v" id="tr-o4">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 계단 100 → 760 W에서 10 ms 뒤에는 약 54.9 °C, 1 s 뒤 약 69 °C, 최종 약 81.7 °C다. 상승의 63 %에 닿는 데 약 0.9 s가 걸린다. 다이는 수 ms 안에 반응하지만 전체는 냉각판이 정한다. ② "주기 펄스"(200/760 W, 듀티 0.7)에서 주기를 10 ms로 두면 리플이 약 3.3 K, 1 s면 약 15.6 K, 10 s면 약 25.8 K다. 학습 반복(계산 ↔ 통신)이 초 단위면 온도가 크게 출렁인다. ③ 짧은 펄스에서는 피크 온도가 평균 전력 온도(약 72.4 °C)에 가깝다. 수 ms짜리 전력 급등은 열로는 거의 보이지 않으므로 그 시간 규모는 전류·전압(<a href="power.html">12장</a>)이 제한한다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 시정수가 층마다 다르다는 것은 제어에 쓸 수 있는 시간 여유가 다르다는 뜻이다. 다이 온도는 10 ms 규모로 변하므로 온도 센서와 스로틀 루프는 그보다 빨라야 하고(1 ms 안팎의 측정), 냉각판이 데워지는 수 초 동안은 평균 열 한계를 잠시 넘는 부스트가 가능하다. 반면 냉각수 쪽은 초~분 단위라 데이터센터 냉각 설비는 천천히 조정해도 된다. 온도 리플은 솔더·범프의 열 피로 수명(<a href="../../device/chapters/reliability.html">DeviceBook 신뢰성 장</a>)을 줄이므로, 학습 클러스터에서는 전력 변동을 일부러 평탄하게 만드는 기법도 쓴다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="throttle">
+    <h2>열 스로틀링 제어 루프</h2>
+    <p>GPU는 <a href="power.html">12장</a>의 전력 상한 루프와 별도로 온도 루프를 돌린다. 다이 곳곳의 센서 중 가장 높은 값 \(T_{hot}\)이 기준(GX-1: 95 °C)을 넘으면 클럭과 전압을 한 단계 내리고, 충분히 식으면 다시 올린다. 이것이 <span class="term">열 스로틀링</span><span class="en">(thermal throttling)</span>이다. 105 °C에 닿으면 최저 클럭으로 떨어뜨리는 비상 보호가 따로 있다. 루프 안에는 양의 되먹임이 하나 숨어 있다. 온도가 오르면 누설 전력이 늘고, 늘어난 전력이 다시 온도를 올린다.</p>
+    <div class="formula">$$P = \underbrace{640\,\text{W}\cdot a\cdot\frac{f}{1.6}\left(\frac{V}{0.75}\right)^{2}}_{P_{dyn}} + \underbrace{120\,\text{W}\left(\frac{V}{0.75}\right)^{3} 2^{(T_{avg}-85)/25}}_{P_{leak}},\qquad T_{hot} = T_{avg} + P\,R_{hs}$$
+      <div class="where">\(a\)는 활동도(GEMM = 1), \(V(f)\)는 GX-1 V–f 표를 잇는 꺾은선(1.2 GHz 0.65 V, 1.6 GHz 0.75 V, 1.8 GHz 0.85 V). 누설은 25 K마다 두 배로 가정(12장). \(T_{avg}\)는 포스터 사다리로, 핫스팟 초과분 \(R_{hs}\) = 0.0055 K/W는 열 지도 결과(4.2 K / 760 W)를 쓴다. 제어기는 10 ms마다 \(T_{hot} \gt 95\) °C면 20 MHz 내리고, \(T_{hot} \lt 94\) °C면 10 MHz 올린다(최대 1.6 GHz).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 220" role="img" aria-label="열 스로틀링 제어 루프: 클럭과 전압이 전력을 정하고, 전력이 열 회로를 거쳐 온도가 되며, 센서와 제어기가 클럭을 조정한다. 누설–온도 양의 되먹임 경로">
+        <rect x="20" y="70" width="130" height="56" rx="8" class="k-clock"/><text x="85" y="94" class="lb-b" text-anchor="middle">클럭·전압</text><text x="85" y="114" class="lb-s" text-anchor="middle">f, V(f) 표</text>
+        <rect x="200" y="70" width="140" height="56" rx="8" class="k-volt"/><text x="270" y="94" class="lb-b" text-anchor="middle">전력</text><text x="270" y="114" class="lb-s" text-anchor="middle">P_dyn + P_leak(T)</text>
+        <rect x="390" y="70" width="140" height="56" rx="8" class="k-heat"/><text x="460" y="94" class="lb-b" text-anchor="middle">열 회로</text><text x="460" y="114" class="lb-s" text-anchor="middle">Z_th(t), 냉각수 T_f</text>
+        <rect x="580" y="70" width="120" height="56" rx="8" class="card"/><text x="640" y="94" class="lb-b" text-anchor="middle">온도 센서</text><text x="640" y="114" class="lb-s" text-anchor="middle">최고값 T_hot</text>
+        <rect x="730" y="70" width="110" height="56" rx="8" class="k-ctrl"/><text x="785" y="94" class="lb-b" text-anchor="middle">제어기</text><text x="785" y="114" class="lb-s" text-anchor="middle">95 °C와 비교</text>
+        <path d="M150 98 H196" class="arr"/><path d="M340 98 H386" class="arr"/><path d="M530 98 H576" class="arr"/><path d="M700 98 H726" class="arr"/>
+        <path d="M785 126 V176 H85 V130" class="arr" style="fill:none"/>
+        <text x="420" y="196" class="lb" text-anchor="middle">음의 되먹임: 뜨거우면 클럭↓ → 전력↓ → 온도↓</text>
+        <path d="M460 70 V40 H270 V66" class="arr-red" style="fill:none;stroke:var(--heat);stroke-width:2;stroke-dasharray:5 4" marker-end="url(#gp-ah-red)"/>
+        <text x="365" y="30" class="lb-h" text-anchor="middle">양의 되먹임: 온도↑ → 누설↑ → 전력↑</text>
+        <text x="40" y="160" class="lb-s">10 ms마다 갱신</text>
+        <text x="600" y="160" class="lb-s">다이 시정수 약 10 ms</text>
+      </svg>
+      <figcaption><b>그림 13-6.</b> 열 스로틀링 루프. 바깥 음의 되먹임(제어기)이 안쪽 양의 되먹임(누설–온도)을 이겨야 안정하다. 냉각수 온도와 유량은 열 회로 블록의 매개변수로 들어가 지속 클럭을 정한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-thr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>열 스로틀링: 냉각수 온도·유량 → 지속 클럭</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="thr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>냉각수 입구 온도 <output id="thr-tf-out"></output></span><input type="range" id="thr-tf" min="20" max="65" step="1" value="40"></label>
+          <label class="ctrl"><span>냉각수 유량 <output id="thr-q-out"></output></span><input type="range" id="thr-q" min="0.3" max="6" step="0.1" value="2"></label>
+          <label class="ctrl"><span>활동도 a <output id="thr-a-out"></output></span><input type="range" id="thr-a" min="0.5" max="1.1" step="0.05" value="1"></label>
+          <label class="check"><input type="checkbox" id="thr-fb" checked> 누설–온도 되먹임</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">지속 클럭</span><span class="v" id="thr-f">—</span></div>
+        <div class="stat"><span class="k">정착 T<sub>hot</sub></span><span class="v" id="thr-t">—</span></div>
+        <div class="stat"><span class="k">로직 다이 전력</span><span class="v" id="thr-p">—</span></div>
+        <div class="stat"><span class="k">첫 스로틀 시각</span><span class="v" id="thr-t1">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본(40 °C, 2 L/min)은 스로틀 없이 1.6 GHz, \(T_{hot}\) 약 80.4 °C, 전력 약 734 W다(표의 760 W는 85 °C 누설 기준이라 실제는 조금 낮다). ② 냉각수를 55 °C로 올리면 약 5.5 s 뒤 스로틀이 시작되어 약 1.54 GHz(−3.6 %), 60 °C면 약 1.43 GHz(−11 %)에 정착한다. ③ 40 °C에서 유량을 0.5 L/min으로 줄이면 약 1.42 GHz다. 되먹임을 끄면(누설 고정) 같은 조건에서 약 0.02 GHz 높게 나온다. 그만큼이 누설–온도 되먹임의 몫이다.</div>
+    </div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>조건 변화 (GEMM, 기준: 냉각수 40 °C·2 L/min·인듐 TIM1)</th><th>결과</th></tr></thead>
+      <tbody>
+        <tr><td>냉각수 40 → 50 °C</td><td>\(T_{hot}\) 80.4 → 92.2 °C, 누설 증가로 전력 734 → 770 W, 클럭은 1.6 GHz 유지</td></tr>
+        <tr><td>냉각수 55 °C</td><td>지속 클럭 약 1.54 GHz(−3.6 %), HBM 약 84 °C</td></tr>
+        <tr><td>냉각수 60 °C</td><td>지속 클럭 약 1.43 GHz(−11 %)</td></tr>
+        <tr><td>유량 2 → 0.5 L/min (40 °C)</td><td>실효 열저항 0.049 → 0.081 K/W, 지속 클럭 약 1.42 GHz(−11 %)</td></tr>
+        <tr><td>TIM1 인듐 → 그리스</td><td>실효 열저항 0.049 → 0.060 K/W, 평균 \(T_j\) 77.5 → 85.8 °C</td></tr>
+        <tr><td>리드 구리 2 mm → 증기 챔버</td><td>핫스팟 초과분 4.2 → 3.2 K</td></tr>
+        <tr><td>냉각판 수냉 → 공랭 히트싱크</td><td>95 °C에서 감당하는 모듈 전력 약 1,320 → 약 700 W</td></tr>
+      </tbody>
+    </table></div>
+    <p><b>왜 이렇게 설계하는가.</b> 스로틀링은 칩을 지키는 안전장치이지만, 데이터센터 GPU가 일상적으로 스로틀하면 사들인 FLOPS를 버리는 셈이다. 그래서 칩 설계자는 "어떤 냉각수 온도·유량에서 부스트 클럭을 지속하는가"를 사양으로 정하고, 거기서 거꾸로 열저항 예산(0.05 K/W)을 각 층에 나눈다. 누설 되먹임 때문에 냉각을 잘하면 전력도 준다(냉각수 50 → 40 °C에서 약 36 W). 냉각 개선은 성능과 전력 효율을 함께 올린다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="runaway">
+    <h2>누설–온도 되먹임과 열 폭주</h2>
+    <p>스로틀이 없다고 하자(클럭 고정). 온도는 \(T = g(T) = T_f + R\,(P_{dyn} + P_{leak}(T))\)의 고정점에서 멈춘다. 누설이 지수적으로 커지므로 \(g(T)\)는 아래로 볼록한 곡선이고, 직선 \(y = T\)와 두 번 만나거나 한 번도 만나지 않는다. 아래 교점은 안정하다(조금 데워져도 되돌아온다). 위 교점은 불안정하다. 그 위로 올라가면 누설 증가가 냉각을 앞질러 온도가 끝없이 오르는 <span class="term">열 폭주</span><span class="en">(thermal runaway)</span>가 된다. 교점이 없으면 어디서 시작해도 폭주한다.</p>
+    <div class="formula">$$\text{안정 조건:}\quad g'(T^*) = R\,\frac{dP_{leak}}{dT} = R\,P_{leak}(T^*)\,\frac{\ln 2}{T_d} \lt 1$$
+      <div class="where">\(T_d\)는 누설이 두 배가 되는 온도 간격(여기서 25 K). 고정점 반복 \(T_{n+1} = g(T_n)\)은 이 기울기가 1보다 작을 때 수렴한다. 기울기는 열저항과 누설 크기의 곱이므로, 냉각이 나쁘거나(큰 \(R\)) 누설이 많은 칩(높은 전압, 누설이 큰 공정 코너)에서 위험하다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 240" role="img" aria-label="고정점 그림: 직선 y=T와 누설이 든 곡선 g(T)의 교점. 왼쪽은 안정점과 불안정점 두 개, 오른쪽은 교점 없이 폭주">
+        <g transform="translate(30,10)">
+          <line x1="40" y1="200" x2="380" y2="200" class="s-axis"/><line x1="40" y1="200" x2="40" y2="10" class="s-axis"/>
+          <line x1="40" y1="200" x2="230" y2="10" class="s-line dash"/>
+          <path d="M40 150 Q180 140 250 80 Q290 40 300 10" class="ks-heat"/>
+          <circle cx="98" cy="142" r="5" class="kf-heat"/><circle cx="214" cy="26" r="5" fill="none" stroke="var(--heat)" stroke-width="2"/>
+          <text x="108" y="164" class="lb">안정점 T*</text><text x="150" y="20" class="lb">불안정점</text>
+          <text x="236" y="186" class="lb-s">T</text><text x="200" y="104" class="lb-s">y = T</text><text x="300" y="60" class="lb-h">g(T)</text>
+          <text x="40" y="226" class="lb-b">R 작음(수냉 0.05 K/W): 두 교점</text>
+        </g>
+        <g transform="translate(450,10)">
+          <line x1="40" y1="200" x2="380" y2="200" class="s-axis"/><line x1="40" y1="200" x2="40" y2="10" class="s-axis"/>
+          <line x1="40" y1="200" x2="230" y2="10" class="s-line dash"/>
+          <path d="M40 120 Q150 100 190 40 Q205 15 210 10" class="ks-heat"/>
+          <path d="M60 200 V117 H94 V111 H100 V104 H110 V95 H124 V80 H140" class="s-acc" style="fill:none;stroke-width:1.5"/>
+          <text x="150" y="104" class="lb-h">g(T) &gt; T</text><text x="200" y="104" class="lb-s">y = T</text>
+          <text x="40" y="226" class="lb-b">R 큼 또는 누설 큼: 교점 없음 → 폭주</text>
+          <text x="150" y="160" class="lb-s">고정점 반복이 계단처럼 위로</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 13-7.</b> 누설–온도 되먹임의 고정점. 열저항이 크거나 누설이 크면 \(g(T)\) 곡선이 위로 올라가 직선과 만나지 않는다. 두 곡선이 접할 때가 경계다(접점에서 \(g' = 1\)).</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-rw">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>열 폭주 조건: 고정점 반복</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rw-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>열저항 R <output id="rw-r-out"></output></span><input type="range" id="rw-r" min="0.02" max="0.2" step="0.002" value="0.05"></label>
+          <label class="ctrl"><span>냉각수 온도 <output id="rw-tf-out"></output></span><input type="range" id="rw-tf" min="20" max="70" step="1" value="40"></label>
+          <label class="ctrl"><span>동적 전력 <output id="rw-pd-out"></output></span><input type="range" id="rw-pd" min="100" max="800" step="10" value="640"></label>
+          <label class="ctrl"><span>누설 @85 °C <output id="rw-pl-out"></output></span><input type="range" id="rw-pl" min="20" max="400" step="10" value="120"></label>
+          <label class="ctrl"><span>누설 2배 간격 T<sub>d</sub> <output id="rw-td-out"></output></span><input type="range" id="rw-td" min="10" max="40" step="1" value="25"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">안정 온도 T*</span><span class="v" id="rw-st">—</span></div>
+        <div class="stat"><span class="k">불안정점(폭주 문턱)</span><span class="v" id="rw-un">—</span></div>
+        <div class="stat"><span class="k">루프 이득 R·dP/dT</span><span class="v" id="rw-g">—</span></div>
+        <div class="stat"><span class="k">폭주 경계 R</span><span class="v" id="rw-cr">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본(GX-1, 0.05 K/W)은 안정점 약 76.8 °C, 불안정점 약 194 °C, 루프 이득 약 0.13으로 여유가 크다. ② R을 밀어 0.085 K/W를 넘기면 교점이 사라진다. 스로틀이 없다면 공랭 수준의 열저항에서 760 W급 칩은 폭주한다. ③ 누설을 300 W(높은 전압이나 누설이 큰 코너)로 올리면 경계 R이 약 0.057 K/W로 줄어든다. 누설이 큰 칩일수록 냉각 여유가 작다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 실제 GPU는 스로틀과 105 °C 비상 차단이 있어 폭주까지 가지 않지만, 그 루프가 안정하려면 열 회로 자체의 루프 이득이 1보다 충분히 작아야 한다. 이득이 1에 가까우면 작은 온도 상승에도 전력이 크게 늘어 스로틀이 자주 깊게 걸린다. 공정 선택(누설이 적은 문턱 전압 소자 비율), 전압 상한, 냉각 열저항이 함께 이 이득을 정한다. 칩마다 누설이 다르므로(공정 산포) 누설이 큰 다이를 낮은 전압 등급으로 분류하는 것(<a href="../../test/chapters/binning.html">TestBook 비닝 장</a>)도 같은 이유다.</p>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="cooling">
+    <h2>냉각 방식: 공랭 · 냉각판 수냉 · 2상 · 액침</h2>
+    <p>냉각 방식은 결국 \(R_{ext}\)와 냉각 유체 온도 \(T_{in}\)의 조합이다. 공랭 히트싱크는 핀 면적으로 낮은 \(h\)(공기 약 50–100 W/m²K)를 보충해 바닥 기준 실효 \(h\) 약 1,700 W/m²K(100 × 100 mm 바닥이면 약 0.06 K/W)까지 가지만, 입구 공기가 35 °C 안팎이고 공기 열용량이 작아 공기 자체도 데워진다. 냉각판 수냉은 물(공기보다 부피 열용량이 약 3,500배)을 미세 유로로 흘려 실효 \(h\)를 수만 W/m²K로 올린다. 2상 냉각은 냉매가 끓을 때의 잠열을 써서 \(h\)가 더 높고 유체 온도가 포화 온도로 거의 일정하다. 2상 액침은 보드 전체를 끓는 유전 액체에 담근다. 비등에는 <span class="term">임계 열유속</span><span class="en">(CHF, critical heat flux)</span>이 있어 그 이상에서는 표면이 증기막으로 덮여 열전달이 무너진다.</p>
+    <div class="formula">$$P_{mod,max} = \frac{T_{lim} - T_{in}}{0.76\,(R_{int} + R_{hs}) + 0.91\,R_{ext}},\qquad P_{mod} \le \frac{q''_{CHF}\,A_{boil}}{0.91}$$
+      <div class="where">모듈 전력 1,000 W 중 로직 다이가 76 %(760 W), 냉각 장치로 가는 열(다이 + HBM)이 91 %(910 W)라는 GX-1 비율을 쓴다. 나머지 9 %(전압 변환 손실 등)는 보드에서 공기로 빠진다고 본다. \(T_{lim}\)은 핫스팟 기준 스로틀 온도(95 °C).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 240" role="img" aria-label="네 가지 냉각 방식의 개념도와 실효 열전달 계수, 감당 가능한 모듈 전력">
+        <g transform="translate(14,16)">
+          <text x="0" y="0" class="lb-b">공랭 히트싱크</text>
+          <rect x="20" y="120" width="150" height="14" class="m-cu"/>
+          <g class="m-al"><rect x="26" y="40" width="5" height="80"/><rect x="40" y="40" width="5" height="80"/><rect x="54" y="40" width="5" height="80"/><rect x="68" y="40" width="5" height="80"/><rect x="82" y="40" width="5" height="80"/><rect x="96" y="40" width="5" height="80"/><rect x="110" y="40" width="5" height="80"/><rect x="124" y="40" width="5" height="80"/><rect x="138" y="40" width="5" height="80"/><rect x="152" y="40" width="5" height="80"/></g>
+          <rect x="60" y="134" width="70" height="12" class="m-si"/>
+          <path d="M0 80 H190" class="cflow" style="stroke-dasharray:6 4"/>
+          <text x="0" y="172" class="lb">공기 35 °C, h ≈ 1,700</text>
+          <text x="0" y="194" class="lb-h">≈ 700 W</text>
+        </g>
+        <g transform="translate(228,16)">
+          <text x="0" y="0" class="lb-b">냉각판 수냉(단상)</text>
+          <rect x="10" y="70" width="170" height="40" class="m-cu"/>
+          <rect x="22" y="80" width="146" height="20" rx="3" class="water"/>
+          <rect x="60" y="110" width="70" height="12" class="m-si"/>
+          <path d="M0 56 H60" class="cflow"/><path d="M130 56 H190" class="cflow"/>
+          <text x="0" y="172" class="lb">물 40 °C, h ≈ 6.5×10⁴</text>
+          <text x="0" y="194" class="lb-h">≈ 1,320 W</text>
+        </g>
+        <g transform="translate(442,16)">
+          <text x="0" y="0" class="lb-b">냉각판 2상(냉매 비등)</text>
+          <rect x="10" y="70" width="170" height="40" class="m-cu"/>
+          <rect x="22" y="80" width="146" height="20" rx="3" class="water"/>
+          <g fill="none" stroke="var(--data)"><circle cx="50" cy="88" r="4"/><circle cx="80" cy="86" r="3"/><circle cx="110" cy="90" r="4"/><circle cx="140" cy="87" r="3"/></g>
+          <rect x="60" y="110" width="70" height="12" class="m-si"/>
+          <text x="0" y="172" class="lb">냉매 35 °C, h ≈ 1.5×10⁵</text>
+          <text x="0" y="194" class="lb-h">≈ 1,860 W</text>
+        </g>
+        <g transform="translate(656,16)">
+          <text x="0" y="0" class="lb-b">2상 액침</text>
+          <rect x="0" y="20" width="190" height="120" rx="6" class="water"/>
+          <rect x="60" y="80" width="70" height="20" class="m-cu"/><rect x="70" y="100" width="50" height="10" class="m-si"/>
+          <g fill="none" stroke="var(--data)"><circle cx="75" cy="70" r="4"/><circle cx="95" cy="58" r="5"/><circle cx="115" cy="66" r="3"/><circle cx="100" cy="40" r="4"/></g>
+          <text x="0" y="172" class="lb">유전 액체 50 °C, h ≈ 2×10⁴</text>
+          <text x="0" y="194" class="lb-h">≈ 990 W(CHF 한계)</text>
+        </g>
+        <text x="14" y="232" class="lb-s">모듈 전력 한계: 핫스팟 95 °C, 인듐 TIM1 기준(냉각 방식 시뮬레이터 기본값). h_eff 단위 W/m²K, 바닥 면적 기준.</text>
+      </svg>
+      <figcaption><b>그림 13-8.</b> 네 가지 냉각 방식. 공랭은 공기의 낮은 열전달과 열용량 때문에 모듈 약 700 W 근처가 한계다. 냉각판 수냉은 1,000 W급의 표준이고, 2상은 더 높은 \(h\)와 일정한 유체 온도로 여유를 넓힌다. 액침은 보드 전체를 식히는 장점이 있지만 비등면의 임계 열유속이 한계를 정한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-cool">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>냉각 방식 비교: 감당할 수 있는 모듈 전력</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cool-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>핫스팟 한계 T<sub>lim</sub> <output id="cool-t-out"></output></span><input type="range" id="cool-t" min="80" max="105" step="1" value="95"></label>
+          <div class="ctrl"><span>TIM1</span><div class="seg" id="cool-tim"><button data-value="grease">그리스</button><button data-value="indium" class="on">인듐 솔더</button><button data-value="lm">액체 금속</button></div></div>
+          <label class="ctrl"><span>모듈 전력(표시용) <output id="cool-p-out"></output></span><input type="range" id="cool-p" min="300" max="2000" step="50" value="1000"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">공랭</span><span class="v" id="cool-o0">—</span></div>
+        <div class="stat"><span class="k">냉각판 수냉</span><span class="v" id="cool-o1">—</span></div>
+        <div class="stat"><span class="k">냉각판 2상</span><span class="v" id="cool-o2">—</span></div>
+        <div class="stat"><span class="k">2상 액침</span><span class="v" id="cool-o3">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본(95 °C, 인듐)에서 공랭은 약 700 W, 냉각판 수냉은 약 1,320 W, 2상 냉각판은 약 1,860 W, 2상 액침은 약 990 W(임계 열유속 한계)다. GX-1 1,000 W를 공기로 식힐 수 없는 이유다. ② 모듈 전력 1,000 W에서 냉각판 수냉의 핫스팟은 약 81.7 °C다(과도 응답 시뮬레이터의 최종값과 같다). ③ TIM1을 그리스로 바꾸면 모든 방식이 수십~백여 W씩 줄고, \(h\)가 큰 방식일수록 손해 비율이 크다. 외부 저항이 작아지면 내부 저항(TIM)이 병목이 된다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 칩 전력이 공랭 한계(약 700 W)를 넘는 순간 GPU는 서버 설계, 랙, 건물 배관까지 바꾼다. 수냉 냉각판은 칩 위에 배관을 붙이는 비용과 누수 위험을 받아들이는 대신, 같은 패키지에서 수백 W를 더 쓰게 해 준다. 다음 세대가 1,500 W를 넘으면 2상 냉각이나 다이 직접 냉각(리드·TIM2 제거)이 후보가 된다. 데이터센터 쪽 냉각 설비의 선택은 <a href="../../infra/chapters/cooling.html">InfraBook 냉각 장</a>에서, 모바일 칩처럼 공기도 팬도 없는 경우의 열 관리는 <a href="../../soc/chapters/thermal.html">SoCBook 열 장</a>에서 다룬다.</p>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="rack">
+    <h2>랙과 데이터센터: kW/랙, 냉각수 유량, PUE</h2>
+    <p>칩의 열은 결국 건물 밖으로 나가야 한다. GX-8 노드(GX-1 8개 + 스위치 칩 4개 + CPU·NIC·팬)는 약 12 kW, GX-Rack(노드 4대)은 약 50 kW다. 전통적인 공랭 랙이 5–15 kW였던 것과 비교하면 3–10배다. 랙 안의 냉각판들을 지난 물은 <span class="term">냉각수 분배 장치</span><span class="en">(CDU)</span>에서 시설 냉각수와 열을 바꾸고, 시설 냉각수는 냉각탑·건식 냉각기(바깥 공기로 식힘)나 냉동기로 간다. 필요한 유량은 열량 보존에서 바로 나온다.</p>
+    <div class="formula">$$Q = \frac{P}{\rho\,c_p\,\Delta T},\qquad \text{PUE} = \frac{P_{facility}}{P_{IT}} = 1 + \frac{P_{cool} + P_{dist}}{P_{IT}}$$
+      <div class="where">\(\rho c_p\) ≈ 4.18 MJ/(m³·K)(물), \(\Delta T\)는 랙 입출구 온도 차. PUE(전력 사용 효율)는 IT 장비 전력에 냉각·배전 손실이 얼마나 얹히는지를 나타낸다. 교육용 모델: 액체 열은 펌프·건식 냉각기 3 % + 냉동기 몫(공급 온도 30 °C 이상이면 0, 15 °C 이하면 전부, COP 5), 공기 열은 송풍·냉동 30 %, 배전 손실 7 %.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 220" role="img" aria-label="랙의 냉각판 회로, 냉각수 분배 장치, 시설 냉각수, 건식 냉각기와 냉동기로 이어지는 열 경로">
+        <g transform="translate(20,20)">
+          <rect x="0" y="0" width="150" height="170" rx="6" class="card"/>
+          <text x="75" y="20" class="lb-b" text-anchor="middle">GX-Rack 50 kW</text>
+          <rect x="14" y="34" width="122" height="26" rx="3" class="k-heat"/><text x="75" y="52" class="lb-s" text-anchor="middle">노드 12 kW</text>
+          <rect x="14" y="66" width="122" height="26" rx="3" class="k-heat"/><text x="75" y="84" class="lb-s" text-anchor="middle">노드 12 kW</text>
+          <rect x="14" y="98" width="122" height="26" rx="3" class="k-heat"/><text x="75" y="116" class="lb-s" text-anchor="middle">노드 12 kW</text>
+          <rect x="14" y="130" width="122" height="26" rx="3" class="k-heat"/><text x="75" y="148" class="lb-s" text-anchor="middle">노드 12 kW</text>
+        </g>
+        <path d="M172 60 H240" class="hflow"/><path d="M240 150 H172" class="cflow"/>
+        <text x="180" y="50" class="lb-h">50 °C</text><text x="180" y="172" class="lb-d">40 °C</text>
+        <rect x="244" y="50" width="120" height="110" rx="8" class="k-data"/><text x="304" y="98" class="lb-b" text-anchor="middle">CDU</text><text x="304" y="118" class="lb-s" text-anchor="middle">열교환기·펌프</text>
+        <path d="M366 70 H450" class="hflow"/><path d="M450 140 H366" class="cflow"/>
+        <text x="372" y="62" class="lb-s">시설 냉각수</text>
+        <rect x="454" y="30" width="150" height="60" rx="8" class="k-data"/><text x="529" y="56" class="lb-b" text-anchor="middle">건식 냉각기</text><text x="529" y="76" class="lb-s" text-anchor="middle">바깥 공기로(냉동 없음)</text>
+        <rect x="454" y="120" width="150" height="60" rx="8" class="k-volt"/><text x="529" y="146" class="lb-b" text-anchor="middle">냉동기</text><text x="529" y="166" class="lb-s" text-anchor="middle">공급 온도 낮을 때만</text>
+        <g transform="translate(630,30)">
+          <text x="0" y="0" class="lb-b">32 GPU 랙, ΔT 10 K</text>
+          <text x="0" y="24" class="lb">액체 85 %: 42.5 kW</text>
+          <text x="0" y="44" class="lb">→ 유량 약 61 L/min</text>
+          <text x="0" y="64" class="lb">공기 15 %: 약 880 CFM</text>
+          <text x="0" y="94" class="lb">PUE 약 1.14 (40 °C 공급)</text>
+          <text x="0" y="114" class="lb">전부 공랭이면 약 1.37</text>
+          <text x="0" y="144" class="lb-s">따뜻한 물(40 °C)은 일 년 내내</text>
+          <text x="0" y="162" class="lb-s">바깥 공기만으로 식힐 수 있다</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 13-9.</b> 칩에서 건물 밖까지의 냉각 사슬. 냉각판을 지난 물은 CDU에서 시설 냉각수로 열을 넘긴다. 공급 온도가 높으면 냉동기 없이 바깥 공기로 식힐 수 있어 PUE가 내려간다. 같은 이유로 칩 쪽에서는 높은 냉각수 온도를 견디는 것이 데이터센터 전력을 줄인다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-rack">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>랙·데이터센터: 랙 kW, 유량, PUE</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rack-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>랙당 GPU 수 <output id="rack-n-out"></output></span><input type="range" id="rack-n" min="8" max="144" step="8" value="32"></label>
+          <label class="ctrl"><span>GPU 모듈 전력 <output id="rack-p-out"></output></span><input type="range" id="rack-p" min="300" max="2000" step="50" value="1000"></label>
+          <label class="ctrl"><span>액체로 회수하는 열 <output id="rack-l-out"></output></span><input type="range" id="rack-l" min="0" max="0.95" step="0.05" value="0.85"></label>
+          <label class="ctrl"><span>랙 입출구 ΔT <output id="rack-dt-out"></output></span><input type="range" id="rack-dt" min="4" max="20" step="1" value="10"></label>
+          <label class="ctrl"><span>냉각수 공급 온도 <output id="rack-ts-out"></output></span><input type="range" id="rack-ts" min="10" max="45" step="1" value="40"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">랙 IT 전력</span><span class="v" id="rack-it">—</span></div>
+        <div class="stat"><span class="k">냉각수 유량</span><span class="v" id="rack-q">—</span></div>
+        <div class="stat"><span class="k">PUE</span><span class="v" id="rack-pue">—</span></div>
+        <div class="stat"><span class="k">100 MW 시설의 GPU 수</span><span class="v" id="rack-g">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본(GX-Rack 32 GPU, 1,000 W)은 약 50 kW, 냉각수 약 61 L/min, PUE 약 1.14, 100 MW 시설에 GPU 약 56,000개다. ② 액체 회수를 0으로 내리면(전부 공랭) PUE가 약 1.37로 올라 같은 시설에 GPU가 약 46,700개로 줄어든다. 냉각 방식이 서버 수를 정한다. ③ 공급 온도를 15 °C로 낮추면 냉동기가 돌아 PUE가 약 1.31이 된다. 칩이 40 °C 냉각수를 견디도록 설계하는 것(<a href="#throttle">6절</a>)이 건물 단위로는 약 15 %의 GPU를 더 들이는 효과다.</div>
+    </div>
+
+    <div class="callout fab"><strong>칩 하나에서 랙 50 kW까지</strong>GX-1 모듈 1,000 W 중 약 910 W가 냉각판으로 간다. 랙 ΔT 10 K로 설계하면 GPU 하나에 약 1.3 L/min, 1절 기본값처럼 2 L/min을 흘리면 냉각판 출구가 약 6.5 K 오른다. GX-Rack 32 GPU는 IT 약 50 kW, 그중 85 %(42.5 kW)를 물로, 나머지(CPU·전원·스위치 일부, 약 7.5 kW)를 공기로 뺀다. 공급 40 °C에서 PUE 약 1.14이면 랙 하나가 시설 전력 약 57 kW를 쓴다. 이 숫자들이 랙의 배관 지름(수십 L/min), 바닥 하중, 전력 인입을 정한다. 랙 전원 분배는 <a href="../../infra/chapters/power.html">InfraBook 전력 장</a>을 보라.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 랙 전력 밀도가 높을수록 GPU 사이 거리가 짧아져 구리 링크로 스케일업 도메인을 묶을 수 있다(<a href="scale.html">14장</a>). 그 대가가 랙 50 kW 이상의 수냉이다. 시설 전력이 고정된 데이터센터에서는 PUE가 곧 GPU 수이므로, 칩 설계자는 높은 냉각수 온도(40 °C 이상)에서도 스로틀하지 않는 열저항 예산을 잡고, 시설 설계자는 냉동기를 없앤다. 칩의 0.05 K/W와 건물의 PUE 1.1은 같은 설계 사슬의 양 끝이다.</p>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>GX-1 로직 다이 760 W는 평균 약 97 W/cm²다. 다이·TIM1·리드(\(R_{int}\) ≈ 0.0195 K/W)와 TIM2·냉각판·대류·냉각수 가열(\(R_{ext}\) ≈ 0.0249 K/W, HBM 열 포함)을 지나 평균 \(T_j\) ≈ 77.5 °C, 실효 약 0.049 K/W다.</li>
+      <li>가장 큰 단일 항은 대류이고, TIM1을 그리스에서 금속으로 바꾸는 것만으로 약 8 K가 달라진다. 냉각수 가열 항 \(1/(2\dot m c_p)\) 때문에 유량도 열저항이다.</li>
+      <li>작은 열원은 퍼짐 저항이 크다. 퍼짐층 두께에는 최적값이 있고, 냉각이 강할수록 얇아진다. 뜨거운 블록은 몰지 않고 흩는다.</li>
+      <li>2D 열 지도에서 텐서 코어 칸(약 222 W/cm², 평균의 2.3배)의 초과 온도는 퍼짐 덕분에 약 4 K다. 메모리 제한 작업에서는 핫스팟이 HBM PHY 띠로 옮긴다.</li>
+      <li>HBM은 85 °C 위에서 리프레시를 늘려야 하고, PHY 띠와 열적으로 붙어 있어 냉각수 온도 상한을 정하는 경우가 많다. 3D 적층은 접합층마다 \(q''\,t/k\)만큼 온도를 더한다.</li>
+      <li>포스터 사다리 \(Z_{th}(t) = \sum R_i(1 - e^{-t/\tau_i})\): 다이는 약 10 ms, 냉각판은 초 단위다. 짧은 전력 급등은 열로는 걸러지고, 초 단위 부하 변동은 큰 온도 리플을 만든다.</li>
+      <li>스로틀 루프는 \(T_{hot} \gt 95\) °C면 클럭을 내린다. 냉각수 55 °C → 약 1.54 GHz, 60 °C 또는 유량 0.5 L/min → 약 1.42–1.43 GHz다. 냉각 능력이 곧 지속 클럭이다.</li>
+      <li>누설–온도 되먹임은 \(R\,dP/dT \lt 1\)일 때만 안정하다. GX-1은 0.13으로 여유가 크지만, 스로틀이 없다면 0.085 K/W(공랭 수준)를 넘기면 폭주한다.</li>
+      <li>공랭은 모듈 약 700 W가 한계, 냉각판 수냉은 약 1,300 W, 2상은 그 이상이다. 랙 50 kW는 약 61 L/min이 필요하고, 40 °C 공급수는 PUE를 약 1.14로 낮춘다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>GX-1 열 사슬에서 \(R_{ext}\) 항들이 로직 다이 전력 760 W가 아니라 910 W를 곱하는 이유는?</p><div class="opts">
+        <button class="opt">전압 변환 손실이 냉각판으로 들어오기 때문</button><button class="opt" data-correct>HBM 스택 열 150 W가 같은 리드·냉각판을 공유하기 때문</button><button class="opt">누설 전력은 외부 경로로만 흐르기 때문</button><button class="opt">냉각수 가열은 항상 1.2배로 계산하기 때문</button>
+      </div><div class="quiz-exp">TIM2 아래부터는 로직 다이와 HBM 6개의 열이 같은 리드·냉각판·냉각수를 지난다. 그래서 외부 저항에는 760 + 150 = 910 W가 흐르고, 평균 \(T_j\) = 40 + 760×0.0195 + 910×0.0249 ≈ 77.5 °C다.</div></div>
+
+      <div class="quiz-q"><p>물 2 L/min(\(\dot m c_p\) ≈ 139 W/K)이 910 W를 받을 때 냉각판 출구 온도는 입구보다 약 몇 K 높은가?</p><div class="opts">
+        <button class="opt">약 0.65 K</button><button class="opt">약 3.3 K</button><button class="opt" data-correct>약 6.5 K</button><button class="opt">약 13 K</button>
+      </div><div class="quiz-exp">\(\Delta T = P/(\dot m c_p)\) = 910 / 139 ≈ 6.5 K. 냉각판 평균은 그 절반(약 3.3 K)만큼 오르므로 열저항으로는 \(1/(2\dot m c_p)\) ≈ 0.0036 K/W가 된다.</div></div>
+
+      <div class="quiz-q"><p>퍼짐층(구리판) 두께를 키우면 전체 열저항이 처음에는 줄다가 다시 느는 이유는?</p><div class="opts">
+        <button class="opt" data-correct>얇을 때는 열이 옆으로 퍼질 길이가 늘어 이득이지만, 두꺼워지면 세로 전도 저항 t/k가 커지기 때문</button><button class="opt">구리의 열전도율이 두께에 따라 줄기 때문</button><button class="opt">두꺼울수록 대류 계수 h가 줄기 때문</button><button class="opt">열용량이 커져 정상 상태 온도가 오르기 때문</button>
+      </div><div class="quiz-exp">퍼짐 저항은 두께가 늘면 줄고 세로 전도 저항은 두께에 비례해 는다. 둘의 합에 최솟값이 생긴다. 바닥 \(h\)가 클수록(냉각이 강할수록) 최적 두께가 얇아진다(h = 20,000 → 약 6.6 mm, 65,000 → 약 4.6 mm).</div></div>
+
+      <div class="quiz-q"><p>열 지도에서 텐서 코어 칸의 열밀도는 평균의 약 2.3배인데 핫스팟은 평균보다 약 4 K만 높다. 가장 큰 이유는?</p><div class="opts">
+        <button class="opt">텐서 코어는 누설 전력이 없기 때문</button><button class="opt">냉각수가 텐서 코어 위로만 흐르기 때문</button><button class="opt">HBM이 텐서 코어 열을 흡수하기 때문</button><button class="opt" data-correct>텐서 칸(약 1 mm)이 면내 퍼짐 길이(약 1 mm)와 비슷해 열이 이웃 칸으로 퍼져 평균되기 때문</button>
+      </div><div class="quiz-exp">퍼짐 길이 \(\sqrt{kt\,R''}\)보다 작은 열원은 옆으로 퍼져 평균된다. 수 mm 이상인 블록(GPC 배열, PHY 띠)의 밀도가 온도를 정한다. 같은 이유로 메모리 제한 작업에서는 길게 뻗은 PHY 띠가 약 9 K 높은 핫스팟이 된다.</div></div>
+
+      <div class="quiz-q"><p>포스터 사다리 GX-1 기본값에서 전력 계단 뒤 10 ms 동안 주로 반응하는 것은?</p><div class="opts">
+        <button class="opt">냉각수 루프</button><button class="opt" data-correct>다이와 TIM1(시정수 약 12 ms)과 핫스팟 항</button><button class="opt">냉각판과 대류(시정수 약 2 s)</button><button class="opt">CDU 열교환기</button>
+      </div><div class="quiz-exp">시정수가 짧은 항부터 차오른다. 100 → 760 W 계단에서 10 ms 뒤 온도는 약 45.5 → 54.9 °C로 전체 상승(약 36 K)의 약 4분의 1이다. 나머지는 냉각판(초 단위)이 정한다. 그래서 온도 센서·스로틀 루프는 ms 단위로 돌아야 한다.</div></div>
+
+      <div class="quiz-q"><p>GX-1을 냉각수 40 °C, 2 L/min에서 냉각수 55 °C로 바꿨을 때(유량 같음) 시뮬레이터의 지속 클럭은?</p><div class="opts">
+        <button class="opt">1.6 GHz 유지</button><button class="opt">약 1.2 GHz</button><button class="opt" data-correct>약 1.54 GHz(약 −3.6 %)</button><button class="opt">0.8 GHz(비상 차단)</button>
+      </div><div class="quiz-exp">55 °C에서 1.6 GHz 정상 상태 \(T_{hot}\)이 약 98 °C라 95 °C를 넘는다. 제어기가 클럭을 내려 \(T_{hot}\) ≈ 95 °C가 되는 약 1.54 GHz에 정착한다. 60 °C면 약 1.43 GHz다.</div></div>
+
+      <div class="quiz-q"><p>누설–온도 되먹임이 안정한 조건은? (\(T^*\)는 고정점)</p><div class="opts">
+        <button class="opt">\(P_{leak}(T^*) \lt P_{dyn}\)</button><button class="opt">\(T^* \lt 105\) °C</button><button class="opt">\(R \lt 0.05\) K/W</button><button class="opt" data-correct>\(R\,dP_{leak}/dT \lt 1\)</button>
+      </div><div class="quiz-exp">고정점 반복 \(T_{n+1} = g(T_n)\)은 \(g'(T^*) = R\,dP/dT \lt 1\)일 때 수렴한다. GX-1 기본값은 약 0.13이다. 누설이 25 K마다 두 배면 \(dP/dT = P_{leak}\ln 2/25\)다.</div></div>
+
+      <div class="quiz-q"><p>랙 IT 전력 50 kW 중 85 %를 물로 회수하고 입출구 ΔT를 10 K로 잡을 때 필요한 냉각수 유량은 약?</p><div class="opts">
+        <button class="opt">약 6 L/min</button><button class="opt" data-correct>약 61 L/min</button><button class="opt">약 610 L/min</button><button class="opt">약 72 L/min</button>
+      </div><div class="quiz-exp">\(Q = P/(\rho c_p \Delta T)\) = 42,500 / (4.18×10⁶ × 10) ≈ 1.02×10⁻³ m³/s ≈ 61 L/min. ΔT를 5 K로 줄이면 유량이 두 배가 된다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+/* model:base */
+// GX-1 열 입력(CONTRIBUTING 표·12장): 로직 다이 760 W(동적 640 + 누설 120 @85 °C), HBM 150 W, 다이 30 × 26 mm, 냉각수 40 °C
+var GX = { Pdie: 760, Pdyn: 640, Pleak85: 120, Phbm: 150, Pmod: 1000, Tin: 40, Tthr: 95, Tcrit: 105, ax: 0.030, ay: 0.026, flow0: 2, frDie: 0.76, frSink: 0.91 };
+var RHOCP_W = 4.18e6;   // 물의 부피 열용량 J/(m³·K)
+/* /model:base */
+
+/* model:chain */
+var TIM1 = { grease: { k: 5, t: 50e-6, rc: 3e-6, name: "그리스" }, indium: { k: 80, t: 200e-6, rc: 2e-6, name: "인듐 솔더" }, lm: { k: 25, t: 30e-6, rc: 1.5e-6, name: "액체 금속" } };
+// 45° 열 퍼짐: a × b 사각형이 두께 t 층을 지나며 (a+2z)(b+2z)로 넓어질 때의 열저항
+function spread45(a, b, t, k) {
+  if (!(t > 0)) return 0;
+  if (Math.abs(b - a) < 1e-9) return t / (k * a * (a + 2 * t));
+  return (Math.log((a + 2 * t) / a) - Math.log((b + 2 * t) / b)) / (2 * k * (b - a));
+}
+function hConv(h0, flow) { return h0 * Math.pow(Math.max(flow, 0.05) / GX.flow0, 0.6); }
+// o: dieT(mm) tim1 lidT(mm) tim2(K·cm²/W) plateT(mm) h0(W/m²K, 2 L/min 기준) flow(L/min) P(W) Phbm(W) Tf(°C)
+function chainModel(o) {
+  var a = GX.ax, b = GX.ay, L = [], tm = TIM1[o.tim1] || TIM1.indium;
+  L.push({ key: "die", name: "실리콘 다이", R: o.dieT * 1e-3 / (120 * a * b), int: 1 });
+  L.push({ key: "tim1", name: "TIM1", R: (tm.t / tm.k + tm.rc) / (a * b), int: 1 });
+  var lt = o.lidT * 1e-3; L.push({ key: "lid", name: "구리 리드", R: spread45(a, b, lt, 390), int: 1 }); a += 2 * lt; b += 2 * lt;
+  L.push({ key: "tim2", name: "TIM2", R: o.tim2 * 1e-4 / (a * b), int: 0 });
+  var pt = o.plateT * 1e-3; L.push({ key: "plate", name: "냉각판 바닥", R: spread45(a, b, pt, 390), int: 0 }); a += 2 * pt; b += 2 * pt;
+  var h = hConv(o.h0, o.flow); L.push({ key: "conv", name: "대류", R: 1 / (h * a * b), int: 0 });
+  var mcp = RHOCP_W * Math.max(o.flow, 0.05) / 60000; L.push({ key: "cal", name: "냉각수 가열", R: 1 / (2 * mcp), int: 0 });
+  var Rint = 0, Rext = 0; L.forEach(function (l) { if (l.int) Rint += l.R; else Rext += l.R; });
+  var Ps = o.P + o.Phbm;
+  L.forEach(function (l) { l.dT = (l.int ? o.P : Ps) * l.R; });
+  var Tavg = o.Tf + o.P * Rint + Ps * Rext;
+  return { L: L, Rint: Rint, Rext: Rext, Reff: o.P > 0 ? (Tavg - o.Tf) / o.P : Rint + Rext, Tavg: Tavg, h: h, rise: Ps / mcp, flux: o.P / (GX.ax * GX.ay) / 1e4 };
+}
+var CHAIN0 = { dieT: 0.75, tim1: "indium", lidT: 2, tim2: 0.05, plateT: 2, h0: 65000, flow: 2, P: 760, Phbm: 150, Tf: 40 };
+/* /model:chain */
+
+/* model:spread */
+// 원형 열원(반지름 a)이 원판(반지름 b, 두께 t, 열전도 k) 위에 있고 바닥이 h로 식는 경우의 퍼짐 저항(Lee·Song·Au·Moran 1995 근사)
+function spreadLee(o) {
+  var a = o.a, b = Math.max(o.b, o.a * 1.0001), t = Math.max(o.t, 1e-6), k = o.k, h = o.h, sp = Math.sqrt(Math.PI);
+  var eps = a / b, tau = t / b, Bi = h * b / k, lam = Math.PI + 1 / (eps * sp), th = Math.tanh(lam * tau);
+  var phi = (th + lam / Bi) / (1 + (lam / Bi) * th);
+  var Rcd = t / (k * Math.PI * b * b), Rcv = 1 / (h * Math.PI * b * b);
+  var Rsp = 0.5 * Math.pow(1 - eps, 1.5) * phi / (k * a * sp);
+  var Rmax = Rcv + (eps * tau / sp + (1 - eps) * phi / sp) / (k * a * sp);
+  var R1d = t / (k * Math.PI * a * a) + 1 / (h * Math.PI * a * a);   // 퍼짐이 없다면(열원 면적 그대로 내려감)
+  return { Rsp: Rsp, Rcd: Rcd, Rcv: Rcv, R: Rcd + Rcv + Rsp, Rmax: Rmax, R1d: R1d };
+}
+function spreadBestT(o) { var best = { t: 0, R: Infinity }; for (var t = 0.1e-3; t <= 15e-3 + 1e-9; t += 0.1e-3) { var r = spreadLee({ a: o.a, b: o.b, t: t, k: o.k, h: o.h }).R; if (r < best.R) best = { t: t, R: r }; } return best; }
+/* /model:spread */
+
+/* model:heatmap */
+// 다이 30 × 26 mm를 0.5 mm 칸 60 × 52로 나눈 2층(다이·리드) 정상 상태 열 방정식. SOR 완화법.
+var HM = { nx: 60, ny: 52, dx: 0.5e-3, TYPES: ["io", "sm", "tensor", "l2", "phy"], NAMES: { io: "I/O·링크", sm: "SM(텐서 외)", tensor: "텐서 코어", l2: "L2·크로스바", phy: "HBM PHY" } };
+HM.WL = { gemm: { tensor: 300, sm: 300, l2: 70, phy: 50, io: 40, hbm: 150 }, fp32: { tensor: 20, sm: 470, l2: 70, phy: 40, io: 40, hbm: 60 }, mem: { tensor: 50, sm: 190, l2: 110, phy: 110, io: 40, hbm: 150 } };
+HM.LID = { thin: 0.195, cu: 0.78, vc: 6 };              // 리드 층의 k·t (W/K): 구리 0.5 mm, 구리 2 mm, 증기 챔버(실효 k 약 3,000)
+HM.R = { die: 0.00801, tim1: 0.00577, lid: 0.00575, ext: 0.0249 };   // 1D 사슬 기본값(K/W, 다이 면적 기준)
+HM.HBM = { Rself: 0.6, kc: 0.4 };                       // HBM 스택 자체 경로(K/W)와 로직 가장자리 온도 결합 계수
+function hmFloor() {
+  var nx = HM.nx, ny = HM.ny, t = new Uint8Array(nx * ny);
+  for (var j = 0; j < ny; j++) for (var i = 0; i < nx; i++) {
+    var x = (i + 0.5) * 0.5, y = (j + 0.5) * 0.5, k = 0;
+    if (y < 1.5 || y > 24.5) k = (x > 1 && x < 9) || (x > 11 && x < 19) || (x > 21 && x < 29) ? 4 : 0;
+    else if (x < 1.5 || x > 28.5) k = 0;
+    else if (y > 11.5 && y < 14.5) k = 3;
+    else k = i % 4 < 2 && j % 4 < 2 ? 2 : 1;
+    t[j * nx + i] = k;
+  }
+  return t;
+}
+function hmSolve(o, warm) {
+  var nx = HM.nx, ny = HM.ny, N = nx * ny, fl = hmFloor(), wl = HM.WL[o.wl] || HM.WL.gemm, cnt = [0, 0, 0, 0, 0], n, i, j;
+  for (n = 0; n < N; n++) cnt[fl[n]]++;
+  var q = new Float64Array(N), P = 0;
+  for (n = 0; n < N; n++) q[n] = wl[HM.TYPES[fl[n]]] / cnt[fl[n]];
+  HM.TYPES.forEach(function (k) { P += wl[k]; });
+  var A = GX.ax * GX.ay, Ac = HM.dx * HM.dx, Ga = Ac / ((HM.R.die + HM.R.tim1 + 0.5 * HM.R.lid) * A), Gb = Ac / ((0.5 * HM.R.lid + HM.R.ext) * A);
+  var Gd = 0.09, Gl = HM.LID[o.lid] || HM.LID.cu, Tb = o.Tf + wl.hbm * HM.R.ext;
+  var T = new Float64Array(N), U = new Float64Array(N), it;
+  if (warm && warm.T && warm.T.length === N) { T.set(warm.T); U.set(warm.U); }
+  else { T.fill(Tb + P * (HM.R.die + HM.R.tim1 + HM.R.lid + HM.R.ext)); U.fill(Tb + P * (0.5 * HM.R.lid + HM.R.ext)); }
+  for (it = 0; it < 6000; it++) {
+    var dmax = 0;
+    for (j = 0; j < ny; j++) for (i = 0; i < nx; i++) {
+      n = j * nx + i; var s = 0, su = 0, m = 0;
+      if (i > 0) { s += T[n - 1]; su += U[n - 1]; m++; } if (i < nx - 1) { s += T[n + 1]; su += U[n + 1]; m++; }
+      if (j > 0) { s += T[n - nx]; su += U[n - nx]; m++; } if (j < ny - 1) { s += T[n + nx]; su += U[n + nx]; m++; }
+      var d = 1.85 * ((Gd * s + Ga * U[n] + q[n]) / (Gd * m + Ga) - T[n]); T[n] += d; if (d > dmax) dmax = d; else if (-d > dmax) dmax = -d;
+      var e = 1.85 * ((Gl * su + Ga * T[n] + Gb * Tb) / (Gl * m + Ga + Gb) - U[n]); U[n] += e; if (e > dmax) dmax = e; else if (-e > dmax) dmax = -e;
+    }
+    if (dmax < 2e-4) break;
+  }
+  var mx = -Infinity, imx = 0, sum = 0, qmax = 0;
+  for (n = 0; n < N; n++) { sum += T[n]; if (T[n] > mx) { mx = T[n]; imx = n; } if (q[n] > qmax) qmax = q[n]; }
+  // HBM 스택 6개: 바로 옆 PHY 구간의 평균 다이 온도와 결합
+  var segs = [[1, 9], [11, 19], [21, 29]], hbm = [], Ps = wl.hbm / 6;
+  [0, 1].forEach(function (side) {
+    segs.forEach(function (sg) {
+      var s = 0, c = 0;
+      for (j = 0; j < ny; j++) for (i = 0; i < nx; i++) { var y = (j + 0.5) * 0.5, x = (i + 0.5) * 0.5; if ((side ? y > 24.5 : y < 1.5) && x > sg[0] && x < sg[1]) { s += T[j * nx + i]; c++; } }
+      var Te = s / c; hbm.push({ Tedge: Te, T: o.Tf + Ps * HM.HBM.Rself + HM.HBM.kc * (Te - o.Tf) });
+    });
+  });
+  var hmax = Math.max.apply(null, hbm.map(function (h) { return h.T; }));
+  var dens = {}; HM.TYPES.forEach(function (k, ix) { dens[k] = wl[k] / (cnt[ix] * Ac * 1e4); });
+  return { T: T, U: U, fl: fl, q: q, P: P, Tmax: mx, imax: imx, Tavg: sum / N, iters: it, qmax: qmax / Ac / 1e4, qavg: P / (A * 1e4), hbm: hbm, Thbm: hmax, dens: dens, cnt: cnt };
+}
+/* /model:heatmap */
+
+/* model:transient */
+// 포스터 사다리: [다이+TIM1, 리드, TIM2+냉각판+대류, 냉각수 가열] + 핫스팟 항. 외부 두 항은 다이 + HBM 열을 받는다.
+var TR = { tau: [0.012, 0.05, 2, 5], Rhs: 0.0055, tauHs: 0.003, hbmRatio: 150 / 760 };
+function trParts(flow) {
+  var c = chainModel(Object.assign({}, CHAIN0, { flow: flow })), L = c.L, w = 1 + TR.hbmRatio;
+  return [{ R: L[0].R + L[1].R, tau: TR.tau[0] }, { R: L[2].R, tau: TR.tau[1] }, { R: (L[3].R + L[4].R + L[5].R) * w, tau: TR.tau[2] }, { R: L[6].R * w, tau: TR.tau[3] }, { R: TR.Rhs, tau: TR.tauHs }];
+}
+function zth(t, parts) { var z = 0; parts.forEach(function (p) { z += p.R * (1 - Math.exp(-Math.max(t, 0) / p.tau)); }); return z; }
+// 계단: 낮은 전력에서 정상 상태였다가 t=0에 높은 전력으로
+function trStep(o) {
+  var parts = trParts(2), Z = zth(1e9, parts), out = [];
+  for (var e = -3; e <= 2.0001; e += 0.025) { var t = Math.pow(10, e); out.push([t, o.Tf + o.Plo * Z + (o.Phi - o.Plo) * zth(t, parts)]); }
+  var Tfin = o.Tf + o.Phi * Z, T0 = o.Tf + o.Plo * Z, t63 = NaN, target = T0 + 0.632 * (Tfin - T0);
+  for (var i = 0; i < out.length; i++) if (out[i][1] >= target) { t63 = out[i][0]; break; }
+  return { data: out, Tfin: Tfin, T0: T0, t63: t63, Z: Z, T10ms: o.Tf + o.Plo * Z + (o.Phi - o.Plo) * zth(0.01, parts), T1s: o.Tf + o.Plo * Z + (o.Phi - o.Plo) * zth(1, parts) };
+}
+// 주기 펄스: 높은 전력 duty, 낮은 전력 나머지. 평균 전력 정상 상태에서 시작해 주기 정상 상태까지 돈 뒤 마지막 3주기를 돌려준다.
+function trPulse(o) {
+  var parts = trParts(2), per = Math.max(o.period, 1e-3), duty = GP_clamp(o.duty, 0.01, 0.99), ns = 240, dt = per / ns;
+  var Pavg = o.Plo + (o.Phi - o.Plo) * duty, x = parts.map(function (p) { return Pavg * p.R; }), E = parts.map(function (p) { return Math.exp(-dt / p.tau); });
+  var nper = Math.min(400, Math.max(6, Math.ceil(30 / per))), out = [], pk = -Infinity, mn = Infinity;
+  for (var c = 0; c < nper; c++) for (var s = 0; s < ns; s++) {
+    var P = s < ns * duty ? o.Phi : o.Plo;
+    for (var k = 0; k < x.length; k++) x[k] = x[k] * E[k] + P * parts[k].R * (1 - E[k]);
+    if (c >= nper - 3) { var T = o.Tf + x.reduce(function (a, b) { return a + b; }, 0); out.push([(c - nper + 3) * per + (s + 1) * dt, T]); if (T > pk) pk = T; if (T < mn) mn = T; }
+  }
+  return { data: out, Tpk: pk, Tmin: mn, ripple: pk - mn, Tavg: o.Tf + Pavg * zth(1e9, parts), Pavg: Pavg };
+}
+function GP_clamp(x, a, b) { return Math.min(b, Math.max(a, x)); }
+/* /model:transient */
+
+/* model:throttle */
+// V–f: 1.2 GHz 0.65 V, 1.6 GHz 0.75 V, 1.8 GHz 0.85 V(GX-1 표), 0.8 GHz 0.55 V까지 연장
+var TH = { fmin: 0.8, fmax: 1.6, Td: 25, thr: 95, hyst: 1, up: 0.01, dn: 0.02, ctrl: 0.01 };
+function vOfF(f) { return f <= 1.2 ? 0.65 - (1.2 - f) * 0.25 : f <= 1.6 ? 0.65 + (f - 1.2) * 0.25 : 0.75 + (f - 1.6) * 0.5; }
+function pDyn(f, act) { var v = vOfF(f) / 0.75; return GX.Pdyn * act * (f / 1.6) * v * v; }
+function pLeak(T, f, fb) { var v = vOfF(f) / 0.75; return GX.Pleak85 * v * v * v * (fb ? Math.pow(2, (Math.min(T, 250) - 85) / TH.Td) : 1); }
+function thR(flow) { var c = chainModel(Object.assign({}, CHAIN0, { flow: flow })), L = c.L; return { R: [L[0].R + L[1].R, L[2].R, L[3].R + L[4].R + L[5].R, L[6].R], Rint: c.Rint, Rext: c.Rext }; }
+// 정상 상태(클럭 고정): 누설–온도 고정점 반복
+function thSteady(o, f) {
+  var r = thR(o.flow), T = o.Tf, P = 0;
+  for (var k = 0; k < 300; k++) { P = pDyn(f, o.act) + pLeak(T, f, o.fb); var Tn = o.Tf + P * r.Rint + (P + GX.Phbm) * r.Rext; var done = Math.abs(Tn - T) < 1e-7; T = Tn; if (done || T > 400) break; }
+  return { Tavg: T, Thot: T + P * TR.Rhs, P: P };
+}
+// 지속 클럭: 정상 상태 T_hot이 95 °C 이하인 가장 높은 클럭(이분법)
+function thSustained(o) {
+  if (thSteady(o, TH.fmax).Thot <= TH.thr) return TH.fmax;
+  if (thSteady(o, TH.fmin).Thot > TH.thr) return TH.fmin;
+  var lo = TH.fmin, hi = TH.fmax;
+  for (var k = 0; k < 40; k++) { var m = (lo + hi) / 2; if (thSteady(o, m).Thot <= TH.thr) lo = m; else hi = m; }
+  return lo;
+}
+// 시간 응답: t=0에 유휴(냉각수 온도)에서 부하 시작. 10 ms마다 제어: 95 °C 초과면 20 MHz↓, 94 °C 미만이면 10 MHz↑, 105 °C면 최저 클럭
+function thSim(o) {
+  var r = thR(o.flow), dt = 0.005, n = Math.round(o.tEnd / dt), x = [0, 0, 0, 0], xh = 0, f = TH.fmax, every = Math.round(TH.ctrl / dt);
+  var E = TR.tau.map(function (t) { return Math.exp(-dt / t); }), Eh = Math.exp(-dt / TR.tauHs), out = { t: [], T: [], f: [], P: [] }, nthr = 0;
+  for (var i = 0; i <= n; i++) {
+    var Tavg = o.Tf + x[0] + x[1] + x[2] + x[3], Thot = Tavg + xh;
+    if (i % every === 0) {
+      if (Thot >= GX.Tcrit) f = TH.fmin;
+      else if (Thot > TH.thr) { f = Math.max(TH.fmin, f - TH.dn); nthr++; }
+      else if (Thot < TH.thr - TH.hyst && f < TH.fmax) f = Math.min(TH.fmax, f + TH.up);
+    }
+    var P = pDyn(f, o.act) + pLeak(Tavg, f, o.fb), drv = [P, P, P + GX.Phbm, P + GX.Phbm];
+    if (i % 4 === 0) { out.t.push(i * dt); out.T.push(Thot); out.f.push(f); out.P.push(P); }
+    for (var k = 0; k < 4; k++) x[k] = x[k] * E[k] + drv[k] * r.R[k] * (1 - E[k]);
+    xh = xh * Eh + P * TR.Rhs * (1 - Eh);
+  }
+  var m = out.f.length, a = Math.floor(m * 0.8), sf = 0, sT = 0, sP = 0;
+  for (i = a; i < m; i++) { sf += out.f[i]; sT += out.T[i]; sP += out.P[i]; }
+  out.fEnd = sf / (m - a); out.TEnd = sT / (m - a); out.PEnd = sP / (m - a); out.Tpk = Math.max.apply(null, out.T); out.nthr = nthr;
+  for (i = 0; i < m; i++) if (out.f[i] < TH.fmax - 1e-9) break;
+  out.tFirst = i < m ? out.t[i] : NaN;
+  return out;
+}
+/* /model:throttle */
+
+/* model:runaway */
+// T = g(T) = T_f + R (P_dyn + P_L85 · 2^((T−85)/T_d)) 의 고정점
+function rwG(T, o) { return o.Tf + o.R * (o.Pdyn + o.Pl * Math.pow(2, (Math.min(T, 900) - 85) / o.Td)); }
+function rwRoots(o) {
+  var roots = [], prev = rwG(o.Tf, o) - o.Tf;
+  for (var T = o.Tf + 0.5; T <= 600; T += 0.5) {
+    var cur = rwG(T, o) - T;
+    if ((prev > 0) !== (cur > 0)) { var lo = T - 0.5, hi = T; for (var k = 0; k < 50; k++) { var m = (lo + hi) / 2; if ((rwG(m, o) - m > 0) === (prev > 0)) lo = m; else hi = m; } roots.push((lo + hi) / 2); if (roots.length === 2) break; }
+    prev = cur;
+  }
+  return roots;
+}
+function rwSolve(o) {
+  var r = rwRoots(o), st = r.length ? r[0] : NaN, gain = r.length ? o.R * o.Pl * Math.pow(2, (st - 85) / o.Td) * Math.LN2 / o.Td : NaN;
+  var cob = [], x = o.Tf; for (var k = 0; k < 40; k++) { var y = rwG(x, o); cob.push([x, y]); x = y; if (x > 600 || !isFinite(x)) break; }
+  return { stable: st, unstable: r.length > 1 ? r[1] : NaN, gain: gain, runaway: r.length === 0, cob: cob, Pl: r.length ? o.Pl * Math.pow(2, (st - 85) / o.Td) : NaN };
+}
+function rwCritR(o) {
+  var lo = 1e-4, hi = 5;
+  if (rwRoots(Object.assign({}, o, { R: hi })).length) return hi;
+  for (var k = 0; k < 40; k++) { var m = (lo + hi) / 2; if (rwRoots(Object.assign({}, o, { R: m })).length) lo = m; else hi = m; }
+  return lo;
+}
+/* /model:runaway */
+
+/* model:cooling */
+// 모듈 전력 P 중 로직 다이 76 %, 냉각 장치로 가는 열(다이 + HBM) 91 %. T_hot = T_in + 0.76 P (R_int + R_hs) + 0.91 P R_ext
+var COOL = [
+  { key: "air", name: "공랭 히트싱크", Tin: 35, Rext: 0.0049 + 1 / (1700 * 0.01) + 1 / (2 * 1170 * 0.047), chf: Infinity, note: "h 실효 약 1,700 W/m²K(핀 포함, 바닥 100 × 100 mm), 공기 100 CFM" },
+  { key: "cp", name: "냉각판 수냉", Tin: 40, Rext: 0.0249, chf: Infinity, note: "마이크로채널 냉각판, 물 2 L/min, h 실효 약 65,000" },
+  { key: "tp", name: "냉각판 2상", Tin: 35, Rext: 0.0049 + 0.0045 + 1 / (150000 * 0.001292), chf: Infinity, note: "냉매 비등, 포화 온도 35 °C, h 실효 약 150,000" },
+  { key: "imm", name: "2상 액침", Tin: 50, Rext: 0.0049 + 0.003 + 1 / (20000 * 0.0036), chf: 25e4 * 0.0036, note: "유전 액체 비등 50 °C, 비등면 60 × 60 mm, 임계 열유속 약 25 W/cm²" },
+];
+function coolRint(tim1) { var c = chainModel(Object.assign({}, CHAIN0, { tim1: tim1 })); return c.Rint; }
+function coolAllow(m, o) {
+  var Rint = coolRint(o.tim1), den = GX.frDie * (Rint + TR.Rhs) + GX.frSink * m.Rext, Pq = (o.Tlim - m.Tin) / den, Pc = m.chf / GX.frSink;
+  return { P: Math.max(0, Math.min(Pq, Pc)), den: den, by: Pc < Pq ? "chf" : "temp", Thot: function (P) { return m.Tin + P * den; } };
+}
+/* /model:cooling */
+
+/* model:rack */
+// 랙 IT 전력 = GPU 수 × 모듈 전력 × 1.5(CPU·스위치 칩·NIC·팬·전원 손실) + 랙 스위치 2 kW
+function rackModel(o) {
+  var IT = o.n * o.Pgpu * 1.5 + 2000, Pl = IT * o.liq, Pa = IT - Pl;
+  var Q = Pl / (RHOCP_W * o.dT), air = Pa / (1200 * 15);
+  var s = Math.min(1, Math.max(0, (30 - o.Ts) / 15));          // 냉동기가 필요한 비율(공급 온도가 낮을수록↑)
+  var cl = Pl * (0.03 + s / 5), ca = Pa * 0.30, dist = 0.07 * IT, pue = 1 + (cl + ca + dist) / IT;
+  return { IT: IT, Pl: Pl, Pa: Pa, Lpm: Q * 60000, cfm: air * 2118.9, chill: s, cl: cl, ca: ca, dist: dist, pue: pue, gpus100: Math.floor(100e6 / (pue * IT / o.n)), perGpuLpm: o.Pgpu * GX.frSink / (RHOCP_W * o.dT) * 60000 };
+}
+/* /model:rack */
+
+/* -------------------------------------------------- UI */
+var fmt = function (x, d) { return GP.fmt(x, d == null ? 3 : d); };
+var nf = function (x) { return Math.round(x).toLocaleString("en-US"); };
+var degC = function (x) { return isFinite(x) ? x.toFixed(1) + " °C" : "—"; };
+// 온도 색 지도(파랑 → 노랑 → 빨강), 데이터 색이라 테마와 무관
+function heatColor(u) {
+  u = Math.min(1, Math.max(0, u));
+  var st = [[0, [49, 54, 149]], [0.25, [69, 117, 180]], [0.45, [116, 173, 209]], [0.6, [254, 224, 144]], [0.78, [253, 174, 97]], [0.9, [244, 109, 67]], [1, [190, 30, 45]]];
+  for (var i = 1; i < st.length; i++) if (u <= st[i][0]) { var a = st[i - 1], b = st[i], t = (u - a[0]) / (b[0] - a[0]); return "rgb(" + [0, 1, 2].map(function (k) { return Math.round(a[1][k] + (b[1][k] - a[1][k]) * t); }).join(",") + ")"; }
+  return "rgb(190,30,45)";
+}
+
+/* ---------- 1. 1D 열저항 사슬 */
+(function () {
+  var cv, o = Object.assign({}, CHAIN0), res;
+  function upd() {
+    o.P = gP(); o.dieT = gD(); o.tim1 = gT(); o.lidT = gL(); o.h0 = gH(); o.flow = gQ();
+    res = chainModel(o);
+    GP.stat("ch-tj", res.Tavg > 95 ? "<span class='bad-t'>" + degC(res.Tavg) + "</span>" : degC(res.Tavg));
+    GP.stat("ch-r", fmt(res.Rint * 1000, 3) + " / " + fmt(res.Rext * 1000, 3) + " <small>mK/W</small>");
+    GP.stat("ch-re", fmt(res.Reff, 3) + " <small>K/W</small>");
+    GP.stat("ch-rise", res.rise.toFixed(1) + " <small>K</small>");
+    cv && cv.redraw();
+  }
+  var gP = GP.range("ch-p", function (v) { return v + " W"; }, upd);
+  var gD = GP.range("ch-d", function (v) { return v.toFixed(2) + " mm"; }, upd);
+  var gT = GP.seg("ch-tim", upd);
+  var gL = GP.range("ch-l", function (v) { return v.toFixed(2) + " mm"; }, upd);
+  var gH = GP.range("ch-h", function (v) { return nf(v) + " W/m²K"; }, upd);
+  var gQ = GP.range("ch-q", function (v) { return v.toFixed(1) + " L/min"; }, upd);
+  upd();
+  cv = GP.canvas("#ch-cv", function (ctx, w, h) {
+    var P = GP.palette(), L = res.L, lx = Math.min(130, w * 0.3), x0 = lx + 8, x1 = w - 16, top = 30, rh = Math.min(30, (h - top - 44) / L.length);
+    var tmin = o.Tf, tmax = Math.max(100, Math.ceil((res.Tavg + 5) / 10) * 10), X = function (t) { return x0 + (t - tmin) / (tmax - tmin) * (x1 - x0); };
+    GP.text(ctx, "냉각수 " + o.Tf + " °C에서 접합까지 쌓이는 온도(층마다 ΔT = 열류 × R)", 8, 14, { size: 12, color: P.dim, baseline: "middle" });
+    ctx.strokeStyle = P.grid; ctx.lineWidth = 1;
+    for (var t = tmin; t <= tmax + 1e-9; t += 10) { var px = Math.round(X(t)) + 0.5; ctx.beginPath(); ctx.moveTo(px, top - 4); ctx.lineTo(px, top + rh * L.length + 4); ctx.stroke(); GP.text(ctx, String(t), px, top + rh * L.length + 16, { size: 11, color: P.dim, align: "center", baseline: "middle" }); }
+    GP.text(ctx, "온도 (°C)", (x0 + x1) / 2, top + rh * L.length + 34, { size: 12, color: P.dim, align: "center", baseline: "middle" });
+    // 아래(냉각수)부터 위(접합)로 쌓되 그림은 접합을 위에
+    var cum = o.Tf, rows = [];
+    for (var i = L.length - 1; i >= 0; i--) { rows[i] = { a: cum, b: cum + L[i].dT }; cum += L[i].dT; }
+    L.forEach(function (l, i) {
+      var y = top + i * rh, r = rows[i], col = l.int ? P.heat : P.data;
+      GP.text(ctx, l.name + (l.key === "tim1" ? " " + TIM1[o.tim1].name : ""), lx, y + rh / 2, { size: 12, color: P.text, align: "right", baseline: "middle" });
+      ctx.fillStyle = GP.alpha(col, 0.75); ctx.fillRect(X(r.a), y + 4, Math.max(1, X(r.b) - X(r.a)), rh - 8);
+      var lab = l.dT.toFixed(1) + " K · " + (l.R * 1000).toFixed(1) + " mK/W", lw = GP.textWidth ? GP.textWidth(ctx, lab, { size: 11 }) : 90, xr = X(r.b) + 6;
+      if (xr + lw > x1) xr = X(r.a) - 6 - lw;
+      GP.text(ctx, lab, Math.max(lx + 4, xr), y + rh / 2, { size: 11, color: P.dim, baseline: "middle" });
+    });
+    [[95, "스로틀 95 °C", P.warn]].forEach(function (m) { if (m[0] < tmax) { var px = X(m[0]); ctx.setLineDash([4, 4]); ctx.strokeStyle = m[2]; ctx.beginPath(); ctx.moveTo(px, top - 6); ctx.lineTo(px, top + rh * L.length + 4); ctx.stroke(); ctx.setLineDash([]); GP.text(ctx, m[1], px - 4, top - 10, { size: 11, color: m[2], align: "right", baseline: "middle" }); } });
+    var pj = X(res.Tavg); ctx.fillStyle = P.heat; ctx.beginPath(); ctx.arc(pj, top - 6, 4, 0, 7); ctx.fill();
+  }, { height: function (w) { return w < 520 ? 300 : 290; } });
+})();
+
+/* ---------- 2. 퍼짐 저항 */
+(function () {
+  var cv, st = {};
+  function upd() {
+    st = { a: gA() * 1e-3, b: 0.02, t: gT() * 1e-3, k: Number(gK()), h: gH() };
+    var r = spreadLee(st), q = gQ(), Pw = q * 1e4 * Math.PI * st.a * st.a, best = spreadBestT(st);
+    st.r = r; st.best = best; st.Pw = Pw;
+    GP.stat("sp-p", Pw.toFixed(0) + " <small>W</small>");
+    GP.stat("sp-r", fmt(r.R, 3) + " / " + fmt(r.Rmax, 3) + " <small>K/W</small>");
+    GP.stat("sp-f", Math.round(100 * r.Rsp / r.R) + " <small>%</small>");
+    GP.stat("sp-dt", (Pw * r.R).toFixed(1) + " K <small>/ " + (best.t * 1e3).toFixed(1) + " mm</small>");
+    cv && cv.redraw();
+  }
+  var gA = GP.range("sp-a", function (v) { return v.toFixed(1) + " mm"; }, upd);
+  var gT = GP.range("sp-t", function (v) { return v.toFixed(1) + " mm"; }, upd);
+  var gK = GP.seg("sp-k", upd);
+  var gH = GP.range("sp-h", function (v) { return nf(v) + " W/m²K"; }, upd);
+  var gQ = GP.range("sp-q", function (v) { return v + " W/cm²"; }, upd);
+  upd();
+  cv = GP.canvas("#sp-cv", function (ctx, w, h) {
+    var P = GP.palette(), tot = [], mx = [], one = [];
+    for (var t = 0.2; t <= 12.0001; t += 0.1) { var r = spreadLee({ a: st.a, b: st.b, t: t * 1e-3, k: st.k, h: st.h }); tot.push([t, r.R]); mx.push([t, r.Rmax]); one.push([t, r.R1d]); }
+    var all = tot.concat(mx).map(function (p) { return p[1]; }), lo = Math.min.apply(null, all) * 0.7, hi = Math.max.apply(null, all) * 1.4;
+    var cur = st.r;
+    GP.chart(ctx, { x: 62, y: 30, w: w - 62 - 16, h: h - 30 - 48 }, {
+      x: [0, 12], y: [lo, hi], logY: true, xLabel: "퍼짐층 두께 t (mm)", yLabel: "열저항 (K/W)",
+      series: [{ data: tot, color: P.heat, width: 2.4, label: "R 평균(퍼짐 포함)" }, { data: mx, color: P.heat, width: 1.5, dash: [5, 4], label: "R 최고(열원 중심)" }, { data: one, color: P.dim, width: 1.4, dash: [2, 3], label: "퍼짐 없음(1D, 열원 면적)" }],
+      vlines: [{ x: st.best.t * 1e3, color: P.ok, label: "최적 " + (st.best.t * 1e3).toFixed(1) + " mm" }],
+      points: [{ x: st.t * 1e3, y: cur.R, color: P.heat, r: 5, label: fmt(cur.R, 3) + " K/W" }],
+      legend: "above", hover: { xFmt: function (v) { return v.toFixed(1) + " mm"; }, yFmt: function (v) { return fmt(v, 3) + " K/W"; } },
+    });
+  }, { height: 300, hover: true });
+})();
+
+/* ---------- 3. 2D 다이 열 지도 */
+(function () {
+  var cv, tip, res = null, geo = null;
+  function upd() {
+    res = hmSolve({ wl: gW(), lid: gL(), Tf: gF() }, res);
+    GP.stat("hm-max", res.Tmax > 95 ? "<span class='bad-t'>" + degC(res.Tmax) + "</span>" : degC(res.Tmax));
+    GP.stat("hm-avg", degC(res.Tavg));
+    GP.stat("hm-d", "+" + (res.Tmax - res.Tavg).toFixed(1) + " <small>K</small>");
+    GP.stat("hm-hbm", res.Thbm > 85 ? "<span class='bad-t'>" + degC(res.Thbm) + "</span>" : degC(res.Thbm));
+    cv && cv.redraw();
+  }
+  var gW = GP.seg("hm-wl", upd), gL = GP.seg("hm-lid", upd), gF = GP.range("hm-tf", function (v) { return v + " °C"; }, upd);
+  var chk = document.getElementById("hm-q"); chk.addEventListener("change", function () { cv.redraw(); });
+  upd();
+  cv = GP.canvas("#hm-cv", function (ctx, w, h) {
+    var P = GP.palette(), nx = HM.nx, ny = HM.ny, sc = Math.min((w - 90) / 30, 9.6), dw = 30 * sc, dh = 26 * sc, hb = 5 * sc, ox = 10, oy = 22 + hb + 6;
+    var showQ = chk.checked, vals = showQ ? Array.from(res.q).map(function (q) { return q / (HM.dx * HM.dx) / 1e4; }) : res.T, lo, hi;
+    if (showQ) { lo = 0; hi = 240; } else { lo = Math.floor(Math.min(Math.min.apply(null, Array.from(res.T)), Math.min.apply(null, res.hbm.map(function (x) { return x.T; }))) - 1); hi = Math.ceil(Math.max(res.Tmax, res.Thbm) + 1); }
+    geo = { ox: ox, oy: oy, cs: sc / 2, nx: nx, ny: ny };
+    GP.text(ctx, showQ ? "전력 밀도 (W/cm²)" : "정상 상태 접합 온도 (°C), 다이 30 × 26 mm", ox, 11, { size: 12, color: P.dim, baseline: "middle" });
+    var cs = sc / 2;
+    for (var j = 0; j < ny; j++) for (var i = 0; i < nx; i++) { ctx.fillStyle = heatColor((vals[j * nx + i] - lo) / (hi - lo)); ctx.fillRect(ox + i * cs, oy + j * cs, cs + 0.6, cs + 0.6); }
+    ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(ox + 0.5, oy + 0.5, dw, dh);
+    // HBM 스택(다이 밖 위·아래)
+    var segs = [[1, 9], [11, 19], [21, 29]];
+    res.hbm.forEach(function (hm, k) {
+      var sg = segs[k % 3], top = k < 3, x = ox + sg[0] * sc, y = top ? oy - hb - 4 : oy + dh + 4, ww = (sg[1] - sg[0]) * sc;
+      ctx.fillStyle = showQ ? GP.alpha(P.dram, 0.35) : heatColor((hm.T - lo) / (hi - lo)); ctx.fillRect(x, y, ww, hb);
+      ctx.strokeStyle = hm.T > 85 && !showQ ? P.bad : P.dram; ctx.lineWidth = 1.5; ctx.strokeRect(x + 0.5, y + 0.5, ww - 1, hb - 1);
+      GP.text(ctx, "HBM " + hm.T.toFixed(0) + "°", x + ww / 2, y + hb / 2, { size: 11, color: "#111", align: "center", baseline: "middle", weight: 600 });
+    });
+    // 최고점 표시
+    var im = res.imax, mx = ox + (im % nx + 0.5) * cs, my = oy + (Math.floor(im / nx) + 0.5) * cs;
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(mx, my, 6, 0, 7); ctx.stroke();
+    ctx.strokeStyle = "#000"; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(mx, my, 8, 0, 7); ctx.stroke();
+    // 색 막대
+    var bx = ox + dw + 18, by = oy, bh = dh;
+    for (var k = 0; k < 60; k++) { ctx.fillStyle = heatColor(1 - k / 59); ctx.fillRect(bx, by + k * bh / 60, 14, bh / 60 + 1); }
+    ctx.strokeStyle = P.border; ctx.strokeRect(bx + 0.5, by + 0.5, 14, bh);
+    for (var u = 0; u <= 4; u++) { var v = lo + (hi - lo) * (1 - u / 4); GP.text(ctx, v.toFixed(0), bx + 18, by + u * bh / 4, { size: 11, color: P.dim, baseline: "middle" }); }
+  }, { height: function (w) { var sc = Math.min((w - 90) / 30, 9.6); return Math.round(36 * sc + 44); }, hover: "track" });
+  tip = GP.tip("#hm-cv");
+  var cvs = document.getElementById("hm-cv");
+  cvs.addEventListener("pointermove", function (e) {
+    if (!geo || !res) return;
+    var r = cvs.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, i = Math.floor((x - geo.ox) / geo.cs), j = Math.floor((y - geo.oy) / geo.cs);
+    if (i < 0 || j < 0 || i >= geo.nx || j >= geo.ny) { tip.hide(); return; }
+    var n = j * geo.nx + i, ty = HM.TYPES[res.fl[n]];
+    tip.show(x, y, "<b>" + HM.NAMES[ty] + "</b><br>" + res.T[n].toFixed(1) + " °C · " + (res.q[n] / (HM.dx * HM.dx) / 1e4).toFixed(0) + " W/cm²<br>(" + (i * 0.5).toFixed(1) + ", " + (j * 0.5).toFixed(1) + ") mm");
+  });
+  cvs.addEventListener("pointerleave", function () { tip.hide(); });
+})();
+
+/* ---------- 4. 과도 열 응답 */
+(function () {
+  var cv, r = null, mode = "step";
+  function upd() {
+    mode = gM(); var o = { Tf: GX.Tin, Phi: gHi(), Plo: Math.min(gLo(), gHi()), period: Math.pow(10, gPer()), duty: gDu() };
+    var lab = [["최종 T<sub>j</sub>", "10 ms 후", "1 s 후", "63 % 도달 시간"], ["피크 T<sub>j</sub>", "최저 T<sub>j</sub>", "리플 ΔT", "평균 전력 온도"]][mode === "step" ? 0 : 1];
+    lab.forEach(function (s, i) { document.getElementById("tr-k" + (i + 1)).innerHTML = s; });
+    if (mode === "step") {
+      r = trStep(o);
+      GP.stat("tr-o1", degC(r.Tfin)); GP.stat("tr-o2", degC(r.T10ms)); GP.stat("tr-o3", degC(r.T1s));
+      GP.stat("tr-o4", isFinite(r.t63) ? (r.t63 < 1 ? (r.t63 * 1000).toFixed(0) + " <small>ms</small>" : r.t63.toFixed(2) + " <small>s</small>") : "—");
+    } else {
+      r = trPulse(o); r.o = o;
+      GP.stat("tr-o1", degC(r.Tpk)); GP.stat("tr-o2", degC(r.Tmin)); GP.stat("tr-o3", r.ripple.toFixed(1) + " <small>K</small>"); GP.stat("tr-o4", degC(r.Tavg));
+    }
+    cv && cv.redraw();
+  }
+  var perFmt = function (v) { var s = Math.pow(10, v); return s < 1 ? (s * 1000).toFixed(0) + " ms" : s.toFixed(s < 10 ? 1 : 0) + " s"; };
+  var gM = GP.seg("tr-m", upd), gHi = GP.range("tr-hi", function (v) { return v + " W"; }, upd), gLo = GP.range("tr-lo", function (v) { return v + " W"; }, upd);
+  var gPer = GP.range("tr-per", perFmt, upd), gDu = GP.range("tr-du", function (v) { return Math.round(v * 100) + " %"; }, upd);
+  upd();
+  cv = GP.canvas("#tr-cv", function (ctx, w, h) {
+    var P = GP.palette(), box = { x: 60, y: 28, w: w - 60 - 16, h: h - 28 - 48 };
+    if (mode === "step") {
+      var ys = r.data.map(function (p) { return p[1]; }), lo = Math.floor(Math.min.apply(null, ys) / 5) * 5 - 5, hi = Math.ceil(Math.max(Math.max.apply(null, ys), 96) / 5) * 5 + 5;
+      GP.chart(ctx, box, { x: [1e-3, 100], y: [lo, hi], logX: true, xLabel: "시간 (s, 로그)", yLabel: "T_{hot} (°C)",
+        series: [{ data: r.data, color: P.heat, width: 2.4, label: "T_{hot}(t)" }],
+        hlines: [{ y: 95, color: P.warn, label: "스로틀 95 °C" }, { y: r.Tfin, color: P.faint, label: "정상 상태 " + r.Tfin.toFixed(1) + " °C", align: "left" }],
+        vlines: isFinite(r.t63) ? [{ x: r.t63, color: P.accent, label: "63 %" }] : [], legend: false,
+        hover: { xFmt: function (v) { return v < 1 ? (v * 1000).toFixed(1) + " ms" : v.toFixed(2) + " s"; }, yFmt: function (v) { return v.toFixed(1) + " °C"; } } });
+    } else {
+      var d = r.data, T = 3 * r.o.period, ys2 = d.map(function (p) { return p[1]; }), lo2 = Math.floor(Math.min.apply(null, ys2) / 5) * 5 - 5, hi2 = Math.ceil(Math.max.apply(null, ys2) / 5) * 5 + 5;
+      var unit = r.o.period < 1 ? 1000 : 1, ul = unit === 1000 ? "ms" : "s";
+      GP.chart(ctx, box, { x: [0, T * unit], y: [lo2, hi2], xLabel: "시간 (" + ul + ", 마지막 3주기)", yLabel: "T_{hot} (°C)",
+        series: [{ data: d.map(function (p) { return [p[0] * unit, p[1]]; }), color: P.heat, width: 2, label: "T_{hot}(t)" }],
+        hlines: [{ y: r.Tavg, color: P.faint, label: "평균 전력 " + r.Pavg.toFixed(0) + " W → " + r.Tavg.toFixed(1) + " °C", align: "left" }], legend: false,
+        hover: { xFmt: function (v) { return v.toFixed(unit === 1000 ? 1 : 2) + " " + ul; }, yFmt: function (v) { return v.toFixed(1) + " °C"; } } });
+    }
+  }, { height: 290, hover: true });
+})();
+
+/* ---------- 5. 열 스로틀링 루프 */
+(function () {
+  var cv, s = null, sus = 1.6;
+  function upd() {
+    var o = { Tf: gF(), flow: gQ(), act: gA(), fb: fb.checked, tEnd: 40 };
+    s = thSim(o); sus = thSustained(o);
+    GP.stat("thr-f", (sus < TH.fmax - 1e-6 ? "<span class='warn-t'>" : "<span>") + sus.toFixed(2) + "</span> <small>GHz (" + (sus >= TH.fmax - 1e-6 ? "부스트 유지" : "−" + ((1 - sus / TH.fmax) * 100).toFixed(1) + " %") + ")</small>");
+    GP.stat("thr-t", degC(s.TEnd));
+    GP.stat("thr-p", s.PEnd.toFixed(0) + " <small>W</small>");
+    GP.stat("thr-t1", isFinite(s.tFirst) ? s.tFirst.toFixed(1) + " <small>s</small>" : "없음");
+    cv && cv.redraw();
+  }
+  var gF = GP.range("thr-tf", function (v) { return v + " °C"; }, upd), gQ = GP.range("thr-q", function (v) { return v.toFixed(1) + " L/min"; }, upd), gA = GP.range("thr-a", function (v) { return Math.round(v * 100) + " %"; }, upd);
+  var fb = document.getElementById("thr-fb"); fb.addEventListener("change", upd);
+  upd();
+  cv = GP.canvas("#thr-cv", function (ctx, w, h) {
+    var P = GP.palette(), hh = (h - 30) / 2, T = [], F = [];
+    for (var i = 0; i < s.t.length; i++) { T.push([s.t[i], s.T[i]]); F.push([s.t[i], s.f[i]]); }
+    var hi = Math.max(110, Math.ceil(s.Tpk / 10) * 10 + 5), lo = Math.floor(gF() / 10) * 10;
+    GP.chart(ctx, { x: 60, y: 12, w: w - 76, h: hh - 30 }, { x: [0, 40], y: [lo, hi], yLabel: "T_{hot} (°C)", xFmt: function () { return ""; },
+      series: [{ data: T, color: P.heat, width: 2, label: "T_{hot}" }], hlines: [{ y: 95, color: P.warn, label: "95 °C" }, { y: 105, color: P.bad, label: "105 °C 비상" }], legend: false });
+    GP.chart(ctx, { x: 60, y: hh + 4, w: w - 76, h: hh - 18 }, { x: [0, 40], y: [0.7, 1.7], xLabel: "부하 시작 후 시간 (s)", yLabel: "클럭 (GHz)",
+      series: [{ data: F, color: P.clock, width: 2, label: "f" }], hlines: [{ y: sus, color: P.faint, label: "지속 " + sus.toFixed(2) + " GHz", align: "left", labelPos: "below" }], legend: false });
+  }, { height: function (w) { return w < 520 ? 380 : 340; } });
+})();
+
+/* ---------- 6. 열 폭주 */
+(function () {
+  var cv, o = {}, r = null, cr = 0;
+  function upd() {
+    o = { R: gR(), Tf: gF(), Pdyn: gD(), Pl: gL(), Td: gT() };
+    r = rwSolve(o); cr = rwCritR(o);
+    GP.stat("rw-st", r.runaway ? "<span class='bad-t'>없음(폭주)</span>" : degC(r.stable));
+    GP.stat("rw-un", r.runaway ? "—" : isFinite(r.unstable) ? degC(r.unstable) : "&gt; 600 °C");
+    GP.stat("rw-g", r.runaway ? "—" : (r.gain > 0.5 ? "<span class='warn-t'>" : "<span>") + r.gain.toFixed(3) + "</span>");
+    GP.stat("rw-cr", fmt(cr, 3) + " <small>K/W</small>");
+    cv && cv.redraw();
+  }
+  var gR = GP.range("rw-r", function (v) { return v.toFixed(3) + " K/W"; }, upd), gF = GP.range("rw-tf", function (v) { return v + " °C"; }, upd);
+  var gD = GP.range("rw-pd", function (v) { return v + " W"; }, upd), gL = GP.range("rw-pl", function (v) { return v + " W"; }, upd), gT = GP.range("rw-td", function (v) { return v + " K"; }, upd);
+  upd();
+  cv = GP.canvas("#rw-cv", function (ctx, w, h) {
+    var P = GP.palette(), x0 = Math.floor(o.Tf / 10) * 10, x1 = r.runaway || !isFinite(r.unstable) ? 260 : Math.max(160, Math.ceil((r.unstable + 30) / 20) * 20);
+    var gd = [], ln = [[x0, x0], [x1, x1]];
+    for (var T = x0; T <= x1; T += (x1 - x0) / 200) gd.push([T, rwG(T, o)]);
+    var cob = [], c = r.cob; if (c.length) { cob.push([c[0][0], x0]); c.forEach(function (p) { cob.push([p[0], p[1]]); cob.push([p[1], p[1]]); }); }
+    var pts = []; if (!r.runaway) { pts.push({ x: r.stable, y: r.stable, color: P.ok, r: 5, label: "안정 " + r.stable.toFixed(1) + " °C" }); if (isFinite(r.unstable) && r.unstable < x1) pts.push({ x: r.unstable, y: r.unstable, color: P.bad, r: 5, ring: true, label: "불안정 " + r.unstable.toFixed(0) + " °C" }); }
+    GP.chart(ctx, { x: 60, y: 30, w: w - 76, h: h - 78 }, { x: [x0, x1], y: [x0, x1], xLabel: "온도 T (°C)", yLabel: "g(T) (°C)",
+      series: [{ data: ln, color: P.dim, width: 1.4, dash: [5, 4], label: "y = T" }, { data: gd, color: P.heat, width: 2.4, label: "g(T) = T_f + R·P(T)" }, { data: cob, color: P.accent, width: 1.3, label: "고정점 반복" }],
+      points: pts, legend: "above" });
+  }, { height: 320 });
+})();
+
+/* ---------- 7. 냉각 방식 비교 */
+(function () {
+  var cv, o = {}, al = [];
+  function upd() {
+    o = { Tlim: gT(), tim1: gM(), P: gP() };
+    al = COOL.map(function (m) { return coolAllow(m, o); });
+    al.forEach(function (a, i) { GP.stat("cool-o" + i, nf(a.P) + " <small>W" + (a.by === "chf" ? " (CHF)" : "") + "</small>"); });
+    cv && cv.redraw();
+  }
+  var gT = GP.range("cool-t", function (v) { return v + " °C"; }, upd), gM = GP.seg("cool-tim", upd), gP = GP.range("cool-p", function (v) { return nf(v) + " W"; }, upd);
+  upd();
+  cv = GP.canvas("#cool-cv", function (ctx, w, h) {
+    var P = GP.palette(), cols = [P.dim, P.data, P.accent, P.ok], ser = [], pts = [];
+    COOL.forEach(function (m, i) {
+      var a = al[i], end = Math.min(2000, m.chf / GX.frSink), d = [[0, m.Tin], [end, a.Thot(end)]];
+      ser.push({ data: d, color: cols[i], width: 2.2, label: m.name });
+      pts.push({ x: a.P, y: a.Thot(a.P), color: cols[i], r: 4.5 });
+      if (end < 2000) ser.push({ data: [[end, a.Thot(end)], [end, 140]], color: cols[i], width: 1.4, dash: [3, 3], legend: false, hover: false });
+    });
+    GP.chart(ctx, { x: 60, y: 46, w: w - 76, h: h - 94 }, { x: [0, 2000], y: [30, 140], xLabel: "모듈 전력 (W)", yLabel: "핫스팟 T_{hot} (°C)", series: ser, points: pts,
+      hlines: [{ y: o.Tlim, color: P.warn, label: "한계 " + o.Tlim + " °C" }], vlines: [{ x: o.P, color: P.faint, label: nf(o.P) + " W" }], legend: { pos: "above", cols: 2 },
+      hover: { xFmt: function (v) { return nf(v) + " W"; }, yFmt: function (v) { return v.toFixed(1) + " °C"; } } });
+  }, { height: function (w) { return w < 520 ? 360 : 320; }, hover: true });
+})();
+
+/* ---------- 8. 랙·데이터센터 */
+(function () {
+  var cv, r = null, o = {};
+  function upd() {
+    o = { n: gN(), Pgpu: gP(), liq: gL(), dT: gD(), Ts: gS() };
+    r = rackModel(o);
+    GP.stat("rack-it", (r.IT / 1000).toFixed(1) + " <small>kW</small>");
+    GP.stat("rack-q", r.Lpm.toFixed(0) + " <small>L/min</small>");
+    GP.stat("rack-pue", r.pue.toFixed(2));
+    GP.stat("rack-g", nf(r.gpus100));
+    cv && cv.redraw();
+  }
+  var gN = GP.range("rack-n", function (v) { return v + "개"; }, upd), gP = GP.range("rack-p", function (v) { return nf(v) + " W"; }, upd), gL = GP.range("rack-l", function (v) { return Math.round(v * 100) + " %"; }, upd);
+  var gD = GP.range("rack-dt", function (v) { return v + " K"; }, upd), gS = GP.range("rack-ts", function (v) { return v + " °C"; }, upd);
+  upd();
+  cv = GP.canvas("#rack-cv", function (ctx, w, h) {
+    var P = GP.palette(), tot = r.IT + r.cl + r.ca + r.dist, x0 = 16, x1 = w - 16, bw = x1 - x0, y = 36, bh = 34;
+    GP.text(ctx, "랙 하나가 쓰는 시설 전력 " + (tot / 1000).toFixed(1) + " kW (PUE " + r.pue.toFixed(2) + ")", x0, 16, { size: 12.5, weight: 700, color: P.text, baseline: "middle" });
+    var parts = [["IT(GPU·CPU·스위치)", r.IT, P.heat], ["액체 냉각(펌프·건식 냉각기·냉동기)", r.cl, P.data], ["공기 냉각(송풍·냉동)", r.ca, P.accent2], ["배전 손실", r.dist, P.volt]], x = x0;
+    parts.forEach(function (p) { var ww = bw * p[1] / tot; ctx.fillStyle = GP.alpha(p[2], 0.8); ctx.fillRect(x, y, Math.max(0, ww), bh); x += ww; });
+    ctx.strokeStyle = P.border; ctx.strokeRect(x0 + 0.5, y + 0.5, bw, bh);
+    var ly = y + bh + 20, col2 = w > 520;
+    parts.forEach(function (p, i) {
+      var lx = col2 ? x0 + (i % 2) * bw / 2 : x0, yy = col2 ? ly + Math.floor(i / 2) * 20 : ly + i * 20;
+      ctx.fillStyle = p[2]; ctx.fillRect(lx, yy - 6, 12, 12);
+      GP.text(ctx, p[0] + " " + (p[1] / 1000).toFixed(1) + " kW", lx + 18, yy, { size: 12, color: P.text, baseline: "middle" });
+    });
+    var ty = col2 ? ly + 56 : ly + 92;
+    var lines = [
+      "액체 열 " + (r.Pl / 1000).toFixed(1) + " kW → " + r.Lpm.toFixed(0) + " L/min (GPU당 " + r.perGpuLpm.toFixed(2) + " L/min)",
+      "공기 열 " + (r.Pa / 1000).toFixed(1) + " kW → 공기 ΔT 15 K에서 약 " + nf(r.cfm) + " CFM",
+      "냉동기 가동 비율 " + Math.round(r.chill * 100) + " % (공급 " + o.Ts + " °C)",
+    ];
+    if (o.liq < 0.5 && r.Pa > 40000) lines.push("공기로 빼는 열 " + (r.Pa / 1000).toFixed(0) + " kW: 공랭 랙 한계(약 20–40 kW)를 넘음");
+    lines.forEach(function (s, i) { GP.text(ctx, s, x0, ty + i * 20, { size: 12, color: i === 3 ? P.bad : P.dim, baseline: "middle" }); });
+  }, { height: function (w) { return w < 520 ? 270 : 210; } });
+})();
+</script>
+</body>
+</html>

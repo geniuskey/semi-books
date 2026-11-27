@@ -1,0 +1,1172 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>온칩 네트워크와 L2 · GPUBook</title>
+<meta name="description" content="SM 144개와 L2 슬라이스 128개를 잇는 크로스바와 메시, 경합과 큐 지연, 주소 해싱, L2 파티션과 원거리 접근, 구리 배선 RC와 리피터, 클럭 분배와 클럭 도메인, 다이 평면 배치와 데이터 이동 전력을 계산 모델로 다룬다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+.nc-tbl td.num, .nc-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.nc-tbl td.up { color: var(--bad); font-weight: 600; } .nc-tbl td.dn { color: var(--ok); font-weight: 600; }
+.sim-view canvas { display: block; width: 100%; }
+.nc-legend { padding: 8px 16px 0; }
+/* 폭 560 이상인 그림은 좁은 화면에서 밀어 보므로 글자를 12px 이상으로 */
+figure.diagram svg .t-xs.t-xs { font-size: 12px; }
+figure.diagram svg .t-sm.t-sm { font-size: 12.5px; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="noc">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 09</div>
+    <h1>온칩 네트워크와 L2</h1>
+    <p class="lead">GX-1에서 활성 SM 144개가 L2 슬라이스 128개에 요청을 보낸다. 어느 SM이든 어느 슬라이스에나 닿아야 하고, 이 경로는 클럭마다 합계 약 13 TB/s를 실어 날라야 한다. 이 장에서는 이 연결망을 계산한다. 어떤 토폴로지를 쓰는가, 요청이 한 슬라이스로 몰리면 어떻게 되는가, 주소를 슬라이스에 어떻게 흩뿌리는가, 30 mm를 가로지르는 구리선은 몇 사이클이 걸리는가, 클럭은 어떻게 다이 전체에 같은 순간에 도착하는가, 그리고 블록을 어디에 놓아야 데이터 이동 전력이 줄어드는가.</p>
+    <ul class="objectives">
+      <li>버스·크로스바·링·2D 메시의 면적, 평균 홉, 이분 대역폭을 포트 수 N의 함수로 비교한다.</li>
+      <li>크로스바 경합을 사이클 단위로 시뮬레이션해 HOL 차단과 핫스팟이 처리량과 꼬리 지연을 어떻게 바꾸는지 본다.</li>
+      <li>선형 비트 선택과 XOR 해시가 스트라이드 접근에서 슬라이스 부하를 어떻게 나누는지 계산한다.</li>
+      <li>L2 파티션 사이 연결(4 TB/s)이 원거리 접근 비율에 따라 L2 대역폭 상한이 되는 과정을 계산한다.</li>
+      <li>구리 저항률의 크기 효과, 분산 RC 지연 \(0.38RCL^2\), 리피터 최적 간격을 써서 칩을 가로지르는 사이클 수를 구한다.</li>
+      <li>H-트리와 클럭 메시의 스큐·전력, 동기화기 MTBF와 비동기 FIFO 지연, 다이 평면 배치에 따른 NoC 전력을 추정한다.</li>
+    </ul>
+  </header>
+
+  <section id="problem">
+    <h2>SM 144개와 슬라이스 128개를 잇는 문제</h2>
+    <p>L2는 모든 SM이 함께 쓰는 마지막 온칩 캐시이고, 한 덩어리 SRAM으로 만들 수 없다. 64 MB를 배열 하나로 만들면 비트선과 워드선이 수 mm가 되어 접근 지연과 에너지가 커진다. 포트도 하나뿐이라 클럭당 64 B밖에 내지 못한다. 그래서 L2는 512 KB짜리 <span class="term">슬라이스</span><span class="en">(slice, bank)</span> 128개로 나뉜다. 슬라이스마다 태그·데이터 배열과 클럭당 64 B 포트가 있으므로 전체 대역폭은 슬라이스 수에 비례한다.</p>
+    <div class="formula">$$BW_{L2} = N_{slice} \times 64\,\text{B} \times f_{clk} = 128 \times 64\,\text{B} \times 1.6\,\text{GHz} \approx 13.1\,\text{TB/s}$$<div class="where">슬라이스가 모두 매 클럭 바쁠 때의 상한이다. 요청이 슬라이스에 고르게 퍼지고 네트워크가 그만큼을 실어 나를 때만 이 값에 다가간다.</div></div>
+    <p>대역폭을 나누어 얻은 대가로, 이제 SM과 슬라이스 사이에 <span class="term">온칩 네트워크</span><span class="en">(network-on-chip, NoC)</span>가 필요하다. 요구 조건은 세 가지다. ① 어느 SM이든 어느 슬라이스에나 닿아야 한다(주소가 슬라이스를 정하므로). ② 합계 13 TB/s를 실어 날라야 한다. ③ 다이 위 실제 거리는 최대 약 30 mm이고, 구리선은 거리에 비례해 에너지를, 거리의 제곱에 비례해 지연을 쓴다. 그림 9-1은 GX-1의 평면 배치다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 440" role="img" aria-label="GX-1 다이 평면 배치. 30 × 26 mm 다이의 위아래 긴 변에 HBM PHY와 HBM 스택이 3개씩 있고, GPC 8개가 위아래로 4개씩 놓이며, 가운데 띠에 L2 파티션 두 개와 크로스바 허브가 있다">
+        <g>
+          <rect x="52" y="10" width="86" height="64" rx="4" class="k-dram"/><rect x="157" y="10" width="86" height="64" rx="4" class="k-dram"/><rect x="262" y="10" width="86" height="64" rx="4" class="k-dram"/>
+          <rect x="52" y="366" width="86" height="64" rx="4" class="k-dram"/><rect x="157" y="366" width="86" height="64" rx="4" class="k-dram"/><rect x="262" y="366" width="86" height="64" rx="4" class="k-dram"/>
+          <g class="t t-sm t-c"><text x="95" y="46">HBM 0</text><text x="200" y="46">HBM 1</text><text x="305" y="46">HBM 2</text><text x="95" y="402">HBM 3</text><text x="200" y="402">HBM 4</text><text x="305" y="402">HBM 5</text></g>
+        </g>
+        <rect x="50" y="90" width="300" height="260" rx="3" class="m-si"/>
+        <rect x="56" y="92" width="288" height="18" class="k-dram"/><rect x="56" y="330" width="288" height="18" class="k-dram"/>
+        <g class="t t-xs t-c"><text x="200" y="105">HBM PHY · 메모리 컨트롤러</text><text x="200" y="343">HBM PHY · 메모리 컨트롤러</text></g>
+        <rect x="51" y="114" width="7" height="212" class="k-link"/><rect x="342" y="114" width="7" height="212" class="k-link"/>
+        <g>
+          <rect x="62" y="114" width="67" height="88" rx="3" class="k-compute"/><rect x="133" y="114" width="67" height="88" rx="3" class="k-compute"/><rect x="204" y="114" width="67" height="88" rx="3" class="k-compute"/><rect x="275" y="114" width="65" height="88" rx="3" class="k-compute"/>
+          <rect x="62" y="238" width="67" height="88" rx="3" class="k-compute"/><rect x="133" y="238" width="67" height="88" rx="3" class="k-compute"/><rect x="204" y="238" width="67" height="88" rx="3" class="k-compute"/><rect x="275" y="238" width="65" height="88" rx="3" class="k-compute"/>
+          <rect x="62" y="114" width="278" height="88" class="p-grid" style="opacity:.5"/><rect x="62" y="238" width="278" height="88" class="p-grid" style="opacity:.5"/>
+          <g class="t t-sm t-c t-b"><text x="95" y="162">GPC 0</text><text x="166" y="162">GPC 1</text><text x="237" y="162">GPC 2</text><text x="307" y="162">GPC 3</text><text x="95" y="286">GPC 4</text><text x="166" y="286">GPC 5</text><text x="237" y="286">GPC 6</text><text x="307" y="286">GPC 7</text></g>
+          <g class="t-dim t-xs t-c"><text x="95" y="178">SM 20</text><text x="166" y="178">SM 20</text><text x="237" y="178">SM 20</text><text x="307" y="178">SM 20</text><text x="95" y="302">SM 20</text><text x="166" y="302">SM 20</text><text x="237" y="302">SM 20</text><text x="307" y="302">SM 20</text></g>
+        </g>
+        <rect x="62" y="206" width="124" height="28" rx="3" class="k-sram"/><rect x="216" y="206" width="124" height="28" rx="3" class="k-sram"/>
+        <rect x="188" y="204" width="26" height="32" rx="3" class="kf-link"/>
+        <g class="t t-xs t-c"><text x="124" y="224">L2 P0 · 32 MB</text><text x="278" y="224">L2 P1 · 32 MB</text></g>
+        <path d="M200 202V188M200 238V252" class="arr-a" style="stroke:var(--link);stroke-width:2"/>
+        <path d="M50 362H350" class="dimline"/><text x="200" y="360" class="t-dim t-xs t-c" style="paint-order:stroke;stroke:var(--bg);stroke-width:3">30 mm</text>
+        <path d="M30 90V350" class="dimline"/><text transform="translate(26 220) rotate(-90)" class="t-dim t-xs t-c">26 mm</text>
+        <g class="t t-sm">
+          <path d="M214 220H400" class="lead"/><text x="405" y="216" class="kt-link">크로스바 허브 · 파티션 간 연결 약 4 TB/s</text><text x="405" y="233" class="t-dim t-xs">GPC 단위로 모아(집선) 슬라이스로 보낸다</text>
+          <path d="M300 206L400 160" class="lead"/><text x="405" y="156" class="kt-sram">L2 64 MB = 슬라이스 128개 × 512 KB</text><text x="405" y="173" class="t-dim t-xs">슬라이스당 64 B/클럭 → 합계 약 13.1 TB/s</text>
+          <path d="M320 140L400 100" class="lead"/><text x="405" y="96" class="kt-compute">GPC 8 × SM 20 = SM 160 (활성 144)</text><text x="405" y="113" class="t-dim t-xs">SM 하나 약 3.2 mm², 다이의 약 66 %</text>
+          <path d="M320 340L400 300" class="lead"/><text x="405" y="296" class="kt-dram">HBM PHY: 긴 변 두 쪽, 스택 3개씩</text><text x="405" y="313" class="t-dim t-xs">L2 미스는 여기까지 다시 수 mm~십수 mm를 간다</text>
+          <path d="M345 270L400 362" class="lead"/><text x="405" y="366" class="kt-link">짧은 변: 칩간 링크·PCIe SerDes</text><text x="405" y="383" class="t-dim t-xs">가장 먼 SM↔슬라이스: 맨해튼 약 40 mm</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 9-1.</b> GX-1 로직 다이(가상)의 평면 배치. 위아래 긴 변에 HBM PHY가 있고, SM 배열 사이 가운데 띠에 L2 두 파티션과 크로스바 허브를 둔다. 실제 칩마다 배치는 다르지만, 연산 블록과 캐시와 메모리 PHY의 상대 위치가 배선 길이를 정한다는 점은 같다(이 장 마지막 절에서 바꿔 본다).</figcaption>
+    </figure>
+    <div class="callout fab"><strong>크로스바가 실어야 할 양</strong>요청은 SM이 내고 응답 데이터는 슬라이스가 낸다. 슬라이스 128개가 모두 클럭마다 64 B를 내면 응답 방향만 13.1 TB/s다. SM 하나로 보면 13.1 TB/s ÷ 144 ≈ 91 GB/s, 클럭당 약 57 B다. 공유 메모리의 SM당 128 B/클럭보다 작지만 HBM 몫(7.37 TB/s ÷ 144 ≈ 51 GB/s)보다 크다. 이 예산이 L2를 "HBM보다 약 1.8배 넓은 중간층"으로 만든다. 7장의 L2 기준 리지 포인트 약 72 FLOP/B가 여기서 나온다(943.7 TFLOPS ÷ 13.1 TB/s).</div>
+    <p><b>왜 이렇게 설계하는가.</b> 슬라이스를 늘리면 대역폭은 선형으로 늘지만 네트워크의 포트 수도 함께 는다. L2를 잘게 나누는 선택은 SRAM 면적 문제가 아니라 대역폭 문제이고, 그 대가가 이 장 나머지에서 다룰 네트워크의 면적·지연·전력이다.</p>
+  </section>
+
+  <section id="topology">
+    <h2>버스·크로스바·링·메시</h2>
+    <p>N개 노드를 잇는 대표 방식은 네 가지다(그림 9-2). <span class="term">버스</span><span class="en">(bus)</span>는 선 하나를 모두가 나눠 쓴다. 싸지만 한 번에 한 쌍만 통신한다. <span class="term">크로스바</span><span class="en">(crossbar)</span>는 입력 N개와 출력 N개의 모든 쌍에 스위치(교차점)를 둔다. 출력이 겹치지 않는 한 N쌍이 동시에 통신하지만 교차점이 \(N^2\)개다. <span class="term">링</span><span class="en">(ring)</span>은 노드마다 작은 라우터를 두고 이웃끼리만 잇는다. <span class="term">2D 메시</span><span class="en">(2D mesh)</span>는 \(k \times k\) 격자로 잇는다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="네 가지 토폴로지. 버스는 노드 8개가 선 하나를 공유, 크로스바는 4 × 4 교차점, 링은 노드 8개가 원형으로 연결, 2D 메시는 4 × 4 격자">
+        <g class="t t-b t-c"><text x="107" y="24">버스</text><text x="322" y="24">크로스바</text><text x="537" y="24">링</text><text x="752" y="24">2D 메시</text></g>
+        <path d="M18 130H196" class="ks-link" style="stroke-width:4"/>
+        <g class="s-line"><path d="M30 92V130M54 92V130M78 92V130M102 92V130M126 92V130M150 92V130M174 92V130M186 168V130"/></g>
+        <g class="k-compute"><circle cx="30" cy="84" r="9"/><circle cx="54" cy="84" r="9"/><circle cx="78" cy="84" r="9"/><circle cx="102" cy="84" r="9"/><circle cx="126" cy="84" r="9"/><circle cx="150" cy="84" r="9"/><circle cx="174" cy="84" r="9"/></g>
+        <rect x="174" y="168" width="24" height="18" rx="3" class="k-sram"/><text x="186" y="181" class="t t-xs t-c">L2</text>
+        <g class="s-line">
+          <path d="M250 70H400M250 100H400M250 130H400M250 160H400"/><path d="M280 50V180M310 50V180M340 50V180M370 50V180"/>
+        </g>
+        <g class="kf-link"><circle cx="280" cy="70" r="4"/><circle cx="310" cy="70" r="4"/><circle cx="340" cy="70" r="4"/><circle cx="370" cy="70" r="4"/><circle cx="280" cy="100" r="4"/><circle cx="310" cy="100" r="4"/><circle cx="340" cy="100" r="4"/><circle cx="370" cy="100" r="4"/><circle cx="280" cy="130" r="4"/><circle cx="310" cy="130" r="4"/><circle cx="340" cy="130" r="4"/><circle cx="370" cy="130" r="4"/><circle cx="280" cy="160" r="4"/><circle cx="310" cy="160" r="4"/><circle cx="340" cy="160" r="4"/><circle cx="370" cy="160" r="4"/></g>
+        <g class="k-compute"><rect x="236" y="62" width="14" height="16" rx="2"/><rect x="236" y="92" width="14" height="16" rx="2"/><rect x="236" y="122" width="14" height="16" rx="2"/><rect x="236" y="152" width="14" height="16" rx="2"/></g>
+        <g class="k-sram"><rect x="272" y="182" width="16" height="12" rx="2"/><rect x="302" y="182" width="16" height="12" rx="2"/><rect x="332" y="182" width="16" height="12" rx="2"/><rect x="362" y="182" width="16" height="12" rx="2"/></g>
+        <text x="222" y="116" class="t-dim t-xs t-e" transform="rotate(-90 222 116)">SM</text>
+        <circle cx="537" cy="116" r="62" class="ks-link" style="stroke-width:3"/>
+        <g class="k-compute"><circle cx="537" cy="54" r="10"/><circle cx="581" cy="72" r="10"/><circle cx="599" cy="116" r="10"/><circle cx="581" cy="160" r="10"/><circle cx="537" cy="178" r="10"/><circle cx="493" cy="160" r="10"/><circle cx="475" cy="116" r="10"/><circle cx="493" cy="72" r="10"/></g>
+        <path d="M537 54L581 160" class="arr-a dash" style="stroke-width:1.4"/>
+        <text x="537" y="120" class="t-dim t-xs t-c">최대 N/2 홉</text>
+        <g class="ks-link" style="stroke-width:2.4"><path d="M697 61H807M697 98H807M697 135H807M697 172H807M697 61V172M734 61V172M771 61V172M807 61V172"/></g>
+        <g class="k-compute"><rect x="689" y="53" width="16" height="16" rx="3"/><rect x="726" y="53" width="16" height="16" rx="3"/><rect x="763" y="53" width="16" height="16" rx="3"/><rect x="799" y="53" width="16" height="16" rx="3"/><rect x="689" y="90" width="16" height="16" rx="3"/><rect x="726" y="90" width="16" height="16" rx="3"/><rect x="763" y="90" width="16" height="16" rx="3"/><rect x="799" y="90" width="16" height="16" rx="3"/><rect x="689" y="127" width="16" height="16" rx="3"/><rect x="726" y="127" width="16" height="16" rx="3"/><rect x="763" y="127" width="16" height="16" rx="3"/><rect x="799" y="127" width="16" height="16" rx="3"/><rect x="689" y="164" width="16" height="16" rx="3"/><rect x="726" y="164" width="16" height="16" rx="3"/><rect x="763" y="164" width="16" height="16" rx="3"/><rect x="799" y="164" width="16" height="16" rx="3"/></g>
+        <path d="M752 48V188" style="stroke:var(--warn);stroke-width:1.6;stroke-dasharray:5 4"/><text x="752" y="201" class="t-warn t-xs t-c">이분선 k개 링크</text>
+        <g class="t t-sm t-c"><text x="107" y="216">면적 ∝ N, 동시 1쌍</text><text x="322" y="216">교차점 N², 홉 1</text><text x="537" y="216">라우터 N개, 평균 홉 ≈ N/4</text><text x="752" y="216">라우터 N개, 평균 홉 ≈ 2k/3</text></g>
+        <g class="t-dim t-xs t-c"><text x="107" y="236">이분 대역폭 1</text><text x="322" y="236">이분 대역폭 N/2</text><text x="537" y="236">이분 대역폭 2</text><text x="752" y="236">이분 대역폭 k = √N</text></g>
+      </svg>
+      <figcaption><b>그림 9-2.</b> 네 가지 토폴로지. 이분 대역폭은 노드를 절반씩 나누는 선을 한 방향으로 건너는 채널 수다. 균일 트래픽에서는 각 노드가 보내는 양의 절반이 이분선을 건넌다.</figcaption>
+    </figure>
+    <p>비교에는 세 가지 양을 쓴다. 면적은 교차점(스위치 한 칸) 수로 센다. 링 라우터는 3 × 3(좌·우·로컬), 메시 라우터는 5 × 5(동·서·남·북·로컬) 스위치다. 평균 홉은 균일 무작위 목적지까지의 링크 수, <span class="term">이분 대역폭</span><span class="en">(bisection bandwidth)</span> \(B_{bis}\)는 위에서 정의했다. 균일 트래픽에서 노드 N개가 각각 주입률 \(\lambda\)(사이클당 패킷)로 보내면, 한 방향으로 이분선을 건너는 양은 \(N\lambda/4\)이다.</p>
+    <div class="formula">$$A_{xbar} \propto N^2,\quad A_{ring} \approx 9N,\quad A_{mesh} \approx 25N,\qquad \bar h_{ring} \approx \frac{N}{4},\quad \bar h_{mesh} \approx \frac{2k}{3},\qquad \lambda_{max} = \min\!\left(1, \frac{4B_{bis}}{N}\right)$$<div class="where">\(k=\sqrt N\). 버스는 전체가 사이클당 1개이므로 \(\lambda_{max}=1/N\)이다. 메시의 \(\lambda_{max} = 4/k\)는 XY 라우팅에서 가운데 링크가 포화되는 값과 같다.</div></div>
+    <div class="sim" id="sim-topo">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>토폴로지 비교: 면적·홉·이분 대역폭</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="tp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>포트 수 N <output id="tp-n-out"></output></span><input type="range" id="tp-n" min="4" max="256" step="4" value="144"></label>
+          <div class="ctrl"><span>강조할 토폴로지</span><div class="seg" id="tp-k"><button data-value="bus">버스</button><button data-value="xbar" class="on">크로스바</button><button data-value="ring">링</button><button data-value="mesh">메시</button></div></div>
+          <div class="step-desc" id="tp-d"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">면적(교차점 등가)</span><span class="v" id="tp-o-a">—</span></div>
+        <div class="stat"><span class="k">평균 홉</span><span class="v" id="tp-o-h">—</span></div>
+        <div class="stat"><span class="k">이분 대역폭(채널)</span><span class="v" id="tp-o-b">—</span></div>
+        <div class="stat"><span class="k">노드당 최대 주입률 λ</span><span class="v" id="tp-o-l">—</span></div>
+        <div class="stat"><span class="k">처리량 / 면적</span><span class="v" id="tp-o-e">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① N = 16에서 크로스바(256)가 메시(400)보다 작다. 둘이 같아지는 N = 25를 찾아보자. ② N = 144에서 크로스바 면적은 20,736으로 메시(3,600)의 약 5.8배지만, λ는 1 대 0.33이다. 메시의 평균 홉은 8이다. ③ 링으로 바꾸면 평균 홉 36, λ ≈ 0.056이다. 노드가 많은 GPU에 단일 링을 쓰지 않는 이유다.</div>
+    </div>
+    <p>GPU는 이 셋 사이에서 <b>집선</b><span class="en">(concentration)</span>과 계층을 쓴다. SM 20개를 GPC 안에서 먼저 모으면 크로스바의 SM 쪽 포트는 GPC 수만큼(GX-1에서 8, 대역폭을 맞추려 GPC당 여러 포트) 줄어든다. 슬라이스 쪽도 몇 개씩 묶는다. 포트 수가 수십이면 크로스바의 \(N^2\)이 감당할 만하고, 홉이 1이라 지연이 짧고 균일하다. 메시는 포트가 수백 이상일 때, 또는 칩렛처럼 거리가 길어 지역성을 살려야 할 때 유리하다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> L2는 모든 SM이 균일하게 쓰는 공유 자원이라 트래픽이 균일 무작위에 가깝다. 이런 트래픽에는 이분 대역폭이 큰 크로스바가 맞다. 크로스바의 \(N^2\) 면적은 집선으로 N을 줄여 억누르고, 그 대가로 GPC 안에 한 단계 중재가 더 생긴다.</p>
+  </section>
+
+  <section id="contention">
+    <h2>경합과 큐 지연</h2>
+    <p>크로스바는 출력이 겹치지 않으면 막힘이 없지만, 같은 슬라이스로 두 요청이 오면 하나만 지나간다. 이 출력 충돌을 정하는 회로가 <span class="term">중재기</span><span class="en">(arbiter)</span>다. 진 요청은 큐에서 기다린다. 큐를 어디에 두느냐가 처리량을 바꾼다. 입력마다 FIFO 하나를 두면 맨 앞 요청이 막힐 때 뒤의 요청은 목적지가 비어 있어도 못 간다. 이것이 <span class="term">HOL 차단</span><span class="en">(head-of-line blocking)</span>이다(그림 9-3). 입력마다 목적지별 큐를 따로 두는 <span class="term">가상 출력 큐</span><span class="en">(virtual output queue, VOQ)</span>는 이 문제를 없애고 출력 큐와 같은 처리량을 낸다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 270" role="img" aria-label="입력 FIFO 크로스바의 HOL 차단. 입력 0과 입력 1의 맨 앞 요청이 모두 슬라이스 2로 가서 입력 1이 지고, 그 뒤의 슬라이스 3 요청은 슬라이스 3이 비어 있는데도 기다린다">
+        <g class="t t-sm t-e"><text x="40" y="58">입력 0</text><text x="40" y="108">입력 1</text><text x="40" y="158">입력 2</text><text x="40" y="208">입력 3</text></g>
+        <g class="k-sram">
+          <rect x="50" y="40" width="40" height="28" rx="3"/><rect x="92" y="40" width="40" height="28" rx="3"/><rect x="134" y="40" width="40" height="28" rx="3"/>
+          <rect x="50" y="90" width="40" height="28" rx="3"/><rect x="92" y="90" width="40" height="28" rx="3"/><rect x="134" y="90" width="40" height="28" rx="3"/>
+          <rect x="50" y="140" width="40" height="28" rx="3"/><rect x="92" y="140" width="40" height="28" rx="3"/>
+          <rect x="50" y="190" width="40" height="28" rx="3"/>
+        </g>
+        <rect x="134" y="90" width="40" height="28" rx="3" style="fill:none;stroke:var(--bad);stroke-width:2.4"/>
+        <rect x="92" y="90" width="40" height="28" rx="3" style="fill:color-mix(in srgb,var(--warn) 25%,transparent);stroke:var(--warn);stroke-width:2"/>
+        <g class="t t-sm t-c t-mono"><text x="70" y="59">S0</text><text x="112" y="59">S1</text><text x="154" y="59">S2</text><text x="70" y="109">S1</text><text x="112" y="109">S3</text><text x="154" y="109">S2</text><text x="70" y="159">S0</text><text x="112" y="159">S0</text><text x="70" y="209">S1</text></g>
+        <text x="112" y="80" class="t-dim t-xs t-c">← 뒤 · 앞 →</text>
+        <rect x="250" y="30" width="200" height="200" rx="8" class="k-link"/>
+        <g class="s-faint"><path d="M250 54H450M250 104H450M250 154H450M250 204H450M290 30V230M340 30V230M390 30V230M430 30V230"/></g>
+        <path d="M174 54H250" class="arr-ok"/><path d="M250 54H390V230" style="fill:none;stroke:var(--ok);stroke-width:3"/>
+        <path d="M174 104H232" class="arr-bad dash"/><text x="204" y="96" class="t-bad t-xs t-c">짐</text>
+        <path d="M174 154H250" class="arr-ok"/><path d="M250 154H290V230" style="fill:none;stroke:var(--ok);stroke-width:3"/>
+        <path d="M90 204H250" class="arr-ok"/><path d="M250 204H340V230" style="fill:none;stroke:var(--ok);stroke-width:3"/>
+        <text x="350" y="20" class="t t-sm t-c kt-link">크로스바 + 중재기</text>
+        <g class="k-sram"><rect x="272" y="236" width="36" height="24" rx="3"/><rect x="322" y="236" width="36" height="24" rx="3"/><rect x="372" y="236" width="36" height="24" rx="3"/><rect x="412" y="236" width="36" height="24" rx="3" style="stroke-dasharray:4 3"/></g>
+        <g class="t t-sm t-c t-mono"><text x="290" y="253">S0</text><text x="340" y="253">S1</text><text x="390" y="253">S2</text><text x="430" y="253">S3</text></g>
+        <g class="t t-sm">
+          <text x="476" y="44" class="t-b">이번 사이클</text>
+          <text x="476" y="66">• 입력 0·1의 맨 앞이 모두 S2</text>
+          <text x="488" y="86">→ 중재기가 입력 0을 고른다</text>
+          <text x="476" y="108">• 입력 1의 다음 요청(S3)은</text>
+          <text x="488" y="128"><tspan class="t-warn t-b">S3가 비어 있어도</tspan> 기다린다</text>
+          <text x="488" y="148">= HOL 차단</text>
+          <text x="476" y="170">• S3는 이번 사이클에 논다(점선)</text>
+          <text x="476" y="200" class="t-b">큰 N·균일 트래픽의 포화 처리량</text>
+          <text x="476" y="222" class="t-mono">2 − √2 ≈ 0.586</text>
+          <text x="476" y="244" class="t-dim t-xs">VOQ·출력 큐면 1에 다가간다</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 9-3.</b> 입력 FIFO 크로스바에서 일어나는 HOL 차단. 큐 안의 글자는 각 요청의 목적지 슬라이스다. 입력 FIFO 크로스바의 포화 처리량 0.586은 큰 N에서 균일 트래픽일 때 알려진 결과다(Karol 외, 1987).</figcaption>
+    </figure>
+    <p>큐 지연의 감은 단순 큐 이론으로 잡는다. 출력 하나가 사이클당 1개를 처리하고 도착이 무작위(이항·포아송)이면 이용률 \(\rho\)에서 평균 대기는 M/D/1 큐로 근사된다.</p>
+    <div class="formula">$$W_q \approx \frac{\rho}{2(1-\rho)}\ \text{사이클},\qquad \rho_{hot} = N\lambda\left(h + \frac{1-h}{N}\right) \lt 1 \;\Rightarrow\; \lambda \lt \frac{1}{Nh + 1 - h}$$<div class="where">\(h\): 요청 중 한 슬라이스(핫스팟)로 몰리는 비율. N = 32, h = 0.1이면 주입률이 약 0.24만 넘어도 그 슬라이스가 포화된다. 나머지 31개 슬라이스가 한가해도 그렇다.</div></div>
+    <div class="sim" id="sim-xbar">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>크로스바 경합: 사이클 단위 시뮬레이션</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="xb-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>포트 수 N (입력 = 출력)</span><div class="seg" id="xb-n"><button data-value="8">8</button><button data-value="16">16</button><button data-value="32" class="on">32</button><button data-value="64">64</button></div></div>
+          <label class="ctrl"><span>주입률 p (입력당 사이클당) <output id="xb-p-out"></output></span><input type="range" id="xb-p" min="0.05" max="1" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span>핫스팟 비율 h <output id="xb-h-out"></output></span><input type="range" id="xb-h" min="0" max="0.3" step="0.01" value="0"></label>
+          <div class="ctrl"><span>큐 구조</span><div class="seg" id="xb-m"><button data-value="oq" class="on">VOQ (출력 큐)</button><button data-value="iq">입력 FIFO</button></div></div>
+          <button class="btn" id="xb-run">다른 난수로 다시</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">처리량(출력당 사이클당)</span><span class="v" id="xb-o-t">—</span></div>
+        <div class="stat"><span class="k">평균 지연</span><span class="v" id="xb-o-m">—</span></div>
+        <div class="stat"><span class="k">p99 지연</span><span class="v" id="xb-o-q">—</span></div>
+        <div class="stat"><span class="k">큐 가득 참(거절)</span><span class="v" id="xb-o-b">—</span></div>
+        <div class="stat"><span class="k">핫스팟 포화 주입률</span><span class="v" id="xb-o-s">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① N = 32, VOQ에서 p = 0.9로 올려도 처리량은 0.90이고 평균 지연은 약 5사이클이다. ② 같은 조건에서 입력 FIFO로 바꾸면 처리량이 약 0.59에서 멈추고 큐가 가득 차 평균 지연이 100사이클을 넘는다. ③ VOQ로 돌아가 h = 0.1로 두면 p = 0.2까지는 평균 지연이 1~2사이클이지만 p = 0.3에서는 슬라이스 0 큐가 64개로 가득 차 p99가 64사이클이 된다. 오른쪽 곡선의 세로선이 포화점 0.244다.</div>
+    </div>
+    <p>이 모델에서 큐 하나의 깊이는 64다. 큐가 차면 요청이 들어가지 못하고 SM 쪽으로 <b>역압</b><span class="en">(backpressure)</span>이 걸린다. 실제 칩에서는 크레딧 기반 흐름 제어가 같은 일을 한다. 핫스팟은 대개 소프트웨어가 만든다. 모든 스레드 블록이 같은 카운터를 원자 연산으로 갱신하거나, 같은 작은 텐서를 동시에 읽는 경우다. 하드웨어는 다음 절의 주소 해싱으로 "우연한" 핫스팟을 없애고, 남는 진짜 핫스팟은 L2 원자 연산 유닛과 멀티캐스트로 줄인다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> 큐 구조는 면적 대 처리량의 선택이다. 입력 FIFO는 싸지만 처리량의 약 41 %를 잃는다. VOQ는 입력마다 목적지 수만큼 큐 포인터와 더 복잡한 중재기가 필요하다. 슬라이스 대역폭 13 TB/s를 실제로 쓰려면 이 면적을 치러야 한다.</p>
+  </section>
+
+  <section id="hashing">
+    <h2>주소 해싱으로 슬라이스에 흩뿌리기</h2>
+    <p>주소가 슬라이스를 정한다. 가장 단순한 방법은 라인 주소의 하위 비트를 그대로 쓰는 <b>선형 비트 선택</b>이다. 128 B 라인, 슬라이스 128개라면 주소 비트 [13:7]이 슬라이스 번호다. 연속 주소는 슬라이스를 하나씩 돌며 완벽하게 퍼진다. 문제는 2의 거듭제곱 <span class="term">스트라이드</span><span class="en">(stride)</span>다. 행렬의 한 열을 읽으면 주소 간격이 행 길이(예: 4,096개 × 4 B = 16 KB)가 된다. 16 KB = \(2^{14}\)이면 비트 [13:7]이 모두 0으로 고정되어 모든 요청이 슬라이스 0으로 간다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 250" role="img" aria-label="주소 비트 배치와 두 가지 슬라이스 선택. 선형은 비트 13에서 7을 그대로 쓰고, XOR 해시는 7비트 조각들을 모두 XOR한다. 16 KB 간격 주소 네 개는 선형에서 모두 슬라이스 0, XOR에서 0, 1, 2, 3">
+        <g>
+          <rect x="40" y="30" width="420" height="34" class="k-ctrl"/><rect x="460" y="30" width="180" height="34" class="k-link"/><rect x="640" y="30" width="140" height="34" class="k-sram"/>
+          <g class="t t-sm t-c"><text x="250" y="52">상위 비트 [47:14]</text><text x="550" y="52">슬라이스 비트 [13:7]</text><text x="710" y="52">라인 오프셋 [6:0]</text></g>
+          <g class="t-dim t-xs t-c t-mono"><text x="40" y="80">47</text><text x="460" y="80">14 | 13</text><text x="640" y="80">7 | 6</text><text x="780" y="80">0</text></g>
+          <path d="M160 64V96M280 64V96M400 64V96" class="s-faint dash"/>
+          <g class="t-dim t-xs t-c"><text x="100" y="92">…</text><text x="220" y="92">[27:21]</text><text x="340" y="92">[20:14]</text></g>
+        </g>
+        <g class="t t-sm">
+          <text x="40" y="126" class="t-b">선형</text><text x="120" y="126" class="t-mono">slice = A[13:7]</text>
+          <text x="40" y="152" class="t-b">XOR 접기</text><text x="120" y="152" class="t-mono">slice = A[13:7] ⊕ A[20:14] ⊕ A[27:21] ⊕ …</text>
+          <text x="40" y="184" class="t-dim t-xs">XOR 게이트 몇 단이면 되어 지연·면적이 거의 없다.</text><text x="40" y="204" class="t-dim t-xs">접는 범위의 주소 비트 하나가 바뀌면 슬라이스도 바뀐다.</text>
+        </g>
+        <g>
+          <rect x="500" y="104" width="290" height="132" rx="6" class="card"/>
+          <g class="t t-xs"><text x="514" y="124" class="t-b">16 KB 간격 주소</text><text x="664" y="124" class="t-b">선형</text><text x="730" y="124" class="t-b">XOR</text></g>
+          <g class="t t-xs t-mono"><text x="514" y="148">0x00000</text><text x="514" y="170">0x04000</text><text x="514" y="192">0x08000</text><text x="514" y="214">0x0C000</text></g>
+          <g class="t t-xs t-mono t-bad"><text x="670" y="148">0</text><text x="670" y="170">0</text><text x="670" y="192">0</text><text x="670" y="214">0</text></g>
+          <g class="t t-xs t-mono t-ok"><text x="736" y="148">0</text><text x="736" y="170">1</text><text x="736" y="192">2</text><text x="736" y="214">3</text></g>
+        </g>
+      </svg>
+      <figcaption><b>그림 9-4.</b> 라인 주소에서 슬라이스를 고르는 두 방법. 선형 비트 선택은 2의 거듭제곱 간격에서 한 슬라이스로 몰린다. XOR 접기는 상위 비트를 섞어 같은 간격을 고르게 편다. 실제 칩은 파티션·슬라이스·메모리 채널을 함께 정하는 더 복잡한 해시를 쓴다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-hash">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>주소 해싱: 스트라이드 접근의 슬라이스 부하</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="hs-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>스트라이드(128 B 라인 단위)</span><div class="seg" id="hs-st"><button data-value="1">1</button><button data-value="2">2</button><button data-value="64">64</button><button data-value="128" class="on">128</button><button data-value="129">129</button><button data-value="512">512</button></div></div>
+          <div class="ctrl"><span>해시</span><div class="seg" id="hs-m"><button data-value="lin" class="on">선형</button><button data-value="xor">XOR 접기</button></div></div>
+          <div class="ctrl"><span>슬라이스 수</span><div class="seg" id="hs-s"><button data-value="32">32</button><button data-value="64">64</button><button data-value="128" class="on">128</button></div></div>
+          <div class="step-desc" id="hs-d"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">쓰인 슬라이스</span><span class="v" id="hs-o-u">—</span></div>
+        <div class="stat"><span class="k">최대 / 평균 부하</span><span class="v" id="hs-o-r">—</span></div>
+        <div class="stat"><span class="k">부하 균형(평균/최대)</span><span class="v" id="hs-o-b">—</span></div>
+        <div class="stat"><span class="k">실효 L2 대역폭</span><span class="v" id="hs-o-w">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 스트라이드 128(16 KB), 선형이면 요청 8,192개가 모두 슬라이스 하나에 간다. 실효 대역폭은 슬라이스 하나 몫인 102 GB/s로, 13.1 TB/s의 1/128이다. XOR로 바꾸면 128개가 고르게 쓰인다. ② 스트라이드 129(= 128 + 1)는 반대다. 선형은 완벽하지만 XOR은 101개만 쓰고 부하 균형이 약 0.04로 떨어진다. 어떤 해시에도 나쁜 스트라이드가 있다. ③ 스트라이드 2에서 선형은 슬라이스 절반만 쓴다.</div>
+    </div>
+    <p>실효 대역폭은 가장 바쁜 슬라이스가 정한다. 요청 M개가 슬라이스 S개에 퍼질 때 걸리는 시간은 최대 부하에 비례하므로 \(BW_{eff} = BW_{L2} \cdot \bar n / n_{max}\)이다. XOR 해시는 2의 거듭제곱 스트라이드를 고르게 펴고, 129 같은 "XOR에 나쁜" 스트라이드는 실제 코드에서 드물다. 그래서 해싱은 흔한 경우를 좋게 바꾸는 선택이다. 같은 이유로 주소 비트를 HBM 채널과 뱅크 선택에도 섞는다(8장).</p>
+    <p><b>왜 이렇게 설계하는가.</b> 해시 회로는 XOR 게이트 몇 개로 면적이 거의 0이다. 그 대가로 프로그래머가 데이터 배치를 신경 쓰지 않아도 128개 슬라이스 대역폭을 얻는다. 이 비용 대비 효과 때문에 슬라이스로 나뉜 캐시는 거의 모두 주소를 해시한다.</p>
+  </section>
+
+  <section id="partition">
+    <h2>L2 파티션과 원거리 접근</h2>
+    <p>다이 폭이 30 mm에 가까우면 모든 SM을 모든 슬라이스에 같은 거리로 이을 수 없다. GX-1은 L2를 파티션 두 개(각 32 MB, 슬라이스 64개)로 나누고, 각 파티션을 가까운 GPC 절반과 크로스바로 잇는다. 두 파티션 사이는 약 4 TB/s의 연결로 묶는다. 주소 해시가 데이터를 두 파티션에 반씩 나누면, SM의 요청 절반은 다른 쪽 파티션으로 가야 한다. 이것이 원거리 접근이다. 메모리 위치에 따라 지연이 다른 NUMA<span class="en">(non-uniform memory access)</span>와 같은 효과가 칩 안에서 생긴다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 230" role="img" aria-label="L2 파티션 두 개와 파티션 간 연결. 왼쪽 GPC에서 가까운 파티션 0으로 가는 로컬 경로와, 연결을 건너 파티션 1로 가는 원거리 경로">
+        <rect x="40" y="20" width="300" height="56" rx="6" class="k-compute"/><rect x="480" y="20" width="300" height="56" rx="6" class="k-compute"/>
+        <g class="t t-sm t-c"><text x="190" y="44">GPC 0–3 (SM 72개 활성)</text><text x="630" y="44">GPC 4–7 (SM 72개 활성)</text></g>
+        <g class="t-dim t-xs t-c"><text x="190" y="62">크로스바 A</text><text x="630" y="62">크로스바 B</text></g>
+        <rect x="40" y="130" width="300" height="60" rx="6" class="k-sram"/><rect x="480" y="130" width="300" height="60" rx="6" class="k-sram"/>
+        <g class="t t-sm t-c"><text x="190" y="156">L2 파티션 0 · 슬라이스 64개</text><text x="630" y="156">L2 파티션 1 · 슬라이스 64개</text></g>
+        <g class="t-dim t-xs t-c"><text x="190" y="176">32 MB · 6.55 TB/s</text><text x="630" y="176">32 MB · 6.55 TB/s</text></g>
+        <rect x="360" y="138" width="100" height="44" rx="6" class="kf-link"/>
+        <text x="410" y="157" class="t t-sm t-c" style="fill:var(--bg-elev)">연결</text><text x="410" y="174" class="t t-xs t-c" style="fill:var(--bg-elev)">약 4 TB/s</text>
+        <path d="M120 76V128" class="arr-ok" style="stroke-width:2.4"/><text x="128" y="106" class="t-ok t-sm">로컬 약 170사이클</text>
+        <path d="M260 76V106H360V140" class="dash" style="fill:none;stroke:var(--warn);stroke-width:2.4"/><path d="M460 160H560V190" class="arr-warn" style="stroke-width:2.4"/>
+        <text x="300" y="98" class="t-warn t-sm">원거리 약 230사이클 + 연결 대기</text>
+        <text x="410" y="214" class="t-dim t-xs t-c">원거리 이동 거리 추가 약 15 mm → 비트당 약 0.75 pJ 더</text>
+      </svg>
+      <figcaption><b>그림 9-5.</b> L2 파티션과 원거리 접근. 로컬과 원거리가 반반이면 평균 지연은 약 200사이클로, GX-1 표의 L2 지연과 같다. 두 파티션의 대역폭 합은 13.1 TB/s이지만, 원거리 몫은 모두 4 TB/s 연결을 지나야 한다.</figcaption>
+    </figure>
+    <p>대칭 트래픽에서 원거리 비율이 \(r\)이고 L2 요구 대역폭이 \(D\)이면 연결 이용률과 L2 대역폭 상한은 다음과 같다. 연결 대기는 패킷 직렬화 시간 \(t_s\)(128 B 패킷이 채널 하나를 지나는 4사이클)를 쓴 단순 큐 모델로 근사한다.</p>
+    <div class="formula">$$\rho_{link} = \frac{rD}{4\,\text{TB/s}},\qquad D_{max} = \min\!\left(13.1,\ \frac{4}{r}\right)\,\text{TB/s},\qquad \bar t = (1-r)\,t_{loc} + r\left(t_{rem} + t_s\frac{\rho}{1-\rho}\right)$$<div class="where">\(t_{loc}\) ≈ 170사이클, \(t_{rem}\) ≈ 230사이클(무부하). \(r = 0.5\)(파티션을 가리지 않는 해시)이면 \(D_{max}\) = 8 TB/s로, 슬라이스 대역폭의 61 %에서 연결이 먼저 포화된다.</div></div>
+    <div class="sim" id="sim-part">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>L2 파티션: 원거리 비율과 연결 포화</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pt-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>원거리 비율 r <output id="pt-r-out"></output></span><input type="range" id="pt-r" min="0" max="1" step="0.05" value="0.5"></label>
+          <label class="ctrl"><span>L2 요구 대역폭 D <output id="pt-d-out"></output></span><input type="range" id="pt-d" min="0" max="13.1" step="0.1" value="6"></label>
+          <div class="step-desc" id="pt-x"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">처리되는 L2 대역폭</span><span class="v" id="pt-o-s">—</span></div>
+        <div class="stat"><span class="k">연결 이용률 ρ</span><span class="v" id="pt-o-u">—</span></div>
+        <div class="stat"><span class="k">평균 L2 지연</span><span class="v" id="pt-o-l">—</span></div>
+        <div class="stat"><span class="k">원거리 이동 추가 전력</span><span class="v" id="pt-o-p">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① r = 0.5에서 D를 8 TB/s 위로 올리면 처리량이 8에서 멈추고 지연이 300사이클 가까이 뛴다. ② r = 0.25로 낮추면 13.1 TB/s 전부를 쓸 수 있고, 이때 ρ ≈ 0.82, 평균 지연 약 190사이클이다. ③ r = 0.5, D = 8 TB/s에서 원거리 이동만으로 약 24 W를 더 쓴다(4 TB/s × 8 bit × 15 mm × 0.05 pJ/bit/mm).</div>
+    </div>
+    <p>원거리 비율을 낮추는 방법은 두 가지다. 하나는 데이터를 요청한 SM 가까운 파티션에 두도록 해시를 바꾸는 것이다. 다른 하나는 원거리 데이터를 로컬 파티션에 사본으로 한 번 더 캐시하는 것이다. 사본은 일관성 관리와 용량 손실(같은 라인이 두 곳을 차지)을 대가로 연결 트래픽과 지연을 줄인다. 어느 쪽이든 L2를 "하나의 64 MB 캐시"가 아니라 "가까운 32 MB + 먼 32 MB"로 다루게 된다. 이 구조를 다이 두 개로 나누면 칩렛 문제가 되고(10장), 연결은 다이 간 링크가 된다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> 모든 SM을 모든 슬라이스에 직접 잇는 단일 크로스바는 포트 수와 배선 길이가 함께 커진다. 파티션으로 나누면 크로스바 두 개가 각각 절반 크기가 되고 배선이 짧아진다. 대신 4 TB/s 연결이라는 좁은 목이 생기므로, 원거리 비율을 낮추는 해시와 사본 정책이 대역폭 예산의 일부가 된다.</p>
+  </section>
+
+  <section id="wire">
+    <h2>구리 배선의 RC 지연</h2>
+    <p>네트워크의 링크는 결국 구리선이다. 단위 길이 저항 \(r\)과 커패시턴스 \(c\)가 고르게 퍼진 선의 지연(엘모어 지연, 50 % 지점)은 길이의 제곱에 비례한다. 길이를 두 배로 하면 저항도 커패시턴스도 두 배가 되기 때문이다.</p>
+    <div class="formula">$$t_{wire} \approx 0.38\,rc\,L^2,\qquad r = \frac{\rho_{eff}}{(w-2t_b)(h-t_b)},\qquad \rho_{eff} \approx \rho_0\left[1 + 0.7\,\lambda_e\left(\frac{1}{w} + \frac{1}{h}\right)\right]$$<div class="where">\(\rho_0\) = 1.7 µΩ·cm(벌크 구리), \(\lambda_e\) ≈ 39 nm(구리 전자의 평균 자유 행로), \(h = 2w\)(종횡비 2), \(t_b\) ≈ 2 nm(확산 방지 장벽층, 전류를 거의 흘리지 못함). \(c\) ≈ 0.2 pF/mm는 선폭이 줄어도 거의 그대로다(선 사이 간격도 함께 줄기 때문). 0.38은 분산 RC 선의 계수로, 집중 RC의 0.69보다 작다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 260" role="img" aria-label="왼쪽은 구리 배선 단면. 유전체 속 구리선을 장벽층이 감싸고, 전자가 표면과 결정립계에서 산란한다. 오른쪽은 분산 RC 사다리 모델">
+        <rect x="30" y="30" width="300" height="190" class="m-ox"/>
+        <rect x="110" y="60" width="80" height="140" class="m-cu" style="stroke-width:5;stroke:var(--text-faint)"/>
+        <rect x="230" y="60" width="80" height="140" class="m-cu" style="stroke-width:5;stroke:var(--text-faint)" opacity=".55"/>
+        <path d="M150 60V200" class="s-faint dash"/><path d="M110 120L190 150" class="s-faint dash"/>
+        <g style="stroke:var(--warn);stroke-width:1.6;fill:none"><path d="M120 180L135 166L118 150L137 132L119 112"/><path d="M175 186L160 168L178 150L163 128L181 102"/></g>
+        <path d="M110 214H190" class="dimline"/><text x="150" y="232" class="t-dim t-xs t-c">w</text>
+        <path d="M96 60V200" class="dimline"/><text x="86" y="134" class="t-dim t-xs t-e">h = 2w</text>
+        <path d="M190 90L230 90" class="dimline"/><text x="210" y="84" class="t-dim t-xs t-c">간격</text>
+        <path d="M108 66L60 44" class="lead"/><text x="34" y="44" class="t t-xs">장벽층 t<tspan class="sub" dy="3">b</tspan></text>
+        <text x="180" y="250" class="t-dim t-xs t-c">표면·결정립계 산란 → 가늘수록 ρ가 커진다</text>
+        <g transform="translate(370 0)">
+          <polygon points="10,100 10,140 44,120" class="k-ctrl"/><text x="24" y="160" class="t-dim t-xs t-c">구동기</text>
+          <path d="M44 120H70" class="s-line"/>
+          <g class="s-line" style="fill:none">
+            <path d="M70 120l5-8 10 16 10-16 10 16 10-16 5 8H140"/>
+            <path d="M140 120l5-8 10 16 10-16 10 16 10-16 5 8H210"/>
+            <path d="M210 120l5-8 10 16 10-16 10 16 10-16 5 8H280"/>
+            <path d="M280 120l5-8 10 16 10-16 10 16 10-16 5 8H350"/>
+            <path d="M140 120V150M128 150H152M128 158H152M140 158V176"/><path d="M210 120V150M198 150H222M198 158H222M210 158V176"/><path d="M280 120V150M268 150H292M268 158H292M280 158V176"/><path d="M350 120V150M338 150H362M338 158H362M350 158V176"/>
+            <path d="M120 176H372"/>
+          </g>
+          <circle cx="350" cy="120" r="4" class="kf-data"/><text x="358" y="110" class="t t-xs">수신</text>
+          <g class="t t-xs t-c"><text x="105" y="102">r·Δx</text><text x="175" y="102">r·Δx</text><text x="157" y="196">c·Δx</text><text x="227" y="196">c·Δx</text></g>
+          <text x="220" y="40" class="t t-sm t-c t-b">분산 RC 선(길이 L)</text>
+          <text x="220" y="62" class="t t-sm t-c">엘모어 합 → ½·rcL², 50 % 지연 0.38·rcL²</text>
+          <text x="220" y="232" class="t-dim t-xs t-c">L을 두 배로: R 2배 × C 2배 = 지연 4배</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 9-6.</b> 구리 배선 단면과 분산 RC 모델. 선폭이 평균 자유 행로(약 39 nm)에 가까워지면 표면·결정립계 산란으로 저항률이 벌크보다 커지고, 장벽층이 단면의 일부를 차지해 저항이 더 오른다. 자세한 배선 물리는 <a href="../../digital/chapters/wire.html">DigitalBook 배선 장</a>에 있다.</figcaption>
+    </figure>
+    <p>긴 선의 \(L^2\)을 끊는 방법이 <span class="term">리피터</span><span class="en">(repeater)</span>다. 선을 k구간으로 나누고 구간마다 인버터를 넣으면 구간 지연은 \((L/k)^2\)에 비례하고, 구간이 k개이므로 전체는 \(L^2/k\)에 인버터 지연 k개를 더한 값이 된다. 단위 인버터의 출력 저항을 \(R_0\), 입력 커패시턴스를 \(C_0\), 리피터 크기를 \(s\)배라 하면 다음과 같다.</p>
+    <div class="formula">$$t(k) = 0.69\frac{R_0}{s}C_w + 0.69\,kR_0C_0 + \frac{0.38R_wC_w}{k} + 0.69R_w sC_0,\qquad k_{opt} = \sqrt{\frac{0.38R_wC_w}{0.69R_0C_0}},\quad s_{opt} = \sqrt{\frac{R_0C_w}{R_wC_0}}$$<div class="where">\(R_w = rL\), \(C_w = cL\). 최적에서 \(t_{opt} \approx 2.5\sqrt{R_0C_0\,rc}\;L\)로 <b>길이에 선형</b>이다. 교육용 값 \(R_0\) = 8 kΩ, \(C_0\) = 0.15 fF(\(R_0C_0\) = 1.2 ps). 신호는 유전체 속 빛(약 5.8 ps/mm)보다 빠를 수 없으므로 그 값을 하한으로 둔다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 210" role="img" aria-label="리피터 삽입. 위는 구동기 하나가 긴 선을 모는 경우, 아래는 같은 선을 네 구간으로 나누고 구간마다 인버터를 넣은 경우. 오른쪽 그래프는 지연이 리피터 없이는 길이의 제곱, 리피터가 있으면 선형으로 는다">
+        <polygon points="20,40 20,70 46,55" class="k-ctrl"/><path d="M46 55H470" class="ks-data" style="stroke-width:3"/><circle cx="470" cy="55" r="4" class="kf-data"/>
+        <text x="250" y="40" class="t t-sm t-c">리피터 없음: 0.38 rcL² (L² 증가)</text>
+        <polygon points="20,120 20,150 46,135" class="k-ctrl"/><path d="M46 135H130" class="ks-data" style="stroke-width:3"/>
+        <polygon points="130,122 130,148 152,135" class="k-ctrl"/><path d="M152 135H236" class="ks-data" style="stroke-width:3"/>
+        <polygon points="236,122 236,148 258,135" class="k-ctrl"/><path d="M258 135H342" class="ks-data" style="stroke-width:3"/>
+        <polygon points="342,122 342,148 364,135" class="k-ctrl"/><path d="M364 135H470" class="ks-data" style="stroke-width:3"/><circle cx="470" cy="135" r="4" class="kf-data"/>
+        <path d="M46 165H130" class="dimline"/><text x="88" y="182" class="t-dim t-xs t-c">L/k</text>
+        <text x="250" y="112" class="t t-sm t-c">리피터 k개 구간: k·(L/k)² + k·t<tspan class="sub" dy="3">inv</tspan><tspan dy="-3"> (L 선형)</tspan></text>
+        <g transform="translate(520 20)">
+          <path d="M30 0V160H280" class="s-axis"/>
+          <path d="M30 160Q150 155 210 90T262 0" class="ks-bad"/>
+          <path d="M30 150L280 70" class="ks-ok"/>
+          <text x="236" y="28" class="t-bad t-xs t-e">∝ L²</text><text x="276" y="62" class="t-ok t-xs t-e">∝ L</text>
+          <text x="155" y="182" class="t-dim t-xs t-c">길이 L</text><text x="20" y="80" class="t-dim t-xs t-e" transform="rotate(-90 20 80)">지연</text>
+          <path d="M120 160V0" class="s-faint dash"/><text x="124" y="14" class="t-dim t-xs">교차 길이 ≈ 수백 µm</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 9-7.</b> 리피터는 \(L^2\)을 \(L\)로 바꾼다. 짧은 선에서는 인버터 지연이 더 커서 리피터가 손해이고, 교차 길이를 넘으면 이득이다. 실제 설계는 면적·전력 때문에 최적보다 적고 작은 리피터를 써서 지연 몇 %를 내준다. 배선층 선택과 리피터 삽입 흐름은 <a href="../../design/chapters/route.html">DesignBook 배선 장</a>에서 다룬다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-wire">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>분산 RC 배선 지연과 리피터 최적</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="wr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>선폭 w <output id="wr-w-out"></output></span><input type="range" id="wr-w" min="0" max="100" step="1" value="45"></label>
+          <label class="ctrl"><span>길이 L <output id="wr-l-out"></output></span><input type="range" id="wr-l" min="0.5" max="30" step="0.5" value="30"></label>
+          <label class="ctrl"><span>구간 수 k (리피터 k−1개) <output id="wr-k-out"></output></span><input type="range" id="wr-k" min="0" max="100" step="1" value="50"></label>
+          <button class="btn" id="wr-opt">k를 최적으로</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">실효 저항률 ρ</span><span class="v" id="wr-o-rho">—</span></div>
+        <div class="stat"><span class="k">선 저항 r</span><span class="v" id="wr-o-r">—</span></div>
+        <div class="stat"><span class="k">리피터 없음</span><span class="v" id="wr-o-u">—</span></div>
+        <div class="stat"><span class="k">k구간 지연</span><span class="v" id="wr-o-k">—</span></div>
+        <div class="stat"><span class="k">최적 k · 간격</span><span class="v" id="wr-o-o">—</span></div>
+        <div class="stat"><span class="k">최적 지연 @1.6 GHz</span><span class="v" id="wr-o-c">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 선폭 80 nm(중간 배선층)에서 30 mm를 리피터 없이 몰면 약 147 ns, 235사이클이다. 최적 리피터를 넣으면 약 1.6 ns, 2.6사이클로 줄어든다(약 55 ps/mm). ② 선폭을 20 nm로 줄이면 저항률이 벌크의 3배(약 5.2 µΩ·cm)가 되고, 최적 리피터로도 약 340 ps/mm라 한 사이클에 2 mm도 못 간다. ③ L = 1 mm로 줄이면 리피터 없음 174 ps, 최적(k ≈ 14, 간격 약 71 µm) 55 ps다. "k를 최적으로"를 누른 뒤 k를 절반으로 줄여도 지연은 약 11 %만 는다. 리피터 수를 아끼는 실제 설계가 이 여유를 쓴다.</div>
+    </div>
+    <div class="callout fab"><strong>다이를 가로지르는 데 몇 사이클인가</strong>중간 배선층(선폭 약 80 nm)에 최적 리피터를 넣은 선은 약 55 ps/mm다. 1.6 GHz 한 사이클(625 ps)에 약 11 mm를 간다. 다이 긴 변 30 mm는 배선만 약 1.6 ns, 2.6사이클이다. 실제로는 사이클마다 파이프라인 레지스터를 넣어야 타이밍이 맞으므로 3~4단이 되고, 크로스바 중재·큐·태그 검사가 더해진다. GX-1 L2 지연 약 200사이클 가운데 순수 배선은 왕복 몇 사이클에 불과하다. 나머지는 SM 안의 주소 처리, GPC 집선, 중재, 큐 대기, 태그·데이터 배열 접근이다. 배선이 지연의 주범이 아니라면 왜 배치를 신경 쓰는가? 답은 에너지다. 이 장 마지막 절에서 계산한다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 가는 하위 배선층은 밀도가 높지만 저항이 커서 수백 µm 이상 가면 안 된다. 긴 NoC 링크는 두껍고 넓은 중간·상위층으로 올리고 리피터와 파이프라인 레지스터를 넣는다. 상위층은 전력망과 클럭이 함께 쓰는 귀한 자원이라, 링크의 비트 폭(64 B = 512비트 × 양방향 × 포트 수)이 곧 배선 트랙 예산이 된다.</p>
+  </section>
+
+  <section id="clock">
+    <h2>클럭 분배: H-트리와 메시</h2>
+    <p>780 mm² 위의 플립플롭 수천만 개가 같은 순간에 클럭을 받아야 한다. 도착 시각의 차이를 <span class="term">클럭 스큐</span><span class="en">(clock skew)</span>라 한다. 스큐는 사이클에서 그대로 빠지는 타이밍 손실이다. <span class="term">H-트리</span><span class="en">(H-tree)</span>는 H 모양을 재귀적으로 반복해 루트에서 모든 말단까지 길이를 같게 만든다. 길이는 같아도 버퍼마다 공정 편차가 있어 지연이 조금씩 다르다. 두 말단이 루트 근처에서 갈라질수록 공통 경로가 짧아 편차가 더 많이 쌓인다. <span class="term">클럭 메시</span><span class="en">(clock mesh)</span>는 말단들을 격자 선으로 단락시켜 이웃끼리 도착 시각을 평균낸다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 290" role="img" aria-label="왼쪽은 두 단계 H-트리. 루트에서 큰 H, 그 네 끝에서 작은 H가 갈라져 말단 16개에 같은 길이로 닿는다. 오른쪽은 같은 트리 말단을 격자 메시로 이은 구조">
+        <g transform="translate(20 30)">
+          <rect x="0" y="0" width="240" height="240" class="m-si" style="opacity:.6"/>
+          <g class="ks-clock" style="stroke-width:3.4"><path d="M60 60V180M180 60V180M60 120H180"/></g>
+          <g class="ks-clock" style="stroke-width:1.8"><path d="M30 30V90M90 30V90M30 60H90M150 30V90M210 30V90M150 60H210M30 150V210M90 150V210M30 180H90M150 150V210M210 150V210M150 180H210"/></g>
+          <g class="kf-clock"><circle cx="30" cy="30" r="4"/><circle cx="90" cy="30" r="4"/><circle cx="30" cy="90" r="4"/><circle cx="90" cy="90" r="4"/><circle cx="150" cy="30" r="4"/><circle cx="210" cy="30" r="4"/><circle cx="150" cy="90" r="4"/><circle cx="210" cy="90" r="4"/><circle cx="30" cy="150" r="4"/><circle cx="90" cy="150" r="4"/><circle cx="30" cy="210" r="4"/><circle cx="90" cy="210" r="4"/><circle cx="150" cy="150" r="4"/><circle cx="210" cy="150" r="4"/><circle cx="150" cy="210" r="4"/><circle cx="210" cy="210" r="4"/></g>
+          <polygon points="112,112 112,128 128,120" class="k-ctrl"/><text x="120" y="146" class="t t-xs t-c">루트</text>
+          <path d="M90 30L90 90" style="stroke:var(--warn);stroke-width:3"/><path d="M150 30V90" style="stroke:var(--warn);stroke-width:3"/>
+          <text x="120" y="262" class="t t-sm t-c t-b">H-트리</text>
+        </g>
+        <g transform="translate(286 30)">
+          <rect x="0" y="0" width="240" height="240" class="m-si" style="opacity:.6"/>
+          <g class="ks-clock" style="stroke-width:3.4;opacity:.45"><path d="M60 60V180M180 60V180M60 120H180"/></g>
+          <g class="ks-clock" style="stroke-width:1.8;opacity:.45"><path d="M30 30V90M90 30V90M30 60H90M150 30V90M210 30V90M150 60H210M30 150V210M90 150V210M30 180H90M150 150V210M210 150V210M150 180H210"/></g>
+          <g style="stroke:var(--clock);stroke-width:1.2"><path d="M30 30H210M30 60H210M30 90H210M30 120H210M30 150H210M30 180H210M30 210H210M30 30V210M60 30V210M90 30V210M120 30V210M150 30V210M180 30V210M210 30V210"/></g>
+          <g class="kf-clock"><circle cx="30" cy="30" r="4"/><circle cx="90" cy="30" r="4"/><circle cx="30" cy="90" r="4"/><circle cx="90" cy="90" r="4"/><circle cx="150" cy="30" r="4"/><circle cx="210" cy="30" r="4"/><circle cx="150" cy="90" r="4"/><circle cx="210" cy="90" r="4"/><circle cx="30" cy="150" r="4"/><circle cx="90" cy="150" r="4"/><circle cx="30" cy="210" r="4"/><circle cx="90" cy="210" r="4"/><circle cx="150" cy="150" r="4"/><circle cx="210" cy="150" r="4"/><circle cx="150" cy="210" r="4"/><circle cx="210" cy="210" r="4"/></g>
+          <text x="120" y="262" class="t t-sm t-c t-b">트리 + 메시</text>
+        </g>
+        <g class="t t-sm">
+          <text x="548" y="44" class="t-b">스큐가 쌓이는 곳</text>
+          <text x="548" y="66" class="t-xs">주황 두 말단은 루트에서</text>
+          <text x="548" y="84" class="t-xs">바로 갈라져 공통 경로가 없다</text>
+          <text x="548" y="102" class="t-xs">→ 모든 단의 편차가 쌓인다</text>
+          <text x="548" y="134" class="t-b">메시</text>
+          <text x="548" y="156" class="t-xs">이웃 말단을 단락해 평균낸다</text>
+          <text x="548" y="174" class="t-xs">무작위 편차를 흡수한다</text>
+          <text x="548" y="206" class="t-b">대가</text>
+          <text x="548" y="228" class="t-xs">메시 선 길이 2·D·(D/피치)</text>
+          <text x="548" y="246" class="t-xs">P = C·V²·f, 매 사이클 토글</text>
+          <text x="548" y="264" class="t-xs">메시는 클럭 게이팅이 어렵다</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 9-8.</b> H-트리와 트리 + 메시. 트리는 지연을 맞추고, 메시는 남은 무작위 편차를 평균낸다. 고성능 CPU는 메시를 즐겨 쓰고, 전력에 민감한 칩은 트리를 세밀하게 맞추는 쪽을 택하는 경우가 많다. 클럭 트리 합성(CTS) 흐름은 <a href="../../design/chapters/cts.html">DesignBook CTS 장</a>, SoC 관점은 <a href="../../soc/chapters/clock.html">SoCBook 클럭 장</a>에 있다.</figcaption>
+    </figure>
+    <p>시뮬레이터는 m단 H-트리(말단 \(2^m \times 2^m\))를 만든다. 단마다 버퍼 두 개의 지연 편차(표준편차 \(\sigma\))를 그 단 아래 말단 전체에 더한다. 메시를 켜면 말단 도착 시각 \(t_i\)가 이웃과 평균된다고 보고 \((1 + s\,d_i)t_i - s\sum_{j}t_j = t_{drv,i}\)를 반복법으로 푼다(\(d_i\)는 이웃 수). 결합 세기 \(s\)는 말단 간격 ÷ 메시 피치에 비례한다. 전력은 \(P = C V^2 f\)이고, 트리 선 길이 \(1.5D(2^m - 1)\), 메시 선 길이 \(2D \cdot D/p\)에 선 커패시턴스를 곱한다(D = 28 mm).</p>
+    <div class="sim" id="sim-clock">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>클럭 분배: H-트리 vs 메시의 스큐와 전력</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ck-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>트리 단수 m (말단 2<sup>m</sup>×2<sup>m</sup>)</span><div class="seg" id="ck-m"><button data-value="3">3</button><button data-value="4">4</button><button data-value="5" class="on">5</button></div></div>
+          <label class="ctrl"><span>버퍼 지연 편차 σ <output id="ck-s-out"></output></span><input type="range" id="ck-s" min="1" max="6" step="0.5" value="3"></label>
+          <label class="ctrl"><span>메시 피치 <output id="ck-p-out"></output></span><input type="range" id="ck-p" min="0" max="100" step="1" value="38"></label>
+          <label class="check"><input type="checkbox" id="ck-on" checked> 클럭 메시 사용</label>
+          <button class="btn" id="ck-seed">다른 칩(난수)</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">트리만의 스큐</span><span class="v" id="ck-o-t">—</span></div>
+        <div class="stat"><span class="k">현재 스큐</span><span class="v" id="ck-o-s">—</span></div>
+        <div class="stat"><span class="k">스큐 / 사이클(625 ps)</span><span class="v" id="ck-o-f">—</span></div>
+        <div class="stat"><span class="k">전역 클럭 C</span><span class="v" id="ck-o-c">—</span></div>
+        <div class="stat"><span class="k">전역 클럭 전력</span><span class="v" id="ck-o-p">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① m = 5, σ = 3 ps, 메시를 끄면 스큐는 약 63 ps로 사이클의 10 %다. ② 메시를 켜고 피치를 0.1 mm로 줄이면 스큐는 약 25 ps로 줄고 전역 클럭 전력은 약 0.4 W에서 약 4 W로 는다. ③ 피치를 2 mm로 넓히면 메시가 약해 스큐가 50 ps 가까이 남는다. 색 지도에서 큰 덩어리(루트 근처 편차)가 메시로도 잘 지워지지 않는 것을 보자.</div>
+    </div>
+    <p>여기서 계산한 것은 전역 분배망뿐이다. 말단 아래의 지역 클럭 버퍼와 플립플롭 클럭 핀이 클럭 커패시턴스의 대부분을 차지하므로, 클럭은 칩 동적 전력의 상당 부분(흔히 20~40 %)이 된다. 그래서 GPU는 SM·서브파티션 단위로 클럭을 끄는 <span class="term">클럭 게이팅</span><span class="en">(clock gating)</span>을 촘촘히 쓴다. 메시는 게이팅 단위가 거칠어지는 단점이 있다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> 스큐 10 %는 클럭 주파수 10 %를 잃는 것과 같고, 메시는 그 손실을 수 W로 산다. 다이 전체를 하나의 메시로 덮기보다 영역별 트리 + 국부 메시를 쓰고, 멀리 떨어진 블록끼리는 다음 절처럼 아예 클럭 도메인을 나누는 것이 큰 다이의 일반적인 선택이다.</p>
+  </section>
+
+  <section id="cdc">
+    <h2>클럭 도메인과 비동기 FIFO</h2>
+    <p>큰 칩은 클럭 하나로 돌지 않는다. SM 클럭은 DVFS로 바뀌고(12장), HBM 컨트롤러는 메모리 쪽 클럭에, 칩간 링크는 SerDes가 복원한 클럭에 묶인다. 서로 위상 관계가 없는 <span class="term">클럭 도메인</span><span class="en">(clock domain)</span> 사이로 신호를 넘기면 받는 플립플롭이 셋업·홀드 창 안에서 바뀌는 입력을 볼 수 있다. 그러면 출력이 0과 1 사이에 머무는 <span class="term">준안정 상태</span><span class="en">(metastability)</span>가 되고, 언제 풀릴지는 확률적이다. 풀릴 시간을 한 사이클 더 주는 것이 2단 <span class="term">동기화기</span><span class="en">(synchronizer)</span>다.</p>
+    <div class="formula">$$\text{MTBF} = \frac{e^{t_r/\tau}}{T_w\, f_{clk}\, f_{data}},\qquad t_r \approx (n-1)\,T_{clk} - (t_{cq} + t_{su})$$<div class="where">\(\tau\): 준안정 해소 시상수(교육용 10 ps), \(T_w\): 준안정 창(20 ps), \(n\): 동기화 플립플롭 단수, \(t_{cq} + t_{su}\) ≈ 60 ps. 1단(n = 1)이면 남는 여유 약 100 ps만 해소 시간이 된다. 지수 함수라 한 사이클을 더 주면 MTBF가 \(e^{T_{clk}/\tau}\)배(1.6 GHz에서 약 \(10^{27}\)배) 는다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 240" role="img" aria-label="비동기 FIFO. 왼쪽 쓰기 클럭 도메인과 오른쪽 읽기 클럭 도메인 사이에 이중 포트 메모리가 있고, 쓰기 포인터와 읽기 포인터를 그레이 코드로 바꾸어 2단 동기화기로 반대쪽 도메인에 넘긴다">
+        <rect x="20" y="20" width="250" height="200" rx="8" style="fill:color-mix(in srgb,var(--clock) 7%,transparent);stroke:var(--clock);stroke-dasharray:6 4"/>
+        <rect x="550" y="20" width="250" height="200" rx="8" style="fill:color-mix(in srgb,var(--link) 7%,transparent);stroke:var(--link);stroke-dasharray:6 4"/>
+        <text x="145" y="40" class="t t-sm t-c kt-clock">쓰기 도메인 (clk A, SM 쪽)</text><text x="675" y="40" class="t t-sm t-c kt-link">읽기 도메인 (clk B, 메모리 쪽)</text>
+        <rect x="330" y="50" width="160" height="70" rx="6" class="k-sram"/><text x="410" y="82" class="t t-sm t-c">이중 포트 SRAM</text><text x="410" y="102" class="t-dim t-xs t-c">깊이 D 칸</text>
+        <rect x="40" y="70" width="110" height="34" rx="4" class="k-ctrl"/><text x="95" y="92" class="t t-xs t-c">쓰기 포인터</text>
+        <rect x="670" y="70" width="110" height="34" rx="4" class="k-ctrl"/><text x="725" y="92" class="t t-xs t-c">읽기 포인터</text>
+        <path d="M150 87H328" class="arr"/><path d="M670 87H492" class="arr"/>
+        <rect x="170" y="118" width="70" height="26" rx="3" class="k-ctrl"/><text x="205" y="136" class="t t-xs t-c">→ 그레이</text>
+        <rect x="580" y="150" width="70" height="26" rx="3" class="k-ctrl"/><text x="615" y="168" class="t t-xs t-c">→ 그레이</text>
+        <g class="k-clock"><rect x="560" y="186" width="30" height="24" rx="3"/><rect x="600" y="186" width="30" height="24" rx="3"/><rect x="230" y="186" width="30" height="24" rx="3"/><rect x="190" y="186" width="30" height="24" rx="3"/></g>
+        <g class="t t-xs t-c"><text x="575" y="203">FF</text><text x="615" y="203">FF</text><text x="245" y="203">FF</text><text x="205" y="203">FF</text></g>
+        <path d="M240 131H540V198H558" style="fill:none;stroke:var(--clock);stroke-width:1.8"/><path d="M590 198H600" class="s-line"/>
+        <path d="M630 198H700V108" class="arr" /><text x="706" y="140" class="t-dim t-xs">빈칸 판정</text>
+        <path d="M580 163H280V198H262" style="fill:none;stroke:var(--link);stroke-width:1.8"/><path d="M230 198H220" class="s-line"/>
+        <path d="M190 198H120V108" class="arr"/><text x="40" y="140" class="t-dim t-xs">가득 참 판정</text>
+        <text x="410" y="230" class="t-dim t-xs t-c">그레이 코드: 한 번에 한 비트만 바뀌어, 동기화 중에 잘못 읽어도 이전 값이나 새 값 중 하나가 된다</text>
+      </svg>
+      <figcaption><b>그림 9-9.</b> 비동기 FIFO. 데이터는 이중 포트 SRAM에 쓰고, 다중 비트 포인터는 그레이 코드로 바꿔 2단 동기화기로 넘긴다. 포인터가 반대 도메인에 보이기까지 몇 사이클이 걸리므로 지연이 생기고, 그 왕복 동안 쓸 칸이 있어야 처리량이 유지된다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-cdc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>클럭 도메인 교차: 동기화기 MTBF와 FIFO 지연</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cd-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>쓰기 클럭 f<sub>A</sub> <output id="cd-a-out"></output></span><input type="range" id="cd-a" min="0.5" max="2" step="0.1" value="1.6"></label>
+          <label class="ctrl"><span>읽기 클럭 f<sub>B</sub> <output id="cd-b-out"></output></span><input type="range" id="cd-b" min="0.5" max="2" step="0.1" value="1.6"></label>
+          <div class="ctrl"><span>동기화 단수 n</span><div class="seg" id="cd-n"><button data-value="1">1</button><button data-value="2" class="on">2</button><button data-value="3">3</button></div></div>
+          <label class="ctrl"><span>데이터 변화율(f<sub>A</sub> 대비) <output id="cd-x-out"></output></span><input type="range" id="cd-x" min="0.05" max="1" step="0.05" value="0.25"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">해소 시간 t<sub>r</sub></span><span class="v" id="cd-o-t">—</span></div>
+        <div class="stat"><span class="k">동기화기 하나의 MTBF</span><span class="v" id="cd-o-m">—</span></div>
+        <div class="stat"><span class="k">FIFO 통과 지연</span><span class="v" id="cd-o-l">—</span></div>
+        <div class="stat"><span class="k">전속 유지에 필요한 깊이</span><span class="v" id="cd-o-d">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 1.6 GHz 양쪽, n = 1이면 MTBF가 약 1.7 ms다. 1초에 수백 번 오류가 난다. ② n = 2로 하면 약 2.7 × 10<sup>17</sup> s(약 85억 년)가 되고, 대가는 FIFO 지연 2.5 ns(읽기 쪽 4사이클)다. ③ f<sub>B</sub>를 2 GHz로 올리면 사이클이 짧아져 해소 시간이 줄고 MTBF가 크게 떨어진다. 칩 하나에 동기화기가 수천 개, 그런 칩이 수만 개면 n = 2로는 모자라 n = 3을 쓰는 경로도 생긴다.</div>
+    </div>
+    <p>FIFO 지연은 쓰기 1사이클 + 읽기 쪽 동기화 n사이클 + 읽기 1사이클로 센다. 처리량을 떨어뜨리지 않으려면, 쓰기 포인터가 읽기 쪽에 보이고 읽기 포인터가 다시 쓰기 쪽에 보이는 왕복 동안 쓰기 쪽이 밀어 넣을 칸이 있어야 한다. 깊이는 대략 \((n+1)(f_A/f_B + 1)\)칸이다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> 도메인을 나누면 SM 클럭을 메모리·링크와 무관하게 DVFS로 움직일 수 있고, 다이 전체에 스큐 없는 단일 클럭을 깔 필요도 없다. 대가는 경계마다 몇 사이클의 지연과 FIFO 면적이다. GPU는 지연을 처리량으로 숨기는 기계(2장)라 이 몇 사이클은 싸고, 그래서 도메인을 넉넉히 나눈다.</p>
+  </section>
+
+  <section id="floorplan">
+    <h2>다이 평면 배치와 데이터 이동 전력</h2>
+    <p>배선 지연은 리피터와 파이프라인으로 감출 수 있지만, 에너지는 감출 수 없다. 온칩 배선은 비트당 mm당 약 0.05 pJ를 쓴다(에너지 표). NoC 전력은 실어 나르는 비트 수 × 거리 × 단위 에너지다.</p>
+    <div class="formula">$$P_{NoC} = BW \times 8\,\tfrac{\text{bit}}{\text{B}} \times \bar d \times 0.05\,\text{pJ/bit/mm}$$<div class="where">13.1 TB/s가 평균 10 mm를 가면 \(13.1\times10^{12} \times 8 \times 10 \times 0.05\times10^{-12}\) ≈ 52 W다. 에너지 표의 "L2 32비트 약 6 pJ"는 가까운 슬라이스(수 mm) 기준이다. 32비트가 16 mm를 가면 배선만 약 26 pJ로, 배열 접근보다 이동이 비싸진다.</div></div>
+    <p>평균 거리 \(\bar d\)는 평면 배치가 정한다. 블록을 어디에 두느냐는 <a href="../../design/chapters/place.html">DesignBook 배치 장</a>의 배치 문제를 칩 전체 규모에서 푸는 일이다. 아래 시뮬레이터는 SM 160개, 슬라이스 128개, HBM PHY 6개를 다이 위에 놓고, SM↔L2(해시로 균일) 트래픽과 L2↔HBM(슬라이스마다 가장 가까운 PHY) 트래픽의 평균 맨해튼 거리와 전력을 계산한다.</p>
+    <div class="sim" id="sim-floor">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>다이 평면 배치 실험: 배선 길이와 NoC 전력</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="fp-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>L2 위치</span><div class="seg" id="fp-l"><button data-value="center" class="on">가운데 띠</button><button data-value="edge">PHY 옆</button><button data-value="side">한쪽 끝</button></div></div>
+          <div class="ctrl"><span>HBM PHY</span><div class="seg" id="fp-h"><button data-value="long" class="on">긴 변(위·아래)</button><button data-value="short">짧은 변(좌·우)</button></div></div>
+          <label class="check"><input type="checkbox" id="fp-loc"> SM은 가까운 L2 파티션만 사용</label>
+          <label class="ctrl"><span>SM↔L2 대역폭 <output id="fp-b-out"></output></span><input type="range" id="fp-b" min="0" max="13.1" step="0.1" value="13.1"></label>
+          <label class="ctrl"><span>L2↔HBM 대역폭 <output id="fp-m-out"></output></span><input type="range" id="fp-m" min="0" max="7.37" step="0.01" value="7.37"></label>
+        </div>
+      </div>
+      <div class="legend nc-legend"><span class="m-key compute">SM</span><span class="m-key sram">L2 슬라이스</span><span class="m-key dram">HBM PHY</span><span class="m-key data">SM↔L2 패킷</span><span class="m-key heat">L2↔HBM 패킷</span></div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">평균 SM↔L2 거리</span><span class="v" id="fp-o-a">—</span></div>
+        <div class="stat"><span class="k">평균 L2↔HBM 거리</span><span class="v" id="fp-o-b">—</span></div>
+        <div class="stat"><span class="k">가장 먼 SM↔L2</span><span class="v" id="fp-o-x">—</span></div>
+        <div class="stat"><span class="k">SM↔L2 배선 전력</span><span class="v" id="fp-o-p">—</span></div>
+        <div class="stat"><span class="k">L2↔HBM 배선 전력</span><span class="v" id="fp-o-q">—</span></div>
+        <div class="stat"><span class="k">합계</span><span class="v" id="fp-o-t">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본 배치(가운데 띠, 긴 변 PHY)에서 SM↔L2 평균 16.2 mm, 전력 약 85 W, L2↔HBM 약 41 W, 합계 약 125 W다. ② "PHY 옆"으로 옮기면 L2↔HBM이 13 W로 줄지만 SM↔L2가 104 W로 늘어 합계 117 W다. HBM 대역폭을 5.2 TB/s 아래로 내리면(L2 적중률이 높으면) 가운데 띠가 다시 유리해진다. ③ "가까운 파티션만"을 켜면 가운데 띠에서 SM↔L2가 11.3 mm, 59 W로 줄어 합계가 약 100 W가 된다.</div>
+    </div>
+    <div class="callout fab"><strong>13 TB/s를 나르는 전력</strong>GX-1 기본 배치에서 L2 대역폭 13.1 TB/s와 HBM 대역폭 7.37 TB/s를 모두 쓰면, 전 비트를 0.05 pJ/bit/mm로 나르는 상한 추정이 약 125 W다. 로직 다이 동적 전력 약 640 W의 약 20 %로, 텐서 코어 한 무리의 전력과 맞먹는다. 실제 칩은 세 가지로 이 값을 낮춘다. ① 파티션 지역성(합계 약 100 W). ② 저전압 스윙 링크와 데이터 인코딩으로 비트당 에너지 절감. ③ 평균 트래픽이 피크보다 낮다. 그래도 "데이터를 옮기는 데 드는 전력이 연산 전력과 같은 자릿수"라는 결론은 남는다. 이것이 공유 메모리·레지스터 재사용(6·7장)이 중요한 이유다.</div>
+    <div class="table-wrap">
+      <table class="nc-tbl">
+        <thead><tr><th>손잡이</th><th>바뀌는 것</th><th>결과(이 장의 모델)</th></tr></thead>
+        <tbody>
+          <tr><td>크로스바 포트 수 N↑</td><td>교차점 N²</td><td class="up">N = 144에서 메시의 약 5.8배 면적 → 집선·계층화</td></tr>
+          <tr><td>메시 크기 k↑</td><td>평균 홉 2k/3, λ = 4/k</td><td class="up">N = 144: 8홉, 노드당 0.33</td></tr>
+          <tr><td>입력 FIFO → VOQ</td><td>HOL 차단 제거</td><td class="dn">포화 처리량 0.59 → 약 1</td></tr>
+          <tr><td>핫스팟 비율 h↑</td><td>한 슬라이스 부하 N·λ·h</td><td class="up">N = 32, h = 0.1: 주입률 0.244에서 포화</td></tr>
+          <tr><td>선형 → XOR 해시</td><td>2의 거듭제곱 스트라이드 분산</td><td class="dn">16 KB 간격: 슬라이스 1개 → 128개(102 GB/s → 13.1 TB/s)</td></tr>
+          <tr><td>원거리 비율 r↑</td><td>파티션 간 연결 이용률</td><td class="up">r = 0.5: L2 대역폭 상한 8 TB/s</td></tr>
+          <tr><td>선폭 w↓</td><td>크기 효과 ρ↑, 단면적↓</td><td class="up">80 → 20 nm: r 약 40배, 최적 지연 55 → 344 ps/mm</td></tr>
+          <tr><td>리피터 삽입</td><td>지연 L² → L</td><td class="dn">30 mm, 80 nm: 147 ns → 1.6 ns</td></tr>
+          <tr><td>클럭 메시 피치↓</td><td>평균화↑, 메시 C↑</td><td>스큐 63 → 25 ps, 전력 0.4 → 4 W</td></tr>
+          <tr><td>동기화 단수 n↑</td><td>해소 시간 +T<sub>clk</sub></td><td class="dn">MTBF 1.7 ms → 약 85억 년, 지연 +1사이클</td></tr>
+          <tr><td>L2를 PHY 옆으로</td><td>L2↔HBM↓, SM↔L2↑</td><td>HBM 트래픽이 5.2 TB/s보다 많을 때만 이득</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>SoC의 NoC는 CPU·GPU·NPU·ISP처럼 성격이 다른 블록을 잇느라 서비스 품질과 일관성 프로토콜이 중심이다(<a href="../../soc/chapters/noc.html">SoCBook NoC 장</a>). GPU의 NoC는 같은 블록 수백 개가 공유 캐시 하나를 두드리는 대칭 구조라, 이분 대역폭과 에너지가 중심이다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> 평면 배치는 "어떤 트래픽이 가장 큰가"에 맞춘다. GPU에서 가장 큰 흐름은 SM↔L2이고, 그다음이 L2↔HBM이다. 그래서 L2를 SM 배열 가운데에 두고, PHY는 쇼어라인이 긴 변에 두고(8장), 칩간 링크 SerDes는 남는 짧은 변에 둔다. 다이 면적이 이미 레티클 한계에 가까우니(10장) 블록을 더 가깝게 모을 여지는 적고, 남은 수단은 지역성과 비트당 에너지다.</p>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>L2는 대역폭 때문에 슬라이스 128개로 나뉜다: 128 × 64 B × 1.6 GHz ≈ 13.1 TB/s. 그 대가로 SM 144개와 슬라이스를 잇는 NoC가 필요하다.</li>
+      <li>크로스바는 교차점 \(N^2\), 홉 1, 이분 대역폭 N/2다. 메시는 면적 ∝ N이지만 평균 홉 2k/3, 노드당 처리량 4/k다. GPU는 GPC 단위 집선으로 포트를 줄인 크로스바를 쓴다.</li>
+      <li>입력 FIFO는 HOL 차단으로 처리량이 약 0.59에서 포화된다. VOQ는 이를 없앤다. 핫스팟 비율 h는 포화 주입률을 \(1/(Nh+1-h)\)로 떨어뜨린다.</li>
+      <li>선형 비트 선택은 2의 거듭제곱 스트라이드를 한 슬라이스로 몰고, XOR 해시는 거의 공짜로 이를 편다. 다만 어떤 해시에도 나쁜 스트라이드는 있다.</li>
+      <li>L2 파티션 사이 연결(4 TB/s)은 원거리 비율 r에서 L2 대역폭을 \(\min(13.1, 4/r)\) TB/s로 묶는다. 지역성 해시와 사본 캐시가 r을 줄인다.</li>
+      <li>배선 지연은 \(0.38rcL^2\)이고, 선폭이 줄면 크기 효과로 저항률이 오른다. 최적 리피터는 지연을 L에 선형으로 바꾸며(중간층 약 55 ps/mm), 30 mm는 배선만 약 2.6사이클이다.</li>
+      <li>H-트리 스큐는 버퍼 편차가 쌓여 생기고, 메시는 이를 평균내는 대신 전력을 쓴다. 도메인 사이는 동기화기(MTBF \(\propto e^{t_r/\tau}\))와 그레이 코드 비동기 FIFO로 넘기고, 그 대가로 몇 사이클 지연이 붙는다.</li>
+      <li>NoC 전력 = BW × 8 × 거리 × 0.05 pJ/bit/mm. GX-1 기본 배치에서 상한 약 125 W다. L2를 SM 가운데 두고 지역성을 살리는 배치가 이를 줄인다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>포트 수가 N인 크로스바에서 포트 수를 두 배로 늘리면 교차점 수는?</p><div class="opts">
+        <button class="opt">2배</button><button class="opt" data-correct>4배</button><button class="opt">√2배</button><button class="opt">그대로</button>
+      </div><div class="quiz-exp">교차점은 입력 × 출력 = N²이므로 4배다. 그래서 GPU는 GPC 단위로 집선해 N을 줄인다.</div></div>
+      <div class="quiz-q"><p>노드 144개를 12 × 12 메시로 이을 때 균일 트래픽의 평균 홉 수에 가장 가까운 값은?</p><div class="opts">
+        <button class="opt">1</button><button class="opt">4</button><button class="opt" data-correct>8</button><button class="opt">36</button>
+      </div><div class="quiz-exp">평균 홉 ≈ 2k/3 = 2 × 12 / 3 = 8이다. 36은 노드 144개짜리 양방향 링의 평균(≈ N/4)이다.</div></div>
+      <div class="quiz-q"><p>입력 FIFO 크로스바에 균일 트래픽을 가득 넣으면 처리량이 약 0.59에서 멈춘다. 원인은?</p><div class="opts">
+        <button class="opt" data-correct>맨 앞 요청이 출력 충돌로 막히면 뒤의 요청도 비어 있는 출력으로 가지 못하는 HOL 차단</button><button class="opt">배선 RC 지연</button><button class="opt">주소 해시 충돌</button><button class="opt">클럭 스큐</button>
+      </div><div class="quiz-exp">큰 N에서 포화 처리량은 2 − √2 ≈ 0.586이다. 가상 출력 큐(VOQ)는 목적지별로 큐를 나눠 이 손실을 없앤다.</div></div>
+      <div class="quiz-q"><p>128 B 라인, 슬라이스 128개, 선형 비트 선택(A[13:7])에서 16 KB 간격으로 읽으면 실효 L2 대역폭은? (슬라이스당 102.4 GB/s)</p><div class="opts">
+        <button class="opt">13.1 TB/s</button><button class="opt">6.55 TB/s</button><button class="opt">819 GB/s</button><button class="opt" data-correct>약 102 GB/s</button>
+      </div><div class="quiz-exp">16 KB = 2<sup>14</sup>이므로 비트 [13:7]이 모두 같아 슬라이스 하나에 몰린다. XOR 해시로 상위 비트를 섞으면 128개에 퍼진다.</div></div>
+      <div class="quiz-q"><p>L2 파티션 간 연결이 4 TB/s이고 원거리 비율이 0.5일 때, L2 대역폭 상한은?</p><div class="opts">
+        <button class="opt">4 TB/s</button><button class="opt" data-correct>8 TB/s</button><button class="opt">13.1 TB/s</button><button class="opt">2 TB/s</button>
+      </div><div class="quiz-exp">원거리 몫 r·D가 4 TB/s를 넘을 수 없으므로 D ≤ 4/0.5 = 8 TB/s다. 슬라이스 대역폭 13.1 TB/s보다 먼저 연결이 포화된다.</div></div>
+      <div class="quiz-q"><p>리피터 없는 배선의 길이를 2배로 늘리면 지연은?</p><div class="opts">
+        <button class="opt">2배</button><button class="opt">√2배</button><button class="opt" data-correct>4배</button><button class="opt">8배</button>
+      </div><div class="quiz-exp">\(t \approx 0.38rcL^2\). R과 C가 모두 L에 비례한다. 최적 리피터를 넣으면 지연이 L에 선형이 되어 2배가 된다.</div></div>
+      <div class="quiz-q"><p>동기화기 플립플롭을 1단에서 2단으로 늘리면 MTBF가 크게 느는 이유는?</p><div class="opts">
+        <button class="opt" data-correct>준안정 해소 시간이 약 한 사이클 늘고, MTBF가 해소 시간에 지수적으로 비례하므로</button><button class="opt">클럭 스큐가 줄어서</button><button class="opt">데이터 변화율이 절반이 되어서</button><button class="opt">준안정 창 T<sub>w</sub>가 0이 되어서</button>
+      </div><div class="quiz-exp">MTBF = e<sup>t<sub>r</sub>/τ</sup> / (T<sub>w</sub> f<sub>clk</sub> f<sub>data</sub>). 1.6 GHz에서 해소 시간이 약 100 ps에서 565 ps로 늘어, τ = 10 ps이면 e<sup>46.5</sup> ≈ 10<sup>20</sup>배가 는다. 대가는 한 사이클 지연이다.</div></div>
+      <div class="quiz-q"><p>10 TB/s의 데이터를 평균 10 mm 옮길 때 배선 전력은? (0.05 pJ/bit/mm)</p><div class="opts">
+        <button class="opt">0.5 W</button><button class="opt">4 W</button><button class="opt">400 W</button><button class="opt" data-correct>40 W</button>
+      </div><div class="quiz-exp">10 × 10<sup>12</sup> B/s × 8 bit × 10 mm × 0.05 × 10<sup>−12</sup> J = 40 W. 바이트를 비트로 바꾸는 8배를 빠뜨리면 5 W라는 틀린 답이 나온다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+"use strict";
+/* ---------------------------------------------------------- 계산 모델(DOM과 분리, scripts/noc-sims.cjs가 잘라 검사) */
+/* model:rng */
+function nocRng(seed) { let a = seed >>> 0; return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function nocRandn(rnd) { let u = 0, v = 0; while (u === 0) u = rnd(); while (v === 0) v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+/* /model:rng */
+
+/* model:topo */
+// 토폴로지 비교. 면적 = 교차점 등가 수(버스 탭 1, 링 라우터 3×3=9, 메시 라우터 5×5=25, 크로스바 N²).
+// 이분 대역폭 = 이분선을 한 방향으로 건너는 채널 수. 균일 트래픽에서 노드당 최대 주입률 λ ≤ 4·B_bis/N(포트 1로 상한).
+const TOPO = ["bus", "xbar", "ring", "mesh"];
+function topoModel(kind, N) {
+  N = Math.max(4, Math.round(N));
+  const k = Math.sqrt(N);
+  let area, hops, bis;
+  if (kind === "bus") { area = N; hops = 1; bis = 1; }
+  else if (kind === "xbar") { area = N * N; hops = 1; bis = N / 2; }
+  else if (kind === "ring") { area = 9 * N; hops = (N * N / 4) / (N - 1); bis = 2; }
+  else { area = 25 * N; hops = (2 * (k * k - 1)) / (3 * k) * (N / (N - 1)); bis = k; }
+  const lam = kind === "bus" ? 1 / N : Math.min(1, (4 * bis) / N);
+  return { area, hops, bis, lam, agg: lam * N, perArea: (lam * N) / area };
+}
+/* /model:topo */
+
+/* model:xbar */
+// 크로스바 경합 사이클 시뮬레이션. N 입력(SM 쪽 포트) × N 출력(L2 슬라이스), 출력은 사이클당 요청 1개를 처리.
+// mode 'oq': 가상 출력 큐(VOQ, 출력 큐와 같은 처리량), 'iq': 입력 FIFO(맨 앞 요청이 막히면 뒤도 막힘, HOL).
+// hot: 요청 중 슬라이스 0으로 가는 비율. 큐가 가득 차면 그 사이클 요청은 들어가지 못한다(역압).
+function xbarSim(o) {
+  const N = o.N | 0, p = o.p, hot = o.hot || 0, mode = o.mode || "oq", C = o.cycles || 4000, W = o.warm || 500, QM = o.qmax || 64;
+  const rnd = nocRng(o.seed || 1), iq = mode === "iq";
+  // 큐 N개를 고리 버퍼로: oq는 출력별(도착 시각), iq는 입력별(도착 시각 + 목적지)
+  const qt = new Int32Array(N * QM), qd = new Int32Array(N * QM), head = new Int32Array(N), len = new Int32Array(N);
+  const lat = [], cnt = new Int32Array(N), cand = new Int32Array(N);
+  let offered = 0, accepted = 0, blocked = 0, maxQ = 0;
+  const pop = (q, t, meas) => { const a = qt[q * QM + head[q]]; head[q] = (head[q] + 1) % QM; len[q]--; if (meas) { accepted++; lat.push(t - a + 1); } };
+  for (let t = 0; t < C + W; t++) {
+    const meas = t >= W;
+    for (let i = 0; i < N; i++) {
+      if (rnd() >= p) continue;
+      const d = rnd() < hot ? 0 : Math.floor(rnd() * N);
+      if (meas) offered++;
+      const q = iq ? i : d;
+      if (len[q] >= QM) { if (meas) blocked++; continue; }
+      const k = q * QM + ((head[q] + len[q]) % QM);
+      qt[k] = t; qd[k] = d; len[q]++;
+    }
+    if (!iq) {
+      for (let d = 0; d < N; d++) { if (len[d] > maxQ) maxQ = len[d]; if (len[d]) pop(d, t, meas); }
+    } else {
+      // 출력마다 맨 앞 요청이 자기를 향한 입력들 중 하나를 무작위로 고른다(저수지 표집)
+      cnt.fill(0); cand.fill(-1);
+      for (let i = 0; i < N; i++) {
+        if (len[i] > maxQ) maxQ = len[i];
+        if (!len[i]) continue;
+        const d = qd[i * QM + head[i]];
+        cnt[d]++;
+        if (rnd() * cnt[d] < 1) cand[d] = i;
+      }
+      for (let d = 0; d < N; d++) if (cand[d] >= 0) pop(cand[d], t, meas);
+    }
+  }
+  lat.sort((a, b) => a - b);
+  const n = lat.length;
+  let sum = 0; for (let i = 0; i < n; i++) sum += lat[i];
+  const pct = (f) => (n ? lat[Math.min(n - 1, Math.floor(f * n))] : 0);
+  return { thr: accepted / (N * C), offeredRate: offered / (N * C), blockFrac: offered ? blocked / offered : 0, mean: n ? sum / n : 0, p50: pct(0.5), p99: pct(0.99), maxQ, lat };
+}
+// 핫스팟 포화 주입률: 슬라이스 0 부하 N·p·(h + (1−h)/N) = 1
+function xbarHotLimit(N, h) { return 1 / (N * h + 1 - h); }
+/* /model:xbar */
+
+/* model:hash */
+// 주소 → L2 슬라이스. 선형: 라인 주소의 하위 log2(S) 비트. XOR: 라인 주소를 log2(S)비트 조각으로 잘라 모두 XOR(접기).
+function sliceOf(line, S, mode) {
+  const b = Math.round(Math.log2(S)), m = S - 1;
+  if (mode === "lin") return line & m;
+  let s = 0, x = line;
+  while (x > 0) { s ^= x & m; x = Math.floor(x / S); }
+  return s;
+}
+function hashHist(strideLines, count, S, mode, baseLine) {
+  const h = new Array(S).fill(0);
+  for (let i = 0; i < count; i++) h[sliceOf((baseLine || 0) + i * strideLines, S, mode)]++;
+  let used = 0, mx = 0;
+  for (const v of h) { if (v) used++; if (v > mx) mx = v; }
+  const mean = count / S;
+  return { h, used, max: mx, mean, balance: mean / mx };
+}
+/* /model:hash */
+
+/* model:part */
+// L2 파티션 2개. 원거리 비율 r, L2 요구 대역폭 D(TB/s). 파티션 간 연결 4 TB/s(양방향 합, 방향당 2 TB/s).
+// 대칭 트래픽에서 연결 이용률 ρ = r·D / 4. 연결 대기 = t_s·ρ/(1−ρ) (t_s = 패킷 직렬화 4사이클).
+const PART = { lloc: 170, lrem: 230, link: 4, ts: 4, l2: 13.1, dx: 15, epb: 0.05 };
+function partModel(r, D, o) {
+  o = Object.assign({}, PART, o || {});
+  r = Math.min(1, Math.max(0, r)); D = Math.max(0, D);
+  const cap = r > 0 ? Math.min(o.l2, o.link / r) : o.l2;
+  const served = Math.min(D, cap);
+  const rho = r > 0 ? (r * served) / o.link : 0;
+  const rq = Math.min(rho, 0.98);
+  const wait = rq > 0 ? (o.ts * rq) / (1 - rq) : 0;
+  const lat = (1 - r) * o.lloc + r * (o.lrem + wait);
+  const pw = r * served * 1e12 * 8 * o.dx * o.epb * 1e-12;   // 원거리 이동 추가 배선 전력(W)
+  return { cap, served, rho, wait, lat, sat: D > cap + 1e-9, pw };
+}
+/* /model:part */
+
+/* model:wire */
+// 구리 배선: 크기 효과 ρ = ρ₀[1 + 0.7·λ(1/w + 1/h)], λ = 39 nm, 종횡비 h = 2w, 장벽층 2 nm(전류를 거의 못 흘림).
+// c = 0.2 pF/mm(배선 폭이 바뀌어도 거의 일정). 리피터: 단위 인버터 R₀ = 8 kΩ, C₀ = 0.15 fF.
+const WIRE = { rho0: 1.7e-8, mfp: 39, ar: 2, tb: 2, c: 0.2e-12, R0: 8000, C0: 0.15e-15, Rd: 80, fclk: 1.6e9, tof: 5.8e-12 };   // tof: √ε_r/c, ε_r ≈ 3 → 약 5.8 ps/mm
+function wireRho(w) { const h = WIRE.ar * w; return WIRE.rho0 * (1 + 0.7 * WIRE.mfp * (1 / w + 1 / h)); }
+function wireR(w) {      // Ω/mm
+  const h = WIRE.ar * w, A = Math.max(1, (w - 2 * WIRE.tb)) * Math.max(1, (h - WIRE.tb)) * 1e-18;
+  return (wireRho(w) / A) * 1e-3;
+}
+function wireDelay(w, L, k) {   // L mm, k 구간(리피터 k−1개 + 구동기). 반환 s
+  const Rw = wireR(w) * L, Cw = WIRE.c * L, R0 = WIRE.R0, C0 = WIRE.C0;
+  const un = 0.38 * Rw * Cw + 0.69 * WIRE.Rd * Cw;          // 리피터 없음(큰 구동기 1개)
+  const hOpt = Math.sqrt((R0 * Cw) / Math.max(1e-30, Rw * C0));
+  const kOpt = Math.max(1, Math.sqrt((0.38 * Rw * Cw) / (0.69 * R0 * C0)));
+  const seg = (kk) => 0.69 * (R0 / hOpt) * Cw + 0.69 * kk * R0 * C0 + (0.38 * Rw * Cw) / kk + 0.69 * Rw * hOpt * C0;
+  const tof = L * WIRE.tof;                                   // 광속 하한: 신호는 유전체 속 빛보다 빠를 수 없다
+  const opt = Math.max(tof, seg(kOpt));
+  return { Rw, Cw, un: Math.max(tof, un), rep: Math.max(tof, seg(Math.max(1, k))), opt, kOpt, hOpt, tof, perMm: opt / Math.max(1e-9, L) };
+}
+const cyc = (s) => s * WIRE.fclk;
+/* /model:wire */
+
+/* model:clock */
+// 클럭 분배: m단 H-트리(말단 2^m × 2^m). 단계마다 버퍼 2개, 버퍼 지연 편차 σ(ps). 메시는 말단을 저항으로 이어
+// 도착 시각을 이웃과 평균낸다: (1 + s·deg)·t_i − s·Σt_j = t_drv,i, s = (말단 간격 / 메시 피치)·0.5.
+const CLK = { D: 28, cw: 0.3e-12, cm: 0.25e-12, cleaf: 100e-15, V: 0.75, f: 1.6e9, tstage: 25 };
+function clockSim(m, pitch, sigma, seed, useMesh) {
+  const n = 1 << m, rnd = nocRng(seed || 7), t = new Float64Array(n * n);
+  // 계층 편차: 단계 j(0..m−1)의 노드 하나가 아래 2^(m−j−1) × 2^(m−j−1) 블록 전체에 같은 편차를 더한다
+  for (let j = 0; j < m; j++) {
+    const blk = n >> (j + 1), nb = 1 << (j + 1);
+    for (let by = 0; by < nb; by++) for (let bx = 0; bx < nb; bx++) {
+      const off = sigma * Math.SQRT2 * nocRandn(rnd);
+      for (let y = by * blk; y < (by + 1) * blk; y++) for (let x = bx * blk; x < (bx + 1) * blk; x++) t[y * n + x] += off;
+    }
+  }
+  const tree = Float64Array.from(t);
+  const s = useMesh ? (CLK.D / n / pitch) * 0.5 : 0;
+  const u = Float64Array.from(t);
+  if (s > 0) {
+    for (let it = 0; it < 4000; it++) {
+      let dmax = 0;
+      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+        let sum = 0, deg = 0;
+        if (x > 0) { sum += u[y * n + x - 1]; deg++; } if (x < n - 1) { sum += u[y * n + x + 1]; deg++; }
+        if (y > 0) { sum += u[(y - 1) * n + x]; deg++; } if (y < n - 1) { sum += u[(y + 1) * n + x]; deg++; }
+        const v = (tree[y * n + x] + s * sum) / (1 + s * deg);
+        const dd = Math.abs(v - u[y * n + x]); if (dd > dmax) dmax = dd;
+        u[y * n + x] = v;
+      }
+      if (dmax < 1e-4) break;
+    }
+  }
+  const span = (a) => { let lo = Infinity, hi = -Infinity; for (const v of a) { if (v < lo) lo = v; if (v > hi) hi = v; } return hi - lo; };
+  const Ltree = 1.5 * CLK.D * (n - 1), Lmesh = useMesh ? 2 * CLK.D * (CLK.D / pitch) : 0;
+  const C = Ltree * CLK.cw + n * n * CLK.cleaf + Lmesh * CLK.cm;
+  return { n, s, tree, mesh: u, skewTree: span(tree), skew: span(u), Ltree, Lmesh, C, P: C * CLK.V * CLK.V * CLK.f, ins: 2 * m * CLK.tstage };
+}
+/* /model:clock */
+
+/* model:cdc */
+// 동기화기 MTBF = e^{t_r/τ} / (T_w · f_clk · f_data). τ = 10 ps, T_w = 20 ps, t_cq + t_su = 60 ps.
+const CDC = { tau: 10e-12, Tw: 20e-12, tov: 60e-12, slack1: 100e-12 };
+function cdcModel(fs, fd, n, act) {     // GHz, GHz, 동기화 플립플롭 수, 데이터 변화율(소스 클럭 대비)
+  const Td = 1 / (fd * 1e9);
+  const tr = n <= 1 ? CDC.slack1 : (n - 1) * Td - CDC.tov;   // 1단이면 남는 여유 시간만(약 100 ps)
+  const fdata = act * fs * 1e9;
+  const mtbf = Math.exp(Math.max(0, tr) / CDC.tau) / (CDC.Tw * fd * 1e9 * Math.max(1, fdata));
+  const latS = 1 / (fs * 1e9) + (n + 1) * Td;          // 쓰기 1사이클 + 동기화 n + 읽기 1
+  const depth = Math.ceil((n + 1) * (fs / fd + 1));    // 포인터 왕복 동안 쓰기 쪽이 밀어 넣는 양
+  return { tr, mtbf, latS, latCyc: latS / Td, depth };
+}
+/* /model:cdc */
+
+/* model:floor */
+// 다이 평면 배치: 30 × 26 mm. SM 160개(활성 144 기준이 아니라 물리 배치), L2 슬라이스 128개, HBM PHY 6개.
+// SM↔L2 트래픽은 해싱으로 모든 슬라이스에 균일, L2↔HBM은 슬라이스마다 가장 가까운 PHY. 거리는 맨해튼.
+const FLOOR = { W: 30, H: 26, phy: 2, epb: 0.05 };
+function gridIn(rects, n) {
+  const tot = rects.reduce((s, r) => s + r.w * r.h, 0), pts = [];
+  rects.forEach((r, ri) => {
+    const k = ri === rects.length - 1 ? n - pts.length : Math.round((n * r.w * r.h) / tot);
+    const cols = Math.max(1, Math.round(Math.sqrt((k * r.w) / r.h))), rows = Math.ceil(k / cols);
+    for (let i = 0; i < k; i++) { const c = i % cols, rr = Math.floor(i / cols); pts.push({ x: r.x + ((c + 0.5) * r.w) / cols, y: r.y + ((rr + 0.5) * r.h) / rows }); }
+  });
+  return pts;
+}
+function floorPlan(layout, hbm) {
+  const W = FLOOR.W, H = FLOOR.H, d = FLOOR.phy;
+  let phy = [], ix0 = 0, iy0 = 0, ix1 = W, iy1 = H;
+  if (hbm === "long") { for (const y of [d / 2, H - d / 2]) for (const x of [5, 15, 25]) phy.push({ x, y }); iy0 = d; iy1 = H - d; }
+  else { for (const x of [d / 2, W - d / 2]) for (const y of [26 / 6, 13, 26 * 5 / 6]) phy.push({ x, y }); ix0 = d; ix1 = W - d; }
+  const iw = ix1 - ix0, ih = iy1 - iy0, l2t = 3.2;
+  let sm, l2;
+  if (layout === "center") {
+    if (hbm === "long") { const ym = iy0 + ih / 2; l2 = [{ x: ix0, y: ym - l2t / 2, w: iw, h: l2t }]; sm = [{ x: ix0, y: iy0, w: iw, h: ih / 2 - l2t / 2 }, { x: ix0, y: ym + l2t / 2, w: iw, h: ih / 2 - l2t / 2 }]; }
+    else { const xm = ix0 + iw / 2; l2 = [{ x: xm - l2t / 2, y: iy0, w: l2t, h: ih }]; sm = [{ x: ix0, y: iy0, w: iw / 2 - l2t / 2, h: ih }, { x: xm + l2t / 2, y: iy0, w: iw / 2 - l2t / 2, h: ih }]; }
+  } else if (layout === "edge") {
+    const t = l2t / 2;
+    if (hbm === "long") { l2 = [{ x: ix0, y: iy0, w: iw, h: t }, { x: ix0, y: iy1 - t, w: iw, h: t }]; sm = [{ x: ix0, y: iy0 + t, w: iw, h: ih - 2 * t }]; }
+    else { l2 = [{ x: ix0, y: iy0, w: t, h: ih }, { x: ix1 - t, y: iy0, w: t, h: ih }]; sm = [{ x: ix0 + t, y: iy0, w: iw - 2 * t, h: ih }]; }
+  } else {   // 'side': L2를 한쪽 끝에 몰았다
+    if (hbm === "long") { l2 = [{ x: ix0, y: iy0, w: l2t * 30 / 26, h: ih }]; sm = [{ x: ix0 + l2t * 30 / 26, y: iy0, w: iw - l2t * 30 / 26, h: ih }]; }
+    else { l2 = [{ x: ix0, y: iy0, w: iw, h: l2t }]; sm = [{ x: ix0, y: iy0 + l2t, w: iw, h: ih - l2t }]; }
+  }
+  return { phy, smR: sm, l2R: l2, sms: gridIn(sm, 160), sls: gridIn(l2, 128) };
+}
+// local = true: 슬라이스를 L2 영역의 긴 쪽 가운데에서 두 파티션으로 나누고, SM은 가까운 파티션의 슬라이스만 쓴다.
+function floorModel(layout, hbm, bwL2, bwHBM, local) {
+  const f = floorPlan(layout, hbm), md = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const b of f.sls) { x0 = Math.min(x0, b.x); x1 = Math.max(x1, b.x); y0 = Math.min(y0, b.y); y1 = Math.max(y1, b.y); }
+  const byX = x1 - x0 >= y1 - y0, mid = byX ? (x0 + x1) / 2 : (y0 + y1) / 2;
+  f.part = f.sls.map((b) => ((byX ? b.x : b.y) < mid ? 0 : 1));
+  let s = 0, mx = 0, cnt = 0;
+  for (const a of f.sms) {
+    const pa = ((byX ? a.x : a.y) < mid ? 0 : 1);
+    f.sls.forEach((b, j) => { if (local && f.part[j] !== pa) return; const v = md(a, b); s += v; cnt++; if (v > mx) mx = v; });
+  }
+  const dSL = s / cnt;
+  let s2 = 0;
+  const home = f.sls.map((b) => { let bi = 0, bd = Infinity; f.phy.forEach((p, i) => { const v = md(b, p); if (v < bd) { bd = v; bi = i; } }); s2 += bd; return bi; });
+  const dLH = s2 / f.sls.length;
+  const P = (bw, dd) => bw * 1e12 * 8 * dd * FLOOR.epb * 1e-12;
+  return Object.assign(f, { dSL, dLH, maxSL: mx, home, pSL: P(bwL2, dSL), pLH: P(bwHBM, dLH), pTot: P(bwL2, dSL) + P(bwHBM, dLH) });
+}
+/* /model:floor */
+
+/* ================================================== 공통 UI 도구 */
+const NARROW = 560;
+const sm = (v, u) => v + " <small>" + u + "</small>";
+const f3 = (x) => GP.fmt(x, 3);
+/** 넓으면 좌우, 좁으면 위아래 두 칸 */
+function boxes2(w, h) {
+  if (w < NARROW) { const hh = h / 2; return [{ x: 58, y: 14, w: w - 76, h: hh - 62 }, { x: 58, y: hh + 14, w: w - 76, h: hh - 62 }]; }
+  return [{ x: 62, y: 14, w: w / 2 - 92, h: h - 62 }, { x: w / 2 + 52, y: 14, w: w / 2 - 70, h: h - 62 }];
+}
+const twoH = (w) => (w < NARROW ? 560 : 320);
+function fmtTime(s) {
+  if (!isFinite(s) || s > 1e40) return "&gt; 10<sup>40</sup> s";
+  if (s < 60) return GP.si(s, "s");
+  const yr = s / 3.156e7;
+  if (yr < 1) return GP.fmt(s / 3600, 3) + " <small>시간</small>";
+  if (yr < 1e4) return GP.fmt(yr, 3) + " <small>년</small>";
+  const e = Math.floor(Math.log10(s)), m = s / Math.pow(10, e);
+  return m.toFixed(1) + "×10<sup>" + e + "</sup> <small>s</small>";
+}
+
+/* ================================================== 1. 토폴로지 */
+(function () {
+  const NM = { bus: "버스", xbar: "크로스바", ring: "링", mesh: "2D 메시" };
+  const COL = (P) => ({ bus: P.dim, xbar: P.link, ring: P.data, mesh: P.compute });
+  const NS = []; for (let n = 4; n < 256; n *= 1.08) NS.push(n); NS.push(256);
+  let cv;
+  const gN = GP.range("tp-n", (v) => v, () => upd());
+  const gK = GP.seg("tp-k", () => upd());
+  function upd() {
+    const k = gK(), N = gN(), r = topoModel(k, N);
+    GP.stat("tp-o-a", GP.num(r.area, 3).replace(/\^\{(.+?)\}/, "<sup>$1</sup>"));
+    GP.stat("tp-o-h", f3(r.hops));
+    GP.stat("tp-o-b", f3(r.bis));
+    GP.stat("tp-o-l", f3(r.lam));
+    GP.stat("tp-o-e", r.perArea.toExponential(2).replace("e-", "×10<sup>−") + "</sup>");
+    const x = topoModel("xbar", N), m = topoModel("mesh", N);
+    document.getElementById("tp-d").innerHTML = "<b>N = " + N + "</b>: 크로스바 면적은 메시의 <b>" + f3(x.area / m.area) + "배</b>, 노드당 처리량은 " + f3(x.lam) + " 대 " + f3(m.lam) + ". " +
+      (x.area < m.area ? "이 크기에서는 크로스바가 더 작다." : "포트가 많을수록 크로스바의 N²이 불리해진다.");
+    cv && cv.redraw();
+  }
+  cv = GP.canvas("#tp-cv", (ctx, w, h) => {
+    const P = GP.palette(), C = COL(P), N = gN(), K = gK(), [b1, b2] = boxes2(w, h);
+    const ser = (f) => TOPO.map((k) => ({ data: NS.map((n) => [n, f(topoModel(k, n))]), color: C[k], width: k === K ? 3.2 : 1.5, label: NM[k] }));
+    const pts = (f) => TOPO.map((k) => ({ x: N, y: f(topoModel(k, N)), color: C[k], r: k === K ? 5 : 3 }));
+    GP.chart(ctx, b1, { x: [4, 256], y: [1, 1e5], logX: true, logY: true, xLabel: "포트 수 N", yLabel: "면적(교차점 등가)", series: ser((r) => r.area), points: pts((r) => r.area), vlines: [{ x: N, color: P.warn, dash: [4, 3] }], legend: "tl" });
+    GP.chart(ctx, b2, { x: [4, 256], y: [1e-3, 2], logX: true, logY: true, xLabel: "포트 수 N", yLabel: "노드당 최대 주입률 λ", series: ser((r) => r.lam).map((s) => Object.assign(s, { legend: false })), points: pts((r) => r.lam), vlines: [{ x: N, color: P.warn, dash: [4, 3] }] });
+  }, { height: twoH });
+  upd();
+})();
+
+/* ================================================== 2. 크로스바 경합 */
+(function () {
+  let seed = 3, cur = null, curve = null, curveKey = "";
+  const gN = GP.seg("xb-n", () => run());
+  const gP = GP.range("xb-p", (v) => v.toFixed(2), () => runD());
+  const gH = GP.range("xb-h", (v) => v.toFixed(2), () => runD());
+  const gM = GP.seg("xb-m", () => run());
+  const runD = GP.debounce(() => run(), 60);
+  const PS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
+  function run() {
+    const N = +gN(), p = gP(), h = gH(), mode = gM();
+    cur = xbarSim({ N, p, hot: h, mode, cycles: 3000, warm: 400, seed });
+    const key = N + "|" + h;
+    if (key !== curveKey) {
+      curveKey = key;
+      curve = { oq: PS.map((pp) => [pp, xbarSim({ N, p: pp, hot: h, mode: "oq", cycles: 900, warm: 200, seed: 11 }).thr]), iq: PS.map((pp) => [pp, xbarSim({ N, p: pp, hot: h, mode: "iq", cycles: 900, warm: 200, seed: 11 }).thr]) };
+    }
+    GP.stat("xb-o-t", f3(cur.thr));
+    GP.stat("xb-o-m", sm(GP.fmt(cur.mean, 3), "사이클"));
+    GP.stat("xb-o-q", sm(cur.p99, "사이클"));
+    GP.stat("xb-o-b", (cur.blockFrac * 100).toFixed(1) + " <small>%</small>");
+    GP.stat("xb-o-s", h > 0 ? f3(Math.min(1, xbarHotLimit(N, h))) : "1 <small>(핫스팟 없음)</small>");
+    cv.redraw();
+  }
+  document.getElementById("xb-run").addEventListener("click", () => { seed = (seed * 7 + 5) % 997; run(); });
+  const cv = GP.canvas("#xb-cv", (ctx, w, h) => {
+    if (!cur) return;
+    const P = GP.palette(), [b1, b2] = boxes2(w, h), lat = cur.lat;
+    const lmax = Math.max(4, Math.min(160, lat.length ? lat[lat.length - 1] : 4));
+    const bw = Math.max(1, Math.ceil(lmax / 40)), nb = Math.ceil(lmax / bw) + 1, hist = new Array(nb).fill(0);
+    lat.forEach((v) => { hist[Math.min(nb - 1, Math.floor(v / bw))]++; });
+    const tot = Math.max(1, lat.length), hm = Math.max(...hist) / tot * 100;
+    GP.chart(ctx, b1, { x: [0, nb * bw], y: [0, Math.max(5, hm * 1.1)], xLabel: "지연(사이클)", yLabel: "요청 비율(%)", series: [],
+      vlines: [{ x: cur.mean, color: P.warn, label: "평균", dash: [4, 3] }, { x: cur.p99, color: P.bad, label: "p99", dash: [2, 3] }],
+      after(c, A) {
+        c.fillStyle = GP.alpha(P.link, 0.75);
+        hist.forEach((v, i) => { if (!v) return; const x0 = A.X(i * bw), x1 = A.X((i + 1) * bw), y = A.Y((v / tot) * 100); c.fillRect(x0 + 0.5, y, Math.max(1, x1 - x0 - 1), A.Y(0) - y); });
+      } });
+    const N = +gN(), hh = gH(), lim = hh > 0 ? Math.min(1, xbarHotLimit(N, hh)) : null;
+    GP.chart(ctx, b2, { x: [0, 1], y: [0, 1], xLabel: "주입률 p", yLabel: "처리량", legend: "tl",
+      series: [{ data: [[0, 0], [1, 1]], color: P.faint, dash: [3, 3], width: 1, label: "이상(= p)" }, { data: curve.oq, color: P.ok, width: 2.4, label: "VOQ", dots: 2.5 }, { data: curve.iq, color: P.bad, width: 2.4, label: "입력 FIFO", dots: 2.5 }],
+      hlines: gM() === "iq" ? [{ y: 0.586, color: P.bad, dash: [2, 4], label: "2 − √2" }] : [],
+      vlines: lim ? [{ x: lim, color: P.warn, dash: [4, 3], label: "핫스팟 포화" }] : [],
+      points: [{ x: gP(), y: cur.thr, color: P.warn, r: 6, ring: true }] });
+  }, { height: twoH });
+  run();
+})();
+
+/* ================================================== 3. 주소 해싱 */
+(function () {
+  let r = null;
+  const gS = GP.seg("hs-st", () => upd()), gM = GP.seg("hs-m", () => upd()), gQ = GP.seg("hs-s", () => upd());
+  const M = 8192, PER = 102.4;   // 슬라이스당 GB/s (64 B × 1.6 GHz)
+  function upd() {
+    const st = +gS(), S = +gQ();
+    r = hashHist(st, M, S, gM(), 0);
+    GP.stat("hs-o-u", r.used + " <small>/ " + S + "</small>");
+    GP.stat("hs-o-r", r.max + " / " + GP.fmt(r.mean, 3));
+    GP.stat("hs-o-b", r.balance.toFixed(3));
+    const bw = S * PER * r.balance;
+    GP.stat("hs-o-w", bw >= 1000 ? sm(GP.fmt(bw / 1000, 3), "TB/s") : sm(GP.fmt(bw, 3), "GB/s"));
+    const bytes = st * 128;
+    document.getElementById("hs-d").innerHTML = "간격 <b>" + (bytes >= 1024 ? GP.fmt(bytes / 1024, 4) + " KB" : bytes + " B") + "</b>" + (Number.isInteger(Math.log2(st)) ? " (2<sup>" + Math.log2(bytes) + "</sup> B)" : "") +
+      "로 요청 " + M.toLocaleString("en-US") + "개. 가장 바쁜 슬라이스가 " + r.max + "개를 처리하는 동안 평균 슬라이스는 " + GP.fmt(r.mean, 3) + "개만 처리한다.";
+    cv && cv.redraw();
+  }
+  const cv = GP.canvas("#hs-cv", (ctx, w, h) => {
+    if (!r) return;
+    const P = GP.palette(), S = r.h.length, ym = Math.max(r.max * 1.08, r.mean * 2);
+    GP.chart(ctx, null, { x: [0, S], y: [0, ym], xLabel: "슬라이스 번호", yLabel: "요청 수", series: [],
+      hlines: [{ y: r.mean, color: P.ok, dash: [4, 3], label: "평균 " + GP.fmt(r.mean, 3) }],
+      after(c, A) {
+        r.h.forEach((v, i) => { if (!v) return; const x0 = A.X(i), x1 = A.X(i + 1), y = A.Y(v); c.fillStyle = v > r.mean * 1.5 ? P.bad : P.sram; c.fillRect(x0 + (x1 - x0 > 3 ? 0.5 : 0), y, Math.max(1, x1 - x0 - (x1 - x0 > 3 ? 1 : 0)), A.Y(0) - y); });
+      } });
+  }, { aspect: 0.5, minHeight: 240, maxHeight: 330 });
+  upd();
+})();
+
+/* ================================================== 4. L2 파티션 */
+(function () {
+  const gR = GP.range("pt-r", (v) => v.toFixed(2), () => upd()), gD = GP.range("pt-d", (v) => v.toFixed(1) + " TB/s", () => upd());
+  const RS = [0, 0.25, 0.5, 0.75, 1];
+  function curveFor(r) { const out = []; const cap = partModel(r, 0).cap; for (let i = 0; i <= 120; i++) { const D = (cap * i) / 120; out.push([D, partModel(r, D).lat]); } return out; }
+  function upd() {
+    const r = gR(), D = gD(), m = partModel(r, D);
+    GP.stat("pt-o-s", sm(GP.fmt(m.served, 3), "TB/s") + (m.sat ? " <small class='bad-t'>포화</small>" : ""));
+    GP.stat("pt-o-u", (m.rho * 100).toFixed(0) + " <small>%</small>");
+    GP.stat("pt-o-l", sm(GP.fmt(m.lat, 3), "사이클"));
+    GP.stat("pt-o-p", sm(GP.fmt(m.pw, 3), "W"));
+    document.getElementById("pt-x").innerHTML = "원거리 비율 " + r.toFixed(2) + "이면 L2 대역폭 상한은 <b>min(13.1, 4 / r) = " + GP.fmt(m.cap, 3) + " TB/s</b>. " +
+      (m.sat ? "요구 " + D.toFixed(1) + " TB/s 중 " + GP.fmt(D - m.served, 3) + " TB/s는 처리되지 못하고 SM이 기다린다." : "아직 연결 여유가 있다.");
+    cv.redraw();
+  }
+  const cv = GP.canvas("#pt-cv", (ctx, w, h) => {
+    const P = GP.palette(), r = gR(), D = gD(), m = partModel(r, D);
+    const ser = RS.map((rr, i) => ({ data: curveFor(rr), color: P.series[i % P.series.length], width: 1.3, label: "r = " + rr }));
+    ser.push({ data: curveFor(r), color: P.link, width: 3.2, label: "현재 r" });
+    GP.chart(ctx, null, { x: [0, 13.1], y: [150, 450], xLabel: "처리되는 L2 대역폭 (TB/s)", yLabel: "평균 L2 지연(사이클)", series: ser, legend: "tl",
+      vlines: [{ x: 13.1, color: P.sram, label: "슬라이스 한계 13.1", dash: [4, 3] }],
+      points: [{ x: m.served, y: Math.min(450, m.lat), color: m.sat ? P.bad : P.warn, r: 6, ring: true }] });
+  }, { aspect: 0.52, minHeight: 260, maxHeight: 360 });
+  upd();
+})();
+
+/* ================================================== 5. 배선 RC */
+(function () {
+  const wOf = (v) => 10 * Math.pow(10, v / 50), kOf = (v) => Math.max(1, Math.round(Math.pow(1000, v / 100)));
+  const gW = GP.range("wr-w", (v) => GP.fmt(wOf(v), 3) + " nm", () => upd());
+  const gL = GP.range("wr-l", (v) => v.toFixed(1) + " mm", () => upd());
+  const gK = GP.range("wr-k", (v) => String(kOf(v)), () => upd());
+  const ps = (s) => (s >= 1e-9 ? sm(GP.fmt(s * 1e9, 3), "ns") : sm(GP.fmt(s * 1e12, 3), "ps"));
+  document.getElementById("wr-opt").addEventListener("click", () => {
+    const d = wireDelay(wOf(gW()), gL(), 1);
+    gK.set(Math.round((100 * Math.log10(Math.max(1, d.kOpt))) / 3));
+  });
+  function upd() {
+    const w = wOf(gW()), L = gL(), k = kOf(gK()), d = wireDelay(w, L, k);
+    GP.stat("wr-o-rho", sm(GP.fmt(wireRho(w) * 1e8, 3), "µΩ·cm"));
+    const r = wireR(w);
+    GP.stat("wr-o-r", r >= 1000 ? sm(GP.fmt(r / 1000, 3), "kΩ/mm") : sm(GP.fmt(r, 3), "Ω/mm"));
+    GP.stat("wr-o-u", ps(d.un) + " <small>(" + GP.fmt(cyc(d.un), 3) + "사이클)</small>");
+    GP.stat("wr-o-k", ps(d.rep));
+    GP.stat("wr-o-o", Math.round(d.kOpt) + " <small>· " + GP.fmt((L / d.kOpt) * 1000, 3) + " µm</small>");
+    GP.stat("wr-o-c", ps(d.opt) + " <small>= " + GP.fmt(cyc(d.opt), 3) + "사이클</small>");
+    cv.redraw();
+  }
+  const cv = GP.canvas("#wr-cv", (ctx, w, h) => {
+    const P = GP.palette(), wd = wOf(gW()), L = gL(), k = kOf(gK());
+    const Ls = []; for (let i = 0; i <= 120; i++) Ls.push(0.1 + (29.9 * i) / 120);
+    const D = Ls.map((l) => [l, wireDelay(wd, l, k)]);
+    const pp = (s) => s * 1e12;
+    GP.chart(ctx, null, { x: [0, 30], y: [1, 1e7], logY: true, xLabel: "배선 길이 L (mm)", yLabel: "지연 (ps)", legend: "br",
+      series: [
+        { data: D.map(([l, d]) => [l, pp(d.un)]), color: P.bad, width: 2.4, label: "리피터 없음 0.38rcL²" },
+        { data: D.map(([l, d]) => [l, pp(d.rep)]), color: P.warn, width: 2, dash: [5, 3], label: "구간 k = " + k + " 고정" },
+        { data: D.map(([l, d]) => [l, pp(d.opt)]), color: P.ok, width: 2.4, label: "최적 리피터" },
+        { data: D.map(([l, d]) => [l, pp(d.tof)]), color: P.faint, width: 1, dash: [2, 3], label: "광속 하한" },
+      ],
+      hlines: [{ y: 625, color: P.clock, dash: [4, 3], label: "1사이클 @1.6 GHz", align: "left" }],
+      vlines: [{ x: L, color: P.dim, dash: [3, 3] }],
+      points: [{ x: L, y: pp(wireDelay(wd, L, k).opt), color: P.ok, r: 5, ring: true }] });
+  }, { aspect: 0.55, minHeight: 280, maxHeight: 380 });
+  upd();
+})();
+
+/* ================================================== 6. 클럭 분배 */
+(function () {
+  let seed = 7, res = null;
+  const pOf = (v) => 0.05 * Math.pow(40, v / 100);
+  const gM = GP.seg("ck-m", () => upd());
+  const gS = GP.range("ck-s", (v) => v.toFixed(1) + " ps", () => upd());
+  const gP = GP.range("ck-p", (v) => GP.fmt(pOf(v), 3) + " mm", () => upd());
+  const on = document.getElementById("ck-on");
+  on.addEventListener("change", () => upd());
+  document.getElementById("ck-seed").addEventListener("click", () => { seed = (seed * 13 + 3) % 1009; upd(); });
+  function upd() {
+    res = clockSim(+gM(), pOf(gP()), gS(), seed, on.checked);
+    GP.stat("ck-o-t", sm(GP.fmt(res.skewTree, 3), "ps"));
+    GP.stat("ck-o-s", sm(GP.fmt(res.skew, 3), "ps"));
+    GP.stat("ck-o-f", ((res.skew / 625) * 100).toFixed(1) + " <small>%</small>");
+    GP.stat("ck-o-c", res.C >= 1e-9 ? sm(GP.fmt(res.C * 1e9, 3), "nF") : sm(GP.fmt(res.C * 1e12, 3), "pF"));
+    GP.stat("ck-o-p", sm(GP.fmt(res.P, 3), "W"));
+    cv.redraw();
+  }
+  const cv = GP.canvas("#ck-cv", (ctx, w, h) => {
+    if (!res) return;
+    const P = GP.palette(), n = res.n, nar = w < NARROW;
+    const side = nar ? Math.min(w - 40, (h - 90) / 2) : Math.min((w - 70) / 2, h - 70);
+    const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+    const half = Math.max(1, res.skewTree / 2), cold = P.blue, hot = P.heat, mid = P.surface;
+    const col = (v) => { const t = GP.clamp(v / half, -1, 1); return t < 0 ? GP.mix(mid, cold, -t) : GP.mix(mid, hot, t); };
+    const panel = (arr, x0, y0, title, sk) => {
+      const m0 = mean(arr), c = side / n;
+      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { ctx.fillStyle = col(arr[y * n + x] - m0); ctx.fillRect(x0 + x * c, y0 + y * c, Math.ceil(c), Math.ceil(c)); }
+      ctx.strokeStyle = P.border; ctx.strokeRect(x0 + 0.5, y0 + 0.5, side, side);
+      GP.text(ctx, title + " · 스큐 " + GP.fmt(sk, 3) + " ps", x0 + side / 2, y0 - 10, { size: 12.5, weight: 600, align: "center", color: P.text });
+    };
+    const y0 = 30;
+    if (nar) { panel(res.tree, (w - side) / 2, y0, "트리만", res.skewTree); panel(res.mesh, (w - side) / 2, y0 + side + 34, on.checked ? "트리 + 메시" : "메시 끔", res.skew); }
+    else { const gap = (w - 2 * side) / 3; panel(res.tree, gap, y0, "트리만", res.skewTree); panel(res.mesh, 2 * gap + side, y0, on.checked ? "트리 + 메시" : "메시 끔", res.skew); }
+    // 색 막대
+    const bx = w / 2 - 90, by = h - 22;
+    for (let i = 0; i <= 60; i++) { ctx.fillStyle = col(((i - 30) / 30) * half); ctx.fillRect(bx + i * 3, by, 3.2, 8); }
+    GP.text(ctx, "−" + GP.fmt(half, 2) + " ps", bx - 6, by + 4, { size: 11, align: "right", baseline: "middle", color: P.dim });
+    GP.text(ctx, "+" + GP.fmt(half, 2) + " ps (늦음)", bx + 189, by + 4, { size: 11, align: "left", baseline: "middle", color: P.dim });
+  }, { height: (w) => (w < NARROW ? Math.min(w - 40, 300) * 2 + 120 : Math.min(360, (w - 70) / 2 + 80)) });
+  upd();
+})();
+
+/* ================================================== 7. 클럭 도메인 교차 */
+(function () {
+  const gA = GP.range("cd-a", (v) => v.toFixed(1) + " GHz", () => upd());
+  const gB = GP.range("cd-b", (v) => v.toFixed(1) + " GHz", () => upd());
+  const gN = GP.seg("cd-n", () => upd());
+  const gX = GP.range("cd-x", (v) => v.toFixed(2), () => upd());
+  const YMAX = 1e40;
+  function upd() {
+    const c = cdcModel(gA(), gB(), +gN(), gX());
+    GP.stat("cd-o-t", sm(GP.fmt(c.tr * 1e12, 3), "ps"));
+    GP.stat("cd-o-m", fmtTime(c.mtbf));
+    GP.stat("cd-o-l", sm(GP.fmt(c.latS * 1e9, 3), "ns") + " <small>(" + GP.fmt(c.latCyc, 3) + "사이클)</small>");
+    GP.stat("cd-o-d", sm(c.depth, "칸"));
+    cv.redraw();
+  }
+  const cv = GP.canvas("#cd-cv", (ctx, w, h) => {
+    const P = GP.palette(), fa = gA(), x = gX(), fb = gB(), n = +gN();
+    const fs = []; for (let i = 0; i <= 60; i++) fs.push(0.5 + (1.5 * i) / 60);
+    const cl = (v) => Math.max(1e-6, Math.min(YMAX, v));
+    const ser = [1, 2, 3].map((k, i) => ({ data: fs.map((f) => [f, cl(cdcModel(fa, f, k, x).mtbf)]), color: [P.bad, P.ok, P.link][i], width: k === n ? 3.2 : 1.6, label: k + "단 동기화" }));
+    GP.chart(ctx, null, { x: [0.5, 2], y: [1e-6, YMAX], logY: true, xLabel: "읽기 클럭 f_{B} (GHz)", yLabel: "MTBF (s)", series: ser, legend: "tr",
+      hlines: [{ y: 3.156e7, color: P.dim, dash: [3, 3], label: "1년", align: "left" }, { y: 4.35e17, color: P.warn, dash: [3, 3], label: "우주의 나이", align: "left" }],
+      vlines: [{ x: fb, color: P.dim, dash: [3, 3] }],
+      points: [{ x: fb, y: cl(cdcModel(fa, fb, n, x).mtbf), color: P.clock, r: 6, ring: true }] });
+  }, { aspect: 0.52, minHeight: 260, maxHeight: 360 });
+  upd();
+})();
+
+/* ================================================== 8. 다이 평면 배치 */
+(function () {
+  let f = null, pk = [];
+  const gL = GP.seg("fp-l", () => upd()), gH = GP.seg("fp-h", () => upd());
+  const loc = document.getElementById("fp-loc");
+  loc.addEventListener("change", () => upd());
+  const gB = GP.range("fp-b", (v) => v.toFixed(1) + " TB/s", () => upd());
+  const gM = GP.range("fp-m", (v) => v.toFixed(2) + " TB/s", () => upd());
+  const rnd = nocRng(5);
+  function spawn(kind) {
+    if (kind === 0) {
+      const a = f.sms[Math.floor(rnd() * f.sms.length)];
+      let j = Math.floor(rnd() * f.sls.length);
+      if (loc.checked) { const pa = f.part[f.sls.reduce((bi, b, i) => (Math.abs(b.x - a.x) + Math.abs(b.y - a.y) < Math.abs(f.sls[bi].x - a.x) + Math.abs(f.sls[bi].y - a.y) ? i : bi), 0)]; let g = 0; while (f.part[j] !== pa && g++ < 50) j = Math.floor(rnd() * f.sls.length); }
+      return { a, b: f.sls[j], t: 0, k: 0 };
+    }
+    const j = Math.floor(rnd() * f.sls.length);
+    return { a: f.sls[j], b: f.phy[f.home[j]], t: 0, k: 1 };
+  }
+  function upd() {
+    f = floorModel(gL(), gH(), gB(), gM(), loc.checked);
+    pk = [];
+    for (let i = 0; i < 46; i++) { const p = spawn(i < 30 ? 0 : 1); p.t = rnd(); pk.push(p); }
+    GP.stat("fp-o-a", sm(GP.fmt(f.dSL, 3), "mm"));
+    GP.stat("fp-o-b", sm(GP.fmt(f.dLH, 3), "mm"));
+    GP.stat("fp-o-x", sm(GP.fmt(f.maxSL, 3), "mm"));
+    GP.stat("fp-o-p", sm(GP.fmt(f.pSL, 3), "W"));
+    GP.stat("fp-o-q", sm(GP.fmt(f.pLH, 3), "W"));
+    GP.stat("fp-o-t", sm(GP.fmt(f.pTot, 3), "W"));
+    cv.redraw();
+  }
+  const cv = GP.canvas("#fp-cv", (ctx, w, h) => {
+    if (!f) return;
+    const P = GP.palette(), pad = 30, sc = Math.min((w - 2 * pad) / FLOOR.W, (h - 2 * pad) / FLOOR.H);
+    const ox = (w - FLOOR.W * sc) / 2, oy = (h - FLOOR.H * sc) / 2;
+    const X = (x) => ox + x * sc, Y = (y) => oy + y * sc;
+    // 다이
+    ctx.fillStyle = GP.alpha(P.dim, 0.08); ctx.fillRect(X(0), Y(0), FLOOR.W * sc, FLOOR.H * sc);
+    ctx.strokeStyle = P.border; ctx.lineWidth = 1.2; ctx.strokeRect(X(0), Y(0), FLOOR.W * sc, FLOOR.H * sc);
+    // HBM 스택(다이 밖)과 PHY
+    const long = gH() === "long";
+    f.phy.forEach((p) => {
+      ctx.fillStyle = GP.alpha(P.dram, 0.22); ctx.strokeStyle = P.dram;
+      if (long) { const sy = p.y < 13 ? Y(0) - pad + 4 : Y(FLOOR.H) + 2; ctx.fillRect(X(p.x - 4.2), sy, 8.4 * sc, pad - 6); ctx.strokeRect(X(p.x - 4.2), sy, 8.4 * sc, pad - 6); }
+      else { const sx = p.x < 15 ? X(0) - pad + 4 : X(FLOOR.W) + 2; ctx.fillRect(sx, Y(p.y - 3.6), pad - 6, 7.2 * sc); ctx.strokeRect(sx, Y(p.y - 3.6), pad - 6, 7.2 * sc); }
+      ctx.fillStyle = GP.alpha(P.dram, 0.55);
+      if (long) ctx.fillRect(X(p.x - 4.2), Y(p.y - 1), 8.4 * sc, 2 * sc); else ctx.fillRect(X(p.x - 1), Y(p.y - 3.6), 2 * sc, 7.2 * sc);
+    });
+    // 영역
+    f.smR.forEach((r) => { ctx.fillStyle = GP.alpha(P.compute, 0.07); ctx.fillRect(X(r.x), Y(r.y), r.w * sc, r.h * sc); });
+    f.l2R.forEach((r) => { ctx.fillStyle = GP.alpha(P.sram, 0.12); ctx.fillRect(X(r.x), Y(r.y), r.w * sc, r.h * sc); });
+    const s1 = Math.max(2, sc * 1.1), s2 = Math.max(2, sc * 0.55);
+    ctx.fillStyle = GP.alpha(P.compute, 0.7);
+    f.sms.forEach((a) => ctx.fillRect(X(a.x) - s1 / 2, Y(a.y) - s1 / 2, s1, s1));
+    f.sls.forEach((b, j) => { ctx.fillStyle = loc.checked && f.part[j] ? GP.mix(P.sram, P.text, 0.35) : P.sram; ctx.fillRect(X(b.x) - s2 / 2, Y(b.y) - s2 / 2, s2, s2); });
+    // 패킷: 맨해튼 경로(먼저 x, 다음 y)
+    pk.forEach((p) => {
+      const dx = p.b.x - p.a.x, dy = p.b.y - p.a.y, L = Math.abs(dx) + Math.abs(dy) || 1, s = p.t * L;
+      const x = s <= Math.abs(dx) ? p.a.x + Math.sign(dx) * s : p.b.x, y = s <= Math.abs(dx) ? p.a.y : p.a.y + Math.sign(dy) * (s - Math.abs(dx));
+      ctx.fillStyle = p.k ? P.heat : P.data; ctx.beginPath(); ctx.arc(X(x), Y(y), 2.6, 0, 7); ctx.fill();
+    });
+    GP.text(ctx, "30 × 26 mm", X(FLOOR.W) - 4, Y(FLOOR.H) - 6, { size: 11, align: "right", color: P.dim });
+  }, { aspect: 0.62, minHeight: 240, maxHeight: 420 });
+  // 패킷은 거리와 무관하게 같은 속도(mm/s)로 움직인다: 먼 경로일수록 오래 걸린다
+  GP.loop(document.getElementById("fp-cv"), (dt) => {
+    if (!f) return;
+    pk.forEach((p, i) => { const L = Math.abs(p.b.x - p.a.x) + Math.abs(p.b.y - p.a.y) || 1; p.t += (dt * 9) / L; if (p.t >= 1) pk[i] = spawn(p.k); });
+    cv.redraw();
+  });
+  upd();
+})();
+})();
+</script>
+</body>
+</html>

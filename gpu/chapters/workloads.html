@@ -1,0 +1,1115 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>워크로드가 칩을 만든다 · GPUBook</title>
+<meta name="description" content="LLM 학습의 6ND FLOP과 GPU 일수, 추론의 프리필(연산 제한)과 디코드(대역폭 제한), 배치와 산술 강도, KV 캐시가 정하는 배치 상한, FP8·FP4 양자화, 전문가 혼합(MoE)의 연산·메모리·통신, 그래픽 파이프라인과 고정 기능 유닛, 광선 추적의 BVH 순회를 계산하고, 같은 780 mm²를 연산·텐서·SRAM·고정 기능에 나누는 면적 배분 실험으로 워크로드가 칩 설계를 정하는 과정을 보여 준다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  .wl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; padding: 8px 18px 0; }
+  .wl-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .wl-presets .btn { padding: 4px 10px; font-size: 13px; }
+  .stat .v.bad-t { color: var(--bad); } .stat .v.ok-t { color: var(--ok); } .stat .v.warn-t { color: var(--warn); }
+  table.dec td:first-child { white-space: nowrap; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="workloads">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 15</div>
+    <h1>워크로드가 칩을 만든다</h1>
+    <p class="lead">GX-1의 숫자, 곧 텐서 코어 943.7 TFLOPS, HBM 7.37 TB/s와 144 GB, L2 64 MB, 링크 900 GB/s는 따로따로 정해진 값이 아니다. 각각은 어떤 워크로드가 어디서 막히는지를 계산한 결과다. 이 장은 기준 워크로드 GX-LM-70B를 학습·프리필·디코드로 나누어 각 단계를 막는 자원(연산, 대역폭, 용량, 통신)을 계산한다. 이어서 그래픽 파이프라인이 왜 고정 기능 유닛을 남겨 두는지 보고, 끝으로 같은 780 mm²를 직접 나누어 보며 <strong>워크로드 → 병목 → 면적 배분</strong>의 고리를 닫는다. 루프라인의 정의와 리지 포인트는 <a href="roofline.html">7장</a>의 결과를 그대로 쓴다.</p>
+    <ul class="objectives">
+      <li>학습 연산량 \(6ND\)로 GPU 수·모델 FLOPS 활용률(MFU)에서 학습 일수와 에너지(MWh)를 계산할 수 있다.</li>
+      <li>프리필이 연산 제한이고 디코드가 대역폭 제한인 이유를 산술 강도로 설명하고, 첫 토큰 지연과 토큰 간 지연을 계산할 수 있다.</li>
+      <li>배치를 키우면 디코드 산술 강도가 왜 배치 크기에 비례해 오르는지, 그리고 KV 캐시 용량이 왜 그 배치를 막는지 계산할 수 있다.</li>
+      <li>FP8·FP4 양자화가 가중치·KV 캐시의 용량과 대역폭, 그리고 토큰/s에 주는 효과를 구분할 수 있다.</li>
+      <li>전문가 혼합(MoE)이 연산량, 메모리 용량, 통신량을 각각 어떻게 바꾸는지 설명할 수 있다.</li>
+      <li>그래픽 파이프라인의 단계별 병목과 고정 기능 유닛의 존재 이유를 계산하고, 면적 배분이 워크로드별 성능을 어떻게 바꾸는지 비교할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="map">
+    <h2>워크로드마다 막히는 곳이 다르다</h2>
+    <p>칩 설계자는 "가장 빠른 칩"을 만들 수 없다. 면적·전력·원가가 정해져 있으니 어떤 자원을 얼마나 줄지 골라야 한다. 그 선택은 워크로드가 정한다. 같은 행렬곱이라도 한 번에 많은 토큰을 처리하면 연산이 부족하고, 토큰을 하나씩 처리하면 메모리 대역폭이 부족하다. 모델이 커지면 HBM 용량이, 여러 칩에 나누면 링크가 부족하다. 그래픽은 행렬곱보다 삼각형·텍스처·픽셀을 처리하는 전용 유닛이 필요하다.</p>
+    <p>이 장의 계산은 모두 <a href="roofline.html">7장</a>의 루프라인 한 줄에서 출발한다. 산술 강도 \(I\)(FLOP/B)가 리지 포인트보다 크면 연산 제한, 작으면 대역폭 제한이다. GX-1의 리지 포인트는 BF16에서 약 128 FLOP/B, FP8에서 약 256 FLOP/B다.</p>
+    <div class="formula">$$P = \min\left(P_{peak},\; I \cdot BW\right),\qquad I_{ridge} = \frac{P_{peak}}{BW} = \frac{943.7\ \text{TFLOPS}}{7.37\ \text{TB/s}} \approx 128\ \text{FLOP/B}$$
+      <div class="where">\(P_{peak}\)은 정밀도별 피크 연산 성능, \(BW\)는 HBM 대역폭. 이 장에서는 이 식에 워크로드별 \(I\)를 넣어 시간을 구한다. 계산은 모두 이상적인 상한이며, 실제 커널의 효율(보통 피크의 40–80 %)은 따로 곱한다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="네 가지 워크로드와 각각을 막는 자원: 학습과 프리필은 텐서 연산, 디코드는 HBM 대역폭과 용량, MoE는 용량과 링크, 그래픽은 고정 기능과 FP32">
+        <text x="20" y="24" class="t t-b">워크로드</text><text x="300" y="24" class="t t-b">산술 강도·특징</text><text x="620" y="24" class="t t-b">먼저 막히는 자원</text>
+        <g>
+          <rect x="20" y="40" width="240" height="44" rx="8" class="k-tensor"/><text x="34" y="60" class="t t-b">LLM 학습</text><text x="34" y="77" class="t-dim">토큰 수백만 개 × 6N FLOP</text>
+          <text x="300" y="60" class="t">\(I\) 수백–수천 FLOP/B</text><text x="300" y="77" class="t-dim">큰 행렬곱, 재사용이 많다</text>
+          <rect x="620" y="44" width="220" height="36" rx="6" class="kf-tensor" opacity="0.85"/><text x="730" y="67" class="t t-c" style="fill:var(--bg-elev)">텐서 연산 · 전력</text>
+        </g>
+        <g>
+          <rect x="20" y="94" width="240" height="44" rx="8" class="k-tensor"/><text x="34" y="114" class="t t-b">추론 프리필</text><text x="34" y="131" class="t-dim">프롬프트 L 토큰을 한꺼번에</text>
+          <text x="300" y="114" class="t">\(I \approx L\) (BF16)</text><text x="300" y="131" class="t-dim">행렬 × 행렬</text>
+          <rect x="620" y="98" width="220" height="36" rx="6" class="kf-tensor" opacity="0.85"/><text x="730" y="121" class="t t-c" style="fill:var(--bg-elev)">텐서 연산</text>
+        </g>
+        <g>
+          <rect x="20" y="148" width="240" height="44" rx="8" class="k-dram"/><text x="34" y="168" class="t t-b">추론 디코드</text><text x="34" y="185" class="t-dim">한 단계에 시퀀스당 1 토큰</text>
+          <text x="300" y="168" class="t">\(I \approx B\) (BF16)</text><text x="300" y="185" class="t-dim">행렬 × 벡터, 가중치 전부 읽기</text>
+          <rect x="620" y="152" width="220" height="36" rx="6" class="kf-dram" opacity="0.85"/><text x="730" y="175" class="t t-c" style="fill:var(--bg-elev)">HBM 대역폭 · 용량</text>
+        </g>
+        <g>
+          <rect x="20" y="202" width="240" height="44" rx="8" class="k-link"/><text x="34" y="222" class="t t-b">전문가 혼합(MoE)</text><text x="34" y="239" class="t-dim">토큰마다 전문가 k개만</text>
+          <text x="300" y="222" class="t">연산 ↓, 파라미터 ↑</text><text x="300" y="239" class="t-dim">토큰을 전문가로 보내는 all-to-all</text>
+          <rect x="620" y="206" width="220" height="36" rx="6" class="kf-link" opacity="0.85"/><text x="730" y="229" class="t t-c" style="fill:var(--bg-elev)">용량 · 링크</text>
+        </g>
+        <g>
+          <rect x="20" y="256" width="240" height="40" rx="8" class="k-compute"/><text x="34" y="281" class="t t-b">그래픽 · 광선 추적</text>
+          <text x="300" y="274" class="t">삼각형·텍스처·픽셀·광선</text><text x="300" y="290" class="t-dim">불규칙 접근, 고정된 연산 패턴</text>
+          <rect x="620" y="258" width="220" height="36" rx="6" class="kf-compute" opacity="0.85"/><text x="730" y="281" class="t t-c" style="fill:var(--bg-elev)">FP32 레인 · 고정 기능</text>
+        </g>
+        <path d="M262 62 H292 M262 116 H292 M262 170 H292 M262 224 H292 M262 276 H292" class="s-line"/>
+        <path d="M560 62 H612 M560 116 H612 M560 170 H612 M560 224 H612 M560 276 H612" class="arr"/>
+      </svg>
+      <figcaption><b>그림 15-1.</b> 워크로드별로 먼저 바닥나는 자원. 같은 칩이 학습과 프리필에서는 텐서 코어를 다 쓰고, 디코드에서는 텐서 코어 대부분을 놀린 채 HBM을 기다린다. 칩의 면적 배분은 이 다섯 줄 가운데 어디에 무게를 두느냐의 문제다.</figcaption>
+    </figure>
+    <p><b>왜 이렇게 설계하는가.</b> 워크로드 하나만 보고 칩을 만들면 다른 워크로드에서 면적이 논다. 데이터센터 GPU는 학습(연산)과 추론(대역폭·용량)을 모두 하므로 텐서 코어와 HBM을 함께 키우고, 그래픽 GPU는 고정 기능과 FP32에 면적을 준다. 아래 절들은 이 선택을 숫자로 만든다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="train">
+    <h2>학습: 6ND FLOP과 GPU 일수</h2>
+    <p>트랜스포머의 순전파는 토큰 하나에 파라미터마다 곱셈 하나와 덧셈 하나, 곧 약 \(2N\) FLOP이 든다. 역전파는 활성값 기울기와 가중치 기울기를 각각 구하므로 순전파의 약 두 배인 \(4N\)이다. 그래서 토큰 \(D\)개로 학습하는 총 연산량은 약 \(6ND\)다(어텐션의 문맥 길이 항은 문맥 8,192에서 수 % 수준이라 뺀다).</p>
+    <div class="formula">$$C_{train} \approx 6ND,\qquad t = \frac{6ND}{n_{GPU}\cdot P_{peak}\cdot \text{MFU}},\qquad E = n_{GPU}\cdot P_{GPU}\cdot t$$
+      <div class="where">\(N\)은 파라미터 수, \(D\)는 학습 토큰 수, \(n_{GPU}\)는 GPU 수. <span class="term">모델 FLOPS 활용률</span><span class="en">(model FLOPs utilization, MFU)</span>은 \(6ND\)를 실제 걸린 시간과 피크로 나눈 값으로, 통신 대기·파이프라인 거품·메모리 제한 커널 때문에 대규모 학습에서 보통 30–50 %다. \(P_{GPU}\)는 GPU 1개 전력(GX-1 1 kW, 노드 몫 포함 1.5 kW).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="토큰 하나의 학습 단계: 순전파 2N, 역전파 활성값 기울기 2N과 가중치 기울기 2N, 합 6N. 아래는 파라미터당 학습 상태 16바이트">
+        <text x="20" y="24" class="t t-b">토큰 하나가 층 하나의 가중치 행렬 W를 지날 때</text>
+        <rect x="20" y="40" width="250" height="60" rx="8" class="k-tensor"/><text x="145" y="64" class="t t-b t-c">순전파 y = W x</text><text x="145" y="86" class="t-dim t-c">가중치마다 FMA 1개 = 2 FLOP</text>
+        <rect x="300" y="40" width="250" height="60" rx="8" class="k-tensor"/><text x="425" y="64" class="t t-b t-c">활성값 기울기 dx = Wᵀ dy</text><text x="425" y="86" class="t-dim t-c">2 FLOP / 가중치</text>
+        <rect x="580" y="40" width="260" height="60" rx="8" class="k-tensor"/><text x="710" y="64" class="t t-b t-c">가중치 기울기 dW = dy xᵀ</text><text x="710" y="86" class="t-dim t-c">2 FLOP / 가중치</text>
+        <path d="M272 70 H296 M552 70 H576" class="arr"/>
+        <text x="145" y="122" class="t-acc t-c">2N</text><text x="425" y="122" class="t-acc t-c">+ 2N</text><text x="710" y="122" class="t-acc t-c">+ 2N = 6N FLOP / 토큰</text>
+        <text x="20" y="160" class="t t-b">GPU 메모리에 상주하는 학습 상태 (혼합 정밀도 + Adam)</text>
+        <rect x="20" y="172" width="80" height="34" class="k-tensor"/><text x="60" y="194" class="t t-c">BF16 W 2</text>
+        <rect x="100" y="172" width="80" height="34" class="k-data"/><text x="140" y="194" class="t t-c">BF16 dW 2</text>
+        <rect x="180" y="172" width="160" height="34" class="k-sram"/><text x="260" y="194" class="t t-c">FP32 원본 W 4</text>
+        <rect x="340" y="172" width="320" height="34" class="k-dram"/><text x="500" y="194" class="t t-c">Adam 모멘트 m, v (FP32) 8</text>
+        <text x="676" y="194" class="t t-b">= 16 B / 파라미터</text>
+        <text x="20" y="232" class="t-dim">70B 모델 → 1.12 TB. GX-1 한 개(144 GB)에 들어가지 않으므로 최소 8개에 나눈다(활성값 메모리는 별도).</text>
+      </svg>
+      <figcaption><b>그림 15-2.</b> \(6N\)의 출처. 순전파 행렬곱 하나마다 역전파에서 같은 크기의 행렬곱이 두 번 생긴다. 아래 막대는 파라미터 하나에 붙는 학습 상태 16 B로, 학습은 연산뿐 아니라 용량에서도 칩 여러 개를 요구한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-train">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>학습 시간·에너지 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="tr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>파라미터 N <output id="tr-n-out"></output></span><input type="range" id="tr-n" min="0" max="3" step="0.005" value="1.845"></label>
+          <label class="ctrl"><span>학습 토큰 D <output id="tr-d-out"></output></span><input type="range" id="tr-d" min="-1" max="2" step="0.005" value="1.176"></label>
+          <label class="ctrl"><span>GPU 수 <output id="tr-g-out"></output></span><input type="range" id="tr-g" min="3" max="16" step="1" value="12"></label>
+          <label class="ctrl"><span>MFU <output id="tr-m-out"></output></span><input type="range" id="tr-m" min="10" max="70" step="1" value="40"></label>
+          <div class="ctrl"><span>연산 정밀도</span><div class="seg" id="tr-p"><button data-value="bf16" class="on">BF16</button><button data-value="fp8">FP8</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">총 연산 6ND</span><span class="v" id="tr-o-f">—</span></div>
+        <div class="stat"><span class="k">학습 기간</span><span class="v" id="tr-o-t">—</span></div>
+        <div class="stat"><span class="k">GPU·시간</span><span class="v" id="tr-o-h">—</span></div>
+        <div class="stat"><span class="k">에너지 GPU / 노드</span><span class="v" id="tr-o-e">—</span></div>
+        <div class="stat"><span class="k">학습 상태 / 최소 GPU</span><span class="v" id="tr-o-s">—</span></div>
+      </div>
+      <div class="sim-note">그래프는 GPU 수에 따른 학습 일수(로그-로그), 실선은 현재 MFU, 점선은 MFU 100 %의 이론 한계다. 식은 \(t = 6ND/(n_{GPU} P_{peak}\,\text{MFU})\), 에너지는 GPU 1 kW·노드 몫 1.5 kW로 계산한다. 해볼 것: ① 기본값(70B, 15T 토큰, 4,096개, MFU 40 %, BF16)에서 약 47일, GPU 에너지 약 4,600 MWh를 확인한다. ② FP8로 바꾸면 피크가 두 배라 약 24일로 준다(실제로는 FP8로 못 하는 연산이 남아 덜 준다). ③ GPU를 8개로 줄이면 약 66년이 걸린다. 학습 상태 1.12 TB를 담는 최소 개수가 8개라는 것과 "시간 안에 끝내는" 개수는 전혀 다른 문제다.</div>
+    </div>
+
+    <div class="callout fab"><strong>GX-LM-70B 학습</strong>토큰 15조 개로 학습하면 \(6 \times 70\times10^{9} \times 15\times10^{12} = 6.3\times10^{24}\) FLOP이다. GX-1 4,096개(GX-8 노드 512대, GX-Rack 128개)가 BF16 피크 943.7 TFLOPS의 40 %로 돌면 초당 \(1.55\times10^{18}\) FLOP, 약 \(4.07\times10^{6}\) s = <b>약 47일</b>이다. GPU·시간 약 464만, GPU 칩만 약 4,600 MWh, 노드 전체 약 7,000 MWh(랙 냉각·PUE 제외). 초당 학습 토큰은 약 370만 개다. MFU를 40 %에서 50 %로 올리면 약 9일과 약 900 MWh가 준다. 대규모 학습에서 링크·스위치(<a href="scale.html">14장</a>)와 전력 관리가 MFU를 통해 곧바로 일수와 전기료가 된다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 학습은 거의 전부 큰 행렬곱이라 산술 강도가 리지 포인트보다 훨씬 높다. 그래서 학습용 칩은 같은 면적과 전력에서 텐서 연산을 최대로 하는 쪽(낮은 정밀도, 큰 텐서 코어)으로 간다. 다만 6ND가 고정이므로 실제 일수는 MFU가 정하고, MFU를 깎는 것은 칩 바깥의 통신과 칩 안의 비행렬 연산이다. 이 때문에 링크 대역폭과 벡터 레인도 함께 키운다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="infer">
+    <h2>추론: 프리필은 연산, 디코드는 대역폭</h2>
+    <p>생성형 추론은 두 단계다. <span class="term">프리필</span><span class="en">(prefill)</span>은 프롬프트 \(L\) 토큰을 한꺼번에 넣어 KV 캐시를 채우고 첫 토큰을 낸다. 토큰 \(L\)개가 같은 가중치를 공유하므로 행렬 × 행렬이고, 가중치 한 바이트를 \(L\)번 재사용한다. <span class="term">디코드</span><span class="en">(decode)</span>는 그 뒤 토큰을 하나씩 만든다. 단계마다 시퀀스당 토큰 1개만 처리하는데도 가중치 전체와 그때까지 쌓인 KV 캐시를 HBM에서 다시 읽는다. 행렬 × 벡터라 재사용이 거의 없다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="프리필은 프롬프트 토큰 전체를 한 번의 행렬곱으로, 디코드는 토큰마다 가중치를 다시 읽는 반복. 아래 시간축에 첫 토큰 지연과 토큰 간 지연">
+        <text x="20" y="24" class="t t-b">프리필 (행렬 × 행렬)</text>
+        <rect x="20" y="36" width="120" height="70" class="k-tensor"/><text x="80" y="76" class="t t-c">W</text>
+        <text x="152" y="76" class="t">×</text>
+        <rect x="170" y="36" width="160" height="70" class="k-data"/><text x="250" y="66" class="t t-c">토큰 L개</text><text x="250" y="86" class="t-dim t-c">(d × L)</text>
+        <text x="20" y="126" class="t-dim">가중치 1 B당 2L FLOP → 연산 제한</text>
+        <text x="470" y="24" class="t t-b">디코드 (행렬 × 벡터, 매 단계 반복)</text>
+        <rect x="470" y="36" width="120" height="70" class="k-tensor"/><text x="530" y="76" class="t t-c">W</text>
+        <text x="602" y="76" class="t">×</text>
+        <rect x="620" y="36" width="16" height="70" class="k-data"/>
+        <text x="646" y="66" class="t">토큰 1개</text><text x="646" y="86" class="t-dim">+ KV 캐시 읽기</text>
+        <text x="470" y="126" class="t-dim">가중치 1 B당 2 FLOP(BF16은 1) → 대역폭 제한</text>
+        <line x1="20" y1="190" x2="840" y2="190" class="s-line"/>
+        <rect x="20" y="168" width="260" height="22" class="kf-tensor" opacity="0.8"/><text x="150" y="184" class="t t-c" style="fill:var(--bg-elev)">프리필</text>
+        <g class="kf-dram" opacity="0.8"><rect x="284" y="168" width="44" height="22"/><rect x="332" y="168" width="44" height="22"/><rect x="380" y="168" width="44" height="22"/><rect x="428" y="168" width="44" height="22"/><rect x="476" y="168" width="44" height="22"/><rect x="524" y="168" width="44" height="22"/></g>
+        <text x="600" y="184" class="t-dim">… 출력 토큰마다 한 단계</text>
+        <path d="M20 204 H280" class="dimline"/><text x="150" y="222" class="t t-c">첫 토큰 지연 TTFT</text>
+        <path d="M284 204 H328" class="dimline"/><text x="306" y="240" class="t t-c">토큰 간 지연 TPOT</text>
+      </svg>
+      <figcaption><b>그림 15-3.</b> 같은 가중치를 쓰지만 두 단계의 모양이 다르다. 프리필은 프롬프트 전체를 한 번에 처리해 텐서 코어를 채우고, 디코드는 매 단계 가중치 전체를 HBM에서 끌어와 토큰 하나(배치 \(B\)면 \(B\)개)에 쓴다. 사용자가 느끼는 지연은 첫 토큰 지연(TTFT)과 토큰 간 지연(TPOT) 두 가지다.</figcaption>
+    </figure>
+
+    <p>디코드 한 단계(배치 \(B\), 시퀀스마다 문맥 \(S\) 토큰)에서 HBM이 옮기는 바이트와 연산량은 다음과 같다. 어텐션은 질의 헤드 64개가 문맥 \(S\)개의 키·값과 곱해지므로 층마다 \(4 d_{model} S\) FLOP이 더해진다.</p>
+    <div class="formula">$$\text{bytes} = N b_w + B\,S\,k_{tok},\qquad \text{FLOP} = B\left(2N + 4 n_{layer} d_{model} S\right),\qquad t_{step} = \max\!\left(\frac{\text{FLOP}}{P_{peak}},\ \frac{\text{bytes}}{BW}\right)$$
+      <div class="where">\(b_w\)는 가중치 한 개의 바이트(BF16 2, FP8 1, FP4 0.5), \(k_{tok}\)는 토큰당 KV 캐시 바이트(GX-LM-70B BF16에서 320 KiB). 프리필은 \(\text{FLOP} = 2NL + 2 n_{layer} d_{model} L^2\), \(\text{bytes} \approx N b_w + L\,k_{tok}\). 첫 토큰 지연 \(\text{TTFT} \approx t_{prefill}\), 토큰 간 지연 \(\text{TPOT} = t_{step}\), 시퀀스당 속도 \(1/t_{step}\), 전체 처리량 \(B/t_{step}\).</div></div>
+
+    <div class="sim" id="sim-inf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>추론 성능 모델: TTFT · TPOT · 토큰/s</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="inf-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>가중치·연산 정밀도</span><div class="seg" id="inf-p"><button data-value="bf16">BF16</button><button data-value="fp8" class="on">FP8</button><button data-value="fp4">FP4</button></div></div>
+          <label class="ctrl"><span>배치 B <output id="inf-b-out"></output></span><input type="range" id="inf-b" min="0" max="9" step="1" value="0"></label>
+          <label class="ctrl"><span>디코드 문맥 S <output id="inf-s-out"></output></span><input type="range" id="inf-s" min="0" max="8192" step="128" value="2048"></label>
+          <label class="ctrl"><span>프롬프트 L <output id="inf-l-out"></output></span><input type="range" id="inf-l" min="128" max="8192" step="128" value="2048"></label>
+          <label class="ctrl"><span>출력 토큰 수 <output id="inf-o-out"></output></span><input type="range" id="inf-o" min="16" max="2048" step="16" value="512"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">TTFT (프리필)</span><span class="v" id="inf-o-ttft">—</span></div>
+        <div class="stat"><span class="k">TPOT (디코드)</span><span class="v" id="inf-o-tpot">—</span></div>
+        <div class="stat"><span class="k">시퀀스당 토큰/s</span><span class="v" id="inf-o-seq">—</span></div>
+        <div class="stat"><span class="k">전체 토큰/s</span><span class="v" id="inf-o-tot">—</span></div>
+        <div class="stat"><span class="k">HBM 사용</span><span class="v" id="inf-o-mem">—</span></div>
+        <div class="stat"><span class="k">응답 전체 시간</span><span class="v" id="inf-o-e2e">—</span></div>
+      </div>
+      <div class="sim-note">막대는 각 단계의 연산 시간(FLOP/피크)과 메모리 시간(바이트/대역폭)이다. 둘 중 긴 쪽이 실제 시간이고, 짧은 쪽은 그만큼 자원이 논다. KV 캐시는 BF16로 둔다(정밀도 효과는 <a href="#quant">6절</a>). 해볼 것: ① 기본값(FP8, B = 1, S = 2,048)에서 디코드 약 104 토큰/s, 메모리 시간이 연산 시간의 약 100배임을 본다. S를 0으로 두면 GX-LM-70B 표의 약 105 토큰/s가 나온다. ② 프롬프트 2,048에서 TTFT 약 155 ms, 연산 제한이다. BF16로 바꾸면 피크가 반이라 약 310 ms가 된다. ③ B를 64로 올리면 TPOT는 약 9.6 → 15 ms로 늘지만 전체 처리량은 약 4,200 토큰/s로 40배 늘어난다. B = 128 이상에서는 HBM 144 GB를 넘는다.</div>
+    </div>
+
+    <div class="callout fab"><strong>배치 1 디코드 105 토큰/s의 정체</strong>FP8 가중치 70 GB를 한 토큰마다 한 번 읽어야 하므로 \(t_{step} \ge 70\ \text{GB} / 7.37\ \text{TB/s} = 9.5\ \text{ms}\), 곧 <b>약 105 토큰/s</b>가 상한이다. 이때 연산은 \(140\ \text{GFLOP} / 1{,}887\ \text{TFLOPS} = 0.074\ \text{ms}\)로 메모리 시간의 1 %도 안 된다. 텐서 코어의 99 %가 노는 셈이다. 같은 칩이 프롬프트 2,048 토큰의 프리필에서는 약 292 TFLOP을 155 ms에 끝내며 피크를 다 쓴다(메모리 시간 9.6 ms). 한 칩 안에서 단계에 따라 병목이 연산과 대역폭 사이를 오간다. 프리필과 디코드를 서로 다른 GPU 묶음에 나누어 돌리는 서빙 방식(분리 서빙)이 나오는 이유다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 디코드의 토큰/s는 HBM 대역폭 ÷ 가중치 바이트로 정해지고, 텐서 코어를 두 배로 늘려도 거의 바뀌지 않는다. 그래서 추론 비중이 큰 칩은 연산보다 HBM 스택 수·핀 속도(<a href="hbm.html">8장</a>)에 원가를 쓰고, 가중치 바이트를 줄이는 저정밀도 포맷(FP8·FP4)을 하드웨어로 지원한다. 프리필은 반대로 연산 제한이라 텐서 코어가 지연을 정한다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="batch">
+    <h2>배치 크기와 산술 강도</h2>
+    <p>디코드에서 가중치 바이트는 배치 \(B\)개 시퀀스가 함께 쓴다. KV 캐시를 빼고 보면 BF16에서 연산은 \(2NB\), 바이트는 \(2N\)이므로 산술 강도는 정확히 \(B\) FLOP/B다. FP8이면 바이트가 반이라 \(2B\)다. 리지 포인트도 FP8에서 두 배(256)이므로, 두 정밀도 모두 <b>B ≈ 128</b>에서 대역폭 제한이 연산 제한으로 바뀐다.</p>
+    <div class="formula">$$I_{decode}(B) = \frac{B\,(2N + 4 n_{layer} d_{model} S)}{N b_w + B\,S\,k_{tok}}\ \xrightarrow{\ S\,k_{tok}\ \to\ 0\ }\ \frac{2B}{b_w},\qquad I_{\infty} = \lim_{B\to\infty} I = \frac{2N + 4 n_{layer} d_{model} S}{S\,k_{tok}}$$
+      <div class="where">분모의 \(B\,S\,k_{tok}\)이 문제다. KV 캐시는 시퀀스마다 따로라 배치로 나누어 쓸 수 없다. 배치를 아무리 키워도 산술 강도는 \(I_\infty\)에서 멈춘다. \(S\) = 2,048, BF16 KV에서 \(I_\infty \approx 217\) FLOP/B로, FP8 리지 256에 못 미친다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="GX-1 루프라인 위의 디코드 배치 1, 8, 64, 128과 프리필, 학습의 위치. BF16 리지 128, FP8 리지 256">
+        <line x1="80" y1="260" x2="780" y2="260" class="s-axis"/><line x1="80" y1="20" x2="80" y2="260" class="s-axis"/>
+        <g class="t-dim"><text x="80" y="280" class="t-dim t-c">1</text><text x="250" y="280" class="t-dim t-c">10</text><text x="420" y="280" class="t-dim t-c">100</text><text x="590" y="280" class="t-dim t-c">1,000</text><text x="760" y="280" class="t-dim t-c">10⁴</text></g>
+        <text x="430" y="298" class="t-dim t-c">산술 강도 I (FLOP/B, 로그)</text>
+        <text x="72" y="264" class="t-dim t-e">1</text><text x="72" y="203" class="t-dim t-e">10</text><text x="72" y="142" class="t-dim t-e">100</text><text x="72" y="81" class="t-dim t-e">1,000</text>
+        <text x="20" y="14" class="t-dim">TFLOPS</text>
+        <path d="M80 207 L438 78 H760" class="ks-tensor"/>
+        <path d="M80 207 L489 60 H760" class="ks-tensor dash" opacity="0.7"/>
+        <text x="600" y="72" class="t kt-tensor">BF16 943.7</text><text x="600" y="54" class="t-dim">FP8 1,887</text>
+        <text x="190" y="150" class="t kt-dram" transform="rotate(-19.8 190 150)">7.37 TB/s × I</text>
+        <line x1="438" y1="78" x2="438" y2="260" class="s-faint dash"/><text x="442" y="250" class="t-dim">리지 128</text>
+        <line x1="489" y1="60" x2="489" y2="260" class="s-faint dash"/><text x="493" y="232" class="t-dim">256</text>
+        <g class="kf-dram"><circle cx="80" cy="207" r="6"/><circle cx="233" cy="152" r="6"/><circle cx="387" cy="97" r="6"/></g>
+        <text x="90" y="226" class="t">B = 1</text><text x="240" y="172" class="t">B = 8</text><text x="330" y="88" class="t">B = 64</text>
+        <circle cx="438" cy="78" r="6" class="kf-tensor"/><text x="400" y="66" class="t">B = 128</text>
+        <circle cx="643" cy="78" r="6" class="kf-tensor"/><text x="620" y="100" class="t">프리필 L = 2,048</text>
+        <circle cx="720" cy="78" r="6" class="kf-tensor"/><text x="700" y="120" class="t-dim">학습</text>
+        <line x1="198" y1="40" x2="198" y2="260" class="s-bad dash"/><text x="204" y="40" class="t-bad">BF16 · S 2,048 용량 벽 B ≈ 5</text>
+      </svg>
+      <figcaption><b>그림 15-4.</b> 7장의 GX-1 루프라인 위에 놓은 GX-LM-70B(BF16, KV 트래픽 제외). 배치 1 디코드는 \(I \approx 1\)로 피크의 1 % 아래에 있고, 배치를 늘리면 점이 대각선을 따라 오른쪽 위로 올라가 B ≈ 128에서 지붕에 닿는다. 그러나 BF16 가중치 140 GB가 HBM 144 GB를 거의 다 차지해, 문맥 2,048에서는 시퀀스 약 5개분의 KV 캐시밖에 들어가지 않는다(빨간 점선).</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ai">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>배치와 디코드 산술 강도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ai-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>가중치 정밀도</span><div class="seg" id="ai-p"><button data-value="bf16" class="on">BF16</button><button data-value="fp8">FP8</button></div></div>
+          <div class="ctrl"><span>KV 캐시 정밀도</span><div class="seg" id="ai-k"><button data-value="bf16" class="on">BF16</button><button data-value="fp8">FP8</button></div></div>
+          <label class="ctrl"><span>문맥 S <output id="ai-s-out"></output></span><input type="range" id="ai-s" min="256" max="8192" step="256" value="2048"></label>
+          <label class="ctrl"><span>배치 B <output id="ai-b-out"></output></span><input type="range" id="ai-b" min="0" max="10" step="1" value="6"></label>
+          <label class="check"><input type="checkbox" id="ai-kv" checked> KV 캐시 트래픽 포함</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">산술 강도 I(B)</span><span class="v" id="ai-o-i">—</span></div>
+        <div class="stat"><span class="k">리지 / 상한 I∞</span><span class="v" id="ai-o-r">—</span></div>
+        <div class="stat"><span class="k">연산 제한 전환 B*</span><span class="v" id="ai-o-x">—</span></div>
+        <div class="stat"><span class="k">용량이 허용하는 B</span><span class="v" id="ai-o-m">—</span></div>
+        <div class="stat"><span class="k">피크 대비 활용</span><span class="v" id="ai-o-u">—</span></div>
+      </div>
+      <div class="sim-note">곡선은 \(I(B)\), 수평선은 리지 포인트, 빨간 세로선은 HBM 144 GB가 허용하는 최대 배치다. 빨간 선 오른쪽은 칩 하나로는 갈 수 없는 영역이다. 해볼 것: ① KV 포함을 끄면 BF16·FP8 모두 B* = 128이 된다. ② 켜면 BF16·S = 2,048에서 B* ≈ 301로 밀리고, 용량 한계는 B = 5라 활용률이 약 4 %에 그친다. ③ FP8 가중치 + BF16 KV는 \(I_\infty \approx 217\)이 리지 256보다 낮아 어떤 배치에서도 연산 제한에 닿지 않는다. KV도 FP8로 바꾸면 \(I_\infty\)가 두 배가 되어 B* ≈ 301이 다시 생긴다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 배치를 키우는 것이 디코드에서 텐서 코어를 쓰는 유일한 길인데, 그 배치는 KV 캐시 바이트(대역폭)와 KV 캐시 용량 둘 다에 막힌다. 그래서 추론 칩은 HBM 대역폭만큼 HBM 용량(스택 높이 8 → 12 → 16단)을 중요하게 보고, 모델 쪽은 KV 헤드를 줄이는 GQA를 쓴다. 하드웨어와 모델 구조가 같은 병목을 놓고 함께 설계된다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="kv">
+    <h2>KV 캐시 용량이 배치를 제한한다</h2>
+    <p>디코드는 이전 토큰의 키(K)와 값(V)을 다시 계산하지 않고 HBM에 저장해 둔다. 이것이 <span class="term">KV 캐시</span><span class="en">(KV cache)</span>다. 토큰 하나가 층마다 KV 헤드 수 × 헤드 차원만큼의 K와 V를 남긴다. 여러 질의 헤드가 KV 헤드 하나를 나누어 쓰는 <span class="term">그룹 질의 어텐션</span><span class="en">(grouped-query attention, GQA)</span>은 이 크기를 질의 헤드 수 대비 KV 헤드 수의 비율만큼 줄인다.</p>
+    <div class="formula">$$k_{tok} = 2 \cdot n_{layer} \cdot n_{kv} \cdot d_{head} \cdot b_{kv} = 2 \times 80 \times 8 \times 128 \times 2\ \text{B} = 327{,}680\ \text{B} = 320\ \text{KiB}$$
+      <div class="where">앞의 2는 K와 V. \(n_{kv}\)는 KV 헤드 수(GQA 8, 일반 다중 헤드 어텐션 MHA는 64, 다중 질의 MQA는 1), \(b_{kv}\)는 KV 원소 바이트. 시퀀스 하나의 KV 캐시는 \(k_{tok} S\)이고, 동시에 돌릴 수 있는 시퀀스 수는 \(\lfloor (M_{HBM} - N b_w - M_{res}) / (k_{tok} S) \rfloor\)다(\(M_{res}\)는 활성값·작업 공간 예약).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 210" role="img" aria-label="토큰 하나의 KV 캐시: 층 80개마다 K와 V, 각각 KV 헤드 8개 곱하기 헤드 차원 128. MHA 64헤드는 8배, MQA는 8분의 1">
+        <text x="20" y="24" class="t t-b">토큰 1개가 남기는 KV 캐시 (층 하나)</text>
+        <g class="k-sram"><rect x="20" y="40" width="30" height="64"/><rect x="54" y="40" width="30" height="64"/><rect x="88" y="40" width="30" height="64"/><rect x="122" y="40" width="30" height="64"/><rect x="156" y="40" width="30" height="64"/><rect x="190" y="40" width="30" height="64"/><rect x="224" y="40" width="30" height="64"/><rect x="258" y="40" width="30" height="64"/></g>
+        <text x="154" y="124" class="t t-c">K: KV 헤드 8 × 128</text>
+        <g class="k-dram"><rect x="320" y="40" width="30" height="64"/><rect x="354" y="40" width="30" height="64"/><rect x="388" y="40" width="30" height="64"/><rect x="422" y="40" width="30" height="64"/><rect x="456" y="40" width="30" height="64"/><rect x="490" y="40" width="30" height="64"/><rect x="524" y="40" width="30" height="64"/><rect x="558" y="40" width="30" height="64"/></g>
+        <text x="454" y="124" class="t t-c">V: KV 헤드 8 × 128</text>
+        <text x="620" y="60" class="t">× 2 B (BF16) × 80층</text>
+        <text x="620" y="84" class="t-acc">= 320 KiB / 토큰</text>
+        <text x="620" y="108" class="t-dim">문맥 8,192 → 2.5 GiB / 시퀀스</text>
+        <text x="20" y="160" class="t t-b">헤드 구성별 토큰당 KV (BF16)</text>
+        <rect x="20" y="172" width="640" height="16" class="kf-dram" opacity="0.75"/><text x="668" y="185" class="t">MHA 64헤드 2.5 MiB</text>
+        <rect x="20" y="192" width="80" height="16" class="kf-sram" opacity="0.9"/><text x="108" y="205" class="t">GQA 8헤드 320 KiB</text>
+        <rect x="300" y="192" width="10" height="16" class="kf-tensor"/><text x="318" y="205" class="t">MQA 1헤드 40 KiB</text>
+      </svg>
+      <figcaption><b>그림 15-5.</b> KV 캐시 한 토큰의 구조. 질의 헤드 64개가 KV 헤드 8개를 여덟씩 나누어 쓰는 GQA 덕분에, GX-LM-70B의 KV 캐시는 MHA로 만들었을 때의 1/8이다. 그래도 문맥 8,192 시퀀스 하나에 약 2.7 GB(2.5 GiB)가 든다.</figcaption>
+    </figure>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 200" role="img" aria-label="HBM 144 GB 안의 배치: BF16 가중치 140 GB면 KV에 4 GB, FP8 70 GB면 시퀀스 27개, FP4 35 GB면 40개(문맥 8192, BF16 KV)">
+        <text x="20" y="22" class="t t-b">GX-1 HBM 144 GB (1 GB = 5 px) · 문맥 8,192 · BF16 KV (시퀀스 하나 2.68 GB)</text>
+        <text x="20" y="56" class="t t-e" transform="translate(56 0)">BF16</text>
+        <rect x="80" y="40" width="700" height="24" class="kf-tensor" opacity="0.75"/><text x="430" y="57" class="t t-c" style="fill:var(--bg-elev)">가중치 140 GB</text>
+        <rect x="780" y="40" width="20" height="24" class="k-dram"/><text x="806" y="57" class="t-dim">1개</text>
+        <text x="20" y="106" class="t t-e" transform="translate(56 0)">FP8</text>
+        <rect x="80" y="90" width="350" height="24" class="kf-tensor" opacity="0.75"/><text x="255" y="107" class="t t-c" style="fill:var(--bg-elev)">가중치 70 GB</text>
+        <rect x="430" y="90" width="370" height="24" class="k-dram"/><text x="615" y="107" class="t t-c">KV 74 GB → 시퀀스 27개</text>
+        <text x="20" y="156" class="t t-e" transform="translate(56 0)">FP4</text>
+        <rect x="80" y="140" width="175" height="24" class="kf-tensor" opacity="0.75"/><text x="168" y="157" class="t t-c" style="fill:var(--bg-elev)">35 GB</text>
+        <rect x="255" y="140" width="545" height="24" class="k-dram"/><text x="528" y="157" class="t t-c">KV 109 GB → 시퀀스 40개</text>
+        <line x1="800" y1="34" x2="800" y2="172" class="s-bad dash"/><text x="800" y="190" class="t-bad t-c">144 GB</text>
+      </svg>
+      <figcaption><b>그림 15-6.</b> 가중치를 줄이면 KV 캐시 자리가 생긴다. BF16 가중치로는 칩 하나에 문맥 8,192 시퀀스가 하나밖에 안 들어가지만, FP8이면 27개, FP4면 40개다. 가중치 양자화의 이득은 "읽는 바이트 감소"보다 "배치를 키울 자리"에서 더 크게 나온다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-kv">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>KV 캐시 용량과 동시 시퀀스 수</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="kv-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>가중치</span><div class="seg" id="kv-w"><button data-value="bf16">BF16</button><button data-value="fp8" class="on">FP8</button><button data-value="fp4">FP4</button></div></div>
+          <div class="ctrl"><span>KV 원소</span><div class="seg" id="kv-k"><button data-value="bf16" class="on">BF16</button><button data-value="fp8">FP8</button><button data-value="fp4">FP4</button></div></div>
+          <div class="ctrl"><span>KV 헤드</span><div class="seg" id="kv-h"><button data-value="64">MHA 64</button><button data-value="8" class="on">GQA 8</button><button data-value="1">MQA 1</button></div></div>
+          <label class="ctrl"><span>문맥 S <output id="kv-s-out"></output></span><input type="range" id="kv-s" min="512" max="32768" step="512" value="8192"></label>
+          <div class="ctrl"><span>GPU 수(모델 분할)</span><div class="seg" id="kv-g"><button data-value="1" class="on">1</button><button data-value="2">2</button><button data-value="4">4</button><button data-value="8">8</button></div></div>
+          <label class="ctrl"><span>예약(활성값 등) <output id="kv-r-out"></output></span><input type="range" id="kv-r" min="0" max="40" step="1" value="0"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">KV / 토큰</span><span class="v" id="kv-o-t">—</span></div>
+        <div class="stat"><span class="k">KV / 시퀀스</span><span class="v" id="kv-o-q">—</span></div>
+        <div class="stat"><span class="k">KV에 쓸 수 있는 용량</span><span class="v" id="kv-o-f">—</span></div>
+        <div class="stat"><span class="k">동시 시퀀스 (배치 상한)</span><span class="v" id="kv-o-n">—</span></div>
+        <div class="stat"><span class="k">담을 수 있는 총 토큰</span><span class="v" id="kv-o-k">—</span></div>
+      </div>
+      <div class="sim-note">막대 하나가 HBM 144 GB × GPU 수, 작은 칸 하나가 시퀀스 하나의 KV 캐시다. 계산은 \(\lfloor\)(용량 − 가중치 − 예약) ÷ (\(k_{tok}\) × S)\(\rfloor\). 해볼 것: ① 기본값(FP8 가중치, BF16 KV, GQA 8, S = 8,192)에서 27개, KV를 FP8로 바꾸면 55개가 된다. ② MHA 64헤드로 바꾸면 3개로 떨어진다. GQA가 왜 표준이 되었는지 보인다. ③ 문맥을 32,768로 늘리면 시퀀스가 6개로 준다. 긴 문맥은 칩 용량을 곧바로 배치에서 빼앗는다. BF16 가중치에 GPU 2개를 쓰면 140 GB를 288 GB에 나누어 담아 시퀀스 55개가 들어간다.</div>
+    </div>
+
+    <div class="callout fab"><strong>시퀀스 27개의 계산</strong>FP8 가중치 70 GB를 올리면 남는 HBM은 144 − 70 = 74 GB다. 문맥 8,192의 BF16 KV 캐시는 시퀀스당 \(8{,}192 \times 327{,}680\ \text{B} = 2.68\ \text{GB}\)이므로 \(\lfloor 74 / 2.68 \rfloor = \) <b>27개</b>다. 이때 디코드 한 단계는 가중치 70 GB + KV 72.5 GB = 142.5 GB를 읽어 약 19 ms, 처리량은 약 1,400 토큰/s다. KV 바이트가 가중치 바이트를 넘어선다. 긴 문맥 서빙에서는 HBM 트래픽의 절반 이상이 KV 캐시이고, KV를 FP8로 줄이거나 오래된 토큰을 압축하는 기법이 가중치 양자화만큼 중요해진다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> HBM 용량은 원가(스택당 약 $360)와 쇼어라인(스택 6개)에 묶여 있다. 그 용량 안에서 배치를 정하는 것이 KV 캐시이므로, 데이터센터 GPU는 세대마다 스택 높이를 올려 용량을 대역폭보다 빠르게 늘리는 경향이 있다. 용량이 모자라면 GPU를 더 묶어 모델을 나누는데, 그러면 링크 대역폭이 새 병목이 된다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="quant">
+    <h2>양자화: 바이트가 곧 토큰/s</h2>
+    <p><span class="term">양자화</span><span class="en">(quantization)</span>는 가중치나 KV 캐시를 더 적은 비트로 저장한다. 하드웨어 입장에서 양자화는 세 가지를 동시에 바꾼다. ① 가중치 바이트가 줄어 디코드 한 단계의 HBM 시간이 준다. ② 남는 용량이 KV 캐시 자리가 되어 배치 상한이 오른다. ③ 텐서 코어가 그 정밀도의 연산을 직접 하면 피크가 오른다(GX-1 BF16 → FP8 → FP4가 943.7 → 1,887 → 3,775 TFLOPS). 디코드는 ①과 ②, 프리필과 학습은 ③의 덕을 본다. 정확도 손실은 이 모델에 넣지 않았다. FP4는 블록마다 지수를 공유하는 마이크로스케일링 포맷(<a href="tensor.html">5장</a>)으로 그 손실을 줄인다.</p>
+
+    <div class="sim" id="sim-q">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>양자화 효과: 정밀도별 처리량 한계</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="q-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>KV 캐시 정밀도</span><div class="seg" id="q-k"><button data-value="bf16" class="on">BF16</button><button data-value="fp8">FP8</button><button data-value="fp4">FP4</button></div></div>
+          <label class="ctrl"><span>문맥 S <output id="q-s-out"></output></span><input type="range" id="q-s" min="512" max="8192" step="512" value="4096"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">BF16 배치 1 / 상한</span><span class="v" id="q-o-bf16">—</span></div>
+        <div class="stat"><span class="k">FP8 배치 1 / 상한</span><span class="v" id="q-o-fp8">—</span></div>
+        <div class="stat"><span class="k">FP4 배치 1 / 상한</span><span class="v" id="q-o-fp4">—</span></div>
+        <div class="stat"><span class="k">최대 배치 BF16·FP8·FP4</span><span class="v" id="q-o-b">—</span></div>
+      </div>
+      <div class="sim-note">곡선은 가중치 정밀도별 전체 처리량(토큰/s) 대 배치(로그-로그), 끝점은 HBM 144 GB가 허용하는 최대 배치다. 읽음표는 "배치 1 토큰/s / 최대 배치에서의 전체 토큰/s". 해볼 것: ① BF16 KV, S = 4,096에서 BF16 가중치는 배치 2가 한계라 약 100 토큰/s에 멈추고, FP8은 배치 55에서 약 2,800, FP4는 배치 81에서 약 4,200 토큰/s다. ② KV를 FP8로 바꾸면 세 곡선 모두 끝점이 두 배 오른쪽으로 가고 처리량도 거의 두 배가 된다. ③ 배치 1에서는 가중치 바이트만 보인다. FP8 → FP4는 약 103 → 203 토큰/s로, 피크 FLOPS와 무관하게 바이트 비로 오른다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 디코드는 바이트에 비례하므로 정밀도를 반으로 줄이는 것이 HBM 대역폭을 두 배로 늘리는 것과 같다. HBM 대역폭을 두 배로 늘리려면 스택·핀·인터포저를 바꾸어야 하지만, 낮은 정밀도 지원은 텐서 코어와 데이터 경로의 작은 면적으로 얻는다(<a href="alu.html">4장</a>, 곱셈기 면적 ∝ 가수 비트²). 그래서 세대마다 더 낮은 정밀도 포맷이 텐서 코어에 들어간다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="moe">
+    <h2>전문가 혼합: 연산은 줄고 메모리와 통신은 는다</h2>
+    <p><span class="term">전문가 혼합</span><span class="en">(mixture of experts, MoE)</span>은 FFN을 작은 전문가 \(E\)개로 나누고, 라우터가 토큰마다 \(k\)개만 고르게 한다. 토큰당 연산은 활성 파라미터 \(N_{act}\)에 비례하지만, 메모리에는 전체 파라미터 \(N_{tot}\)를 다 올려야 한다. 전문가를 여러 GPU에 나누는 <span class="term">전문가 병렬</span><span class="en">(expert parallelism)</span>에서는 층마다 토큰을 전문가가 있는 GPU로 보내고(dispatch) 결과를 되돌리는(combine) all-to-all 통신이 생긴다.</p>
+    <div class="formula">$$N_{tot} = N_{attn} + E \cdot n_{layer} \cdot 3 d_{model} d_{e},\quad N_{act} = N_{attn} + k \cdot n_{layer} \cdot 3 d_{model} d_{e},\quad U = E\left[1 - \left(1 - \tfrac{k}{E}\right)^{B}\right]$$
+      <div class="where">\(N_{attn}\)은 어텐션·임베딩 등 공유 파라미터(GX-LM-70B에서 약 13.6 B), \(d_e\)는 전문가 FFN 차원, \(3 d_{model} d_e\)는 게이트·업·다운 행렬. \(U\)는 배치 \(B\) 토큰이 한 층에서 건드리는 전문가 수의 기댓값으로, 디코드 한 단계가 읽는 가중치는 \(N_{attn} + U \cdot n_{layer} \cdot 3 d_{model} d_e\)다. 토큰당 통신은 층마다 \(2 k\, d_{model}\) 원소(dispatch + combine) × 2 B × \((G-1)/G\), 링크 시간에 all-to-all 한 번당 약 2 µs의 고정 지연을 더한다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 240" role="img" aria-label="MoE 층: 라우터가 토큰마다 전문가 2개를 고르고, 전문가는 GPU 네 개에 나뉘어 있어 토큰이 링크로 오간다">
+        <text x="20" y="22" class="t t-b">MoE 층 하나 (E = 16, k = 2, 전문가 병렬 G = 4)</text>
+        <rect x="20" y="90" width="110" height="50" rx="8" class="k-data"/><text x="75" y="112" class="t t-c">토큰 x</text><text x="75" y="130" class="t-dim t-c">d = 8,192</text>
+        <rect x="160" y="90" width="110" height="50" rx="8" class="k-ctrl"/><text x="215" y="112" class="t t-c">라우터</text><text x="215" y="130" class="t-dim t-c">상위 k개 선택</text>
+        <path d="M132 115 H156" class="arr"/>
+        <g>
+          <rect x="330" y="34" width="230" height="40" rx="6" class="k-link"/><text x="342" y="59" class="t">GPU 0 · 전문가 0–3</text>
+          <rect x="330" y="82" width="230" height="40" rx="6" class="k-link"/><text x="342" y="107" class="t">GPU 1 · 전문가 4–7</text>
+          <rect x="330" y="130" width="230" height="40" rx="6" class="k-link"/><text x="342" y="155" class="t">GPU 2 · 전문가 8–11</text>
+          <rect x="330" y="178" width="230" height="40" rx="6" class="k-link"/><text x="342" y="203" class="t">GPU 3 · 전문가 12–15</text>
+          <rect x="520" y="88" width="30" height="28" class="kf-tensor"/><rect x="520" y="184" width="30" height="28" class="kf-tensor"/>
+        </g>
+        <path d="M272 108 C300 108 300 102 512 102" class="arr-a"/><path d="M272 122 C300 122 300 198 512 198" class="arr-a"/>
+        <text x="588" y="96" class="t">선택된 전문가만 계산</text>
+        <text x="588" y="118" class="t-dim">연산 ∝ k (활성 파라미터)</text>
+        <text x="588" y="150" class="t">메모리 ∝ E (전체 파라미터)</text>
+        <text x="588" y="172" class="t-dim">16개 전부 HBM에 상주</text>
+        <text x="588" y="204" class="t kt-link">토큰 왕복 = all-to-all</text>
+        <text x="588" y="226" class="t-dim">층마다 dispatch + combine</text>
+      </svg>
+      <figcaption><b>그림 15-7.</b> MoE 층. 토큰 하나는 전문가 2개만 쓰므로 FFN 연산은 1/8로 줄지만, 16개 전문가의 가중치는 모두 메모리에 있어야 하고 토큰은 층마다 링크를 두 번 건넌다. 연산·용량·통신이라는 세 자원을 서로 바꾸는 구조다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-moe">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>MoE: 연산량 vs 메모리량 vs 통신량</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="moe-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>전문가 수 E <output id="moe-e-out"></output></span><input type="range" id="moe-e" min="0" max="8" step="1" value="4"></label>
+          <label class="ctrl"><span>활성 전문가 k <output id="moe-k-out"></output></span><input type="range" id="moe-k" min="1" max="8" step="1" value="2"></label>
+          <label class="ctrl"><span>전문가 FFN 차원 <output id="moe-f-out"></output></span><input type="range" id="moe-f" min="1024" max="28672" step="1024" value="14336"></label>
+          <label class="ctrl"><span>디코드 배치 B <output id="moe-b-out"></output></span><input type="range" id="moe-b" min="0" max="9" step="1" value="6"></label>
+          <label class="ctrl"><span>GPU 수 G <output id="moe-g-out"></output></span><input type="range" id="moe-g" min="0" max="6" step="1" value="3"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">전체 / 활성 파라미터</span><span class="v" id="moe-o-p">—</span></div>
+        <div class="stat"><span class="k">FP8 메모리 / 최소 GPU</span><span class="v" id="moe-o-m">—</span></div>
+        <div class="stat"><span class="k">단계당 건드린 전문가 U</span><span class="v" id="moe-o-u">—</span></div>
+        <div class="stat"><span class="k">디코드 단계 시간</span><span class="v" id="moe-o-t">—</span></div>
+        <div class="stat"><span class="k">전체 토큰/s</span><span class="v" id="moe-o-k">—</span></div>
+      </div>
+      <div class="sim-note">위 막대는 GX-LM-70B(밀집) 대비 배수(전체 파라미터 = 메모리, 활성 파라미터 = 토큰당 연산, 단계당 읽는 가중치), 아래 막대는 디코드 한 단계의 HBM·연산·통신 시간(FP8, KV 제외, G개 GPU에 고르게 분산)이다. 해볼 것: ① 기본값(E = 16, k = 2, d_e = 14,336)은 활성 70 B로 밀집 모델과 연산이 같지만 메모리는 약 6.6배(465 GB, GPU 최소 4개)다. ② B = 1에서는 전문가 2개만 읽어 단계 시간이 밀집과 비슷하지만, B = 64면 U ≈ 16으로 거의 모든 전문가를 읽는다. 배치가 큰 디코드에서 MoE는 대역폭을 아끼지 못한다. ③ k를 8로 올리고 d_e를 3,584로 줄이면 연산은 비슷하게 두고 통신량이 4배가 된다. G를 1로 두면 메모리가 넘친다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> MoE는 같은 학습 연산(6 N<sub>act</sub> D)으로 더 큰 모델을 만들지만, 그 대가를 용량과 통신으로 낸다. 그래서 MoE를 돌리는 시스템은 GPU 하나의 FLOPS보다 노드 전체의 HBM 용량과 모든 GPU 쌍 사이의 대역폭(GX-8 노드의 스위치 구조, <a href="scale.html">14장</a>)을 중시한다. all-to-all은 고정 지연이 커서 작은 배치에서는 링크 대역폭보다 지연이 먼저 문제가 된다.</p>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="graphics">
+    <h2>그래픽 파이프라인과 고정 기능 유닛</h2>
+    <p>GPU는 그래픽에서 출발했다. 3D 장면은 삼각형 목록이고, 한 프레임은 정점 셰이딩 → 프리미티브 조립·<span class="term">래스터화</span><span class="en">(rasterization)</span> → 픽셀 셰이딩 → 텍스처 필터링 → <span class="term">ROP</span><span class="en">(raster operations: 깊이 검사·블렌딩·압축 후 프레임 버퍼 쓰기)</span>를 거친다. 2000년대 중반 통합 셰이더 이후 정점·픽셀 셰이딩은 같은 SM의 FP32 레인에서 돌지만, 래스터·텍스처·ROP는 지금도 전용 하드웨어, 곧 <span class="term">고정 기능 유닛</span><span class="en">(fixed-function unit)</span>으로 남아 있다. 2010년대 후반에는 광선 추적의 BVH 순회를 맡는 유닛이 더해졌다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 220" role="img" aria-label="그래픽 파이프라인: 정점 셰이더(프로그래머블), 래스터(고정), 픽셀 셰이더(프로그래머블), 텍스처 유닛(고정), ROP(고정), 프레임 버퍼, 광선 추적 유닛(고정)">
+        <rect x="20" y="40" width="120" height="56" rx="8" class="k-compute"/><text x="80" y="64" class="t t-b t-c">정점 셰이더</text><text x="80" y="84" class="t-dim t-c">변환·조명</text>
+        <rect x="170" y="40" width="120" height="56" rx="8" class="k-ctrl"/><text x="230" y="64" class="t t-b t-c">래스터</text><text x="230" y="84" class="t-dim t-c">삼각형 → 픽셀</text>
+        <rect x="320" y="40" width="130" height="56" rx="8" class="k-compute"/><text x="385" y="64" class="t t-b t-c">픽셀 셰이더</text><text x="385" y="84" class="t-dim t-c">재질·조명 계산</text>
+        <rect x="320" y="130" width="130" height="50" rx="8" class="k-ctrl"/><text x="385" y="152" class="t t-b t-c">텍스처 유닛</text><text x="385" y="170" class="t-dim t-c">주소·필터·압축 해제</text>
+        <rect x="480" y="40" width="120" height="56" rx="8" class="k-ctrl"/><text x="540" y="64" class="t t-b t-c">ROP</text><text x="540" y="84" class="t-dim t-c">깊이·블렌딩</text>
+        <rect x="630" y="40" width="210" height="56" rx="8" class="k-dram"/><text x="735" y="64" class="t t-b t-c">프레임 버퍼 (GDDR)</text><text x="735" y="84" class="t-dim t-c">압축된 색·깊이</text>
+        <rect x="170" y="130" width="120" height="50" rx="8" class="k-ctrl"/><text x="230" y="152" class="t t-b t-c">광선 추적 유닛</text><text x="230" y="170" class="t-dim t-c">BVH 순회·교차</text>
+        <path d="M142 68 H166 M292 68 H316 M452 68 H476 M602 68 H626" class="arr"/>
+        <path d="M385 98 V126" class="arr"/><path d="M370 128 V100" class="arr"/>
+        <path d="M292 150 C310 150 310 96 330 96" class="arr"/>
+        <rect x="20" y="196" width="14" height="14" class="k-compute"/><text x="40" y="208" class="t-dim">SM FP32 레인에서 실행(프로그래머블)</text>
+        <rect x="330" y="196" width="14" height="14" class="k-ctrl"/><text x="350" y="208" class="t-dim">고정 기능 하드웨어(셰이더와 병렬로 동작)</text>
+      </svg>
+      <figcaption><b>그림 15-8.</b> 그래픽 파이프라인. 프로그래머블 단계(초록)는 SM의 FP32 레인에서, 고정 기능 단계(주황)는 전용 유닛에서 돈다. 고정 기능 유닛은 셰이더와 동시에 일하므로, 프레임 시간은 단계 시간의 합이 아니라 가장 느린 단계(병목)가 정한다.</figcaption>
+    </figure>
+
+    <p>광선 추적은 광선 하나가 장면의 어느 삼각형에 맞는지 찾는 문제다. 삼각형 \(T\)개를 하나씩 검사하면 광선당 \(T\)번이지만, 경계 상자를 나무로 쌓은 <span class="term">BVH</span><span class="en">(bounding volume hierarchy)</span>를 쓰면 상자 검사가 \(\log T\)에 비례한다. 순회는 데이터에 따라 갈림길이 달라 워프 안의 스레드가 서로 다른 노드를 따라가는 분기 발산과 불규칙 메모리 접근이 심하다. 셰이더로는 비효율적이고, 전용 유닛에 맡기기 좋은 일이다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="BVH 나무: 뿌리 상자에서 자식 상자로 내려가며 광선과 겹치는 가지만 따라간다. 깊이는 log T">
+        <rect x="390" y="20" width="80" height="30" rx="5" class="k-ctrl"/><text x="430" y="40" class="t t-c">뿌리</text>
+        <rect x="200" y="80" width="80" height="30" rx="5" class="k-ctrl"/><rect x="580" y="80" width="80" height="30" rx="5" class="f-surface"/>
+        <path d="M430 50 L240 80 M430 50 L620 80" class="s-line"/>
+        <rect x="100" y="140" width="70" height="28" rx="5" class="f-surface"/><rect x="300" y="140" width="70" height="28" rx="5" class="k-ctrl"/>
+        <rect x="520" y="140" width="70" height="28" rx="5" class="f-surface"/><rect x="680" y="140" width="70" height="28" rx="5" class="f-surface"/>
+        <path d="M240 110 L135 140 M240 110 L335 140 M620 110 L555 140 M620 110 L715 140" class="s-line"/>
+        <g class="kf-tensor"><rect x="290" y="196" width="22" height="18"/><rect x="318" y="196" width="22" height="18"/><rect x="346" y="196" width="22" height="18"/></g>
+        <path d="M335 168 L301 196 M335 168 L329 196 M335 168 L357 196" class="s-line"/>
+        <path d="M430 50 L240 80 L335 140 L329 196" class="ks-ctrl" style="stroke-width:3"/>
+        <text x="40" y="40" class="t">광선이 겹치는 상자만 따라 내려간다</text>
+        <text x="40" y="62" class="t-dim">회색 가지는 상자 검사 한 번으로 버린다</text>
+        <text x="610" y="200" class="t">깊이 ≈ log₂ T</text>
+        <text x="610" y="222" class="t-dim">T = 500만 → 약 22단, 방문 약 45노드</text>
+        <text x="380" y="210" class="t-dim">삼각형 교차 검사</text>
+      </svg>
+      <figcaption><b>그림 15-9.</b> BVH 순회. 삼각형 수가 10배 늘어도 깊이는 \(\log_2 10 \approx 3.3\)단만 는다. 이 장의 모델은 광선당 방문 노드를 \(2\log_2 T\)(되돌아가기 포함)로 잡는다.</figcaption>
+    </figure>
+
+    <p>프레임 시간 모델은 다음과 같다. 셰이더 단계는 모두 같은 FP32 레인을 나누어 쓰므로 시간이 더해지고, 고정 기능 단계는 셰이더와 병렬이므로 각자 따로 잰다. 고정 기능을 끄면 그 일을 셰이더 명령으로 흉내 내야 해서 셰이더 시간에 더해진다.</p>
+    <div class="formula">$$t_{frame} = \max\!\left(\frac{W_{shader} + \sum_{\text{끈 유닛}} W_{emu}}{R_{lane}},\ \frac{T}{R_{tri}},\ \frac{P\,n_{tex}}{R_{tex}},\ \frac{P\,n_{rop}}{R_{rop}},\ \frac{P\,r\cdot 2\log_2 T}{R_{rt}}\right)$$
+      <div class="where">\(P\)는 화면 픽셀 수, \(T\)는 삼각형 수, \(n_{tex}\)·\(n_{rop}\)는 픽셀당 텍스처 읽기·프레임 버퍼 쓰기(모든 패스 합), \(r\)은 픽셀당 광선 수. GX-G(SM 96개, 클럭은 GX-1과 같은 1.6 GHz로 가정): 레인 명령 \(R_{lane}\) = 96 × 128 × 1.6 GHz = 19.7 T/s, 삼각형 6개/클럭(GPC 6개), 텍스처 384 텍셀/클럭(SM당 4), ROP 96 픽셀/클럭, 광선 추적 유닛 SM당 1개가 클럭당 노드 1개. 흉내 비용(레인 명령): 텍스처 읽기 1번 약 60, 프레임 버퍼 쓰기 약 20, 노드 방문 약 240(분기 발산 포함), 삼각형 설정 약 100 + 픽셀 덮기 약 10.</div></div>
+
+    <div class="sim" id="sim-gfx">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>그래픽 파이프라인 병목과 고정 기능</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gfx-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>해상도</span><div class="seg" id="gfx-r"><button data-value="1080p">1080p</button><button data-value="1440p">1440p</button><button data-value="4k" class="on">4K</button></div></div>
+          <label class="ctrl"><span>삼각형 수 <output id="gfx-t-out"></output></span><input type="range" id="gfx-t" min="50" max="80" step="1" value="67"></label>
+          <label class="ctrl"><span>픽셀당 셰이더 명령 <output id="gfx-p-out"></output></span><input type="range" id="gfx-p" min="1000" max="30000" step="500" value="10000"></label>
+          <label class="ctrl"><span>픽셀당 텍스처 읽기 <output id="gfx-x-out"></output></span><input type="range" id="gfx-x" min="4" max="128" step="4" value="32"></label>
+          <div class="ctrl"><span>픽셀당 광선</span><div class="seg" id="gfx-y"><button data-value="0">0</button><button data-value="1" class="on">1</button><button data-value="2">2</button><button data-value="4">4</button></div></div>
+          <div class="ctrl"><span>고정 기능 유닛 사용</span>
+            <label class="check"><input type="checkbox" id="gfx-f-raster" checked> 래스터</label>
+            <label class="check"><input type="checkbox" id="gfx-f-tex" checked> 텍스처</label>
+            <label class="check"><input type="checkbox" id="gfx-f-rop" checked> ROP</label>
+            <label class="check"><input type="checkbox" id="gfx-f-rt" checked> 광선 추적</label>
+          </div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">프레임 시간</span><span class="v" id="gfx-o-f">—</span></div>
+        <div class="stat"><span class="k">초당 프레임</span><span class="v" id="gfx-o-p">—</span></div>
+        <div class="stat"><span class="k">병목 단계</span><span class="v" id="gfx-o-b">—</span></div>
+        <div class="stat"><span class="k">광선당 BVH 노드 방문</span><span class="v" id="gfx-o-v">—</span></div>
+        <div class="stat"><span class="k">흉내 낸 일의 몫</span><span class="v" id="gfx-o-e">—</span></div>
+      </div>
+      <div class="sim-note">막대는 단계별 시간이고, 가장 긴 막대(굵은 테두리)가 프레임 시간이다. 셰이더 막대의 빗금 부분은 꺼 둔 고정 기능을 셰이더로 흉내 낸 몫이다. 해볼 것: ① 기본값(4K, 삼각형 500만, 픽셀당 10,000 명령, 광선 1개)은 셰이더 병목 약 4.5 ms(약 220 fps), 광선 추적 유닛은 약 2.4 ms로 셰이더와 겹쳐 숨는다. ② 고정 기능을 모두 끄면 약 9.9 ms(약 100 fps)가 된다. 가장 큰 몫은 광선 추적(+4.5 ms)과 텍스처(+0.8 ms)다. ③ 래스터만 끄면 거의 변하지 않는다. 삼각형이 픽셀만큼 작아지면 소프트웨어 래스터가 실제로 쓰이는 이유다. 반면 삼각형을 1억 개로 늘리면 고정 래스터(6개/클럭)가 약 10 ms로 병목이 된다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 텍스처 필터링·블렌딩·BVH 순회처럼 연산 패턴이 정해져 있고 대량으로 반복되는 일은, 전용 회로가 범용 레인보다 면적과 에너지당 수 배~수십 배 효율이 높다. 또 셰이더와 병렬로 돌아 FP32 레인을 비워 준다. 범용으로 흉내 낼 수 있는 일(작은 삼각형 래스터)은 셰이더로 옮겨 가고, 흉내 비용이 큰 일(광선 추적)은 새 고정 기능이 된다. 데이터센터용 GX-1은 그래픽을 하지 않으므로 이 유닛을 빼고 그 면적을 텐서 코어와 SRAM에 쓴다.</p>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="area">
+    <h2>면적 배분 설계 실험: 같은 780 mm²</h2>
+    <p>이제 같은 다이 면적을 다르게 나누어 보자. GX-1의 780 mm² 가운데 HBM PHY·온칩 네트워크·I/O 등 워크로드와 상관없이 필요한 부분을 약 220 mm²로 잡으면, 남는 약 560 mm²를 벡터 레인(FP32·FP64·INT와 그 제어), 텐서 코어, SRAM(레지스터·L1·L2), 그래픽 고정 기능에 나눈다. GX-1은 대략 34 : 34 : 32 : 0이다. 이 비율과 GX-1 표의 피크에서 단위 면적당 성능을 거꾸로 구한다. 텐서 약 4.96 TFLOPS/mm²(BF16), 벡터 FP32 약 0.52 TFLOPS/mm²(FP64 1:2 레인이 벡터 면적의 약 40 %를 쓴다고 가정), SRAM 약 0.76 MB/mm²(136 MB / 179 mm², 주변 회로 포함 실효)다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 190" role="img" aria-label="같은 780 mm² 면적 배분: GX-1은 벡터 190, 텐서 190, SRAM 179, 고정 기능 0, 공통 220. GX-G 비율은 벡터 252, 텐서 67, SRAM 140, 고정 기능 101">
+        <text x="20" y="22" class="t t-b">780 mm² 다이의 면적 배분 (1 mm² = 1 px)</text>
+        <text x="20" y="62" class="t t-b">GX-1</text>
+        <rect x="70" y="44" width="190" height="28" class="kf-compute" opacity="0.8"/><text x="165" y="63" class="t t-c" style="fill:var(--bg-elev)">벡터 190</text>
+        <rect x="260" y="44" width="190" height="28" class="kf-tensor" opacity="0.8"/><text x="355" y="63" class="t t-c" style="fill:var(--bg-elev)">텐서 190</text>
+        <rect x="450" y="44" width="179" height="28" class="kf-sram" opacity="0.8"/><text x="540" y="63" class="t t-c" style="fill:var(--bg-elev)">SRAM 179</text>
+        <rect x="629" y="44" width="220" height="28" class="f-surface"/><text x="739" y="63" class="t-dim t-c">PHY·NoC·I/O 220</text>
+        <text x="20" y="112" class="t t-b">GX-G 비율</text>
+        <rect x="70" y="94" width="252" height="28" class="kf-compute" opacity="0.8"/><text x="196" y="113" class="t t-c" style="fill:var(--bg-elev)">벡터 252 (FP64 1:64)</text>
+        <rect x="322" y="94" width="67" height="28" class="kf-tensor" opacity="0.8"/><text x="355" y="113" class="t t-c" style="fill:var(--bg-elev)">67</text>
+        <rect x="389" y="94" width="140" height="28" class="kf-sram" opacity="0.8"/><text x="459" y="113" class="t t-c" style="fill:var(--bg-elev)">SRAM 140</text>
+        <rect x="529" y="94" width="101" height="28" class="k-ctrl"/><text x="579" y="113" class="t t-c">고정 101</text>
+        <rect x="630" y="94" width="220" height="28" class="f-surface"/><text x="740" y="113" class="t-dim t-c">PHY·NoC·I/O 220</text>
+        <text x="20" y="150" class="t-dim">GX-G 실제 다이는 380 mm²이지만, 여기서는 그 비율(45 : 12 : 25 : 18)을 780 mm²에 옮겨 같은 면적에서 비교한다.</text>
+        <text x="20" y="172" class="t-dim">HBM 대역폭 7.37 TB/s는 두 경우 모두 같다고 둔다(PHY 면적이 공통).</text>
+      </svg>
+      <figcaption><b>그림 15-10.</b> 데이터센터 칩과 그래픽 칩의 면적 배분. 그래픽 칩은 텐서 코어를 줄이고 그 자리를 FP32 레인과 고정 기능에 준다. FP64를 1:64로 줄여 같은 벡터 면적에서 FP32 레인을 더 많이 넣는다.</figcaption>
+    </figure>
+
+    <p>워크로드 묶음별 성능 모델은 앞 절의 결과를 한 줄씩 줄인 것이다(모두 GX-1 = 1로 정규화). <b>LLM 학습</b>: 텐서 연산 95 % + 벡터 연산 5 %(정규화·소프트맥스). 텐서 쪽은 루프라인 \(\min(P_{ten}, I\cdot BW)\)이고, 타일링 재사용으로 산술 강도가 SRAM 용량의 제곱근에 비례한다고 본다(GX-1에서 \(I\) = 200). <b>LLM 디코드</b>: 배치 32 BF16(\(I\) ≈ 32)에서 대역폭 제한 90 % + 벡터 10 %. <b>그래픽</b>: 앞 절 모델을 줄여, 셰이더 일은 FP32로, 고정 기능 일은 고정 기능 면적으로 처리하고 모자라면 셰이더로 흉내 낸다. <b>과학 계산 FP64</b>: 밀집 선형대수처럼 FP64 연산 제한.</p>
+
+    <div class="sim" id="sim-area">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>면적 배분 설계 실험</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ar-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>프리셋</span><div class="wl-presets">
+            <button class="btn" data-p="gx1">GX-1</button><button class="btn" data-p="gxg">GX-G 비율</button><button class="btn" data-p="ten">텐서 70 %</button><button class="btn" data-p="sci">FP64 과학</button>
+          </div></div>
+          <label class="ctrl"><span>벡터 레인 <output id="ar-v-out"></output></span><input type="range" id="ar-v" min="0" max="100" step="1" value="34"></label>
+          <label class="ctrl"><span>텐서 코어 <output id="ar-t-out"></output></span><input type="range" id="ar-t" min="0" max="100" step="1" value="34"></label>
+          <label class="ctrl"><span>SRAM <output id="ar-s-out"></output></span><input type="range" id="ar-s" min="0" max="100" step="1" value="32"></label>
+          <label class="ctrl"><span>그래픽 고정 기능 <output id="ar-f-out"></output></span><input type="range" id="ar-f" min="0" max="100" step="1" value="0"></label>
+          <div class="ctrl"><span>FP64 : FP32</span><div class="seg" id="ar-d"><button data-value="half" class="on">1:2</button><button data-value="low">1:64</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">텐서 BF16</span><span class="v" id="ar-o-t">—</span></div>
+        <div class="stat"><span class="k">FP32 / FP64</span><span class="v" id="ar-o-v">—</span></div>
+        <div class="stat"><span class="k">온칩 SRAM</span><span class="v" id="ar-o-s">—</span></div>
+        <div class="stat"><span class="k">가장 이득 / 손해</span><span class="v" id="ar-o-b">—</span></div>
+      </div>
+      <div class="sim-note">슬라이더는 비율의 가중치이고 합이 100 %가 아니어도 자동으로 560 mm²에 맞추어 나눈다. 위 막대는 면적 배분, 아래 막대는 GX-1 대비 워크로드별 상대 성능(로그 축, 1 = GX-1)이다. 해볼 것: ① GX-G 비율에서 그래픽 약 6.2배, LLM 학습 약 0.37배, FP64 과학 약 0.07배, 디코드는 약 1.06배다. 디코드는 HBM이 같으면 면적 배분에 거의 둔감하다. ② "텐서 70 %"(벡터 10, SRAM 20)는 텐서 피크가 약 2.1배인데 학습은 약 1.07배에 그친다. SRAM이 줄어 재사용이 떨어지고 대역폭 지붕에 걸리기 때문이다. 그래픽·FP64는 약 0.29배로 떨어진다. ③ GX-1에서 SRAM만 32 → 10으로 줄이고 텐서에 주면 텐서 피크는 1.6배가 되지만 학습은 약 0.9배로 오히려 떨어진다. 재사용이 줄어 대역폭 지붕 아래로 내려가기 때문이다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 면적 한 mm²는 한 워크로드에만 효율적으로 쓰인다. 텐서 코어는 그래픽에, 고정 기능은 LLM에, FP64 레인은 둘 다에 거의 쓸모없다. 그래서 한 회사가 같은 아키텍처로 데이터센터용(텐서·HBM·FP64)과 그래픽용(FP32·고정 기능·GDDR) 다이를 따로 만든다. 다이 마스크 한 벌의 원가가 매우 커도 면적 배분을 워크로드에 맞추는 이득이 더 크기 때문이다. 시장이 충분히 크면 한 워크로드만을 위한 맞춤형 가속기(<a href="roadmap.html">16장</a>)까지 간다.</p>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="decisions">
+    <h2>워크로드 → 하드웨어 결정</h2>
+    <p>이 장의 계산을 조건 → 결과로 모으면 GX-1의 표가 왜 그렇게 생겼는지가 보인다.</p>
+    <div class="table-wrap"><table class="dec">
+      <thead><tr><th>워크로드 조건</th><th>병목</th><th>하드웨어 결정</th><th>결과 (GX-1 수치)</th></tr></thead>
+      <tbody>
+        <tr><td>학습 토큰·파라미터 ↑ (6ND)</td><td>텐서 연산, MFU</td><td>텐서 코어 면적 ↑, 저정밀도(FP8)</td><td>943.7 → 1,887 TFLOPS, 70B·15T 학습 47 → 24일(4,096개)</td></tr>
+        <tr><td>학습 상태 16 B/파라미터</td><td>HBM 용량</td><td>칩 여러 개에 분할, 링크 ↑</td><td>70B → 1.12 TB, 최소 8개(GX-8 노드)</td></tr>
+        <tr><td>긴 프롬프트(프리필)</td><td>텐서 연산</td><td>텐서 피크가 TTFT를 정함</td><td>L 2,048: FP8 약 155 ms, BF16 약 310 ms</td></tr>
+        <tr><td>배치 1 디코드</td><td>HBM 대역폭</td><td>HBM 스택·핀 속도 ↑, 가중치 바이트 ↓</td><td>FP8 70 GB ÷ 7.37 TB/s → 약 105 토큰/s, 연산 활용 1 % 미만</td></tr>
+        <tr><td>배치 ↑ 디코드</td><td>대역폭 → (B ≈ 128) 연산</td><td>리지 포인트 128을 넘기려면 배치 수백</td><td>B 64(S 2,048): 약 4,200 토큰/s, TPOT 15 ms</td></tr>
+        <tr><td>문맥 S ↑</td><td>KV 캐시 용량·대역폭</td><td>HBM 용량 ↑(스택 높이), GQA, KV FP8</td><td>FP8 가중치·S 8,192: 시퀀스 27개(KV FP8이면 55개)</td></tr>
+        <tr><td>정밀도 BF16 → FP8 → FP4</td><td>바이트·용량</td><td>텐서 코어에 저정밀도 데이터 경로 추가</td><td>배치 1: 52 → 103 → 203 토큰/s(S 4,096)</td></tr>
+        <tr><td>MoE (E ↑, k 고정)</td><td>용량·all-to-all</td><td>노드 HBM 총량·GPU 쌍 대역폭 ↑</td><td>E 16·k 2: 연산 1배, 메모리 6.6배(465 GB)</td></tr>
+        <tr><td>그래픽 해상도·광선 수 ↑</td><td>FP32 레인, 고정 기능</td><td>텍스처·ROP·광선 추적 유닛 유지</td><td>고정 기능 없으면 프레임 약 2.2배(4K, 광선 1)</td></tr>
+        <tr><td>과학 계산 FP64</td><td>FP64 레인</td><td>데이터센터 칩만 FP64 1:2</td><td>29.5 TFLOPS. 그래픽 비율(1:64)이면 약 0.07배</td></tr>
+        <tr><td>SRAM ↓, 텐서 ↑</td><td>재사용 ↓ → 대역폭</td><td>SRAM 면적을 일정 이상 유지</td><td>SRAM 32 → 10 %: 텐서 1.6배인데 학습 0.9배</td></tr>
+      </tbody>
+    </table></div>
+    <p>세 가지를 기억하면 표 대부분이 따라 나온다. 첫째, 연산은 싸고 바이트는 비싸다. 디코드처럼 재사용이 없는 워크로드는 대역폭과 용량이 성능이다. 둘째, 정밀도를 낮추면 바이트와 면적이 함께 준다. 셋째, 면적은 워크로드 사이에서 옮겨 쓸 수 없다. 그래서 GPU는 시장별로 다이를 나누고, 가장 큰 시장(지금은 LLM)의 병목이 다음 세대의 면적 배분을 정한다.</p>
+  </section>
+
+  <section class="keypoints" id="summary"><h2>핵심 정리</h2><ol>
+    <li>학습 연산량은 약 \(6ND\)이고, 일수는 \(6ND/(n_{GPU} P_{peak}\,\text{MFU})\)다. GX-LM-70B를 15조 토큰으로 GX-1 4,096개에서 MFU 40 %로 학습하면 약 47일, GPU 에너지 약 4,600 MWh다.</li>
+    <li>프리필은 가중치를 \(L\)번 재사용하는 행렬 × 행렬이라 연산 제한이고, 디코드는 매 토큰 가중치 전체를 읽는 행렬 × 벡터라 대역폭 제한이다. FP8 배치 1 디코드 상한은 7.37 TB/s ÷ 70 GB ≈ 105 토큰/s다.</li>
+    <li>디코드 산술 강도는 KV를 빼면 BF16에서 \(B\), FP8에서 \(2B\)이고, 두 경우 모두 B ≈ 128에서 리지에 닿는다. KV 트래픽은 산술 강도를 \(I_\infty\)에서 멈추게 한다.</li>
+    <li>KV 캐시는 토큰당 320 KiB(BF16, GQA 8)다. HBM에서 가중치를 뺀 용량이 동시 시퀀스 수를 정한다. FP8 가중치, 문맥 8,192에서 27개다.</li>
+    <li>양자화는 디코드에서 바이트와 용량을 함께 줄여 배치 1 속도와 배치 상한을 모두 올리고, 프리필·학습에서는 텐서 피크를 올린다.</li>
+    <li>MoE는 토큰당 연산을 활성 파라미터로 줄이지만, 메모리는 전체 파라미터만큼 필요하고 층마다 all-to-all 통신이 생긴다. 배치가 크면 디코드가 결국 모든 전문가를 읽는다.</li>
+    <li>그래픽은 정해진 패턴의 대량 작업(텍스처·ROP·BVH 순회)을 고정 기능 유닛에 맡겨 셰이더와 병렬로 돌린다. 광선당 BVH 방문은 \(\log T\)에 비례한다.</li>
+    <li>같은 면적에서 텐서·벡터·SRAM·고정 기능의 비율은 워크로드 묶음별 성능을 서로 바꾼다. 그래서 데이터센터 GPU와 그래픽 GPU는 같은 아키텍처라도 다이가 다르다.</li>
+  </ol></section>
+
+  <section class="quiz-sec" id="quiz"><h2>확인 퀴즈</h2><div class="quiz">
+    <div class="quiz-q"><p>파라미터 140억 개 모델을 토큰 2조 개로 학습한다. GX-1 512개가 BF16 피크의 MFU 50 %로 돌면 학습 기간은 대략?</p><div class="opts">
+      <button class="opt">약 2일</button><button class="opt">약 4일</button><button class="opt" data-correct>약 8일</button><button class="opt">약 32일</button>
+    </div><div class="quiz-exp">\(6ND = 6 \times 1.4\times10^{10} \times 2\times10^{12} = 1.68\times10^{23}\) FLOP. 초당 \(512 \times 943.7\times10^{12} \times 0.5 \approx 2.42\times10^{17}\) FLOP이므로 약 \(6.95\times10^{5}\) s, 곧 약 8일이다.</div></div>
+    <div class="quiz-q"><p>GX-LM-70B를 BF16, 배치 1로 디코드할 때 텐서 코어가 거의 노는 이유는?</p><div class="opts">
+      <button class="opt" data-correct>산술 강도가 약 1 FLOP/B로 리지 포인트 128보다 훨씬 작아 HBM이 먼저 막힌다</button><button class="opt">텐서 코어가 BF16을 지원하지 않는다</button><button class="opt">KV 캐시가 L2에 들어가지 않아 연산이 멈춘다</button><button class="opt">디코드는 FP32 벡터 레인에서만 돈다</button>
+    </div><div class="quiz-exp">배치 1에서는 가중치 1바이트(BF16 2바이트에 FMA 1개 = 2 FLOP)마다 약 1 FLOP만 한다. 루프라인에서 \(P = I \cdot BW \approx 7.4\) TFLOPS로 피크 943.7의 1 % 미만이다.</div></div>
+    <div class="quiz-q"><p>가중치를 FP4(마이크로스케일링, 35 GB)로 바꾸면 배치 1 디코드의 상한(KV 무시)은 대략?</p><div class="opts">
+      <button class="opt">약 53 토큰/s</button><button class="opt">약 105 토큰/s</button><button class="opt">약 3,775 토큰/s</button><button class="opt" data-correct>약 210 토큰/s</button>
+    </div><div class="quiz-exp">\(7.37\ \text{TB/s} / 35\ \text{GB} \approx 211\) 토큰/s. 디코드는 바이트에 비례하므로 FP4 텐서 피크(3,775 TFLOPS)는 이 상한과 상관이 없다.</div></div>
+    <div class="quiz-q"><p>GX-LM-70B가 GQA 대신 KV 헤드 64개(MHA)를 썼다면 BF16 KV 캐시는 토큰당 얼마인가?</p><div class="opts">
+      <button class="opt">40 KiB</button><button class="opt" data-correct>2.5 MiB</button><button class="opt">320 KiB</button><button class="opt">20 MiB</button>
+    </div><div class="quiz-exp">\(2 \times 80 \times 64 \times 128 \times 2\ \text{B} = 2{,}621{,}440\ \text{B} = 2.5\) MiB로 GQA 8헤드(320 KiB)의 8배다. 문맥 8,192면 시퀀스당 약 21 GB라 FP8 가중치 옆에 시퀀스 3개밖에 못 올린다.</div></div>
+    <div class="quiz-q"><p>FP8 가중치와 BF16 KV 캐시, 문맥 2,048에서 배치를 아무리 키워도 디코드가 연산 제한에 닿지 않는 이유는?</p><div class="opts">
+      <button class="opt">FP8 리지 포인트가 128이라서</button><button class="opt">배치가 커지면 가중치 바이트가 배치에 비례해 늘어서</button><button class="opt" data-correct>KV 바이트가 배치에 비례해 늘어 산술 강도가 약 217 FLOP/B에서 멈추는데, FP8 리지는 약 256이라서</button><button class="opt">어텐션 연산이 텐서 코어에서 돌지 않아서</button>
+    </div><div class="quiz-exp">\(I_\infty = (2N + 4 n_{layer} d_{model} S)/(S\,k_{tok}) \approx 1.45\times10^{11} / 6.7\times10^{8} \approx 217\) FLOP/B로, 리지 256 아래다. KV를 FP8로 줄이면 \(I_\infty\)가 약 433으로 올라 전환점이 생긴다.</div></div>
+    <div class="quiz-q"><p>전문가 16개 중 2개를 쓰는 MoE(활성 70 B, 전체 약 465 B)를 배치 64로 디코드한다. 밀집 70B 모델과 비교한 디코드 한 단계의 HBM 읽기량은?</p><div class="opts">
+      <button class="opt" data-correct>거의 모든 전문가를 건드려 약 6.6배를 읽는다</button><button class="opt">활성 파라미터가 같으므로 같다</button><button class="opt">전문가 2개분만 읽어 1/8이다</button><button class="opt">라우터가 캐시에 남아 0에 가깝다</button>
+    </div><div class="quiz-exp">토큰 64개가 각자 전문가 2개를 고르면 한 층에서 건드리는 전문가 수의 기댓값은 \(16[1-(14/16)^{64}] \approx 16\)이다. 연산은 밀집과 같아도 읽는 바이트는 전체 파라미터에 가깝다. MoE는 큰 배치 디코드에서 대역폭을 아끼지 못한다.</div></div>
+    <div class="quiz-q"><p>광선 추적의 BVH 순회를 셰이더 대신 전용 유닛에 맡기는 이유로 가장 알맞은 것은?</p><div class="opts">
+      <button class="opt">BVH 순회는 행렬곱이라 텐서 코어가 필요하다</button><button class="opt" data-correct>광선마다 갈림길이 달라 분기 발산·불규칙 접근이 심하고, 전용 유닛은 셰이더와 병렬로 돌아 FP32 레인을 비워 준다</button><button class="opt">순회 횟수가 삼각형 수에 비례해 늘어서</button><button class="opt">셰이더는 부동소수점 비교를 할 수 없어서</button>
+    </div><div class="quiz-exp">방문 노드는 \(\log T\)에 비례하지만 워프 안의 광선들이 서로 다른 경로를 따라가 셰이더 효율이 낮다. 이 장의 모델에서 4K·광선 1개의 순회를 셰이더로 흉내 내면 약 4.5 ms가 셰이더 시간에 더해진다.</div></div>
+    <div class="quiz-q"><p>GX-1에서 SRAM 면적을 32 %에서 10 %로 줄이고 그 면적을 텐서 코어에 주었다. 텐서 피크는 약 1.6배인데 LLM 학습 성능이 오히려 약 0.9배로 떨어지는 이유는?</p><div class="opts">
+      <button class="opt">텐서 코어가 늘면 클럭이 내려가서</button><button class="opt">학습은 대역폭과 상관없는 워크로드라서</button><button class="opt">FP64 레인이 함께 줄어서</button><button class="opt" data-correct>타일을 담을 SRAM이 줄어 데이터 재사용(산술 강도)이 떨어지고, HBM 대역폭 지붕 아래로 내려가서</button>
+    </div><div class="quiz-exp">타일 크기는 SRAM 용량의 제곱근 정도로 줄고 산술 강도도 그만큼 준다(7장). \(I\)가 200에서 약 112로 떨어지면 \(I \cdot BW \approx 825\) TFLOPS로, 늘어난 텐서 피크(약 1,550)를 쓰지 못한다.</div></div>
+  </div></section>
+</main>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+/* model:base */
+var GX = { peak: { bf16: 943.7184e12, fp8: 1887.4368e12, fp4: 3774.8736e12 }, fp32: 58.9824e12, fp64: 29.4912e12, bw: 7.3728e12, hbm: 144e9, link: 900e9, tdp: 1000, nodeW: 1500 };
+var LM = { N: 70e9, layers: 80, d: 8192, heads: 64, kvHeads: 8, dh: 128, ffn: 28672, ctx: 8192 };
+var BYTES = { bf16: 2, fp8: 1, fp4: 0.5 };
+function kvPerToken(kvPrec, kvHeads) { return 2 * LM.layers * (kvHeads == null ? LM.kvHeads : kvHeads) * LM.dh * BYTES[kvPrec]; }
+function attnFlopPerToken(s) { return 4 * LM.layers * LM.d * Math.max(0, s); }
+/* /model:base */
+/* model:train */
+function trainCalc(o) {
+  var flop = 6 * o.N * o.D;
+  var rate = o.gpus * GX.peak[o.prec] * o.mfu;
+  var sec = flop / rate, days = sec / 86400, gpuH = o.gpus * sec / 3600;
+  var stateB = 16 * o.N;
+  return { flop: flop, sec: sec, days: days, gpuH: gpuH, eGpuMWh: gpuH * GX.tdp / 1e6, eNodeMWh: gpuH * GX.nodeW / 1e6,
+    stateB: stateB, minGpus: Math.ceil(stateB / GX.hbm), tokPerSec: o.D / sec };
+}
+/* /model:train */
+/* model:infer */
+function decodeStep(prec, kvPrec, B, S) {
+  var W = LM.N * BYTES[prec], kv = kvPerToken(kvPrec);
+  var bytes = W + B * S * kv, flops = B * (2 * LM.N + attnFlopPerToken(S));
+  var tMem = bytes / GX.bw, tCmp = flops / GX.peak[prec], t = Math.max(tMem, tCmp);
+  return { W: W, bytes: bytes, flops: flops, tMem: tMem, tCmp: tCmp, t: t, I: flops / bytes, perSeq: 1 / t, total: B / t,
+    mem: W + B * S * kv, fits: W + B * S * kv <= GX.hbm, bound: tCmp > tMem ? "compute" : "memory" };
+}
+function prefill(prec, kvPrec, L) {
+  var W = LM.N * BYTES[prec];
+  var flops = 2 * LM.N * L + 2 * LM.layers * LM.d * L * L;
+  var bytes = W + L * kvPerToken(kvPrec);
+  var tCmp = flops / GX.peak[prec], tMem = bytes / GX.bw, t = Math.max(tCmp, tMem);
+  return { flops: flops, bytes: bytes, tCmp: tCmp, tMem: tMem, t: t, I: flops / bytes, bound: tCmp > tMem ? "compute" : "memory" };
+}
+function serve(prec, B, S, L, outTok) {
+  var p = prefill(prec, "bf16", L), d = decodeStep(prec, "bf16", B, S);
+  return { ttft: p.t, tpot: d.t, perSeq: d.perSeq, total: d.total, pre: p, dec: d, e2e: p.t + outTok * d.t };
+}
+/* /model:infer */
+/* model:batch */
+function decodeI(prec, kvPrec, B, S, withKV) {
+  var W = LM.N * BYTES[prec], kv = withKV ? kvPerToken(kvPrec) : 0;
+  var a = withKV ? attnFlopPerToken(S) : 0;
+  return B * (2 * LM.N + a) / (W + B * S * kv);
+}
+function ridge(prec) { return GX.peak[prec] / GX.bw; }
+function crossoverB(prec, kvPrec, S, withKV) {
+  var R = ridge(prec), W = LM.N * BYTES[prec], kv = withKV ? kvPerToken(kvPrec) : 0, f = 2 * LM.N + (withKV ? attnFlopPerToken(S) : 0);
+  var den = f - R * S * kv;
+  return den > 0 ? R * W / den : Infinity;
+}
+function iInf(prec, kvPrec, S) { return (2 * LM.N + attnFlopPerToken(S)) / (S * kvPerToken(kvPrec)); }
+function bMax(prec, kvPrec, S, gpus, reserve, kvHeads) {
+  var free = GX.hbm * (gpus || 1) - LM.N * BYTES[prec] - (reserve || 0);
+  var per = Math.max(1, S) * kvPerToken(kvPrec, kvHeads);
+  return free > 0 ? Math.floor(free / per) : 0;
+}
+function peakFrac(prec, kvPrec, B, S) { var d = decodeStep(prec, kvPrec, B, S); return (d.flops / d.t) / GX.peak[prec]; }
+/* /model:batch */
+/* model:kv */
+function kvCap(o) {
+  var per = kvPerToken(o.kvPrec, o.kvHeads), W = LM.N * BYTES[o.wPrec], cap = GX.hbm * o.gpus;
+  var free = Math.max(0, cap - W - o.reserve), perSeq = per * o.S;
+  var n = Math.floor(free / perSeq);
+  return { per: per, W: W, cap: cap, free: free, perSeq: perSeq, nSeq: n, tokens: Math.floor(free / per), weightsFit: W + o.reserve <= cap };
+}
+/* /model:kv */
+/* model:quant */
+function quantRow(wPrec, kvPrec, S) {
+  var B = bMax(wPrec, kvPrec, S, 1, 0), d1 = decodeStep(wPrec, kvPrec, 1, S);
+  var dm = B >= 1 ? decodeStep(wPrec, kvPrec, B, S) : null;
+  return { W: LM.N * BYTES[wPrec], bmax: B, tok1: d1.perSeq, fits1: d1.fits, tokMax: dm ? dm.total : 0, peak: GX.peak[wPrec], boundMax: dm ? dm.bound : "-" };
+}
+/* /model:quant */
+/* model:moe */
+var MOE = { attn: LM.layers * (2 * LM.d * LM.d + 2 * LM.d * LM.kvHeads * LM.dh), ffnDense: LM.layers * 3 * LM.d * LM.ffn };
+MOE.other = LM.N - MOE.attn - MOE.ffnDense;
+MOE.lat = 2e-6;
+function moeCalc(o) {
+  var exp = LM.layers * 3 * LM.d * o.fe;
+  var base = MOE.attn + MOE.other;
+  var total = base + o.E * exp + LM.layers * LM.d * o.E, active = base + o.k * exp;
+  var k = Math.min(o.k, o.E), U = o.E * (1 - Math.pow(1 - k / o.E, o.B));
+  var stepBytes = base + U * exp;
+  var G = o.G, mem = total;
+  var tMem = stepBytes / (G * GX.bw), tCmp = o.B * 2 * active / (G * GX.peak.fp8);
+  var commTok = G > 1 ? LM.layers * 2 * k * LM.d * 2 * (G - 1) / G : 0;
+  var tComm = G > 1 ? o.B * commTok / (G * GX.link) + LM.layers * 2 * MOE.lat : 0;
+  var t = Math.max(tMem, tCmp) + tComm;
+  return { total: total, active: active, flopTok: 2 * active, mem: mem, minG: Math.ceil(mem / GX.hbm), fits: mem <= G * GX.hbm, U: U, stepBytes: stepBytes,
+    tMem: tMem, tCmp: tCmp, tComm: tComm, commTok: commTok, t: t, tok: o.B / t, ratioMem: total / LM.N, ratioCmp: active / LM.N };
+}
+/* /model:moe */
+/* model:gfx */
+var GXG = { sm: 96, gpc: 6, clk: 1.6e9 };
+GXG.lane = GXG.sm * 128 * GXG.clk; GXG.tri = GXG.gpc * GXG.clk; GXG.rpx = GXG.gpc * 16 * GXG.clk; GXG.tex = GXG.sm * 4 * GXG.clk; GXG.rop = GXG.gpc * 16 * GXG.clk; GXG.rt = GXG.sm * GXG.clk;
+var EMU = { triSetup: 100, rasterPx: 10, tex: 60, rop: 20, rtVisit: 240 };
+var RES = { "1080p": 1920 * 1080, "1440p": 2560 * 1440, "4k": 3840 * 2160 };
+function bvhVisits(T) { return 2 * Math.log2(Math.max(2, T)); }
+function gfxFrame(o) {
+  var px = RES[o.res], ff = o.ff;
+  var rays = px * o.rpp, visits = bvhVisits(o.tris);
+  var sh = o.tris * o.vInstr + px * o.pInstr + rays * o.hitInstr;
+  var st = { raster: Math.max(o.tris / GXG.tri, px * o.od / GXG.rpx), tex: px * o.texPx / GXG.tex, rop: px * o.ropPx / GXG.rop, rt: rays * visits / GXG.rt };
+  var emu = { raster: o.tris * EMU.triSetup + px * o.od * EMU.rasterPx, tex: px * o.texPx * EMU.tex, rop: px * o.ropPx * EMU.rop, rt: rays * visits * EMU.rtVisit };
+  var times = {}, emuT = 0;
+  ["raster", "tex", "rop", "rt"].forEach(function (k) { if (ff[k]) times[k] = st[k]; else { times[k] = 0; emuT += emu[k] / GXG.lane; } });
+  times.shader = sh / GXG.lane + emuT; times.emu = emuT;
+  var frame = Math.max(times.shader, times.raster, times.tex, times.rop, times.rt), bott = "shader";
+  ["raster", "tex", "rop", "rt"].forEach(function (k) { if (times[k] >= frame) bott = k; });
+  if (times.shader >= frame) bott = "shader";
+  return { times: times, frame: frame, fps: 1 / frame, bott: bott, visits: visits, px: px };
+}
+/* /model:gfx */
+/* model:area */
+var AREA = { die: 780, fixed: 220, alloc: 560, gx1: { vec: 34, ten: 34, sram: 32, ff: 0, fp64: "half" }, gxg: { vec: 45, ten: 12, sram: 25, ff: 18, fp64: "low" } };
+AREA.dTen = GX.peak.bf16 / (AREA.alloc * 0.34); AREA.dVec = GX.fp32 / (AREA.alloc * 0.34 * 0.6); AREA.dSram = 136 / (AREA.alloc * 0.32); AREA.ffRef = AREA.alloc * 0.18;
+var WL = { trainI0: 200, trainVec: 0.05, decI: 32, decVec: 0.10, gfxTs: 0.6, gfxTe: 4.0, gfxTff: 1.0 };
+function areaChip(a) {
+  var s = a.vec + a.ten + a.sram + a.ff; if (!(s > 0)) s = 1;
+  var A = { vec: AREA.alloc * a.vec / s, ten: AREA.alloc * a.ten / s, sram: AREA.alloc * a.sram / s, ff: AREA.alloc * a.ff / s };
+  var s64 = a.fp64 === "half" ? 0.4 : 0.0125;
+  var p32 = A.vec * (1 - s64) * AREA.dVec, p64 = a.fp64 === "half" ? p32 / 2 : p32 / 64;
+  return { A: A, ten: A.ten * AREA.dTen, p32: p32, p64: p64, sramMB: A.sram * AREA.dSram };
+}
+function areaPerfRaw(a) {
+  var c = areaChip(a), ref = { ten: GX.peak.bf16, p32: GX.fp32, sram: 136 };
+  var Ieff = WL.trainI0 * Math.sqrt(Math.max(1e-6, c.sramMB) / ref.sram);
+  var tenEff = Math.min(c.ten, Ieff * GX.bw);
+  var tTrain = (1 - WL.trainVec) * ref.ten / Math.max(1, tenEff) + WL.trainVec * ref.p32 / Math.max(1, c.p32);
+  var tDec = (1 - WL.decVec) * (WL.decI * GX.bw) / Math.max(1, Math.min(c.ten, WL.decI * GX.bw)) + WL.decVec * ref.p32 / Math.max(1, c.p32);
+  var Ts = WL.gfxTs * ref.p32 / Math.max(1, c.p32), Te = WL.gfxTe * ref.p32 / Math.max(1, c.p32);
+  var Tff = c.A.ff > 0 ? WL.gfxTff * AREA.ffRef / c.A.ff : Infinity;
+  var x = isFinite(Tff) ? Math.min(1, (Ts + Te) / (Tff + Te)) : 0;
+  var tGfx = x >= 1 ? Math.max(Tff, Ts) : Ts + (1 - x) * Te;
+  var tSci = ref.p32 / 2 / Math.max(1e-3, c.p64);
+  return { chip: c, train: 1 / tTrain, dec: 1 / tDec, gfx: 1 / tGfx, sci: 1 / tSci };
+}
+function areaPerf(a) {
+  var r = areaPerfRaw(a), g = areaPerfRaw(AREA.gx1);
+  return { chip: r.chip, train: r.train / g.train, dec: r.dec / g.dec, gfx: r.gfx / g.gfx, sci: r.sci / g.sci };
+}
+/* /model:area */
+
+  /* -------------------------------------------------- 공통 서식·그리기 */
+  function sci(x, d) {
+    if (!isFinite(x)) return "—";
+    if (x === 0) return "0";
+    var e = Math.floor(Math.log10(Math.abs(x))), m = x / Math.pow(10, e);
+    if (Number(m.toFixed(d || 2)) >= 10) { m /= 10; e += 1; }
+    return m.toFixed(d || 2) + "×10<sup>" + e + "</sup>";
+  }
+  function tm(s) {
+    if (!isFinite(s)) return "—";
+    if (s < 1e-3) return GP.fmt(s * 1e6, 3) + "<small> µs</small>";
+    if (s < 1) return GP.fmt(s * 1e3, 3) + "<small> ms</small>";
+    if (s < 120) return GP.fmt(s, 3) + "<small> s</small>";
+    return GP.fmt(s / 60, 3) + "<small> 분</small>";
+  }
+  function days(d) {
+    if (d < 1 / 24) return GP.fmt(d * 1440, 3) + "<small> 분</small>";
+    if (d < 1) return GP.fmt(d * 24, 3) + "<small> 시간</small>";
+    if (d > 730) return GP.fmt(d / 365, 3) + "<small> 년</small>";
+    return GP.fmt(d, 3) + "<small> 일</small>";
+  }
+  function gb(b) { return GP.fmt(b / 1e9, 3) + "<small> GB</small>"; }
+  function big(n) { return n >= 1e4 ? Math.round(n).toLocaleString("en-US") : GP.fmt(n, 3); }
+  /** 가로 막대 묶음. rows: [{label, v, color, txt, bold, hatch(0–1, 앞쪽 빗금 비율)}], 선형 또는 로그 축 */
+  function hbars(ctx, x, y, w, rh, rows, o) {
+    var P = GP.palette(), lw = o.labelW || 92, bw = w - lw - (o.valW || 70);
+    var max = o.max || Math.max.apply(null, rows.map(function (r) { return r.v; }).concat([1e-30]));
+    var pos = function (v) {
+      if (o.log) { var a = Math.log10(o.min), b = Math.log10(max), t = (Math.log10(Math.max(o.min, v)) - a) / (b - a); return GP.clamp(t, 0, 1) * bw; }
+      return GP.clamp(v / max, 0, 1) * bw;
+    };
+    rows.forEach(function (r, i) {
+      var yy = y + i * rh, h = rh * 0.62, L = pos(r.v);
+      GP.text(ctx, r.label, x + lw - 8, yy + h / 2, { size: 12, color: P.text, align: "right", baseline: "middle" });
+      ctx.fillStyle = GP.alpha(P.grid, 0.5); ctx.fillRect(x + lw, yy, bw, h);
+      ctx.fillStyle = GP.alpha(r.color, r.faint ? 0.35 : 0.85); ctx.fillRect(x + lw, yy, L, h);
+      if (r.hatch > 0) {
+        var hx = x + lw + L * (1 - r.hatch), hw = L * r.hatch;
+        ctx.save(); ctx.beginPath(); ctx.rect(hx, yy, hw, h); ctx.clip();
+        ctx.fillStyle = GP.alpha(P.bg, 0.55); ctx.fillRect(hx, yy, hw, h);
+        ctx.strokeStyle = r.color; ctx.lineWidth = 1.5;
+        for (var k = -h; k < hw + h; k += 6) { ctx.beginPath(); ctx.moveTo(hx + k, yy + h); ctx.lineTo(hx + k + h, yy); ctx.stroke(); }
+        ctx.restore();
+      }
+      if (r.bold) { ctx.strokeStyle = P.text; ctx.lineWidth = 2; ctx.strokeRect(x + lw + 1, yy + 1, Math.max(2, L - 2), h - 2); }
+      GP.text(ctx, r.txt || "", x + lw + Math.min(L, bw) + 6, yy + h / 2, { size: 12, color: P.dim, align: "left", baseline: "middle", mono: true });
+    });
+    if (o.ref != null) {
+      var rx = x + lw + pos(o.ref);
+      ctx.strokeStyle = P.dim; ctx.setLineDash([4, 3]); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(rx, y - 6); ctx.lineTo(rx, y + rows.length * rh - rh * 0.3); ctx.stroke(); ctx.setLineDash([]);
+      if (o.refLabel) GP.text(ctx, o.refLabel, rx, y - 8, { size: 11.5, color: P.dim, align: "center", baseline: "bottom" });
+    }
+  }
+  var log2Fmt = function (v) { return String(Math.pow(2, v)); };
+
+  /* ================================================== 1. 학습 */
+  (function () {
+    var cv;
+    var gN = GP.range("tr-n", function (v) { return GP.fmt(Math.pow(10, v), 3) + " B"; }, upd);
+    var gD = GP.range("tr-d", function (v) { return GP.fmt(Math.pow(10, v), 3) + " T"; }, upd);
+    var gG = GP.range("tr-g", function (v) { return Math.pow(2, v).toLocaleString("en-US") + "개"; }, upd);
+    var gM = GP.range("tr-m", function (v) { return v + " %"; }, upd);
+    var gP = GP.seg("tr-p", upd);
+    function inp(g) { return { N: Number(Math.pow(10, gN()).toPrecision(3)) * 1e9, D: Number(Math.pow(10, gD()).toPrecision(3)) * 1e12, gpus: g || Math.pow(2, gG()), mfu: gM() / 100, prec: gP() }; }
+    function upd() {
+      var r = trainCalc(inp());
+      GP.stat("tr-o-f", sci(r.flop) + "<small> FLOP</small>");
+      GP.stat("tr-o-t", days(r.days));
+      GP.stat("tr-o-h", r.gpuH >= 1e6 ? GP.fmt(r.gpuH / 1e6, 3) + "<small> 백만</small>" : big(r.gpuH));
+      GP.stat("tr-o-e", big(r.eGpuMWh) + " / " + big(r.eNodeMWh) + "<small> MWh</small>");
+      GP.stat("tr-o-s", GP.fmt(r.stateB / 1e12, 3) + "<small> TB</small> / " + r.minGpus + "<small>개</small>");
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("tr-cv"), function (ctx, w, h) {
+      var P = GP.palette(), cur = [], ideal = [], lo = Infinity, hi = 0;
+      for (var e = 3; e <= 16; e += 0.25) {
+        var g = Math.pow(2, e), a = trainCalc(inp(g)).days, o = inp(g); o.mfu = 1; var b = trainCalc(o).days;
+        cur.push([g, a]); ideal.push([g, b]); lo = Math.min(lo, b); hi = Math.max(hi, a);
+      }
+      var y0 = Math.pow(10, Math.floor(Math.log10(lo))), y1 = Math.pow(10, Math.ceil(Math.log10(hi)));
+      if (y1 / y0 < 100) y1 = y0 * 100;
+      var now = trainCalc(inp());
+      GP.chart(ctx, null, { x: [8, 65536], y: [y0, y1], logX: true, logY: true, xLabel: "GPU 수", yLabel: "학습 일수",
+        series: [{ data: cur, color: P.tensor, label: "MFU " + gM() + " %" }, { data: ideal, color: P.dim, dash: [5, 4], label: "MFU 100 %" }],
+        hlines: [{ y: 30, label: "30일", color: P.faint }, { y: 365, label: "1년", color: P.faint }].filter(function (l) { return l.y > y0 && l.y < y1; }),
+        points: [{ x: Math.pow(2, gG()), y: now.days, color: P.accent, label: GP.fmt(now.days, 3) + "일" }], legend: "tr", hover: true });
+    }, { aspect: 0.62, maxHeight: 360, minHeight: 240, hover: true });
+    upd();
+  })();
+
+  /* ================================================== 2. 추론 성능 모델 */
+  (function () {
+    var cv;
+    var gP = GP.seg("inf-p", upd);
+    var gB = GP.range("inf-b", log2Fmt, upd);
+    var gS = GP.range("inf-s", function (v) { return v.toLocaleString("en-US"); }, upd);
+    var gL = GP.range("inf-l", function (v) { return v.toLocaleString("en-US"); }, upd);
+    var gO = GP.range("inf-o", function (v) { return v.toLocaleString("en-US"); }, upd);
+    var R;
+    function upd() {
+      R = serve(gP(), Math.pow(2, gB()), gS(), gL(), gO());
+      GP.stat("inf-o-ttft", tm(R.ttft));
+      GP.stat("inf-o-tpot", tm(R.tpot));
+      GP.stat("inf-o-seq", GP.fmt(R.perSeq, 3));
+      GP.stat("inf-o-tot", big(R.total));
+      $("inf-o-mem").className = "v " + (R.dec.fits ? "" : "bad-t");
+      GP.stat("inf-o-mem", GP.fmt(R.dec.mem / 1e9, 3) + "<small> / 144 GB" + (R.dec.fits ? "" : " 초과") + "</small>");
+      GP.stat("inf-o-e2e", tm(R.e2e));
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("inf-cv"), function (ctx, w, h) {
+      var P = GP.palette(), pre = R.pre, dec = R.dec, pad = 12, bw = w - 2 * pad;
+      GP.text(ctx, "프리필 (L = " + gL() + ")  →  " + (pre.bound === "compute" ? "연산 제한" : "대역폭 제한"), pad, 18, { size: 13, weight: 700, color: P.text, baseline: "middle" });
+      hbars(ctx, pad, 32, bw, 26, [
+        { label: "연산", v: pre.tCmp, color: P.tensor, txt: tm(pre.tCmp).replace(/<[^>]+>/g, ""), faint: pre.bound !== "compute", bold: pre.bound === "compute" },
+        { label: "HBM", v: pre.tMem, color: P.dram, txt: tm(pre.tMem).replace(/<[^>]+>/g, ""), faint: pre.bound === "compute", bold: pre.bound !== "compute" }], { labelW: 60, valW: 80 });
+      var y2 = 104;
+      GP.text(ctx, "디코드 한 단계 (B = " + Math.pow(2, gB()) + ", S = " + gS() + ")  →  " + (dec.bound === "compute" ? "연산 제한" : "대역폭 제한"), pad, y2, { size: 13, weight: 700, color: P.text, baseline: "middle" });
+      hbars(ctx, pad, y2 + 14, bw, 26, [
+        { label: "연산", v: dec.tCmp, color: P.tensor, txt: tm(dec.tCmp).replace(/<[^>]+>/g, ""), faint: dec.bound !== "compute", bold: dec.bound === "compute" },
+        { label: "HBM", v: dec.tMem, color: P.dram, txt: tm(dec.tMem).replace(/<[^>]+>/g, ""), faint: dec.bound === "compute", bold: dec.bound !== "compute" }], { labelW: 60, valW: 80 });
+      var y3 = y2 + 90, tot = R.e2e, x0 = pad + 60, tw = bw - 60;
+      GP.text(ctx, "응답 전체 (출력 " + gO() + " 토큰)", pad, y3, { size: 13, weight: 700, color: P.text, baseline: "middle" });
+      var a = tw * R.ttft / tot;
+      ctx.fillStyle = GP.alpha(P.tensor, 0.85); ctx.fillRect(x0, y3 + 14, a, 18);
+      ctx.fillStyle = GP.alpha(P.dram, 0.85); ctx.fillRect(x0 + a, y3 + 14, tw - a, 18);
+      GP.text(ctx, "TTFT " + GP.fmt(100 * R.ttft / tot, 2) + " %", x0, y3 + 46, { size: 12, color: P.dim, baseline: "middle" });
+      GP.text(ctx, "디코드 " + GP.fmt(100 * (1 - R.ttft / tot), 3) + " %", x0 + tw, y3 + 46, { size: 12, color: P.dim, align: "right", baseline: "middle" });
+      var mfr = dec.bound === "compute" ? 1 : dec.tCmp / dec.tMem;
+      GP.text(ctx, "디코드 중 텐서 코어 활용 ≈ " + GP.fmt(100 * mfr, 2) + " %", pad, y3 + 70, { size: 12.5, color: mfr < 0.2 ? P.bad : P.ok, baseline: "middle" });
+    }, { height: 280 });
+    upd();
+  })();
+
+  /* ================================================== 3. 배치와 산술 강도 */
+  (function () {
+    var cv;
+    var gP = GP.seg("ai-p", upd), gK = GP.seg("ai-k", upd);
+    var gS = GP.range("ai-s", function (v) { return v.toLocaleString("en-US"); }, upd);
+    var gB = GP.range("ai-b", log2Fmt, upd);
+    var cK = $("ai-kv"); cK.addEventListener("change", upd);
+    function upd() {
+      var p = gP(), k = gK(), S = gS(), B = Math.pow(2, gB()), kv = cK.checked;
+      var I = decodeI(p, k, B, S, kv), R = ridge(p), x = crossoverB(p, k, S, kv), bm = bMax(p, k, S, 1, 0);
+      GP.stat("ai-o-i", GP.fmt(I, 3) + "<small> FLOP/B</small>");
+      GP.stat("ai-o-r", GP.fmt(R, 3) + " / " + (kv ? GP.fmt(iInf(p, k, S), 3) : "∞"));
+      GP.stat("ai-o-x", isFinite(x) ? "B ≈ " + GP.fmt(x, 3) : "없음");
+      GP.stat("ai-o-m", bm >= 1 ? "≤ " + bm : "0 (가중치만으로 가득)");
+      var u = Math.min(1, I / R);
+      $("ai-o-u").className = "v " + (B > bm ? "warn-t" : "");
+      GP.stat("ai-o-u", GP.fmt(100 * u, 3) + " %" + (B > bm ? "<small> 용량 초과</small>" : ""));
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("ai-cv"), function (ctx, w, h) {
+      var P = GP.palette(), p = gP(), k = gK(), S = gS(), kv = cK.checked, cur = [], nokv = [];
+      for (var e = 0; e <= 10; e += 0.1) { var b = Math.pow(2, e); cur.push([b, decodeI(p, k, b, S, kv)]); nokv.push([b, decodeI(p, k, b, S, false)]); }
+      var bm = bMax(p, k, S, 1, 0), B = Math.pow(2, gB()), R = ridge(p);
+      var series = [{ data: cur, color: P.dram, width: 2.5, label: kv ? "I(B), KV 포함" : "I(B), KV 제외" }];
+      if (kv) series.push({ data: nokv, color: P.dim, dash: [5, 4], label: "KV 제외" });
+      var vl = [];
+      if (bm >= 1 && bm <= 1024) vl.push({ x: bm, color: P.bad, label: "용량 B " + bm, dash: [6, 3] });
+      GP.chart(ctx, null, { x: [1, 1024], y: [0.5, 4096], logX: true, logY: true, xLabel: "배치 B", yLabel: "산술 강도 (FLOP/B)",
+        series: series, hlines: [{ y: R, color: P.tensor, label: "리지 " + GP.fmt(R, 3), dash: [] }], vlines: vl,
+        bands: bm < 1024 ? [{ x0: Math.max(1, bm), x1: 1024, color: GP.alpha(P.bad, 0.07) }] : [],
+        points: [{ x: B, y: decodeI(p, k, B, S, kv), color: P.accent }], legend: "tl", hover: true });
+    }, { aspect: 0.62, maxHeight: 360, minHeight: 240, hover: true });
+    upd();
+  })();
+
+  /* ================================================== 4. KV 캐시 용량 */
+  (function () {
+    var cv, R;
+    var gW = GP.seg("kv-w", upd), gK = GP.seg("kv-k", upd), gH = GP.seg("kv-h", upd), gG = GP.seg("kv-g", upd);
+    var gS = GP.range("kv-s", function (v) { return v.toLocaleString("en-US"); }, upd);
+    var gR = GP.range("kv-r", function (v) { return v + " GB"; }, upd);
+    function upd() {
+      R = kvCap({ wPrec: gW(), kvPrec: gK(), kvHeads: Number(gH()), S: gS(), gpus: Number(gG()), reserve: gR() * 1e9 });
+      GP.stat("kv-o-t", GP.fmt(R.per / 1024, 4) + "<small> KiB</small>");
+      GP.stat("kv-o-q", GP.fmt(R.perSeq / 1e9, 3) + "<small> GB</small>");
+      GP.stat("kv-o-f", R.weightsFit ? gb(R.free) : "<span class='bad-t'>가중치 초과</span>");
+      $("kv-o-n").className = "v " + (R.nSeq < 1 ? "bad-t" : R.nSeq < 8 ? "warn-t" : "");
+      GP.stat("kv-o-n", R.nSeq + "<small>개</small>");
+      GP.stat("kv-o-k", big(R.tokens) + "<small> 토큰</small>");
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("kv-cv"), function (ctx, w, h) {
+      var P = GP.palette(), pad = 12, x0 = pad, bw = w - 2 * pad, cap = R.cap, sc = bw / cap, y = 40, bh = 46;
+      GP.text(ctx, "HBM " + GP.fmt(cap / 1e9, 4) + " GB (GPU " + gG() + "개)", x0, 18, { size: 13, weight: 700, color: P.text, baseline: "middle" });
+      ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(x0, y, bw, bh);
+      var wW = Math.min(bw, R.W * sc);
+      ctx.fillStyle = GP.alpha(P.tensor, 0.8); ctx.fillRect(x0, y, wW, bh);
+      if (wW > 70) GP.text(ctx, "가중치 " + GP.fmt(R.W / 1e9, 3) + " GB", x0 + wW / 2, y + bh / 2, { size: 12, color: P.bg, align: "center", baseline: "middle" });
+      var rx = x0 + wW, rW = Math.min(bw - wW, gR() * 1e9 * sc);
+      ctx.fillStyle = GP.alpha(P.dim, 0.35); ctx.fillRect(rx, y, rW, bh);
+      var kx = rx + rW, sw = R.perSeq * sc, n = R.nSeq;
+      if (n > 0) {
+        ctx.fillStyle = GP.alpha(P.dram, 0.7);
+        if (sw >= 3 && n <= 400) {
+          for (var i = 0; i < n; i++) { ctx.fillRect(kx + i * sw + 0.5, y + 3, Math.max(1, sw - 1.5), bh - 6); }
+        } else ctx.fillRect(kx, y + 3, n * sw, bh - 6);
+      }
+      var used = (R.W + gR() * 1e9 + n * R.perSeq) * sc;
+      var ly = y + bh + 26;
+      GP.text(ctx, "■", x0, ly, { size: 13, color: P.tensor, baseline: "middle" }); GP.text(ctx, "가중치", x0 + 16, ly, { size: 12, color: P.dim, baseline: "middle" });
+      GP.text(ctx, "■", x0 + 80, ly, { size: 13, color: P.dram, baseline: "middle" }); GP.text(ctx, "시퀀스 하나의 KV (" + GP.fmt(R.perSeq / 1e9, 3) + " GB)", x0 + 96, ly, { size: 12, color: P.dim, baseline: "middle" });
+      GP.text(ctx, "남는 자투리 " + GP.fmt(Math.max(0, cap - used / sc) / 1e9, 3) + " GB", x0, ly + 22, { size: 12, color: P.dim, baseline: "middle" });
+      if (!R.weightsFit) GP.text(ctx, "가중치 + 예약이 HBM보다 크다 → GPU를 더 묶어야 한다", x0, ly + 46, { size: 12.5, weight: 700, color: P.bad, baseline: "middle" });
+      else GP.text(ctx, "동시 시퀀스 " + n + "개 × 문맥 " + gS().toLocaleString("en-US") + " = 배치 상한", x0, ly + 46, { size: 12.5, weight: 700, color: n < 8 ? P.warn : P.text, baseline: "middle" });
+    }, { height: 190 });
+    upd();
+  })();
+
+  /* ================================================== 5. 양자화 */
+  (function () {
+    var cv;
+    var gK = GP.seg("q-k", upd);
+    var gS = GP.range("q-s", function (v) { return v.toLocaleString("en-US"); }, upd);
+    var PRECS = ["bf16", "fp8", "fp4"], NAME = { bf16: "BF16", fp8: "FP8", fp4: "FP4" };
+    function upd() {
+      var bs = [];
+      PRECS.forEach(function (w) {
+        var q = quantRow(w, gK(), gS()); bs.push(q.bmax);
+        GP.stat("q-o-" + w, big(q.tok1) + " / " + (q.bmax >= 1 ? big(q.tokMax) : "—"));
+      });
+      GP.stat("q-o-b", bs.join(" · "));
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("q-cv"), function (ctx, w, h) {
+      var P = GP.palette(), cols = [P.dim, P.dram, P.tensor], series = [], points = [];
+      PRECS.forEach(function (wp, i) {
+        var bm = bMax(wp, gK(), gS(), 1, 0), d = [];
+        if (bm >= 1) {
+          for (var e = 0; Math.pow(2, e) < bm; e += 0.1) { var b = Math.pow(2, e); d.push([b, decodeStep(wp, gK(), b, gS()).total]); }
+          d.push([bm, decodeStep(wp, gK(), bm, gS()).total]);
+          points.push({ x: bm, y: d[d.length - 1][1], color: cols[i], label: NAME[wp] + " B " + bm });
+        }
+        series.push({ data: d, color: cols[i], width: 2.4, label: "가중치 " + NAME[wp] });
+      });
+      GP.chart(ctx, null, { x: [1, 1024], y: [10, 1e5], logX: true, logY: true, xLabel: "배치 B", yLabel: "전체 토큰/s",
+        series: series, points: points, legend: "tl", hover: true });
+    }, { aspect: 0.62, maxHeight: 360, minHeight: 240, hover: true });
+    upd();
+  })();
+
+  /* ================================================== 6. MoE */
+  (function () {
+    var cv, R, D;
+    var gE = GP.range("moe-e", log2Fmt, upd);
+    var gK = GP.range("moe-k", function (v) { return String(v); }, upd);
+    var gF = GP.range("moe-f", function (v) { return v.toLocaleString("en-US"); }, upd);
+    var gB = GP.range("moe-b", log2Fmt, upd);
+    var gG = GP.range("moe-g", log2Fmt, upd);
+    function upd() {
+      var E = Math.pow(2, gE()), k = Math.min(gK(), E), B = Math.pow(2, gB()), G = Math.pow(2, gG());
+      R = moeCalc({ E: E, k: k, fe: gF(), B: B, G: G });
+      D = moeCalc({ E: 1, k: 1, fe: LM.ffn, B: B, G: G });
+      GP.stat("moe-o-p", GP.fmt(R.total / 1e9, 3) + " / " + GP.fmt(R.active / 1e9, 3) + "<small> B</small>");
+      $("moe-o-m").className = "v " + (R.fits ? "" : "bad-t");
+      GP.stat("moe-o-m", GP.fmt(R.mem / 1e9, 3) + "<small> GB</small> / " + R.minG + "<small>개</small>" + (R.fits ? "" : "<small> 초과</small>"));
+      GP.stat("moe-o-u", GP.fmt(R.U, 3) + "<small> / " + E + (k < gK() ? " (k≤E)" : "") + "</small>");
+      GP.stat("moe-o-t", tm(R.t));
+      GP.stat("moe-o-k", big(R.tok));
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("moe-cv"), function (ctx, w, h) {
+      var P = GP.palette(), pad = 12, bw = w - 2 * pad;
+      GP.text(ctx, "밀집 GX-LM-70B 대비 배수 (로그)", pad, 16, { size: 13, weight: 700, color: P.text, baseline: "middle" });
+      hbars(ctx, pad, 40, bw, 26, [
+        { label: "메모리", v: R.ratioMem, color: P.dram, txt: "×" + GP.fmt(R.ratioMem, 3) },
+        { label: "연산/토큰", v: R.ratioCmp, color: P.tensor, txt: "×" + GP.fmt(R.ratioCmp, 3) },
+        { label: "단계 읽기", v: R.stepBytes / D.stepBytes, color: P.data, txt: "×" + GP.fmt(R.stepBytes / D.stepBytes, 3) }], { log: true, min: 0.05, max: 300, ref: 1, refLabel: "×1", labelW: 76, valW: 62 });
+      var y2 = 136;
+      GP.text(ctx, "디코드 한 단계 (B = " + Math.pow(2, gB()) + ", G = " + Math.pow(2, gG()) + ")", pad, y2, { size: 13, weight: 700, color: P.text, baseline: "middle" });
+      var mb = R.tMem >= R.tCmp;
+      hbars(ctx, pad, y2 + 16, bw, 26, [
+        { label: "HBM", v: R.tMem, color: P.dram, txt: tm(R.tMem).replace(/<[^>]+>/g, ""), bold: mb, faint: !mb },
+        { label: "연산", v: R.tCmp, color: P.tensor, txt: tm(R.tCmp).replace(/<[^>]+>/g, ""), bold: !mb, faint: mb },
+        { label: "통신", v: R.tComm, color: P.link, txt: tm(R.tComm).replace(/<[^>]+>/g, "") }], { labelW: 76, valW: 72 });
+      GP.text(ctx, "단계 = max(HBM, 연산) + 통신 = " + tm(R.t).replace(/<[^>]+>/g, "") + " · 밀집 " + tm(D.t).replace(/<[^>]+>/g, ""), pad, y2 + 104, { size: 12, color: P.dim, baseline: "middle" });
+      if (!R.fits) GP.text(ctx, "전체 파라미터가 G개 GPU의 HBM보다 크다", pad, y2 + 124, { size: 12.5, weight: 700, color: P.bad, baseline: "middle" });
+    }, { height: 272 });
+    upd();
+  })();
+
+  /* ================================================== 7. 그래픽 파이프라인 */
+  (function () {
+    var cv, R;
+    var gR = GP.seg("gfx-r", upd), gY = GP.seg("gfx-y", upd);
+    var gT = GP.range("gfx-t", function (v) { var t = Math.pow(10, v / 10); return t >= 1e6 ? GP.fmt(t / 1e6, 3) + "백만" : GP.fmt(t / 1e4, 3) + "만"; }, upd);
+    var gPx = GP.range("gfx-p", function (v) { return v.toLocaleString("en-US"); }, upd);
+    var gX = GP.range("gfx-x", function (v) { return String(v); }, upd);
+    var UN = ["raster", "tex", "rop", "rt"], NM = { shader: "셰이더(SM)", raster: "래스터", tex: "텍스처", rop: "ROP", rt: "광선 추적" };
+    UN.forEach(function (k) { $("gfx-f-" + k).addEventListener("change", upd); });
+    function inp() {
+      var ff = {}; UN.forEach(function (k) { ff[k] = $("gfx-f-" + k).checked; });
+      return { res: gR(), tris: Math.pow(10, gT() / 10), vInstr: 300, pInstr: gPx(), hitInstr: 500, rpp: Number(gY()), od: 1.5, texPx: gX(), ropPx: 6, ff: ff };
+    }
+    function upd() {
+      R = gfxFrame(inp());
+      GP.stat("gfx-o-f", tm(R.frame));
+      GP.stat("gfx-o-p", GP.fmt(R.fps, 3));
+      GP.stat("gfx-o-b", NM[R.bott]);
+      GP.stat("gfx-o-v", GP.fmt(R.visits, 3));
+      GP.stat("gfx-o-e", GP.fmt(100 * R.times.emu / R.times.shader, 3) + " %<small> 셰이더 중</small>");
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("gfx-cv"), function (ctx, w, h) {
+      var P = GP.palette(), pad = 12, t = R.times, ff = inp().ff;
+      GP.text(ctx, "단계별 시간 (GX-G, " + gR() + ")  · 가장 긴 막대 = 프레임 시간", pad, 16, { size: 13, weight: 700, color: P.text, baseline: "middle" });
+      var rows = [{ label: NM.shader, v: t.shader, color: P.compute, txt: tm(t.shader).replace(/<[^>]+>/g, ""), bold: R.bott === "shader", hatch: t.shader > 0 ? t.emu / t.shader : 0 }];
+      UN.forEach(function (k) {
+        rows.push({ label: NM[k], v: t[k], color: P.ctrl, txt: ff[k] ? tm(t[k]).replace(/<[^>]+>/g, "") : "끔 → 셰이더로", bold: R.bott === k, faint: !ff[k] });
+      });
+      hbars(ctx, pad, 36, w - 2 * pad, 32, rows, { labelW: 92, valW: 96, max: R.frame });
+      GP.text(ctx, "빗금 = 꺼 둔 고정 기능을 셰이더 명령으로 흉내 낸 몫", pad, 36 + 5 * 32 + 8, { size: 12, color: P.dim, baseline: "middle" });
+    }, { height: 224 });
+    upd();
+  })();
+
+  /* ================================================== 8. 면적 배분 */
+  (function () {
+    var cv, R;
+    var f = function (v) { return String(v); };
+    var gV = GP.range("ar-v", f, upd), gT = GP.range("ar-t", f, upd), gS = GP.range("ar-s", f, upd), gF = GP.range("ar-f", f, upd);
+    var gD = GP.seg("ar-d", upd);
+    var PRE = { gx1: AREA.gx1, gxg: AREA.gxg, ten: { vec: 10, ten: 70, sram: 20, ff: 0, fp64: "half" }, sci: { vec: 60, ten: 15, sram: 25, ff: 0, fp64: "half" } };
+    var hold = false;
+    document.querySelectorAll("#sim-area [data-p]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var p = PRE[b.dataset.p]; hold = true;
+        gV.set(p.vec); gT.set(p.ten); gS.set(p.sram); gF.set(p.ff); gD.set(p.fp64);
+        hold = false; upd();
+      });
+    });
+    var WN = { train: "LLM 학습", dec: "LLM 디코드", gfx: "그래픽", sci: "FP64 과학" };
+    function upd() {
+      if (hold) return;
+      R = areaPerf({ vec: gV(), ten: gT(), sram: gS(), ff: gF(), fp64: gD() });
+      var c = R.chip;
+      GP.stat("ar-o-t", GP.fmt(c.ten / 1e12, 4) + "<small> TFLOPS</small>");
+      GP.stat("ar-o-v", GP.fmt(c.p32 / 1e12, 3) + " / " + GP.fmt(c.p64 / 1e12, 3) + "<small> TFLOPS</small>");
+      GP.stat("ar-o-s", GP.fmt(c.sramMB, 3) + "<small> MB</small>");
+      var ks = ["train", "dec", "gfx", "sci"].sort(function (a, b) { return R[b] - R[a]; });
+      GP.stat("ar-o-b", WN[ks[0]] + " / " + WN[ks[3]]);
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("ar-cv"), function (ctx, w, h) {
+      var P = GP.palette(), pad = 12, bw = w - 2 * pad, A = R.chip.A, sc = bw / AREA.die, x = pad, y = 30, bh = 30;
+      GP.text(ctx, "780 mm² 배분", pad, 14, { size: 13, weight: 700, color: P.text, baseline: "middle" });
+      [["vec", P.compute, "벡터"], ["ten", P.tensor, "텐서"], ["sram", P.sram, "SRAM"], ["ff", P.ctrl, "고정"]].forEach(function (s) {
+        var ww = A[s[0]] * sc; if (ww <= 0) return;
+        ctx.fillStyle = GP.alpha(s[1], 0.82); ctx.fillRect(x, y, ww, bh);
+        if (ww > 44) GP.text(ctx, s[2] + " " + Math.round(A[s[0]]), x + ww / 2, y + bh / 2, { size: 12, color: P.bg, align: "center", baseline: "middle" });
+        x += ww;
+      });
+      ctx.fillStyle = GP.alpha(P.dim, 0.25); ctx.fillRect(x, y, AREA.fixed * sc, bh);
+      GP.text(ctx, "공통 220", x + AREA.fixed * sc / 2, y + bh / 2, { size: 12, color: P.dim, align: "center", baseline: "middle" });
+      GP.text(ctx, "GX-1 대비 상대 성능 (로그, 1 = GX-1)", pad, y + bh + 26, { size: 13, weight: 700, color: P.text, baseline: "middle" });
+      var cols = { train: P.tensor, dec: P.dram, gfx: P.ctrl, sci: P.compute };
+      hbars(ctx, pad, y + bh + 50, bw, 30, ["train", "dec", "gfx", "sci"].map(function (k) {
+        return { label: WN[k], v: R[k], color: cols[k], txt: "×" + (R[k] < 0.001 ? "0.00" : GP.fmt(R[k], 3)), bold: R[k] >= 1 };
+      }), { log: true, min: 0.01, max: 10, ref: 1, refLabel: "GX-1", labelW: 86, valW: 60 });
+    }, { height: 236 });
+    upd();
+  })();
+})();
+</script>
+</body>
+</html>

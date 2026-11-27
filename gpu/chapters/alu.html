@@ -1,0 +1,1614 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>연산 유닛과 수 표현 · GPUBook</title>
+<meta name="description" content="FP32·FP16·BF16·TF32·FP8·FP4·INT8의 비트 배치와 범위·정밀도, 최근접 짝수 반올림과 비정규수, FMA 데이터패스, 가수 비트의 제곱에 비례하는 곱셈기 면적, 정밀도별 에너지와 처리량, 누산 정밀도와 오차 누적, 특수 함수 유닛의 표+다항식 근사, INT8 양자화를 비트 단위로 계산하는 시뮬레이터로 익힌다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+.al-bits { display: flex; flex-wrap: wrap; gap: 1px; padding: 12px 14px 4px; justify-content: center; }
+.al-bits button { font: 600 12px/1 var(--mono); width: 16px; height: 28px; padding: 0; border-radius: 4px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+.al-bits button.s { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, var(--bg-elev)); }
+.al-bits button.e { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--bg-elev)); }
+.al-bits button.m { border-color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 14%, var(--bg-elev)); }
+.al-bits button.one { font-weight: 800; box-shadow: inset 0 -3px 0 currentColor; }
+.al-bits .gap { width: 6px; }
+.al-field { text-align: center; font: 12px var(--mono); color: var(--text-dim); padding: 0 14px 6px; }
+.al-in { width: 100%; font: 14px var(--mono); padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elev); color: var(--text); box-sizing: border-box; }
+.al-pre { display: flex; flex-wrap: wrap; gap: 4px; }
+.al-pre .btn { padding: 3px 8px; font-size: 12.5px; }
+.al-row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.al-row3 label { font-size: 12.5px; color: var(--text-dim); display: grid; gap: 2px; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="alu">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 04</div>
+    <h1>연산 유닛과 수 표현</h1>
+    <p class="lead">GPU 다이에서 가장 많이 복제되는 회로는 곱셈-덧셈기다. GX-1에는 FP32 레인만 18,432개(활성 SM 144개 × 128), 텐서 코어 안의 BF16 곱셈기는 그 16배가 있다. 이 회로 하나의 면적과 에너지는 숫자를 몇 비트로 표현하느냐로 거의 정해진다. 곱셈기는 가수 비트 수의 제곱에 비례하므로, 가수를 23비트에서 7비트로 줄이면 곱셈기는 약 1/9이 되고 같은 면적에 레인을 몇 배 더 넣을 수 있다. 대신 반올림 오차가 커지고, 표현 범위가 좁아지고, 오래 더하면 오차가 쌓인다. 이 장은 비트 배치에서 시작해 반올림·FMA 회로·곱셈기 면적·에너지·누산 오차·특수 함수 유닛까지, 정밀도라는 손잡이 하나가 칩을 어떻게 바꾸는지 계산한다.</p>
+    <ul class="objectives">
+      <li>FP32·TF32·FP16·BF16·FP8(E4M3·E5M2)·FP4(E2M1)의 비트 배치에서 최대값·최소값·간격·상대 오차를 계산한다.</li>
+      <li>최근접 짝수 반올림을 G·R·S 비트로 수행하고, 비정규수가 왜 필요한지 설명한다.</li>
+      <li>FMA 데이터패스(곱셈 배열 → 정렬 → 덧셈 → 정규화 → 반올림)의 비트 폭과 단일 반올림의 이점을 안다.</li>
+      <li>곱셈기 면적 ∝ (m+1)² 모델로 정밀도별 면적·에너지·같은 면적 처리량 배수를 계산하고, GX-1의 정밀도별 피크를 재현한다.</li>
+      <li>누산 정밀도가 긴 내적의 오차를 어떻게 정하는지, 특수 함수 유닛이 표와 다항식으로 어떻게 근사하는지, INT8 스케일을 어떻게 고르는지 계산한다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="numbers">
+    <h2>정수, 고정소수점, 부동소수점</h2>
+    <p>하드웨어가 다루는 수는 결국 비트 묶음이다. <span class="term">2의 보수</span><span class="en">(two's complement)</span> 정수는 \(b\)비트로 \(-2^{b-1}\)부터 \(2^{b-1}-1\)까지를 간격 1로 균일하게 표현한다. 덧셈과 뺄셈이 같은 가산기로 되고 부호 처리가 따로 없어 회로가 가장 싸다. <span class="term">고정소수점</span><span class="en">(fixed point)</span>은 같은 정수에 \(2^{-f}\) 배율을 약속한 것뿐이라 회로는 정수와 같다. 문제는 범위다. 16비트 정수는 가장 작은 수와 가장 큰 수의 비가 약 \(3 \times 10^4\)(4.5자릿수)뿐이라, 신경망의 활성값·기울기처럼 크기가 여러 자릿수를 오가는 값을 담지 못한다.</p>
+    <p><span class="term">부동소수점</span><span class="en">(floating point)</span>은 수를 과학 표기처럼 \(1.f \times 2^{E}\)로 쓴다. 지수 \(E\)가 범위를, 가수 \(f\)가 정밀도를 맡는다. 그 결과 간격이 균일하지 않고 <strong>값에 비례</strong>한다. 큰 수 근처의 간격은 크고 작은 수 근처의 간격은 작아서, 상대 오차가 범위 전체에서 거의 일정하다. 대가는 회로다. 덧셈 전에 지수를 맞추는 정렬 시프터, 덧셈 뒤 맨 앞 1을 찾는 정규화, 반올림 논리가 필요하다. 정수 가산기 하나에 비해 부동소수점 덧셈기는 몇 배 크다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>표현</th><th>간격</th><th>범위(최대/최소)</th><th>회로</th><th>GPU에서의 쓰임</th></tr></thead>
+      <tbody>
+        <tr><td>INT32</td><td>균일 1</td><td>약 \(2 \times 10^9\)</td><td>가산기, 곱셈기</td><td>주소 계산, 인덱스, 루프 카운터</td></tr>
+        <tr><td>INT8 + 스케일</td><td>균일 \(s\)</td><td>127배(2.1자릿수)</td><td>8×8 곱셈 + 32비트 누산</td><td>양자화 추론</td></tr>
+        <tr><td>FP32</td><td>값의 \(2^{-23}\)배</td><td>약 \(10^{83}\)(비정규 포함)</td><td>24×24 곱셈 + 정렬 + 정규화</td><td>벡터 레인, 누산기</td></tr>
+        <tr><td>BF16·FP8·FP4</td><td>값의 \(2^{-7}\)~\(2^{-1}\)배</td><td>포맷마다 다름</td><td>작은 곱셈 + FP32 누산</td><td>텐서 코어</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>왜 이렇게 설계하는가.</strong> GPU는 정수와 부동소수점 레인을 따로 둔다(GX-1 서브파티션: FP32 32개, INT32 16개). 주소 계산은 정수의 균일 간격이 맞고, 데이터 값은 부동소수점의 비례 간격이 맞기 때문이다. 둘을 한 레인에 합치면 면적은 줄지만 같은 클럭에 주소와 데이터를 동시에 계산하지 못한다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="ieee">
+    <h2>IEEE 754: 부호·지수·가수</h2>
+    <p>IEEE 754 이진 부동소수점은 비트를 세 칸으로 나눈다. 부호 \(s\) 1비트, <span class="term">지수</span><span class="en">(exponent)</span> \(e\)비트, <span class="term">가수</span><span class="en">(mantissa, significand)</span> \(m\)비트. 지수 칸에는 <span class="term">바이어스</span><span class="en">(bias)</span> \(2^{e-1}-1\)을 더한 부호 없는 정수 \(E_f\)를 저장하고, 가수의 맨 앞 1은 항상 1이므로 저장하지 않는다(숨은 비트). 그래서 \(m\)비트를 저장하면서 유효 비트는 \(p = m+1\)이다.</p>
+    <div class="formula">$$x = (-1)^{s} \times 1.f \times 2^{E_f - \text{bias}}, \qquad 1 \le E_f \le 2^{e}-2$$
+      $$x = (-1)^{s} \times 0.f \times 2^{1 - \text{bias}} \quad (E_f = 0,\ \text{비정규수}), \qquad E_f = 2^{e}-1:\ \pm\infty\ \text{또는 NaN}$$
+      <div class="where">여기서 \(f\)는 가수 칸의 \(m\)비트를 이진 소수점 뒤에 놓은 값. FP32는 \(e=8, m=23\), bias 127. 최대값 \(= 2^{e_{max}}(2-2^{-m})\), 최소 정규수 \(= 2^{1-\text{bias}}\), 최소 비정규수 \(= 2^{1-\text{bias}-m}\).</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="FP32·TF32·FP16·BF16·FP8 두 가지·FP4·INT8의 비트 배치. 부호 1비트, 지수와 가수 비트 수가 포맷마다 다르고, 오른쪽에 최대값과 1 다음 수까지의 간격을 적었다">
+      <text x="114" y="18" class="t t-dim t-sm">부호</text><rect x="96" y="8" width="12" height="12" class="f-warn-soft" style="stroke:var(--warn)"/>
+      <rect x="156" y="8" width="12" height="12" class="f-acc-soft" style="stroke:var(--accent)"/><text x="174" y="18" class="t t-dim t-sm">지수 e</text>
+      <rect x="232" y="8" width="12" height="12" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="250" y="18" class="t t-dim t-sm">가수 m (앞의 1은 저장 안 함)</text>
+      <text x="690" y="18" class="t t-dim t-sm">최대값</text><text x="800" y="18" class="t t-dim t-sm">ε = 2⁻ᵐ</text>
+      <text x="88" y="50" class="t t-b t-e">FP32</text>
+      <rect x="96.0" y="34" width="12.5" height="22" class="f-warn-soft" style="stroke:var(--warn)"/>
+      <rect x="110.0" y="34" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="124.0" y="34" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="138.0" y="34" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="152.0" y="34" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="166.0" y="34" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="180.0" y="34" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="194.0" y="34" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="208.0" y="34" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="222.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="236.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="250.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="264.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="278.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="292.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="306.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="320.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="334.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="348.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="362.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="376.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="390.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="404.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="418.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="432.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="446.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="460.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="474.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="488.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="502.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="516.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="530.0" y="34" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <text x="550.0" y="50" class="t-mono">32 = 1 + 8 + 23</text>
+      <text x="690" y="50" class="t-mono">±3.4×10³⁸</text><text x="800" y="50" class="t-mono">2⁻²³</text>
+      <text x="88" y="81" class="t t-b t-e">TF32</text>
+      <rect x="96.0" y="65" width="12.5" height="22" class="f-warn-soft" style="stroke:var(--warn)"/>
+      <rect x="110.0" y="65" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="124.0" y="65" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="138.0" y="65" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="152.0" y="65" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="166.0" y="65" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="180.0" y="65" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="194.0" y="65" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="208.0" y="65" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="222.0" y="65" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="236.0" y="65" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="250.0" y="65" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="264.0" y="65" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="278.0" y="65" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="292.0" y="65" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="306.0" y="65" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="320.0" y="65" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="334.0" y="65" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="348.0" y="65" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <text x="368.0" y="81" class="t-mono">19 = 1 + 8 + 10</text>
+      <text x="690" y="81" class="t-mono">±3.4×10³⁸</text><text x="800" y="81" class="t-mono">2⁻¹⁰</text>
+      <text x="88" y="112" class="t t-b t-e">FP16</text>
+      <rect x="96.0" y="96" width="12.5" height="22" class="f-warn-soft" style="stroke:var(--warn)"/>
+      <rect x="110.0" y="96" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="124.0" y="96" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="138.0" y="96" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="152.0" y="96" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="166.0" y="96" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="180.0" y="96" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="194.0" y="96" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="208.0" y="96" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="222.0" y="96" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="236.0" y="96" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="250.0" y="96" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="264.0" y="96" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="278.0" y="96" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="292.0" y="96" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="306.0" y="96" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <text x="326.0" y="112" class="t-mono">16 = 1 + 5 + 10</text>
+      <text x="690" y="112" class="t-mono">±65504</text><text x="800" y="112" class="t-mono">2⁻¹⁰</text>
+      <text x="88" y="143" class="t t-b t-e">BF16</text>
+      <rect x="96.0" y="127" width="12.5" height="22" class="f-warn-soft" style="stroke:var(--warn)"/>
+      <rect x="110.0" y="127" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="124.0" y="127" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="138.0" y="127" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="152.0" y="127" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="166.0" y="127" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="180.0" y="127" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="194.0" y="127" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="208.0" y="127" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="222.0" y="127" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="236.0" y="127" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="250.0" y="127" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="264.0" y="127" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="278.0" y="127" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="292.0" y="127" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="306.0" y="127" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <text x="326.0" y="143" class="t-mono">16 = 1 + 8 + 7</text>
+      <text x="690" y="143" class="t-mono">±3.4×10³⁸</text><text x="800" y="143" class="t-mono">2⁻⁷</text>
+      <text x="88" y="174" class="t t-b t-e">FP8 E5M2</text>
+      <rect x="96.0" y="158" width="12.5" height="22" class="f-warn-soft" style="stroke:var(--warn)"/>
+      <rect x="110.0" y="158" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="124.0" y="158" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="138.0" y="158" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="152.0" y="158" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="166.0" y="158" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="180.0" y="158" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="194.0" y="158" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <text x="214.0" y="174" class="t-mono">8 = 1 + 5 + 2</text>
+      <text x="690" y="174" class="t-mono">±57344</text><text x="800" y="174" class="t-mono">2⁻²</text>
+      <text x="88" y="205" class="t t-b t-e">FP8 E4M3</text>
+      <rect x="96.0" y="189" width="12.5" height="22" class="f-warn-soft" style="stroke:var(--warn)"/>
+      <rect x="110.0" y="189" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="124.0" y="189" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="138.0" y="189" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="152.0" y="189" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="166.0" y="189" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="180.0" y="189" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <rect x="194.0" y="189" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <text x="214.0" y="205" class="t-mono">8 = 1 + 4 + 3</text>
+      <text x="690" y="205" class="t-mono">±448</text><text x="800" y="205" class="t-mono">2⁻³</text>
+      <text x="88" y="236" class="t t-b t-e">FP4 E2M1</text>
+      <rect x="96.0" y="220" width="12.5" height="22" class="f-warn-soft" style="stroke:var(--warn)"/>
+      <rect x="110.0" y="220" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="124.0" y="220" width="12.5" height="22" class="f-acc-soft" style="stroke:var(--accent)"/>
+      <rect x="138.0" y="220" width="12.5" height="22" class="f-acc2-soft" style="stroke:var(--accent-2)"/>
+      <text x="158.0" y="236" class="t-mono">4 = 1 + 2 + 1</text>
+      <text x="690" y="236" class="t-mono">±6</text><text x="800" y="236" class="t-mono">2⁻¹</text>
+      <text x="88" y="267" class="t t-b t-e">INT8</text>
+      <rect x="96.0" y="251" width="12.5" height="22" class="chip"/>
+      <rect x="110.0" y="251" width="12.5" height="22" class="chip"/>
+      <rect x="124.0" y="251" width="12.5" height="22" class="chip"/>
+      <rect x="138.0" y="251" width="12.5" height="22" class="chip"/>
+      <rect x="152.0" y="251" width="12.5" height="22" class="chip"/>
+      <rect x="166.0" y="251" width="12.5" height="22" class="chip"/>
+      <rect x="180.0" y="251" width="12.5" height="22" class="chip"/>
+      <rect x="194.0" y="251" width="12.5" height="22" class="chip"/>
+      <text x="214.0" y="267" class="t-mono">8비트 2의 보수</text>
+      <text x="690" y="267" class="t-mono">−128…127</text><text x="800" y="267" class="t-mono">1</text>
+      </svg>
+      <figcaption><b>그림 4-1.</b> 포맷별 비트 배치. 같은 16비트라도 FP16은 가수에, BF16은 지수에 비트를 더 준다. TF32는 FP32의 지수와 FP16의 가수를 합친 19비트 연산 포맷으로, 메모리에는 32비트로 저장되고 텐서 코어 입력단에서만 가수를 잘라 쓴다. FP8 E4M3은 지수 코드 1111도 수로 쓰고(무한대 없음) 가수 111만 NaN으로 남겨 최대값이 240이 아니라 448이 된다.</figcaption>
+    </figure>
+    <p>같은 지수 구간 \([2^{E}, 2^{E+1})\) 안에는 \(2^{m}\)개의 수가 같은 간격 \(2^{E-m}\)으로 놓인다. 구간을 하나 올라가면 간격이 두 배가 된다. 1 바로 다음 수까지의 간격을 <span class="term">머신 엡실론</span><span class="en">(machine epsilon)</span> \(\varepsilon = 2^{-m}\)이라 하고, 최근접 반올림의 최대 상대 오차는 그 절반인 <span class="term">단위 반올림</span><span class="en">(unit roundoff)</span> \(u = 2^{-(m+1)}\)이다.</p>
+    <div class="formula">$$\mathrm{fl}(x) = x(1+\delta), \quad |\delta| \le u = 2^{-(m+1)} \qquad (\text{정규 범위 안})$$
+      <div class="where">FP32 \(u \approx 6.0 \times 10^{-8}\), FP16·TF32 \(4.9 \times 10^{-4}\), BF16 \(3.9 \times 10^{-3}\), E4M3 \(6.3 \times 10^{-2}\), E2M1 0.25.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 150" role="img" aria-label="장난감 포맷 E3M2의 양수 전부를 선형 수직선에 찍은 그림. 2의 거듭제곱 구간마다 점이 4개씩 같은 간격으로 있고, 구간이 올라갈 때마다 간격이 두 배가 된다. 0과 0.25 사이에는 비정규수 3개가 같은 간격으로 있다">
+      <rect x="40.0" y="30" width="25.0" height="62" class="f-warn-soft"/>
+      <rect x="65.0" y="30" width="25.0" height="62" class="f-acc-soft" style="opacity:.55"/>
+      <rect x="90.0" y="30" width="50.0" height="62" class="f-acc2-soft" style="opacity:.55"/>
+      <rect x="140.0" y="30" width="100.0" height="62" class="f-acc-soft" style="opacity:.55"/>
+      <rect x="240.0" y="30" width="200.0" height="62" class="f-acc2-soft" style="opacity:.55"/>
+      <rect x="440.0" y="30" width="400.0" height="62" class="f-acc-soft" style="opacity:.55"/>
+      <path d="M40 70H850" class="s-axis"/>
+      <circle cx="40.0" cy="70" r="3.4" style="fill:var(--warn)"/>
+      <circle cx="46.2" cy="70" r="3.4" style="fill:var(--warn)"/>
+      <circle cx="52.5" cy="70" r="3.4" style="fill:var(--warn)"/>
+      <circle cx="58.8" cy="70" r="3.4" style="fill:var(--warn)"/>
+      <circle cx="65.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="71.2" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="77.5" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="83.8" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="90.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="102.5" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="115.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="127.5" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="140.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="165.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="190.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="215.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="240.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="290.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="340.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="390.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="440.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="540.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="640.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="740.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <circle cx="840.0" cy="70" r="3.4" style="fill:var(--accent)"/>
+      <path d="M40.0 70V76" class="s-axis"/><text x="40.0" y="90" class="t-mono t-c">0</text>
+      <path d="M140.0 70V76" class="s-axis"/><text x="140.0" y="90" class="t-mono t-c">1</text>
+      <path d="M240.0 70V76" class="s-axis"/><text x="240.0" y="90" class="t-mono t-c">2</text>
+      <path d="M340.0 70V76" class="s-axis"/><text x="340.0" y="90" class="t-mono t-c">3</text>
+      <path d="M440.0 70V76" class="s-axis"/><text x="440.0" y="90" class="t-mono t-c">4</text>
+      <path d="M540.0 70V76" class="s-axis"/><text x="540.0" y="90" class="t-mono t-c">5</text>
+      <path d="M640.0 70V76" class="s-axis"/><text x="640.0" y="90" class="t-mono t-c">6</text>
+      <path d="M740.0 70V76" class="s-axis"/><text x="740.0" y="90" class="t-mono t-c">7</text>
+      <path d="M840.0 70V76" class="s-axis"/><text x="840.0" y="90" class="t-mono t-c">8</text>
+      <text x="52.5" y="24" class="t t-xs t-warn t-c">비정규</text>
+      <text x="115.0" y="46" class="t t-xs t-dim t-c">간격 1/8</text>
+      <text x="190.0" y="46" class="t t-xs t-dim t-c">간격 1/4</text>
+      <text x="340.0" y="46" class="t t-xs t-dim t-c">간격 1/2</text>
+      <text x="640.0" y="46" class="t t-xs t-dim t-c">간격 1</text>
+      <text x="460.0" y="24" class="t t-xs t-dim">[2ᴱ, 2ᴱ⁺¹) 구간마다 점 2ᵐ = 4개</text>
+      <text x="40.0" y="114" class="t t-sm t-dim">8 이상: 8, 10, 12, 14 (최대값 14 = 2³ × 1.75), 그 위 지수 코드 111은 Inf·NaN</text>
+      <text x="40.0" y="136" class="t t-sm t-dim">상대 간격(간격 ÷ 값)은 구간 안에서 1/4 → 1/8로 줄었다가 다음 구간에서 다시 1/4: 톱니 모양</text>
+      </svg>
+      <figcaption><b>그림 4-2.</b> 장난감 포맷 E3M2(지수 3비트, 가수 2비트, bias 3)의 양수 전부. 각 2의 거듭제곱 구간에 4개씩, 간격은 구간마다 두 배. 0과 최소 정규수 0.25 사이는 지수 코드 0이 맡는 비정규수 3개가 같은 간격 1/16으로 메운다. 실제 포맷은 이 그림의 \(m\)과 \(e\)만 키운 것이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-bits">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>비트 배치 탐색기: 실수 하나를 각 포맷에 넣기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view">
+          <div class="al-bits" id="bits-row" aria-label="비트를 눌러 0과 1을 바꾼다"></div>
+          <div class="al-field" id="bits-field">—</div>
+          <canvas id="bits-cv"></canvas>
+        </div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>입력 실수 (10진, 1e-5·2^-7 꼴도 됨)</span><input class="al-in" type="text" id="bits-x" value="0.1" inputmode="decimal" spellcheck="false"></label>
+          <div class="ctrl"><span>포맷</span><div class="seg" id="bits-f"><button data-value="fp32" class="on">FP32</button><button data-value="tf32">TF32</button><button data-value="fp16">FP16</button><button data-value="bf16">BF16</button><button data-value="e5m2">E5M2</button><button data-value="e4m3">E4M3</button><button data-value="e2m1">E2M1</button></div></div>
+          <div class="ctrl"><span>예제</span><div class="al-pre" id="bits-pre"><button class="btn" data-v="0.1">0.1</button><button class="btn" data-v="65504">65504</button><button class="btn" data-v="65520">65520</button><button class="btn" data-v="1+2^-7">1+2⁻⁷</button><button class="btn" data-v="1+2^-8">1+2⁻⁸</button><button class="btn" data-v="3.14159265">π</button><button class="btn" data-v="1e-6">10⁻⁶</button><button class="btn" data-v="464">464</button><button class="btn" data-v="-5">−5</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">비트 (16진)</span><span class="v" id="bits-hex">—</span></div>
+        <div class="stat"><span class="k">저장된 값</span><span class="v" id="bits-val">—</span></div>
+        <div class="stat"><span class="k">상대 오차</span><span class="v" id="bits-err">—</span></div>
+        <div class="stat"><span class="k">분류</span><span class="v" id="bits-cls">—</span></div>
+        <div class="stat"><span class="k">이웃 간격(ulp)</span><span class="v" id="bits-ulp">—</span></div>
+        <div class="stat"><span class="k">최대 / 최소 정규 / 최소 비정규</span><span class="v" id="bits-rng">—</span></div>
+      </div>
+      <div class="sim-note">입력을 double로 읽은 뒤 선택한 포맷으로 <b>한 번</b> 최근접 짝수 반올림한다(정수 가수와 지수를 BigInt로 정확히 계산). 아래 수직선은 입력값(점선)과 양옆 표현 가능 값, 그 사이 중점(반올림 경계)을 보여 준다. 비트 칸을 누르면 그 비트를 뒤집어 해독한다. 해볼 것: ① 0.1을 FP32에 넣으면 0x3DCCCCCD, 상대 오차 약 1.5×10⁻⁸. BF16에서는 0x3DCD, 약 10⁻³. ② FP16에 65504는 정확히 들어가고 65520은 최대값과 다음 수(65536)의 정중앙이라 짝수 쪽인 65536으로 올라가 넘침 → +Inf. ③ E4M3에 464를 넣으면 448과 480의 중점이지만 짝수 가수 쪽인 448, 465 이상은 포화해 448(무한대가 없는 포맷). 1e-6을 FP16에 넣으면 비정규수가 되어 상대 오차가 커진다.</div>
+    </div>
+    <p><strong>왜 이렇게 설계하는가.</strong> 숨은 비트 덕분에 같은 저장 폭에서 유효 비트가 1 늘어난다(곱셈기 입력은 \(m+1\)비트가 된다). 지수를 바이어스로 저장하면 양수끼리의 크기 비교를 정수 비교기 하나로 할 수 있어, 최대값 찾기·정렬 같은 연산이 싸진다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="formats">
+    <h2>작은 포맷들: 범위를 살릴 것인가, 정밀도를 살릴 것인가</h2>
+    <p>16비트를 지수와 가수에 어떻게 나눌지가 첫 번째 갈림길이다. <span class="term">FP16</span>(반정밀도, E5M10)은 가수 10비트로 정밀하지만 최대값이 65504, 최소 정규수가 \(6.1 \times 10^{-5}\)라 학습 중 기울기가 쉽게 넘치거나 0으로 떨어진다. 그래서 손실에 큰 배율을 곱했다 나누는 손실 스케일링이 필요했다. <span class="term">BF16</span><span class="en">(bfloat16, E8M7)</span>은 FP32의 지수 8비트를 그대로 두고 가수를 7비트로 자른 포맷이다. 범위가 FP32와 같아 스케일링이 거의 필요 없고, FP32 상위 16비트를 잘라 내면 바로 BF16이 되므로 변환 회로가 가장 싸다. 대신 1 다음 수가 \(1+2^{-7}\)로 거칠다.</p>
+    <p>8비트에서는 범위와 정밀도를 동시에 가질 수 없어 두 가지를 쓴다. <span class="term">E4M3</span>는 가수 3비트로 순전파의 가중치·활성값에, <span class="term">E5M2</span>는 지수 5비트로 범위가 넓은 기울기에 쓴다. 4비트 <span class="term">FP4</span><span class="en">(E2M1)</span>는 표현할 수 있는 크기가 0, 0.5, 1, 1.5, 2, 3, 4, 6의 여덟 개뿐이라 혼자서는 쓸 수 없고, 32개 정도의 원소가 지수 하나를 나눠 쓰는 블록 스케일과 함께 쓴다(<a href="tensor.html">5장</a>의 마이크로스케일링).</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>포맷</th><th>s·e·m</th><th>bias</th><th>최대값</th><th>최소 정규수</th><th>최소 비정규수</th><th>\(\varepsilon\)</th><th>범위(자릿수)</th></tr></thead>
+      <tbody>
+        <tr><td>FP32</td><td>1·8·23</td><td>127</td><td>\(3.40 \times 10^{38}\)</td><td>\(1.18 \times 10^{-38}\)</td><td>\(1.4 \times 10^{-45}\)</td><td>\(2^{-23}\)</td><td>83.4</td></tr>
+        <tr><td>TF32</td><td>1·8·10</td><td>127</td><td>\(3.40 \times 10^{38}\)</td><td>\(1.18 \times 10^{-38}\)</td><td>\(1.1 \times 10^{-41}\)</td><td>\(2^{-10}\)</td><td>79.5</td></tr>
+        <tr><td>FP16</td><td>1·5·10</td><td>15</td><td>65504</td><td>\(6.10 \times 10^{-5}\)</td><td>\(5.96 \times 10^{-8}\)</td><td>\(2^{-10}\)</td><td>12.0</td></tr>
+        <tr><td>BF16</td><td>1·8·7</td><td>127</td><td>\(3.39 \times 10^{38}\)</td><td>\(1.18 \times 10^{-38}\)</td><td>\(9.2 \times 10^{-41}\)</td><td>\(2^{-7}\)</td><td>78.6</td></tr>
+        <tr><td>FP8 E5M2</td><td>1·5·2</td><td>15</td><td>57344</td><td>\(6.10 \times 10^{-5}\)</td><td>\(1.5 \times 10^{-5}\)</td><td>\(2^{-2}\)</td><td>9.6</td></tr>
+        <tr><td>FP8 E4M3</td><td>1·4·3</td><td>7</td><td>448</td><td>\(2^{-6}\) = 0.0156</td><td>\(2^{-9}\) = 0.00195</td><td>\(2^{-3}\)</td><td>5.4</td></tr>
+        <tr><td>FP4 E2M1</td><td>1·2·1</td><td>1</td><td>6</td><td>1</td><td>0.5</td><td>\(2^{-1}\)</td><td>1.1</td></tr>
+      </tbody>
+    </table></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 270" role="img" aria-label="가로축은 표현 범위(최대값 ÷ 최소 비정규수의 10진 자릿수), 세로축은 유효 비트 수. FP32는 오른쪽 위, BF16과 TF32는 범위는 FP32와 같고 비트만 적다. FP16은 비트는 TF32와 같고 범위가 좁다. FP8과 FP4는 왼쪽 아래">
+      <path d="M70.0 20V220" style="stroke:var(--grid)"/><text x="70.0" y="236" class="t-mono t-c">0</text>
+      <path d="M142.2 20V220" style="stroke:var(--grid)"/><text x="142.2" y="236" class="t-mono t-c">10</text>
+      <path d="M214.4 20V220" style="stroke:var(--grid)"/><text x="214.4" y="236" class="t-mono t-c">20</text>
+      <path d="M286.7 20V220" style="stroke:var(--grid)"/><text x="286.7" y="236" class="t-mono t-c">30</text>
+      <path d="M358.9 20V220" style="stroke:var(--grid)"/><text x="358.9" y="236" class="t-mono t-c">40</text>
+      <path d="M431.1 20V220" style="stroke:var(--grid)"/><text x="431.1" y="236" class="t-mono t-c">50</text>
+      <path d="M503.3 20V220" style="stroke:var(--grid)"/><text x="503.3" y="236" class="t-mono t-c">60</text>
+      <path d="M575.6 20V220" style="stroke:var(--grid)"/><text x="575.6" y="236" class="t-mono t-c">70</text>
+      <path d="M647.8 20V220" style="stroke:var(--grid)"/><text x="647.8" y="236" class="t-mono t-c">80</text>
+      <path d="M720.0 20V220" style="stroke:var(--grid)"/><text x="720.0" y="236" class="t-mono t-c">90</text>
+      <path d="M70 220.0H720" style="stroke:var(--grid)"/><text x="64" y="224.0" class="t-mono t-e">0</text>
+      <path d="M70 189.2H720" style="stroke:var(--grid)"/><text x="64" y="193.2" class="t-mono t-e">4</text>
+      <path d="M70 158.5H720" style="stroke:var(--grid)"/><text x="64" y="162.5" class="t-mono t-e">8</text>
+      <path d="M70 127.7H720" style="stroke:var(--grid)"/><text x="64" y="131.7" class="t-mono t-e">12</text>
+      <path d="M70 96.9H720" style="stroke:var(--grid)"/><text x="64" y="100.9" class="t-mono t-e">16</text>
+      <path d="M70 66.2H720" style="stroke:var(--grid)"/><text x="64" y="70.2" class="t-mono t-e">20</text>
+      <path d="M70 35.4H720" style="stroke:var(--grid)"/><text x="64" y="39.4" class="t-mono t-e">24</text>
+      <path d="M70 20V220H720" class="s-axis"/>
+      <text x="395" y="260" class="t t-sm t-dim t-c">표현 범위 log₁₀(최대 ÷ 최소 비정규수), 자릿수</text>
+      <text transform="translate(22 120) rotate(-90)" class="t t-sm t-dim t-c">유효 비트 m+1</text>
+      <circle cx="672.3" cy="35.4" r="6" class="kf-compute"/><text x="662.3" y="39.4" class="t t-b t-e">FP32</text>
+      <circle cx="644.2" cy="135.4" r="6" class="kf-tensor"/><text x="634.2" y="125.4" class="t t-b t-e">TF32</text>
+      <circle cx="637.7" cy="158.5" r="6" class="kf-tensor"/><text x="627.7" y="174.5" class="t t-b t-e">BF16</text>
+      <circle cx="156.7" cy="135.4" r="6" class="kf-tensor"/><text x="166.7" y="127.4" class="t t-b ">FP16</text>
+      <circle cx="139.3" cy="196.9" r="6" class="kf-tensor"/><text x="149.3" y="200.9" class="t t-b ">E5M2</text>
+      <circle cx="109.0" cy="189.2" r="6" class="kf-tensor"/><text x="119.0" y="183.2" class="t t-b ">E4M3</text>
+      <circle cx="77.9" cy="204.6" r="6" class="kf-tensor"/><text x="87.9" y="216.6" class="t t-b ">E2M1</text>
+      <circle cx="85.2" cy="166.2" r="6" class="kf-ctrl"/><text x="95.2" y="170.2" class="t t-b ">INT8</text>
+      <path d="M669.4 46.9L647.8 146.9" class="arr arr-a dash"/>
+      <text x="640.6" y="96.9" class="t t-xs t-acc t-e">범위는 두고 비트만 줄임</text>
+      <path d="M618.9 135.4L178.3 135.4" class="arr arr-a2 dash"/>
+      <text x="402.2" y="129.4" class="t t-xs t-acc2 t-c">같은 11비트, 범위를 버림</text>
+      </svg>
+      <figcaption><b>그림 4-3.</b> 범위와 정밀도의 지도. BF16·TF32는 FP32에서 가수만 잘라 범위를 지켰고, FP16은 같은 가수 폭으로 범위를 버렸다. FP8·FP4는 둘 다 작아 블록·텐서 단위 스케일을 곁들여야 한다. INT8은 범위가 2.1자릿수뿐이지만 간격이 균일하다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-dist">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>표현 가능 값의 분포: 로그 축 위의 점과 상대 간격</h3></div>
+      <div class="sim-body">
+        <div class="sim-view"><canvas id="dist-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>가로축 범위</span><div class="seg" id="dist-r"><button data-value="small" class="on">10⁻⁸ ~ 10⁵</button><button data-value="wide">10⁻⁴⁵ ~ 10³⁹</button></div></div>
+          <label class="check"><input type="checkbox" id="dist-fp32"> FP32 곡선</label>
+          <label class="check"><input type="checkbox" id="dist-fp16" checked> FP16</label>
+          <label class="check"><input type="checkbox" id="dist-bf16" checked> BF16</label>
+          <label class="check"><input type="checkbox" id="dist-e4m3" checked> E4M3</label>
+          <label class="check"><input type="checkbox" id="dist-e5m2" checked> E5M2</label>
+          <label class="check"><input type="checkbox" id="dist-e2m1" checked> E2M1</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">E2M1 / E4M3 / E5M2 양수 개수</span><span class="v" id="dist-n">—</span></div>
+        <div class="stat"><span class="k">구간당 점 수 (2ᵐ)</span><span class="v" id="dist-per">—</span></div>
+        <div class="stat"><span class="k">커서 위치 값</span><span class="v" id="dist-x">—</span></div>
+      </div>
+      <div class="sim-note">위 띠: 작은 포맷의 양의 유한 값을 비트 코드 전부(\(2^{e+m}\)개)를 해독해 찍었다. 아래: 상대 간격 ulp(x)/x(톱니). 톱니의 바닥은 \(2^{-m}\cdot\frac{1}{2}\), 꼭대기는 \(2^{-m}\). 왼쪽 끝에서 곡선이 치솟는 곳이 비정규 구간이다(간격은 고정인데 값이 작아져 상대 간격이 커진다). 해볼 것: ① E4M3의 양수는 126개, E5M2는 123개(Inf·NaN 코드를 뺀 수). ② 커서를 10⁻⁶에 두면 FP16 곡선이 비정규 구간이라 상대 간격 약 6 %, BF16은 여전히 0.4~0.8 %. ③ 넓은 범위로 바꾸면 BF16 곡선이 FP32와 같은 폭으로 10⁻⁴⁰까지 뻗고 높이만 2¹⁶배 높다.</div>
+    </div>
+    <p><strong>왜 이렇게 설계하는가.</strong> 학습은 범위가 깨지면(넘침·0으로 떨어짐) 바로 발산하지만 정밀도가 조금 거칠어지는 것은 견딘다. 그래서 텐서 코어는 FP16보다 BF16을 기본으로 삼고, 범위가 더 좁은 FP8·FP4는 스케일 인자를 하드웨어와 소프트웨어가 함께 관리한다. 포맷 하나를 더 지원할 때마다 입력 해독·변환 논리가 늘지만 곱셈기 배열은 공유할 수 있어 면적 증가는 작다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="rounding">
+    <h2>반올림과 비정규수</h2>
+    <p>연산 결과는 보통 저장할 수 있는 비트보다 길다. 남는 비트를 버리는 규칙이 <span class="term">반올림 모드</span><span class="en">(rounding mode)</span>이고, IEEE 754 기본값은 <span class="term">최근접 짝수 반올림</span><span class="en">(round to nearest, ties to even, RNE)</span>이다. 가장 가까운 표현 가능 값으로 가되, 정확히 중간이면 가수 마지막 비트가 0인(짝수) 쪽으로 간다. 중간값을 늘 올리면(사사오입) 평균적으로 결과가 위로 치우쳐 긴 합에서 오차가 쌓이지만, 짝수 쪽으로 보내면 올림과 내림이 반반이 되어 치우침이 사라진다.</p>
+    <p>하드웨어는 남는 비트를 다 보관하지 않는다. 결과 가수 바로 아래의 <span class="term">가드 비트</span><span class="en">(guard, G)</span>, 그 아래 <span class="term">라운드 비트</span><span class="en">(round, R)</span>, 나머지 전부를 OR한 <span class="term">스티키 비트</span><span class="en">(sticky, S)</span> 세 비트만 있으면 RNE를 정확히 할 수 있다.</p>
+    <div class="formula">$$\text{올림} \iff G \land (R \lor S \lor \text{LSB})$$
+      <div class="where">G = 0이면 버림, G = 1이고 R·S 중 하나라도 1이면 중간보다 크므로 올림, G = 1, R = S = 0이면 정확히 중간이므로 LSB가 1(홀수)일 때만 올려 짝수를 만든다. 올림이 가수 전체를 넘치게 하면(1.111…1 + 1) 지수를 1 올린다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 210" role="img" aria-label="RNE 반올림. 결과 가수 뒤에 G, R, S 세 비트를 둔다. 수직선 위 두 표현 가능 값 사이에서 중간점보다 왼쪽이면 내림, 오른쪽이면 올림, 정확히 중간이면 짝수 쪽으로 간다">
+        <g transform="translate(20 20)">
+          <text x="0" y="14" class="t t-b">정렬·덧셈 뒤의 긴 결과</text>
+          <g class="t-mono">
+            <rect x="0" y="26" width="300" height="30" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="150" y="46" class="t-mono t-c">1 . f₁ f₂ … f_m  (p = m+1비트)</text>
+            <rect x="304" y="26" width="40" height="30" class="f-warn-soft" style="stroke:var(--warn)"/><text x="324" y="46" class="t-mono t-c">G</text>
+            <rect x="348" y="26" width="40" height="30" class="f-warn-soft" style="stroke:var(--warn)"/><text x="368" y="46" class="t-mono t-c">R</text>
+            <rect x="392" y="26" width="40" height="30" class="f-bad-soft" style="stroke:var(--bad)"/><text x="412" y="46" class="t-mono t-c">S</text>
+          </g>
+          <text x="300" y="76" class="t t-xs t-dim t-e">LSB</text><path d="M290 60V66" class="s-axis"/>
+          <text x="436" y="46" class="t t-xs t-dim">← 그 아래 모든 비트의 OR</text>
+          <text x="0" y="104" class="t t-sm">G R S = 0xx → <tspan class="t-ok">버림</tspan></text>
+          <text x="0" y="126" class="t t-sm">G R S = 101, 110, 111 → <tspan class="t-warn">올림</tspan> (중간 초과)</text>
+          <text x="0" y="148" class="t t-sm">G R S = 100 → <tspan class="t-acc">LSB가 1이면 올림, 0이면 버림</tspan> (중간, 짝수로)</text>
+          <text x="0" y="176" class="t t-xs t-dim">덧셈에서 정규화 시프트가 1칸이면 R이 결과로 들어오므로 G·R 두 칸을 따로 둔다.</text>
+        </g>
+        <g transform="translate(560 40)">
+          <path d="M0 80H280" class="s-axis"/>
+          <circle cx="20" cy="80" r="6" style="fill:var(--accent)"/><text x="20" y="104" class="t-mono t-c">…0 (짝수)</text>
+          <circle cx="260" cy="80" r="6" style="fill:var(--accent)"/><text x="260" y="104" class="t-mono t-c">…1 (홀수)</text>
+          <path d="M140 62V98" class="s-warn dash"/><text x="140" y="56" class="t t-xs t-warn t-c">중간점: G=1, R=S=0</text>
+          <path d="M136 30C 100 10 50 10 26 64" class="arr arr-a"/><text x="70" y="14" class="t t-xs t-acc t-c">짝수로</text>
+          <rect x="22" y="118" width="116" height="10" class="f-ok-soft"/><rect x="142" y="118" width="116" height="10" class="f-warn-soft"/>
+          <text x="80" y="146" class="t t-xs t-dim t-c">내림 구간</text><text x="200" y="146" class="t t-xs t-dim t-c">올림 구간</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 4-4.</b> G·R·S 세 비트로 하는 최근접 짝수 반올림. 버리는 비트가 수십 개여도 회로는 OR 트리 하나(스티키)와 3입력 판정만 더하면 된다.</figcaption>
+    </figure>
+    <p>지수 코드 0은 특별하다. 숨은 비트를 0으로 보고 지수를 최소 정규 지수에 고정한 <span class="term">비정규수</span><span class="en">(subnormal, denormal)</span>다. 비정규수가 없으면 최소 정규수 \(2^{e_{min}}\)과 0 사이에 빈틈이 생겨, \(x \ne y\)인데 \(x - y = 0\)이 되는 일이 생긴다. 비정규수는 그 빈틈을 같은 간격으로 메워 <span class="term">점진적 언더플로</span><span class="en">(gradual underflow)</span>를 만든다. 대신 정밀도가 서서히 줄어든다. FP16에서 \(10^{-6}\)은 비정규 구간이라 유효 비트가 4비트 남짓이다.</p>
+    <p>비정규수는 회로를 비싸게 만든다. 입력이 비정규면 숨은 비트가 0이라 곱셈 전에 정규화해야 하고, 결과가 비정규 범위로 떨어지면 지수에 맞춰 가수를 오른쪽으로 더 밀어야 한다. 많은 CPU는 이를 마이크로코드 예외로 처리해 수십~수백 사이클이 걸리지만, GPU의 FP32·FP16 레인과 텐서 코어는 대개 정렬·정규화 시프터를 조금 넓혀 <strong>전속으로</strong> 처리한다. 수천 레인이 박자를 맞춰 도는 SIMT 기계에서 한 레인만 느려지면 워프 전체가 기다리기 때문이다. 대신 비정규수를 0으로 바꾸는 <span class="term">FTZ</span><span class="en">(flush to zero)</span> 옵션을 두어, 정확도보다 단순함을 고를 수도 있게 한다.</p>
+    <p><strong>왜 이렇게 설계하는가.</strong> G·R·S 세 비트와 스티키 OR 트리는 면적이 작으면서 IEEE와 비트 단위로 같은 결과를 보장한다. 정확한 반올림은 같은 프로그램이 다른 칩에서도 같은 비트를 내게 하므로, 수천 GPU에 나눠 돌리는 학습의 재현성과 디버깅에 직접 이어진다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="fma">
+    <h2>FMA 회로: 곱하고, 정렬하고, 더하고, 한 번 반올림</h2>
+    <p>GPU 레인의 기본 연산은 덧셈이 아니라 <span class="term">FMA</span><span class="en">(fused multiply-add)</span> \(d = a \times b + c\)다. 행렬곱·합성곱·내적이 전부 곱하고 더하기의 반복이기 때문이다. "융합"은 곱 \(a \times b\)를 반올림하지 않고 \(2p\)비트 그대로 덧셈에 넘겨 <strong>마지막에 한 번만</strong> 반올림한다는 뜻이다. 곱셈과 덧셈을 따로 하면 반올림이 두 번이고, 특히 \(a \times b \approx -c\)인 상쇄에서 첫 반올림이 버린 비트가 결과의 전부일 수 있다.</p>
+    <p>곱셈은 <span class="term">부분곱 배열</span><span class="en">(partial product array)</span>로 한다. \(p\)비트 × \(p\)비트 곱은 AND 게이트로 만든 \(p^2\)개의 부분곱 비트를 <span class="term">월리스 트리</span><span class="en">(Wallace tree)</span>의 캐리 세이브 덧셈기로 두 줄까지 줄인 뒤, 마지막에 \(2p\)비트 가산기 하나로 더한다. 부스 부호화로 부분곱 줄을 반으로 줄일 수 있지만 비례 관계는 그대로 \(p^2\)이다(<a href="../../digital/chapters/datapath.html">DigitalBook 데이터패스 장</a>).</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="부분곱 배열. 4비트 가수(FP8 E4M3)는 점 16개, 8비트 가수(BF16)는 64개의 부분곱 비트를 만들고, 각 점이 AND 게이트와 덧셈기 한 칸에 해당한다. 24비트(FP32)는 576개">
+      <circle cx="136.0" cy="60.0" r="5.8" class="kf-compute"/>
+      <circle cx="120.0" cy="60.0" r="5.8" class="kf-compute"/>
+      <circle cx="104.0" cy="60.0" r="5.8" class="kf-compute"/>
+      <circle cx="88.0" cy="60.0" r="5.8" class="kf-compute"/>
+      <circle cx="120.0" cy="76.0" r="5.8" class="kf-compute"/>
+      <circle cx="104.0" cy="76.0" r="5.8" class="kf-compute"/>
+      <circle cx="88.0" cy="76.0" r="5.8" class="kf-compute"/>
+      <circle cx="72.0" cy="76.0" r="5.8" class="kf-compute"/>
+      <circle cx="104.0" cy="92.0" r="5.8" class="kf-compute"/>
+      <circle cx="88.0" cy="92.0" r="5.8" class="kf-compute"/>
+      <circle cx="72.0" cy="92.0" r="5.8" class="kf-compute"/>
+      <circle cx="56.0" cy="92.0" r="5.8" class="kf-compute"/>
+      <circle cx="88.0" cy="108.0" r="5.8" class="kf-compute"/>
+      <circle cx="72.0" cy="108.0" r="5.8" class="kf-compute"/>
+      <circle cx="56.0" cy="108.0" r="5.8" class="kf-compute"/>
+      <circle cx="40.0" cy="108.0" r="5.8" class="kf-compute"/>
+      <path d="M32.0 118.0H144.0" class="s-axis"/>
+      <text x="88.0" y="48.0" class="t t-b t-c">E4M3: 4 × 4 = 16</text>
+      <text x="88.0" y="162.0" class="t t-sm t-dim t-c">곱 8비트</text>
+      <circle cx="422.0" cy="40.0" r="4.7" class="kf-compute"/>
+      <circle cx="409.0" cy="40.0" r="4.7" class="kf-compute"/>
+      <circle cx="396.0" cy="40.0" r="4.7" class="kf-compute"/>
+      <circle cx="383.0" cy="40.0" r="4.7" class="kf-compute"/>
+      <circle cx="370.0" cy="40.0" r="4.7" class="kf-compute"/>
+      <circle cx="357.0" cy="40.0" r="4.7" class="kf-compute"/>
+      <circle cx="344.0" cy="40.0" r="4.7" class="kf-compute"/>
+      <circle cx="331.0" cy="40.0" r="4.7" class="kf-compute"/>
+      <circle cx="409.0" cy="53.0" r="4.7" class="kf-compute"/>
+      <circle cx="396.0" cy="53.0" r="4.7" class="kf-compute"/>
+      <circle cx="383.0" cy="53.0" r="4.7" class="kf-compute"/>
+      <circle cx="370.0" cy="53.0" r="4.7" class="kf-compute"/>
+      <circle cx="357.0" cy="53.0" r="4.7" class="kf-compute"/>
+      <circle cx="344.0" cy="53.0" r="4.7" class="kf-compute"/>
+      <circle cx="331.0" cy="53.0" r="4.7" class="kf-compute"/>
+      <circle cx="318.0" cy="53.0" r="4.7" class="kf-compute"/>
+      <circle cx="396.0" cy="66.0" r="4.7" class="kf-compute"/>
+      <circle cx="383.0" cy="66.0" r="4.7" class="kf-compute"/>
+      <circle cx="370.0" cy="66.0" r="4.7" class="kf-compute"/>
+      <circle cx="357.0" cy="66.0" r="4.7" class="kf-compute"/>
+      <circle cx="344.0" cy="66.0" r="4.7" class="kf-compute"/>
+      <circle cx="331.0" cy="66.0" r="4.7" class="kf-compute"/>
+      <circle cx="318.0" cy="66.0" r="4.7" class="kf-compute"/>
+      <circle cx="305.0" cy="66.0" r="4.7" class="kf-compute"/>
+      <circle cx="383.0" cy="79.0" r="4.7" class="kf-compute"/>
+      <circle cx="370.0" cy="79.0" r="4.7" class="kf-compute"/>
+      <circle cx="357.0" cy="79.0" r="4.7" class="kf-compute"/>
+      <circle cx="344.0" cy="79.0" r="4.7" class="kf-compute"/>
+      <circle cx="331.0" cy="79.0" r="4.7" class="kf-compute"/>
+      <circle cx="318.0" cy="79.0" r="4.7" class="kf-compute"/>
+      <circle cx="305.0" cy="79.0" r="4.7" class="kf-compute"/>
+      <circle cx="292.0" cy="79.0" r="4.7" class="kf-compute"/>
+      <circle cx="370.0" cy="92.0" r="4.7" class="kf-compute"/>
+      <circle cx="357.0" cy="92.0" r="4.7" class="kf-compute"/>
+      <circle cx="344.0" cy="92.0" r="4.7" class="kf-compute"/>
+      <circle cx="331.0" cy="92.0" r="4.7" class="kf-compute"/>
+      <circle cx="318.0" cy="92.0" r="4.7" class="kf-compute"/>
+      <circle cx="305.0" cy="92.0" r="4.7" class="kf-compute"/>
+      <circle cx="292.0" cy="92.0" r="4.7" class="kf-compute"/>
+      <circle cx="279.0" cy="92.0" r="4.7" class="kf-compute"/>
+      <circle cx="357.0" cy="105.0" r="4.7" class="kf-compute"/>
+      <circle cx="344.0" cy="105.0" r="4.7" class="kf-compute"/>
+      <circle cx="331.0" cy="105.0" r="4.7" class="kf-compute"/>
+      <circle cx="318.0" cy="105.0" r="4.7" class="kf-compute"/>
+      <circle cx="305.0" cy="105.0" r="4.7" class="kf-compute"/>
+      <circle cx="292.0" cy="105.0" r="4.7" class="kf-compute"/>
+      <circle cx="279.0" cy="105.0" r="4.7" class="kf-compute"/>
+      <circle cx="266.0" cy="105.0" r="4.7" class="kf-compute"/>
+      <circle cx="344.0" cy="118.0" r="4.7" class="kf-compute"/>
+      <circle cx="331.0" cy="118.0" r="4.7" class="kf-compute"/>
+      <circle cx="318.0" cy="118.0" r="4.7" class="kf-compute"/>
+      <circle cx="305.0" cy="118.0" r="4.7" class="kf-compute"/>
+      <circle cx="292.0" cy="118.0" r="4.7" class="kf-compute"/>
+      <circle cx="279.0" cy="118.0" r="4.7" class="kf-compute"/>
+      <circle cx="266.0" cy="118.0" r="4.7" class="kf-compute"/>
+      <circle cx="253.0" cy="118.0" r="4.7" class="kf-compute"/>
+      <circle cx="331.0" cy="131.0" r="4.7" class="kf-compute"/>
+      <circle cx="318.0" cy="131.0" r="4.7" class="kf-compute"/>
+      <circle cx="305.0" cy="131.0" r="4.7" class="kf-compute"/>
+      <circle cx="292.0" cy="131.0" r="4.7" class="kf-compute"/>
+      <circle cx="279.0" cy="131.0" r="4.7" class="kf-compute"/>
+      <circle cx="266.0" cy="131.0" r="4.7" class="kf-compute"/>
+      <circle cx="253.0" cy="131.0" r="4.7" class="kf-compute"/>
+      <circle cx="240.0" cy="131.0" r="4.7" class="kf-compute"/>
+      <path d="M233.5 139.5H428.5" class="s-axis"/>
+      <text x="331.0" y="28.0" class="t t-b t-c">BF16: 8 × 8 = 64</text>
+      <text x="331.0" y="179.0" class="t t-sm t-dim t-c">곱 16비트</text>
+      <g transform="translate(580 40)"><text x="76" y="-12" class="t t-b t-c">FP32: 24 × 24 = 576</text>
+      <path d="M147.2 0.0h2.7v4.5h-2.7zM144.0 0.0h2.7v4.5h-2.7zM140.8 0.0h2.7v4.5h-2.7zM137.6 0.0h2.7v4.5h-2.7zM134.4 0.0h2.7v4.5h-2.7zM131.2 0.0h2.7v4.5h-2.7zM128.0 0.0h2.7v4.5h-2.7zM124.8 0.0h2.7v4.5h-2.7zM121.6 0.0h2.7v4.5h-2.7zM118.4 0.0h2.7v4.5h-2.7zM115.2 0.0h2.7v4.5h-2.7zM112.0 0.0h2.7v4.5h-2.7zM108.8 0.0h2.7v4.5h-2.7zM105.6 0.0h2.7v4.5h-2.7zM102.4 0.0h2.7v4.5h-2.7zM99.2 0.0h2.7v4.5h-2.7zM96.0 0.0h2.7v4.5h-2.7zM92.8 0.0h2.7v4.5h-2.7zM89.6 0.0h2.7v4.5h-2.7zM86.4 0.0h2.7v4.5h-2.7zM83.2 0.0h2.7v4.5h-2.7zM80.0 0.0h2.7v4.5h-2.7zM76.8 0.0h2.7v4.5h-2.7zM73.6 0.0h2.7v4.5h-2.7zM144.0 6.4h2.7v4.5h-2.7zM140.8 6.4h2.7v4.5h-2.7zM137.6 6.4h2.7v4.5h-2.7zM134.4 6.4h2.7v4.5h-2.7zM131.2 6.4h2.7v4.5h-2.7zM128.0 6.4h2.7v4.5h-2.7zM124.8 6.4h2.7v4.5h-2.7zM121.6 6.4h2.7v4.5h-2.7zM118.4 6.4h2.7v4.5h-2.7zM115.2 6.4h2.7v4.5h-2.7zM112.0 6.4h2.7v4.5h-2.7zM108.8 6.4h2.7v4.5h-2.7zM105.6 6.4h2.7v4.5h-2.7zM102.4 6.4h2.7v4.5h-2.7zM99.2 6.4h2.7v4.5h-2.7zM96.0 6.4h2.7v4.5h-2.7zM92.8 6.4h2.7v4.5h-2.7zM89.6 6.4h2.7v4.5h-2.7zM86.4 6.4h2.7v4.5h-2.7zM83.2 6.4h2.7v4.5h-2.7zM80.0 6.4h2.7v4.5h-2.7zM76.8 6.4h2.7v4.5h-2.7zM73.6 6.4h2.7v4.5h-2.7zM70.4 6.4h2.7v4.5h-2.7zM140.8 12.8h2.7v4.5h-2.7zM137.6 12.8h2.7v4.5h-2.7zM134.4 12.8h2.7v4.5h-2.7zM131.2 12.8h2.7v4.5h-2.7zM128.0 12.8h2.7v4.5h-2.7zM124.8 12.8h2.7v4.5h-2.7zM121.6 12.8h2.7v4.5h-2.7zM118.4 12.8h2.7v4.5h-2.7zM115.2 12.8h2.7v4.5h-2.7zM112.0 12.8h2.7v4.5h-2.7zM108.8 12.8h2.7v4.5h-2.7zM105.6 12.8h2.7v4.5h-2.7zM102.4 12.8h2.7v4.5h-2.7zM99.2 12.8h2.7v4.5h-2.7zM96.0 12.8h2.7v4.5h-2.7zM92.8 12.8h2.7v4.5h-2.7zM89.6 12.8h2.7v4.5h-2.7zM86.4 12.8h2.7v4.5h-2.7zM83.2 12.8h2.7v4.5h-2.7zM80.0 12.8h2.7v4.5h-2.7zM76.8 12.8h2.7v4.5h-2.7zM73.6 12.8h2.7v4.5h-2.7zM70.4 12.8h2.7v4.5h-2.7zM67.2 12.8h2.7v4.5h-2.7zM137.6 19.2h2.7v4.5h-2.7zM134.4 19.2h2.7v4.5h-2.7zM131.2 19.2h2.7v4.5h-2.7zM128.0 19.2h2.7v4.5h-2.7zM124.8 19.2h2.7v4.5h-2.7zM121.6 19.2h2.7v4.5h-2.7zM118.4 19.2h2.7v4.5h-2.7zM115.2 19.2h2.7v4.5h-2.7zM112.0 19.2h2.7v4.5h-2.7zM108.8 19.2h2.7v4.5h-2.7zM105.6 19.2h2.7v4.5h-2.7zM102.4 19.2h2.7v4.5h-2.7zM99.2 19.2h2.7v4.5h-2.7zM96.0 19.2h2.7v4.5h-2.7zM92.8 19.2h2.7v4.5h-2.7zM89.6 19.2h2.7v4.5h-2.7zM86.4 19.2h2.7v4.5h-2.7zM83.2 19.2h2.7v4.5h-2.7zM80.0 19.2h2.7v4.5h-2.7zM76.8 19.2h2.7v4.5h-2.7zM73.6 19.2h2.7v4.5h-2.7zM70.4 19.2h2.7v4.5h-2.7zM67.2 19.2h2.7v4.5h-2.7zM64.0 19.2h2.7v4.5h-2.7zM134.4 25.6h2.7v4.5h-2.7zM131.2 25.6h2.7v4.5h-2.7zM128.0 25.6h2.7v4.5h-2.7zM124.8 25.6h2.7v4.5h-2.7zM121.6 25.6h2.7v4.5h-2.7zM118.4 25.6h2.7v4.5h-2.7zM115.2 25.6h2.7v4.5h-2.7zM112.0 25.6h2.7v4.5h-2.7zM108.8 25.6h2.7v4.5h-2.7zM105.6 25.6h2.7v4.5h-2.7zM102.4 25.6h2.7v4.5h-2.7zM99.2 25.6h2.7v4.5h-2.7zM96.0 25.6h2.7v4.5h-2.7zM92.8 25.6h2.7v4.5h-2.7zM89.6 25.6h2.7v4.5h-2.7zM86.4 25.6h2.7v4.5h-2.7zM83.2 25.6h2.7v4.5h-2.7zM80.0 25.6h2.7v4.5h-2.7zM76.8 25.6h2.7v4.5h-2.7zM73.6 25.6h2.7v4.5h-2.7zM70.4 25.6h2.7v4.5h-2.7zM67.2 25.6h2.7v4.5h-2.7zM64.0 25.6h2.7v4.5h-2.7zM60.8 25.6h2.7v4.5h-2.7zM131.2 32.0h2.7v4.5h-2.7zM128.0 32.0h2.7v4.5h-2.7zM124.8 32.0h2.7v4.5h-2.7zM121.6 32.0h2.7v4.5h-2.7zM118.4 32.0h2.7v4.5h-2.7zM115.2 32.0h2.7v4.5h-2.7zM112.0 32.0h2.7v4.5h-2.7zM108.8 32.0h2.7v4.5h-2.7zM105.6 32.0h2.7v4.5h-2.7zM102.4 32.0h2.7v4.5h-2.7zM99.2 32.0h2.7v4.5h-2.7zM96.0 32.0h2.7v4.5h-2.7zM92.8 32.0h2.7v4.5h-2.7zM89.6 32.0h2.7v4.5h-2.7zM86.4 32.0h2.7v4.5h-2.7zM83.2 32.0h2.7v4.5h-2.7zM80.0 32.0h2.7v4.5h-2.7zM76.8 32.0h2.7v4.5h-2.7zM73.6 32.0h2.7v4.5h-2.7zM70.4 32.0h2.7v4.5h-2.7zM67.2 32.0h2.7v4.5h-2.7zM64.0 32.0h2.7v4.5h-2.7zM60.8 32.0h2.7v4.5h-2.7zM57.6 32.0h2.7v4.5h-2.7zM128.0 38.4h2.7v4.5h-2.7zM124.8 38.4h2.7v4.5h-2.7zM121.6 38.4h2.7v4.5h-2.7zM118.4 38.4h2.7v4.5h-2.7zM115.2 38.4h2.7v4.5h-2.7zM112.0 38.4h2.7v4.5h-2.7zM108.8 38.4h2.7v4.5h-2.7zM105.6 38.4h2.7v4.5h-2.7zM102.4 38.4h2.7v4.5h-2.7zM99.2 38.4h2.7v4.5h-2.7zM96.0 38.4h2.7v4.5h-2.7zM92.8 38.4h2.7v4.5h-2.7zM89.6 38.4h2.7v4.5h-2.7zM86.4 38.4h2.7v4.5h-2.7zM83.2 38.4h2.7v4.5h-2.7zM80.0 38.4h2.7v4.5h-2.7zM76.8 38.4h2.7v4.5h-2.7zM73.6 38.4h2.7v4.5h-2.7zM70.4 38.4h2.7v4.5h-2.7zM67.2 38.4h2.7v4.5h-2.7zM64.0 38.4h2.7v4.5h-2.7zM60.8 38.4h2.7v4.5h-2.7zM57.6 38.4h2.7v4.5h-2.7zM54.4 38.4h2.7v4.5h-2.7zM124.8 44.8h2.7v4.5h-2.7zM121.6 44.8h2.7v4.5h-2.7zM118.4 44.8h2.7v4.5h-2.7zM115.2 44.8h2.7v4.5h-2.7zM112.0 44.8h2.7v4.5h-2.7zM108.8 44.8h2.7v4.5h-2.7zM105.6 44.8h2.7v4.5h-2.7zM102.4 44.8h2.7v4.5h-2.7zM99.2 44.8h2.7v4.5h-2.7zM96.0 44.8h2.7v4.5h-2.7zM92.8 44.8h2.7v4.5h-2.7zM89.6 44.8h2.7v4.5h-2.7zM86.4 44.8h2.7v4.5h-2.7zM83.2 44.8h2.7v4.5h-2.7zM80.0 44.8h2.7v4.5h-2.7zM76.8 44.8h2.7v4.5h-2.7zM73.6 44.8h2.7v4.5h-2.7zM70.4 44.8h2.7v4.5h-2.7zM67.2 44.8h2.7v4.5h-2.7zM64.0 44.8h2.7v4.5h-2.7zM60.8 44.8h2.7v4.5h-2.7zM57.6 44.8h2.7v4.5h-2.7zM54.4 44.8h2.7v4.5h-2.7zM51.2 44.8h2.7v4.5h-2.7zM121.6 51.2h2.7v4.5h-2.7zM118.4 51.2h2.7v4.5h-2.7zM115.2 51.2h2.7v4.5h-2.7zM112.0 51.2h2.7v4.5h-2.7zM108.8 51.2h2.7v4.5h-2.7zM105.6 51.2h2.7v4.5h-2.7zM102.4 51.2h2.7v4.5h-2.7zM99.2 51.2h2.7v4.5h-2.7zM96.0 51.2h2.7v4.5h-2.7zM92.8 51.2h2.7v4.5h-2.7zM89.6 51.2h2.7v4.5h-2.7zM86.4 51.2h2.7v4.5h-2.7zM83.2 51.2h2.7v4.5h-2.7zM80.0 51.2h2.7v4.5h-2.7zM76.8 51.2h2.7v4.5h-2.7zM73.6 51.2h2.7v4.5h-2.7zM70.4 51.2h2.7v4.5h-2.7zM67.2 51.2h2.7v4.5h-2.7zM64.0 51.2h2.7v4.5h-2.7zM60.8 51.2h2.7v4.5h-2.7zM57.6 51.2h2.7v4.5h-2.7zM54.4 51.2h2.7v4.5h-2.7zM51.2 51.2h2.7v4.5h-2.7zM48.0 51.2h2.7v4.5h-2.7zM118.4 57.6h2.7v4.5h-2.7zM115.2 57.6h2.7v4.5h-2.7zM112.0 57.6h2.7v4.5h-2.7zM108.8 57.6h2.7v4.5h-2.7zM105.6 57.6h2.7v4.5h-2.7zM102.4 57.6h2.7v4.5h-2.7zM99.2 57.6h2.7v4.5h-2.7zM96.0 57.6h2.7v4.5h-2.7zM92.8 57.6h2.7v4.5h-2.7zM89.6 57.6h2.7v4.5h-2.7zM86.4 57.6h2.7v4.5h-2.7zM83.2 57.6h2.7v4.5h-2.7zM80.0 57.6h2.7v4.5h-2.7zM76.8 57.6h2.7v4.5h-2.7zM73.6 57.6h2.7v4.5h-2.7zM70.4 57.6h2.7v4.5h-2.7zM67.2 57.6h2.7v4.5h-2.7zM64.0 57.6h2.7v4.5h-2.7zM60.8 57.6h2.7v4.5h-2.7zM57.6 57.6h2.7v4.5h-2.7zM54.4 57.6h2.7v4.5h-2.7zM51.2 57.6h2.7v4.5h-2.7zM48.0 57.6h2.7v4.5h-2.7zM44.8 57.6h2.7v4.5h-2.7zM115.2 64.0h2.7v4.5h-2.7zM112.0 64.0h2.7v4.5h-2.7zM108.8 64.0h2.7v4.5h-2.7zM105.6 64.0h2.7v4.5h-2.7zM102.4 64.0h2.7v4.5h-2.7zM99.2 64.0h2.7v4.5h-2.7zM96.0 64.0h2.7v4.5h-2.7zM92.8 64.0h2.7v4.5h-2.7zM89.6 64.0h2.7v4.5h-2.7zM86.4 64.0h2.7v4.5h-2.7zM83.2 64.0h2.7v4.5h-2.7zM80.0 64.0h2.7v4.5h-2.7zM76.8 64.0h2.7v4.5h-2.7zM73.6 64.0h2.7v4.5h-2.7zM70.4 64.0h2.7v4.5h-2.7zM67.2 64.0h2.7v4.5h-2.7zM64.0 64.0h2.7v4.5h-2.7zM60.8 64.0h2.7v4.5h-2.7zM57.6 64.0h2.7v4.5h-2.7zM54.4 64.0h2.7v4.5h-2.7zM51.2 64.0h2.7v4.5h-2.7zM48.0 64.0h2.7v4.5h-2.7zM44.8 64.0h2.7v4.5h-2.7zM41.6 64.0h2.7v4.5h-2.7zM112.0 70.4h2.7v4.5h-2.7zM108.8 70.4h2.7v4.5h-2.7zM105.6 70.4h2.7v4.5h-2.7zM102.4 70.4h2.7v4.5h-2.7zM99.2 70.4h2.7v4.5h-2.7zM96.0 70.4h2.7v4.5h-2.7zM92.8 70.4h2.7v4.5h-2.7zM89.6 70.4h2.7v4.5h-2.7zM86.4 70.4h2.7v4.5h-2.7zM83.2 70.4h2.7v4.5h-2.7zM80.0 70.4h2.7v4.5h-2.7zM76.8 70.4h2.7v4.5h-2.7zM73.6 70.4h2.7v4.5h-2.7zM70.4 70.4h2.7v4.5h-2.7zM67.2 70.4h2.7v4.5h-2.7zM64.0 70.4h2.7v4.5h-2.7zM60.8 70.4h2.7v4.5h-2.7zM57.6 70.4h2.7v4.5h-2.7zM54.4 70.4h2.7v4.5h-2.7zM51.2 70.4h2.7v4.5h-2.7zM48.0 70.4h2.7v4.5h-2.7zM44.8 70.4h2.7v4.5h-2.7zM41.6 70.4h2.7v4.5h-2.7zM38.4 70.4h2.7v4.5h-2.7zM108.8 76.8h2.7v4.5h-2.7zM105.6 76.8h2.7v4.5h-2.7zM102.4 76.8h2.7v4.5h-2.7zM99.2 76.8h2.7v4.5h-2.7zM96.0 76.8h2.7v4.5h-2.7zM92.8 76.8h2.7v4.5h-2.7zM89.6 76.8h2.7v4.5h-2.7zM86.4 76.8h2.7v4.5h-2.7zM83.2 76.8h2.7v4.5h-2.7zM80.0 76.8h2.7v4.5h-2.7zM76.8 76.8h2.7v4.5h-2.7zM73.6 76.8h2.7v4.5h-2.7zM70.4 76.8h2.7v4.5h-2.7zM67.2 76.8h2.7v4.5h-2.7zM64.0 76.8h2.7v4.5h-2.7zM60.8 76.8h2.7v4.5h-2.7zM57.6 76.8h2.7v4.5h-2.7zM54.4 76.8h2.7v4.5h-2.7zM51.2 76.8h2.7v4.5h-2.7zM48.0 76.8h2.7v4.5h-2.7zM44.8 76.8h2.7v4.5h-2.7zM41.6 76.8h2.7v4.5h-2.7zM38.4 76.8h2.7v4.5h-2.7zM35.2 76.8h2.7v4.5h-2.7zM105.6 83.2h2.7v4.5h-2.7zM102.4 83.2h2.7v4.5h-2.7zM99.2 83.2h2.7v4.5h-2.7zM96.0 83.2h2.7v4.5h-2.7zM92.8 83.2h2.7v4.5h-2.7zM89.6 83.2h2.7v4.5h-2.7zM86.4 83.2h2.7v4.5h-2.7zM83.2 83.2h2.7v4.5h-2.7zM80.0 83.2h2.7v4.5h-2.7zM76.8 83.2h2.7v4.5h-2.7zM73.6 83.2h2.7v4.5h-2.7zM70.4 83.2h2.7v4.5h-2.7zM67.2 83.2h2.7v4.5h-2.7zM64.0 83.2h2.7v4.5h-2.7zM60.8 83.2h2.7v4.5h-2.7zM57.6 83.2h2.7v4.5h-2.7zM54.4 83.2h2.7v4.5h-2.7zM51.2 83.2h2.7v4.5h-2.7zM48.0 83.2h2.7v4.5h-2.7zM44.8 83.2h2.7v4.5h-2.7zM41.6 83.2h2.7v4.5h-2.7zM38.4 83.2h2.7v4.5h-2.7zM35.2 83.2h2.7v4.5h-2.7zM32.0 83.2h2.7v4.5h-2.7zM102.4 89.6h2.7v4.5h-2.7zM99.2 89.6h2.7v4.5h-2.7zM96.0 89.6h2.7v4.5h-2.7zM92.8 89.6h2.7v4.5h-2.7zM89.6 89.6h2.7v4.5h-2.7zM86.4 89.6h2.7v4.5h-2.7zM83.2 89.6h2.7v4.5h-2.7zM80.0 89.6h2.7v4.5h-2.7zM76.8 89.6h2.7v4.5h-2.7zM73.6 89.6h2.7v4.5h-2.7zM70.4 89.6h2.7v4.5h-2.7zM67.2 89.6h2.7v4.5h-2.7zM64.0 89.6h2.7v4.5h-2.7zM60.8 89.6h2.7v4.5h-2.7zM57.6 89.6h2.7v4.5h-2.7zM54.4 89.6h2.7v4.5h-2.7zM51.2 89.6h2.7v4.5h-2.7zM48.0 89.6h2.7v4.5h-2.7zM44.8 89.6h2.7v4.5h-2.7zM41.6 89.6h2.7v4.5h-2.7zM38.4 89.6h2.7v4.5h-2.7zM35.2 89.6h2.7v4.5h-2.7zM32.0 89.6h2.7v4.5h-2.7zM28.8 89.6h2.7v4.5h-2.7zM99.2 96.0h2.7v4.5h-2.7zM96.0 96.0h2.7v4.5h-2.7zM92.8 96.0h2.7v4.5h-2.7zM89.6 96.0h2.7v4.5h-2.7zM86.4 96.0h2.7v4.5h-2.7zM83.2 96.0h2.7v4.5h-2.7zM80.0 96.0h2.7v4.5h-2.7zM76.8 96.0h2.7v4.5h-2.7zM73.6 96.0h2.7v4.5h-2.7zM70.4 96.0h2.7v4.5h-2.7zM67.2 96.0h2.7v4.5h-2.7zM64.0 96.0h2.7v4.5h-2.7zM60.8 96.0h2.7v4.5h-2.7zM57.6 96.0h2.7v4.5h-2.7zM54.4 96.0h2.7v4.5h-2.7zM51.2 96.0h2.7v4.5h-2.7zM48.0 96.0h2.7v4.5h-2.7zM44.8 96.0h2.7v4.5h-2.7zM41.6 96.0h2.7v4.5h-2.7zM38.4 96.0h2.7v4.5h-2.7zM35.2 96.0h2.7v4.5h-2.7zM32.0 96.0h2.7v4.5h-2.7zM28.8 96.0h2.7v4.5h-2.7zM25.6 96.0h2.7v4.5h-2.7zM96.0 102.4h2.7v4.5h-2.7zM92.8 102.4h2.7v4.5h-2.7zM89.6 102.4h2.7v4.5h-2.7zM86.4 102.4h2.7v4.5h-2.7zM83.2 102.4h2.7v4.5h-2.7zM80.0 102.4h2.7v4.5h-2.7zM76.8 102.4h2.7v4.5h-2.7zM73.6 102.4h2.7v4.5h-2.7zM70.4 102.4h2.7v4.5h-2.7zM67.2 102.4h2.7v4.5h-2.7zM64.0 102.4h2.7v4.5h-2.7zM60.8 102.4h2.7v4.5h-2.7zM57.6 102.4h2.7v4.5h-2.7zM54.4 102.4h2.7v4.5h-2.7zM51.2 102.4h2.7v4.5h-2.7zM48.0 102.4h2.7v4.5h-2.7zM44.8 102.4h2.7v4.5h-2.7zM41.6 102.4h2.7v4.5h-2.7zM38.4 102.4h2.7v4.5h-2.7zM35.2 102.4h2.7v4.5h-2.7zM32.0 102.4h2.7v4.5h-2.7zM28.8 102.4h2.7v4.5h-2.7zM25.6 102.4h2.7v4.5h-2.7zM22.4 102.4h2.7v4.5h-2.7zM92.8 108.8h2.7v4.5h-2.7zM89.6 108.8h2.7v4.5h-2.7zM86.4 108.8h2.7v4.5h-2.7zM83.2 108.8h2.7v4.5h-2.7zM80.0 108.8h2.7v4.5h-2.7zM76.8 108.8h2.7v4.5h-2.7zM73.6 108.8h2.7v4.5h-2.7zM70.4 108.8h2.7v4.5h-2.7zM67.2 108.8h2.7v4.5h-2.7zM64.0 108.8h2.7v4.5h-2.7zM60.8 108.8h2.7v4.5h-2.7zM57.6 108.8h2.7v4.5h-2.7zM54.4 108.8h2.7v4.5h-2.7zM51.2 108.8h2.7v4.5h-2.7zM48.0 108.8h2.7v4.5h-2.7zM44.8 108.8h2.7v4.5h-2.7zM41.6 108.8h2.7v4.5h-2.7zM38.4 108.8h2.7v4.5h-2.7zM35.2 108.8h2.7v4.5h-2.7zM32.0 108.8h2.7v4.5h-2.7zM28.8 108.8h2.7v4.5h-2.7zM25.6 108.8h2.7v4.5h-2.7zM22.4 108.8h2.7v4.5h-2.7zM19.2 108.8h2.7v4.5h-2.7zM89.6 115.2h2.7v4.5h-2.7zM86.4 115.2h2.7v4.5h-2.7zM83.2 115.2h2.7v4.5h-2.7zM80.0 115.2h2.7v4.5h-2.7zM76.8 115.2h2.7v4.5h-2.7zM73.6 115.2h2.7v4.5h-2.7zM70.4 115.2h2.7v4.5h-2.7zM67.2 115.2h2.7v4.5h-2.7zM64.0 115.2h2.7v4.5h-2.7zM60.8 115.2h2.7v4.5h-2.7zM57.6 115.2h2.7v4.5h-2.7zM54.4 115.2h2.7v4.5h-2.7zM51.2 115.2h2.7v4.5h-2.7zM48.0 115.2h2.7v4.5h-2.7zM44.8 115.2h2.7v4.5h-2.7zM41.6 115.2h2.7v4.5h-2.7zM38.4 115.2h2.7v4.5h-2.7zM35.2 115.2h2.7v4.5h-2.7zM32.0 115.2h2.7v4.5h-2.7zM28.8 115.2h2.7v4.5h-2.7zM25.6 115.2h2.7v4.5h-2.7zM22.4 115.2h2.7v4.5h-2.7zM19.2 115.2h2.7v4.5h-2.7zM16.0 115.2h2.7v4.5h-2.7zM86.4 121.6h2.7v4.5h-2.7zM83.2 121.6h2.7v4.5h-2.7zM80.0 121.6h2.7v4.5h-2.7zM76.8 121.6h2.7v4.5h-2.7zM73.6 121.6h2.7v4.5h-2.7zM70.4 121.6h2.7v4.5h-2.7zM67.2 121.6h2.7v4.5h-2.7zM64.0 121.6h2.7v4.5h-2.7zM60.8 121.6h2.7v4.5h-2.7zM57.6 121.6h2.7v4.5h-2.7zM54.4 121.6h2.7v4.5h-2.7zM51.2 121.6h2.7v4.5h-2.7zM48.0 121.6h2.7v4.5h-2.7zM44.8 121.6h2.7v4.5h-2.7zM41.6 121.6h2.7v4.5h-2.7zM38.4 121.6h2.7v4.5h-2.7zM35.2 121.6h2.7v4.5h-2.7zM32.0 121.6h2.7v4.5h-2.7zM28.8 121.6h2.7v4.5h-2.7zM25.6 121.6h2.7v4.5h-2.7zM22.4 121.6h2.7v4.5h-2.7zM19.2 121.6h2.7v4.5h-2.7zM16.0 121.6h2.7v4.5h-2.7zM12.8 121.6h2.7v4.5h-2.7zM83.2 128.0h2.7v4.5h-2.7zM80.0 128.0h2.7v4.5h-2.7zM76.8 128.0h2.7v4.5h-2.7zM73.6 128.0h2.7v4.5h-2.7zM70.4 128.0h2.7v4.5h-2.7zM67.2 128.0h2.7v4.5h-2.7zM64.0 128.0h2.7v4.5h-2.7zM60.8 128.0h2.7v4.5h-2.7zM57.6 128.0h2.7v4.5h-2.7zM54.4 128.0h2.7v4.5h-2.7zM51.2 128.0h2.7v4.5h-2.7zM48.0 128.0h2.7v4.5h-2.7zM44.8 128.0h2.7v4.5h-2.7zM41.6 128.0h2.7v4.5h-2.7zM38.4 128.0h2.7v4.5h-2.7zM35.2 128.0h2.7v4.5h-2.7zM32.0 128.0h2.7v4.5h-2.7zM28.8 128.0h2.7v4.5h-2.7zM25.6 128.0h2.7v4.5h-2.7zM22.4 128.0h2.7v4.5h-2.7zM19.2 128.0h2.7v4.5h-2.7zM16.0 128.0h2.7v4.5h-2.7zM12.8 128.0h2.7v4.5h-2.7zM9.6 128.0h2.7v4.5h-2.7zM80.0 134.4h2.7v4.5h-2.7zM76.8 134.4h2.7v4.5h-2.7zM73.6 134.4h2.7v4.5h-2.7zM70.4 134.4h2.7v4.5h-2.7zM67.2 134.4h2.7v4.5h-2.7zM64.0 134.4h2.7v4.5h-2.7zM60.8 134.4h2.7v4.5h-2.7zM57.6 134.4h2.7v4.5h-2.7zM54.4 134.4h2.7v4.5h-2.7zM51.2 134.4h2.7v4.5h-2.7zM48.0 134.4h2.7v4.5h-2.7zM44.8 134.4h2.7v4.5h-2.7zM41.6 134.4h2.7v4.5h-2.7zM38.4 134.4h2.7v4.5h-2.7zM35.2 134.4h2.7v4.5h-2.7zM32.0 134.4h2.7v4.5h-2.7zM28.8 134.4h2.7v4.5h-2.7zM25.6 134.4h2.7v4.5h-2.7zM22.4 134.4h2.7v4.5h-2.7zM19.2 134.4h2.7v4.5h-2.7zM16.0 134.4h2.7v4.5h-2.7zM12.8 134.4h2.7v4.5h-2.7zM9.6 134.4h2.7v4.5h-2.7zM6.4 134.4h2.7v4.5h-2.7zM76.8 140.8h2.7v4.5h-2.7zM73.6 140.8h2.7v4.5h-2.7zM70.4 140.8h2.7v4.5h-2.7zM67.2 140.8h2.7v4.5h-2.7zM64.0 140.8h2.7v4.5h-2.7zM60.8 140.8h2.7v4.5h-2.7zM57.6 140.8h2.7v4.5h-2.7zM54.4 140.8h2.7v4.5h-2.7zM51.2 140.8h2.7v4.5h-2.7zM48.0 140.8h2.7v4.5h-2.7zM44.8 140.8h2.7v4.5h-2.7zM41.6 140.8h2.7v4.5h-2.7zM38.4 140.8h2.7v4.5h-2.7zM35.2 140.8h2.7v4.5h-2.7zM32.0 140.8h2.7v4.5h-2.7zM28.8 140.8h2.7v4.5h-2.7zM25.6 140.8h2.7v4.5h-2.7zM22.4 140.8h2.7v4.5h-2.7zM19.2 140.8h2.7v4.5h-2.7zM16.0 140.8h2.7v4.5h-2.7zM12.8 140.8h2.7v4.5h-2.7zM9.6 140.8h2.7v4.5h-2.7zM6.4 140.8h2.7v4.5h-2.7zM3.2 140.8h2.7v4.5h-2.7zM73.6 147.2h2.7v4.5h-2.7zM70.4 147.2h2.7v4.5h-2.7zM67.2 147.2h2.7v4.5h-2.7zM64.0 147.2h2.7v4.5h-2.7zM60.8 147.2h2.7v4.5h-2.7zM57.6 147.2h2.7v4.5h-2.7zM54.4 147.2h2.7v4.5h-2.7zM51.2 147.2h2.7v4.5h-2.7zM48.0 147.2h2.7v4.5h-2.7zM44.8 147.2h2.7v4.5h-2.7zM41.6 147.2h2.7v4.5h-2.7zM38.4 147.2h2.7v4.5h-2.7zM35.2 147.2h2.7v4.5h-2.7zM32.0 147.2h2.7v4.5h-2.7zM28.8 147.2h2.7v4.5h-2.7zM25.6 147.2h2.7v4.5h-2.7zM22.4 147.2h2.7v4.5h-2.7zM19.2 147.2h2.7v4.5h-2.7zM16.0 147.2h2.7v4.5h-2.7zM12.8 147.2h2.7v4.5h-2.7zM9.6 147.2h2.7v4.5h-2.7zM6.4 147.2h2.7v4.5h-2.7zM3.2 147.2h2.7v4.5h-2.7zM0.0 147.2h2.7v4.5h-2.7z" class="kf-compute"/>
+      <text x="76" y="178" class="t t-sm t-dim t-c">곱 48비트, 월리스 트리로 줄인 뒤 덧셈</text></g>
+      <text x="430" y="238" class="t t-sm t-dim t-c">점 하나 = AND 게이트 + 전가산기 약 1칸 → 곱셈기 면적·에너지 ∝ (m+1)²</text>
+      </svg>
+      <figcaption><b>그림 4-5.</b> 부분곱 배열의 크기. 가수가 \(m\)비트면 숨은 비트를 포함해 \((m+1)^2\)개의 부분곱 비트가 생기고, 각 비트마다 AND 게이트와 덧셈기 약 한 칸이 붙는다. FP32 하나의 곱셈기 자리에 BF16 곱셈기 9개, E4M3 곱셈기 36개가 들어간다.</figcaption>
+    </figure>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="FP32 FMA 데이터패스. a와 b의 가수 24비트가 곱셈기 배열로 들어가 48비트 곱이 되고, c의 가수는 지수 차이만큼 정렬 시프터로 밀려 74비트 창에 놓인다. 3:2 캐리 세이브 덧셈기와 74비트 가산기, 선행 0 예측, 정규화 시프터, 반올림을 거쳐 32비트 결과가 나온다">
+        <g class="t-sm">
+          <rect x="690" y="20" width="150" height="40" rx="6" class="k-ctrl"/><text x="765" y="38" class="t t-c t-b">지수 덧셈·비교</text><text x="765" y="53" class="t-mono t-c">Ea+Eb−bias vs Ec</text>
+          <rect x="210" y="20" width="210" height="40" rx="6" class="k-compute"/><text x="315" y="38" class="t t-c t-b">곱셈기 배열 (24 × 24)</text><text x="315" y="53" class="t-mono t-c">월리스 트리 → 48비트 2줄</text>
+          <rect x="460" y="20" width="200" height="40" rx="6" class="k-data"/><text x="560" y="38" class="t t-c t-b">정렬 시프터 (c)</text><text x="560" y="53" class="t-mono t-c">지수 차만큼 밀기, 74비트 창</text>
+          <rect x="210" y="96" width="450" height="34" rx="6" class="k-compute"/><text x="435" y="118" class="t t-c t-b">3:2 캐리 세이브 + 74비트 가산기 (자리올림 1칸 포함)</text>
+          <rect x="690" y="96" width="150" height="34" rx="6" class="k-ctrl"/><text x="765" y="118" class="t t-c t-b">선행 0 예측(LZA)</text>
+          <rect x="210" y="166" width="450" height="34" rx="6" class="k-data"/><text x="435" y="188" class="t t-c t-b">정규화 시프터: 맨 앞 1을 맨 위로 (상쇄 시 최대 약 50칸)</text>
+          <rect x="210" y="236" width="300" height="34" rx="6" class="k-compute"/><text x="360" y="258" class="t t-c t-b">반올림: 24비트 + G·R·S → RNE</text>
+          <rect x="560" y="236" width="140" height="34" rx="6" class="chip-a"/><text x="630" y="258" class="t t-c t-b">d (FP32)</text>
+        </g>
+        <g class="t-mono">
+          <text x="250" y="14" class="t-mono">a.m 24</text><text x="340" y="14" class="t-mono">b.m 24</text><text x="590" y="14" class="t-mono">c.m 24</text><text x="720" y="14" class="t-mono">Ea Eb Ec</text>
+          <path d="M315 60V96" class="arr"/><text x="322" y="82" class="t-mono">48</text>
+          <path d="M560 60V96" class="arr"/><text x="567" y="82" class="t-mono">74</text>
+          <path d="M690 40H664" class="arr"/><text x="668" y="76" class="t-mono">시프트 양</text>
+          <path d="M435 130V166" class="arr"/><text x="442" y="152" class="t-mono">74</text>
+          <path d="M660 113H688" class="arr"/><path d="M765 130V183H664" class="arr"/>
+          <path d="M435 200V236" class="arr"/><text x="442" y="222" class="t-mono">24+3</text>
+          <path d="M510 253H556" class="arr"/>
+        </g>
+        <text x="20" y="96" class="t t-xs t-dim">곱 48비트는</text><text x="20" y="112" class="t t-xs t-dim">반올림하지 않는다</text>
+        <text x="20" y="176" class="t t-xs t-dim">창 폭 3p+2 = 74비트:</text><text x="20" y="192" class="t t-xs t-dim">c는 곱보다 p+2칸 위 ~</text><text x="20" y="208" class="t t-xs t-dim">2p칸 아래 어디든 놓인다</text>
+      </svg>
+      <figcaption><b>그림 4-6.</b> FP32 FMA의 데이터패스와 비트 폭. 곱셈기 배열이 면적의 절반 이상을 차지하고, 정렬·정규화 시프터와 74비트 가산기가 나머지 대부분이다. 선행 0 예측은 가산과 병렬로 정규화 시프트 양을 미리 계산해 지연을 줄인다. 실제 설계는 파이프라인 4단 안팎으로 나눈다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-fma">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>FMA 데이터패스 단계별 추적</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="fma-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>포맷</span><div class="seg" id="fma-f"><button data-value="fp16" class="on">FP16</button><button data-value="bf16">BF16</button><button data-value="fp32">FP32</button></div></div>
+          <div class="ctrl al-row3">
+            <label>a<input class="al-in" type="text" id="fma-a" value="1+2^-10" spellcheck="false"></label>
+            <label>b<input class="al-in" type="text" id="fma-b" value="1+2^-10" spellcheck="false"></label>
+            <label>c<input class="al-in" type="text" id="fma-c" value="-(1+2^-9)" spellcheck="false"></label>
+          </div>
+          <div class="ctrl"><span>예제</span><div class="al-pre" id="fma-pre"><button class="btn" data-a="1+2^-10" data-b="1+2^-10" data-c="-(1+2^-9)">상쇄</button><button class="btn" data-a="3" data-b="5" data-c="1/512">작은 c</button><button class="btn" data-a="1.5" data-b="1.5" data-c="1.75">자리올림</button><button class="btn" data-a="300" data-b="300" data-c="0">넘침</button></div></div>
+          <div class="btn-row"><button class="btn" id="fma-prev">◀ 이전</button><button class="btn primary" id="fma-next">다음 ▶</button><button class="btn" id="fma-play">재생</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">단계</span><span class="v" id="fma-stage">—</span></div>
+        <div class="stat"><span class="k">정렬 시프트 / 정규화 시프트</span><span class="v" id="fma-sh">—</span></div>
+        <div class="stat"><span class="k">G R S → 판정</span><span class="v" id="fma-grs">—</span></div>
+        <div class="stat"><span class="k">FMA (반올림 1회)</span><span class="v" id="fma-fused">—</span></div>
+        <div class="stat"><span class="k">곱·덧셈 따로 (2회)</span><span class="v" id="fma-unf">—</span></div>
+      </div>
+      <div class="sim-note">입력 a·b·c를 먼저 포맷으로 반올림한 뒤, 정수 가수(숨은 비트 포함 p비트)와 지수로 나눠 BigInt로 곱·정렬·덧셈을 정확히 하고 마지막에 한 번 RNE한다. 비트 줄은 같은 지수 칸을 세로로 맞춰 그렸고, 창 밖으로 밀린 비트는 스티키로 모인다. 해볼 것: ① 기본 예제(FP16, \((1+2^{-10})^2 - (1+2^{-9})\))는 정확한 답이 \(2^{-20}\)이다. FMA는 이를 비정규수로 정확히 내지만, 곱을 먼저 반올림하면 \(2^{-20}\)이 사라져 0이 된다. ② "작은 c"(3 × 5 + 1/512, FP16)는 c가 곱보다 12칸 아래로 밀려 결과 LSB(15 근처 ulp = 2⁻⁷) 아래 R 자리에 놓인다. G·R·S = 0·1·0이라 15로 내림된다. "자리올림"(1.5 × 1.5 + 1.75 = 4)은 합이 곱보다 한 칸 위로 올라가 정규화가 오른쪽 1칸이다. ③ "넘침"(300 × 300)은 FP16에서 +Inf, BF16에서는 90112(가수 7비트로 반올림)가 된다.</div>
+    </div>
+    <p><strong>왜 이렇게 설계하는가.</strong> FMA는 곱셈기와 가산기를 따로 두는 것보다 면적이 약간 크지만(정렬 창이 3p+2로 넓다) 반올림·정규화 논리를 하나로 합쳐 연산당 면적·지연·에너지가 모두 적고, 정확도는 더 좋다. 그래서 GPU 레인에는 별도 곱셈기가 없고 덧셈·곱셈도 FMA에 1이나 0을 넣어 계산한다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="area">
+    <h2>곱셈기 면적은 가수 비트의 제곱</h2>
+    <p>MAC(곱셈-누산) 하나의 면적을 부품별로 세어 보자. 단위는 전가산기 한 칸쯤의 게이트 등가 \(u\)로 둔다. 곱셈기는 부분곱 비트 수 \((m+1)^2\), 지수 덧셈·비교는 지수 폭에 비례, 정렬 시프터는 데이터패스 폭 \(w\)의 \(w \log_2 w\)에 비례, 덧셈·선행 0 예측·정규화·반올림은 \(w\)에 비례한다. 텐서 코어처럼 \(L\)개의 곱을 한꺼번에 더하는 <span class="term">내적 유닛</span><span class="en">(dot-product unit)</span>은 곱셈기와 곱마다의 정렬은 \(L\)개 두지만, 최종 덧셈·정규화·반올림은 하나만 둬서 \(L\)개가 나눠 쓴다.</p>
+    <div class="formula">$$A_{MAC} \approx (m+1)^2 + 3e + 0.35\,w\log_2 w + \frac{w\,(2 + 0.5\log_2 w)}{L} + 2(1+e+m), \qquad w = \max(2(m+1),\ m_{acc}+1) + 3$$
+      <div class="where">\(m_{acc}\)는 누산기 가수 폭(FP32 누산이면 23). 계수는 교육용 가정으로, FP32 단독 FMA(\(L=1\))가 약 1,012 \(u\)가 되게 잡았다. 에너지는 면적(스위칭 커패시턴스)에 비례한다고 보고 FP32 FMA = 0.8 pJ(에너지 표)에 맞춘다. 정수(INT8)는 정렬·정규화가 없고 32비트 누산 가산기만 있다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="내적 유닛. 곱셈기 L개가 각자 곱을 만들고, 최대 지수를 찾아 각 곱을 정렬한 뒤, 덧셈 트리로 합쳐 정규화와 반올림은 한 번만 한다. 정규화·반올림 블록은 L개 곱이 나눠 쓴다">
+        <g class="t-sm">
+          <g>
+            <rect x="20" y="20" width="110" height="34" rx="5" class="k-compute"/><text x="75" y="42" class="t t-c">a₀ × b₀</text>
+            <rect x="20" y="62" width="110" height="34" rx="5" class="k-compute"/><text x="75" y="84" class="t t-c">a₁ × b₁</text>
+            <rect x="20" y="104" width="110" height="34" rx="5" class="k-compute"/><text x="75" y="126" class="t t-c">a₂ × b₂</text>
+            <text x="75" y="160" class="t t-c t-dim">⋮</text>
+            <rect x="20" y="172" width="110" height="34" rx="5" class="k-compute"/><text x="75" y="194" class="t t-c">a_{L−1} × b_{L−1}</text>
+          </g>
+          <rect x="160" y="20" width="120" height="186" rx="6" class="k-ctrl"/><text x="220" y="100" class="t t-c t-b">최대 지수</text><text x="220" y="118" class="t t-c">찾기·지수 차</text>
+          <g>
+            <rect x="310" y="20" width="120" height="34" rx="5" class="k-data"/><text x="370" y="42" class="t t-c">정렬 ≫ d₀</text>
+            <rect x="310" y="62" width="120" height="34" rx="5" class="k-data"/><text x="370" y="84" class="t t-c">정렬 ≫ d₁</text>
+            <rect x="310" y="104" width="120" height="34" rx="5" class="k-data"/><text x="370" y="126" class="t t-c">정렬 ≫ d₂</text>
+            <rect x="310" y="172" width="120" height="34" rx="5" class="k-data"/><text x="370" y="194" class="t t-c">정렬 ≫ d_{L−1}</text>
+          </g>
+          <path d="M460 20L560 80V146L460 206Z" class="k-compute"/><text x="508" y="110" class="t t-c t-b">덧셈 트리</text>
+          <rect x="590" y="86" width="120" height="54" rx="6" class="k-tensor"/><text x="650" y="108" class="t t-c t-b">+ 누산기 C</text><text x="650" y="126" class="t-mono t-c">FP32</text>
+          <rect x="740" y="86" width="100" height="54" rx="6" class="k-tensor"/><text x="790" y="108" class="t t-c t-b">정규화</text><text x="790" y="126" class="t t-c">반올림 1회</text>
+        </g>
+        <g>
+          <path d="M130 37H156M130 79H156M130 121H156M130 189H156" class="arr"/>
+          <path d="M280 37H306M280 79H306M280 121H306M280 189H306" class="arr"/>
+          <path d="M430 37H462M430 79H470M430 121H470M430 189H462" class="arr"/>
+          <path d="M560 113H586M710 113H736" class="arr"/>
+        </g>
+        <text x="20" y="236" class="t t-sm t-dim">L개씩: 곱셈기 (m+1)², 곱마다 정렬 0.35·w·log₂w</text>
+        <text x="590" y="170" class="t t-sm t-dim">1개를 L이 나눠 씀:</text><text x="590" y="188" class="t t-sm t-dim">w(2 + 0.5·log₂w) / L</text>
+      </svg>
+      <figcaption><b>그림 4-7.</b> 내적 유닛(텐서 코어의 기본 단위). 곱셈기와 정렬 시프터는 곱마다 두지만, 정규화·반올림·누산기는 \(L\)개가 함께 쓴다. 내적 길이 \(L\)이 길수록 MAC당 면적이 곱셈기 쪽으로 수렴한다. 텐서 코어 전체 구조와 데이터 공급은 <a href="tensor.html">5장</a>에서 다룬다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-area">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>곱셈기 면적 모델: 정밀도를 낮추면 같은 면적에 레인이 몇 배</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="area-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>강조할 포맷</span><div class="seg" id="area-f"><button data-value="fp32">FP32</button><button data-value="bf16" class="on">BF16</button><button data-value="e4m3">E4M3</button><button data-value="e2m1">E2M1</button><button data-value="int8">INT8</button><button data-value="fp64">FP64</button></div></div>
+          <div class="ctrl"><span>누산기</span><div class="seg" id="area-acc"><button data-value="wide" class="on">넓게 (FP32·INT32)</button><button data-value="same">입력과 같은 폭</button></div></div>
+          <div class="ctrl"><span>내적 길이 L (FP32 기준선은 L = 1)</span><div class="seg" id="area-L"><button data-value="1">1 (단독 FMA)</button><button data-value="4">4</button><button data-value="16" class="on">16</button><button data-value="64">64</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">곱셈기만: FP32 대비</span><span class="v" id="area-mult">—</span></div>
+        <div class="stat"><span class="k">MAC 면적 (u) / FP32 대비</span><span class="v" id="area-rel">—</span></div>
+        <div class="stat"><span class="k">같은 면적 MAC 수</span><span class="v" id="area-lanes">—</span></div>
+        <div class="stat"><span class="k">에너지 추정 / 에너지 표</span><span class="v" id="area-pj">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: 강조한 포맷의 부분곱 배열(점 하나 = 부분곱 비트 하나). 오른쪽: 모든 포맷의 MAC 면적을 부품별로 쌓은 막대(FP32 단독 FMA = 1). 해볼 것: ① BF16, L = 16, FP32 누산: 곱셈기는 1/9이지만 MAC 전체는 약 1/5.9. 정렬·누산이 남기 때문이다. ② E4M3은 약 1/10.5(곱셈기만 보면 1/36). E2M1로 더 내려도 1/14 정도에 그친다. FP32 누산 정렬이 대부분을 차지하기 때문이고, 그래서 FP4는 블록 스케일로 누산 폭을 줄인다. ③ 누산기를 "입력과 같은 폭"으로 바꾸면 E2M1이 약 1/38로 커지지만, 다음 절의 누산 오차 때문에 실제로는 쓰지 않는다. FP64는 L = 1에서 FP32 FMA의 약 3.8배다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>손잡이(조건)</th><th>곱셈기</th><th>MAC 면적(L=16, FP32 누산)</th><th>결과</th></tr></thead>
+      <tbody>
+        <tr><td>FP32 → BF16 (가수 23 → 7)</td><td>576 → 64 (1/9)</td><td>약 1/5.9</td><td>같은 면적 MAC 약 6배, 범위 그대로, \(u\) 6×10⁻⁸ → 3.9×10⁻³</td></tr>
+        <tr><td>BF16 → FP8 E4M3</td><td>64 → 16 (1/4)</td><td>약 1/1.8</td><td>처리량 2배(GX-1 표), 범위 78.6 → 5.4자릿수라 스케일 필요</td></tr>
+        <tr><td>FP8 → FP4 E2M1</td><td>16 → 4 (1/4)</td><td>약 1/1.4</td><td>누산 정렬이 지배 → 블록 공유 지수로 정렬·누산 폭을 줄여야 2배</td></tr>
+        <tr><td>FP8 → INT8</td><td>16 → 64</td><td>비슷(정렬 없음)</td><td>에너지 0.1 → 0.05 pJ, 대신 균일 간격 → 스케일 선택이 중요</td></tr>
+        <tr><td>내적 길이 1 → 16</td><td>그대로</td><td>BF16 3.6배 → 5.9배 (FP32 FMA 대비)</td><td>정규화·반올림을 공유 → 텐서 코어가 벡터 레인보다 효율적인 첫째 이유</td></tr>
+        <tr><td>FP32 → FP64</td><td>576 → 2,809 (4.9배)</td><td>단독 FMA 약 3.8배</td><td>FP32 절반 속도를 주려면 FP64 레인이 FP32 레인보다 더 큰 면적</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>왜 이렇게 설계하는가.</strong> 곱셈기가 \(p^2\)으로 줄어드는 몫은 곧 같은 다이 면적에서의 처리량이 된다. 그러나 곱셈기만 줄여서는 몇 배에서 멈춘다. 텐서 코어가 정밀도를 한 단계 낮출 때마다 처리량을 정확히 2배씩 올리는 것은 곱셈기 축소에 더해 정렬·누산 공유, 입력 레지스터 대역폭 재사용(다음 절)을 함께 설계하기 때문이다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="energy">
+    <h2>정밀도별 에너지와 처리량</h2>
+    <p>에너지 표(4 nm급, 0.75 V)에서 FMA 하나의 에너지는 FP32 약 0.8 pJ, BF16 약 0.2 pJ, FP8 약 0.1 pJ, INT8 곱-누산 약 0.05 pJ이다. 위 면적 모델의 추정(BF16 0.14, E4M3 0.08, INT8 0.07 pJ)과 같은 자릿수다. 그런데 연산 자체보다 더 비싼 것이 있다. 레지스터 파일 32비트 읽기 약 0.5 pJ. 벡터 레인의 FMA는 오퍼랜드 셋을 읽고 결과 하나를 쓰므로 레지스터 접근만 약 2 pJ로, FMA 0.8 pJ의 2.5배다.</p>
+    <p>텐서 코어는 이 비용을 나눈다. BF16 텐서 코어가 클럭마다 8×8×8 타일(FMA 512개)을 계산한다면, 레지스터에서 읽는 것은 A 타일 64개 + B 타일 64개 원소 × 2 B = 256 B = 32비트 워드 64개(32 pJ)뿐이고 누산기 C는 텐서 코어 안에 머문다. FMA 하나당 0.0625 pJ다. FP8에서는 같은 64워드에 원소가 두 배 들어가 FMA 1,024개(0.031 pJ/FMA). 정밀도를 반으로 줄이면 <strong>같은 레지스터 대역폭으로 FMA가 두 배</strong>가 된다. 이것이 GX-1 표에서 정밀도가 반이 될 때마다 피크가 정확히 두 배인 이유다.</p>
+    <div class="formula">$$P_{peak} = N_{SM} \times n_{FMA/SM} \times 2 \times f_{clk}, \qquad P_{MAC} = N_{SM}\, n_{FMA/SM}\, f_{clk}\,(E_{FMA} + E_{RF})\left(\frac{V_{DD}}{0.75\,\text{V}}\right)^2$$
+      <div class="where">FMA 하나 = 2 FLOP. \(E_{RF}\)는 FMA 하나가 나눠 내는 레지스터 파일 에너지(벡터 4 × 0.5 pJ, 텐서 코어 32 pJ ÷ 텐서 코어 하나의 클럭당 FMA 수). 전압은 GX-1 표의 1.2 GHz/0.65 V, 1.6 GHz/0.75 V, 1.8 GHz/0.85 V를 잇는다.</div></div>
+    <div class="callout fab"><strong>정밀도별 피크와 연산 전력</strong>활성 SM 144개, 1.6 GHz. FP32 벡터: SM당 FMA 128개 → 144 × 128 × 2 × 1.6 GHz = <b>59.0 TFLOPS</b>, FP64는 레인이 절반이라 29.5 TFLOPS. 텐서 코어: SM당 4개 × 클럭당 BF16 FMA 512개 → 144 × 4 × 512 × 2 × 1.6 GHz = <b>943.7 TFLOPS</b>, FP8·INT8 1,887, FP4 3,775(이 장의 가정: TF32는 BF16의 절반인 472). 전력: BF16 피크에서 FMA 4.72 × 10¹⁴개/s × 0.2 pJ = 94 W, 레지스터 읽기 0.0625 pJ를 더하면 약 124 W. FP32 벡터 피크는 FMA만 23.6 W지만 레지스터 접근을 더하면 약 83 W. 같은 레지스터·연산 전력으로 텐서 코어 BF16은 W당 약 7.6 TFLOPS, FP32 벡터는 약 0.71 TFLOPS로 10배 넘게 차이 난다. 로직 다이 동적 전력 약 640 W 가운데 나머지는 공유 메모리·L2·배선·클럭이 쓴다(<a href="onchip.html">6장</a>, <a href="power.html">12장</a>).</div>
+
+    <div class="sim" id="sim-perf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>정밀도별 처리량·전력: GX-1 피크 재현</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="perf-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>클럭 f<sub>clk</sub> <output id="perf-f-out"></output></span><input type="range" id="perf-f" min="1.2" max="1.8" step="0.05" value="1.6"></label>
+          <label class="ctrl"><span>활성 SM <output id="perf-sm-out"></output></span><input type="range" id="perf-sm" min="96" max="160" step="4" value="144"></label>
+          <div class="ctrl"><span>막대</span><div class="seg" id="perf-m"><button data-value="tflops" class="on">TFLOPS</button><button data-value="W">연산 전력 W</button><button data-value="eff">TFLOPS/W</button></div></div>
+          <label class="check"><input type="checkbox" id="perf-rf" checked> 레지스터 파일 읽기·쓰기 포함</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">BF16 / FP8 피크</span><span class="v" id="perf-bf">—</span></div>
+        <div class="stat"><span class="k">FP32 / FP64 벡터</span><span class="v" id="perf-v">—</span></div>
+        <div class="stat"><span class="k">BF16 연산 전력</span><span class="v" id="perf-w">—</span></div>
+        <div class="stat"><span class="k">BF16 ÷ FP32 효율</span><span class="v" id="perf-x">—</span></div>
+        <div class="stat"><span class="k">V<sub>DD</sub></span><span class="v" id="perf-vdd">—</span></div>
+      </div>
+      <div class="sim-note">막대는 로그 축. FMA 에너지는 에너지 표 값(FP64·TF32·FP4는 표에 없어 면적 모델 추정, 빗금)이고, 전압 제곱으로 보정한다. 해볼 것: ① 1.6 GHz, SM 144에서 BF16 943.7, FP8 1,887, FP4 3,775, FP32 59.0, FP64 29.5 TFLOPS가 나오는지 확인. ② 1.8 GHz로 올리면 처리량은 12.5 % 늘지만 전압이 0.85 V로 올라 BF16 연산 전력은 124 W → 약 179 W(+44 %). ③ 레지스터 포함을 끄면 FP32 벡터의 효율이 0.71 → 2.5 TFLOPS/W로 뛴다. 벡터 레인의 에너지 대부분이 연산이 아니라 오퍼랜드 운반이라는 뜻이다.</div>
+    </div>
+    <p><strong>왜 이렇게 설계하는가.</strong> 연산 에너지가 데이터 운반 에너지보다 작아진 시대에는 "FMA 하나에 오퍼랜드를 몇 번 읽는가"가 효율을 정한다. 텐서 코어는 한 번 읽은 A·B를 여러 FMA에 재사용하고, 정밀도를 낮추면 같은 바이트에 더 많은 원소를 실어 보낸다. 이 원리가 온칩 메모리(<a href="onchip.html">6장</a>)와 루프라인(<a href="roofline.html">7장</a>)의 재사용 논리로 그대로 이어진다.</p>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="accum">
+    <h2>누산 정밀도와 오차 누적</h2>
+    <p>입력을 BF16·FP8로 낮춰도 텐서 코어는 곱을 FP32로 누산한다. 이유는 긴 합에서 나타나는 <span class="term">흡수</span><span class="en">(swamping)</span>다. 누산값 \(S\)가 커지면 그 자리의 간격(ulp)도 커지고, 더하려는 항이 ulp의 절반보다 작으면 정렬 단계에서 전부 G·R·S 아래로 밀려 반올림에 사라진다. BF16 누산기에서 \(S = 64\)이면 ulp는 \(64 \times 2^{-7} = 0.5\)라 0.25보다 작은 항은 더해지지 않는다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 190" role="img" aria-label="흡수. BF16 누산기 값 256과 더할 항 0.75를 정렬하면 항의 비트가 누산기 가수 끝보다 아래로 밀려 반올림에서 사라진다. FP32 누산기는 가수가 길어 같은 항이 살아남는다">
+        <g class="t-mono">
+          <text x="20" y="24" class="t t-b">BF16 누산기 (p = 8)</text>
+          <text x="20" y="52" class="t-mono">S = 256 = </text>
+          <g transform="translate(110 36)">
+            <rect x="0" y="0" width="160" height="24" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="80" y="17" class="t-mono t-c">1 0 0 0 0 0 0 0</text>
+            <text x="166" y="17" class="t-mono">× 2⁸ · 2⁻⁷ (ulp = 2)</text>
+          </g>
+          <text x="20" y="88" class="t-mono">x = 0.75 =</text>
+          <g transform="translate(110 72)">
+            <rect x="160" y="0" width="40" height="24" class="f-warn-soft" style="stroke:var(--warn)"/><text x="180" y="17" class="t-mono t-c">0 1</text>
+            <rect x="200" y="0" width="40" height="24" class="f-bad-soft" style="stroke:var(--bad)"/><text x="220" y="17" class="t-mono t-c">1 …</text>
+            <text x="248" y="17" class="t-mono">G = 0 → 버림</text>
+          </g>
+          <path d="M270 36V112" class="s-bad dash"/><text x="276" y="126" class="t t-xs t-bad">가수 끝(LSB)</text><text x="110" y="126" class="t t-sm">S + x = 256 그대로</text>
+        </g>
+        <g transform="translate(480 0)" class="t-mono">
+          <text x="0" y="24" class="t t-b">FP32 누산기 (p = 24)</text>
+          <rect x="0" y="36" width="360" height="24" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="180" y="53" class="t-mono t-c">1 0000000 0 1 1 0000000000000</text>
+          <text x="0" y="88" class="t t-sm">x가 가수 안에 들어가 256.75가 정확히 남는다.</text>
+          <text x="0" y="108" class="t t-sm t-dim">FP32에서 흡수는 S/x ≳ 2²⁴ ≈ 1.7 × 10⁷부터.</text>
+        </g>
+        <text x="20" y="164" class="t t-sm">양수만 더하는 내적은 S가 K에 비례해 커지므로, BF16 누산은 K가 수백만 넘으면 거의 멈춘다(정체).</text>
+        <text x="20" y="182" class="t t-sm t-dim">평균 0인 값은 S가 √K로만 커져 흡수가 늦다. 하지만 최악 오차 상한은 같다.</text>
+      </svg>
+      <figcaption><b>그림 4-8.</b> 흡수: 큰 누산값에 작은 항을 더하면 정렬 시프트에서 항이 가수 끝 밖으로 밀려 사라진다. 누산기 가수가 길수록 흡수가 시작되는 \(S/x\) 비가 커진다.</figcaption>
+    </figure>
+    <p>순차 합의 오차는 다음 상한을 따른다. 상한은 \(K\)에 비례하지만, 반올림 오차의 부호가 무작위면 실제 오차는 대개 \(\sqrt{K}\,u\) 정도다. 흡수가 시작되면 그때부터는 상한 쪽으로 간다.</p>
+    <div class="formula">$$\left|\hat{s}_K - s_K\right| \le \gamma_{K-1} \sum_{i=1}^{K} |x_i y_i|, \qquad \gamma_{K} = \frac{K u}{1 - K u} \approx K u$$
+      <div class="where">\(u\)는 누산기의 단위 반올림(BF16 \(2^{-8}\), FP16 \(2^{-11}\), FP32 \(2^{-24}\)). 곱이 정확하다고 본 순차 합. BF16 누산이면 \(K = 256\)에서 이미 상한 \(Ku = 1\)(100 %)이다.</div></div>
+
+    <div class="sim" id="sim-acc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>누산 정밀도와 오차 누적: 길이 K 내적</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="acc-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>입력 분포</span><div class="seg" id="acc-d"><button data-value="pos" class="on">양수 U(0,1)</button><button data-value="gauss">평균 0 N(0,1)</button></div></div>
+          <div class="ctrl"><span>입력 포맷</span><div class="seg" id="acc-in"><button data-value="bf16" class="on">BF16</button><button data-value="e4m3">FP8 E4M3</button></div></div>
+          <label class="ctrl"><span>읽을 K <output id="acc-k-out"></output></span><input type="range" id="acc-k" min="3" max="14" step="1" value="12"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">BF16 누산</span><span class="v" id="acc-bf">—</span></div>
+        <div class="stat"><span class="k">FP16 누산</span><span class="v" id="acc-h">—</span></div>
+        <div class="stat"><span class="k">BF16 32개 묶음 → FP32</span><span class="v" id="acc-blk">—</span></div>
+        <div class="stat"><span class="k">FP32 누산</span><span class="v" id="acc-f">—</span></div>
+        <div class="stat"><span class="k">상한 Ku (BF16 / FP32)</span><span class="v" id="acc-ub">—</span></div>
+      </div>
+      <div class="sim-note">입력 \(x_i, y_i\)를 고른 포맷으로 반올림하고(비트 단위 RNE), 곱은 FP32로(BF16·E4M3 곱은 FP32 가수 안에 정확히 들어간다), 누산은 매 덧셈마다 누산기 포맷으로 반올림한다. 오차는 \(|\hat{s} - s| / \sum|x_i y_i|\), 시드 4개 평균. 점선은 BF16·FP32의 상한 \(Ku\). 해볼 것: ① 양수 입력, K = 4,096: BF16 누산은 합이 약 1,024여야 하는데 수백에서 멈춰 오차가 50 %를 넘는다. FP32 누산은 10⁻⁶ 안팎. ② 32개씩 BF16으로 더하고 묶음 합을 FP32로 더하면(짧은 내적은 저정밀, 긴 누산은 FP32) 오차가 10⁻³ 아래로 유지된다. ③ 평균 0 입력으로 바꾸면 BF16 누산도 10⁻³ 수준에 머문다. 흡수는 합이 커질 때의 문제다.</div>
+    </div>
+    <p><strong>왜 이렇게 설계하는가.</strong> 누산기는 텐서 코어 하나에 출력 원소 수만큼만 있고(입력 곱셈기 수보다 훨씬 적다), FP32 누산기의 면적 부담은 \(L\)개 곱이 나눠 낸다(그림 4-7). 오차는 \(K\)에 비례해 커지므로, 누산 정밀도를 아껴 얻는 면적은 작고 잃는 정확도는 크다. 그래서 거의 모든 행렬 엔진이 "입력은 낮게, 누산은 FP32"를 고른다.</p>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="sfu">
+    <h2>특수 함수 유닛: 표와 다항식</h2>
+    <p>역수, 역제곱근, \(2^x\), \(\log_2 x\), 사인·코사인은 FMA로 계산하면 반복이 수십 번 필요하다. GPU는 이를 <span class="term">특수 함수 유닛</span><span class="en">(special function unit, SFU)</span>에 맡긴다. 방법은 세 단계다. (1) <strong>범위 축소</strong>: 지수와 가수를 나눠 가수 구간 \([1,2)\)만 남긴다(\(1/x\)는 지수를 뒤집고, \(1/\sqrt{x}\)는 지수의 홀짝에 따라 \([1,4)\), \(2^x\)는 정수부를 결과 지수로 보낸다). (2) <strong>표 찾기</strong>: 가수의 상위 \(t\)비트로 ROM에서 조각 다항식 계수를 꺼낸다. (3) <strong>다항식 계산</strong>: 하위 비트 \(u\)로 \(c_0 + c_1 u + c_2 u^2\)를 짧은 곱셈기 두 개로 계산한다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 200" role="img" aria-label="특수 함수 유닛. 입력의 지수는 범위 축소 논리로 가고, 가수 상위 t비트는 계수 표 주소, 하위 비트 u는 다항식 계산에 쓰인다. 표에서 나온 c0, c1, c2로 c0 + c1 u + c2 u²를 계산하고 지수와 합쳐 결과를 만든다">
+        <g class="t-sm">
+          <rect x="20" y="70" width="40" height="30" class="f-warn-soft" style="stroke:var(--warn)"/><text x="40" y="90" class="t-mono t-c">s</text>
+          <rect x="60" y="70" width="100" height="30" class="f-acc-soft" style="stroke:var(--accent)"/><text x="110" y="90" class="t-mono t-c">지수</text>
+          <rect x="160" y="70" width="80" height="30" class="f-acc2-soft" style="stroke:var(--accent-2)"/><text x="200" y="90" class="t-mono t-c">상위 t</text>
+          <rect x="240" y="70" width="140" height="30" class="f-acc2-soft" style="stroke:var(--accent-2);opacity:.7"/><text x="310" y="90" class="t-mono t-c">하위 비트 u</text>
+          <rect x="60" y="140" width="140" height="40" rx="6" class="k-ctrl"/><text x="130" y="158" class="t t-c t-b">범위 축소</text><text x="130" y="173" class="t t-c t-xs">지수 뒤집기·홀짝·정수부</text>
+          <rect x="420" y="20" width="160" height="64" rx="6" class="k-sram"/><text x="500" y="44" class="t t-c t-b">계수 표 (ROM)</text><text x="500" y="62" class="t-mono t-c">2ᵗ칸 × (c₀ c₁ c₂)</text>
+          <rect x="420" y="104" width="250" height="44" rx="6" class="k-compute"/><text x="545" y="124" class="t t-c t-b">c₀ + u·(c₁ + c₂·u)</text><text x="545" y="140" class="t t-c t-xs">짧은 곱셈기 2개 (호너)</text>
+          <rect x="710" y="104" width="130" height="44" rx="6" class="chip-a"/><text x="775" y="124" class="t t-c t-b">결과 가수</text><text x="775" y="140" class="t t-c t-xs">+ 지수 → FP32</text>
+        </g>
+        <path d="M200 70V52H416" class="arr"/><path d="M310 100V126H416" class="arr"/><path d="M500 84V100" class="arr"/>
+        <path d="M110 100V136" class="arr"/><path d="M200 160H760V152" class="arr dash"/><path d="M670 126H706" class="arr"/>
+        <text x="610" y="40" class="t t-xs t-dim">t 하나 늘면 표 2배,</text><text x="610" y="56" class="t t-xs t-dim">2차 근사 오차 약 1/8</text>
+      </svg>
+      <figcaption><b>그림 4-9.</b> 표 + 다항식 방식의 SFU. 조각 폭 \(h = 2^{-t}\)에서 \(d\)차 다항식의 오차는 \(h^{d+1}\)에 비례하므로, 표 크기(면적)와 곱셈기 수(지연·면적) 사이에서 고른다. 결과는 대개 FP32에서 1~2 ulp 정도의 근사이고, 정확한 반올림이 필요하면 FMA로 뉴턴–랩슨 보정을 한 번 더 한다.</figcaption>
+    </figure>
+    <div class="formula">$$\varepsilon_{rel} \approx \frac{|f^{(d+1)}|}{(d+1)!\,2^{d}} \left(\frac{h}{2}\right)^{d+1}, \qquad y_1 = y_0\,(2 - x y_0) \ \ (1/x\ \text{뉴턴–랩슨: 맞는 비트 수가 두 배})$$
+      <div class="where">체비쇼프 점에서 보간한 \(d\)차 다항식의 조각 오차(근사적 최소최대). 뉴턴–랩슨 한 번은 FMA 2개로 오차를 제곱한다.</div></div>
+
+    <div class="sim" id="sim-sfu">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>SFU 근사: 표 크기와 다항식 차수, 맞는 비트 수</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sfu-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>함수</span><div class="seg" id="sfu-k"><button data-value="rcp" class="on">1/x</button><button data-value="rsqrt">1/√x</button><button data-value="exp2">2ˣ</button></div></div>
+          <label class="ctrl"><span>표 주소 비트 t <output id="sfu-t-out"></output></span><input type="range" id="sfu-t" min="1" max="8" step="1" value="6"></label>
+          <div class="ctrl"><span>다항식 차수</span><div class="seg" id="sfu-d"><button data-value="1">1차</button><button data-value="2" class="on">2차</button></div></div>
+          <label class="check"><input type="checkbox" id="sfu-nr"> 뉴턴–랩슨 1회 (1/x, 1/√x)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최대 상대 오차</span><span class="v" id="sfu-max">—</span></div>
+        <div class="stat"><span class="k">맞는 비트 수</span><span class="v" id="sfu-bits">—</span></div>
+        <div class="stat"><span class="k">표 크기 (계수 24비트 가정)</span><span class="v" id="sfu-rom">—</span></div>
+        <div class="stat"><span class="k">FP32 목표 (24비트)까지</span><span class="v" id="sfu-gap">—</span></div>
+      </div>
+      <div class="sim-note">조각마다 체비쇼프 점 \(d+1\)개에서 함수값을 보간해 계수를 만들고, 구간 전체 1,536점에서 근사값을 FP32로 반올림한 뒤 상대 오차를 잰다(로그 축). 바닥 약 \(2^{-24}\)은 FP32 출력 반올림 자체다. 해볼 것: ① 1/x, t = 6, 2차: 약 22.8비트(표 64칸 × 3계수). t = 7이면 FP32 바닥(약 24비트)에 닿는다. ② 1차로 바꾸면 t = 6에서 15비트, 같은 정확도를 얻으려면 표가 수백 배 커진다. ③ 1/x, t = 4, 1차 + 뉴턴–랩슨: 11비트가 22비트로 두 배가 된다(표는 작게, 대신 FMA 2개와 지연을 더 쓴다). 1/√x는 구간이 [1,4)로 두 배이고 곡률도 커서 같은 t에서 두세 비트 덜 맞는다.</div>
+    </div>
+    <div class="callout fab"><strong>SFU는 왜 FP32 레인의 1/8인가</strong>GX-1 서브파티션에는 FP32 레인 32개, SFU 4개가 있다. SM당 SFU 16개 × 144 SM × 1.6 GHz = 초당 약 3.7 × 10¹² 회. 소프트맥스 지수 함수 수요로 따져 보자. GX-LM-70B의 8,192 토큰 프리필에서 어텐션 점수는 층 80 × 헤드 64 × 8,192²/2(인과 마스크) ≈ 1.7 × 10¹¹개이고, \(2^x\) 하나씩이면 SFU 시간은 약 47 ms다. 같은 프리필의 밀집 행렬곱 \(2N \times 8192 \approx 1.15 \times 10^{15}\) FLOP은 BF16 피크에서 약 1.2 s이므로 지수 함수는 약 4 %이고, FP8로 행렬곱이 두 배 빨라지면 약 8 %로 커진다. SFU를 더 늘리면 면적이 들고 줄이면 어텐션이 SFU에 막힌다. 행렬곱이 빨라질수록 이 비율을 다시 맞춰야 한다.</div>
+    <p><strong>왜 이렇게 설계하는가.</strong> 초월 함수는 전체 연산에서 차지하는 몫이 작아 FP32 레인만큼 많이 둘 이유가 없다. 표 + 2차 다항식은 작은 ROM과 짧은 곱셈기 두 개로 FP32에 가까운 정확도를 4~8사이클에 내므로, 레인 8개당 하나만 두어도 대부분의 커널에서 병목이 되지 않는다.</p>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="int">
+    <h2>정수 연산, 주소 계산, INT8 양자화</h2>
+    <p>GPU 커널의 정수 연산은 대부분 데이터가 아니라 <strong>주소</strong>다. 스레드마다 자기 원소의 주소를 계산하고(아래 의사 코드), 루프 카운터와 경계 비교, 비트 연산을 한다. GX-1 서브파티션은 FP32 레인 32개 옆에 INT32 레인 16개를 따로 두어, 워프 스케줄러가 한 클럭은 FP32 FMA를, 다음 클럭은 정수 명령을 내도 두 파이프가 겹쳐 돈다(<a href="sm.html">3장</a> 발행). INT32 곱셈-덧셈(IMAD)은 32×32 곱의 하위 32비트만 필요해 부분곱 배열이 절반 남짓이다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 170" role="img" aria-label="주소 계산. 스레드 번호와 블록 번호로 전역 인덱스 i를 계산하고, 기준 주소에 i 곱하기 4바이트를 더해 로드 주소를 만든다. 이 계산은 INT32 레인의 IMAD 두 번이고, 데이터에 대한 FMA는 FP32 레인에서 따로 돈다">
+        <g class="t-mono">
+          <rect x="20" y="20" width="360" height="120" rx="6" class="k-ctrl"/>
+          <text x="36" y="44" class="t-mono">i    = blockIdx · blockDim + tid   // IMAD</text>
+          <text x="36" y="66" class="t-mono">addr = base + i · 4                // IMAD</text>
+          <text x="36" y="88" class="t-mono">if (i &lt; n)                        // ISETP</text>
+          <text x="36" y="110" class="t-mono">  y[i] = a · x[i] + y[i]          // LD, FFMA, ST</text>
+        </g>
+        <rect x="420" y="20" width="180" height="50" rx="6" class="k-ctrl"/><text x="510" y="42" class="t t-c t-b">INT32 레인 16개</text><text x="510" y="60" class="t t-c t-xs">IMAD·ISETP·비트 연산</text>
+        <rect x="420" y="90" width="180" height="50" rx="6" class="k-compute"/><text x="510" y="112" class="t t-c t-b">FP32 레인 32개</text><text x="510" y="130" class="t t-c t-xs">FFMA</text>
+        <rect x="640" y="55" width="200" height="50" rx="6" class="k-data"/><text x="740" y="77" class="t t-c t-b">로드·스토어 유닛 8개</text><text x="740" y="95" class="t t-c t-xs">주소 → 병합 (6장)</text>
+        <path d="M380 45H416M380 115H416M600 45L636 72M600 115L636 90" class="arr"/>
+      </svg>
+      <figcaption><b>그림 4-10.</b> SAXPY 한 줄이 하드웨어에서 하는 일. 데이터 연산은 FFMA 하나인데 주소·경계 계산은 정수 명령 셋이다. 정수 레인을 따로 두면 이 둘이 같은 클럭에 겹친다. 주소가 모이는 방식(병합)은 <a href="onchip.html">6장</a>에서 다룬다.</figcaption>
+    </figure>
+    <p>추론에서는 정수가 데이터가 되기도 한다. <span class="term">양자화</span><span class="en">(quantization)</span>는 실수 텐서를 스케일 \(s\) 하나와 8비트 정수로 바꾼다. \(q = \mathrm{round}(x/s)\)를 \([-127, 127]\)로 자르고 \(\hat{x} = qs\)로 되돌린다. 간격이 균일하므로 스케일을 크게 잡으면(최대값 기준) 이상치는 살지만 작은 값이 거칠어지고, 작게 잡으면 작은 값은 정밀해지지만 큰 값이 잘린다(클리핑). 균일 양자화의 신호 대 양자화 잡음비는 대략 다음과 같다.</p>
+    <div class="formula">$$s = \frac{x_{clip}}{2^{b-1}-1}, \qquad \mathrm{SQNR} \approx 6.02\,b + 4.77 - 20\log_{10}\frac{x_{clip}}{\sigma}\ \ \text{dB} \quad (\text{클리핑이 없을 때})$$
+      <div class="where">\(b\)는 비트 수, \(\sigma\)는 신호의 RMS. 비트 하나에 약 6 dB. \(x_{clip}\)을 줄이면 셋째 항이 줄지만 클리핑 오차가 생긴다.</div></div>
+
+    <div class="sim" id="sim-q">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>INT8 양자화: 스케일 선택과 이상치</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="q-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>이상치 비율 <output id="q-of-out"></output></span><input type="range" id="q-of" min="0" max="2" step="0.05" value="0.1"></label>
+          <label class="ctrl"><span>이상치 크기 (σ 배) <output id="q-om-out"></output></span><input type="range" id="q-om" min="5" max="50" step="1" value="20"></label>
+          <div class="ctrl"><span>스케일 기준</span><div class="seg" id="q-m"><button data-value="max" class="on">최대 |x|</button><button data-value="pct">99.9 백분위</button><button data-value="mse">MSE 최소</button></div></div>
+          <div class="ctrl"><span>비트</span><div class="seg" id="q-b"><button data-value="8" class="on">INT8</button><button data-value="4">INT4</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">스케일 s / 클립 경계</span><span class="v" id="q-s">—</span></div>
+        <div class="stat"><span class="k">SQNR</span><span class="v" id="q-sqnr">—</span></div>
+        <div class="stat"><span class="k">잘린 원소</span><span class="v" id="q-clip">—</span></div>
+        <div class="stat"><span class="k">비교: FP8 E4M3 (텐서 스케일 1개)</span><span class="v" id="q-fp8">—</span></div>
+      </div>
+      <div class="sim-note">정규분포 N(0,1) 원소 4,096개에 지정 비율만큼 ±(0.6~1)×크기의 이상치를 섞는다. 히스토그램(로그 세로축) 위에 클립 경계와 양자화 격자(INT4에서 잘 보인다)를 겹쳤다. 정수 반올림도 최근접 짝수. 해볼 것: ① 이상치 0 %: 최대값 기준 INT8 SQNR 약 42 dB로 FP8 E4M3(약 31 dB)보다 좋다. 균일 간격이 정규분포의 몸통을 촘촘히 덮기 때문이다. ② 이상치 0.1 %, 20σ: 최대값 기준은 몸통이 거칠어져 약 29 dB로 떨어지고, 99.9 백분위 기준은 이상치를 잘라 약 16 dB로 더 나쁘다. FP8은 상대 간격이 일정해 약 32 dB를 유지한다. ③ INT4로 바꾸면 MSE 최소 스케일이 최대값 기준보다 2~4 dB 낫다. 블록마다 스케일을 따로 두면(마이크로스케일링, <a href="tensor.html">5장</a>) 이상치의 영향이 그 블록에만 갇힌다.</div>
+    </div>
+    <p><strong>왜 이렇게 설계하는가.</strong> INT8 곱-누산은 지수 정렬이 없어 에너지가 FP8의 절반(약 0.05 pJ)이지만, 이상치에 약해 스케일을 잘 골라야 한다. FP8은 회로가 조금 비싸도 스케일 선택에 덜 민감하다. 그래서 텐서 코어는 둘 다 같은 곱셈기 배열 위에서 지원하고, 작은 블록마다 스케일을 두는 포맷으로 둘의 장점을 합친다.</p>
+  </section>
+
+  <!-- ============================================================ 11 -->
+  <section id="fp64">
+    <h2>FP64는 왜 데이터센터 칩에만 넓은가</h2>
+    <p>과학 계산(유체·분자 동역학·기후·선형 시스템 풀이)은 수백만 번의 반복에서 오차가 쌓이므로 FP64(가수 52비트, \(u \approx 1.1 \times 10^{-16}\))가 필요하다. 그러나 FP64 곱셈기는 53 × 53 = 2,809개의 부분곱으로 FP32(576)의 4.9배이고, 데이터패스 폭 \(w = 109\)비트에 맞춘 정렬·정규화까지 넣으면 면적 모델로 FP32 FMA의 약 3.8배다.</p>
+    <div class="callout fab"><strong>FP64 레인의 면적 값</strong>GX-1 서브파티션의 FP64 레인 16개 × 3.8 ≈ FP32 FMA 60개 분량으로, FP32 레인 32개의 약 1.9배 면적이다. 이 덕분에 FP64 피크가 FP32의 절반(29.5 TFLOPS)이다. 그래픽·소비자용 칩은 보통 FP64를 FP32의 1/64 정도만 둔다. SM당 FP64 레인 2개라면 \(2 \times 3.8 \approx 7.5\)로 FP32 레인 128개의 6 % 면적이다. 같은 아키텍처라도 HPC 고객이 있는 데이터센터 칩만 이 면적을 낸다. AI 학습만 본다면 이 면적을 텐서 코어에 주는 것이 처리량에는 유리하다. 그래서 최근 세대 일부는 FP64를 텐서 코어 쪽 행렬 연산으로 옮기거나, FP64 행렬곱을 저정밀 텐서 연산 여러 번으로 쪼개 흉내 내기도 한다.</div>
+    <p><strong>왜 이렇게 설계하는가.</strong> 정밀도별 레인 수는 시장의 결정이다. 같은 면적이면 FP64 레인 하나 대신 BF16 MAC 약 22개(면적 모델, \(L\) = 16)를 넣을 수 있다. 데이터센터 칩은 HPC와 AI 두 시장을 함께 노려 FP64를 남기고, 게이밍 칩은 그 면적을 래스터·광선 추적 유닛과 FP32 레인에 준다(<a href="workloads.html">15장</a>).</p>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>부동소수점은 지수가 범위, 가수가 정밀도를 맡는다. 간격은 값에 비례하고 최대 상대 오차는 \(u = 2^{-(m+1)}\). FP16 최대 65504, BF16은 FP32와 같은 범위에 \(\varepsilon = 2^{-7}\), E4M3 최대 448, E5M2 57344, E2M1 6.</li>
+      <li>최근접 짝수 반올림은 G·R·S 세 비트로 정확히 할 수 있고, 비정규수는 0 근처의 빈틈을 같은 간격으로 메운다. GPU는 SIMT 박자 때문에 비정규수를 전속으로 처리한다.</li>
+      <li>FMA는 \(2p\)비트 곱을 반올림하지 않고 3p+2비트 창에서 정렬·덧셈해 한 번만 반올림한다. 상쇄에서 따로 계산하면 사라지는 비트를 지킨다.</li>
+      <li>곱셈기 면적 ∝ \((m+1)^2\): FP32 → BF16은 1/9, E4M3은 1/36. 그러나 정렬·누산이 남아 MAC 전체는 각각 약 1/6, 1/10(내적 16, FP32 누산).</li>
+      <li>FMA 에너지(FP32 0.8, BF16 0.2, FP8 0.1 pJ)보다 레지스터 접근(32비트 0.5 pJ)이 비싸다. 텐서 코어는 A·B 타일 재사용으로 이를 FMA당 0.06 pJ로 나누고, 정밀도가 반이면 같은 대역폭으로 FMA가 두 배 → GX-1 BF16 943.7, FP8 1,887, FP4 3,775 TFLOPS.</li>
+      <li>긴 내적은 누산기 정밀도가 오차를 정한다. BF16 누산은 양수 4,096개 합에서 50 % 넘게 틀리고, FP32 누산은 10⁻⁶ 수준이다. 그래서 "입력은 낮게, 누산은 FP32".</li>
+      <li>SFU는 범위 축소 + 2ᵗ칸 계수 표 + 2차 다항식으로 FP32에 가까운 근사를 낸다. t를 1 늘리면 표 2배, 오차 약 1/8. GX-1은 FP32 레인 8개당 SFU 1개.</li>
+      <li>정수 레인은 주소 계산을 데이터 연산과 겹치게 한다. INT8 양자화는 에너지가 낮지만 스케일 선택이 중요하고, FP8은 이상치에 강하다. FP64 레인은 FP32의 약 3.8배 면적이라 데이터센터 칩에만 넓게 둔다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. FP16(E5M10, bias 15)의 최대 유한값은?</p><div class="opts">
+        <button class="opt">65535</button><button class="opt" data-correct>65504</button><button class="opt">57344</button><button class="opt">32768</button>
+      </div><div class="quiz-exp">최대 지수 코드 30 → \(2^{15}\), 가수 전부 1 → \(2 - 2^{-10}\). \(2^{15}(2-2^{-10}) = 65504\). 57344는 FP8 E5M2의 최대값이다.</div></div>
+      <div class="quiz-q"><p>2. BF16과 FP16은 둘 다 16비트다. BF16을 텐서 코어 학습의 기본으로 쓰는 주된 이유는?</p><div class="opts">
+        <button class="opt">가수가 더 길어 반올림 오차가 작다</button><button class="opt">비정규수가 없어 회로가 단순하다</button><button class="opt" data-correct>지수가 FP32와 같은 8비트라 범위가 같아 넘침·언더플로 걱정과 손실 스케일링이 거의 필요 없다</button><button class="opt">곱셈기가 FP16보다 크지만 더 빠르다</button>
+      </div><div class="quiz-exp">BF16은 FP32 상위 16비트다. 가수는 7비트로 FP16(10비트)보다 거칠지만 범위가 FP32와 같고 곱셈기도 8×8로 FP16(11×11)보다 작다.</div></div>
+      <div class="quiz-q"><p>3. \(1 + 2^{-8}\)을 BF16(가수 7비트)으로 최근접 짝수 반올림하면?</p><div class="opts">
+        <button class="opt" data-correct>1</button><button class="opt">\(1 + 2^{-7}\)</button><button class="opt">\(1 + 2^{-8}\) 그대로</button><button class="opt">\(1 + 2^{-6}\)</button>
+      </div><div class="quiz-exp">1과 \(1+2^{-7}\)의 정확히 중간(G=1, R=S=0)이다. 가수 LSB가 0인 1(짝수) 쪽으로 간다. \(1 + 3 \cdot 2^{-8}\)이었다면 \(1+2^{-7}\)(홀수)과 \(1+2^{-6}\)(짝수)의 중간이라 \(1+2^{-6}\)이 된다.</div></div>
+      <div class="quiz-q"><p>4. 곱셈기 면적이 부분곱 비트 수 \((m+1)^2\)에 비례한다면, FP32 곱셈기 하나의 면적에 BF16 곱셈기는 몇 개 들어가는가?</p><div class="opts">
+        <button class="opt">약 2개</button><button class="opt">약 3개</button><button class="opt">약 4.7개</button><button class="opt" data-correct>약 9개</button>
+      </div><div class="quiz-exp">\(24^2 / 8^2 = 576/64 = 9\). 다만 정렬·정규화·누산이 남아 MAC 전체의 비는 약 6배(내적 16, FP32 누산)로 줄어든다.</div></div>
+      <div class="quiz-q"><p>5. 양수 4,096개의 곱을 BF16 누산기로 순서대로 더하면 오차가 50 %를 넘는다. 가장 직접적인 원인은?</p><div class="opts">
+        <button class="opt">BF16 입력의 반올림 오차가 곱에서 증폭된다</button><button class="opt" data-correct>합이 커지면 누산기의 ulp가 항보다 커져 작은 항이 정렬 시프트에서 밀려 사라진다(흡수)</button><button class="opt">BF16의 범위가 좁아 합이 넘친다</button><button class="opt">비정규수가 0으로 바뀐다</button>
+      </div><div class="quiz-exp">BF16 누산기 값이 64면 ulp는 0.5라 0.25보다 작은 항이 더해지지 않는다. 합이 그 근처에서 정체한다. 입력 오차는 상대적으로 작고 무작위라 이 정도로 쌓이지 않는다.</div></div>
+      <div class="quiz-q"><p>6. GX-1(활성 SM 144, SM당 텐서 코어 4개, 텐서 코어당 클럭당 BF16 FMA 512개, 1.6 GHz)의 BF16 밀집 피크는?</p><div class="opts">
+        <button class="opt">약 472 TFLOPS</button><button class="opt">약 59 TFLOPS</button><button class="opt" data-correct>약 944 TFLOPS</button><button class="opt">약 1,887 TFLOPS</button>
+      </div><div class="quiz-exp">144 × 4 × 512 × 2(FMA = 2 FLOP) × 1.6 GHz = 943.7 TFLOPS. 1,887은 FP8, 59는 FP32 벡터, 472는 이 장에서 가정한 TF32다.</div></div>
+      <div class="quiz-q"><p>7. 표 + 2차 다항식 SFU에서 표 주소 비트 \(t\)를 하나 늘리면?</p><div class="opts">
+        <button class="opt" data-correct>표 크기는 2배, 근사 오차는 약 1/8(맞는 비트 약 3개 증가)</button><button class="opt">표 크기는 2배, 오차는 1/2</button><button class="opt">표 크기는 그대로, 오차는 1/4</button><button class="opt">표 크기는 4배, 오차는 1/8</button>
+      </div><div class="quiz-exp">조각 폭 \(h\)가 반이 되고, \(d\)차 다항식의 오차는 \(h^{d+1}\)에 비례하므로 2차면 \(2^{-3}\)이다. 1차였다면 1/4(2비트)이다.</div></div>
+      <div class="quiz-q"><p>8. 곱셈과 덧셈을 따로 하는 대신 FMA를 쓰는 이점으로 옳은 것은?</p><div class="opts">
+        <button class="opt">곱셈기 배열이 절반으로 준다</button><button class="opt">비정규수를 처리할 필요가 없다</button><button class="opt">정렬 시프터가 필요 없다</button><button class="opt" data-correct>곱을 반올림하지 않아 반올림이 한 번이고, \(ab - c\)의 상쇄에서도 정확한 결과를 낸다</button>
+      </div><div class="quiz-exp">FMA는 2p비트 곱을 그대로 3p+2비트 창에서 더한 뒤 한 번만 반올림한다. 시뮬레이터의 FP16 예에서 정확한 답 \(2^{-20}\)을 FMA는 내고, 곱을 먼저 반올림하면 0이 된다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+
+  /* model:fp */
+  /* 부동소수점 포맷 표와 비트 단위 반올림(최근접 짝수). 값 = M·2^q (M 정수)로 다뤄 BigInt로 정확히 계산한다.
+     kind: ieee = 지수 전부 1이 Inf/NaN, fn = E4M3(지수 전부 1도 수, 가수 전부 1만 NaN, Inf 없음), none = E2M1(Inf·NaN 없음). */
+  var FMT = {
+    fp64: { key: "fp64", name: "FP64", e: 11, m: 52, kind: "ieee" },
+    fp32: { key: "fp32", name: "FP32", e: 8, m: 23, kind: "ieee" },
+    tf32: { key: "tf32", name: "TF32", e: 8, m: 10, kind: "ieee" },
+    fp16: { key: "fp16", name: "FP16", e: 5, m: 10, kind: "ieee" },
+    bf16: { key: "bf16", name: "BF16", e: 8, m: 7, kind: "ieee" },
+    e5m2: { key: "e5m2", name: "FP8 E5M2", e: 5, m: 2, kind: "ieee" },
+    e4m3: { key: "e4m3", name: "FP8 E4M3", e: 4, m: 3, kind: "fn" },
+    e2m1: { key: "e2m1", name: "FP4 E2M1", e: 2, m: 1, kind: "none" },
+  };
+  (function () {
+    for (var k in FMT) {
+      var f = FMT[k];
+      f.bits = 1 + f.e + f.m;
+      f.bias = Math.pow(2, f.e - 1) - 1;
+      f.emin = 1 - f.bias;
+      f.emax = (f.kind === "ieee" ? Math.pow(2, f.e) - 2 : Math.pow(2, f.e) - 1) - f.bias;
+      f.max = Math.pow(2, f.emax) * (f.kind === "fn" ? 2 - 2 * Math.pow(2, -f.m) : 2 - Math.pow(2, -f.m));
+      f.minNormal = Math.pow(2, f.emin);
+      f.minSub = Math.pow(2, f.emin - f.m);
+      f.eps = Math.pow(2, -f.m);           // 1 다음 수까지의 간격
+      f.u = Math.pow(2, -f.m - 1);         // 단위 반올림(최대 상대 오차)
+      f.decades = Math.log10(f.max / f.minSub);
+    }
+  })();
+  function bitLen(N) { return N === 0n ? 0 : N.toString(2).length; }
+  var _dv = new DataView(new ArrayBuffer(8));
+  /** double → {s, N, E}: |x| = N·2^E (정확) */
+  function decomp(x) {
+    _dv.setFloat64(0, x);
+    var hi = _dv.getUint32(0), lo = _dv.getUint32(4);
+    var s = hi >>> 31, ex = (hi >>> 20) & 0x7ff;
+    var N = (BigInt(hi & 0xfffff) << 32n) | BigInt(lo);
+    if (ex === 0) return { s: s, N: N, E: -1074 };
+    return { s: s, N: N | (1n << 52n), E: ex - 1075 };
+  }
+  /** 정확한 값 (−1)^s·N·2^E를 포맷 f로 반올림(RNE). G·R·S는 버린 첫째·둘째 비트와 나머지의 OR */
+  function roundExact(s, N, E, f) {
+    var g = 0, r = 0, st = 0, inexact = false;
+    if (N === 0n) return pack(s, 0n, f.emin - f.m, f, { g: 0, r: 0, st: 0, inexact: false, up: false });
+    var t = E + bitLen(N) - 1;                 // 맨 윗 비트의 지수
+    var q = Math.max(t, f.emin) - f.m;         // 결과 가수 LSB의 지수(비정규 영역에서는 emin−m에 고정)
+    var sh = q - E, M, up = false;
+    if (sh <= 0) M = N << BigInt(-sh);
+    else {
+      M = N >> BigInt(sh);
+      var rem = N - (M << BigInt(sh)), half = 1n << BigInt(sh - 1);
+      g = rem >= half ? 1 : 0;
+      r = sh >= 2 ? Number((rem >> BigInt(sh - 2)) & 1n) : 0;
+      st = sh >= 3 && (rem & ((1n << BigInt(sh - 2)) - 1n)) !== 0n ? 1 : 0;
+      inexact = rem !== 0n;
+      if (rem > half || (rem === half && (M & 1n) === 1n)) { M += 1n; up = true; }
+    }
+    return pack(s, M, q, f, { g: g, r: r, st: st, inexact: inexact, up: up, sh: sh });
+  }
+  /** M·2^q → 비트 필드. 넘침은 ieee면 ±Inf, 그 밖은 ±최대값으로 포화 */
+  function pack(s, M, q, f, rb) {
+    if (M === 1n << BigInt(f.m + 1)) { M >>= 1n; q += 1; }
+    var sig = Number(M), cls, expF, man;
+    if (M === 0n) { cls = "zero"; expF = 0; man = 0; }
+    else if (M < (1n << BigInt(f.m))) { cls = "subnormal"; expF = 0; man = sig; }
+    else { cls = "normal"; expF = q + f.m + f.bias; man = sig - Math.pow(2, f.m); }
+    var value = sig * Math.pow(2, q), over = false;
+    if (cls === "normal" && (q + f.m > f.emax || value > f.max)) {
+      over = true;
+      if (f.kind === "ieee") { cls = "inf"; expF = Math.pow(2, f.e) - 1; man = 0; value = Infinity; M = 0n; }
+      else { cls = "normal"; value = f.max; expF = f.emax + f.bias; man = Math.round((f.max / Math.pow(2, f.emax) - 1) * Math.pow(2, f.m)); M = BigInt(Math.pow(2, f.m) + man); q = f.emax - f.m; }
+    }
+    var bits = s * Math.pow(2, f.e + f.m) + expF * Math.pow(2, f.m) + man;
+    return { s: s, M: M, q: q, cls: cls, expF: expF, man: man, bits: bits, value: s ? -value : value, over: over, rb: rb };
+  }
+  /** double x → 포맷 f (비트 단위 RNE). NaN·Inf 입력 처리 포함 */
+  function encode(x, f) {
+    if (x !== x) {
+      if (f.kind === "none") return pack(0, BigInt(Math.pow(2, f.m) * 2 - 1), f.emax - f.m, f, { nan: true });  // NaN 없음 → 최대값(표시용)
+      var expN = Math.pow(2, f.e) - 1, manN = f.kind === "fn" ? Math.pow(2, f.m) - 1 : Math.pow(2, f.m - 1);
+      return { s: 0, cls: "nan", expF: expN, man: manN, bits: expN * Math.pow(2, f.m) + manN, value: NaN, over: false, rb: {} };
+    }
+    if (!isFinite(x)) {
+      var sI = x < 0 ? 1 : 0;
+      if (f.kind === "ieee") return { s: sI, cls: "inf", expF: Math.pow(2, f.e) - 1, man: 0, bits: sI * Math.pow(2, f.e + f.m) + (Math.pow(2, f.e) - 1) * Math.pow(2, f.m), value: x, over: true, rb: {} };
+      var mx = encode(sI ? -f.max : f.max, f); mx.over = true; return mx;
+    }
+    var d = decomp(x);
+    return roundExact(d.s, d.N, d.E, f);
+  }
+  /** 비트 패턴 → 값과 분류 */
+  function decodeBits(bits, f) {
+    var P = Math.pow(2, f.m), s = Math.floor(bits / Math.pow(2, f.e + f.m)) % 2;
+    var expF = Math.floor(bits / P) % Math.pow(2, f.e), man = bits % P, top = Math.pow(2, f.e) - 1, v, cls;
+    if (f.kind === "ieee" && expF === top) { v = man === 0 ? Infinity : NaN; cls = man === 0 ? "inf" : "nan"; }
+    else if (f.kind === "fn" && expF === top && man === P - 1) { v = NaN; cls = "nan"; }
+    else if (expF === 0) { v = man * Math.pow(2, f.emin - f.m); cls = man === 0 ? "zero" : "subnormal"; }
+    else { v = (P + man) * Math.pow(2, expF - f.bias - f.m); cls = "normal"; }
+    return { s: s, expF: expF, man: man, cls: cls, value: s ? -v : v };
+  }
+  /** 빠른 RNE(double 연산만, 누산 시뮬레이터용). 2의 거듭제곱으로 나누기는 정확하므로 roundExact와 같은 답을 낸다(회귀 검사) */
+  var P2 = new Float64Array(2201); for (var _i = 0; _i < 2201; _i++) P2[_i] = Math.pow(2, _i - 1100);
+  function rq(x, f) {
+    if (x === 0 || !isFinite(x)) return x;
+    var a = x < 0 ? -x : x, E = Math.floor(Math.log2(a));
+    if (P2[E + 1100] > a) E--; else if (P2[E + 1101] <= a) E++;
+    var q = P2[(E > f.emin ? E : f.emin) - f.m + 1100], n = a / q, r = Math.floor(n), d = n - r;
+    if (d > 0.5 || (d === 0.5 && r % 2 === 1)) r += 1;
+    var v = r * q;
+    if (v > f.max) v = f.kind === "ieee" ? Infinity : f.max;
+    return x < 0 ? -v : v;
+  }
+  /** 양의 유한 값 전부(작은 포맷용) */
+  function allPositive(f) {
+    var out = [], n = Math.pow(2, f.e + f.m);
+    for (var b = 1; b < n; b++) { var d = decodeBits(b, f); if (d.cls === "normal" || d.cls === "subnormal") out.push(d.value); }
+    return out;
+  }
+  /** x 근처에서 이웃한 두 수의 상대 간격(ulp/x) */
+  function relSpacing(x, f) {
+    if (!(x > 0) || x > f.max) return NaN;
+    var E = Math.max(Math.floor(Math.log2(x)), f.emin);
+    return Math.pow(2, E - f.m) / x;
+  }
+  /** 정확한 덧셈: (s1,N1,E1)+(s2,N2,E2) */
+  function exactAdd(s1, N1, E1, s2, N2, E2) {
+    if (N1 === 0n) return { s: s2, N: N2, E: E2 };
+    if (N2 === 0n) return { s: s1, N: N1, E: E1 };
+    var e = Math.min(E1, E2), a = N1 << BigInt(E1 - e), b = N2 << BigInt(E2 - e);
+    var v = (s1 ? -a : a) + (s2 ? -b : b);
+    if (v === 0n) return { s: s1 && s2 ? 1 : 0, N: 0n, E: e };
+    return { s: v < 0n ? 1 : 0, N: v < 0n ? -v : v, E: e };
+  }
+  /* /model:fp */
+
+  /* model:fma */
+  /** FMA 단계 추적: a·b + c를 포맷 f에서. 곱은 정확히(2p비트), 정렬·덧셈도 정확히, 반올림은 한 번(RNE).
+     비교용 비융합(곱 → 반올림 → 덧셈 → 반올림)도 계산한다. */
+  function fmaTrace(a, b, c, f) {
+    var A = encode(a, f), B = encode(b, f), C = encode(c, f), p = f.m + 1;
+    var fin = A.cls !== "nan" && B.cls !== "nan" && C.cls !== "nan" && A.cls !== "inf" && B.cls !== "inf" && C.cls !== "inf";
+    if (!fin) { var v = A.value * B.value + C.value; return { special: true, A: A, B: B, C: C, R: encode(v, f), U: encode(rq(A.value * B.value, f) + C.value, f), p: p }; }
+    var Mp = A.M * B.M, qp = A.q + B.q, sp = A.s ^ B.s;
+    var S = exactAdd(sp, Mp, qp, C.s, C.M, C.q);
+    var R = roundExact(S.s, S.N, S.E, f);
+    var P1 = roundExact(sp, Mp, qp, f);
+    var U = P1.cls === "inf" ? encode(P1.value + C.value, f) : (function () { var S2 = exactAdd(P1.s, P1.M, P1.q, C.s, C.M, C.q); return roundExact(S2.s, S2.N, S2.E, f); })();
+    var ep = Mp === 0n ? -Infinity : qp + bitLen(Mp) - 1;      // 곱의 맨 윗 비트 지수
+    var ec = C.M === 0n ? -Infinity : C.q + bitLen(C.M) - 1;   // c의 맨 윗 비트 지수
+    var topE = Math.max(ep, ec) + 1;                           // 자리올림 한 칸 포함
+    var sTop = S.N === 0n ? -Infinity : S.E + bitLen(S.N) - 1;
+    var lzc = isFinite(sTop) ? topE - sTop : 0;                 // 정규화에서 왼쪽으로 미는 칸 수(0이면 자리올림)
+    var shift = isFinite(ep) && isFinite(ec) ? ep - ec : 0;     // c를 오른쪽으로 미는 칸 수(음수면 곱을 민다)
+    var cancel = isFinite(sTop) && sTop < Math.max(ep, ec) - 1;  // 큰 상쇄
+    return { special: false, A: A, B: B, C: C, p: p, Mp: Mp, qp: qp, sp: sp, ep: ep, ec: ec, shift: shift, S: S, sTop: sTop, topE: topE, lzc: lzc, cancel: cancel, R: R, P1: P1, U: U };
+  }
+  /** 지수 기준 창 [hiE ≥ … ≥ loE]에 정수 N·2^E의 비트를 문자열로(창 밖 아래 비트는 버림 표시용 플래그) */
+  function bitsWindow(N, E, hiE, loE) {
+    var out = "", lost = false;
+    var top = E + bitLen(N) - 1;   // 맨 윗 비트 위와 LSB 아래는 빈칸
+    for (var k = hiE; k >= loE; k--) { var i = k - E; out += i < 0 || k > top ? " " : ((N >> BigInt(i)) & 1n ? "1" : "0"); }
+    if (N !== 0n && E < loE) { var below = N & ((1n << BigInt(Math.min(loE - E, 4000))) - 1n); lost = below !== 0n; }
+    return { s: out, lost: lost };
+  }
+  /* /model:fma */
+
+  /* model:area */
+  /** 곱셈-누산(MAC) 1개의 면적 모델(게이트 등가 단위 u). 가수 m, 지수 e, 누산 가수 ma, 내적 길이 L.
+     곱셈기 (m+1)², 지수 덧셈 3e, 곱마다 정렬 시프터 0.35·w·log₂w, 덧셈·정규화·반올림 w(2+0.5·log₂w)를 L개가 나눠 씀, 입력 래치 2(1+e+m).
+     w = max(2(m+1), ma+1) + 3(G·R·S). 정수(e=0)는 정렬·정규화 없이 덧셈기만. */
+  function macArea(m, e, ma, L) {
+    var p = m + 1, mult = p * p, latch = 2 * (1 + e + m);
+    if (e === 0) { var wi = ma; return { mult: mult, exp: 0, align: 0, fin: (wi * 2) / L, latch: latch, w: wi, total: mult + (wi * 2) / L + latch }; }
+    var w = Math.max(2 * p, ma + 1) + 3, lg = Math.log2(w);
+    var exp = 3 * e, align = 0.35 * w * lg, fin = (w * (2 + 0.5 * lg)) / L;
+    return { mult: mult, exp: exp, align: align, fin: fin, latch: latch, w: w, total: mult + exp + align + fin + latch };
+  }
+  var AREA_FMTS = [
+    { k: "fp64", name: "FP64", m: 52, e: 11 }, { k: "fp32", name: "FP32", m: 23, e: 8 }, { k: "tf32", name: "TF32", m: 10, e: 8 },
+    { k: "fp16", name: "FP16", m: 10, e: 5 }, { k: "bf16", name: "BF16", m: 7, e: 8 }, { k: "e4m3", name: "E4M3", m: 3, e: 4 },
+    { k: "e5m2", name: "E5M2", m: 2, e: 5 }, { k: "e2m1", name: "E2M1", m: 1, e: 2 }, { k: "int8", name: "INT8", m: 7, e: 0 },
+  ];
+  /** acc: 'wide'(FP는 FP32 누산·FP64는 FP64, INT8은 32비트) | 'same'(입력과 같은 폭으로 누산) */
+  function areaOf(fm, acc, L) {
+    var ma = fm.e === 0 ? (acc === "wide" ? 32 : 16) : acc === "wide" ? (fm.m > 23 ? fm.m : 23) : fm.m;
+    return macArea(fm.m, fm.e, ma, L);
+  }
+  var A_FP32 = macArea(23, 8, 23, 1).total;      // 기준: 벡터 레인 FP32 FMA 1개
+  var E_FP32_PJ = 0.8;                            // 에너지 표: FP32 FMA 약 0.8 pJ
+  function areaRatio(fm, acc, L) { var a = areaOf(fm, acc, L); return { a: a, rel: a.total / A_FP32, lanes: A_FP32 / a.total, pJ: E_FP32_PJ * a.total / A_FP32 }; }
+  /* /model:area */
+
+  /* model:perf */
+  /** GX-1 정밀도별 피크와 연산 전력. perSM = SM 하나의 클럭당 FMA(MAC) 수. pJ = 에너지 표(없는 칸은 면적 모델 추정, est 표시).
+     rf = FMA 하나가 나눠 내는 레지스터 파일 에너지: 벡터는 읽기 3 + 쓰기 1 = 4 × 0.5 pJ, 텐서 코어는 클럭마다 A·B 타일 64워드(32 pJ)를 클럭당 FMA 수로 나눔. */
+  var GX = { sm: 144, f: 1.6, rfWord: 0.5, tcWordsPerClk: 64 };
+  var PERF = [
+    { k: "fp64", name: "FP64", unit: "vec", perSM: 64, pJ: 3.0, est: true },
+    { k: "fp32", name: "FP32", unit: "vec", perSM: 128, pJ: 0.8 },
+    { k: "tf32", name: "TF32", unit: "tc", perSM: 4 * 256, pJ: 0.27, est: true },
+    { k: "bf16", name: "BF16", unit: "tc", perSM: 4 * 512, pJ: 0.2 },
+    { k: "fp8", name: "FP8", unit: "tc", perSM: 4 * 1024, pJ: 0.1 },
+    { k: "int8", name: "INT8", unit: "tc", perSM: 4 * 1024, pJ: 0.05 },
+    { k: "fp4", name: "FP4", unit: "tc", perSM: 4 * 2048, pJ: 0.07, est: true },
+  ];
+  /** 클럭 → 전압(GX-1 표의 세 점 1.2/0.65, 1.6/0.75, 1.8/0.85를 잇는 꺾은선) */
+  function vOf(fGHz) {
+    var pts = [[1.2, 0.65], [1.6, 0.75], [1.8, 0.85]];
+    if (fGHz <= 1.6) return 0.65 + (fGHz - 1.2) * (0.1 / 0.4);
+    return 0.75 + (fGHz - 1.6) * (0.1 / 0.2);
+  }
+  function perfRow(P, sm, fGHz, withRF) {
+    var fma = sm * P.perSM * fGHz * 1e9;                  // FMA/s
+    var rf = P.unit === "vec" ? 4 * GX.rfWord : (GX.tcWordsPerClk * GX.rfWord) / (P.perSM / 4);
+    var vs = Math.pow(vOf(fGHz) / 0.75, 2);               // 에너지 ∝ V²
+    var ePer = (P.pJ + (withRF ? rf : 0)) * vs;           // pJ/FMA
+    var W = fma * ePer * 1e-12;
+    var tflops = (2 * fma) / 1e12;
+    return { tflops: tflops, W: W, eff: tflops / W, ePer: ePer, rf: rf };
+  }
+  /* /model:perf */
+
+  /* model:acc */
+  /** 길이 K 내적: 입력을 inF로 반올림, 곱은 정확(BF16·FP16·FP8 곱은 FP32 가수 24비트 안에 들어간다)해 rq(·, FP32),
+     누산기 mode: 'bf16' | 'fp16' | 'fp32' | 'blk'(BF16 곱을 FP32로 32개씩 묶어 더하고 다시 FP32 합; 결과적으로 FP32 누산과 같은 등급) | 'bf16blk'(32개 묶음은 BF16, 묶음 합은 FP32).
+     오차 = |누산 − 기준| / Σ|xᵢyᵢ|. 기준은 double 합. */
+  function seeded(seed) { var a = seed >>> 0; return function () { a = (a + 0x6d2b79f5) | 0; var t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  function gauss(R) { var u = 1 - R(), v = R(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+  function dotRun(K, dist, mode, inF, seed, marks) {
+    var R = seeded(seed), acc = 0, blk = 0, ref = 0, absSum = 0, F32 = FMT.fp32, out = [], mi = 0;
+    var aF = mode === "bf16" || mode === "bf16blk" ? FMT.bf16 : mode === "fp16" ? FMT.fp16 : F32;
+    for (var i = 0; i < K; i++) {
+      var x = dist === "pos" ? R() : gauss(R), y = dist === "pos" ? R() : gauss(R);
+      x = rq(x, inF); y = rq(y, inF);
+      var pr = rq(x * y, F32);
+      ref += pr; absSum += Math.abs(pr);
+      if (mode === "bf16blk") { blk = rq(blk + pr, aF); if ((i & 31) === 31) { acc = rq(acc + blk, F32); blk = 0; } }
+      else acc = rq(acc + pr, aF);
+      if (marks && i + 1 === marks[mi]) { var a2 = mode === "bf16blk" ? rq(acc + blk, F32) : acc; out.push([i + 1, Math.abs(a2 - ref) / absSum]); mi++; }
+    }
+    if (mode === "bf16blk") acc = rq(acc + blk, F32);
+    return { acc: acc, ref: ref, err: Math.abs(acc - ref) / absSum, marks: out };
+  }
+  /** 오차–K 곡선: 한 번의 긴 내적에서 앞부분 K개 합의 오차를 표시점마다 읽고(접두 합), trials번 평균 */
+  function accCurve(dist, mode, inF, Ks, trials) {
+    var sum = Ks.map(function () { return 0; });
+    for (var t = 0; t < trials; t++) { var r = dotRun(Ks[Ks.length - 1], dist, mode, inF, 1000 + 7919 * t, Ks); r.marks.forEach(function (p, i) { sum[i] += p[1]; }); }
+    return Ks.map(function (K, i) { return [K, Math.max(sum[i] / trials, 1e-9)]; });
+  }
+  /* /model:acc */
+
+  /* model:sfu */
+  /** 특수 함수 유닛 근사: 구간 [lo,hi)를 2^t개 조각으로 나눈 표 + 조각마다 deg차 다항식(체비쇼프 점 보간), 선택적으로 뉴턴–랩슨 1회, 결과는 FP32로 반올림. */
+  var SFU = {
+    rcp: { name: "역수 1/x", lo: 1, hi: 2, f: function (x) { return 1 / x; }, nr: function (x, y) { return y * (2 - x * y); } },
+    rsqrt: { name: "역제곱근 1/√x", lo: 1, hi: 4, f: function (x) { return 1 / Math.sqrt(x); }, nr: function (x, y) { return y * (1.5 - 0.5 * x * y * y); } },
+    exp2: { name: "2^x (소수부)", lo: 0, hi: 1, f: function (x) { return Math.pow(2, x); }, nr: null },
+  };
+  function sfuBuild(kind, t, deg) {
+    var F = SFU[kind], n = Math.pow(2, t), hS = (F.hi - F.lo) / n, segs = [];
+    for (var i = 0; i < n; i++) {
+      var a = F.lo + i * hS, xs = [], ys = [];
+      for (var j = 0; j <= deg; j++) { var u = (1 - Math.cos(((2 * j + 1) * Math.PI) / (2 * (deg + 1)))) / 2; xs.push(a + u * hS); ys.push(F.f(a + u * hS)); }
+      // 뉴턴 분할 차분 → u = x − a 에 대한 거듭제곱 계수
+      var dd = ys.slice();
+      for (var k = 1; k <= deg; k++) for (var j2 = deg; j2 >= k; j2--) dd[j2] = (dd[j2] - dd[j2 - 1]) / (xs[j2] - xs[j2 - k]);
+      var c = [dd[deg]];
+      for (var k2 = deg - 1; k2 >= 0; k2--) {           // c(u) ← c(u)·(u − (xs[k2]−a)) + dd[k2]
+        var r = xs[k2] - a, nc = new Array(c.length + 1).fill(0);
+        for (var q = 0; q < c.length; q++) { nc[q + 1] += c[q]; nc[q] -= c[q] * r; }
+        nc[0] += dd[k2]; c = nc;
+      }
+      segs.push({ a: a, c: c });
+    }
+    return { kind: kind, t: t, deg: deg, h: hS, segs: segs };
+  }
+  function sfuEval(T, x, nr) {
+    var F = SFU[T.kind], i = Math.min(T.segs.length - 1, Math.floor((x - F.lo) / T.h)), S = T.segs[i], u = x - S.a, y = 0;
+    for (var k = S.c.length - 1; k >= 0; k--) y = y * u + S.c[k];
+    if (nr && F.nr) y = F.nr(x, y);
+    return rq(y, FMT.fp32);
+  }
+  function sfuErr(kind, t, deg, nr, nS) {
+    var T = sfuBuild(kind, t, deg), F = SFU[kind], N = nS || 1536, maxE = 0, pts = [];
+    for (var i = 0; i < N; i++) {
+      var x = F.lo + ((i + 0.5) / N) * (F.hi - F.lo), ex = F.f(x), e = Math.abs(sfuEval(T, x, nr) - ex) / ex;
+      if (e > maxE) maxE = e; pts.push([x, Math.max(e, 1e-12)]);
+    }
+    var romBits = Math.pow(2, t) * (deg + 1) * 24;
+    return { maxE: maxE, bits: -Math.log2(Math.max(maxE, 1e-30)), pts: pts, romBits: romBits };
+  }
+  /* /model:sfu */
+
+  /* model:quant */
+  /** INT 양자화: 대칭, 스케일 s, 정수 범위 ±(2^(b−1)−1), 최근접 짝수 반올림. 데이터는 정규분포 + 이상치 */
+  function qData(n, outFrac, outMag, seed) {
+    var R = seeded(seed), xs = new Float64Array(n);
+    for (var i = 0; i < n; i++) xs[i] = R() < outFrac ? (R() < 0.5 ? -1 : 1) * outMag * (0.6 + 0.4 * R()) : gauss(R);
+    return xs;
+  }
+  function rne(v) { var r = Math.floor(v), d = v - r; return d > 0.5 || (d === 0.5 && r % 2 !== 0) ? r + 1 : r; }
+  function qErr(xs, s, bits) {
+    var qm = Math.pow(2, bits - 1) - 1, se = 0, sx = 0, clip = 0;
+    for (var i = 0; i < xs.length; i++) {
+      var v = rne(xs[i] / s); if (v > qm) { v = qm; clip++; } else if (v < -qm) { v = -qm; clip++; }
+      var d = v * s - xs[i]; se += d * d; sx += xs[i] * xs[i];
+    }
+    return { sqnr: 10 * Math.log10(sx / Math.max(se, 1e-300)), clip: clip / xs.length, mse: se / xs.length };
+  }
+  function absMax(xs) { var m = 0; for (var i = 0; i < xs.length; i++) m = Math.max(m, Math.abs(xs[i])); return m; }
+  function pctAbs(xs, p) { var a = Array.from(xs, Math.abs).sort(function (x, y) { return x - y; }); return a[Math.min(a.length - 1, Math.floor(p * a.length))]; }
+  function qScale(method, xs, bits) {
+    var qm = Math.pow(2, bits - 1) - 1, mx = absMax(xs);
+    if (method === "max") return mx / qm;
+    if (method === "pct") return pctAbs(xs, 0.999) / qm;
+    var best = mx / qm, bm = Infinity;                       // MSE 최소: 클리핑 경계를 최대값의 2–100 % 사이에서 탐색
+    for (var k = 1; k <= 100; k++) { var s = (mx * k) / 100 / qm, e = qErr(xs, s, bits).mse; if (e < bm) { bm = e; best = s; } }
+    return best;
+  }
+  /** 비교: 텐서 하나에 스케일 하나를 둔 FP8 E4M3(최대값을 448에 맞춤) */
+  function fp8Err(xs) {
+    var s = absMax(xs) / FMT.e4m3.max, se = 0, sx = 0;
+    for (var i = 0; i < xs.length; i++) { var d = rq(xs[i] / s, FMT.e4m3) * s - xs[i]; se += d * d; sx += xs[i] * xs[i]; }
+    return 10 * Math.log10(sx / Math.max(se, 1e-300));
+  }
+  /* /model:quant */
+
+  /* model:parse */
+  /** 입력 식 해석: 숫자, + − × ÷, ^, 괄호, 1e-5, inf, nan. eval을 쓰지 않는다 */
+  function parseNum(str) {
+    const s = String(str).replace(/\s+/g, "").replace(/[−–]/g, "-").replace(/×/g, "*").replace(/÷/g, "/");
+    let i = 0;
+    const peek = () => s[i];
+    function atom() {
+      if (peek() === "(") { i++; const v = expr(); if (s[i++] !== ")") throw new Error("paren"); return v; }
+      const low = s.slice(i).toLowerCase();
+      if (low.startsWith("inf")) { i += 3; return Infinity; }
+      if (low.startsWith("nan")) { i += 3; return NaN; }
+      const m = /^(\d+\.?\d*|\.\d+)(e[+-]?\d+)?/i.exec(s.slice(i));
+      if (!m) throw new Error("num");
+      i += m[0].length; return parseFloat(m[0]);
+    }
+    function factor() { if (peek() === "-") { i++; return -factor(); } if (peek() === "+") { i++; return factor(); } const b = atom(); if (peek() === "^") { i++; return Math.pow(b, factor()); } return b; }
+    function term() { let v = factor(); while (peek() === "*" || peek() === "/") { const o = s[i++], r = factor(); v = o === "*" ? v * r : v / r; } return v; }
+    function expr() { let v = term(); while (peek() === "+" || peek() === "-") { const o = s[i++], r = term(); v = o === "+" ? v + r : v - r; } return v; }
+    const v = expr(); if (i !== s.length) throw new Error("trail"); return v;
+  }
+  /* /model:parse */
+
+  /* ------------------------------------------------------------ 공통 서식 */
+  const SUP = { "-": "⁻", 0: "⁰", 1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶", 7: "⁷", 8: "⁸", 9: "⁹" };
+  const sup = (n) => String(n).split("").map((c) => SUP[c] || c).join("");
+  function fmtV(v, d, noPow) {
+    if (v !== v) return "NaN";
+    if (!isFinite(v)) return v > 0 ? "+Inf" : "−Inf";
+    if (v === 0) return "0";
+    const a = Math.abs(v), l2 = Math.log2(a);
+    let s = a >= 1e-4 && a < 1e7 ? String(Number(v.toPrecision(d || 9))) : v.toExponential((d || 9) - 3).replace(/\.?0+e/, "e");
+    s = s.replace("-", "−").replace("e+", "e");
+    if (!noPow && Number.isInteger(l2) && Math.abs(l2) > 3) s += " (" + (v < 0 ? "−" : "") + "2" + sup(l2) + ")";
+    return s;
+  }
+  const fmtE = (e) => (e === 0 ? "0" : e < 1e-3 ? e.toExponential(1).replace("e-", "×10⁻").replace(/⁻(\d+)/, (m, d) => "⁻" + sup(d)) : (e * 100).toPrecision(3) + " %");
+  const CLS = { normal: "정규수", subnormal: "비정규수", zero: "0", inf: "무한대", nan: "NaN" };
+  const FCOL = (P) => ({ fp32: P.dim, tf32: P.clock, fp16: P.accent, bf16: P.accent2, e5m2: P.tensor, e4m3: P.warn, e2m1: P.bad });
+  const fontM = (px) => GP.font(px, 400, true);
+
+  /* ================================================================ 1. 비트 배치 탐색기 */
+  (function () {
+    const row = $("bits-row"); if (!row) return;
+    const inp = $("bits-x");
+    let st = { f: FMT.fp32, x: 0.1, enc: null };
+    const fSel = GP.seg("bits-f", () => fromInput());
+    const cv = GP.canvas($("bits-cv"), draw, { height: 134 });
+    function fromInput() {
+      let x;
+      try { x = parseNum(inp.value); inp.style.borderColor = ""; } catch (e) { inp.style.borderColor = "var(--bad)"; return; }
+      st.f = FMT[fSel()]; st.x = x; st.enc = encode(x, st.f); render();
+    }
+    function fromBits(b) {
+      const d = decodeBits(b, st.f);
+      st.x = d.value; st.enc = Object.assign({}, d, { bits: b, over: false });
+      inp.value = d.value !== d.value ? "nan" : String(d.value);
+      inp.style.borderColor = ""; render();
+    }
+    function bitAt(b, k) { return Math.floor(b / Math.pow(2, k)) % 2; }
+    function render() {
+      const f = st.f, E = st.enc, n = f.bits;
+      row.innerHTML = "";
+      for (let k = n - 1; k >= 0; k--) {
+        const btn = document.createElement("button");
+        const kind = k === n - 1 ? "s" : k >= f.m ? "e" : "m", v = bitAt(E.bits, k);
+        btn.className = kind + (v ? " one" : ""); btn.textContent = v; btn.type = "button";
+        btn.title = (kind === "s" ? "부호" : kind === "e" ? "지수" : "가수") + " 비트 " + k;
+        btn.addEventListener("click", () => fromBits(v ? E.bits - Math.pow(2, k) : E.bits + Math.pow(2, k)));
+        row.appendChild(btn);
+        if (k === n - 1 || k === f.m) { const g = document.createElement("span"); g.className = "gap"; row.appendChild(g); }
+      }
+      const expS = GP.bin(E.expF, f.e), manS = GP.bin(E.man, f.m);
+      const eu = E.cls === "subnormal" || E.cls === "zero" ? f.emin : E.expF - f.bias;
+      let field = "부호 " + E.s + " │ 지수 " + expS + " (" + E.expF + (E.cls === "normal" ? " − " + f.bias + " = " + eu : "") + ") │ 가수 " + manS;
+      if (E.cls === "normal") field += " → 1." + manS + "₂ × 2" + sup(eu);
+      else if (E.cls === "subnormal") field += " → 0." + manS + "₂ × 2" + sup(f.emin);
+      $("bits-field").textContent = field;
+      const hexW = Math.ceil(n / 4);
+      GP.stat("bits-hex", "0x" + E.bits.toString(16).toUpperCase().padStart(hexW, "0"));
+      GP.stat("bits-val", fmtV(E.value, f.m > 10 ? 10 : 7));
+      const x = st.x, err = isFinite(x) && x !== 0 && isFinite(E.value) ? Math.abs(E.value - x) / Math.abs(x) : NaN;
+      GP.stat("bits-err", err !== err ? "—" : err === 0 ? "0 (정확)" : fmtE(err) + (err > f.u * 1.0000001 && E.cls !== "subnormal" && !E.over ? "" : ""));
+      let cls = CLS[E.cls] || E.cls;
+      if (E.over) cls = f.kind === "ieee" ? "넘침 → ±Inf" : "넘침 → 최대값 포화";
+      else if (E.rb && E.rb.inexact && E.cls !== "zero") cls += E.rb.up ? " (올림)" : " (내림)";
+      else if (E.cls === "zero" && x !== 0 && isFinite(x)) cls = "언더플로 → 0";
+      GP.stat("bits-cls", cls);
+      const ulp = E.cls === "normal" ? Math.pow(2, eu - f.m) : f.minSub;
+      GP.stat("bits-ulp", E.cls === "inf" || E.cls === "nan" ? "—" : "2" + sup(Math.round(Math.log2(ulp))) + (E.value ? " (상대 " + fmtE(ulp / Math.abs(E.value)) + ")" : ""));
+      GP.stat("bits-rng", fmtV(f.max, 5, true) + " / " + fmtV(f.minNormal, 4, true) + " / " + fmtV(f.minSub, 4, true));
+      cv.redraw();
+    }
+    function draw(ctx, w, h) {
+      const P = GP.palette(), f = st.f, E = st.enc; if (!E) return;
+      const sgn = Math.pow(2, f.e + f.m), ab = E.bits % sgn, top = f.kind === "ieee" ? (Math.pow(2, f.e) - 1) * Math.pow(2, f.m) : sgn - (f.kind === "fn" ? 1 : 0);
+      if (E.cls === "nan" || E.cls === "inf") { GP.text(ctx, E.cls === "nan" ? "NaN: 수직선에 놓을 수 없다" : "무한대: 최대값 " + fmtV(f.max, 5) + "보다 큰 입력", w / 2, h / 2, { align: "center", color: P.dim, size: 13 }); return; }
+      const v = Math.abs(E.value), lo = ab > 0 ? decodeBits(ab - 1, f).value : 0, hiB = ab + 1 < top ? decodeBits(ab + 1, f) : null, hi = hiB && isFinite(hiB.value) ? hiB.value : v + (v - lo);
+      const x = Math.abs(st.x), a = lo - (hi - lo) * 0.08, b = hi + (hi - lo) * 0.08, X = (u) => 30 + ((u - a) / (b - a)) * (w - 60), y0 = 52;
+      ctx.strokeStyle = P.axis; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(20, y0); ctx.lineTo(w - 20, y0); ctx.stroke();
+      ctx.fillStyle = GP.alpha(P.accent, 0.10); ctx.fillRect(X((lo + v) / 2), y0 - 16, X((v + hi) / 2) - X((lo + v) / 2), 32);
+      [(lo + v) / 2, (v + hi) / 2].forEach((m) => { ctx.setLineDash([3, 3]); ctx.strokeStyle = P.warn; ctx.beginPath(); ctx.moveTo(X(m), y0 - 20); ctx.lineTo(X(m), y0 + 20); ctx.stroke(); ctx.setLineDash([]); });
+      const pts = [[lo, "이전", P.dim], [v, "저장 값", P.accent], [hi, hiB ? "다음" : "", P.dim]];
+      pts.forEach(([u, l, c], i) => {
+        ctx.fillStyle = c; ctx.beginPath(); ctx.arc(X(u), y0, i === 1 ? 6 : 4.5, 0, 7); ctx.fill();
+        GP.text(ctx, l, X(u), y0 + 26, { align: "center", color: c, size: 12 });
+        GP.text(ctx, fmtV(u, 7), X(u), y0 + 42, { align: "center", color: P.dim, size: 11, mono: true });
+      });
+      if (isFinite(x)) {
+        const px = GP.clamp(X(x), 24, w - 24);
+        ctx.strokeStyle = P.text; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(px, y0 - 30); ctx.lineTo(px, y0 + 8); ctx.stroke(); ctx.setLineDash([]);
+        GP.text(ctx, "입력 |x| = " + fmtV(x, 9) + (X(x) !== px ? " (범위 밖)" : ""), GP.clamp(px, 90, w - 90), 14, { align: "center", color: P.text, size: 12 });
+      }
+      GP.text(ctx, "점선 = 중점(반올림 경계), 띠 = 이 값으로 반올림되는 구간", 24, h - 6, { align: "left", color: P.faint, size: 11, baseline: "bottom" });
+    }
+    inp.addEventListener("input", GP.debounce(fromInput, 150));
+    $("bits-pre").addEventListener("click", (e) => { const b = e.target.closest("button[data-v]"); if (!b) return; inp.value = b.dataset.v; fromInput(); });
+    fromInput();
+  })();
+
+  /* ================================================================ 2. 표현 가능 값 분포 */
+  (function () {
+    const el = $("dist-cv"); if (!el) return;
+    const keys = ["fp32", "fp16", "bf16", "e4m3", "e5m2", "e2m1"], strips = ["e2m1", "e4m3", "e5m2"];
+    const vals = {}; strips.forEach((k) => (vals[k] = allPositive(FMT[k])));
+    const on = {}; keys.forEach((k) => { on[k] = $("dist-" + k); on[k].addEventListener("change", () => cv.redraw()); });
+    const rSel = GP.seg("dist-r", () => cv.redraw());
+    GP.stat("dist-n", vals.e2m1.length + " / " + vals.e4m3.length + " / " + vals.e5m2.length);
+    GP.stat("dist-per", "FP16 1024 · BF16 128 · E4M3 8");
+    const cv = GP.canvas(el, (ctx, w, h) => {
+      const P = GP.palette(), C = FCOL(P), wide = rSel() === "wide";
+      const xr = wide ? [1e-46, 1e39] : [1e-8, 1e5];
+      const sh = strips.filter((k) => on[k].checked), top = 8 + sh.length * 22;
+      const box = { x: 62, y: top + 14, w: w - 80, h: h - top - 14 - 46 };
+      const N = wide ? 5000 : 1600, lx0 = Math.log10(xr[0]), lx1 = Math.log10(xr[1]);
+      const series = keys.filter((k) => on[k].checked).map((k) => {
+        const d = []; for (let i = 0; i <= N; i++) { const x = Math.pow(10, lx0 + ((lx1 - lx0) * i) / N); d.push([x, relSpacing(x, FMT[k])]); }
+        return { data: d, color: C[k], width: k === "fp32" ? 1.4 : 1.8, label: FMT[k].name };
+      });
+      const ch = GP.chart(ctx, box, { x: xr, y: [on.fp32.checked ? 1e-8 : 1e-4, 2], logX: true, logY: true, xLabel: "값 x", yLabel: "상대 간격 ulp/x", series, legend: "br", hover: { all: true },
+        onHover: (hv) => GP.stat("dist-x", hv ? fmtV(hv.x, 3) : "—") });
+      sh.forEach((k, j) => {
+        const y = 8 + j * 22 + 10;
+        ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(box.x, y); ctx.lineTo(box.x + box.w, y); ctx.stroke();
+        GP.text(ctx, FMT[k].name.replace(/^FP\d /, ""), box.x - 6, y, { align: "right", baseline: "middle", size: 11, color: C[k] });
+        ctx.strokeStyle = C[k]; ctx.lineWidth = 1.2;
+        vals[k].forEach((v) => { if (v < xr[0] || v > xr[1]) return; const px = ch.X(v); ctx.beginPath(); ctx.moveTo(px, y - 7); ctx.lineTo(px, y + 7); ctx.stroke(); });
+      });
+    }, { height: (w) => (w < 520 ? 380 : 420), hover: true });
+  })();
+
+  /* ================================================================ 3. 곱셈기 면적 모델 */
+  (function () {
+    const el = $("area-cv"); if (!el) return;
+    const fSel = GP.seg("area-f", upd), aSel = GP.seg("area-acc", upd), lSel = GP.seg("area-L", upd);
+    const TAB = { fp32: 0.8, bf16: 0.2, e4m3: 0.1, e5m2: 0.1, int8: 0.05 };
+    function upd() {
+      const fm = AREA_FMTS.find((x) => x.k === fSel()), L = Number(lSel()), r = areaRatio(fm, aSel(), L), p = fm.e === 0 ? 8 : fm.m + 1;
+      const mr = 576 / (p * p);
+      GP.stat("area-mult", p + "×" + p + " = " + p * p + " → " + (mr >= 1 ? "1/" + mr.toFixed(1) : mr < 1 ? (1 / mr).toFixed(1) + "배" : ""));
+      GP.stat("area-rel", Math.round(r.a.total) + " u / " + (r.rel >= 1 ? r.rel.toFixed(2) + "배" : "1/" + (1 / r.rel).toFixed(1)));
+      GP.stat("area-lanes", r.lanes.toFixed(2) + "개");
+      GP.stat("area-pj", r.pJ.toFixed(3) + " pJ / " + (TAB[fm.k] != null ? TAB[fm.k] + " pJ" : "표에 없음"));
+      cv.redraw();
+    }
+    const cv = GP.canvas(el, (ctx, w, h) => {
+      const P = GP.palette(), fm = AREA_FMTS.find((x) => x.k === fSel()), L = Number(lSel()), acc = aSel();
+      const narrow = w < 560, gw = narrow ? w : Math.round(w * 0.34), p = fm.e === 0 ? 8 : fm.m + 1;
+      // 부분곱 배열
+      const gh = narrow ? 150 : h - 30, cell = Math.min((gw - 30) / (2 * p), (gh - 40) / p);
+      GP.text(ctx, fm.name + " 부분곱 " + p + " × " + p + " = " + p * p, gw / 2, 16, { align: "center", weight: 700, size: 12 });
+      const right = (gw + (2 * p - 1) * cell) / 2, oy = 30;
+      ctx.fillStyle = GP.alpha(P.compute, 0.85);
+      for (let i = 0; i < p; i++) for (let j = 0; j < p; j++) ctx.fillRect(right - (i + j + 1) * cell + cell * 0.1, oy + i * cell + cell * 0.1, Math.max(1, cell * 0.8), Math.max(1, cell * 0.8));
+      ctx.globalAlpha = 1;
+      // 쌓은 막대
+      const bx = narrow ? 64 : gw + 70, by = narrow ? gh + 26 : 30, bw = w - bx - 60, rows = AREA_FMTS.length, rh = Math.min(26, (h - by - 40) / rows);
+      const cap = 1.25, comps = [["mult", "곱셈기", P.compute], ["exp", "지수", P.ctrl], ["align", "정렬", P.data], ["fin", "덧셈·정규화·반올림 ÷L", P.tensor], ["latch", "입력 래치", P.sram]];
+      const X = (v) => bx + (Math.min(v, cap) / cap) * bw;
+      ctx.strokeStyle = P.grid; [0.25, 0.5, 0.75, 1].forEach((v) => { ctx.beginPath(); ctx.moveTo(X(v), by - 4); ctx.lineTo(X(v), by + rows * rh); ctx.stroke(); GP.text(ctx, String(v), X(v), by + rows * rh + 12, { align: "center", size: 11, color: P.dim, mono: true }); });
+      AREA_FMTS.forEach((F, i) => {
+        const a = areaOf(F, acc, L), y = by + i * rh, sel = F.k === fm.k; let x0 = 0;
+        GP.text(ctx, F.name, bx - 8, y + rh / 2, { align: "right", baseline: "middle", size: 12, weight: sel ? 700 : 400, color: sel ? P.text : P.dim });
+        comps.forEach(([k, , c]) => { const v = a[k] / A_FP32; if (x0 >= cap) { x0 += v; return; } ctx.fillStyle = GP.alpha(c, sel ? 0.95 : 0.55); ctx.fillRect(X(x0), y + 3, Math.max(0, X(x0 + v) - X(x0)), rh - 6); x0 += v; });
+        if (x0 > cap) { ctx.strokeStyle = P.bg; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(X(cap) - 10, y + rh - 2); ctx.lineTo(X(cap) - 4, y + 2); ctx.stroke(); ctx.lineWidth = 1; }
+        GP.text(ctx, (x0 >= 1 ? x0.toFixed(2) + "×" : "1/" + (1 / x0).toFixed(1)), Math.min(X(x0), X(cap)) + 5, y + rh / 2, { align: "left", baseline: "middle", size: 11, mono: true, color: sel ? P.text : P.dim });
+      });
+      let lx = bx, ly = narrow ? by + rows * rh + 30 : h - 26;
+      GP.text(ctx, "막대 길이: FP32 단독 FMA = 1", bx, by - 12, { align: "left", size: 11, color: P.faint, baseline: "middle" });
+      comps.forEach(([, l, c]) => { const tw = GP.textWidth(ctx, l, { size: 11 }) + 26; if (lx + tw > w - 4) { lx = bx; ly += 16; } ctx.fillStyle = c; ctx.fillRect(lx, ly - 9, 10, 10); lx += 14; lx += GP.text(ctx, l, lx, ly - 4, { align: "left", baseline: "middle", size: 11, color: P.dim }) + 12; });
+    }, { height: (w) => (w < 560 ? 540 : 340) });
+    upd();
+  })();
+
+  /* ================================================================ 4. FMA 단계 추적 */
+  (function () {
+    const el = $("fma-cv"); if (!el) return;
+    const NAMES = ["① 입력 해독", "② 가수 곱 (2p비트)", "③ c 정렬", "④ 덧셈", "⑤ 정규화", "⑥ 반올림"];
+    const LAB = ["1 입력", "2 곱 a·b", "3 c 정렬", "4 합", "5 정규화", "6 반올림"];
+    let T = null, stage = 5, timer = 0;
+    const fSel = GP.seg("fma-f", calc);
+    const ins = ["fma-a", "fma-b", "fma-c"].map((id) => $(id));
+    function calc() {
+      let v;
+      try { v = ins.map((x) => parseNum(x.value)); ins.forEach((x) => (x.style.borderColor = "")); } catch (e) { ins.forEach((x) => { try { parseNum(x.value); x.style.borderColor = ""; } catch (er) { x.style.borderColor = "var(--bad)"; } }); return; }
+      T = fmaTrace(v[0], v[1], v[2], FMT[fSel()]); show();
+    }
+    function show() {
+      GP.stat("fma-stage", NAMES[stage]);
+      if (!T) return;
+      if (T.special) { GP.stat("fma-sh", "—"); GP.stat("fma-grs", "특수값(Inf·NaN)"); }
+      else {
+        GP.stat("fma-sh", (T.shift >= 0 ? "c ≫ " + T.shift : "곱 ≫ " + -T.shift) + " / " + (T.lzc > 0 ? "≪ " + T.lzc : T.lzc === 0 ? "자리올림 ≫ 1" : "—"));
+        const rb = T.R.rb || {};
+        GP.stat("fma-grs", rb.sh > 0 ? rb.g + " " + rb.r + " " + rb.st + " → " + (rb.up ? "올림" : rb.inexact ? "내림" : "정확") : "버릴 비트 없음 → 정확");
+      }
+      GP.stat("fma-fused", fmtV(T.R.value, 8) + " <span class=\"t-dim\">" + (T.R.over ? "넘침" : CLS[T.R.cls] || "") + "</span>");
+      GP.stat("fma-unf", fmtV(T.U.value, 8) + (T.U.value !== T.R.value && !(T.U.value !== T.U.value && T.R.value !== T.R.value) ? " <span class=\"t-bad\">≠</span>" : ""));
+      cv.redraw();
+    }
+    const cv = GP.canvas(el, (ctx, w, h) => {
+      const P = GP.palette(); if (!T) return;
+      const f = FMT[fSel()], p = f.m + 1;
+      const lab = (t, y, c) => GP.text(ctx, t, 8, y, { size: 12, weight: 700, color: c || P.text, baseline: "middle", align: "left" });
+      if (T.special) { lab("입력에 Inf 또는 NaN: 데이터패스를 건너뛰는 특수값 경로", 30, P.warn); GP.text(ctx, "FMA = " + fmtV(T.R.value), 8, 60, { align: "left", size: 12, color: P.dim }); return; }
+      const W = 3 * p + 3, hiE = T.topE, loE = hiE - W + 1, x0 = w < 520 ? 66 : 90, cw = Math.max(3.2, Math.min(11, (w - x0 - 12) / W)), fs = Math.max(8, Math.min(12, cw * 1.25));
+      const colX = (k) => x0 + (hiE - k) * cw;
+      const row = (y, N, E, color, opts = {}) => {
+        const s = bitsWindow(N, E, hiE, loE);
+        ctx.font = fontM(fs); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        for (let j = 0; j < s.s.length; j++) {
+          let ch = s.s[j]; const k = hiE - j, inK = opts.keep && k <= opts.keep[0] && k >= opts.keep[1], inG = opts.grs && k < opts.keep[1] && k >= opts.keep[1] - 3;
+          if (inK) { ctx.fillStyle = GP.alpha(P.accent2, 0.18); ctx.fillRect(colX(k), y - 9, cw, 18); }
+          if (inG) { ctx.fillStyle = GP.alpha(P.warn, 0.22); ctx.fillRect(colX(k), y - 9, cw, 18); }
+          if (ch === " " && (inK || inG) && k < E) ch = "0";
+          if (ch === " ") continue;
+          const c = color;
+          ctx.fillStyle = c; ctx.fillText(ch, colX(k) + cw / 2, y);
+        }
+        if (s.lost) GP.text(ctx, "…S", colX(loE) + cw + 2, y, { size: 11, color: P.bad, baseline: "middle", align: "left" });
+      };
+      const A = T.A, B = T.B, C = T.C, sig = (X) => (X.M === 0n ? "0" : X.M.toString(2).padStart(p, "0"));
+      const eOf = (X) => (X.M === 0n ? 0 : X.q + f.m);
+      let y = 16;
+      // 지수 칸 눈금
+      ctx.fillStyle = GP.alpha(P.grid, 0.6);
+      for (let k = hiE; k >= loE; k--) if ((hiE - k) % 4 === 0) ctx.fillRect(colX(k), 76, 1, h - 92);
+      lab(LAB[0], y, stage === 0 ? P.accent : P.text);
+      const dsc = (nm, X) => nm + " = " + (X.s ? "−" : "+") + sig(X).replace(/^(.)/, "$1.") + "₂ × 2" + sup(eOf(X)) + "  (" + fmtV(X.value, 7) + ")";
+      ctx.font = fontM(11);
+      [dsc("a", A), dsc("b", B), dsc("c", C)].forEach((t, i) => GP.text(ctx, t, w < 520 ? 8 : x0, y + 18 + i * 16, { size: w < 520 ? 10 : 12, mono: true, color: P.dim, baseline: "middle", align: "left" }));
+      y += 72;
+      if (stage >= 1) { lab(LAB[1], y, stage === 1 ? P.accent : P.text); row(y, T.Mp, T.qp, P.compute); GP.text(ctx, (T.sp ? "−" : "+"), x0 - 10, y, { size: 12, baseline: "middle", align: "right", color: P.compute }); y += 24; }
+      if (stage >= 2) { lab(LAB[2], y, stage === 2 ? P.accent : P.text); row(y, C.M, C.q, P.data); GP.text(ctx, (C.s ? "−" : "+"), x0 - 10, y, { size: 12, baseline: "middle", align: "right", color: P.data }); y += 24; }
+      if (stage >= 3) {
+        ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(x0, y - 12); ctx.lineTo(x0 + W * cw, y - 12); ctx.stroke();
+        lab(LAB[3], y, stage === 3 ? P.accent : P.text); row(y, T.S.N, T.S.E, P.text); GP.text(ctx, (T.S.s ? "−" : "+"), x0 - 10, y, { size: 12, baseline: "middle", align: "right" }); y += 24;
+      }
+      if (stage >= 4 && T.S.N !== 0n) {
+        const kTop = T.sTop, keep = [kTop, Math.max(kTop, f.emin) - f.m + (kTop < f.emin ? 0 : 0)];
+        keep[1] = Math.max(kTop, f.emin) - f.m;
+        lab(LAB[4], y, stage === 4 ? P.accent : P.text); row(y, T.S.N, T.S.E, P.text, { keep, grs: true });
+        GP.text(ctx, kTop < f.emin ? "비정규: 지수가 e_min에 고정" : "맨 앞 1 = 2" + sup(kTop), colX(keep[1] - 4) + 4, y + 18, { size: 11, color: P.dim, baseline: "middle", align: "left" });
+        y += 34;
+      }
+      if (stage >= 5) {
+        lab(LAB[5], y, P.accent);
+        if (T.R.M !== 0n && isFinite(T.R.value)) row(y, T.R.M, T.R.q, P.accent2);
+        GP.text(ctx, "FMA = " + fmtV(T.R.value, 9) + "   │   곱 먼저 반올림 = " + fmtV(T.P1.value, 9) + " → " + fmtV(T.U.value, 9), 8, y + 22, { size: 12, color: T.U.value !== T.R.value ? P.bad : P.dim, baseline: "middle", align: "left" });
+      }
+      GP.text(ctx, "세로 칸 = 같은 지수 자리, 창 " + W + "비트(3p+3), 창 밖 비트는 S로", w - 8, h - 6, { align: "right", size: 11, color: P.faint, baseline: "bottom" });
+    }, { height: (w) => (w < 520 ? 300 : 290) });
+    ins.forEach((x) => x.addEventListener("input", GP.debounce(calc, 200)));
+    $("fma-pre").addEventListener("click", (e) => { const b = e.target.closest("button[data-a]"); if (!b) return; ins[0].value = b.dataset.a; ins[1].value = b.dataset.b; ins[2].value = b.dataset.c; stage = 0; calc(); });
+    const go = (d) => { stage = GP.clamp(stage + d, 0, 5); show(); };
+    $("fma-prev").addEventListener("click", () => go(-1));
+    $("fma-next").addEventListener("click", () => go(1));
+    $("fma-play").addEventListener("click", () => {
+      clearInterval(timer); stage = 0; show();
+      timer = setInterval(() => { if (stage >= 5) { clearInterval(timer); return; } go(1); }, 800);
+    });
+    calc();
+  })();
+
+  /* ================================================================ 5. 누산 정밀도 */
+  (function () {
+    const el = $("acc-cv"); if (!el) return;
+    const Ks = []; for (let e = 3; e <= 14; e++) Ks.push(Math.pow(2, e));
+    let cur = null;
+    const dSel = GP.seg("acc-d", calc), iSel = GP.seg("acc-in", calc);
+    const kGet = GP.range("acc-k", (v) => "2" + sup(v) + " = " + Math.pow(2, v).toLocaleString("en-US"), show);
+    const MODES = [["bf16", "BF16 누산", "bf16"], ["fp16", "FP16 누산", "fp16"], ["bf16blk", "BF16 32개 → FP32", "e5m2"], ["fp32", "FP32 누산", "fp32"]];
+    function calc() { const inF = FMT[iSel()]; cur = {}; MODES.forEach(([m]) => (cur[m] = accCurve(dSel(), m, inF, Ks, 4))); show(); }
+    function show() {
+      const i = kGet() - 3, K = Ks[i];
+      GP.stat("acc-bf", fmtE(cur.bf16[i][1])); GP.stat("acc-h", fmtE(cur.fp16[i][1])); GP.stat("acc-blk", fmtE(cur.bf16blk[i][1])); GP.stat("acc-f", fmtE(cur.fp32[i][1]));
+      GP.stat("acc-ub", fmtE(Math.min(1, K * FMT.bf16.u)) + " / " + fmtE(K * FMT.fp32.u));
+      cv.redraw();
+    }
+    const cv = GP.canvas(el, (ctx, w, h) => {
+      if (!cur) return; const P = GP.palette(), C = FCOL(P), K = Ks[kGet() - 3];
+      const series = MODES.map(([m, l, ck]) => ({ data: cur[m], color: m === "bf16blk" ? P.warn : C[ck], label: l, dots: 2.5, width: m === "fp32" ? 2 : 1.8 }));
+      series.push({ data: Ks.map((k) => [k, Math.min(1, k * FMT.bf16.u)]), color: C.bf16, dash: [5, 4], width: 1.2, label: "Ku (BF16)", legend: false, hover: false });
+      series.push({ data: Ks.map((k) => [k, k * FMT.fp32.u]), color: C.fp32, dash: [5, 4], width: 1.2, label: "Ku (FP32)", legend: false, hover: false });
+      GP.chart(ctx, null, { x: [8, 16384], y: [1e-9, 2], logX: true, logY: true, xLabel: "내적 길이 K", yLabel: "오차 / Σ|x_i y_i|", series, legend: "tl", hover: true,
+        vlines: [{ x: K, color: P.faint, dash: [3, 3] }] });
+    }, { aspect: 0.6, maxHeight: 400, hover: true });
+    calc();
+  })();
+
+  /* ================================================================ 6. 정밀도별 처리량·전력 */
+  (function () {
+    const el = $("perf-cv"); if (!el) return;
+    const gF = GP.range("perf-f", (v) => v.toFixed(2) + " GHz", upd), gS = GP.range("perf-sm", (v) => v + "개", upd), mSel = GP.seg("perf-m", upd), rf = $("perf-rf");
+    rf.addEventListener("change", upd);
+    let rows = [];
+    function upd() {
+      rows = PERF.map((P) => Object.assign({ P }, perfRow(P, gS(), gF(), rf.checked)));
+      const r = (k) => rows.find((x) => x.P.k === k);
+      GP.stat("perf-bf", GP.fmt(r("bf16").tflops, 4) + " / " + GP.fmt(r("fp8").tflops, 4) + " TFLOPS");
+      GP.stat("perf-v", GP.fmt(r("fp32").tflops, 3) + " / " + GP.fmt(r("fp64").tflops, 3) + " TFLOPS");
+      GP.stat("perf-w", GP.fmt(r("bf16").W, 3) + " W (" + r("bf16").ePer.toFixed(3) + " pJ/FMA)");
+      GP.stat("perf-x", (r("bf16").eff / r("fp32").eff).toFixed(1) + "배 (" + r("bf16").eff.toFixed(2) + " vs " + r("fp32").eff.toFixed(2) + " TFLOPS/W)");
+      GP.stat("perf-vdd", vOf(gF()).toFixed(3) + " V");
+      cv.redraw();
+    }
+    const cv = GP.canvas(el, (ctx, w, h) => {
+      const P = GP.palette(), m = mSel(), n = rows.length; if (!n) return;
+      const val = (r) => (m === "tflops" ? r.tflops : m === "W" ? r.W : r.eff);
+      const yr = m === "tflops" ? [10, 10000] : m === "W" ? [10, 1000] : [0.1, 100];
+      const lab = m === "tflops" ? "피크 (TFLOPS·TOPS)" : m === "W" ? "피크에서 연산 전력 (W)" : "TFLOPS/W";
+      const ch = GP.chart(ctx, null, { x: [0, n], y: yr, logY: true, yLabel: lab, xTicks: rows.map((_, i) => i + 0.5), xFmt: (v) => (rows[Math.floor(v)] || {}).P ? rows[Math.floor(v)].P.name : "", series: [],
+        after: (c2, A) => {
+          rows.forEach((r, i) => {
+            const v = val(r), x0 = A.X(i + 0.18), x1 = A.X(i + 0.82), y = A.Y(Math.max(v, yr[0])), yb = A.Y(yr[0]);
+            const col = r.P.unit === "vec" ? P.compute : P.tensor;
+            ctx.fillStyle = GP.alpha(col, r.P.est ? 0.35 : 0.8); ctx.fillRect(x0, y, x1 - x0, yb - y);
+            if (r.P.est) { ctx.save(); ctx.beginPath(); ctx.rect(x0, y, x1 - x0, yb - y); ctx.clip(); ctx.strokeStyle = GP.alpha(col, 0.9); for (let k = -200; k < 400; k += 8) { ctx.beginPath(); ctx.moveTo(x0 + k, yb); ctx.lineTo(x0 + k + 200, yb - 200); ctx.stroke(); } ctx.restore(); }
+            GP.text(ctx, v >= 100 ? Math.round(v).toLocaleString("en-US") : v.toPrecision(3), (x0 + x1) / 2, y - 4, { align: "center", baseline: "bottom", size: 11, mono: true });
+          });
+        } });
+      GP.text(ctx, "■ 벡터 레인", ch.box.x + 8, ch.box.y + 10, { align: "left", color: P.compute, size: 11, baseline: "middle" });
+      GP.text(ctx, "■ 텐서 코어 (빗금 = FMA 에너지 추정)", ch.box.x + 86, ch.box.y + 10, { align: "left", color: P.tensor, size: 11, baseline: "middle" });
+    }, { aspect: 0.55, maxHeight: 380 });
+    upd();
+  })();
+
+  /* ================================================================ 7. SFU 근사 */
+  (function () {
+    const el = $("sfu-cv"); if (!el) return;
+    let R = null;
+    const kSel = GP.seg("sfu-k", upd), dSel = GP.seg("sfu-d", upd), nr = $("sfu-nr");
+    const tGet = GP.range("sfu-t", (v) => v + " (" + Math.pow(2, v) + "칸)", upd);
+    nr.addEventListener("change", upd);
+    function upd() {
+      const k = kSel(); nr.disabled = k === "exp2";
+      R = sfuErr(k, tGet(), Number(dSel()), nr.checked && k !== "exp2");
+      GP.stat("sfu-max", fmtE(R.maxE)); GP.stat("sfu-bits", R.bits.toFixed(1) + "비트");
+      GP.stat("sfu-rom", R.romBits.toLocaleString("en-US") + "비트 (" + (R.romBits / 8192).toFixed(2) + " KB)");
+      GP.stat("sfu-gap", R.bits >= 23.5 ? "도달 (출력 반올림이 한계)" : (24 - R.bits).toFixed(1) + "비트 부족");
+      cv.redraw();
+    }
+    const cv = GP.canvas(el, (ctx, w, h) => {
+      if (!R) return; const P = GP.palette(), F = SFU[kSel()];
+      GP.chart(ctx, null, { x: [F.lo, F.hi], y: [1e-9, 0.1], logY: true, xLabel: "축소된 입력 x", yLabel: "상대 오차", hover: true,
+        series: [{ data: R.pts, color: P.compute, width: 1.4, label: F.name }],
+        hlines: [{ y: Math.pow(2, -24), color: P.faint, dash: [4, 3], label: "2^{−24} (FP32 반올림)" }, { y: R.maxE, color: P.warn, dash: [2, 3], label: "최대 " + R.bits.toFixed(1) + "비트" }] });
+    }, { aspect: 0.52, maxHeight: 360, hover: true });
+    upd();
+  })();
+
+  /* ================================================================ 8. INT8 양자화 */
+  (function () {
+    const el = $("q-cv"); if (!el) return;
+    let xs = null, S = null;
+    const gO = GP.range("q-of", (v) => v.toFixed(2) + " %", gen), gM = GP.range("q-om", (v) => v + "σ", gen);
+    const mSel = GP.seg("q-m", upd), bSel = GP.seg("q-b", upd);
+    function gen() { xs = qData(4096, gO() / 100, gM(), 7); upd(); }
+    function upd() {
+      const b = Number(bSel()), s = qScale(mSel(), xs, b), e = qErr(xs, s, b), qm = Math.pow(2, b - 1) - 1;
+      S = { s, b, qm, clip: s * qm, mx: absMax(xs) };
+      GP.stat("q-s", s.toPrecision(3) + " / ±" + (s * qm).toPrecision(3));
+      GP.stat("q-sqnr", e.sqnr.toFixed(1) + " dB"); GP.stat("q-clip", (e.clip * 100).toFixed(2) + " %");
+      GP.stat("q-fp8", fp8Err(xs).toFixed(1) + " dB");
+      cv.redraw();
+    }
+    const cv = GP.canvas(el, (ctx, w, h) => {
+      if (!S) return; const P = GP.palette(), lim = Math.max(S.mx, S.clip) * 1.05, nb = 120, hist = new Array(nb).fill(0);
+      for (let i = 0; i < xs.length; i++) hist[Math.min(nb - 1, Math.floor(((xs[i] + lim) / (2 * lim)) * nb))]++;
+      const data = []; hist.forEach((c, i) => { const x0 = -lim + (2 * lim * i) / nb, x1 = x0 + (2 * lim) / nb; data.push([x0, Math.max(c, 0.5)], [x1, Math.max(c, 0.5)]); });
+      const grid = []; if (S.b === 4) for (let q = -S.qm; q <= S.qm; q++) grid.push({ x: q * S.s, color: GP.alpha(P.accent, 0.35), width: 1 });
+      GP.chart(ctx, null, { x: [-lim, lim], y: [0.5, 3000], logY: true, xLabel: "x (σ 단위)", yLabel: "개수",
+        series: [{ data, color: P.compute, width: 1.2, fill: GP.alpha(P.compute, 0.25), label: "분포" }],
+        vlines: grid.concat([{ x: -S.clip, color: P.bad, dash: [5, 3], width: 1.6 }, { x: S.clip, color: P.bad, dash: [5, 3], width: 1.6, label: "클립 ±" + S.clip.toPrecision(3) }]) });
+    }, { aspect: 0.5, maxHeight: 340 });
+    gen();
+  })();
+})();
+
+</script>
+</body>
+</html>

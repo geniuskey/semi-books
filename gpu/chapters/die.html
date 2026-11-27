@@ -1,0 +1,1149 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>다이 크기·수율·칩렛 · GPUBook</title>
+<meta name="description" content="레티클 한계 26×33 mm 안에 780 mm² 다이를 넣는 이유와 대가를 계산한다. 웨이퍼 격자 배치로 다이 수를 세고, 결함 몬테카를로로 포아송·음이항·머피 수율을 비교하며, SM 하베스팅의 이항 수율, 양품 다이당 원가의 초선형성, 칩렛 분할과 KGD, 다이 간 링크, HBM을 포함한 GX-1 패키지 원가를 시뮬레이터로 다룬다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .f10-part { fill: color-mix(in srgb, var(--text-faint) 14%, transparent); stroke: var(--text-faint); stroke-width: 0.8; }
+  svg .f10-wafer { fill: var(--surface); stroke: var(--text-dim); stroke-width: 1.4; }
+  svg .f10-excl { fill: none; stroke: var(--bad); stroke-width: 1.2; stroke-dasharray: 5 4; }
+  svg .f10-def { fill: var(--bad); }
+  svg .f10-dead { fill: color-mix(in srgb, var(--bad) 22%, var(--bg-elev)); stroke: var(--bad); }
+  svg .f10-ok { fill: color-mix(in srgb, var(--ok) 14%, var(--bg-elev)); stroke: var(--ok); }
+  svg .f10-off { fill: color-mix(in srgb, var(--bad) 30%, var(--bg-elev)); stroke: var(--bad); }
+  svg .f10-cell { stroke-width: 1; }
+  .v.ok { color: var(--ok); } .v.warn { color: var(--warn); } .v.bad { color: var(--bad); }
+  .sim-controls .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="die">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 10</div>
+    <h1>다이 크기·수율·칩렛</h1>
+    <p class="lead">GX-1 로직 다이는 26 × 30 mm = 780 mm²로, 노광기가 한 번에 찍을 수 있는 레티클 필드(26 × 33 mm = 858 mm²)의 약 91 %를 쓴다. 다이를 크게 만들면 SM과 SRAM을 더 넣을 수 있고 다이 사이 통신도 필요 없다. 그 대가로 웨이퍼 한 장에서 나오는 다이 수가 줄고, 결함 하나에 다이 전체를 버릴 확률이 커진다. 이 장은 <strong>웨이퍼 원가 → 다이 수 → 수율 → 양품 다이 원가 → 패키지 원가</strong>를 처음부터 계산해, 왜 GPU가 레티클 한계까지 다이를 키우고, 왜 SM 16개를 여유로 남기고, 언제 다이를 쪼개 칩렛으로 가는지 답한다.</p>
+    <ul class="objectives">
+      <li>레티클 한계가 다이 크기의 물리적 상한인 이유와, 그것을 넘는 방법(칩렛·스티칭)을 설명할 수 있다.</li>
+      <li>격자 배치로 웨이퍼당 온전한 다이 수를 세고, 근사식 \(\pi d^2/4A - \pi d/\sqrt{2A}\)과 비교할 수 있다.</li>
+      <li>포아송·음이항·머피 수율 모델의 가정과 차이를 알고, 군집 계수 \(\alpha\)가 수율을 어떻게 바꾸는지 계산할 수 있다.</li>
+      <li>SM 하베스팅의 판매 가능 수율을 이항 분포로 계산하고, 여유 SM 수를 정하는 근거를 댈 수 있다.</li>
+      <li>양품 다이당 원가가 면적에 대해 초선형으로 오르는 이유를 식으로 보이고, 칩렛 분할의 손익(KGD·조립 수율·인터페이스 면적)을 따질 수 있다.</li>
+      <li>GX-1 패키지 원가(로직 다이 + HBM 6개 + 인터포저·조립·테스트)를 합산하고 가장 큰 항목을 찾을 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="reticle">
+    <h2>레티클 한계: 다이는 왜 858 mm²에서 멈추나</h2>
+    <p>노광기(스캐너)는 마스크의 무늬를 축소 투영해 웨이퍼에 찍는다. 한 번의 노광으로 찍히는 영역을 <span class="term">레티클</span> 필드<span class="en">(reticle field)</span>라 하며, 현재 표준 스캐너(4배 축소)의 최대 필드는 26 × 33 mm = 858 mm²다. 스캐너는 웨이퍼를 한 필드씩 옮겨 가며(스텝) 같은 무늬를 반복해 찍는다. 다이 하나가 필드보다 크면 필드 두 개를 이어 붙여야 하는데, 필드 경계에서 배선을 맞추는 <span class="term">스티칭</span><span class="en">(stitching)</span>은 이미지 센서나 인터포저처럼 배선이 성긴 곳에서만 쓰인다. 4 nm급 로직의 미세 배선은 필드 경계를 넘을 수 없으므로 <b>로직 다이 한 개의 면적 상한은 약 858 mm²</b>다. 실제로는 정렬 표식·스크라이브 공간 때문에 약 800–830 mm²가 현실적인 최대다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="레티클 필드 26×33 mm 안에 GX-1 다이 26×30 mm가 들어가고, 다이 두 개 크기는 들어가지 않으며, 고개구수 EUV는 필드가 절반이다">
+        <text x="20" y="22" class="t t-b">① 표준 필드 26 × 33 mm = 858 mm²</text>
+        <rect x="40" y="40" width="182" height="231" class="f-surface" stroke-dasharray="6 4"/>
+        <rect x="40" y="61" width="182" height="210" class="k-compute"/>
+        <text x="131" y="160" class="kt-compute t-c" text-anchor="middle">GX-1 다이</text>
+        <text x="131" y="180" class="t t-c" text-anchor="middle">26 × 30 mm</text>
+        <text x="131" y="198" class="t t-c" text-anchor="middle">780 mm² (91 %)</text>
+        <text x="131" y="55" class="t-dim" text-anchor="middle">남는 3 mm</text>
+        <line x1="40" y1="282" x2="222" y2="282" class="dimline"/><text x="131" y="296" class="t-dim" text-anchor="middle">26 mm</text>
+        <line x1="232" y1="40" x2="232" y2="271" class="dimline"/><text x="238" y="160" class="t-dim">33 mm</text>
+
+        <text x="300" y="22" class="t t-b">② 연산을 두 배로? 1,560 mm²</text>
+        <rect x="300" y="40" width="182" height="231" class="f-surface" stroke-dasharray="6 4"/>
+        <rect x="486" y="40" width="182" height="231" class="f-surface" stroke-dasharray="6 4"/>
+        <rect x="300" y="61" width="182" height="210" class="k-compute"/>
+        <rect x="486" y="61" width="182" height="210" class="k-compute"/>
+        <rect x="474" y="61" width="8" height="210" class="kf-link"/><rect x="486" y="61" width="8" height="210" class="kf-link"/>
+        <text x="391" y="160" class="kt-compute" text-anchor="middle">다이 A</text>
+        <text x="577" y="160" class="kt-compute" text-anchor="middle">다이 B</text>
+        <text x="484" y="292" class="kt-link" text-anchor="middle">다이 간 링크 → 칩렛</text>
+        <text x="391" y="185" class="t-dim" text-anchor="middle">필드 1</text><text x="577" y="185" class="t-dim" text-anchor="middle">필드 2</text>
+
+        <text x="700" y="22" class="t t-b">③ 고개구수 EUV</text>
+        <rect x="712" y="40" width="130" height="83" class="f-surface" stroke-dasharray="6 4"/>
+        <text x="777" y="78" class="t t-c" text-anchor="middle">26 × 16.5</text>
+        <text x="777" y="96" class="t-dim" text-anchor="middle">= 429 mm²</text>
+        <text x="700" y="148" class="t-dim">한 방향 축소 8배</text>
+        <text x="700" y="166" class="t-dim">→ 필드가 절반</text>
+        <text x="700" y="190" class="t-dim">780 mm² 다이는</text>
+        <text x="700" y="208" class="t-dim">이 층을 두 번</text>
+        <text x="700" y="226" class="t-dim">나눠 찍어야 한다</text>
+        <text x="700" y="244" class="t-dim">→ 분할 압력↑</text>
+      </svg>
+      <figcaption><b>그림 10-1.</b> 레티클 한계. ① GX-1 다이(26 × 30 mm)는 표준 필드에 한 번에 들어간다. ② 연산을 두 배로 늘리려면 필드 하나에 다 들어가지 않으므로 다이를 두 개로 나누고 다이 간 링크로 잇는다(칩렛, <a href="#chiplet">6절</a>). ③ 차세대 고개구수(High-NA) EUV는 한 방향 축소 배율이 커서 필드가 26 × 16.5 mm로 줄어든다. 노광 자체는 <a href="../../litho/chapters/euv.html">LithoBook EUV 장</a>을 보라.</figcaption>
+    </figure>
+    <p>그렇다면 왜 GPU는 이 한계에 바짝 붙어 다이를 키울까? GPU의 성능은 SM 수에 거의 비례하고(<a href="throughput.html">2장</a>), SM과 L2를 한 다이에 두면 그 사이 통신은 온칩 배선(약 0.05 pJ/bit/mm)으로 끝난다. 다이를 나누면 같은 통신이 다이 간 링크(약 0.5 pJ/bit 이상)를 지나야 하고 인터페이스 회로가 면적을 먹는다. 그래서 <b>수율과 원가가 허락하는 한</b> 다이를 키운다. 이 장의 나머지는 그 "허락하는 한"을 계산한다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="wafer">
+    <h2>웨이퍼당 다이 수와 가장자리 손실</h2>
+    <p>300 mm 웨이퍼의 면적은 \(\pi \cdot 150^2 \approx 70{,}700\) mm²다. 780 mm² 다이라면 단순 나눗셈으로 90개가 나올 것 같지만 실제로는 훨씬 적다. 이유는 세 가지다. (1) 웨이퍼 가장자리 몇 mm는 막 두께·식각 균일도가 나빠 쓰지 않는다(<span class="term">가장자리 제외</span><span class="en">(edge exclusion)</span>, GX-1 가정 3 mm). (2) 다이 사이에는 톱날이 지나가는 <span class="term">스크라이브 라인</span><span class="en">(scribe line)</span>이 있다(가정 0.1 mm, 공정 감시용 테스트 구조도 여기에 둔다). (3) 사각형 다이로 원을 채우면 가장자리에 걸치는 <b>부분 다이</b>가 생긴다. 다이가 클수록 (3)의 손실 비율이 커진다.</p>
+    <p>원 안의 온전한 사각형 수를 근사하는 흔한 식은 다음과 같다. 첫 항은 면적 나눗셈, 둘째 항은 둘레를 따라 잃는 다이 수다.</p>
+    <div class="formula">$$N_{die} \approx \frac{\pi d^2}{4A} - \frac{\pi d}{\sqrt{2A}}$$
+      <div class="where">여기서 \(d\)는 쓸 수 있는 지름(300 − 2 × 3 = 294 mm), \(A = (w+s)(h+s)\)는 스크라이브 \(s\)를 포함한 다이 피치 면적. GX-1은 \(A = 26.1 \times 30.1 = 785.6\) mm²이므로 \(N \approx 86.4 - 23.3 = 63\)개.</div></div>
+    <p>근사식은 다이 모양과 격자 위치를 무시한다. 실제로는 격자를 웨이퍼 위에서 얼마나 밀어 놓느냐(오프셋)에 따라 온전한 다이 수가 몇 개씩 달라지므로, 마스크 배치 단계에서 오프셋을 최적화한다. 아래 그림은 GX-1 다이를 최적 오프셋으로 깐 결과다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 330" role="img" aria-label="300 mm 웨이퍼 위 GX-1 다이 격자: 온전한 다이 70개, 가장자리 부분 다이 42개, 오른쪽은 스크라이브 라인 확대">
+        <defs><clipPath id="f10b-clip"><circle cx="160" cy="160" r="138"/></clipPath></defs>
+        <circle cx="160" cy="160" r="138" class="f10-wafer"/>
+        <g clip-path="url(#f10b-clip)"><rect x="20.4" y="229.3" width="23.9" height="27.6" class="f10-part"/><rect x="20.4" y="201.6" width="23.9" height="27.6" class="f10-part"/><rect x="20.4" y="173.9" width="23.9" height="27.6" class="f10-part"/><rect x="20.4" y="146.2" width="23.9" height="27.6" class="f10-part"/><rect x="20.4" y="118.6" width="23.9" height="27.6" class="f10-part"/><rect x="20.4" y="90.9" width="23.9" height="27.6" class="f10-part"/><rect x="20.4" y="63.2" width="23.9" height="27.6" class="f10-part"/><rect x="44.4" y="257.0" width="23.9" height="27.6" class="f10-part"/><rect x="44.4" y="229.3" width="23.9" height="27.6" class="f10-part"/><rect x="44.4" y="201.6" width="23.9" height="27.6" class="k-compute"/><rect x="44.4" y="173.9" width="23.9" height="27.6" class="k-compute"/><rect x="44.4" y="146.2" width="23.9" height="27.6" class="k-compute"/><rect x="44.4" y="118.6" width="23.9" height="27.6" class="k-compute"/><rect x="44.4" y="90.9" width="23.9" height="27.6" class="k-compute"/><rect x="44.4" y="63.2" width="23.9" height="27.6" class="f10-part"/><rect x="44.4" y="35.5" width="23.9" height="27.6" class="f10-part"/><rect x="68.5" y="257.0" width="23.9" height="27.6" class="f10-part"/><rect x="68.5" y="229.3" width="23.9" height="27.6" class="k-compute"/><rect x="68.5" y="201.6" width="23.9" height="27.6" class="k-compute"/><rect x="68.5" y="173.9" width="23.9" height="27.6" class="k-compute"/><rect x="68.5" y="146.2" width="23.9" height="27.6" class="k-compute"/><rect x="68.5" y="118.6" width="23.9" height="27.6" class="k-compute"/><rect x="68.5" y="90.9" width="23.9" height="27.6" class="k-compute"/><rect x="68.5" y="63.2" width="23.9" height="27.6" class="k-compute"/><rect x="68.5" y="35.5" width="23.9" height="27.6" class="f10-part"/><rect x="92.5" y="284.7" width="23.9" height="27.6" class="f10-part"/><rect x="92.5" y="257.0" width="23.9" height="27.6" class="f10-part"/><rect x="92.5" y="229.3" width="23.9" height="27.6" class="k-compute"/><rect x="92.5" y="201.6" width="23.9" height="27.6" class="k-compute"/><rect x="92.5" y="173.9" width="23.9" height="27.6" class="k-compute"/><rect x="92.5" y="146.2" width="23.9" height="27.6" class="k-compute"/><rect x="92.5" y="118.6" width="23.9" height="27.6" class="k-compute"/><rect x="92.5" y="90.9" width="23.9" height="27.6" class="k-compute"/><rect x="92.5" y="63.2" width="23.9" height="27.6" class="k-compute"/><rect x="92.5" y="35.5" width="23.9" height="27.6" class="f10-part"/><rect x="92.5" y="7.8" width="23.9" height="27.6" class="f10-part"/><rect x="116.5" y="284.7" width="23.9" height="27.6" class="f10-part"/><rect x="116.5" y="257.0" width="23.9" height="27.6" class="k-compute"/><rect x="116.5" y="229.3" width="23.9" height="27.6" class="k-compute"/><rect x="116.5" y="201.6" width="23.9" height="27.6" class="k-compute"/><rect x="116.5" y="173.9" width="23.9" height="27.6" class="k-compute"/><rect x="116.5" y="146.2" width="23.9" height="27.6" class="k-compute"/><rect x="116.5" y="118.6" width="23.9" height="27.6" class="k-compute"/><rect x="116.5" y="90.9" width="23.9" height="27.6" class="k-compute"/><rect x="116.5" y="63.2" width="23.9" height="27.6" class="k-compute"/><rect x="116.5" y="35.5" width="23.9" height="27.6" class="k-compute"/><rect x="116.5" y="7.8" width="23.9" height="27.6" class="f10-part"/><rect x="140.5" y="284.7" width="23.9" height="27.6" class="f10-part"/><rect x="140.5" y="257.0" width="23.9" height="27.6" class="k-compute"/><rect x="140.5" y="229.3" width="23.9" height="27.6" class="k-compute"/><rect x="140.5" y="201.6" width="23.9" height="27.6" class="k-compute"/><rect x="140.5" y="173.9" width="23.9" height="27.6" class="k-compute"/><rect x="140.5" y="146.2" width="23.9" height="27.6" class="k-compute"/><rect x="140.5" y="118.6" width="23.9" height="27.6" class="k-compute"/><rect x="140.5" y="90.9" width="23.9" height="27.6" class="k-compute"/><rect x="140.5" y="63.2" width="23.9" height="27.6" class="k-compute"/><rect x="140.5" y="35.5" width="23.9" height="27.6" class="k-compute"/><rect x="140.5" y="7.8" width="23.9" height="27.6" class="f10-part"/><rect x="164.5" y="284.7" width="23.9" height="27.6" class="f10-part"/><rect x="164.5" y="257.0" width="23.9" height="27.6" class="k-compute"/><rect x="164.5" y="229.3" width="23.9" height="27.6" class="k-compute"/><rect x="164.5" y="201.6" width="23.9" height="27.6" class="k-compute"/><rect x="164.5" y="173.9" width="23.9" height="27.6" class="k-compute"/><rect x="164.5" y="146.2" width="23.9" height="27.6" class="k-compute"/><rect x="164.5" y="118.6" width="23.9" height="27.6" class="k-compute"/><rect x="164.5" y="90.9" width="23.9" height="27.6" class="k-compute"/><rect x="164.5" y="63.2" width="23.9" height="27.6" class="k-compute"/><rect x="164.5" y="35.5" width="23.9" height="27.6" class="k-compute"/><rect x="164.5" y="7.8" width="23.9" height="27.6" class="f10-part"/><rect x="188.5" y="284.7" width="23.9" height="27.6" class="f10-part"/><rect x="188.5" y="257.0" width="23.9" height="27.6" class="k-compute"/><rect x="188.5" y="229.3" width="23.9" height="27.6" class="k-compute"/><rect x="188.5" y="201.6" width="23.9" height="27.6" class="k-compute"/><rect x="188.5" y="173.9" width="23.9" height="27.6" class="k-compute"/><rect x="188.5" y="146.2" width="23.9" height="27.6" class="k-compute"/><rect x="188.5" y="118.6" width="23.9" height="27.6" class="k-compute"/><rect x="188.5" y="90.9" width="23.9" height="27.6" class="k-compute"/><rect x="188.5" y="63.2" width="23.9" height="27.6" class="k-compute"/><rect x="188.5" y="35.5" width="23.9" height="27.6" class="k-compute"/><rect x="188.5" y="7.8" width="23.9" height="27.6" class="f10-part"/><rect x="212.5" y="284.7" width="23.9" height="27.6" class="f10-part"/><rect x="212.5" y="257.0" width="23.9" height="27.6" class="f10-part"/><rect x="212.5" y="229.3" width="23.9" height="27.6" class="k-compute"/><rect x="212.5" y="201.6" width="23.9" height="27.6" class="k-compute"/><rect x="212.5" y="173.9" width="23.9" height="27.6" class="k-compute"/><rect x="212.5" y="146.2" width="23.9" height="27.6" class="k-compute"/><rect x="212.5" y="118.6" width="23.9" height="27.6" class="k-compute"/><rect x="212.5" y="90.9" width="23.9" height="27.6" class="k-compute"/><rect x="212.5" y="63.2" width="23.9" height="27.6" class="k-compute"/><rect x="212.5" y="35.5" width="23.9" height="27.6" class="f10-part"/><rect x="212.5" y="7.8" width="23.9" height="27.6" class="f10-part"/><rect x="236.5" y="257.0" width="23.9" height="27.6" class="f10-part"/><rect x="236.5" y="229.3" width="23.9" height="27.6" class="f10-part"/><rect x="236.5" y="201.6" width="23.9" height="27.6" class="k-compute"/><rect x="236.5" y="173.9" width="23.9" height="27.6" class="k-compute"/><rect x="236.5" y="146.2" width="23.9" height="27.6" class="k-compute"/><rect x="236.5" y="118.6" width="23.9" height="27.6" class="k-compute"/><rect x="236.5" y="90.9" width="23.9" height="27.6" class="k-compute"/><rect x="236.5" y="63.2" width="23.9" height="27.6" class="f10-part"/><rect x="236.5" y="35.5" width="23.9" height="27.6" class="f10-part"/><rect x="260.6" y="229.3" width="23.9" height="27.6" class="f10-part"/><rect x="260.6" y="201.6" width="23.9" height="27.6" class="f10-part"/><rect x="260.6" y="173.9" width="23.9" height="27.6" class="k-compute"/><rect x="260.6" y="146.2" width="23.9" height="27.6" class="k-compute"/><rect x="260.6" y="118.6" width="23.9" height="27.6" class="k-compute"/><rect x="260.6" y="90.9" width="23.9" height="27.6" class="f10-part"/><rect x="260.6" y="63.2" width="23.9" height="27.6" class="f10-part"/><rect x="284.6" y="201.6" width="23.9" height="27.6" class="f10-part"/><rect x="284.6" y="173.9" width="23.9" height="27.6" class="f10-part"/><rect x="284.6" y="146.2" width="23.9" height="27.6" class="f10-part"/><rect x="284.6" y="118.6" width="23.9" height="27.6" class="f10-part"/><rect x="284.6" y="90.9" width="23.9" height="27.6" class="f10-part"/></g>
+        <circle cx="160" cy="160" r="135.2" class="f10-excl"/>
+        <path d="M152 298 L160 290 L168 298" class="s-line"/>
+        <text x="330" y="40" class="t t-b">GX-1: 26 × 30 mm, 최적 오프셋</text>
+        <rect x="330" y="56" width="16" height="16" class="k-compute"/><text x="354" y="69" class="t">온전한 다이 70개</text>
+        <rect x="330" y="82" width="16" height="16" class="f10-part"/><text x="354" y="95" class="t">부분 다이 42개(버림)</text>
+        <line x1="330" y1="116" x2="346" y2="116" class="f10-excl"/><text x="354" y="120" class="t">가장자리 제외 3 mm</text>
+        <text x="330" y="150" class="t-dim">근사식으로는 63개</text>
+        <text x="330" y="170" class="t-dim">다이 중심을 웨이퍼 중심에 두면 67개</text>
+        <text x="330" y="200" class="t-dim">온전한 다이가 덮는 면적</text>
+        <text x="330" y="220" class="t-dim">70 × 780 / 70,686 ≈ 77 %</text>
+        <g transform="translate(610,40)">
+          <text x="0" y="0" class="t t-b">스크라이브 교차부 확대</text>
+          <rect x="0" y="16" width="100" height="100" class="k-compute"/>
+          <rect x="130" y="16" width="100" height="100" class="k-compute"/>
+          <rect x="0" y="146" width="100" height="100" class="k-compute"/>
+          <rect x="130" y="146" width="100" height="100" class="k-compute"/>
+          <rect x="100" y="16" width="30" height="230" class="f-surface"/>
+          <rect x="0" y="116" width="230" height="30" class="f-surface"/>
+          <rect x="106" y="40" width="18" height="12" class="k-sram"/><rect x="106" y="180" width="18" height="12" class="k-sram"/>
+          <rect x="30" y="122" width="14" height="18" class="k-ctrl"/>
+          <line x1="115" y1="16" x2="115" y2="246" stroke="var(--bad)" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="0" y="268" class="t-dim">스크라이브 0.1 mm</text>
+          <text x="0" y="286" class="t-dim">톱날 길 + 공정 감시 패턴(작은 칸)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-2.</b> 웨이퍼 위 GX-1 다이 격자(시뮬레이터와 같은 계산). 온전한 다이 70개, 가장자리에 걸친 부분 다이 42개다. 부분 다이도 노광·식각은 다 거치므로 공정 원가는 그대로 들고 수익은 0이다. 오른쪽: 다이 사이 스크라이브 라인에는 톱날 길과 공정 감시용 테스트 구조가 있다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-wf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>웨이퍼 다이 배치: 격자로 세기 vs 근사식</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="wf-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>다이 가로 \(w\) <output id="wf-w-out"></output></span><input type="range" id="wf-w" min="4" max="33" step="0.5" value="26"></label>
+          <label class="ctrl"><span>다이 세로 \(h\) <output id="wf-h-out"></output></span><input type="range" id="wf-h" min="4" max="33" step="0.5" value="30"></label>
+          <label class="ctrl"><span>가장자리 제외 <output id="wf-e-out"></output></span><input type="range" id="wf-e" min="0" max="10" step="0.5" value="3"></label>
+          <label class="ctrl"><span>스크라이브 폭 \(s\) <output id="wf-s-out"></output></span><input type="range" id="wf-s" min="0.05" max="1" step="0.05" value="0.1"></label>
+          <div class="ctrl"><span>격자 오프셋</span><div class="seg" id="wf-o"><button data-value="center">다이 중심</button><button data-value="origin">격자 교차점</button><button data-value="best" class="on">최적(탐색)</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">온전한 다이(격자)</span><span class="v" id="wf-full">—</span></div>
+        <div class="stat"><span class="k">근사식</span><span class="v" id="wf-form">—</span></div>
+        <div class="stat"><span class="k">부분 다이</span><span class="v" id="wf-part">—</span></div>
+        <div class="stat"><span class="k">면적 활용률</span><span class="v" id="wf-util">—</span></div>
+        <div class="stat"><span class="k">레티클(26 × 33)</span><span class="v" id="wf-ret">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(26 × 30)에서 오프셋을 "다이 중심" → "최적"으로 바꾸면 67 → 70개로 3개(약 4 %)가 공짜로 늘어난다. ② 다이를 10 × 10 mm로 줄이면 근사식과 격자 수가 2 % 안으로 맞고 활용률이 약 87 %로 오른다. 큰 다이일수록 둘레 손실이 크다. ③ 가장자리 제외를 0 → 6 mm로 바꾸면 GX-1 다이 수가 72 → 68개로 준다. 큰 다이에서는 가장자리 1 mm가 다이 한 개 값이다.</div>
+    </div>
+
+    <div class="callout fab"><strong>웨이퍼 한 장에서 GX-1 후보 다이 70개</strong>가장자리 3 mm, 스크라이브 0.1 mm, 최적 오프셋에서 온전한 다이는 70개다(근사식 63개는 큰 다이에서 약 10 % 비관적이다). 웨이퍼 원가 $18,000을 70으로 나누면 <b>수율을 따지기 전 다이 자리 하나가 약 $257</b>이다. 쓸 수 있는 웨이퍼 면적 \(\pi \cdot 147^2 \approx 67{,}900\) mm²로 보면 실리콘 원가는 약 $0.27/mm²이고, 다이 70개가 그중 약 80 %를 쓴다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 다이 모양과 크기를 정할 때 레티클만 보는 것이 아니라 웨이퍼 위 격자 배치도 본다. 26 × 30 mm는 레티클 폭 26 mm를 꽉 채우고 세로만 조절한 모양이다. 다이 수가 몇 개만 늘어도 수천 장의 웨이퍼에 곱해지므로, 오프셋 최적화와 스크라이브 폭 축소는 설계 막바지까지 따진다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="defects">
+    <h2>결함과 수율 모델</h2>
+    <p>공정 중 떨어진 입자, 패턴 결함, 막 결함 중 회로를 끊거나 붙여 다이를 못 쓰게 만드는 것을 <span class="term">치명 결함</span><span class="en">(killer defect)</span>이라 한다. 단위 면적당 치명 결함 수가 <span class="term">결함 밀도</span> \(D_0\)(/cm²)이다. 성숙한 공정의 큰 다이에서 \(D_0\)는 약 0.05–0.1 /cm², 새 공정 초기에는 그 몇 배다. 결함의 물리와 임계 면적은 <a href="../../yield/chapters/defects.html">YieldBook 결함 장</a>에서 다룬다. 여기서는 \(D_0\)가 주어졌을 때 다이 수율 \(Y\)가 면적에 어떻게 의존하는지만 본다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="같은 결함 10개가 큰 다이 16개 중 10개를 죽이지만 작은 다이 64개 중에서는 10개만 죽인다">
+        <g transform="translate(40,30)">
+          <text x="0" y="-10" class="t t-b">큰 다이 4 × 4 = 16개</text>
+          <g class="f10-ok f10-cell">
+            <rect x="0" y="0" width="60" height="60"/><rect x="60" y="0" width="60" height="60" class="f10-dead"/><rect x="120" y="0" width="60" height="60" class="f10-dead"/><rect x="180" y="0" width="60" height="60"/>
+            <rect x="0" y="60" width="60" height="60" class="f10-dead"/><rect x="60" y="60" width="60" height="60"/><rect x="120" y="60" width="60" height="60"/><rect x="180" y="60" width="60" height="60" class="f10-dead"/>
+            <rect x="0" y="120" width="60" height="60"/><rect x="60" y="120" width="60" height="60"/><rect x="120" y="120" width="60" height="60" class="f10-dead"/><rect x="180" y="120" width="60" height="60" class="f10-dead"/>
+            <rect x="0" y="180" width="60" height="60"/><rect x="60" y="180" width="60" height="60" class="f10-dead"/><rect x="120" y="180" width="60" height="60" class="f10-dead"/><rect x="180" y="180" width="60" height="60" class="f10-dead"/>
+          </g>
+          <rect x="0" y="0" width="60" height="60" class="f10-dead"/>
+          <g class="f10-def"><circle cx="20" cy="15" r="4"/><circle cx="95" cy="40" r="4"/><circle cx="155" cy="25" r="4"/><circle cx="200" cy="70" r="4"/><circle cx="35" cy="100" r="4"/><circle cx="130" cy="130" r="4"/><circle cx="215" cy="155" r="4"/><circle cx="70" cy="190" r="4"/><circle cx="160" cy="200" r="4"/><circle cx="225" cy="225" r="4"/></g>
+          <text x="0" y="262" class="t">양품 6 / 16 = 37.5 %</text>
+        </g>
+        <g transform="translate(330,30)">
+          <text x="0" y="-10" class="t t-b">작은 다이 8 × 8 = 64개</text>
+                    <path d="M0 0H240V240H0Z M30 0V240 M60 0V240 M90 0V240 M120 0V240 M150 0V240 M180 0V240 M210 0V240 M0 30H240 M0 60H240 M0 90H240 M0 120H240 M0 150H240 M0 180H240 M0 210H240" class="f10-ok f10-cell"/>
+          <g class="f10-dead f10-cell"><rect x="0" y="0" width="30" height="30"/><rect x="90" y="30" width="30" height="30"/><rect x="150" y="0" width="30" height="30"/><rect x="180" y="60" width="30" height="30"/><rect x="30" y="90" width="30" height="30"/><rect x="120" y="120" width="30" height="30"/><rect x="210" y="150" width="30" height="30"/><rect x="60" y="180" width="30" height="30"/><rect x="150" y="180" width="30" height="30"/><rect x="210" y="210" width="30" height="30"/></g>
+          <g class="f10-def"><circle cx="20" cy="15" r="4"/><circle cx="95" cy="40" r="4"/><circle cx="155" cy="25" r="4"/><circle cx="200" cy="70" r="4"/><circle cx="35" cy="100" r="4"/><circle cx="130" cy="130" r="4"/><circle cx="215" cy="155" r="4"/><circle cx="70" cy="190" r="4"/><circle cx="160" cy="200" r="4"/><circle cx="225" cy="225" r="4"/></g>
+          <text x="0" y="262" class="t">양품 54 / 64 = 84.4 %</text>
+        </g>
+        <g transform="translate(610,40)">
+          <text x="0" y="0" class="t t-b">같은 웨이퍼, 같은 결함 10개</text>
+          <text x="0" y="28" class="t-dim">큰 다이: 다이당 평균 결함</text>
+          <text x="0" y="46" class="t">λ = 10/16 = 0.625</text>
+          <text x="0" y="64" class="t-dim">→ 포아송 e^−λ ≈ 53.5 %</text>
+          <text x="0" y="96" class="t-dim">작은 다이: λ = 10/64 = 0.156</text>
+          <text x="0" y="114" class="t-dim">→ 포아송 e^−λ ≈ 85.5 %</text>
+          <text x="0" y="150" class="t-dim">결함 하나는 다이 하나만 죽인다.</text>
+          <text x="0" y="168" class="t-dim">다이가 크면 결함 하나가 버리는</text>
+          <text x="0" y="186" class="t-dim">실리콘이 많아진다.</text>
+          <text x="0" y="218" class="t-dim">(큰 다이의 λ 0.625는 GX-1의</text>
+          <text x="0" y="236" class="t-dim"> A·D₀ = 7.8 × 0.08 = 0.624와 같다)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-3.</b> 수율이 면적에 의존하는 이유. 같은 결함 10개(빨간 점)가 큰 다이 16개 중 10개를 버리게 하지만, 작은 다이 64개 중에서는 10개만 버린다. 이 예는 결함이 모두 다른 다이에 떨어지도록 그렸다. 실제로는 한 다이에 결함이 둘 이상 떨어지기도 하므로 포아송 수율이 이 그림의 큰 다이 값보다 조금 높다.</figcaption>
+    </figure>
+    <p>결함이 웨이퍼에 서로 독립으로, 균일하게 떨어진다면 면적 \(A\)인 다이에 떨어지는 결함 수는 평균 \(AD_0\)인 포아송 분포를 따른다. 결함이 하나도 없을 확률이 수율이다.</p>
+    <div class="formula">$$Y_{\text{포아송}} = e^{-AD_0},\qquad Y_{\text{음이항}} = \left(1 + \frac{AD_0}{\alpha}\right)^{-\alpha},\qquad Y_{\text{머피}} = \left(\frac{1 - e^{-AD_0}}{AD_0}\right)^2$$
+      <div class="where">\(A\)는 cm² 단위 다이 면적, \(D_0\)는 /cm². \(\alpha\)는 <span class="term">군집 계수</span><span class="en">(clustering parameter)</span>로, 작을수록 결함이 뭉쳐 있다. \(\alpha \to \infty\)이면 음이항이 포아송이 된다. 머피 모델은 \(D_0\)가 웨이퍼마다 삼각 분포로 흩어진다고 보고 평균을 낸 결과다. 시즈 모델 \(Y = 1/(1+AD_0)\)은 \(\alpha = 1\)인 음이항과 같다.</div></div>
+    <p>실제 결함은 뭉친다. 장비 한 대의 입자 폭발, 웨이퍼 가장자리의 막 벗겨짐, 긁힘은 좁은 영역에 결함 여러 개를 남긴다. 결함이 뭉치면 같은 평균 결함 수에서도 결함이 적은 다이와 많은 다이가 나뉘고, 결함이 이미 있는 다이에 또 떨어진 결함은 추가 손실을 내지 않는다. 그래서 군집이 강할수록(α가 작을수록) <b>같은 \(D_0\)에서 수율이 높다</b>. 음이항 모델은 다이마다 결함 밀도가 평균 \(D_0\), 모양 \(\alpha\)인 감마 분포로 다르다고 보고 포아송을 평균한 결과다. 아래 몬테카를로는 정확히 이 과정을 흉내 낸다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 290" role="img" aria-label="같은 결함 16개가 무작위로 흩어지면 다이 12개를 죽이고, 두 덩어리로 뭉치면 다이 3개만 죽인다">
+        <g transform="translate(40,34)">
+          <text x="0" y="-12" class="t t-b">무작위(포아송): 16개 → 12개 다이 불량</text>
+          <g class="f10-cell">
+            <rect x="0" y="0" width="60" height="60" class="f10-dead"/><rect x="60" y="0" width="60" height="60" class="f10-dead"/><rect x="120" y="0" width="60" height="60" class="f10-dead"/><rect x="180" y="0" width="60" height="60" class="f10-dead"/>
+            <rect x="0" y="60" width="60" height="60" class="f10-dead"/><rect x="60" y="60" width="60" height="60" class="f10-ok"/><rect x="120" y="60" width="60" height="60" class="f10-dead"/><rect x="180" y="60" width="60" height="60" class="f10-dead"/>
+            <rect x="0" y="120" width="60" height="60" class="f10-ok"/><rect x="60" y="120" width="60" height="60" class="f10-dead"/><rect x="120" y="120" width="60" height="60" class="f10-ok"/><rect x="180" y="120" width="60" height="60" class="f10-dead"/>
+            <rect x="0" y="180" width="60" height="60" class="f10-dead"/><rect x="60" y="180" width="60" height="60" class="f10-dead"/><rect x="120" y="180" width="60" height="60" class="f10-dead"/><rect x="180" y="180" width="60" height="60" class="f10-ok"/>
+          </g>
+          <g class="f10-def"><circle cx="15" cy="20" r="4"/><circle cx="40" cy="45" r="4"/><circle cx="100" cy="30" r="4"/><circle cx="170" cy="15" r="4"/><circle cx="215" cy="40" r="4"/><circle cx="30" cy="90" r="4"/><circle cx="140" cy="100" r="4"/><circle cx="160" cy="110" r="4"/><circle cx="200" cy="95" r="4"/><circle cx="205" cy="80" r="4"/><circle cx="80" cy="150" r="4"/><circle cx="95" cy="140" r="4"/><circle cx="225" cy="170" r="4"/><circle cx="20" cy="200" r="4"/><circle cx="110" cy="215" r="4"/><circle cx="130" cy="225" r="4"/></g>
+          <text x="0" y="262" class="t">양품 4 / 16 = 25 %</text>
+        </g>
+        <g transform="translate(330,34)">
+          <text x="0" y="-12" class="t t-b">군집: 같은 16개 → 3개 다이 불량</text>
+          <g class="f10-cell">
+            <rect x="0" y="0" width="60" height="60" class="f10-ok"/><rect x="60" y="0" width="60" height="60" class="f10-ok"/><rect x="120" y="0" width="60" height="60" class="f10-ok"/><rect x="180" y="0" width="60" height="60" class="f10-ok"/>
+            <rect x="0" y="60" width="60" height="60" class="f10-ok"/><rect x="60" y="60" width="60" height="60" class="f10-dead"/><rect x="120" y="60" width="60" height="60" class="f10-ok"/><rect x="180" y="60" width="60" height="60" class="f10-ok"/>
+            <rect x="0" y="120" width="60" height="60" class="f10-ok"/><rect x="60" y="120" width="60" height="60" class="f10-ok"/><rect x="120" y="120" width="60" height="60" class="f10-dead"/><rect x="180" y="120" width="60" height="60" class="f10-dead"/>
+            <rect x="0" y="180" width="60" height="60" class="f10-ok"/><rect x="60" y="180" width="60" height="60" class="f10-ok"/><rect x="120" y="180" width="60" height="60" class="f10-ok"/><rect x="180" y="180" width="60" height="60" class="f10-ok"/>
+          </g>
+          <g class="f10-def"><circle cx="70" cy="72" r="4"/><circle cx="82" cy="80" r="4"/><circle cx="76" cy="92" r="4"/><circle cx="92" cy="70" r="4"/><circle cx="95" cy="86" r="4"/><circle cx="86" cy="100" r="4"/><circle cx="104" cy="94" r="4"/><circle cx="72" cy="106" r="4"/><circle cx="168" cy="138" r="4"/><circle cx="174" cy="152" r="4"/><circle cx="186" cy="140" r="4"/><circle cx="192" cy="156" r="4"/><circle cx="160" cy="160" r="4"/><circle cx="178" cy="166" r="4"/><circle cx="196" cy="134" r="4"/><circle cx="184" cy="170" r="4"/></g>
+          <text x="0" y="262" class="t">양품 13 / 16 = 81 %</text>
+        </g>
+        <g transform="translate(610,44)">
+          <text x="0" y="0" class="t t-b">다이당 평균 결함 λ = 1</text>
+          <text x="0" y="28" class="t-dim">포아송: e^−1 ≈ 36.8 %</text>
+          <text x="0" y="48" class="t-dim">음이항 α = 2: (1 + 1/2)^−2 ≈ 44.4 %</text>
+          <text x="0" y="68" class="t-dim">음이항 α = 0.5: (1 + 2)^−0.5 ≈ 57.7 %</text>
+          <text x="0" y="104" class="t-dim">뭉친 결함은 이미 죽은 다이에</text>
+          <text x="0" y="122" class="t-dim">거듭 떨어져 "낭비"된다.</text>
+          <text x="0" y="140" class="t-dim">결함 수가 같아도 군집이 강하면</text>
+          <text x="0" y="158" class="t-dim">수율이 높다.</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-4.</b> 무작위 결함 vs 군집 결함. 결함 수(16개)와 다이 수(16개)가 같아도 결함이 뭉치면 불량 다이가 적다. 음이항 모델의 \(\alpha\)는 이 뭉침의 정도를 하나의 수로 나타낸다. 측정된 \(\alpha\)는 공정과 다이 크기에 따라 대략 0.5–5 범위다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-mc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>결함 몬테카를로: 웨이퍼에 결함 뿌리기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="mc-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>다이 크기</span><div class="seg" id="mc-a"><button data-value="780" class="on">26×30</button><button data-value="400">20×20</button><button data-value="200">14×14</button><button data-value="100">10×10</button></div></div>
+          <label class="ctrl"><span>결함 밀도 \(D_0\) <output id="mc-d-out"></output></span><input type="range" id="mc-d" min="0.02" max="0.5" step="0.01" value="0.08"></label>
+          <label class="ctrl"><span>군집 계수 \(\alpha\) <output id="mc-al-out"></output></span><input type="range" id="mc-al" min="0.5" max="10" step="0.5" value="2"></label>
+          <label class="check"><input type="checkbox" id="mc-cl" checked> 군집(다이마다 감마 분포 밀도)</label>
+          <div class="btn-row"><button class="btn primary" id="mc-run">웨이퍼 1장</button><button class="btn" id="mc-run20">20장</button><button class="btn" id="mc-rst">초기화</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">누적 웨이퍼 / 다이</span><span class="v" id="mc-n">—</span></div>
+        <div class="stat"><span class="k">몬테카를로 수율</span><span class="v" id="mc-y">—</span></div>
+        <div class="stat"><span class="k">포아송 \(e^{-AD_0}\)</span><span class="v" id="mc-p">—</span></div>
+        <div class="stat"><span class="k">음이항(α)</span><span class="v" id="mc-nb">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(26×30, \(D_0\) 0.08, α 2, 군집 켬)에서 "20장"을 몇 번 누르면 수율이 음이항 58.1 %로 모이고 포아송 53.6 %보다 높다. ② 군집을 끄면 몬테카를로 수율이 포아송 53.6 % 쪽으로 옮겨 간다. ③ \(D_0\)를 0.3으로 올리고 다이를 10×10으로 바꾸면 포아송 74 %, 26×30은 약 10 %다. 결함 밀도가 높은 초기 공정에서는 큰 다이를 만들 수 없다.</div>
+    </div>
+
+    <div class="sim" id="sim-ya">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>수율 vs 다이 면적: 모델별 곡선</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ya-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>결함 밀도 \(D_0\) <output id="ya-d-out"></output></span><input type="range" id="ya-d" min="0.02" max="0.5" step="0.01" value="0.08"></label>
+          <label class="ctrl"><span>군집 계수 \(\alpha\) <output id="ya-al-out"></output></span><input type="range" id="ya-al" min="0.5" max="10" step="0.5" value="2"></label>
+          <label class="ctrl"><span>표시할 다이 면적 <output id="ya-A-out"></output></span><input type="range" id="ya-A" min="50" max="1000" step="10" value="780"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">포아송</span><span class="v" id="ya-p">—</span></div>
+        <div class="stat"><span class="k">음이항(α)</span><span class="v" id="ya-nb">—</span></div>
+        <div class="stat"><span class="k">머피</span><span class="v" id="ya-m">—</span></div>
+        <div class="stat"><span class="k">시즈(α = 1)</span><span class="v" id="ya-s">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 780 mm²에서 네 모델은 53.6 %(포아송)–61.6 %(시즈)로 약 8 %p 차이 난다. 원가 견적에서 어떤 모델을 쓰는지가 결과를 바꾼다. ② 100 mm²로 옮기면 네 모델이 92–93 %로 거의 겹친다. 작은 다이에서는 모델 선택이 중요하지 않다. ③ α를 10으로 올리면 음이항 곡선이 포아송에 붙는다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 포아송은 군집을 무시하므로 큰 다이 수율을 가장 낮게 본다. 원가 견적에서 보수적으로 쓰기 좋다. 이 장의 GX-1 계산은 포아송을 기준으로 한다(780 mm², \(D_0\) 0.08 → <b>53.6 %</b>). 반으로 나뉜 다이를 버리는 것이 아니라 다이 전체를 버린다는 점이 큰 다이의 약점이다. 다음 절은 이 약점을 GPU 구조로 줄이는 방법이다. 모델의 유도와 측정 방법은 <a href="../../yield/chapters/models.html">YieldBook 수율 모델 장</a>에 있다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="harvest">
+    <h2>하베스팅: 결함이 있어도 판다</h2>
+    <p>GPU는 같은 SM을 160개 반복한 칩이다. 결함이 SM 하나에 떨어지면 그 SM만 퓨즈로 끄고 나머지로 팔 수 있다. 이것이 <span class="term">하베스팅</span><span class="en">(harvesting)</span>이다. GX-1은 물리 SM 160개 중 144개만 켜서 판다. 16개(10 %)는 처음부터 여유다. 결함이 SM이 아닌 곳(L2 제어, 크로스바, HBM PHY, I/O, 클럭·전원 회로)에 떨어지면 대개 다이를 살릴 수 없다. SRAM 배열은 여분 행·열로 수리하므로 L2 데이터 배열의 결함 상당수도 살린다. 이 절은 단순하게 <b>SM 영역(160 × 3.2 = 512 mm²)의 결함은 그 SM만 끄고, 나머지 268 mm²의 결함은 다이를 버린다</b>고 본다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 340" role="img" aria-label="GX-1 다이 평면도: GPC 8개 × SM 20개, 가운데 L2, 양쪽 HBM PHY. 결함 셋이 SM에 떨어져 SM 3개를 끄고, 네 번째 결함이 PHY에 떨어지면 다이를 버린다">
+        <g transform="translate(20,20)">
+          <rect x="0" y="0" width="260" height="300" class="chip"/>
+          <rect x="0" y="0" width="22" height="300" class="k-dram"/><rect x="238" y="0" width="22" height="300" class="k-dram"/>
+          <text x="11" y="155" class="kt-dram" text-anchor="middle" transform="rotate(-90 11 150)">HBM PHY</text>
+          <text x="249" y="155" class="kt-dram" text-anchor="middle" transform="rotate(90 249 150)">HBM PHY</text>
+          <rect x="116" y="8" width="28" height="284" class="k-sram"/>
+          <text x="130" y="155" class="kt-sram" text-anchor="middle" transform="rotate(-90 130 150)">L2 · 크로스바</text>
+          <rect x="26" y="280" width="86" height="14" class="k-ctrl"/><rect x="148" y="280" width="86" height="14" class="k-ctrl"/>
+                    <path d="M26 8h86v66h-86z M148 8h86v66h-86z M26 76h86v66h-86z M148 76h86v66h-86z M26 144h86v66h-86z M148 144h86v66h-86z M26 212h86v66h-86z M148 212h86v66h-86z" class="k-compute"/>
+          <path d="M43.2 8v270 M60.4 8v270 M77.6 8v270 M94.8 8v270 M165.2 8v270 M182.4 8v270 M199.6 8v270 M216.8 8v270 M26 24.5h86 M26 41h86 M26 57.5h86 M148 24.5h86 M148 41h86 M148 57.5h86 M26 92.5h86 M26 109h86 M26 125.5h86 M148 92.5h86 M148 109h86 M148 125.5h86 M26 160.5h86 M26 177h86 M26 193.5h86 M148 160.5h86 M148 177h86 M148 193.5h86 M26 228.5h86 M26 245h86 M26 261.5h86 M148 228.5h86 M148 245h86 M148 261.5h86" class="ks-compute" stroke-width="0.8"/>
+          <rect x="60.4" y="41" width="17.2" height="16.5" class="f10-off"/>
+          <rect x="182.4" y="144" width="17.2" height="16.5" class="f10-off"/>
+          <rect x="26" y="228.5" width="17.2" height="16.5" class="f10-off"/>
+          <g class="f10-def"><circle cx="69" cy="49" r="4"/><circle cx="191" cy="152" r="4"/><circle cx="34" cy="237" r="4"/></g>
+          <circle cx="249" cy="64" r="5" class="f10-def"/>
+          <text x="40" y="318" class="t-dim">26 mm × 30 mm, GPC 8 × SM 20</text>
+        </g>
+        <g transform="translate(320,30)">
+          <text x="0" y="0" class="t t-b">결함 셋이 SM에 떨어진 다이</text>
+          <text x="0" y="24" class="t-dim">빨간 칸 SM 3개를 퓨즈로 끈다 → 157개 정상</text>
+          <text x="0" y="44" class="t">144개만 켜서 판매 가능(여유 13개 남음)</text>
+          <text x="0" y="84" class="t t-b">네 번째 결함이 HBM PHY에 떨어지면</text>
+          <text x="0" y="108" class="t-dim">PHY는 반복 구조가 아니고 6개 스택이 다 필요하다 → 폐기</text>
+          <text x="0" y="148" class="t t-b">면적 나누기(GX-1 가정)</text>
+          <rect x="0" y="162" width="340" height="22" class="k-compute"/><rect x="340" y="162" width="178" height="22" class="f10-dead"/>
+          <text x="170" y="178" class="t t-c" text-anchor="middle">SM 160 × 3.2 = 512 mm²</text>
+          <text x="429" y="178" class="t t-c" text-anchor="middle">비-SM 268 mm²</text>
+          <text x="0" y="208" class="t-dim">SM 하나에 결함이 있을 확률 p = 1 − e^−(0.032 × 0.08) ≈ 0.26 %</text>
+          <text x="0" y="228" class="t-dim">다이당 불량 SM 수 평균 160p ≈ 0.41개 → 16개를 넘을 확률은 사실상 0</text>
+          <text x="0" y="248" class="t-dim">비-SM이 깨끗할 확률 e^−(2.68 × 0.08) ≈ 80.7 %</text>
+          <text x="0" y="276" class="t">판매 가능 수율 ≈ 80.7 % (하베스팅 없이 53.6 %)</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-5.</b> GX-1의 하베스팅. 결함이 SM에 떨어지면 그 SM을 끄고 판다. 판매 가능 여부를 가르는 것은 대부분 반복되지 않는 비-SM 영역이다. 실제 칩에서는 끄는 단위가 GPC·TPC(SM 두 개 묶음)일 수도 있고, 끈 SM의 위치가 GPC마다 고르도록 규칙을 두기도 한다. 배치는 개념도다(<a href="noc.html">9장</a>에서 다이 평면 배치를 다룬다).</figcaption>
+    </figure>
+    <p>각 SM이 결함 없을 확률이 \(1-p\)이고 서로 독립이면, 불량 SM 수 \(k\)는 이항 분포를 따른다. 여유가 \(s\)개면 \(k \le s\)일 때 SM 조건을 통과한다.</p>
+    <div class="formula">$$Y_{\text{판매}} = e^{-A_{other} D_0}\sum_{k=0}^{s}\binom{n}{k}p^k(1-p)^{n-k},\qquad p = 1 - e^{-a_{SM} D_0}$$
+      <div class="where">\(n\) = 160(물리 SM), \(s\) = 16(여유), \(a_{SM}\) = 0.032 cm², \(A_{other}\) = 2.68 cm². \(s = 0\)이면 \(e^{-A_{other}D_0}(1-p)^n = e^{-AD_0}\)로 포아송 다이 수율과 같다.</div></div>
+
+    <div class="sim" id="sim-hv">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>SM 하베스팅: 여유 SM 수와 판매 가능 수율</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="hv-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>결함 밀도 \(D_0\) <output id="hv-d-out"></output></span><input type="range" id="hv-d" min="0.02" max="0.5" step="0.01" value="0.08"></label>
+          <label class="ctrl"><span>여유 SM 수 \(s\) <output id="hv-sp-out"></output></span><input type="range" id="hv-sp" min="0" max="32" step="1" value="16"></label>
+          <label class="ctrl"><span>비-SM(치명) 면적 <output id="hv-o-out"></output></span><input type="range" id="hv-o" min="100" max="400" step="4" value="268"></label>
+          <button class="btn primary" id="hv-draw">다이 하나 뽑기</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">SM당 불량 확률 p</span><span class="v" id="hv-p">—</span></div>
+        <div class="stat"><span class="k">다이당 불량 SM 평균</span><span class="v" id="hv-m">—</span></div>
+        <div class="stat"><span class="k">비-SM 무결</span><span class="v" id="hv-yo">—</span></div>
+        <div class="stat"><span class="k">판매 가능 수율</span><span class="v" id="hv-y">—</span></div>
+        <div class="stat"><span class="k">여유 0일 때</span><span class="v" id="hv-yf">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값에서 여유를 0 → 1 → 2 → 4로 늘리면 판매 가능 수율이 53.6 → 75.6 → 80.0 → 80.7 %로 오르고 그 뒤로는 거의 늘지 않는다. 성숙 공정만 보면 여유 4개로 충분하다. ② \(D_0\)를 0.5(초기 공정)로 올리면 불량 SM 평균이 약 2.5개가 되지만, 여유 16개는 여전히 넉넉하다. 이때 수율을 26 %로 끌어내리는 것은 비-SM 영역이다. ③ 비-SM 면적을 268 → 150 mm²로 줄이면(SRAM 수리·중복 설계) 기본값에서 수율이 88.7 %로 오른다. 하베스팅 다음 손잡이는 반복되지 않는 회로를 줄이는 것이다.</div>
+    </div>
+
+    <div class="callout fab"><strong>하베스팅이 GX-1 양품을 1.5배로 만든다</strong>포아송 다이 수율은 \(e^{-7.8 \times 0.08} = 53.6\) %이므로 웨이퍼당 양품은 70 × 0.536 ≈ 37.5개다. SM 여유 16개를 두면 판매 가능 수율이 80.7 %, 웨이퍼당 약 56.5개가 된다. 양품 다이당 원가는 $18,000 / 37.5 ≈ <b>$480</b>에서 $18,000 / 56.5 ≈ <b>$319</b>로 내려간다. 여유 SM 16개(51 mm², 다이의 6.6 %)는 피크 성능에 보태지 않지만, 그 면적 값보다 훨씬 큰 원가를 아낀다. 실제로는 결함 외에도 <b>속도가 느린 SM</b>(공정 편차)을 끄는 데 여유를 쓰고, 활성 SM 수가 다른 제품 등급(빈)을 따로 팔기도 한다. 비닝은 <a href="../../test/chapters/binning.html">TestBook 비닝 장</a>을 보라.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 수율은 "결함 없는 다이"가 아니라 "팔 수 있는 다이"의 비율이다. 같은 블록을 많이 반복하는 GPU는 블록 일부를 여유로 두는 것만으로 결함의 대부분을 흡수한다. 여유 16개가 결함만 보면 넉넉한 것은 속도 편차·전력 편차로 끄는 SM, 그리고 공정 초기의 높은 \(D_0\)까지 감당하기 위해서다. 남은 치명 면적(비-SM)은 SRAM 수리와 중복 설계로 줄인다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="cost">
+    <h2>양품 다이당 원가와 초선형성</h2>
+    <p>웨이퍼 원가는 다이 크기와 관계없이 고정이다. 양품 다이 하나의 원가는 웨이퍼 원가를 양품 수로 나눈 값이다.</p>
+    <div class="formula">$$C_{good} = \frac{C_{wafer}}{N_{die}(A)\,Y(A)},\qquad \frac{d\ln C_{good}}{d\ln A} \approx 1 + \frac{\epsilon}{1-2\epsilon} + AD_0,\quad \epsilon = \frac{\sqrt{2A}}{d}$$
+      <div class="where">오른쪽은 근사식 \(N_{die}\)와 포아송 수율을 넣어 미분한 결과(면적 탄력성)다. 1은 면적 비례, 둘째 항은 가장자리 손실, 셋째 항 \(AD_0\)는 수율 손실이다. GX-1(\(A\) = 7.86 cm² 피치, \(d\) = 294 mm)에서 \(1 + 0.18 + 0.62 \approx 1.8\).</div></div>
+    <p>면적 탄력성 1.8은 "다이 면적을 1 % 키우면 양품 다이 원가가 1.8 % 오른다"는 뜻이다. 면적이 작을 때는 탄력성이 1에 가깝고(원가 ∝ 면적), 클수록 커진다. 같은 연산을 다이 두 개로 나누면 실리콘 원가만 보면 이득이다. 근사식 기준으로 390 mm² 다이 두 개는 780 mm² 다이 하나보다 약 1.5배 싸다(다음 절에서 이 이득을 인터페이스·조립 비용과 비교한다).</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 210" role="img" aria-label="GX-1 원가 사슬: 웨이퍼 18,000달러, 다이 70개, 판매 가능 수율 80.7 %, 양품 56.5개, 다이 319달러, HBM과 인터포저를 더하고 조립 수율로 나누면 패키지 약 3,550달러">
+        <rect x="10" y="40" width="120" height="66" rx="8" class="card"/><text x="70" y="64" class="t t-b" text-anchor="middle">웨이퍼</text><text x="70" y="86" class="t" text-anchor="middle">$18,000</text>
+        <path d="M134 73 H160" class="arr"/>
+        <rect x="164" y="40" width="120" height="66" rx="8" class="k-compute"/><text x="224" y="64" class="t t-b" text-anchor="middle">다이 자리</text><text x="224" y="86" class="t" text-anchor="middle">70개</text>
+        <path d="M288 73 H314" class="arr"/><text x="301" y="30" class="t-dim" text-anchor="middle">× 0.807</text>
+        <rect x="318" y="40" width="120" height="66" rx="8" class="f10-ok"/><text x="378" y="64" class="t t-b" text-anchor="middle">판매 가능</text><text x="378" y="86" class="t" text-anchor="middle">56.5개</text>
+        <path d="M442 73 H468" class="arr"/>
+        <rect x="472" y="40" width="120" height="66" rx="8" class="k-compute"/><text x="532" y="64" class="t t-b" text-anchor="middle">로직 다이</text><text x="532" y="86" class="t" text-anchor="middle">$319</text>
+        <path d="M596 73 H622" class="arr"/>
+        <rect x="626" y="22" width="120" height="44" rx="8" class="k-dram"/><text x="686" y="49" class="t" text-anchor="middle">HBM 6개 $2,160</text>
+        <rect x="626" y="80" width="120" height="44" rx="8" class="k-link"/><text x="686" y="100" class="t" text-anchor="middle">인터포저·조립</text><text x="686" y="117" class="t" text-anchor="middle">·테스트 $1,000</text>
+        <path d="M750 73 H770" class="arr"/>
+        <rect x="774" y="40" width="80" height="66" rx="8" class="chip-a2"/><text x="814" y="64" class="t t-b" text-anchor="middle">패키지</text><text x="814" y="86" class="t" text-anchor="middle">$3,550</text>
+        <text x="430" y="160" class="t-dim" text-anchor="middle">패키지 = (다이 + HBM + 인터포저·조립·테스트) ÷ 조립 수율 0.98 — 조립에서 실패하면 다이와 HBM을 함께 잃는다</text>
+        <text x="430" y="182" class="t-dim" text-anchor="middle">하베스팅이 없으면 다이 $480, 패키지 약 $3,714</text>
+      </svg>
+      <figcaption><b>그림 10-6.</b> GX-1 원가 사슬(교육용 가정). 웨이퍼 원가가 다이 자리 수, 판매 가능 수율을 거쳐 양품 다이 원가가 되고, 여기에 HBM과 패키지 원가가 더해진다. 마지막 단계의 계산은 <a href="#package">8절</a> 시뮬레이터에서 직접 해 본다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-cs">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>양품 다이당 원가 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cs-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>웨이퍼 원가 <output id="cs-w-out"></output></span><input type="range" id="cs-w" min="3000" max="30000" step="500" value="18000"></label>
+          <label class="ctrl"><span>결함 밀도 \(D_0\) <output id="cs-d-out"></output></span><input type="range" id="cs-d" min="0.02" max="0.5" step="0.01" value="0.08"></label>
+          <div class="ctrl"><span>수율 모델</span><div class="seg" id="cs-m"><button data-value="poisson" class="on">포아송</button><button data-value="nb">음이항 α=2</button><button data-value="murphy">머피</button></div></div>
+          <label class="ctrl"><span>표시할 다이 면적 <output id="cs-A-out"></output></span><input type="range" id="cs-A" min="50" max="858" step="2" value="780"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">다이 수(근사식, 정사각)</span><span class="v" id="cs-n">—</span></div>
+        <div class="stat"><span class="k">수율</span><span class="v" id="cs-y">—</span></div>
+        <div class="stat"><span class="k">양품 다이당 원가</span><span class="v" id="cs-c">—</span></div>
+        <div class="stat"><span class="k">반쪽 다이 2개 대비</span><span class="v" id="cs-r">—</span></div>
+        <div class="stat"><span class="k">면적 탄력성</span><span class="v" id="cs-e">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(780 mm²)에서 양품 다이 원가는 약 $532(근사식 63개, 포아송, 하베스팅 없음)이고, 반쪽 다이 두 개보다 약 1.5배 비싸며, 탄력성은 약 1.8이다. ② 100 mm²로 옮기면 탄력성이 약 1.1로 거의 선형이다. 작은 다이는 면적만큼만 비싸다. ③ \(D_0\)를 0.25로 올리면 780 mm² 다이가 약 $2,000로 3.8배가 된다. 같은 설계라도 공정이 성숙할 때까지 큰 다이는 비싸다.</div>
+    </div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>손잡이(조건)</th><th>무엇이 바뀌나</th><th>결과(GX-1 기준)</th></tr></thead>
+      <tbody>
+        <tr><td>다이 면적 780 → 390 mm²</td><td>다이 수 약 2.2배(근사식), 수율 53.6 → 73 %</td><td>실리콘 원가: 반쪽 2개가 1개보다 약 1/1.5 (탄력성 1.8)</td></tr>
+        <tr><td>\(D_0\) 0.08 → 0.25 /cm²</td><td>포아송 수율 53.6 → 14 %</td><td>양품 다이 원가 약 3.8배(하베스팅 없음)</td></tr>
+        <tr><td>여유 SM 0 → 16개</td><td>판매 가능 수율 53.6 → 80.7 %</td><td>양품 다이 $480 → $319</td></tr>
+        <tr><td>격자 오프셋 최적화</td><td>다이 자리 67 → 70개</td><td>양품 다이 원가 약 4 % 절감</td></tr>
+        <tr><td>가장자리 제외 3 → 6 mm</td><td>다이 자리 70 → 68개</td><td>원가 약 3 % 상승</td></tr>
+        <tr><td>칩렛 2개 분할(하베스팅 있음)</td><td>실리콘 원가 $319 → $286, 조립 수율 0.98 → 0.97</td><td>패키지 원가 거의 같음(<a href="#chiplet">6절</a>)</td></tr>
+        <tr><td>HBM 6 → 8스택</td><td>HBM 원가 $2,160 → $2,880</td><td>패키지 원가 약 +$735, HBM 비중 61 → 67 %</td></tr>
+      </tbody>
+    </table></div>
+    <p><b>왜 이렇게 설계하는가.</b> 원가가 면적에 대해 초선형이라는 사실이 다이 크기의 경제적 상한을 만든다. 그런데도 GPU가 레티클 한계에 붙어 있는 것은 하베스팅이 수율 항을 \(AD_0\) = 0.62에서 \(A_{other}D_0\) = 0.21로 줄여 탄력성을 약 1.4로 낮추기 때문이다. 반복 구조가 적은 CPU·SoC는 같은 면적에서 이 혜택이 작다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="chiplet">
+    <h2>칩렛: 다이를 나누면 무엇을 얻고 잃나</h2>
+    <p><span class="term">칩렛</span><span class="en">(chiplet)</span>은 하나의 칩 기능을 여러 다이로 나누어 만들고 패키지 안에서 다시 잇는 방식이다. 얻는 것: (1) 작은 다이의 높은 수율, (2) 레티클 한계를 넘는 총 면적, (3) 블록마다 다른 공정(I/O는 성숙 공정, 연산은 첨단 공정), (4) 같은 다이를 여러 제품에 재사용. 잃는 것: (1) 다이 경계를 넘는 통신에 필요한 인터페이스 회로 면적과 전력, (2) 지연, (3) 패키지 조립이 복잡해지고 다이마다 조립 실패 확률이 곱해짐, (4) 다이마다 조립 전에 양품을 확인해야 하는 부담.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 280" role="img" aria-label="780 mm² 단일 다이, 405 mm² 다이 2개, 225 mm² 다이 4개로 나눈 비교와 각 다이 수·판매 가능 수율">
+        <g transform="translate(30,30)">
+          <text x="0" y="0" class="t t-b">단일 다이</text>
+          <rect x="0" y="14" width="130" height="150" class="k-compute"/>
+          <text x="65" y="94" class="t t-c" text-anchor="middle">26 × 30</text>
+          <text x="0" y="190" class="t">780 mm², 자리 70개</text>
+          <text x="0" y="210" class="t-dim">판매 가능 수율 80.7 %</text>
+          <text x="0" y="230" class="t-dim">조립 수율 0.98</text>
+        </g>
+        <g transform="translate(250,30)">
+          <text x="0" y="0" class="t t-b">2개: 26 × 15.6 mm</text>
+          <rect x="0" y="14" width="130" height="75" class="k-compute"/>
+          <rect x="0" y="89" width="130" height="3" class="kf-link"/>
+          <rect x="0" y="100" width="130" height="3" class="kf-link"/>
+          <rect x="0" y="103" width="130" height="75" class="k-compute"/>
+          <text x="140" y="100" class="kt-link">D2D</text>
+          <text x="0" y="200" class="t">405 mm² × 2, 자리 142개</text>
+          <text x="0" y="220" class="t-dim">판매 가능 수율 88.8 %</text>
+          <text x="0" y="240" class="t-dim">조립 수율 0.98 × 0.99</text>
+        </g>
+        <g transform="translate(470,30)">
+          <text x="0" y="0" class="t t-b">4개: 13 × 17.3 mm</text>
+          <rect x="0" y="14" width="64" height="82" class="k-compute"/><rect x="72" y="14" width="64" height="82" class="k-compute"/>
+          <rect x="0" y="104" width="64" height="82" class="k-compute"/><rect x="72" y="104" width="64" height="82" class="k-compute"/>
+          <rect x="62" y="14" width="2" height="172" class="kf-link"/><rect x="72" y="14" width="2" height="172" class="kf-link"/>
+          <rect x="0" y="94" width="136" height="2" class="kf-link"/><rect x="0" y="104" width="136" height="2" class="kf-link"/>
+          <text x="0" y="208" class="t">225 mm² × 4, 자리 263개</text>
+          <text x="0" y="228" class="t-dim">판매 가능 수율 92.5 %</text>
+          <text x="0" y="248" class="t-dim">조립 수율 0.98 × 0.99³</text>
+        </g>
+        <g transform="translate(660,40)">
+          <text x="0" y="0" class="t t-b">가정</text>
+          <text x="0" y="24" class="t-dim">다이 간 인터페이스</text>
+          <text x="0" y="42" class="t-dim">이웃 한 쪽당 15 mm²</text>
+          <text x="0" y="66" class="t-dim">SM·여유 SM은 균등 분할</text>
+          <text x="0" y="84" class="t-dim">(2개: 80 중 72 활성)</text>
+          <text x="0" y="108" class="t-dim">추가 다이마다 부착·연결</text>
+          <text x="0" y="126" class="t-dim">수율 0.99</text>
+          <text x="0" y="160" class="kt-link">연결 면적 합</text>
+          <text x="0" y="180" class="t-dim">2개: 30 mm² · 4개: 120 mm²</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 10-7.</b> 같은 GX-1 기능을 다이 1·2·4개로 나눌 때. 다이가 작아질수록 자리 수와 수율이 오르지만, 다이 간(D2D) 인터페이스 면적이 늘고 조립 수율이 다이 수만큼 곱해진다. 그림의 수율은 하베스팅을 포함한 값이다.</figcaption>
+    </figure>
+    <p>조립 전에 다이마다 동작을 확인한 다이를 <span class="term">KGD</span><span class="en">(known good die, 양품 확인 다이)</span>라 한다. 웨이퍼 테스트(프로브)는 고속 I/O나 전체 기능을 다 확인하지 못하므로, 불량 다이 일부가 테스트를 통과해 패키지로 들어간다(테스트 누락). 그러면 그 패키지의 다른 다이와 HBM까지 함께 버린다. 다이 \(n\)개짜리 패키지의 양품 원가는 다음과 같다.</p>
+    <div class="formula">$$C_{pkg} = \frac{n\,\dfrac{C_{die} + C_{test}}{P_{pass}} + C_{other}}{q^n\, Y_{asm}(n)},\qquad P_{pass} = Y + (1-Y)(1-c),\quad q = \frac{Y}{P_{pass}}$$
+      <div class="where">\(C_{die} = C_{wafer}/N_{die}\)는 다이 자리 원가, \(c\)는 KGD 검출률(불량 다이를 걸러낼 확률), \(P_{pass}\)는 통과율, \(q\)는 통과한 다이가 실제로 양품일 확률, \(C_{other}\)는 HBM과 인터포저·조립·테스트(GX-1 $3,160), \(Y_{asm}(n) = 0.98 \times 0.99^{\,n-1}\). \(c = 0\)이면 테스트 없이 조립하는 경우로 패키지 수율이 \(Y^n\)이 되어 분할 이득이 사라진다.</div></div>
+
+    <div class="sim" id="sim-cl">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>칩렛 분할: 1개 vs 2개 vs 4개 패키지 원가</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cl-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>결함 밀도 \(D_0\) <output id="cl-d-out"></output></span><input type="range" id="cl-d" min="0.02" max="0.5" step="0.01" value="0.08"></label>
+          <label class="ctrl"><span>D2D 인터페이스(이웃당) <output id="cl-if-out"></output></span><input type="range" id="cl-if" min="0" max="60" step="1" value="15"></label>
+          <label class="ctrl"><span>KGD 검출률 \(c\) <output id="cl-cov-out"></output></span><input type="range" id="cl-cov" min="0" max="100" step="1" value="100"></label>
+          <label class="ctrl"><span>다이당 KGD 테스트 원가 <output id="cl-t-out"></output></span><input type="range" id="cl-t" min="0" max="100" step="5" value="0"></label>
+          <label class="ctrl"><span>추가 다이 부착 수율 <output id="cl-ya-out"></output></span><input type="range" id="cl-ya" min="95" max="100" step="0.1" value="99"></label>
+          <label class="check"><input type="checkbox" id="cl-h" checked> SM 하베스팅</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">단일 다이</span><span class="v" id="cl-1">—</span></div>
+        <div class="stat"><span class="k">2개 분할</span><span class="v" id="cl-2">—</span></div>
+        <div class="stat"><span class="k">4개 분할</span><span class="v" id="cl-4">—</span></div>
+        <div class="stat"><span class="k">가장 싼 구성</span><span class="v" id="cl-best">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값에서 1개 $3,550, 2개 $3,551로 같다. 하베스팅이 이미 수율 이득을 대부분 가져갔기 때문이다. ② 하베스팅을 끄면 1개 $3,714, 2개 $3,618로 분할이 약 $96 싸다. ③ \(D_0\)를 0.25로 올리면(초기 공정, 하베스팅 켬) 2개 $3,636이 1개 $3,737보다 약 $100 싸고, 4개($3,690)는 조립 수율 때문에 2개보다 비싸다. ④ KGD 검출률을 0 %로 내리면 1개 $4,321, 2개 $4,466, 4개 $4,925로 다이가 많을수록 비싸다. 칩렛은 KGD 없이는 성립하지 않는다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 반복 구조와 하베스팅이 있는 GPU에서 순수한 수율 이득만으로는 칩렛 분할이 큰 이득이 아니다(성숙 공정 기준). 칩렛의 진짜 동기는 <b>레티클 한계를 넘는 총 면적</b>(780 mm² 두 개를 한 패키지에)과 <b>초기 공정의 높은 \(D_0\)</b>, 그리고 I/O·SRAM을 싼 공정으로 빼는 <b>공정 분리</b>다. 그 대신 다이 간 링크가 온칩 배선만큼 넓고 싸야 한다. 다음 절의 주제다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="d2d">
+    <h2>다이 간 링크: 병렬 단거리 vs SerDes</h2>
+    <p>GX-1을 L2 파티션 경계에서 둘로 자른다면, 두 L2 파티션 사이의 약 4 TB/s(<a href="noc.html">9장</a>)가 다이 경계를 넘어야 한다. 이 정도 대역폭을 다이 가장자리 몇 mm로 통과시키는 방법은 두 가지다. 하나는 실리콘 인터포저나 로컬 실리콘 브리지 위에서 마이크로범프로 수천 개의 느린 선을 병렬로 잇는 <span class="term">병렬 단거리 링크</span><span class="en">(parallel die-to-die link)</span>, 다른 하나는 유기 기판 위로 소수의 고속 직렬 레인을 쓰는 <span class="term">SerDes</span>다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 270" role="img" aria-label="왼쪽: 실리콘 인터포저 위 두 다이가 45 µm 마이크로범프와 2 mm 이하의 미세 배선으로 연결. 오른쪽: 유기 기판 위 두 패키지가 SerDes 레인 몇 개로 수십 mm 연결">
+        <text x="20" y="22" class="t t-b">병렬 단거리(실리콘 위)</text>
+        <rect x="30" y="60" width="160" height="40" class="m-si"/><rect x="210" y="60" width="160" height="40" class="m-si"/>
+        <g class="m-sol"><circle cx="160" cy="106" r="4"/><circle cx="170" cy="106" r="4"/><circle cx="180" cy="106" r="4"/><circle cx="220" cy="106" r="4"/><circle cx="230" cy="106" r="4"/><circle cx="240" cy="106" r="4"/><circle cx="60" cy="106" r="4"/><circle cx="100" cy="106" r="4"/><circle cx="300" cy="106" r="4"/><circle cx="340" cy="106" r="4"/></g>
+        <rect x="20" y="110" width="360" height="34" class="m-interp"/>
+        <path d="M160 116 H240 M170 122 H230 M180 128 H220" class="ks-link" stroke-width="1.6"/>
+        <rect x="20" y="144" width="360" height="30" class="m-sub"/>
+        <text x="200" y="196" class="kt-link" text-anchor="middle">선 수천 개 × 약 16 Gb/s, 길이 2 mm 이하</text>
+        <text x="200" y="216" class="t-dim" text-anchor="middle">범프 피치 약 45 µm, 약 0.5 pJ/bit, 지연 수 ns</text>
+        <text x="110" y="85" class="t t-c" text-anchor="middle">다이 A</text><text x="290" y="85" class="t t-c" text-anchor="middle">다이 B</text>
+        <text x="200" y="240" class="t-dim" text-anchor="middle">실리콘 인터포저 또는 로컬 실리콘 브리지</text>
+
+        <text x="460" y="22" class="t t-b">SerDes(유기 기판 위)</text>
+        <rect x="470" y="60" width="130" height="40" class="m-si"/><rect x="700" y="60" width="130" height="40" class="m-si"/>
+        <g class="m-sol"><circle cx="490" cy="106" r="6"/><circle cx="530" cy="106" r="6"/><circle cx="580" cy="106" r="6"/><circle cx="720" cy="106" r="6"/><circle cx="770" cy="106" r="6"/><circle cx="810" cy="106" r="6"/></g>
+        <rect x="460" y="112" width="380" height="50" class="m-sub"/>
+        <path d="M580 120 C 620 150, 680 150, 720 120" class="ks-link"/>
+        <rect x="570" y="68" width="26" height="24" class="kf-link"/><rect x="704" y="68" width="26" height="24" class="kf-link"/>
+        <text x="650" y="186" class="kt-link" text-anchor="middle">레인 수십 개 × 112 Gb/s PAM4, 길이 수십 mm</text>
+        <text x="650" y="206" class="t-dim" text-anchor="middle">C4 범프 약 150 µm · 약 2 pJ/bit · 10 ns 이상</text>
+        <text x="535" y="85" class="t t-c" text-anchor="middle">다이 A</text><text x="775" y="85" class="t t-c" text-anchor="middle">다이 B</text>
+        <text x="583" y="56" class="t-dim" text-anchor="middle">SerDes</text>
+      </svg>
+      <figcaption><b>그림 10-8.</b> 다이 간 링크의 두 방식. 실리콘 위에서는 범프와 배선이 촘촘하고 짧아 선 하나를 느리게, 많이 쓰는 것이 유리하다(직렬화·클럭 복원·이퀄라이저가 필요 없음). 기판 위에서는 범프와 배선이 성기므로 레인 하나를 빠르게 돌려야 하고, 그 대가가 비트당 에너지와 지연이다. SerDes 물리는 <a href="scale.html">14장</a>, 인터포저 공정은 <a href="../../packaging/chapters/interposer.html">PackagingBook 인터포저 장</a>에서 다룬다.</figcaption>
+    </figure>
+    <p>병렬 링크의 대역폭 밀도는 다이 가장자리 1 mm에 놓을 수 있는 신호 범프 수와 선당 속도로 정해진다. 범프 피치 \(p\)인 정사각 격자를 깊이 \(D\)만큼 두면</p>
+    <div class="formula">$$\rho_{BW} = \frac{1}{p}\cdot\frac{D}{p}\cdot f_d \cdot r\quad[\text{Tb/s/mm}],\qquad P_{link} = BW \cdot E_{bit}$$
+      <div class="where">\(f_d\)는 신호 범프 비율(나머지는 전원·접지·클럭, 여기서 0.5), \(r\)은 선당 속도. \(p\) = 45 µm, \(D\) = 1 mm, \(r\) = 16 Gb/s이면 \(22.2 \times 22.2 \times 0.5 \times 16 \approx 3.95\) Tb/s/mm(양방향 합). 4 TB/s = 32 Tb/s에는 가장자리 약 8 mm가 필요하고, 0.5 pJ/bit이면 전력은 약 16 W다.</div></div>
+
+    <div class="sim" id="sim-lk">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>다이 간 링크 비교: 가장자리 길이·전력·지연</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="lk-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>필요 대역폭(양방향 합) <output id="lk-bw-out"></output></span><input type="range" id="lk-bw" min="0.5" max="10" step="0.5" value="4"></label>
+          <label class="ctrl"><span>실리콘 범프 피치 \(p\) <output id="lk-p-out"></output></span><input type="range" id="lk-p" min="20" max="55" step="1" value="45"></label>
+          <label class="ctrl"><span>병렬 선당 속도 \(r\) <output id="lk-r-out"></output></span><input type="range" id="lk-r" min="4" max="32" step="1" value="16"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">실리콘 병렬 밀도</span><span class="v" id="lk-d">—</span></div>
+        <div class="stat"><span class="k">실리콘 병렬 가장자리</span><span class="v" id="lk-s">—</span></div>
+        <div class="stat"><span class="k">실리콘 병렬 전력</span><span class="v" id="lk-pw">—</span></div>
+        <div class="stat"><span class="k">SerDes 전력</span><span class="v" id="lk-sd">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(4 TB/s)에서 실리콘 병렬은 가장자리 8.1 mm·16 W, 유기 기판 병렬은 68 mm, SerDes는 64 mm·64 W다. 26 mm 다이 변 하나에 들어가는 것은 실리콘 병렬뿐이다. ② 범프 피치를 45 → 25 µm로 줄이면(차세대 마이크로범프) 밀도가 약 3.2배(12.8 Tb/s/mm)가 되어 가장자리 2.5 mm로 충분하다. 하이브리드 본딩(10 µm 이하)은 이 방향의 끝이다. ③ 선당 속도를 32 Gb/s로 올리면 가장자리는 반이 되지만 비트당 에너지가 0.51 → 0.76 pJ/bit로 오른다. 넓고 느린 링크가 에너지에 유리하다는 HBM의 논리(<a href="hbm.html">8장</a>)와 같다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 칩렛 GPU의 다이 간 링크는 온칩 배선을 "조금 늘인 것"처럼 보여야 한다. 그래야 소프트웨어가 두 다이를 하나의 GPU로 쓸 수 있다. 그 조건(수 TB/s, 1 pJ/bit 이하, 수 ns)을 만족하는 것은 실리콘 위 병렬 링크뿐이므로, 칩렛 GPU는 실리콘 인터포저나 브리지 패키징과 짝을 이룬다. SerDes는 패키지와 패키지 사이(GX-Link, 5 pJ/bit)에 쓴다.</p>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="package">
+    <h2>패키지 원가 합산: 로직 다이는 일부일 뿐</h2>
+    <p>GX-1 패키지는 로직 다이 1개, HBM 스택 6개, 실리콘 인터포저, 유기 기판으로 이루어진다. HBM은 스택마다 이미 테스트된 KGD로 들어오고(DRAM 다이 8개 + 베이스 다이를 쌓고 시험한 뒤), 인터포저 위에 로직 다이와 함께 얹는다. 조립 마지막에 실패하면 그 위에 올라간 모든 것을 잃는다. 패키지 원가는</p>
+    <div class="formula">$$C_{pkg} = \frac{C_{die} + n_{HBM}\,G\,c_{GB} + C_{asm}}{Y_{asm}}$$
+      <div class="where">\(C_{die}\)는 양품 다이 원가, \(n_{HBM}\)은 스택 수(6), \(G\)는 스택 용량(24 GB), \(c_{GB}\)는 GB당 원가($15), \(C_{asm}\)은 인터포저·조립·테스트($1,000), \(Y_{asm}\)은 조립·최종 테스트 수율(여기서 0.98로 가정). 인터포저 원가 자체의 구성은 <a href="package.html">11장</a>에서 더한다.</div></div>
+
+    <div class="sim" id="sim-pk">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>GX-1 패키지 원가 합산</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pk-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>로직 다이 면적 <output id="pk-A-out"></output></span><input type="range" id="pk-A" min="560" max="858" step="2" value="780"></label>
+          <label class="ctrl"><span>결함 밀도 \(D_0\) <output id="pk-d-out"></output></span><input type="range" id="pk-d" min="0.02" max="0.5" step="0.01" value="0.08"></label>
+          <label class="ctrl"><span>HBM 스택 수 <output id="pk-n-out"></output></span><input type="range" id="pk-n" min="4" max="8" step="1" value="6"></label>
+          <div class="ctrl"><span>스택 용량</span><div class="seg" id="pk-c"><button data-value="16">16 GB</button><button data-value="24" class="on">24 GB</button><button data-value="36">36 GB</button></div></div>
+          <label class="ctrl"><span>HBM GB당 원가 <output id="pk-g-out"></output></span><input type="range" id="pk-g" min="5" max="30" step="0.5" value="15"></label>
+          <label class="ctrl"><span>인터포저·조립·테스트 <output id="pk-o-out"></output></span><input type="range" id="pk-o" min="300" max="3000" step="50" value="1000"></label>
+          <label class="ctrl"><span>조립 수율 <output id="pk-y-out"></output></span><input type="range" id="pk-y" min="90" max="100" step="0.5" value="98"></label>
+          <label class="check"><input type="checkbox" id="pk-h" checked> SM 하베스팅(SM 512 mm² 고정)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">양품 로직 다이</span><span class="v" id="pk-die">—</span></div>
+        <div class="stat"><span class="k">HBM 합</span><span class="v" id="pk-hbm">—</span></div>
+        <div class="stat"><span class="k">패키지 원가</span><span class="v" id="pk-tot">—</span></div>
+        <div class="stat"><span class="k">HBM 비중</span><span class="v" id="pk-sh">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값에서 패키지는 약 $3,550이고 HBM이 61 %, 로직 다이가 9 %다. ② 조립 수율을 98 → 92 %로 내리면 패키지가 약 $3,780으로 $230 오른다. 다이 값의 70 %가 넘는 증가다. 조립 손실은 HBM까지 버린다. ③ 스택을 8개·36 GB로 바꾸면(288 GB) HBM이 $4,320으로 75 % 비중이 된다. 메모리 용량이 원가를 정한다.</div>
+    </div>
+
+    <div class="callout fab"><strong>GX-1 패키지 원가 약 $3,550</strong>교육용 가정으로 계산하면: 양품 로직 다이 <b>$319</b>(웨이퍼 $18,000 ÷ (70 × 0.807)), HBM 6 × 24 GB × $15 = <b>$2,160</b>, 인터포저·조립·테스트 <b>$1,000</b>, 합 $3,479를 조립 수율 0.98로 나누면 <b>약 $3,550</b>이다. 비중은 HBM 약 61 %, 인터포저·조립·테스트 약 28 %, 로직 다이 약 9 %, 조립 손실 약 2 %. 하베스팅이 없다면 다이 $480, 패키지 약 $3,714다. 로직 다이는 패키지 원가의 10분의 1이지만, 다이 크기가 대역폭(HBM PHY를 놓을 가장자리 길이)과 연산량을 정하므로 다이를 줄여 아낄 수 있는 원가는 생각보다 작다. 이 값은 제조 원가이며 보드·전원·냉각판·설계 비용(NRE)·마진은 포함하지 않는다(<a href="roadmap.html">16장</a>).</div>
+    <p><b>왜 이렇게 설계하는가.</b> 패키지 원가에서 로직 다이가 차지하는 몫이 작으므로, 로직 다이를 레티클 한계까지 키워 HBM 6개를 다 쓸 연산과 PHY 가장자리를 확보하는 편이 패키지당 성능/원가에 유리하다. 반대로 조립 수율 1 %p는 패키지 원가 약 $36, 다이 원가의 약 11 %에 해당한다. 그래서 KGD 테스트와 조립 공정 관리에 큰 비용을 쓴다. 테스트 원가 구조는 <a href="../../test/chapters/cost.html">TestBook 원가 장</a>을 보라.</p>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>로직 다이 한 개의 면적 상한은 레티클 필드 26 × 33 mm = 858 mm²다. GX-1(780 mm²)은 그 91 %를 쓴다. 넘으려면 칩렛으로 나눈다.</li>
+      <li>웨이퍼당 다이 수는 \(\pi d^2/4A - \pi d/\sqrt{2A}\)로 근사하지만, 큰 다이는 격자 배치와 오프셋 최적화로 직접 센다. GX-1은 300 mm 웨이퍼에 70개(근사식 63개).</li>
+      <li>포아송 수율 \(e^{-AD_0}\)은 군집을 무시한 가장 보수적인 모델이다. 결함이 뭉칠수록(α↓) 같은 \(D_0\)에서 수율이 높다. GX-1: 포아송 53.6 %, 음이항(α = 2) 58.1 %.</li>
+      <li>하베스팅은 반복 블록의 결함을 흡수한다. SM 160 중 144를 켜면 판매 가능 수율은 비-SM 영역 무결 확률 \(e^{-A_{other}D_0} \approx 80.7\) %로 정해진다.</li>
+      <li>양품 다이 원가는 면적에 초선형이다(GX-1 탄력성 약 1.8). 하베스팅이 수율 항을 지워 큰 다이를 경제적으로 만든다.</li>
+      <li>칩렛은 KGD와 조립 수율, D2D 인터페이스 면적을 대가로 수율·레티클·공정 분리 이득을 얻는다. 하베스팅이 있는 성숙 공정에서는 수율 이득이 작다.</li>
+      <li>다이 간 링크는 실리콘 위 병렬 단거리 링크(약 4 Tb/s/mm, 약 0.5 pJ/bit)여야 온칩처럼 쓸 수 있다. SerDes는 패키지 사이에 쓴다.</li>
+      <li>GX-1 패키지 원가는 약 $3,550이고 HBM이 약 61 %, 로직 다이는 약 9 %다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. GX-1 로직 다이(26 × 30 mm)가 표준 레티클 필드에서 차지하는 비율은?</p><div class="opts">
+        <button class="opt">약 66 %</button><button class="opt" data-correct>약 91 %</button><button class="opt">약 100 %</button><button class="opt">약 110 %(스티칭 필요)</button>
+      </div><div class="quiz-exp">레티클 필드는 26 × 33 = 858 mm²이고, 780 / 858 ≈ 0.91이다. 66 %는 다이 중 SM 면적 비율(512 / 780)이다.</div></div>
+
+      <div class="quiz-q"><p>2. 780 mm² 다이, \(D_0\) = 0.08 /cm²일 때 포아송 수율에 가장 가까운 값은?</p><div class="opts">
+        <button class="opt" data-correct>약 54 %</button><button class="opt">약 81 %</button><button class="opt">약 92 %</button><button class="opt">약 24 %</button>
+      </div><div class="quiz-exp">\(AD_0\) = 7.8 cm² × 0.08 = 0.624, \(e^{-0.624} \approx 0.536\). 81 %는 하베스팅을 반영한 판매 가능 수율이다.</div></div>
+
+      <div class="quiz-q"><p>3. 평균 결함 밀도 \(D_0\)가 같을 때, 결함이 뭉쳐 있으면(군집 계수 α가 작으면) 큰 다이의 수율은?</p><div class="opts">
+        <button class="opt">낮아진다. 한 곳에 결함이 몰려 다이가 더 많이 죽는다.</button><button class="opt">변하지 않는다. 결함 수가 같기 때문이다.</button><button class="opt" data-correct>높아진다. 이미 결함이 있는 다이에 결함이 거듭 떨어져 불량 다이 수가 줄어든다.</button><button class="opt">α는 다이 면적에만 의존하므로 수율과 관계없다.</button>
+      </div><div class="quiz-exp">음이항 \((1+AD_0/\alpha)^{-\alpha}\)는 α가 작을수록 커진다. 같은 결함 수가 더 적은 다이에 몰리므로 결함 없는 다이가 늘어난다.</div></div>
+
+      <div class="quiz-q"><p>4. GX-1(SM 160 중 144 활성, \(D_0\) = 0.08)에서 판매 가능 수율을 사실상 결정하는 것은?</p><div class="opts">
+        <button class="opt">불량 SM이 16개를 넘을 확률</button><button class="opt">SM 하나의 결함 확률 p</button><button class="opt">HBM 스택의 수율</button><button class="opt" data-correct>비-SM 영역(약 268 mm²)에 결함이 없을 확률</button>
+      </div><div class="quiz-exp">다이당 불량 SM 평균은 160 × 0.26 % ≈ 0.41개라 16개를 넘을 확률은 거의 0이다. 남는 것은 \(e^{-2.68 \times 0.08} \approx 0.807\)이다.</div></div>
+
+      <div class="quiz-q"><p>5. 큰 다이에서 면적을 두 배로 늘리면 양품 다이 원가는?</p><div class="opts">
+        <button class="opt">정확히 두 배가 된다.</button><button class="opt" data-correct>두 배보다 더 오른다. 다이 수가 반 이하로 줄고 수율도 떨어진다.</button><button class="opt">두 배보다 덜 오른다. 웨이퍼 원가가 고정이기 때문이다.</button><button class="opt">변하지 않는다.</button>
+      </div><div class="quiz-exp">\(C = C_{wafer}/(N Y)\)에서 \(N\)은 면적에 반비례보다 빨리 줄고(가장자리 손실), \(Y\)도 지수적으로 준다. GX-1 크기에서 면적 탄력성은 약 1.8이다.</div></div>
+
+      <div class="quiz-q"><p>6. 다이 4개짜리 칩렛 패키지를 KGD 테스트 없이(검출률 0) 조립하면?</p><div class="opts">
+        <button class="opt">수율 이득이 그대로 남는다.</button><button class="opt">조립 수율만 떨어지고 다이 수율은 무관하다.</button><button class="opt" data-correct>패키지 수율이 다이 수율의 4제곱이 되어 분할 이득이 사라지고 HBM까지 버린다.</button><button class="opt">테스트 원가가 줄어 항상 더 싸다.</button>
+      </div><div class="quiz-exp">테스트 없이 조립하면 네 다이가 모두 양품일 확률 \(Y^4\)가 패키지 수율이다. 작은 다이 4개의 \(Y^4\)는 큰 다이 하나의 \(Y\)와 비슷하거나 낮고, 실패한 패키지는 HBM 6개까지 잃는다.</div></div>
+
+      <div class="quiz-q"><p>7. 칩렛 GPU의 다이 간 링크로 SerDes보다 실리콘 위 병렬 단거리 링크를 쓰는 주된 이유는?</p><div class="opts">
+        <button class="opt" data-correct>가장자리 mm당 대역폭이 수 배 높고 비트당 에너지(약 0.5 vs 2 pJ/bit 이상)와 지연이 작다.</button><button class="opt">레인당 속도가 더 빠르다.</button><button class="opt">유기 기판만으로 만들 수 있어 싸다.</button><button class="opt">수십 mm 이상 멀리 보낼 수 있다.</button>
+      </div><div class="quiz-exp">병렬 링크는 선 하나는 느리지만 45 µm 범프로 선을 아주 많이 둘 수 있어 약 4 Tb/s/mm에 이른다. 대신 실리콘 인터포저·브리지가 필요하고 도달 거리가 수 mm로 짧다.</div></div>
+
+      <div class="quiz-q"><p>8. 이 장의 교육용 가정에서 GX-1 패키지 원가 중 가장 큰 항목은?</p><div class="opts">
+        <button class="opt">로직 다이</button><button class="opt">인터포저·조립·테스트</button><button class="opt">조립 수율 손실</button><button class="opt" data-correct>HBM 6스택</button>
+      </div><div class="quiz-exp">HBM 144 GB × $15 = $2,160으로 약 $3,550의 약 61 %다. 로직 다이는 $319로 약 9 %다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+/* ================================================================== 모델(순수 함수, DOM 없음)
+   gpu/scripts/die-sims.cjs가 model 블록을 잘라 node:vm에서 검사한다. */
+/* model:wafer */
+function dieGrid(o) {
+  var D = o.D || 300, R = D / 2 - o.edge, Rw = D / 2, px = o.w + o.s, py = o.h + o.s;
+  var ox = o.ox == null ? -o.w / 2 : o.ox, oy = o.oy == null ? -o.h / 2 : o.oy;
+  var i0 = Math.floor((-Rw - ox) / px) - 1, i1 = Math.ceil((Rw - ox) / px) + 1;
+  var j0 = Math.floor((-Rw - oy) / py) - 1, j1 = Math.ceil((Rw - oy) / py) + 1;
+  var full = 0, part = 0, dies = [], R2 = R * R;
+  for (var i = i0; i <= i1; i++) for (var j = j0; j <= j1; j++) {
+    var x0 = ox + i * px, y0 = oy + j * py, x1 = x0 + o.w, y1 = y0 + o.h;
+    var fx = Math.max(x0 * x0, x1 * x1), fy = Math.max(y0 * y0, y1 * y1);
+    var nx = x0 > 0 ? x0 : x1 < 0 ? x1 : 0, ny = y0 > 0 ? y0 : y1 < 0 ? y1 : 0;
+    if (nx * nx + ny * ny >= Rw * Rw) continue;
+    var isFull = fx + fy <= R2;
+    if (isFull) full++; else part++;
+    if (o.list) dies.push({ x: x0, y: y0, full: isFull });
+  }
+  return { full: full, partial: part, dies: dies, ox: ox, oy: oy };
+}
+function bestOffset(o, n) {
+  n = n || 16;
+  var px = o.w + o.s, py = o.h + o.s, best = null;
+  for (var a = 0; a < n; a++) for (var b = 0; b < n; b++) {
+    var g = dieGrid({ D: o.D, edge: o.edge, w: o.w, h: o.h, s: o.s, ox: (a / n) * px, oy: (b / n) * py });
+    if (!best || g.full > best.full) best = g;
+  }
+  return best;
+}
+function dpwFormula(d, A) { return Math.max(0, Math.PI * d * d / (4 * A) - Math.PI * d / Math.sqrt(2 * A)); }
+/* /model:wafer */
+/* model:yield */
+function yPoisson(A, D) { return Math.exp(-A * D); }
+function yMurphy(A, D) { var x = A * D; return x < 1e-9 ? 1 : Math.pow((1 - Math.exp(-x)) / x, 2); }
+function yNB(A, D, a) { return Math.pow(1 + A * D / a, -a); }
+function ySeeds(A, D) { return 1 / (1 + A * D); }
+/* /model:yield */
+/* model:harvest */
+function harvest(o) {
+  var p = 1 - Math.exp(-o.aSM / 100 * o.D0), q = 1 - p, n = o.nSM, spare = n - o.need;
+  var pmf = [], cur = Math.pow(q, n), cdf = 0, ok = 0;
+  for (var k = 0; k <= n; k++) { pmf.push(cur); if (k <= spare) ok += cur; cur = p > 0 && q > 0 ? cur * (n - k) / (k + 1) * p / q : 0; }
+  var yo = Math.exp(-o.aOther / 100 * o.D0);
+  return { p: p, pmf: pmf, pSM: Math.min(1, ok), yOther: yo, y: yo * Math.min(1, ok), yFull: yo * Math.pow(q, n), mean: n * p };
+}
+/* /model:harvest */
+/* model:mc */
+function mkRng(seed) { var a = seed >>> 0; return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; var t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function randn(rng) { var u = 1 - rng(), v = rng(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+function gammaSample(rng, a) {
+  if (a < 1) return gammaSample(rng, a + 1) * Math.pow(1 - rng(), 1 / a);
+  var d = a - 1 / 3, c = 1 / Math.sqrt(9 * d);
+  for (;;) { var x = randn(rng), v = 1 + c * x; if (v <= 0) continue; v = v * v * v; var u = 1 - rng(); if (Math.log(u) < 0.5 * x * x + d - d * v + d * Math.log(v)) return d * v; }
+}
+function poissonSample(rng, lam) {
+  if (lam <= 0) return 0;
+  if (lam > 40) return Math.max(0, Math.round(lam + Math.sqrt(lam) * randn(rng)));
+  var L = Math.exp(-lam), k = 0, p = 1; do { k++; p *= rng(); } while (p > L); return k - 1;
+}
+/* 다이마다 결함 밀도 배율 g ~ Gamma(α, 1/α)(평균 1)를 뽑고 결함 수 ~ Poisson(A·D0·g) → 다이 수율은 음이항 */
+function simWafer(n, Acm2, D0, alpha, clustered, rng) {
+  var out = [], good = 0;
+  for (var i = 0; i < n; i++) {
+    var g = clustered ? gammaSample(rng, alpha) / alpha : 1, k = poissonSample(rng, Acm2 * D0 * g), pts = [];
+    for (var j = 0; j < k; j++) pts.push([rng(), rng()]);
+    if (!k) good++;
+    out.push(pts);
+  }
+  return { dies: out, good: good };
+}
+/* /model:mc */
+/* model:cost */
+var GX = { W: 18000, D0: 0.08, edge: 3, s: 0.1, w: 26, h: 30, aSM: 3.2, nSM: 160, need: 144, aOther: 268, gbStack: 24, perGB: 15, nHBM: 6, other: 1000, yAsm: 0.98 };
+function dieDims(A, aspect) { var w = Math.sqrt(A * aspect); return [w, A / w]; }
+function goodDieCost(o) {
+  var g = bestOffset({ D: 300, edge: o.edge, w: o.w, h: o.h, s: o.s }, o.n || 16), A = o.w * o.h / 100;
+  var y = o.harvest ? harvest({ D0: o.D0, aSM: o.aSM, nSM: o.nSM, need: o.need, aOther: o.aOther }).y : yPoisson(A, o.D0);
+  var good = g.full * y;
+  return { dpw: g.full, y: y, good: good, cost: good > 0 ? o.W / good : Infinity };
+}
+function costCurve(A, D0, W, edge, s, model, alpha) {
+  var side = Math.sqrt(A), dpw = dpwFormula(300 - 2 * edge, (side + s) * (side + s)), Ac = A / 100;
+  var y = model === "nb" ? yNB(Ac, D0, alpha) : model === "murphy" ? yMurphy(Ac, D0) : yPoisson(Ac, D0);
+  return { dpw: dpw, y: y, cost: dpw * y > 1e-9 ? W / (dpw * y) : Infinity };
+}
+/* /model:cost */
+/* model:chiplet */
+function chiplet(o) {
+  var n = o.n, nb = n === 1 ? 0 : n === 2 ? 1 : 2;
+  var w = n === 4 ? 13 : 26, h = n === 1 ? 30 : 15;
+  h += nb * o.aIf / w;
+  var A = w * h, g = bestOffset({ D: 300, edge: GX.edge, w: w, h: h, s: GX.s }, 12);
+  var y = o.harvest ? harvest({ D0: o.D0, aSM: GX.aSM, nSM: GX.nSM / n, need: GX.need / n, aOther: GX.aOther / n + nb * o.aIf }).y : yPoisson(A / 100, o.D0);
+  var raw = o.W / g.full, cov = o.cov, pass = y + (1 - y) * (1 - cov), q = pass > 0 ? y / pass : 0;
+  var perPassed = (raw + o.test) / pass, yAsm = o.yAsm * Math.pow(o.yAttach, n - 1), yPkg = Math.pow(q, n) * yAsm;
+  var si = n * perPassed, testPart = n * o.test / pass;
+  var total = yPkg > 0 ? (si + o.other) / yPkg : Infinity;
+  return { w: w, h: h, A: A, dpw: g.full, y: y, siPerGoodSet: n * o.W / (g.full * y), si: si, testPart: testPart, yPkg: yPkg, total: total, loss: total - si - o.other };
+}
+/* /model:chiplet */
+/* model:link */
+var LINKS = [
+  { k: "si", name: "실리콘 병렬", pitch: null, e0: 0.25, e1: 0.016, lat: 2, reach: 2 },
+  { k: "org", name: "유기 기판 병렬", pitch: 130, e0: 0.5, e1: 0.03, lat: 3, reach: 25 },
+  { k: "serdes", name: "SerDes 112G", dens: 0.5, e: 2, lat: 15, reach: 50 }
+];
+function linkCalc(L, bwTB, pitch, rate) {
+  var dens, e;
+  if (L.k === "serdes") { dens = L.dens; e = L.e; }
+  else { var p = L.k === "si" ? pitch : L.pitch, perMm = 1000 / p; dens = perMm * perMm * 0.5 * rate / 1000; e = L.e0 + L.e1 * rate; }
+  var tb = bwTB * 8;
+  return { dens: dens, e: e, shore: tb / dens, power: tb * 1e12 * e * 1e-12, lat: L.lat };
+}
+/* /model:link */
+/* model:pkg */
+function pkgCost(o) {
+  var hbm = o.nHBM * o.gbStack * o.perGB, sum = o.die + hbm + o.other, total = o.yAsm > 0 ? sum / o.yAsm : Infinity;
+  return { die: o.die, hbm: hbm, other: o.other, loss: total - sum, total: total, hbmShare: hbm / total, dieShare: o.die / total };
+}
+/* /model:pkg */
+
+/* ================================================================== 화면 */
+(function () {
+  "use strict";
+  const usd = (v) => (isFinite(v) ? "$" + Math.round(v).toLocaleString("en-US") : "∞");
+  const pct = (v, d = 1) => (isFinite(v) ? (v * 100).toFixed(d) + " %" : "—");
+  const NARROW = 560;
+  const canvasBg = () => GP.color("canvas-bg");
+
+  /* ---------------------------------------------- 1. 웨이퍼 다이 배치 */
+  (function () {
+    let res = null, cv = null;
+    const upd = () => { compute(); if (cv) cv.redraw(); };
+    const gW = GP.range("wf-w", (v) => v.toFixed(1) + " mm", upd);
+    const gH = GP.range("wf-h", (v) => v.toFixed(1) + " mm", upd);
+    const gE = GP.range("wf-e", (v) => v.toFixed(1) + " mm", upd);
+    const gS = GP.range("wf-s", (v) => v.toFixed(2) + " mm", upd);
+    const gO = GP.seg("wf-o", upd);
+    function compute() {
+      const o = { D: 300, edge: gE(), w: gW(), h: gH(), s: gS() }, mode = gO();
+      const off = mode === "best" ? bestOffset(o, 16) : mode === "origin" ? { ox: 0, oy: 0 } : { ox: -o.w / 2, oy: -o.h / 2 };
+      const g = dieGrid({ D: 300, edge: o.edge, w: o.w, h: o.h, s: o.s, ox: off.ox, oy: off.oy, list: true });
+      const f = dpwFormula(300 - 2 * o.edge, (o.w + o.s) * (o.h + o.s));
+      res = { o, g, f };
+      GP.stat("wf-full", g.full + "<small>개</small>");
+      GP.stat("wf-form", f.toFixed(1) + "<small>개</small>");
+      GP.stat("wf-part", g.partial + "<small>개</small>");
+      GP.stat("wf-util", pct((g.full * o.w * o.h) / (Math.PI * 150 * 150)));
+      const fits = (o.w <= 26 && o.h <= 33) || (o.w <= 33 && o.h <= 26);
+      GP.stat("wf-ret", fits ? "<span class='ok-t'>들어감</span> <small>" + ((o.w * o.h) / 858 * 100).toFixed(0) + " %</small>" : "<span class='bad-t'>초과</span> <small>칩렛·스티칭 필요</small>");
+    }
+    compute();
+    cv = GP.canvas("#wf-cv", (ctx, w, h) => {
+      const P = GP.palette(), R = Math.min(w, h) / 2 - 14, k = R / 150, cx = w / 2, cy = h / 2 + 4, o = res.o;
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fillStyle = P.surface; ctx.fill(); ctx.strokeStyle = P.dim; ctx.lineWidth = 1.2; ctx.stroke();
+      ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+      const dw = o.w * k, dh = o.h * k;
+      res.g.dies.forEach((d) => {
+        const x = cx + d.x * k, y = cy - (d.y + o.h) * k;
+        ctx.fillStyle = d.full ? GP.alpha(P.compute, 0.32) : GP.alpha(P.faint, 0.2);
+        ctx.fillRect(x, y, dw, dh);
+        if (dw > 4) { ctx.strokeStyle = d.full ? P.compute : P.faint; ctx.lineWidth = 0.8; ctx.strokeRect(x + 0.4, y + 0.4, dw - 0.8, dh - 0.8); }
+      });
+      ctx.restore();
+      ctx.setLineDash([5, 4]); ctx.strokeStyle = P.bad; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.arc(cx, cy, (150 - o.edge) * k, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = canvasBg(); ctx.beginPath(); ctx.moveTo(cx - 6, cy + R + 1); ctx.lineTo(cx, cy + R - 7); ctx.lineTo(cx + 6, cy + R + 1); ctx.fill();
+      GP.text(ctx, "300 mm 웨이퍼", 10, 14, { size: 12, weight: 700, color: P.text, baseline: "middle" });
+      GP.text(ctx, "온전 " + res.g.full + " · 부분 " + res.g.partial, 10, 32, { size: 12, color: P.dim, baseline: "middle" });
+      GP.text(ctx, "점선: 가장자리 제외", w - 10, 14, { size: 11.5, color: P.bad, align: "right", baseline: "middle" });
+    }, { aspect: 0.86, maxHeight: 440, minHeight: 260 });
+  })();
+
+  /* ---------------------------------------------- 2. 결함 몬테카를로 */
+  (function () {
+    const DIMS = { 780: [26, 30], 400: [20, 20], 200: [14.1, 14.1], 100: [10, 10] };
+    const rng = mkRng(20261128);
+    let grid = null, A = 7.8, wafers = 0, good = 0, total = 0, last = null, anim = 1, cv = null, loop = null;
+    const gA = GP.seg("mc-a", () => reset());
+    const gD = GP.range("mc-d", (v) => v.toFixed(2) + " /cm²", () => reset());
+    const gAl = GP.range("mc-al", (v) => v.toFixed(1), () => reset());
+    const cl = document.getElementById("mc-cl");
+    cl.addEventListener("change", () => reset());
+    function setup() {
+      const [w, h] = DIMS[gA()], o = { D: 300, edge: 3, w, h, s: 0.1 }, b = bestOffset(o, 12);
+      const g = dieGrid(Object.assign({}, o, { ox: b.ox, oy: b.oy, list: true }));
+      grid = { dies: g.dies.filter((d) => d.full), w, h };
+      A = (w * h) / 100;
+    }
+    function stats() {
+      const y = total ? good / total : NaN, se = total ? 1.96 * Math.sqrt(Math.max(y * (1 - y), 1e-9) / total) : 0;
+      GP.stat("mc-n", wafers + " <small>/ " + total + "</small>");
+      GP.stat("mc-y", total ? pct(y) + " <small>±" + (se * 100).toFixed(1) + "</small>" : "—");
+      GP.stat("mc-p", pct(yPoisson(A, gD())));
+      GP.stat("mc-nb", pct(yNB(A, gD(), gAl())));
+    }
+    function run(nw) {
+      for (let i = 0; i < nw; i++) {
+        last = simWafer(grid.dies.length, A, gD(), gAl(), cl.checked, rng);
+        wafers++; good += last.good; total += grid.dies.length;
+      }
+      anim = nw === 1 ? 0 : 1;
+      stats();
+      if (cv) cv.redraw();
+      if (loop && anim < 1) loop.start();
+    }
+    function reset() { setup(); wafers = good = total = 0; last = null; run(1); }
+    document.getElementById("mc-run").addEventListener("click", () => run(1));
+    document.getElementById("mc-run20").addEventListener("click", () => run(20));
+    document.getElementById("mc-rst").addEventListener("click", () => reset());
+    setup(); run(1);
+    cv = GP.canvas("#mc-cv", (ctx, w, h) => {
+      const P = GP.palette(), narrow = w < NARROW;
+      const side = narrow ? Math.min(w - 20, h - 150) : Math.min(h - 16, w * 0.56);
+      const R = side / 2, cx = narrow ? w / 2 : R + 10, cy = R + 8, k = R / 150;
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fillStyle = P.surface; ctx.fill(); ctx.strokeStyle = P.dim; ctx.lineWidth = 1; ctx.stroke();
+      const n = grid.dies.length, shown = Math.floor(anim * n + 1e-9), dw = grid.w * k, dh = grid.h * k;
+      grid.dies.forEach((d, i) => {
+        const x = cx + d.x * k, y = cy - (d.y + grid.h) * k, pts = last ? last.dies[i] : [];
+        const rev = i < shown || anim >= 1;
+        ctx.fillStyle = !rev ? GP.alpha(P.faint, 0.15) : pts.length ? GP.alpha(P.bad, 0.3) : GP.alpha(P.ok, 0.3);
+        ctx.fillRect(x, y, dw, dh);
+        ctx.strokeStyle = !rev ? P.faint : pts.length ? P.bad : P.ok; ctx.lineWidth = 0.7; ctx.strokeRect(x + 0.4, y + 0.4, dw - 0.8, dh - 0.8);
+        if (rev) {
+          ctx.fillStyle = P.bad;
+          pts.forEach(([u, v]) => { ctx.beginPath(); ctx.arc(x + u * dw, y + v * dh, Math.max(1.4, Math.min(2.6, dw / 10)), 0, Math.PI * 2); ctx.fill(); });
+        }
+      });
+      // 막대: 몬테카를로 vs 모델
+      const bx = narrow ? 92 : cx + R + 96, bw = w - bx - 52, by = narrow ? cy + R + 26 : 40, rh = narrow ? 26 : Math.min(40, (h - 70) / 4);
+      const y = total ? good / total : 0;
+      const rows = [["몬테카를로", y, P.accent], ["포아송", yPoisson(A, gD()), P.bad], ["음이항 α=" + gAl(), yNB(A, gD(), gAl()), P.compute], ["머피", yMurphy(A, gD()), P.ok]];
+      GP.text(ctx, "다이 수율 (" + wafers + "장 누적)", bx - 84, by - 18, { size: 12, weight: 700, color: P.text, baseline: "middle" });
+      rows.forEach((r, i) => {
+        const yy = by + i * rh;
+        GP.text(ctx, r[0], bx - 8, yy + rh * 0.35, { size: 12, color: P.dim, align: "right", baseline: "middle" });
+        ctx.fillStyle = GP.alpha(P.text, 0.06); ctx.fillRect(bx, yy + 4, bw, rh * 0.6);
+        ctx.fillStyle = GP.alpha(r[2], 0.75); ctx.fillRect(bx, yy + 4, bw * GP.clamp(r[1], 0, 1), rh * 0.6);
+        GP.text(ctx, pct(r[1]), bx + bw + 4, yy + rh * 0.35, { size: 11.5, color: P.text, baseline: "middle", mono: true });
+      });
+    }, { height: (w) => (w < NARROW ? Math.min(w - 20, 320) + 160 : Math.min(400, Math.max(280, w * 0.5))) });
+    loop = GP.loop(cv.canvas, (dt) => {
+      if (anim < 1) { anim = Math.min(1, anim + dt / 0.9); cv.redraw(); } else if (loop) loop.stop();
+    });
+    loop.start();
+  })();
+
+  /* ---------------------------------------------- 3. 수율 vs 면적 */
+  (function () {
+    let cv = null;
+    const upd = () => { stats(); if (cv) cv.redraw(); };
+    const gD = GP.range("ya-d", (v) => v.toFixed(2) + " /cm²", upd);
+    const gAl = GP.range("ya-al", (v) => v.toFixed(1), upd);
+    const gA = GP.range("ya-A", (v) => v + " mm²", upd);
+    function stats() {
+      const A = gA() / 100, D = gD();
+      GP.stat("ya-p", pct(yPoisson(A, D))); GP.stat("ya-nb", pct(yNB(A, D, gAl())));
+      GP.stat("ya-m", pct(yMurphy(A, D))); GP.stat("ya-s", pct(ySeeds(A, D)));
+    }
+    stats();
+    cv = GP.canvas("#ya-cv", (ctx, w, h) => {
+      const P = GP.palette(), D = gD(), al = gAl(), A0 = gA(), xs = [];
+      for (let a = 0; a <= 1000; a += 10) xs.push(a);
+      const S = (f) => xs.map((a) => [a, f(a / 100)]);
+      const models = [["포아송", (a) => yPoisson(a, D), P.bad], ["음이항 α=" + al, (a) => yNB(a, D, al), P.compute], ["머피", (a) => yMurphy(a, D), P.ok], ["시즈", (a) => ySeeds(a, D), P.dim]];
+      GP.chart(ctx, null, {
+        x: [0, 1000], y: [0, 1], xLabel: "다이 면적 (mm²)", yLabel: "다이 수율", yFmt: (v) => Math.round(v * 100) + "%",
+        series: models.map((m, i) => ({ data: S(m[1]), color: m[2], label: m[0], dash: i === 3 ? [5, 4] : null })),
+        vlines: [{ x: 858, label: "레티클 858", color: P.warn }],
+        points: models.map((m) => ({ x: A0, y: m[1](A0 / 100), color: m[2], r: 3.5 })),
+        legend: { pos: "tr" }, hover: { xFmt: (v) => Math.round(v) + " mm²", yFmt: (v) => (v * 100).toFixed(1) + " %" },
+      });
+    }, { aspect: 0.62, maxHeight: 380, minHeight: 260, hover: true });
+  })();
+
+  /* ---------------------------------------------- 4. SM 하베스팅 */
+  (function () {
+    const rng = mkRng(144);
+    let res = null, sample = null, cv = null;
+    const upd = () => { compute(); if (cv) cv.redraw(); };
+    const gD = GP.range("hv-d", (v) => v.toFixed(2) + " /cm²", upd);
+    const gSp = GP.range("hv-sp", (v) => v + "개 (활성 " + (160 - v) + ")", upd);
+    const gO = GP.range("hv-o", (v) => v + " mm²", upd);
+    function draw1() {
+      const lamSM = (3.2 / 100) * gD(), lamO = (gO() / 100) * gD(), bad = [];
+      for (let i = 0; i < 160; i++) bad.push(poissonSample(rng, lamSM) > 0);
+      sample = { bad, other: poissonSample(rng, lamO) };
+    }
+    function compute() {
+      res = harvest({ D0: gD(), aSM: 3.2, nSM: 160, need: 160 - gSp(), aOther: gO() });
+      GP.stat("hv-p", (res.p * 100).toFixed(2) + " %");
+      GP.stat("hv-m", res.mean.toFixed(2) + "<small>개</small>");
+      GP.stat("hv-yo", pct(res.yOther));
+      GP.stat("hv-y", pct(res.y));
+      GP.stat("hv-yf", pct(res.yFull));
+    }
+    document.getElementById("hv-draw").addEventListener("click", () => { draw1(); if (cv) cv.redraw(); });
+    compute(); draw1();
+    cv = GP.canvas("#hv-cv", (ctx, w, h) => {
+      const P = GP.palette(), sp = gSp();
+      /* 위: 표본 다이(8 GPC × 20 SM) + 비-SM 칸 */
+      const ox = 10, cw = Math.min(16, (w - 120) / 20), ch = Math.min(11, cw * 0.75), oy = 22;
+      const nBad = sample.bad.filter(Boolean).length;
+      GP.text(ctx, "표본 다이: 불량 SM " + nBad + "개, 비-SM 결함 " + sample.other + "개", ox, 10, { size: 12, weight: 700, color: P.text, baseline: "middle" });
+      for (let r = 0; r < 8; r++) for (let c = 0; c < 20; c++) {
+        const i = r * 20 + c, x = ox + c * cw, y = oy + r * (ch + 1);
+        ctx.fillStyle = sample.bad[i] ? GP.alpha(P.bad, 0.75) : GP.alpha(P.compute, 0.35);
+        ctx.fillRect(x, y, cw - 1.5, ch);
+      }
+      const nx = ox + 20 * cw + 8, nw = Math.min(140, Math.max(40, w - nx - 10)), nh = 8 * (ch + 1) - 1;
+      ctx.fillStyle = sample.other ? GP.alpha(P.bad, 0.6) : GP.alpha(P.dim, 0.18); ctx.fillRect(nx, oy, nw, nh);
+      GP.text(ctx, "비-SM", nx + nw / 2, oy + nh / 2 - 8, { size: 11.5, color: P.text, align: "center", baseline: "middle" });
+      GP.text(ctx, gO() + " mm²", nx + nw / 2, oy + nh / 2 + 8, { size: 11, color: P.dim, align: "center", baseline: "middle" });
+      const okDie = !sample.other && nBad <= sp;
+      const verdict = sample.other ? "폐기: 비-SM 결함" : nBad > sp ? "폐기: 불량 SM이 여유 " + sp + "개 초과" : "판매 가능: 활성 " + (160 - sp) + ", 남는 여유 " + (sp - nBad);
+      const vy = oy + nh + 16;
+      GP.text(ctx, verdict, ox, vy, { size: 12, weight: 700, color: okDie ? P.ok : P.bad, baseline: "middle" });
+      /* 아래: 불량 SM 수 분포 */
+      const K = Math.min(60, Math.max(sp + 4, Math.ceil(res.mean + 4 * Math.sqrt(res.mean) + 4)));
+      let ymax = 0; for (let k = 0; k <= K; k++) ymax = Math.max(ymax, res.pmf[k]);
+      const box = { x: 54, y: vy + 26, w: w - 54 - 14, h: h - (vy + 26) - 44 };
+      GP.chart(ctx, box, {
+        x: [-0.5, K + 0.5], y: [0, ymax * 1.15 || 1], xLabel: "다이당 불량 SM 수 k", yLabel: "확률",
+        yFmt: (v) => Math.round(v * 100) + "%", xFmt: (v) => (Number.isInteger(v) ? String(v) : ""),
+        vlines: [{ x: sp + 0.5, label: "여유 " + sp, color: P.warn }],
+        after: (c, { X, Y }) => {
+          const bw = Math.max(1, (X(1) - X(0)) * 0.7);
+          for (let k = 0; k <= K; k++) {
+            c.fillStyle = k <= sp ? GP.alpha(P.ok, 0.7) : GP.alpha(P.bad, 0.7);
+            const y0 = Y(0), y1 = Y(res.pmf[k]);
+            c.fillRect(X(k) - bw / 2, y1, bw, y0 - y1);
+          }
+        },
+      });
+    }, { height: (w) => (w < NARROW ? 330 : 360) });
+  })();
+
+  /* ---------------------------------------------- 5. 양품 다이당 원가 */
+  (function () {
+    let cv = null;
+    const upd = () => { stats(); if (cv) cv.redraw(); };
+    const gW = GP.range("cs-w", (v) => "$" + v.toLocaleString("en-US"), upd);
+    const gD = GP.range("cs-d", (v) => v.toFixed(2) + " /cm²", upd);
+    const gM = GP.seg("cs-m", upd);
+    const gA = GP.range("cs-A", (v) => v + " mm²", upd);
+    const cost = (A) => costCurve(A, gD(), gW(), 3, 0.1, gM(), 2);
+    function stats() {
+      const A = gA(), c = cost(A), half = cost(A / 2);
+      const ex = (Math.log(cost(A * 1.01).cost) - Math.log(cost(A / 1.01).cost)) / (2 * Math.log(1.01));
+      GP.stat("cs-n", c.dpw.toFixed(1) + "<small>개</small>");
+      GP.stat("cs-y", pct(c.y));
+      GP.stat("cs-c", usd(c.cost));
+      GP.stat("cs-r", isFinite(c.cost / (2 * half.cost)) ? "×" + (c.cost / (2 * half.cost)).toFixed(2) : "—");
+      GP.stat("cs-e", isFinite(ex) ? ex.toFixed(2) : "—");
+    }
+    stats();
+    cv = GP.canvas("#cs-cv", (ctx, w, h) => {
+      const P = GP.palette(), data = [], ideal = [], lin = [];
+      const c50 = cost(50).cost;
+      for (let A = 50; A <= 858; A += 4) {
+        const c = cost(A);
+        if (isFinite(c.cost)) data.push([A, c.cost]);
+        if (c.dpw > 0) ideal.push([A, gW() / c.dpw]);
+        lin.push([A, (c50 * A) / 50]);
+      }
+      const vals = data.map((d) => d[1]).concat(ideal.map((d) => d[1]));
+      const lo = Math.pow(10, Math.floor(Math.log10(Math.max(0.1, Math.min(...vals))))), hi = Math.pow(10, Math.ceil(Math.log10(Math.max(...vals) * 1.05)));
+      const A0 = gA(), c0 = cost(A0).cost;
+      GP.chart(ctx, null, {
+        x: [0, 900], y: [lo, hi], logY: true, xLabel: "다이 면적 (mm²)", yLabel: "양품 다이당 원가 ($)",
+        series: [
+          { data: data, color: P.accent, label: "양품 다이당 원가", width: 2.4 },
+          { data: ideal, color: P.dim, dash: [5, 4], label: "수율 100 %일 때" },
+          { data: lin, color: P.faint, dash: [2, 4], label: "면적 비례(50 mm² 기준)" },
+        ],
+        vlines: [{ x: 858, label: "레티클", color: P.warn }],
+        points: isFinite(c0) ? [{ x: A0, y: c0, label: usd(c0), color: P.accent }] : [],
+        legend: { pos: "tl" }, hover: { xFmt: (v) => Math.round(v) + " mm²", yFmt: (v) => usd(v) },
+      });
+    }, { aspect: 0.62, maxHeight: 380, minHeight: 260, hover: true });
+  })();
+
+  /* ---------------------------------------------- 6. 칩렛 분할 */
+  (function () {
+    let res = null, cv = null;
+    const upd = () => { compute(); if (cv) cv.redraw(); };
+    const gD = GP.range("cl-d", (v) => v.toFixed(2) + " /cm²", upd);
+    const gIf = GP.range("cl-if", (v) => v + " mm²", upd);
+    const gC = GP.range("cl-cov", (v) => v + " %", upd);
+    const gT = GP.range("cl-t", (v) => "$" + v, upd);
+    const gY = GP.range("cl-ya", (v) => v.toFixed(1) + " %", upd);
+    const hv = document.getElementById("cl-h");
+    hv.addEventListener("change", upd);
+    function compute() {
+      res = [1, 2, 4].map((n) => chiplet({ n, aIf: gIf(), D0: gD(), W: GX.W, harvest: hv.checked, cov: gC() / 100, test: gT(), yAsm: GX.yAsm, yAttach: gY() / 100, other: GX.nHBM * GX.gbStack * GX.perGB + GX.other }));
+      ["cl-1", "cl-2", "cl-4"].forEach((id, i) => GP.stat(id, usd(res[i].total) + " <small>패키지 수율 " + pct(res[i].yPkg, 0) + "</small>"));
+      let b = 0; res.forEach((r, i) => { if (r.total < res[b].total) b = i; });
+      GP.stat("cl-best", [1, 2, 4][b] + "개 <small>" + usd(res[b].total) + "</small>");
+    }
+    compute();
+    cv = GP.canvas("#cl-cv", (ctx, w, h) => {
+      const P = GP.palette();
+      const ymax = Math.max(...res.map((r) => (isFinite(r.total) ? r.total : 0))) * 1.28 || 1;
+      const segs = [["로직 실리콘", P.compute, (r) => r.si - r.testPart], ["KGD 테스트", P.ctrl, (r) => r.testPart], ["HBM·인터포저·조립", P.dram, (r) => r.total - r.si - r.loss], ["수율 손실", P.bad, (r) => r.loss]];
+      GP.chart(ctx, { x: 64, y: 30, w: w - 64 - 16, h: h - 30 - 46 }, {
+        x: [0.5, 3.5], y: [0, ymax], xTicks: [1, 2, 3], xFmt: (v) => ["", "단일 다이", "2개", "4개"][v] || "", yLabel: "패키지 원가 ($)", yFmt: (v) => "$" + Math.round(v).toLocaleString("en-US"),
+        legend: { pos: "above", items: segs.map((s) => ({ label: s[0], color: s[1], type: "box" })) },
+        after: (c, { X, Y }) => {
+          const bw = Math.min(110, (X(2) - X(1)) * 0.55);
+          res.forEach((r, i) => {
+            let acc = 0;
+            segs.forEach((s) => {
+              const v = Math.max(0, s[2](r)); if (!isFinite(v)) return;
+              c.fillStyle = GP.alpha(s[1], 0.75); c.fillRect(X(i + 1) - bw / 2, Y(acc + v), bw, Y(acc) - Y(acc + v)); acc += v;
+            });
+            GP.text(c, usd(r.total), X(i + 1), Y(acc) - 8, { size: 12, weight: 700, color: P.text, align: "center", baseline: "bottom" });
+            GP.text(c, (X(2) - X(1) < 140 ? "" : r.A.toFixed(0) + " mm² × " + [1, 2, 4][i] + " · ") + "Y " + pct(r.y, 1), X(i + 1), Y(acc) - 24, { size: 11, color: P.dim, align: "center", baseline: "bottom" });
+          });
+        },
+      });
+    }, { aspect: 0.6, maxHeight: 380, minHeight: 280 });
+  })();
+
+  /* ---------------------------------------------- 7. 다이 간 링크 */
+  (function () {
+    let res = null, cv = null;
+    const upd = () => { compute(); if (cv) cv.redraw(); };
+    const gB = GP.range("lk-bw", (v) => v.toFixed(1) + " TB/s", upd);
+    const gP = GP.range("lk-p", (v) => v + " µm", upd);
+    const gR = GP.range("lk-r", (v) => v + " Gb/s", upd);
+    function compute() {
+      res = LINKS.map((L) => Object.assign({ name: L.name, reach: L.reach }, linkCalc(L, gB(), gP(), gR())));
+      GP.stat("lk-d", res[0].dens.toFixed(2) + " <small>Tb/s/mm</small>");
+      GP.stat("lk-s", res[0].shore.toFixed(1) + " <small>mm</small>");
+      GP.stat("lk-pw", res[0].power.toFixed(1) + " <small>W · " + res[0].e.toFixed(2) + " pJ/b</small>");
+      GP.stat("lk-sd", res[2].power.toFixed(0) + " <small>W · " + res[2].shore.toFixed(0) + " mm</small>");
+    }
+    compute();
+    cv = GP.canvas("#lk-cv", (ctx, w, h) => {
+      const P = GP.palette(), narrow = w < NARROW, cols = [P.link, P.data, P.heat];
+      const panels = [
+        { t: "필요한 다이 가장자리 (mm)", f: (r) => r.shore, fmt: (v) => v.toFixed(1) + " mm", ref: 26, refL: "다이 변 26 mm" },
+        { t: "링크 전력 (W)", f: (r) => r.power, fmt: (v) => v.toFixed(1) + " W" },
+        { t: "지연(대략, ns) · 도달 거리", f: (r) => r.lat, fmt: (v, r) => "~" + v + " ns · " + r.reach + " mm" },
+      ];
+      const lw = narrow ? 0 : 110, ph = (h - 6) / 3;
+      panels.forEach((pn, pi) => {
+        const y0 = 4 + pi * ph, bx = narrow ? 10 : lw + 10, bw = w - bx - (narrow ? 170 : 110);
+        GP.text(ctx, pn.t, 10, y0 + 10, { size: 12, weight: 700, color: P.text, baseline: "middle" });
+        const vmax = Math.max(...res.map(pn.f), pn.ref || 0) * 1.05 || 1, rh = (ph - 26) / 3;
+        res.forEach((r, i) => {
+          const yy = y0 + 22 + i * rh, v = pn.f(r);
+          if (!narrow) GP.text(ctx, r.name, lw + 4, yy + rh * 0.4, { size: 11.5, color: P.dim, align: "right", baseline: "middle" });
+          ctx.fillStyle = GP.alpha(cols[i], 0.75); ctx.fillRect(bx, yy + 2, (bw * v) / vmax, rh * 0.62);
+          GP.text(ctx, pn.fmt(v, r) + (narrow ? "  " + r.name : ""), bx + (bw * v) / vmax + 6, yy + rh * 0.36, { size: 11.5, color: P.text, baseline: "middle" });
+        });
+        if (pn.ref) {
+          const rx = bx + (bw * pn.ref) / vmax;
+          ctx.setLineDash([4, 3]); ctx.strokeStyle = P.warn; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(rx, y0 + 18); ctx.lineTo(rx, y0 + ph - 4); ctx.stroke(); ctx.setLineDash([]);
+          GP.text(ctx, pn.refL, rx + 4, y0 + 10, { size: 11, color: P.warn, baseline: "middle" });
+        }
+      });
+    }, { height: (w) => (w < NARROW ? 380 : 330) });
+  })();
+
+  /* ---------------------------------------------- 8. 패키지 원가 합산 */
+  (function () {
+    let res = null, die = null, cv = null;
+    const upd = () => { compute(); if (cv) cv.redraw(); };
+    const gA = GP.range("pk-A", (v) => v + " mm²", upd);
+    const gD = GP.range("pk-d", (v) => v.toFixed(2) + " /cm²", upd);
+    const gN = GP.range("pk-n", (v) => v + "개", upd);
+    const gC = GP.seg("pk-c", upd);
+    const gG = GP.range("pk-g", (v) => "$" + v.toFixed(1), upd);
+    const gO = GP.range("pk-o", (v) => "$" + v.toLocaleString("en-US"), upd);
+    const gY = GP.range("pk-y", (v) => v.toFixed(1) + " %", upd);
+    const hv = document.getElementById("pk-h");
+    hv.addEventListener("change", upd);
+    function compute() {
+      const A = gA(), wd = Math.sqrt((A * 26) / 30), hd = A / wd;
+      die = goodDieCost({ W: GX.W, D0: gD(), edge: GX.edge, s: GX.s, w: wd, h: hd, harvest: hv.checked, aSM: GX.aSM, nSM: GX.nSM, need: GX.need, aOther: Math.max(0, A - GX.nSM * GX.aSM) });
+      res = pkgCost({ die: die.cost, nHBM: gN(), gbStack: Number(gC()), perGB: gG(), other: gO(), yAsm: gY() / 100 });
+      GP.stat("pk-die", usd(res.die) + " <small>" + die.dpw + "개 × " + pct(die.y, 1) + "</small>");
+      GP.stat("pk-hbm", usd(res.hbm) + " <small>" + gN() * Number(gC()) + " GB</small>");
+      GP.stat("pk-tot", usd(res.total));
+      GP.stat("pk-sh", pct(res.hbmShare, 0) + " <small>다이 " + pct(res.dieShare, 0) + "</small>");
+    }
+    compute();
+    cv = GP.canvas("#pk-cv", (ctx, w, h) => {
+      const P = GP.palette();
+      const items = [["로직 다이", res.die, P.compute], ["HBM " + gN() + "스택", res.hbm, P.dram], ["인터포저·조립·테스트", res.other, P.link], ["조립 수율 손실", res.loss, P.bad]];
+      const x0 = 12, bw = w - 24, y0 = 34, bh = 34, tot = res.total;
+      GP.text(ctx, "GX-1 패키지 원가 " + usd(tot), x0, 14, { size: 13, weight: 700, color: P.text, baseline: "middle" });
+      let acc = 0;
+      items.forEach((it) => {
+        const v = isFinite(it[1]) ? Math.max(0, it[1]) : 0, ww = (bw * v) / tot;
+        ctx.fillStyle = GP.alpha(it[2], 0.78); ctx.fillRect(x0 + acc, y0, ww, bh);
+        if (ww > 44) GP.text(ctx, pct(v / tot, 0), x0 + acc + ww / 2, y0 + bh / 2, { size: 12, weight: 700, color: P.text, align: "center", baseline: "middle", halo: true });
+        acc += ww;
+      });
+      const ly = y0 + bh + 22, rh = Math.min(30, (h - ly - 8) / items.length), maxV = Math.max(...items.map((it) => it[1]));
+      const lx = Math.min(170, w * 0.36), barW = w - lx - 100;
+      items.forEach((it, i) => {
+        const yy = ly + i * rh;
+        ctx.fillStyle = it[2]; ctx.fillRect(x0, yy + rh * 0.2, 10, 10);
+        GP.text(ctx, it[0], x0 + 16, yy + rh * 0.2 + 5, { size: 12, color: P.text, baseline: "middle" });
+        ctx.fillStyle = GP.alpha(it[2], 0.55); ctx.fillRect(lx, yy + rh * 0.1, (barW * Math.max(0, it[1])) / maxV, rh * 0.55);
+        GP.text(ctx, usd(it[1]), lx + (barW * Math.max(0, it[1])) / maxV + 6, yy + rh * 0.1 + rh * 0.28, { size: 12, color: P.text, baseline: "middle", mono: true });
+      });
+    }, { height: 230 });
+  })();
+})();
+
+</script>
+</body>
+</html>

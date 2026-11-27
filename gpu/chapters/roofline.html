@@ -1,0 +1,1212 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>루프라인과 데이터 재사용 · GPUBook</title>
+<meta name="description" content="산술 강도 I = FLOP/바이트와 루프라인 P = min(P_peak, I·BW)를 정의하고, GX-1의 리지 포인트(BF16 128 FLOP/B, FP8 256, FP32 8, L2 기준 72)를 계산한다. 커널별 산술 강도, GEMM 타일링 트래픽과 공유 메모리·레지스터 한계, 계층별 루프라인, 연산 융합, 정밀도 하향, 메모리 장벽, 연산:대역폭 비율을 정하는 설계자의 관점을 시뮬레이터로 다룬다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  .rf-legend { margin: 4px 0 0; font-size: 13px; }
+  .rf-mini { font-size: 13.5px; color: var(--text-dim); margin: 6px 0 0; }
+  .rf-parts { font-size: 13px; color: var(--text-dim); padding: 8px 16px 10px; border-top: 1px solid var(--border); background: var(--bg-elev); line-height: 1.6; }
+  .rf-parts b { color: var(--text); }
+  .seg.rf-wrap { flex-wrap: wrap; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="roofline">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 07</div>
+    <h1>루프라인과 데이터 재사용</h1>
+    <p class="lead">GX-1은 1초에 BF16 연산을 943.7조 번 할 수 있지만 HBM에서는 1초에 7.37조 바이트만 가져온다. 바이트 하나가 도착할 때마다 128번 계산하지 않으면 텐서 코어는 데이터를 기다리며 논다. 이 장은 그 비율을 재는 자 <strong>산술 강도</strong>와, 성능 상한을 한 장의 그림으로 보여 주는 <strong>루프라인</strong>을 정의한다. 그다음 타일링·융합·정밀도 하향으로 강도를 올리는 법을 계산하고, 마지막으로 칩 설계자가 같은 전력 예산을 연산과 대역폭에 어떤 비율로 나눌지 정하는 문제로 넘어간다.</p>
+    <ul class="objectives">
+      <li>산술 강도 \(I\)와 루프라인 \(P = \min(P_{peak}, I \cdot BW)\)를 쓰고, GX-1의 정밀도별·계층별 리지 포인트를 표에서 계산할 수 있다.</li>
+      <li>벡터 덧셈·리덕션·소프트맥스·GEMV·GEMM·합성곱·어텐션의 FLOP과 바이트를 세어 루프라인 위에 놓을 수 있다.</li>
+      <li>GEMM 타일 크기와 HBM·L2 트래픽의 관계(\(I \approx b/2\), BF16)를 유도하고, 공유 메모리·레지스터 용량이 타일을 제한하는 이유를 설명할 수 있다.</li>
+      <li>연산 융합과 정밀도 하향이 강도와 리지 포인트를 어떻게 옮기는지 계산할 수 있다.</li>
+      <li>연산과 대역폭의 성장률 차이(메모리 장벽)와, 같은 전력 안에서 HBM 스택 수를 정하는 설계 문제를 루프라인으로 풀 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="intensity">
+    <h2>산술 강도: 바이트 하나로 몇 번 계산하는가</h2>
+    <p>커널 하나가 하는 일은 두 숫자로 요약된다. 수행하는 부동소수점 연산 수 \(W\)(FLOP)와, 메모리 계층의 한 층(보통 HBM)에서 옮기는 바이트 수 \(Q\)다. 둘의 비가 <span class="term">산술 강도</span><span class="en">(arithmetic intensity)</span>다.</p>
+    <div class="formula">$$I = \frac{W}{Q}\ \ [\text{FLOP/B}],\qquad t \ge \max\!\left(\frac{W}{P_{peak}},\ \frac{Q}{BW}\right)$$
+      <div class="where">여기서 \(P_{peak}\)는 피크 연산 속도(FLOP/s), \(BW\)는 그 층의 대역폭(B/s). 연산과 데이터 이동이 완전히 겹친다고 보면 실행 시간은 둘 중 긴 쪽이다. FMA 한 번은 2 FLOP으로 센다.</div></div>
+    <p>시간의 두 항이 같아지는 강도가 <span class="term">리지 포인트</span><span class="en">(ridge point)</span>다. \(I_{ridge} = P_{peak}/BW\)보다 강도가 낮은 커널은 데이터를 기다리고(<b>메모리 제한</b>), 높은 커널은 연산을 기다린다(<b>연산 제한</b>). 리지 포인트는 커널이 아니라 <b>칩의 성질</b>이다. 칩 설계자가 연산 유닛과 메모리 인터페이스에 면적·전력을 어떤 비율로 줬는지가 이 한 숫자에 담긴다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="HBM에서 텐서 코어로 이어지는 데이터 관과 연산 공장: 7.37 TB/s로 들어온 바이트마다 128 FLOP을 해야 연산이 쉬지 않는다">
+        <rect x="20" y="40" width="190" height="110" rx="10" class="k-dram"/>
+        <text x="115" y="72" class="kt-dram t-c" text-anchor="middle">HBM 스택 6개</text>
+        <text x="115" y="96" class="t" text-anchor="middle">144 GB</text>
+        <text x="115" y="120" class="t" text-anchor="middle">BW = 7.37 TB/s</text>
+        <rect x="210" y="80" width="420" height="30" class="k-data"/>
+        <line x1="222" y1="95" x2="618" y2="95" class="arr" stroke-width="2"/>
+        <text x="420" y="72" class="kt-data" text-anchor="middle">초당 7.37 × 10¹² 바이트</text>
+        <text x="420" y="132" class="t-dim" text-anchor="middle">바이트당 에너지 약 24 pJ (3 pJ/bit)</text>
+        <rect x="630" y="30" width="210" height="130" rx="10" class="k-tensor"/>
+        <text x="735" y="62" class="kt-tensor" text-anchor="middle">텐서 코어 576개</text>
+        <text x="735" y="86" class="t" text-anchor="middle">BF16 943.7 TFLOPS</text>
+        <text x="735" y="110" class="t-dim" text-anchor="middle">FLOP당 약 0.1 pJ</text>
+        <text x="735" y="134" class="t-dim" text-anchor="middle">(BF16 FMA 0.2 pJ = 2 FLOP)</text>
+        <rect x="120" y="178" width="620" height="40" rx="8" class="chip-a"/>
+        <text x="430" y="203" class="t t-b" text-anchor="middle">943.7 T ÷ 7.37 T = 128 FLOP/B — 바이트 하나마다 128 FLOP을 해야 쉬지 않는다</text>
+      </svg>
+      <figcaption><b>그림 7-1.</b> 데이터 관과 연산 공장. 관(HBM)의 굵기와 공장(텐서 코어)의 처리량 비가 리지 포인트다. 에너지로 보면 바이트 하나를 HBM에서 가져오는 24 pJ로 BF16 연산을 약 240번 할 수 있다. 시간 기준 균형점(128)보다 에너지 기준 균형점(약 240)이 더 오른쪽에 있다. 리지 포인트에 딱 놓인 커널은 시간으로는 균형이지만 에너지는 약 2/3(24 pJ 대 128 × 0.1 = 12.8 pJ)를 데이터 이동에 쓴다.</figcaption>
+    </figure>
+
+    <div class="callout fab"><strong>GX-1의 리지 포인트</strong>피크 BF16은 144 SM × 텐서 코어 4개 × 512 FMA × 2 × 1.6 GHz = 943.7 TFLOPS, HBM은 6 스택 × 1,024비트 × 9.6 Gb/s ÷ 8 = 7.3728 TB/s다. 나누면 정확히 <b>128 FLOP/B</b>다. FP8은 피크가 2배라 <b>256</b>, FP4는 <b>512</b>, FP32 벡터(59.0 TFLOPS)는 <b>8</b>이다. 온칩 층에 대해서도 같은 계산을 하면 L2(13.1 TB/s) 기준 BF16 <b>72</b>, 공유 메모리(전체 29.5 TB/s) 기준 <b>32</b>다. 비교로 서버 CPU SC-64는 FP32 12.3 TFLOPS ÷ DDR5 460 GB/s ≈ 27 FLOP/B로, GX-1의 FP32 리지(8)보다 높다. GPU의 FP32 벡터 연산은 대역폭에 비해 오히려 "가벼운" 편이고, 리지가 높은 것은 텐서 코어 쪽이다.</div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>GX-1 리지 포인트 (FLOP/B)</th><th>HBM 7.37 TB/s</th><th>L2 13.1 TB/s</th><th>공유 메모리 29.5 TB/s</th></tr></thead>
+      <tbody>
+        <tr><td>FP32 벡터 59.0 TFLOPS</td><td>8</td><td>4.5</td><td>2</td></tr>
+        <tr><td>BF16 텐서 943.7 TFLOPS</td><td><b>128</b></td><td>72</td><td>32</td></tr>
+        <tr><td>FP8 텐서 1,887 TFLOPS</td><td>256</td><td>144</td><td>64</td></tr>
+        <tr><td>FP4 텐서 3,775 TFLOPS</td><td>512</td><td>288</td><td>128</td></tr>
+      </tbody>
+    </table></div>
+    <p><b>왜 이렇게 설계하는가.</b> 텐서 코어는 면적당 FLOPS가 FP32 레인보다 한 자릿수 이상 높다(<a href="alu.html">4장</a>, <a href="tensor.html">5장</a>). 반면 HBM 대역폭은 다이 가장자리 길이(쇼어라인)와 스택 수, 핀 속도로 묶여 있다(<a href="hbm.html">8장</a>). 연산은 쉽게 늘고 대역폭은 비싸게 늘기 때문에, AI 가속기의 리지 포인트는 세대마다 오른쪽으로 간다. 그 결과 칩의 성능은 "얼마나 많이 계산할 수 있나"보다 "커널이 데이터를 얼마나 재사용하나"에 좌우된다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="roofline">
+    <h2>루프라인: 성능 상한을 한 장에</h2>
+    <p>시간 식을 성능(\(W/t\))으로 바꾸면 <span class="term">루프라인</span><span class="en">(roofline)</span> 모형이 된다(Williams, Waterman, Patterson 2009).</p>
+    <div class="formula">$$P(I) = \min\left(P_{peak},\ I \cdot BW\right),\qquad I_{ridge} = \frac{P_{peak}}{BW}$$
+      <div class="where">로그-로그 그래프에서 \(I \cdot BW\)는 기울기 1인 사선(대역폭 지붕), \(P_{peak}\)은 수평선(연산 지붕)이다. 두 선이 만나는 점이 리지 포인트. 실제 커널은 이 선 아래에 놓인다. 선과의 간격은 지연·점유율·뱅크 충돌 같은 나머지 비효율이다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 760 340" role="img" aria-label="로그-로그 루프라인: HBM 사선과 FP32·BF16·FP8 지붕, 리지 포인트 8·128·256 FLOP/B, 커널 점 네 개">
+        <rect x="80" y="20" width="397.7" height="280" class="f-warn-soft" opacity="0.55"/>
+        <rect x="477.7" y="20" width="242.3" height="280" class="f-ok-soft" opacity="0.55"/>
+        <line x1="80" y1="300" x2="720" y2="300" class="s-axis"/><line x1="80" y1="20" x2="80" y2="300" class="s-axis"/>
+        <g class="t-dim" text-anchor="middle"><text x="80" y="318">0.1</text><text x="208" y="318">1</text><text x="336" y="318">10</text><text x="464" y="318">100</text><text x="592" y="318">1,000</text><text x="720" y="318">10⁴</text></g>
+        <g class="t-dim" text-anchor="end"><text x="74" y="304">1</text><text x="74" y="234">10</text><text x="74" y="164">100</text><text x="74" y="94">1,000</text><text x="74" y="24">10⁴</text></g>
+        <text x="400" y="336" class="t-dim" text-anchor="middle">산술 강도 I (FLOP/B, HBM 기준)</text>
+        <text x="20" y="160" class="t-dim" text-anchor="middle" transform="rotate(-90 20 160)">TFLOPS</text>
+        <line x1="96.9" y1="300" x2="516.3" y2="70.7" class="ks-dram dash"/>
+        <line x1="516.3" y1="70.7" x2="720" y2="70.7" class="ks-tensor dash"/>
+        <line x1="323.6" y1="176" x2="720" y2="176" class="ks-compute"/>
+        <polyline points="96.9,300 477.7,91.8 720,91.8" class="ks-tensor" stroke-width="3"/>
+        <circle cx="323.6" cy="176" r="4" class="kf-compute"/><text x="323.6" y="196" class="kt-compute" text-anchor="middle">8</text>
+        <circle cx="477.7" cy="91.8" r="5" class="kf-tensor"/><text x="477.7" y="84" class="kt-tensor" text-anchor="end">리지 128</text>
+        <circle cx="516.3" cy="70.7" r="4" class="kf-tensor"/><text x="524" y="64" class="kt-tensor">256</text>
+        <text x="716" y="168" class="kt-compute" text-anchor="end">FP32 59 TFLOPS</text>
+        <text x="716" y="86" class="kt-tensor" text-anchor="end">BF16 944</text>
+        <text x="716" y="64" class="t-dim" text-anchor="end">FP8 1,887</text>
+        <text x="250" y="196" class="kt-dram" transform="rotate(-28.7 250 196)">HBM 7.37 TB/s (기울기 1)</text>
+        <circle cx="108.5" cy="293.7" r="5" class="kf-data"/><text x="116" y="286" class="t-dim">벡터 덧셈 0.17</text>
+        <circle cx="208" cy="239.3" r="5" class="kf-data"/><text x="216" y="252" class="t-dim">GEMV 1</text>
+        <circle cx="438.3" cy="113.3" r="5" class="kf-data"/><text x="430" y="130" class="t-dim" text-anchor="end">비융합 어텐션 63</text>
+        <circle cx="647.9" cy="91.8" r="5" class="kf-data"/><text x="647.9" y="112" class="t-dim" text-anchor="middle">GEMM 8192 2,731</text>
+        <text x="180" y="40" class="t t-b">메모리 제한</text><text x="560" y="40" class="t t-b">연산 제한</text>
+      </svg>
+      <figcaption><b>그림 7-2.</b> GX-1의 HBM 루프라인. 굵은 선이 BF16 지붕이다. 리지 포인트 128의 왼쪽(주황 영역)에 있는 커널은 대역폭이, 오른쪽(초록 영역)은 연산이 상한을 정한다. 벡터 덧셈은 피크의 0.13 %, GEMV는 0.8 %, 융합하지 않은 어텐션은 약 49 %밖에 쓰지 못한다.</figcaption>
+    </figure>
+
+    <p>드래그해서 커널 점을 옮겨 보자. 점이 사선 위에 있으면 대역폭을 두 배로 하면 성능이 두 배가 되고, 지붕 위에 있으면 대역폭을 아무리 늘려도 그대로다. 반대로 연산 유닛을 늘리면 지붕만 올라가고 사선은 그대로다.</p>
+
+    <div class="sim" id="sim-rl">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>GX-1 루프라인: 커널 점을 옮겨 제한 요인 찾기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rl-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>산술 강도 I <output id="rl-i-out"></output></span><input type="range" id="rl-i" min="-1" max="4" step="0.01" value="1.5"></label>
+          <div class="ctrl"><span>연산 지붕</span><div class="seg" id="rl-p"><button data-value="fp32">FP32</button><button data-value="bf16" class="on">BF16</button><button data-value="fp8">FP8</button></div></div>
+          <div class="ctrl"><span>강도를 잰 층</span><div class="seg" id="rl-m"><button data-value="hbm" class="on">HBM</button><button data-value="l2">L2</button><button data-value="smem">공유 메모리</button></div></div>
+          <label class="ctrl"><span>HBM 대역폭 배율 <output id="rl-bw-out"></output></span><input type="range" id="rl-bw" min="0.25" max="4" step="0.05" value="1"></label>
+          <p class="rf-mini">그래프 위를 끌면 점이 따라간다.</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">달성 성능</span><span class="v" id="rl-o-p">—</span></div>
+        <div class="stat"><span class="k">피크 대비</span><span class="v" id="rl-o-f">—</span></div>
+        <div class="stat"><span class="k">제한 요인</span><span class="v" id="rl-o-l">—</span></div>
+        <div class="stat"><span class="k">리지 포인트</span><span class="v" id="rl-o-r">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① BF16·HBM에서 I = 32로 두면 32 × 7.37 = 236 TFLOPS(피크의 25 %)다. 대역폭 배율을 2로 하면 472로 정확히 두 배가 된다. ② I = 1,000(GEMM)에서는 대역폭 배율을 0.25까지 내려도 리지가 512로 옮겨갈 뿐 943.7 TFLOPS 그대로다. ③ 지붕을 FP8로 바꾸면 리지가 256으로 가고, I = 128 커널은 연산 제한에서 메모리 제한으로 넘어간다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 루프라인은 칩 설계자에게 "어느 손잡이가 듣는가"를 알려 준다. 주요 워크로드가 사선 위에 몰려 있으면 텐서 코어를 늘리는 데 쓴 mm²와 W는 낭비고, HBM 스택·핀 속도·온칩 SRAM에 써야 한다. 지붕 위에 있으면 반대다. 5장의 텐서 코어 면적, 8장의 HBM 스택 수, 15장의 워크로드별 칩 구성이 모두 이 그림 위에서 정해진다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="kernels">
+    <h2>커널의 산술 강도 세기</h2>
+    <p>강도를 세는 규칙은 단순하다. FLOP은 알고리즘이 정한다. 바이트는 <b>각 데이터를 HBM에서 한 번만 읽고 결과를 한 번만 쓴다</b>는 이상적 가정에서 센다(필수 트래픽, compulsory traffic). 실제 트래픽은 이보다 많을 수 있다. 캐시·공유 메모리가 작아서 같은 데이터를 다시 읽을 때다. 그 차이를 줄이는 것이 다음 절의 타일링이다. 원소 크기를 \(e\)바이트(BF16 2, FP32 4)라 하면 대표 커널은 다음과 같다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>커널</th><th>FLOP</th><th>필수 바이트</th><th>강도 (BF16)</th><th>GX-1에서</th></tr></thead>
+      <tbody>
+        <tr><td>벡터 덧셈 \(c = a + b\)</td><td>\(n\)</td><td>\(3ne\)</td><td>1/6 ≈ 0.17</td><td>메모리 제한</td></tr>
+        <tr><td>SAXPY \(y \leftarrow \alpha x + y\)</td><td>\(2n\)</td><td>\(3ne\)</td><td>0.33</td><td>메모리 제한</td></tr>
+        <tr><td>리덕션(합)</td><td>\(n\)</td><td>\(ne\)</td><td>0.5</td><td>메모리 제한</td></tr>
+        <tr><td>소프트맥스(행이 온칩에 들어갈 때)</td><td>약 \(5n\)</td><td>\(2ne\)</td><td>약 1.25</td><td>메모리 제한</td></tr>
+        <tr><td>레이어노름</td><td>약 \(8n\)</td><td>\(2ne\)</td><td>약 2</td><td>메모리 제한</td></tr>
+        <tr><td>GEMV \(y = Ax\) (\(n \times n\))</td><td>\(2n^2\)</td><td>\(e(n^2 + 2n)\)</td><td>≈ 1</td><td>메모리 제한</td></tr>
+        <tr><td>GEMM \(C = AB\) (\(M, N, K\))</td><td>\(2MNK\)</td><td>\(e(MK + KN + MN)\)</td><td>정사각 \(n/3\)</td><td>\(n \gtrsim 384\)이면 연산 제한</td></tr>
+        <tr><td>합성곱 3×3 (배치 32, 56×56, 채널 \(C\))</td><td>\(2BHW \cdot 9C^2\)</td><td>\(e(2BHWC + 9C^2)\)</td><td>\(C\) = 256에서 약 1,140</td><td>연산 제한</td></tr>
+        <tr><td>어텐션 융합 (길이 \(L\), 헤드 차원 \(d\))</td><td>\(4L^2 d\)/헤드</td><td>\(4Lde\)/헤드</td><td>\(L/2\)</td><td>\(L \ge 256\)이면 연산 제한</td></tr>
+        <tr><td>디코드 어텐션 (쿼리 1개, GQA 8)</td><td>\(8 \cdot 4Ld\)/KV 헤드</td><td>\(2Lde\)/KV 헤드</td><td>≈ 8</td><td>메모리 제한</td></tr>
+      </tbody>
+    </table></div>
+    <p>원소별 연산과 리덕션은 크기와 상관없이 강도가 상수다. 원소 하나를 읽어 몇 번 계산하고 끝나므로 재사용이 없다. 행렬곱은 다르다. FLOP은 \(n^3\), 데이터는 \(n^2\)로 늘어나므로 강도가 \(n\)에 비례한다. 원소 하나가 \(n\)번 재사용되기 때문이다(<a href="tensor.html">5장</a>의 출발점). GEMV는 행렬 원소 하나를 한 번만 쓰므로(곱 1번, 합 1번 = 2 FLOP, 2바이트) 강도가 1에 묶인다. LLM의 배치 1 디코드가 대역폭 제한인 이유다(<a href="workloads.html">15장</a>).</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 200" role="img" aria-label="로그 수직선 위의 커널별 산술 강도와 GX-1 리지 포인트 8, 128, 256">
+        <line x1="50" y1="100" x2="800" y2="100" class="s-axis" stroke-width="2"/>
+        <g class="t-dim" text-anchor="middle"><text x="50" y="122">0.1</text><text x="200" y="122">1</text><text x="350" y="122">10</text><text x="500" y="122">100</text><text x="650" y="122">1,000</text><text x="800" y="122">10⁴</text></g>
+        <g class="s-faint"><line x1="200" y1="94" x2="200" y2="106"/><line x1="350" y1="94" x2="350" y2="106"/><line x1="500" y1="94" x2="500" y2="106"/><line x1="650" y1="94" x2="650" y2="106"/></g>
+        <line x1="335.5" y1="60" x2="335.5" y2="140" class="ks-compute dash"/><text x="335.5" y="156" class="kt-compute" text-anchor="middle">FP32 리지 8</text>
+        <line x1="516.1" y1="60" x2="516.1" y2="140" class="ks-tensor dash"/><text x="516.1" y="156" class="kt-tensor" text-anchor="middle">BF16 128</text>
+        <line x1="561.2" y1="60" x2="561.2" y2="140" class="ks-tensor dash"/><text x="566" y="176" class="t-dim">FP8 256</text>
+        <g class="kf-data">
+          <circle cx="83.4" cy="100" r="5"/><circle cx="121.6" cy="100" r="5"/><circle cx="154.8" cy="100" r="5"/><circle cx="200" cy="100" r="5"/><circle cx="214.5" cy="100" r="5"/><circle cx="245.2" cy="100" r="5"/><circle cx="335.5" cy="100" r="5"/><circle cx="469.9" cy="100" r="5"/><circle cx="658.5" cy="100" r="5"/><circle cx="715.4" cy="100" r="5"/><circle cx="741.9" cy="100" r="5"/>
+        </g>
+        <g class="t-dim">
+          <text x="83.4" y="84" text-anchor="middle">덧셈</text>
+          <text x="121.6" y="60" text-anchor="middle">SAXPY</text>
+          <text x="154.8" y="84" text-anchor="middle">합</text>
+          <text x="200" y="40" text-anchor="middle">GEMV</text>
+          <text x="214.5" y="60" text-anchor="start">소프트맥스</text>
+          <text x="245.2" y="84" text-anchor="start">노름</text>
+          <text x="335.5" y="40" text-anchor="middle">디코드 어텐션</text>
+          <text x="469.9" y="40" text-anchor="middle">비융합 어텐션</text>
+          <text x="658.5" y="84" text-anchor="middle">합성곱</text>
+          <text x="715.4" y="60" text-anchor="middle">GEMM</text>
+          <text x="760" y="40" text-anchor="middle">융합 어텐션</text>
+        </g>
+        <text x="50" y="192" class="t-dim">← 재사용 없음 (원소별·리덕션)</text>
+        <text x="800" y="192" class="t-dim" text-anchor="end">재사용 ∝ 크기 (행렬곱류) →</text>
+      </svg>
+      <figcaption><b>그림 7-3.</b> 커널별 산술 강도(BF16, 표의 기본 크기: 벡터 \(2^{26}\), GEMM \(n\) = 8,192, 어텐션 \(L\) = 8,192). 원소별 연산과 정규화는 0.1–2에 몰려 있어 FP32 리지(8)에도 못 미친다. 행렬곱류는 BF16 리지 128을 훌쩍 넘는다. 같은 어텐션도 점수 행렬을 HBM에 쓰는지에 따라 63과 4,096으로 갈린다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-kc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>커널 카탈로그: FLOP·바이트를 세어 루프라인에 놓기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="kc-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>커널</span><div class="seg rf-wrap" id="kc-k">
+            <button data-value="vadd">덧셈</button><button data-value="saxpy">SAXPY</button><button data-value="reduce">합</button><button data-value="softmax">소프트맥스</button><button data-value="lnorm">노름</button><button data-value="gemv">GEMV</button><button data-value="gemm" class="on">GEMM</button><button data-value="conv">합성곱</button><button data-value="attn">어텐션 융합</button><button data-value="attnU">비융합</button><button data-value="attnD">디코드</button>
+          </div></div>
+          <label class="ctrl"><span><span id="kc-s-l">한 변 n</span> <output id="kc-s-out"></output></span><input type="range" id="kc-s" min="6" max="15" step="1" value="13"></label>
+          <div class="ctrl"><span>정밀도</span><div class="seg" id="kc-p"><button data-value="fp32">FP32</button><button data-value="bf16" class="on">BF16</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">FLOP</span><span class="v" id="kc-o-w">—</span></div>
+        <div class="stat"><span class="k">HBM 바이트</span><span class="v" id="kc-o-q">—</span></div>
+        <div class="stat"><span class="k">강도 I</span><span class="v" id="kc-o-i">—</span></div>
+        <div class="stat"><span class="k">달성 성능</span><span class="v" id="kc-o-p">—</span></div>
+        <div class="stat"><span class="k">최소 시간</span><span class="v" id="kc-o-t">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① GEMM에서 \(n\)을 256으로 줄이면 강도 85 → 메모리 제한(629 TFLOPS)이고, 512에서 171로 연산 제한이 된다(경계는 \(n = 3 \times 128 = 384\)). ② 어텐션 융합·비융합을 \(L\) = 8,192에서 비교하면 강도 4,096 vs 63, 시간 약 2.3 ms vs 4.7 ms다. ③ 정밀도를 FP32로 바꾸면 원소별 커널은 강도가 절반이 되지만 리지(8)가 낮아 여전히 메모리 제한이고, 시간만 두 배가 된다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 원소별 커널이 리지 8에도 못 미친다는 사실은 GX-1의 FP32 레인이 원소별 연산에는 이미 넘친다는 뜻이다. 그래서 세대가 바뀔 때 FP32 레인은 거의 늘지 않고, 늘어나는 면적은 행렬곱(강도가 큰 쪽)을 위한 텐서 코어로 간다. 강도가 낮은 커널은 연산 유닛을 더 넣는다고 빨라지지 않고, 데이터를 덜 옮기거나(융합) 대역폭을 늘려야 빨라진다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="tiling">
+    <h2>GEMM 타일링: 재사용은 온칩 용량이 정한다</h2>
+    <p>GEMM의 강도 \(n/3\)은 상한이다. 행렬 \(A, B\)를 통째로 온칩에 담을 수 있을 때만 이룰 수 있다. 8,192 × 8,192 BF16 행렬 하나가 128 MiB인데 SM의 공유 메모리는 228 KB다. 그래서 \(C\)를 \(b_M \times b_N\) 크기의 <span class="term">타일</span><span class="en">(tile)</span>로 나누고, 스레드 블록 하나가 타일 하나를 맡는다. 블록은 \(A\)의 행 띠(\(b_M \times K\))와 \(B\)의 열 띠(\(K \times b_N\))를 \(b_K\)씩 잘라 공유 메모리로 가져오면서 누산한다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 820 330" role="img" aria-label="GEMM 타일링: C의 타일 하나가 A의 행 띠와 B의 열 띠를 bK 조각씩 읽는다">
+        <rect x="240" y="20" width="240" height="120" class="chip"/>
+        <rect x="320" y="20" width="40" height="120" class="k-sram"/>
+        <rect x="320" y="60" width="40" height="22" class="kf-data" opacity="0.6"/>
+        <text x="360" y="14" class="t-dim" text-anchor="middle">B (K × N)</text>
+        <text x="372" y="76" class="kt-data">b_K</text>
+        <rect x="20" y="160" width="200" height="150" class="chip"/>
+        <rect x="20" y="200" width="200" height="30" class="k-sram"/>
+        <rect x="100" y="200" width="22" height="30" class="kf-data" opacity="0.6"/>
+        <text x="120" y="324" class="t-dim" text-anchor="middle">A (M × K)</text>
+        <rect x="240" y="160" width="240" height="150" class="chip"/>
+        <g class="s-faint"><line x1="280" y1="160" x2="280" y2="310"/><line x1="320" y1="160" x2="320" y2="310"/><line x1="360" y1="160" x2="360" y2="310"/><line x1="400" y1="160" x2="400" y2="310"/><line x1="440" y1="160" x2="440" y2="310"/><line x1="240" y1="200" x2="480" y2="200"/><line x1="240" y1="230" x2="480" y2="230"/><line x1="240" y1="270" x2="480" y2="270"/></g>
+        <rect x="320" y="200" width="40" height="30" class="k-tensor" stroke-width="2.5"/>
+        <text x="340" y="220" class="kt-tensor" text-anchor="middle">C 타일</text>
+        <text x="360" y="324" class="t-dim" text-anchor="middle">C (M × N)</text>
+        <line x1="330" y1="146" x2="330" y2="194" class="arr arr-a"/>
+        <line x1="226" y1="215" x2="314" y2="215" class="arr arr-a"/>
+        <text x="232" y="196" class="t-dim" text-anchor="end">b_M</text>
+        <text x="340" y="154" class="t-dim" text-anchor="middle">b_N</text>
+        <g transform="translate(510,30)">
+          <rect x="0" y="0" width="300" height="270" rx="10" class="card"/>
+          <text x="16" y="28" class="t t-b">타일 하나가 하는 일</text>
+          <text x="16" y="56" class="t">연산: 2 · b_M · b_N · K FLOP</text>
+          <text x="16" y="82" class="t">읽기: e · K · (b_M + b_N) 바이트</text>
+          <text x="16" y="114" class="kt-data">I = 2 / (e · (1/b_M + 1/b_N))</text>
+          <text x="16" y="140" class="t-dim">정사각 b, BF16 → I ≈ b / 2</text>
+          <text x="16" y="172" class="t">공유 메모리: 단계 × e · b_K(b_M + b_N)</text>
+          <text x="16" y="198" class="t">누산기(FP32): 4 · b_M · b_N 바이트</text>
+          <text x="16" y="230" class="t-dim">A 원소 하나는 b_N번, B 원소는</text>
+          <text x="16" y="250" class="t-dim">b_M번 재사용된다</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 7-4.</b> GEMM 타일링. 블록 하나가 \(C\) 타일을 맡아 \(A\)의 행 띠와 \(B\)의 열 띠를 \(b_K\) 조각씩 공유 메모리로 가져온다(진한 조각). \(A\) 원소 하나가 타일 안에서 \(b_N\)번 쓰이므로 트래픽은 \(1/b\)에 비례해 줄고 강도는 \(b\)에 비례해 는다.</figcaption>
+    </figure>
+
+    <p>L2나 다른 블록의 도움 없이 타일 단위로만 재사용할 때 전체 트래픽은 다음과 같다. \(A\)는 열 타일 수(\(N/b_N\))만큼, \(B\)는 행 타일 수(\(M/b_M\))만큼 다시 읽힌다.</p>
+    <div class="formula">$$Q_{tile} = e\,MNK\left(\frac{1}{b_N} + \frac{1}{b_M}\right) + e\,MN,\qquad I_{tile} = \frac{2}{e\,(1/b_M + 1/b_N) + e/K} \approx \frac{b}{2}\ (\text{BF16, 정사각})$$
+      <div class="where">트래픽은 타일 크기에 반비례한다. 그런데 타일은 온칩 용량으로 묶여 있다. 공유 메모리에는 \(A, B\) 조각을 단계 수만큼(복사와 계산을 겹치는 다중 버퍼링) 둬야 하고, 누산기 \(b_M b_N\)개(FP32)는 레지스터에 있어야 한다. GX-1 SM의 레지스터 파일은 256 KB이며 주소·조각용 레지스터를 빼고 75 %(192 KB)를 누산기에 쓸 수 있다고 보자.</div></div>
+    <p>GX-1에서 따져 보면 256 × 256 타일은 누산기만 256 KB라 레지스터 파일을 넘는다. 들어가는 가장 큰 타일은 128 × 256(누산기 128 KB)이고, 강도는 \(2/(2(1/128 + 1/256)) \approx 85\) FLOP/B다. <b>HBM 리지 128에 못 미친다.</b> SM 하나의 온칩 용량만으로는 HBM 리지를 넘을 수 없다는 뜻이다. 남은 재사용은 SM 사이에서 일어나야 한다. 동시에 실행되는 블록 144개(한 <span class="term">웨이브</span><span class="en">(wave)</span>)가 같은 \(A\) 행 띠나 \(B\) 열 띠를 읽으면 L2가 그것을 한 번만 HBM에서 가져온다. 이때 블록의 실행 순서가 중요하다. 행 우선으로 144개를 늘어놓으면 웨이브가 \(B\)의 열 띠를 거의 다 건드린다. 12 × 12로 묶어(스위즐) 실행하면 행 띠 12개와 열 띠 12개만 읽는다.</p>
+
+    <div class="sim" id="sim-tile">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>GEMM 타일링 트래픽 계산기: 타일이 행렬을 쓸고 가는 동안</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="tl-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>행렬 크기 M = N = K <output id="tl-n-out"></output></span><input type="range" id="tl-n" min="1024" max="16384" step="1024" value="8192"></label>
+          <label class="ctrl"><span>타일 b<sub>M</sub> <output id="tl-bm-out"></output></span><input type="range" id="tl-bm" min="16" max="256" step="16" value="128"></label>
+          <label class="ctrl"><span>타일 b<sub>N</sub> <output id="tl-bn-out"></output></span><input type="range" id="tl-bn" min="16" max="256" step="16" value="256"></label>
+          <label class="ctrl"><span>조각 b<sub>K</sub> <output id="tl-bk-out"></output></span><input type="range" id="tl-bk" min="16" max="128" step="16" value="64"></label>
+          <label class="ctrl"><span>버퍼 단계 <output id="tl-st-out"></output></span><input type="range" id="tl-st" min="1" max="4" step="1" value="3"></label>
+          <div class="ctrl"><span>블록 실행 순서</span><div class="seg" id="tl-o"><button data-value="row">행 우선</button><button data-value="group" class="on">12×12 묶음</button></div></div>
+          <button class="btn" id="tl-play">일시정지</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">공유 메모리 / SM</span><span class="v" id="tl-o-sm">—</span></div>
+        <div class="stat"><span class="k">누산기 레지스터</span><span class="v" id="tl-o-rg">—</span></div>
+        <div class="stat"><span class="k">웨이브 효율</span><span class="v" id="tl-o-we">—</span></div>
+        <div class="stat"><span class="k">강도 L2 / HBM</span><span class="v" id="tl-o-i">—</span></div>
+        <div class="stat"><span class="k">달성 성능</span><span class="v" id="tl-o-p">—</span></div>
+        <div class="stat"><span class="k">제한 요인</span><span class="v" id="tl-o-l">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(8,192, 128 × 256, 3단계)은 공유 메모리 144 KB, 누산기 128 KB, L2 강도 약 85, 타일 2,048개를 144개씩 15웨이브로 돌려 마지막 웨이브가 32개뿐이라 효율 94.8 % → 약 895 TFLOPS다. ② 타일을 128 × 128로 줄이면 L2 강도 64가 L2 리지 72 아래로 내려가 L2 제한(약 832 TFLOPS)이 된다. 256 × 256은 강도는 좋지만 누산기 256 KB로 레지스터에 들어가지 않는다. ③ 128 × 128 타일, 행렬 16,384에서 실행 순서를 행 우선으로 바꾸면 HBM 강도가 약 141로 리지 128 바로 위에 붙고, 12×12 묶음이면 약 710으로 다섯 배 여유가 생긴다. 실행 순서는 HBM 트래픽만 바꾸고 L2 트래픽은 그대로다.</div>
+    </div>
+
+    <div class="callout fab"><strong>타일 128 × 256이 표준이 되는 이유</strong>BF16 GEMM 타일의 조건 세 가지를 GX-1 값으로 맞추면 답이 거의 하나로 정해진다. (1) L2 리지 72를 넘는 강도: \(b_M b_N/(b_M + b_N) \gt 72\), 정사각이면 \(b \gt 144\). (2) 누산기 \(4 b_M b_N \le 192\) KB → \(b_M b_N \le 49{,}152\). (3) 공유 메모리 \(\text{단계} \times 2 b_K (b_M + b_N) \le 228\) KB. 128 × 256은 (1) 85, (2) 32,768, (3) \(b_K\) = 64·3단계에서 144 KB로 셋을 모두 만족한다. 강도 85는 L2 리지(72)는 넘지만 HBM 리지(128)는 못 넘는다. 그래서 웨이브 안의 블록 144개가 L2에서 띠를 나눠 써야 한다(12×12 묶음이면 HBM 강도 약 790). L2가 64 MB나 되는 이유 하나가 여기 있다. 한 웨이브가 읽는 띠(행 띠 12개 + 열 띠 12개, \(b_K\) 조각 몇 단계)가 L2에 머물러야 재사용이 된다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> SM의 레지스터 파일(256 KB)이 L1보다 크고, 공유 메모리가 228 KB까지 커진 것은 타일을 키우기 위해서다. 타일을 두 배로 키우면 HBM·L2 트래픽은 절반이 되지만 누산기 레지스터는 네 배가 된다. 그래서 레지스터를 늘리는 대신 SM 여러 개가 공유 메모리를 서로 읽게 하거나(블록 클러스터), 한 번 읽은 띠를 여러 SM에 동시에 뿌리는(멀티캐스트) 하드웨어가 등장했다. 모두 "온칩 용량 한계 안에서 재사용을 늘리는" 장치다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="hier">
+    <h2>계층별 루프라인</h2>
+    <p>데이터는 HBM → L2 → 공유 메모리 → 레지스터 → 텐서 코어로 흐르고, 층마다 대역폭과 재사용이 다르다. 같은 커널이라도 층마다 강도가 다르므로 사선도 층마다 하나씩 긋는다. 이것이 <span class="term">계층별 루프라인</span><span class="en">(hierarchical roofline)</span>이다. 커널의 성능은 모든 층의 상한 중 가장 낮은 것이다.</p>
+    <div class="formula">$$P = \min\left(P_{peak},\ I_{HBM}\,BW_{HBM},\ I_{L2}\,BW_{L2},\ I_{smem}\,BW_{smem}\right)$$
+      <div class="where">여기서 \(I_x = W/Q_x\), \(Q_x\)는 층 \(x\)를 지나가는 바이트. 위층(가까운 층)일수록 대역폭이 크지만 지나가는 바이트도 많다. GEMM이면 \(Q_{smem}\)은 워프 타일 \(w\), \(Q_{L2}\)는 블록 타일 \(b\), \(Q_{HBM}\)은 L2 적중률이 정한다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 760 340" role="img" aria-label="계층별 루프라인: 공유 메모리, L2, HBM 사선과 BF16 지붕, 리지 32, 72, 128. GEMM 한 개가 층마다 다른 강도의 점 세 개로 찍힌다">
+        <line x1="80" y1="300" x2="720" y2="300" class="s-axis"/><line x1="80" y1="20" x2="80" y2="300" class="s-axis"/>
+        <g class="t-dim" text-anchor="middle"><text x="80" y="318">1</text><text x="240" y="318">10</text><text x="400" y="318">100</text><text x="560" y="318">1,000</text><text x="720" y="318">10⁴</text></g>
+        <g class="t-dim" text-anchor="end"><text x="74" y="304">10</text><text x="74" y="211">100</text><text x="74" y="117">1,000</text><text x="74" y="24">10⁴</text></g>
+        <text x="400" y="336" class="t-dim" text-anchor="middle">그 층 기준 산술 강도 (FLOP/B)</text>
+        <text x="20" y="160" class="t-dim" text-anchor="middle" transform="rotate(-90 20 160)">TFLOPS</text>
+        <line x1="80" y1="256.2" x2="320.8" y2="115.7" class="ks-sram"/>
+        <line x1="80" y1="289.1" x2="377.2" y2="115.7" class="ks-data"/>
+        <line x1="101.2" y1="300" x2="417.2" y2="115.7" class="ks-dram"/>
+        <line x1="320.8" y1="115.7" x2="720" y2="115.7" class="ks-tensor" stroke-width="3"/>
+        <text x="716" y="108" class="kt-tensor" text-anchor="end">BF16 943.7 TFLOPS</text>
+        <text x="150" y="200" class="kt-sram" transform="rotate(-30.3 150 200)">공유 메모리 29.5 TB/s</text>
+        <text x="215" y="230" class="kt-data" transform="rotate(-30.3 215 230)">L2 13.1 TB/s</text>
+        <text x="280" y="250" class="kt-dram" transform="rotate(-30.3 280 250)">HBM 7.37 TB/s</text>
+        <g class="t-dim" text-anchor="middle"><text x="320.8" y="96">32</text><text x="377.2" y="96">72</text><text x="417.2" y="96">128</text></g>
+        <circle cx="320.8" cy="115.7" r="6" class="kf-sram"/>
+        <circle cx="368.4" cy="120.8" r="6" class="kf-data"/>
+        <circle cx="515.2" cy="115.7" r="6" class="kf-dram"/>
+        <line x1="80" y1="120.8" x2="720" y2="120.8" class="s-bad dash"/>
+        <text x="520" y="140" class="t-dim">GEMM: 워프 64, 블록 128, L2 적중 90 %</text>
+        <text x="520" y="158" class="t-dim">→ L2 점이 가장 낮다: 약 832 TFLOPS</text>
+      </svg>
+      <figcaption><b>그림 7-5.</b> GX-1의 계층별 루프라인. 공유 메모리·L2·HBM의 리지는 각각 32, 72, 128 FLOP/B다. GEMM 하나(8,192³)는 층마다 강도가 달라 점 세 개로 찍힌다: 워프 타일 64 → 공유 메모리 강도 32, 블록 타일 128 → L2 강도 64, L2 적중률 90 % → HBM 강도 약 525. 세 점 중 L2 점의 상한이 가장 낮아(빨간 점선) 성능을 정한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-hr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>계층별 루프라인: 같은 GEMM이 어느 지붕에 닿나</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="hr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>워프 타일 w (공유 메모리 → 레지스터) <output id="hr-w-out"></output></span><input type="range" id="hr-w" min="16" max="128" step="16" value="64"></label>
+          <label class="ctrl"><span>블록 타일 b (L2 → 공유 메모리) <output id="hr-b-out"></output></span><input type="range" id="hr-b" min="32" max="256" step="16" value="128"></label>
+          <label class="ctrl"><span>L2 적중률 h <output id="hr-h-out"></output></span><input type="range" id="hr-h" min="0" max="0.99" step="0.01" value="0.9"></label>
+          <p class="rf-mini">GEMM 8,192 × 8,192 × 8,192, BF16. 워프 타일은 블록 타일보다 클 수 없다.</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">I 공유 메모리</span><span class="v" id="hr-o-s">—</span></div>
+        <div class="stat"><span class="k">I L2</span><span class="v" id="hr-o-2">—</span></div>
+        <div class="stat"><span class="k">I HBM</span><span class="v" id="hr-o-h">—</span></div>
+        <div class="stat"><span class="k">달성 성능</span><span class="v" id="hr-o-p">—</span></div>
+        <div class="stat"><span class="k">제한 층</span><span class="v" id="hr-o-l">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 워프 타일을 32로 줄이면 공유 메모리 강도가 16(리지 32의 절반)이 되어 공유 메모리 제한 약 472 TFLOPS로 떨어진다. 워프 타일은 64 이상이어야 한다. ② L2 적중률을 0으로 하면 HBM 강도가 블록 타일 강도와 같은 약 64가 되어 HBM 제한 약 468 TFLOPS다. 적중률 0.5면 HBM 강도 약 124로 리지 근처. ③ 블록 타일 256이면 L2 강도 약 126 → L2 제한이 풀려 피크에 닿는다(단, 앞 시뮬레이터처럼 레지스터가 허락해야 한다).</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 층마다 리지가 32 → 72 → 128로 커지는 것은 우연이 아니다. 가까운 층일수록 대역폭이 크지만(에너지도 작다: 공유 메모리 32비트 1.5 pJ, L2 6 pJ, HBM 약 100 pJ) 담을 수 있는 데이터가 작다. 설계자는 층마다 "그 층의 용량으로 만들 수 있는 재사용(타일 크기)"이 "그 층의 리지"를 넘도록 용량과 대역폭을 짝지어 정한다. 공유 메모리 128 B/클럭은 워프 타일 64가, L2 64 B/클럭 × 128 슬라이스는 블록 타일 약 150이, HBM 7.37 TB/s는 L2 재사용이 넘을 수 있는 수준으로 맞춰져 있다(<a href="onchip.html">6장</a>).</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="fusion">
+    <h2>연산 융합: 중간 결과를 HBM에 쓰지 않기</h2>
+    <p>원소별 연산 \(y = \text{GELU}(x \cdot s + b)\)를 연산마다 커널 하나로 돌리면, 커널마다 텐서 전체를 HBM에서 읽고 HBM에 쓴다. 세 커널을 하나로 합치면(<span class="term">연산 융합</span><span class="en">(kernel fusion)</span>) 중간 결과는 레지스터에 머물고, HBM은 처음 읽기와 마지막 쓰기 한 번씩만 본다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="연산 융합: 따로 실행하면 원소별 커널 세 개가 매번 HBM을 왕복하고, 합치면 한 번만 읽고 쓴다">
+        <text x="20" y="24" class="t t-b">따로 실행: 커널 3개</text>
+        <rect x="20" y="96" width="820" height="26" class="k-dram"/><text x="430" y="114" class="kt-dram" text-anchor="middle">HBM</text>
+        <g>
+          <rect x="70" y="36" width="140" height="36" rx="6" class="k-compute"/><text x="140" y="59" class="t" text-anchor="middle">× s</text>
+          <rect x="340" y="36" width="140" height="36" rx="6" class="k-compute"/><text x="410" y="59" class="t" text-anchor="middle">+ b</text>
+          <rect x="610" y="36" width="140" height="36" rx="6" class="k-compute"/><text x="680" y="59" class="t" text-anchor="middle">GELU</text>
+        </g>
+        <g class="ks-data">
+          <line x1="95" y1="94" x2="95" y2="76" class="arr"/><line x1="185" y1="74" x2="185" y2="94" class="arr"/>
+          <line x1="365" y1="94" x2="365" y2="76" class="arr"/><line x1="455" y1="74" x2="455" y2="94" class="arr"/>
+          <line x1="635" y1="94" x2="635" y2="76" class="arr"/><line x1="725" y1="74" x2="725" y2="94" class="arr"/>
+        </g>
+        <text x="430" y="86" class="t-dim" text-anchor="middle">읽기 3번 + 쓰기 3번 = 6ne 바이트, 커널 시작 3번</text>
+        <text x="20" y="160" class="t t-b">합쳐서 실행: 커널 1개</text>
+        <rect x="20" y="216" width="820" height="26" class="k-dram"/><text x="430" y="234" class="kt-dram" text-anchor="middle">HBM</text>
+        <rect x="200" y="166" width="460" height="36" rx="6" class="k-compute"/>
+        <text x="430" y="189" class="t" text-anchor="middle">× s → + b → GELU   (중간값은 레지스터에)</text>
+        <line x1="225" y1="214" x2="225" y2="206" class="arr"/><line x1="635" y1="204" x2="635" y2="214" class="arr"/>
+        <text x="700" y="190" class="t-dim">2ne 바이트, 시작 1번</text>
+      </svg>
+      <figcaption><b>그림 7-6.</b> 연산 융합. 원소별 연산 \(k\)개를 따로 돌리면 트래픽이 \(2kne\)이고, 합치면 \(2ne\)이다. 강도는 \(k\)배가 되지만 FP32 리지 8에 닿기 전까지는 계속 메모리 제한이므로 속도도 거의 \(k\)배가 된다.</figcaption>
+    </figure>
+    <div class="formula">$$t_{unfused} = k\left(t_0 + \frac{2ne}{BW}\right),\qquad t_{fused} = t_0 + \max\!\left(\frac{kfn}{P_{FP32}},\ \frac{2ne}{BW}\right)$$
+      <div class="where">\(k\): 연산 수, \(f\): 연산당 원소당 FLOP, \(t_0\): 커널 시작·동기화 고정 비용(수 µs, 여기서는 기본 3 µs로 가정). 융합 커널의 강도 \(kf/(2e)\)가 FP32 리지 8을 넘으면(\(kf \gt 32\), BF16) 그때부터는 연산 제한이 되어 융합 이득이 줄어든다.</div></div>
+
+    <div class="sim" id="sim-fu">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>연산 융합: 따로 vs 합쳐서</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="fu-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>원소별 연산 수 k <output id="fu-k-out"></output></span><input type="range" id="fu-k" min="1" max="8" step="1" value="3"></label>
+          <label class="ctrl"><span>연산당 FLOP/원소 f <output id="fu-f-out"></output></span><input type="range" id="fu-f" min="1" max="64" step="1" value="1"></label>
+          <label class="ctrl"><span>원소 수 n <output id="fu-n-out"></output></span><input type="range" id="fu-n" min="16" max="30" step="1" value="26"></label>
+          <label class="ctrl"><span>커널 고정 비용 t<sub>0</sub> <output id="fu-l-out"></output></span><input type="range" id="fu-l" min="0" max="10" step="0.5" value="3"></label>
+          <div class="ctrl"><span>원소 형식</span><div class="seg" id="fu-p"><button data-value="fp32">FP32</button><button data-value="bf16" class="on">BF16</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">HBM 바이트 (따로 → 합침)</span><span class="v" id="fu-o-q">—</span></div>
+        <div class="stat"><span class="k">시간 따로</span><span class="v" id="fu-o-tu">—</span></div>
+        <div class="stat"><span class="k">시간 합침</span><span class="v" id="fu-o-tf">—</span></div>
+        <div class="stat"><span class="k">빨라짐</span><span class="v" id="fu-o-s">—</span></div>
+        <div class="stat"><span class="k">합친 강도</span><span class="v" id="fu-o-i">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(k = 3, f = 1, \(2^{26}\) 원소 BF16)은 따로 118 µs, 합쳐서 39 µs로 정확히 3배다. 트래픽이 1/3이 되기 때문이다. ② f를 16으로 올리면 합친 강도 12가 리지 8을 넘어 연산 제한이 되고 이득이 약 2.05배로 준다. f = 32면 1.05배로, 융합해도 거의 같다. ③ n을 \(2^{16}\)(6.6만 원소)으로 줄이면 데이터 이동은 0.02 µs뿐이고 고정 비용 3 µs가 시간을 채운다. 그래도 커널 수가 줄어 3배 빨라진다.</div>
+    </div>
+
+    <p>융합의 가장 큰 사례는 어텐션이다. \(S = QK^\top\)(\(L \times L\)), \(P = \text{softmax}(S)\), \(O = PV\)를 따로 돌리면 \(L \times L\) 점수 행렬을 HBM에 쓰고 다시 읽는다. 헤드 하나, \(L\) = 8,192, BF16이면 점수 행렬 하나가 128 MiB다. 이 트래픽이 \(4L^2 e\)로 \(L^2\)에 비례하므로 강도가 \(Ld/(2(L+d))\)에 묶여 헤드 차원 128 근처(\(L = 8{,}192\)에서 63)에서 멈춘다. 점수 행렬을 타일로 나눠 공유 메모리에서 처리하고, 소프트맥스를 블록마다 최댓값과 합을 갱신하며 계산하면(온라인 소프트맥스) \(L \times L\) 행렬은 HBM에 한 번도 나가지 않는다. 남는 트래픽은 \(Q, K, V, O\)의 \(4Lde\)뿐이고 강도는 \(L/2\)가 된다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 240" role="img" aria-label="어텐션: 비융합은 L×L 점수 행렬을 HBM에 쓰고 읽고, 융합은 K·V 타일을 공유 메모리로 흘려보내며 점수 타일을 온칩에 둔다">
+        <text x="20" y="24" class="t t-b">비융합</text>
+        <rect x="20" y="36" width="60" height="90" class="k-dram"/><text x="50" y="86" class="t" text-anchor="middle">Q,K,V</text>
+        <rect x="160" y="36" width="140" height="140" class="k-dram" opacity="0.9"/><text x="230" y="100" class="kt-dram" text-anchor="middle">S, P (L × L)</text><text x="230" y="122" class="t-dim" text-anchor="middle">HBM에 쓰기·읽기</text>
+        <line x1="84" y1="80" x2="154" y2="80" class="arr arr-bad"/>
+        <rect x="350" y="36" width="60" height="90" class="k-dram"/><text x="380" y="86" class="t" text-anchor="middle">O</text>
+        <line x1="304" y1="80" x2="344" y2="80" class="arr arr-bad"/>
+        <text x="20" y="200" class="t-dim">트래픽 4Lde + 4L²e /헤드</text>
+        <text x="20" y="220" class="t-dim">L = 8,192 → I ≈ 63 (메모리 제한)</text>
+        <line x1="440" y1="20" x2="440" y2="230" class="s-faint"/>
+        <text x="470" y="24" class="t t-b">융합 (타일 + 온라인 소프트맥스)</text>
+        <rect x="470" y="36" width="60" height="90" class="k-dram"/><text x="500" y="86" class="t" text-anchor="middle">Q,K,V</text>
+        <rect x="580" y="46" width="160" height="110" rx="8" class="k-sram"/>
+        <text x="660" y="66" class="kt-sram" text-anchor="middle">SM 온칩</text>
+        <rect x="600" y="78" width="40" height="40" class="k-tensor"/><text x="620" y="103" class="t-dim" text-anchor="middle">S 타일</text>
+        <text x="650" y="96" class="t-dim">최댓값·합</text><text x="650" y="114" class="t-dim">블록마다 갱신</text>
+        <line x1="534" y1="80" x2="574" y2="80" class="arr arr-ok"/>
+        <rect x="780" y="36" width="60" height="90" class="k-dram"/><text x="810" y="86" class="t" text-anchor="middle">O</text>
+        <line x1="744" y1="80" x2="774" y2="80" class="arr arr-ok"/>
+        <text x="470" y="200" class="t-dim">트래픽 4Lde /헤드 (L × L은 HBM에 안 나감)</text>
+        <text x="470" y="220" class="t-dim">I = L/2 = 4,096 (연산 제한)</text>
+      </svg>
+      <figcaption><b>그림 7-7.</b> 어텐션 융합. 비융합에서는 \(L \times L\) 점수 행렬의 HBM 왕복이 트래픽을 지배한다. 융합하면 FLOP은 그대로(\(4L^2 d\)/헤드, 소프트맥스 재계산 약간 추가)인데 트래픽이 \(L\)에 비례하는 항만 남아 강도가 \(L/2\)로 자란다.</figcaption>
+    </figure>
+    <p><b>왜 이렇게 설계하는가.</b> 융합은 소프트웨어 기법이지만 하드웨어 요구를 바꾼다. 중간 결과를 온칩에 두려면 SM에 충분한 공유 메모리와 레지스터가 있어야 하고, 지수 함수를 빠르게 계산할 특수 함수 유닛(SFU)이 텐서 코어 속도를 따라가야 한다. 어텐션을 융합하면 소프트맥스의 exp가 텐서 코어 행렬곱과 같은 시간 안에 끝나야 하므로, 세대가 바뀔 때 SFU 처리량과 공유 메모리 용량이 함께 늘어 왔다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="precision">
+    <h2>정밀도를 낮추면 리지가 오른쪽으로 간다</h2>
+    <p>BF16을 FP8로 바꾸면 두 가지가 동시에 일어난다. 텐서 코어의 피크가 두 배가 되고(곱셈기가 작아진다, <a href="alu.html">4장</a>), 원소 하나가 1바이트가 되어 같은 커널의 바이트가 절반이 된다. 지붕도 2배, 강도도 2배다. 리지는 \(2P/BW\)로 오른쪽으로 두 배 옮겨 간다(128 → 256 → FP4 512).</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 330" role="img" aria-label="정밀도 하향: BF16, FP8, FP4 지붕과 리지 128, 256, 512. 배치 32 선형층의 점이 강도 32, 64, 127로 사선을 따라 올라간다">
+        <line x1="80" y1="300" x2="720" y2="300" class="s-axis"/><line x1="80" y1="20" x2="80" y2="300" class="s-axis"/>
+        <g class="t-dim" text-anchor="middle"><text x="80" y="318">1</text><text x="240" y="318">10</text><text x="400" y="318">100</text><text x="560" y="318">1,000</text><text x="720" y="318">10⁴</text></g>
+        <g class="t-dim" text-anchor="end"><text x="74" y="234">10</text><text x="74" y="164">100</text><text x="74" y="94">1,000</text><text x="74" y="24">10⁴</text></g>
+        <line x1="80" y1="239.3" x2="513.4" y2="49.6" class="ks-dram"/>
+        <line x1="417.2" y1="91.8" x2="720" y2="91.8" class="ks-tensor" stroke-width="2.6"/>
+        <line x1="465.3" y1="70.7" x2="720" y2="70.7" class="ks-tensor" stroke-width="2.6" opacity="0.7"/>
+        <line x1="513.4" y1="49.6" x2="720" y2="49.6" class="ks-tensor" stroke-width="2.6" opacity="0.45"/>
+        <text x="716" y="86" class="kt-tensor" text-anchor="end">BF16 944</text>
+        <text x="716" y="65" class="kt-tensor" text-anchor="end">FP8 1,887</text>
+        <text x="716" y="44" class="kt-tensor" text-anchor="end">FP4 3,775</text>
+        <g class="t-dim" text-anchor="middle"><text x="417.2" y="112">128</text><text x="465.3" y="91">256</text><text x="513.4" y="70">512</text></g>
+        <circle cx="320.4" cy="134.1" r="6" class="kf-data"/><circle cx="368.4" cy="113.1" r="6" class="kf-data" opacity="0.75"/><circle cx="416.6" cy="92" r="6" class="kf-data" opacity="0.5"/>
+        <text x="314" y="154" class="t-dim" text-anchor="end">BF16: I 32, 234 TFLOPS</text>
+        <text x="362" y="133" class="t-dim" text-anchor="end">FP8: I 64, 468</text>
+        <text x="410" y="78" class="t-dim" text-anchor="end">FP4: I 127, 936</text>
+        <text x="160" y="250" class="kt-dram" transform="rotate(-23.6 160 250)">HBM 7.37 TB/s</text>
+        <text x="400" y="336" class="t-dim" text-anchor="middle">산술 강도 (FLOP/B)</text>
+      </svg>
+      <figcaption><b>그림 7-8.</b> 정밀도와 리지 포인트. 지붕이 두 배가 될 때마다 리지가 두 배 오른쪽으로 간다. 배치 32 선형층(8,192 × 8,192)은 정밀도를 낮출 때마다 바이트가 절반이 되어 사선을 따라 두 배씩 오르지만, 세 정밀도 모두에서 메모리 제한이다. 메모리 제한 커널의 이득은 지붕이 아니라 <b>바이트를 줄인 덕</b>이다.</figcaption>
+    </figure>
+    <p>LLM의 선형층 \(Y = XW\)(가중치 \(K \times M\), 배치 \(B\) 토큰)는 FLOP이 \(2BKM\), 바이트가 대부분 가중치 \(e_w KM\)이므로 강도는 약 \(2B/e_w\)다. 즉 <b>강도 ≈ 배치 크기</b>(BF16)다. 그래서 정밀도 선택은 두 갈래가 된다. 가중치만 FP8로 저장하고 연산은 BF16으로 하면(가중치 전용 양자화) 지붕은 그대로이고 바이트만 절반이라 메모리 제한 구간만 2배 빨라진다. 활성도 FP8로 바꿔 FP8 텐서 코어를 쓰면 지붕도 2배가 되어 연산 제한 구간까지 2배가 된다.</p>
+    <div class="sim" id="sim-pr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>정밀도 하향: 선형층의 배치와 리지 이동</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>배치 B (토큰) <output id="pr-b-out"></output></span><input type="range" id="pr-b" min="0" max="12" step="0.25" value="5"></label>
+          <div class="ctrl"><span>형식</span><div class="seg rf-wrap" id="pr-m"><button data-value="w16a16" class="on">BF16</button><button data-value="w8a16">가중치만 FP8</button><button data-value="w8a8">FP8</button><button data-value="w4a4">FP4</button></div></div>
+          <p class="rf-mini">선형층 8,192 × 8,192 (GX-LM-70B의 \(d_{model}\)). 바이트 = 가중치 + 입력·출력 활성.</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">강도 I</span><span class="v" id="pr-o-i">—</span></div>
+        <div class="stat"><span class="k">달성 성능</span><span class="v" id="pr-o-p">—</span></div>
+        <div class="stat"><span class="k">층 시간</span><span class="v" id="pr-o-t">—</span></div>
+        <div class="stat"><span class="k">BF16 대비</span><span class="v" id="pr-o-s">—</span></div>
+        <div class="stat"><span class="k">연산 제한이 되는 배치</span><span class="v" id="pr-o-b">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① B = 32에서 네 형식을 차례로 눌러 보면 층 시간이 18.4 → 9.2 → 9.2 → 4.6 µs다. 메모리 제한 구간에서는 가중치만 FP8로 해도 FP8 연산과 거의 같은 이득이다. ② B = 1,024에서는 가중치만 FP8은 1.0배(지붕이 그대로), FP8 연산은 2.0배, FP4는 4.0배다. ③ 연산 제한이 되는 배치는 BF16 약 132, 가중치만 FP8 약 66, FP8·FP4 약 132다. 정밀도를 함께 낮추면 리지와 강도가 같이 움직여 경계 배치가 그대로다.</div>
+    </div>
+    <div class="callout fab"><strong>GX-LM-70B 디코드의 루프라인 위치</strong>배치 1 디코드는 토큰마다 가중치 70 GB(FP8)를 한 번씩 읽고 파라미터당 2 FLOP을 한다. 강도는 2 FLOP/B, 달성 성능은 \(2 \times 7.37 = 14.7\) TFLOPS로 FP8 피크(1,887)의 0.8 %다. 시간 상한은 70 GB ÷ 7.37 TB/s = 9.5 ms/토큰, 즉 약 105 토큰/s다. 배치를 \(B\)로 늘리면 가중치 읽기는 그대로이고 FLOP만 \(B\)배라 강도가 약 \(2B\)다. FP8 리지 256에 닿는 배치는 약 130이다(위 시뮬레이터의 132). 실제로는 배치마다 KV 캐시(토큰당 320 KiB, BF16)를 따로 읽어야 하므로 어텐션 부분은 배치를 늘려도 강도가 GQA 그룹 크기 8 근처에 머문다. 이 계산은 <a href="workloads.html">15장</a>의 토큰/s 모델로 이어진다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 정밀도 하향은 같은 HBM으로 두 배의 "유효 대역폭"을 얻는 가장 싼 방법이다. 그래서 새 세대 칩은 FP8·FP4 텐서 코어(지붕)와 함께 블록마다 스케일을 공유하는 마이크로스케일링 형식(바이트 절감, <a href="tensor.html">5장</a>)을 넣는다. 다만 지붕이 두 배가 되면 리지도 두 배가 되어, 연산 제한이었던 커널 일부가 메모리 제한으로 넘어간다. 정밀도를 낮출수록 재사용(타일·배치)을 더 키워야 피크를 쓸 수 있다.</p>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="wall">
+    <h2>메모리 장벽: 리지는 해마다 오른쪽으로</h2>
+    <p>1990년대부터 프로세서 속도와 DRAM 속도의 성장률 차이를 <span class="term">메모리 장벽</span><span class="en">(memory wall)</span>이라 불렀다(Wulf, McKee 1995). AI 가속기에서도 같은 일이 일어난다. 공개된 추세 분석들은 대략 피크 연산이 2년에 약 3배(정밀도 하향 포함), DRAM 대역폭이 2년에 약 1.6배, 칩간 링크가 2년에 약 1.4배 늘었다고 본다. 리지 포인트는 두 성장률의 비로 커진다.</p>
+    <div class="formula">$$I_{ridge}(t) = I_{ridge}(0)\left(\frac{g_P}{g_B}\right)^{t/2},\qquad t_{2\times} = \frac{2\ln 2}{\ln(g_P/g_B)}$$
+      <div class="where">\(g_P, g_B\): 2년당 연산·대역폭 성장 배율. \(g_P = 3.0\), \(g_B = 1.6\)이면 리지가 약 2.2년마다 두 배가 된다. 강도가 고정된 커널(원소별 연산, 배치 1 디코드)이 피크에서 차지하는 비율은 같은 속도로 줄어든다.</div></div>
+    <div class="sim" id="sim-wl">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>메모리 장벽 추세: 성장률이 다를 때 리지의 이동</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="wl-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>연산 성장 (2년당) <output id="wl-p-out"></output></span><input type="range" id="wl-p" min="1.2" max="4" step="0.1" value="3"></label>
+          <label class="ctrl"><span>대역폭 성장 (2년당) <output id="wl-b-out"></output></span><input type="range" id="wl-b" min="1.1" max="3" step="0.1" value="1.6"></label>
+          <label class="ctrl"><span>시작 리지 (FLOP/B) <output id="wl-r-out"></output></span><input type="range" id="wl-r" min="2" max="64" step="1" value="16"></label>
+          <label class="ctrl"><span>커널 강도 I <output id="wl-i-out"></output></span><input type="range" id="wl-i" min="0" max="3" step="0.05" value="1.8"></label>
+          <label class="ctrl"><span>기간 (년) <output id="wl-y-out"></output></span><input type="range" id="wl-y" min="4" max="20" step="1" value="10"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">리지 2배 주기</span><span class="v" id="wl-o-d">—</span></div>
+        <div class="stat"><span class="k">마지막 해 리지</span><span class="v" id="wl-o-r">—</span></div>
+        <div class="stat"><span class="k">커널의 피크 대비</span><span class="v" id="wl-o-f">—</span></div>
+        <div class="stat"><span class="k">연산 / 대역폭 성장</span><span class="v" id="wl-o-g">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(3.0, 1.6, 시작 리지 16, 10년)이면 연산 243배, 대역폭 10.5배, 리지 약 371이다. 강도 63인 커널은 처음엔 피크를 다 썼지만 10년 뒤 17 %만 쓴다. ② 대역폭 성장을 3.0으로 맞추면 리지가 16에 머문다. 대역폭이 연산만큼 늘어야 장벽이 사라진다. ③ 시작 리지 8에서 연산 성장 2.0, 대역폭 1.6이면 10년 뒤 약 24다. 정밀도 하향 없이 트랜지스터만 늘리던 시대에 가까운 값이다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 연산은 트랜지스터 수와 정밀도 하향으로 늘지만, 대역폭은 다이 가장자리(쇼어라인), 패키지 배선 밀도, DRAM 다이의 I/O, 비트당 에너지에 묶여 있다. 그래서 HBM은 인터페이스 폭을 1,024비트에서 2,048비트로 넓히고(HBM4), 패키지는 2.5D 인터포저로 배선 밀도를 높이며, 온칩 SRAM(L2)은 계속 커진다. 리지 포인트가 오르는 속도를 늦추는 일이 메모리·패키징 기술의 몫이다(<a href="hbm.html">8장</a>, <a href="package.html">11장</a>).</p>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="designer">
+    <h2>설계자의 루프라인: 연산 대 대역폭 비율 정하기</h2>
+    <p>루프라인은 소프트웨어에게는 "얼마나 빨라질 수 있나"를, 칩 설계자에게는 "<b>연산과 대역폭을 어떤 비율로 살 것인가</b>"를 묻는다. 모듈 전력이 1,000 W로 고정된 GX-1에서 HBM 스택을 하나 더 달면 대역폭은 1.23 TB/s 늘지만 전력 약 25 W(150 W ÷ 6)를 HBM에 줘야 하고, 그만큼 로직 다이의 전력, 즉 텐서 코어가 쓸 수 있는 클럭·면적이 준다. 피크 연산이 로직 전력에 비례한다고 보면 다음 모형이 된다.</p>
+    <div class="formula">$$BW(s) = s \times 1.2288\ \text{TB/s},\qquad P_{peak}(s) = 943.7 \times \frac{1000 - 90 - 25s}{760}\ \text{TFLOPS}$$
+      <div class="where">\(s\): HBM 스택 수(GX-1은 6, 이때 로직 760 W). 90 W는 전압 변환 손실·기타. 워크로드 묶음의 평균 성능은 \(\bar P = \sum W_i / \sum (W_i / P_i)\), \(P_i = \min(P_{peak}, I_i \cdot BW)\). 쇼어라인으로 보면 긴 변 두 쪽에 4개씩, 8개가 물리적 한계에 가깝다(<a href="hbm.html">8장</a>).</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 760 260" role="img" aria-label="칩별 연산 대 대역폭 비율 막대: SC-64 FP32 27, GX-1 FP32 8, L2 기준 BF16 72, HBM 기준 BF16 128, 에너지 균형 240, FP8 256, FP4 512">
+        <line x1="200" y1="20" x2="200" y2="226" class="s-axis"/>
+        <g class="t-dim" text-anchor="middle"><text x="200" y="246">1</text><text x="320" y="246">10</text><text x="440" y="246">100</text><text x="560" y="246">1,000</text></g>
+        <g class="s-faint"><line x1="320" y1="20" x2="320" y2="226"/><line x1="440" y1="20" x2="440" y2="226"/><line x1="560" y1="20" x2="560" y2="226"/></g>
+        <g class="t" text-anchor="end">
+          <text x="192" y="38">GX-1 FP32 · HBM</text><text x="192" y="66">SC-64 CPU FP32 · DDR5</text><text x="192" y="94">GX-1 BF16 · L2</text><text x="192" y="122">GX-1 BF16 · HBM</text><text x="192" y="150">에너지 균형 (BF16)</text><text x="192" y="178">GX-1 FP8 · HBM</text><text x="192" y="206">GX-1 FP4 · HBM</text>
+        </g>
+        <rect x="200" y="26" width="108.4" height="16" class="kf-compute"/><text x="314" y="39" class="t-dim">8</text>
+        <rect x="200" y="54" width="171.2" height="16" class="kf-ctrl"/><text x="377" y="67" class="t-dim">27</text>
+        <rect x="200" y="82" width="222.9" height="16" class="kf-sram"/><text x="429" y="95" class="t-dim">72</text>
+        <rect x="200" y="110" width="252.9" height="16" class="kf-tensor"/><text x="459" y="123" class="t t-b">128</text>
+        <rect x="200" y="138" width="285.6" height="16" class="kf-heat" opacity="0.8"/><text x="492" y="151" class="t-dim">약 240 (24 pJ/B ÷ 0.1 pJ/FLOP)</text>
+        <rect x="200" y="166" width="289" height="16" class="kf-tensor" opacity="0.75"/><text x="495" y="179" class="t-dim">256</text>
+        <rect x="200" y="194" width="325.1" height="16" class="kf-tensor" opacity="0.5"/><text x="531" y="207" class="t-dim">512</text>
+        <text x="600" y="40" class="t-dim">FLOP/B (로그)</text>
+      </svg>
+      <figcaption><b>그림 7-9.</b> 연산:대역폭 비율(리지 포인트) 비교. CPU는 FP32 기준으로 GX-1보다 리지가 높다(대역폭이 상대적으로 적다). GX-1의 높은 리지는 텐서 코어에서 나온다. 에너지 균형점(HBM 바이트 하나의 에너지 = BF16 연산 몇 번)은 약 240으로 시간 기준 리지(128)보다 오른쪽에 있다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ds">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>설계자 관점: 같은 1,000 W에서 HBM 스택 수 정하기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ds-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>HBM 스택 수 s <output id="ds-s-out"></output></span><input type="range" id="ds-s" min="1" max="12" step="1" value="6"></label>
+          <div class="ctrl"><span>워크로드 묶음</span><div class="seg rf-wrap" id="ds-m"><button data-value="gemm">대형 GEMM만</button><button data-value="train" class="on">학습</button><button data-value="decode">디코드 배치 32</button></div></div>
+          <p class="rf-mini">스택당 1.2288 TB/s·약 25 W, 남는 전력이 로직(피크 연산)으로 간다. 9개 이상은 쇼어라인을 넘는 가상의 설계다.</p>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">HBM 대역폭</span><span class="v" id="ds-o-bw">—</span></div>
+        <div class="stat"><span class="k">피크 BF16</span><span class="v" id="ds-o-pk">—</span></div>
+        <div class="stat"><span class="k">리지</span><span class="v" id="ds-o-r">—</span></div>
+        <div class="stat"><span class="k">평균 달성</span><span class="v" id="ds-o-p">—</span></div>
+        <div class="stat"><span class="k">최적 스택 수 (≤ 8)</span><span class="v" id="ds-o-b">—</span></div>
+      </div>
+      <div class="rf-parts" id="ds-parts">—</div>
+      <div class="sim-note">해볼 것: ① 학습 묶음에서 최적은 7스택 약 724 TFLOPS이고 GX-1(6스택)은 718로 1 % 안쪽이다. FLOP의 0.5 %뿐인 원소별·정규화 커널이 시간의 약 24 %를 쓴다. ② 디코드 배치 32는 모든 커널이 메모리 제한이라 스택을 늘릴수록 거의 비례해 빨라진다(6스택 117 → 8스택 157 TFLOPS). 쇼어라인 한계 8이 최적이다. ③ 대형 GEMM만이면 1스택이 최적이다. 강도 1,000이면 대역폭 1.2 TB/s로도 연산 제한이다. 범용 칩이 어느 한 묶음에 맞추지 못하고 그 중간을 고르는 이유다.</div>
+    </div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>조건(손잡이)</th><th>강도·리지 변화</th><th>결과</th></tr></thead>
+      <tbody>
+        <tr><td>GEMM 타일 \(b\) 두 배</td><td>L2·HBM 강도 ×2</td><td>트래픽 ½, 대신 누산기 레지스터 ×4, 공유 메모리 ×2</td></tr>
+        <tr><td>워프 타일 32 → 64</td><td>공유 메모리 강도 16 → 32</td><td>공유 메모리 제한(약 472) → 피크 근처</td></tr>
+        <tr><td>L2 적중률 0 → 90 % (블록 묶음 실행)</td><td>HBM 강도 64 → 약 525</td><td>HBM 제한 해소, L2가 다음 병목</td></tr>
+        <tr><td>원소별 연산 3개 융합</td><td>강도 ×3 (0.25 → 0.75)</td><td>메모리 제한 구간에서 약 3배 빨라짐</td></tr>
+        <tr><td>어텐션 융합 (\(L\) = 8,192)</td><td>63 → 4,096</td><td>메모리 제한 → 연산 제한, 약 2배 빨라짐</td></tr>
+        <tr><td>BF16 → FP8 (가중치·활성 모두)</td><td>지붕 ×2, 강도 ×2, 리지 128 → 256</td><td>메모리 제한·연산 제한 모두 약 2배</td></tr>
+        <tr><td>가중치만 FP8</td><td>강도 ×2, 지붕 그대로</td><td>메모리 제한 구간만 2배, 연산 제한 1배</td></tr>
+        <tr><td>HBM 스택 6 → 8 (같은 1,000 W)</td><td>BW ×1.33, 피크 ×0.93, 리지 128 → 약 90</td><td>디코드 +33 %, 대형 GEMM −7 %</td></tr>
+        <tr><td>연산 3×/2년, 대역폭 1.6×/2년</td><td>리지 약 2.2년마다 ×2</td><td>강도 고정 커널의 피크 대비 비율이 같은 속도로 감소</td></tr>
+      </tbody>
+    </table></div>
+    <p><b>왜 이렇게 설계하는가.</b> 칩의 리지 포인트는 그 칩이 겨냥하는 워크로드의 강도 분포에 맞춰 정해진다. 학습용 칩은 강도가 큰 GEMM이 대부분이라 연산에 더 기울고(리지 높음), 추론 디코드용 칩은 대역폭과 메모리 용량에 기운다(리지 낮음). 하나의 칩으로 둘 다 해야 하는 범용 GPU는 그 중간에서, 원소별 커널처럼 어떤 설계로도 리지에 닿지 못하는 부분을 융합·정밀도 하향으로 줄이는 소프트웨어를 함께 전제한다. 이 선택이 15장의 면적 배분 실험과 16장의 맞춤형 가속기 논의로 이어진다.</p>
+  </section>
+
+  <section class="keypoints" id="summary"><h2>핵심 정리</h2><ol>
+    <li>산술 강도 \(I = W/Q\)(FLOP/B), 루프라인 \(P = \min(P_{peak}, I \cdot BW)\), 리지 포인트 \(I_{ridge} = P_{peak}/BW\). 리지 왼쪽은 메모리 제한, 오른쪽은 연산 제한이다.</li>
+    <li>GX-1 리지(HBM 기준): BF16 <b>128</b>, FP8 256, FP4 512, FP32 벡터 8 FLOP/B. L2 기준 BF16 72, 공유 메모리 기준 32.</li>
+    <li>원소별 연산·리덕션·정규화는 강도 0.1–2로 크기와 무관하다. GEMV는 약 1, GEMM은 정사각 \(n/3\), 융합 어텐션은 \(L/2\), 비융합 어텐션은 \(Ld/(2(L+d))\)에 묶인다.</li>
+    <li>GEMM 타일 \(b\)의 강도는 BF16에서 약 \(b/2\)다. GX-1에서 레지스터에 들어가는 최대 타일 128 × 256의 강도 약 85는 L2 리지(72)는 넘지만 HBM 리지(128)는 못 넘어, 웨이브 안 블록들의 L2 재사용이 필요하다.</li>
+    <li>계층별 루프라인의 성능은 모든 층 상한의 최솟값이다. 워프 타일 ≥ 64, 블록 타일 ≥ 약 150, L2 재사용이 각각 공유 메모리·L2·HBM 리지를 넘게 한다.</li>
+    <li>연산 융합은 중간 결과의 HBM 왕복을 없애 강도를 \(k\)배로 만든다. 어텐션은 융합으로 63 → 4,096(\(L\) = 8,192)이 된다.</li>
+    <li>정밀도를 절반으로 하면 지붕·강도·리지가 모두 2배가 된다. 가중치만 낮추면 메모리 제한 구간만 빨라진다. 선형층의 강도는 대략 배치 크기다.</li>
+    <li>연산이 대역폭보다 빨리 늘어(2년에 약 3배 vs 1.6배) 리지가 약 2.2년마다 두 배가 된다. 설계자는 같은 전력에서 HBM 스택과 연산의 비율을 워크로드 묶음의 평균 성능이 최대가 되도록 고른다.</li>
+  </ol></section>
+
+  <section class="quiz-sec" id="quiz"><h2>확인 퀴즈</h2><div class="quiz">
+    <div class="quiz-q"><p>BF16 벡터 덧셈 \(c = a + b\)의 산술 강도는?</p><div class="opts">
+      <button class="opt">1/2 FLOP/B</button><button class="opt">1/3 FLOP/B</button><button class="opt" data-correct>1/6 FLOP/B</button><button class="opt">1 FLOP/B</button>
+    </div><div class="quiz-exp">원소 하나마다 1 FLOP, 바이트는 \(a, b\) 읽기와 \(c\) 쓰기 3 × 2 B = 6 B다. 1/6 ≈ 0.17로 FP32 리지 8에도 한참 못 미친다.</div></div>
+    <div class="quiz-q"><p>GX-1의 BF16 텐서 피크 943.7 TFLOPS와 HBM 7.37 TB/s로 계산한 리지 포인트는?</p><div class="opts">
+      <button class="opt" data-correct>128 FLOP/B</button><button class="opt">72 FLOP/B</button><button class="opt">256 FLOP/B</button><button class="opt">8 FLOP/B</button>
+    </div><div class="quiz-exp">943.7 ÷ 7.3728 = 128. 72는 L2 기준, 256은 FP8, 8은 FP32 벡터의 리지다.</div></div>
+    <div class="quiz-q"><p>HBM 기준 강도 32 FLOP/B인 BF16 커널이 GX-1에서 낼 수 있는 최대 성능은?</p><div class="opts">
+      <button class="opt">943.7 TFLOPS</button><button class="opt">472 TFLOPS</button><button class="opt">29.5 TFLOPS</button><button class="opt" data-correct>약 236 TFLOPS</button>
+    </div><div class="quiz-exp">32 &lt; 128이므로 메모리 제한: \(P = 32 \times 7.37 \approx 236\) TFLOPS, 피크의 25 %. 연산 유닛을 늘려도 오르지 않고 대역폭을 늘리거나 재사용을 늘려야 한다.</div></div>
+    <div class="quiz-q"><p>L2나 다른 블록의 재사용 없이 정사각 타일 \(b\)로 BF16 GEMM을 하면 강도는 약 \(b/2\)다. GX-1의 L2 리지(72)를 넘으려면 \(b\)가 최소 얼마여야 하는가?</p><div class="opts">
+      <button class="opt">약 36</button><button class="opt" data-correct>약 144</button><button class="opt">약 256</button><button class="opt">약 512</button>
+    </div><div class="quiz-exp">\(b/2 \gt 72\) → \(b \gt 144\). 정사각 192는 누산기 144 KB로 들어가지만, 실제로는 2의 거듭제곱에 맞춰 128 × 256(강도 약 85)을 많이 쓴다. HBM 리지 128을 넘으려면 \(b \gt 256\)이 필요해 레지스터가 모자란다.</div></div>
+    <div class="quiz-q"><p>메모리 제한인 원소별 연산 3개를 하나의 커널로 합치면 대략 어떻게 되는가?</p><div class="opts">
+      <button class="opt">FLOP이 1/3이 되어 3배 빨라진다</button><button class="opt">강도는 그대로이고 커널 시작 비용만 준다</button><button class="opt" data-correct>HBM 트래픽이 1/3이 되어 강도 3배, 시간 약 1/3</button><button class="opt">연산 제한이 되어 오히려 느려진다</button>
+    </div><div class="quiz-exp">FLOP은 같고, 중간 결과를 HBM에 쓰고 다시 읽는 일이 사라져 바이트가 \(6ne \to 2ne\)이 된다. 합친 강도가 FP32 리지 8 아래면 시간이 바이트에 비례하므로 약 3배 빨라진다.</div></div>
+    <div class="quiz-q"><p>길이 \(L\) = 8,192, 헤드 차원 128인 어텐션을 융합하지 않으면 강도가 약 63에 묶이는 주된 이유는?</p><div class="opts">
+      <button class="opt" data-correct>\(L \times L\) 점수 행렬을 HBM에 쓰고 다시 읽기 때문</button><button class="opt">소프트맥스의 exp가 느리기 때문</button><button class="opt">Q, K, V가 너무 커서</button><button class="opt">FLOP이 \(L\)에 비례해서</button>
+    </div><div class="quiz-exp">트래픽에 \(4L^2 e\) 항이 생겨 FLOP(\(4L^2 d\))과 같은 차수가 되므로 강도가 \(Ld/(2(L+d)) \approx d/2\)에 묶인다. 융합하면 이 항이 사라져 강도가 \(L/2\) = 4,096이 된다.</div></div>
+    <div class="quiz-q"><p>배치 1,024 선형층(연산 제한)에서 가중치만 FP8로 저장하고 연산은 BF16 텐서 코어로 하면?</p><div class="opts">
+      <button class="opt">2배 빨라진다</button><button class="opt" data-correct>거의 빨라지지 않는다</button><button class="opt">4배 빨라진다</button><button class="opt">리지가 256으로 옮겨 가 느려진다</button>
+    </div><div class="quiz-exp">바이트가 줄어 강도는 오르지만 이미 BF16 지붕(943.7) 위에 있으므로 성능은 그대로다. 연산 제한 구간에서 이득을 보려면 FP8 텐서 코어로 지붕 자체를 올려야 한다.</div></div>
+    <div class="quiz-q"><p>피크 연산이 2년에 3배, 대역폭이 2년에 1.6배 늘면 리지 포인트는 대략 몇 년마다 두 배가 되는가?</p><div class="opts">
+      <button class="opt">약 1년</button><button class="opt">약 4년</button><button class="opt">변하지 않는다</button><button class="opt" data-correct>약 2.2년</button>
+    </div><div class="quiz-exp">리지는 2년에 3/1.6 = 1.875배. \(t_{2\times} = 2\ln 2/\ln 1.875 \approx 2.2\)년. 강도가 고정된 커널은 같은 속도로 피크 대비 비율을 잃는다.</div></div>
+  </div></section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const small = (v, u) => v + "<small> " + u + "</small>";
+  const fI = (I) => !isFinite(I) ? "—" : I >= 100 ? Math.round(I).toLocaleString("en-US") : I >= 10 ? I.toFixed(1) : I >= 1 ? I.toFixed(2) : I.toFixed(3);
+  const fTF = (p) => small(GP.fmt(p / 1e12, p >= 1e14 ? 4 : 3), "TFLOPS");
+  const fT = (s) => !isFinite(s) ? "—" : s < 1e-6 ? small((s * 1e9).toPrecision(3), "ns") : s < 1e-3 ? small((s * 1e6).toPrecision(3), "µs") : s < 1 ? small((s * 1e3).toPrecision(3), "ms") : small(s.toPrecision(3), "s");
+  const fBy = (b) => GP.si(b, "B", 3);
+  const LIMN = { compute: "연산", memory: "메모리", hbm: "HBM", l2: "L2", smem: "공유 메모리" };
+  const limHtml = (l) => l === "compute" ? "<span class='ok-t'>연산</span>" : "<span class='warn-t'>" + (LIMN[l] || l) + "</span>";
+
+  /* model:gx1 */
+  // GX-1 기준값(CONTRIBUTING 표에서 계산): 피크 연산 FLOP/s, 대역폭 B/s, 원소 바이트
+  const GX = (function () {
+    const sm = 144, clk = 1.6e9;
+    const bf16 = sm * 4 * 512 * 2 * clk;
+    return {
+      sm, clk,
+      peak: { fp32: sm * 128 * 2 * clk, bf16, fp8: 2 * bf16, fp4: 4 * bf16 },
+      bw: { hbm: 6 * (1024 / 8) * 9.6e9, l2: 128 * 64 * clk, smem: sm * 128 * clk },
+      bytes: { fp32: 4, bf16: 2, fp8: 1, fp4: 0.5 },
+      smemMax: 228 * 1024, regFile: 256 * 1024,
+    };
+  })();
+  /** 루프라인: 강도 I(FLOP/B)에서 달성 성능 P = min(P_peak, I·BW) */
+  function roof(I, peak, bw) {
+    const mem = I * bw, P = Math.min(peak, mem);
+    return { P, bound: mem < peak ? "memory" : "compute", frac: P / peak, ridge: peak / bw };
+  }
+  /** 여러 대역폭 지붕(계층) 중 가장 낮은 것: levels = [{name, I, bw}] */
+  function roofMulti(peak, levels) {
+    let P = peak, lim = "compute";
+    levels.forEach((l) => { const v = l.I * l.bw; if (v < P) { P = v; lim = l.name; } });
+    return { P, lim, frac: P / peak };
+  }
+  /* /model:gx1 */
+
+  /* model:kernels */
+  // 커널 카탈로그: FLOP과 HBM 바이트(각 데이터를 한 번만 옮기는 이상적 경우). e = 원소 바이트
+  const KERNELS = {
+    vadd:   { name: "벡터 덧셈", unit: "vec", size: "n", cost: (n, e) => ({ flop: n, bytes: 3 * n * e }) },
+    saxpy:  { name: "SAXPY", unit: "vec", size: "n", cost: (n, e) => ({ flop: 2 * n, bytes: 3 * n * e }) },
+    reduce: { name: "리덕션", unit: "vec", size: "n", cost: (n, e) => ({ flop: n, bytes: n * e + e }) },
+    softmax:{ name: "소프트맥스", unit: "vec", size: "n", cost: (n, e) => ({ flop: 5 * n, bytes: 2 * n * e }) },
+    lnorm:  { name: "레이어노름", unit: "vec", size: "n", cost: (n, e) => ({ flop: 8 * n, bytes: 2 * n * e }) },
+    gemv:   { name: "GEMV", unit: "tensor", size: "m", cost: (n, e) => ({ flop: 2 * n * n, bytes: e * (n * n + 2 * n) }) },
+    gemm:   { name: "GEMM", unit: "tensor", size: "m", cost: (n, e) => ({ flop: 2 * n * n * n, bytes: 3 * e * n * n }) },
+    conv:   { name: "합성곱 3×3", unit: "tensor", size: "c",
+              cost: (c, e) => { const B = 32, H = 56, W = 56, R = 3; return { flop: 2 * B * H * W * c * R * R * c, bytes: e * (2 * B * H * W * c + R * R * c * c) }; } },
+    attn:   { name: "어텐션 융합", unit: "tensor", size: "L",
+              cost: (L, e) => { const d = 128, h = 64; return { flop: h * 4 * L * L * d, bytes: h * e * 4 * L * d }; } },
+    attnU:  { name: "어텐션 비융합", unit: "tensor", size: "L",
+              cost: (L, e) => { const d = 128, h = 64; return { flop: h * 4 * L * L * d, bytes: h * e * (4 * L * d + 4 * L * L) }; } },
+    attnD:  { name: "디코드 어텐션", unit: "tensor", size: "L",
+              cost: (L, e) => { const d = 128, g = 8, kv = 8; return { flop: kv * g * 4 * L * d, bytes: kv * e * (2 * L * d) + kv * g * e * 2 * d }; } },
+  };
+  // 크기 손잡이: n은 2^p 원소, m은 2^p 행렬 한 변, c는 채널 수, L은 2^p 토큰
+  const KSIZE = {
+    n: { min: 16, max: 30, step: 1, def: 26, val: (p) => Math.pow(2, p), label: "원소 수 n" },
+    m: { min: 6, max: 15, step: 1, def: 13, val: (p) => Math.pow(2, p), label: "한 변 n" },
+    c: { min: 16, max: 1024, step: 16, def: 256, val: (p) => p, label: "채널 C" },
+    L: { min: 7, max: 17, step: 1, def: 13, val: (p) => Math.pow(2, p), label: "길이 L" },
+  };
+  /** 커널 하나를 GX-1 HBM 루프라인 위에 놓는다. prec: 'fp32' | 'bf16' */
+  function kernelPoint(key, size, prec) {
+    const k = KERNELS[key], e = GX.bytes[prec], c = k.cost(size, e);
+    const peak = prec === "fp32" || k.unit === "vec" ? GX.peak.fp32 : GX.peak[prec];
+    const I = c.flop / c.bytes, r = roof(I, peak, GX.bw.hbm);
+    return { flop: c.flop, bytes: c.bytes, I, peak, P: r.P, bound: r.bound, frac: r.frac, ridge: r.ridge, time: c.flop / r.P };
+  }
+  /* /model:kernels */
+
+  /* model:tile */
+  /** 타일 번호 i → (행, 열). 'row' 행 우선, 'group' 높이 G 띠 안에서 열 우선(스위즐) */
+  function tileRC(i, TM, TN, order, G) {
+    if (order === "group") {
+      const s = Math.floor(i / (G * TN)), Gs = Math.min(G, TM - s * G), j = i - s * G * TN;
+      return [s * G + (j % Gs), Math.floor(j / Gs)];
+    }
+    return [Math.floor(i / TN), i % TN];
+  }
+  /** GEMM 타일링 트래픽: 블록 타일 bM×bN×bK, 단계 수 stages, 웨이브 = 동시 실행 블록 sms개.
+      L2 트래픽 = 타일마다 A·B 띠를 읽는 양, HBM 트래픽 = 웨이브마다 서로 다른 띠만(L2가 웨이브 안에서 재사용) */
+  function gemmTile(o) {
+    const e = o.e, M = o.M, N = o.N, K = o.K, bM = o.bM, bN = o.bN, sms = o.sms || GX.sm;
+    const TM = Math.ceil(M / bM), TN = Math.ceil(N / bN), T = TM * TN;
+    const waves = Math.ceil(T / sms), waveEff = T / (waves * sms);
+    const smem = o.stages * e * o.bK * (bM + bN), regs = 4 * bM * bN;
+    const flop = 2 * M * N * K;
+    const l2Bytes = T * e * K * (bM + bN) + e * M * N;
+    const G = Math.max(1, Math.round(Math.sqrt(sms)));
+    const rowSt = new Int32Array(TM).fill(-1), colSt = new Int32Array(TN).fill(-1);
+    let rows = 0, cols = 0, hbmLoads = 0;
+    for (let i = 0; i < T; i++) {
+      const w = Math.floor(i / sms), rc = tileRC(i, TM, TN, o.order, G);
+      if (rowSt[rc[0]] !== w) { rowSt[rc[0]] = w; rows++; }
+      if (colSt[rc[1]] !== w) { colSt[rc[1]] = w; cols++; }
+      if (i % sms === sms - 1 || i === T - 1) { hbmLoads += rows * bM + cols * bN; rows = 0; cols = 0; }
+    }
+    const comp = e * (M * K + K * N + M * N);
+    const hbmBytes = Math.max(comp, e * K * hbmLoads + e * M * N);
+    const peak = GX.peak[o.prec || "bf16"];
+    const IL2 = flop / l2Bytes, IHBM = flop / hbmBytes;
+    const r = roofMulti(peak * waveEff, [{ name: "l2", I: IL2, bw: GX.bw.l2 }, { name: "hbm", I: IHBM, bw: GX.bw.hbm }]);
+    const okSmem = smem <= GX.smemMax, okReg = regs <= 0.75 * GX.regFile;
+    return { TM, TN, T, waves, waveEff, smem, regs, okSmem, okReg, ok: okSmem && okReg, flop, l2Bytes, hbmBytes, comp, IL2, IHBM, P: r.P, lim: r.lim, time: flop / r.P, G };
+  }
+  /** 타일 강도 근사(무캐시): I ≈ 2 / (e·(1/bM + 1/bN)) */
+  const tileI = (bM, bN, e) => 2 / (e * (1 / bM + 1 / bN));
+  /* /model:tile */
+
+  /* model:fusion */
+  /** 원소별 연산 k개를 따로(커널 k개) vs 합쳐서(커널 1개). n 원소, 연산당 f FLOP/원소, 원소 e 바이트, 커널 고정 비용 launch 초 */
+  function fusion(o) {
+    const n = o.n, k = o.k, f = o.f, e = o.e, L = o.launch, P = GX.peak.fp32, B = GX.bw.hbm;
+    const one = Math.max(f * n / P, 2 * n * e / B);
+    const unf = { bytes: k * 2 * n * e, flop: k * f * n, time: k * (L + one), mem: k * 2 * n * e / B, cmp: k * f * n / P };
+    const fus = { bytes: 2 * n * e, flop: k * f * n, time: L + Math.max(k * f * n / P, 2 * n * e / B), mem: 2 * n * e / B, cmp: k * f * n / P };
+    unf.I = unf.flop / unf.bytes; fus.I = fus.flop / fus.bytes;
+    return { unf, fus, speed: unf.time / fus.time, saved: 1 - fus.bytes / unf.bytes };
+  }
+  /* /model:fusion */
+
+  /* model:hier */
+  /** GEMM 계층 루프라인: 워프 타일 w(공유 메모리 → 레지스터), 블록 타일 b(L2 → 공유 메모리), L2 적중률 h */
+  function hierGemm(o) {
+    const e = o.e, M = o.n, N = o.n, K = o.n, flop = 2 * M * N * K;
+    const smem = e * M * N * K * (2 / o.w);
+    const l2 = e * M * N * K * (2 / o.b) + e * M * N;
+    const comp = e * (M * K + K * N + M * N);
+    const hbm = comp + (1 - o.h) * Math.max(0, l2 - comp);
+    const lv = [
+      { name: "smem", I: flop / smem, bw: GX.bw.smem },
+      { name: "l2", I: flop / l2, bw: GX.bw.l2 },
+      { name: "hbm", I: flop / hbm, bw: GX.bw.hbm },
+    ];
+    const r = roofMulti(GX.peak.bf16, lv);
+    return { flop, levels: lv, P: r.P, lim: r.lim, frac: r.frac };
+  }
+  /* /model:hier */
+
+  /* model:prec */
+  /** 선형층 Y = X·W (W: K×M, 배치 B 토큰). 형식별 가중치·활성 바이트와 지붕 */
+  const PMODES = {
+    w16a16: { name: "BF16", ew: 2, ea: 2, roof: "bf16" },
+    w8a16:  { name: "가중치만 FP8", ew: 1, ea: 2, roof: "bf16" },
+    w8a8:   { name: "FP8", ew: 1, ea: 1, roof: "fp8" },
+    w4a4:   { name: "FP4", ew: 0.5, ea: 0.5, roof: "fp4" },
+  };
+  function linearLayer(B, mode, K, M) {
+    K = K || 8192; M = M || 8192;
+    const m = PMODES[mode], flop = 2 * B * K * M, bytes = m.ew * K * M + m.ea * B * (K + M);
+    const peak = GX.peak[m.roof], I = flop / bytes, r = roof(I, peak, GX.bw.hbm);
+    const den = 2 * K * M - r.ridge * m.ea * (K + M);
+    const Bstar = den > 0 ? r.ridge * m.ew * K * M / den : Infinity;
+    return { flop, bytes, I, P: r.P, bound: r.bound, ridge: r.ridge, time: flop / r.P, Bstar, peak };
+  }
+  /* /model:prec */
+
+  /* model:wall */
+  /** 메모리 장벽: 2년마다 연산 gP배, 대역폭 gB배. 시작 리지 R0, 강도 I로 고정된 커널의 피크 대비 비율 */
+  function wall(o) {
+    const out = [], r = o.gP / o.gB, n = Math.max(1, Math.round(o.years * 4));
+    for (let k = 0; k <= n; k++) {
+      const t = o.years * k / n, P = Math.pow(o.gP, t / 2), B = Math.pow(o.gB, t / 2), R = o.R0 * Math.pow(r, t / 2);
+      out.push({ t, P, B, R, frac: Math.min(1, o.I / R) });
+    }
+    const dbl = r > 1 ? 2 * Math.LN2 / Math.log(r) : Infinity;
+    return { pts: out, dbl, end: out[out.length - 1] };
+  }
+  /* /model:wall */
+
+  /* model:design */
+  /** 설계자 관점: 모듈 1,000 W 안에서 HBM 스택 s개(스택당 1.2288 TB/s, 약 25 W), 나머지 전력이 로직(= 피크 연산)에 간다.
+      워크로드 묶음: w = FLOP 비중, I = HBM 기준 강도(BF16) */
+  const MIXES = {
+    gemm:   [{ n: "대형 GEMM", w: 1, I: 1000 }],
+    train:  [{ n: "GEMM", w: 0.86, I: 500 }, { n: "어텐션", w: 0.135, I: 250 }, { n: "원소별·정규화", w: 0.005, I: 2 }],
+    decode: [{ n: "가중치 GEMM(배치 32)", w: 0.85, I: 32 }, { n: "디코드 어텐션", w: 0.13, I: 8 }, { n: "원소별·정규화", w: 0.02, I: 1 }],
+  };
+  function designPoint(s, mixKey) {
+    const bw = s * 1.2288e12, pl = 1000 - 90 - 25 * s, peak = GX.peak.bf16 * Math.max(0, pl) / 760;
+    let W = 0, T = 0;
+    const parts = MIXES[mixKey].map((k) => { const P = Math.min(peak, k.I * bw), t = P > 0 ? k.w / P : Infinity; W += k.w; T += t; return { n: k.n, t, I: k.I, bound: k.I * bw < peak ? "memory" : "compute" }; });
+    parts.forEach((p) => { p.share = p.t / T; });
+    return { s, bw, peak, ridge: peak / bw, P: W / T, parts };
+  }
+  function designBest(mixKey, smin, smax) {
+    let best = null;
+    for (let s = smin; s <= smax; s++) { const d = designPoint(s, mixKey); if (!best || d.P > best.P) best = d; }
+    return best;
+  }
+  /* /model:design */
+
+  const PREC_ROOF = { fp32: GX.peak.fp32, bf16: GX.peak.bf16, fp8: GX.peak.fp8 };
+  const LEVEL_BW = { hbm: GX.bw.hbm, l2: GX.bw.l2, smem: GX.bw.smem };
+  const LEVEL_NAME = { hbm: "HBM", l2: "L2", smem: "공유 메모리" };
+  const PREC_NAME = { fp32: "FP32", bf16: "BF16", fp8: "FP8", fp4: "FP4" };
+  const roofSeries = (peakT, bwT, x0, x1, opt) => {
+    const rg = peakT / bwT, d = [];
+    if (rg > x0) d.push([x0, x0 * bwT]);
+    if (rg > x0 && rg < x1) d.push([rg, peakT]);
+    d.push([x1, Math.min(peakT, x1 * bwT)]);
+    if (rg <= x0) d.unshift([x0, peakT]);
+    return Object.assign({ data: d }, opt);
+  };
+  const chartBox = (w, h) => ({ x: 62, y: 14, w: w - 62 - 16, h: h - 14 - 46 });
+
+  /* =============================================================
+     1) GX-1 루프라인 (드래그)
+     ============================================================= */
+  (function () {
+    if (!$("rl-cv")) return;
+    const X0 = 0.1, X1 = 1e4, Y0 = 0.5, Y1 = 5000;
+    let ch = null;
+    const gI = GP.range("rl-i", (v) => fI(Math.pow(10, v)) + " FLOP/B", () => upd());
+    const gBW = GP.range("rl-bw", (v) => "×" + v.toFixed(2), () => upd());
+    const gP = GP.seg("rl-p", () => upd()), gM = GP.seg("rl-m", () => upd());
+    const bwOf = (m) => LEVEL_BW[m] * (m === "hbm" ? gBW() : 1);
+    function upd() {
+      const I = Math.pow(10, gI()), pk = PREC_ROOF[gP()], bw = bwOf(gM()), r = roof(I, pk, bw);
+      GP.stat("rl-o-p", fTF(r.P));
+      GP.stat("rl-o-f", small((r.frac * 100).toPrecision(3), "%"));
+      GP.stat("rl-o-l", r.bound === "compute" ? "<span class='ok-t'>연산</span>" : "<span class='warn-t'>" + LEVEL_NAME[gM()] + " 대역폭</span>");
+      GP.stat("rl-o-r", small(fI(r.ridge), "FLOP/B"));
+      cv.redraw();
+    }
+    const cv = GP.canvas($("rl-cv"), (ctx, w, h) => {
+      const P = GP.palette(), pk = gP(), m = gM(), I = Math.pow(10, gI());
+      const series = [];
+      ["fp32", "bf16", "fp8"].forEach((p) => {
+        const on = p === pk, col = p === "fp32" ? P.compute : P.tensor;
+        series.push({ data: [[X0, PREC_ROOF[p] / 1e12], [X1, PREC_ROOF[p] / 1e12]], color: col, width: on ? 1.2 : 1, dash: [5, 4], hover: false, legend: false });
+      });
+      ["hbm", "l2", "smem"].forEach((l) => {
+        const bwT = bwOf(l) / 1e12, col = l === "hbm" ? P.dram : l === "l2" ? P.data : P.sram;
+        series.push({ data: [[X0, X0 * bwT], [X1, X1 * bwT]], color: col, width: l === m ? 1.2 : 1, dash: [5, 4], hover: false, label: LEVEL_NAME[l] + " " + GP.fmt(bwT, 3) + " TB/s" });
+      });
+      series.push(roofSeries(PREC_ROOF[pk] / 1e12, bwOf(m) / 1e12, X0, X1, { color: P.tensor, width: 3.2, label: PREC_NAME[pk] + " · " + LEVEL_NAME[m], fmt: (y) => GP.fmt(y, 3) + " TFLOPS" }));
+      const r = roof(I, PREC_ROOF[pk], bwOf(m));
+      ch = GP.chart(ctx, chartBox(w, h), {
+        x: [X0, X1], y: [Y0, Y1], logX: true, logY: true, xLabel: "산술 강도 I (FLOP/B)", yLabel: "TFLOPS",
+        series, legend: "br", hover: { xFmt: (x) => "I = " + fI(x) + " FLOP/B" },
+        vlines: [{ x: r.ridge, color: P.faint, label: "리지 " + fI(r.ridge) }],
+        points: [{ x: I, y: r.P / 1e12, r: 7, color: P.accent, label: GP.fmt(r.P / 1e12, 3) + " TFLOPS" }],
+      });
+    }, { aspect: 0.62, minHeight: 300, maxHeight: 420, hover: true });
+    GP.drag($("rl-cv"), {
+      hit: (x, y) => (ch && x >= ch.box.x && x <= ch.box.x + ch.box.w && y >= ch.box.y && y <= ch.box.y + ch.box.h ? "pt" : null),
+      move: (hd, x) => { if (!ch) return; gI.set(GP.clamp(Math.log10(ch.invX(x)), -1, 4)); },
+      cursor: "ew-resize",
+    });
+    upd();
+  })();
+
+  /* =============================================================
+     2) 커널 카탈로그
+     ============================================================= */
+  (function () {
+    if (!$("kc-cv")) return;
+    const sl = $("kc-s");
+    let key = "gemm";
+    const sizeOf = () => KSIZE[KERNELS[key].size].val(Number(sl.value));
+    const fmtSize = (v) => { const z = KERNELS[key].size; const s = KSIZE[z].val(v); return z === "c" ? String(s) : z === "n" ? "2^" + v + " = " + GP.si(s, "", 3).trim() : s.toLocaleString("en-US"); };
+    const gS = GP.range("kc-s", (v) => fmtSize(v), () => upd());
+    const gP = GP.seg("kc-p", () => upd());
+    GP.seg("kc-k", (v) => {
+      key = v; const z = KSIZE[KERNELS[key].size];
+      sl.min = z.min; sl.max = z.max; sl.step = z.step; sl.value = z.def;
+      $("kc-s-l").textContent = z.label; gS.refresh(); upd();
+    });
+    const defSize = (k) => { const z = KSIZE[KERNELS[k].size]; return z.val(z.def); };
+    let cur = null;
+    function upd() {
+      cur = kernelPoint(key, sizeOf(), gP());
+      GP.stat("kc-o-w", GP.si(cur.flop, "FLOP", 3));
+      GP.stat("kc-o-q", fBy(cur.bytes));
+      GP.stat("kc-o-i", small(fI(cur.I), "FLOP/B"));
+      GP.stat("kc-o-p", fTF(cur.P) + " " + (cur.bound === "compute" ? "<span class='ok-t'>연산</span>" : "<span class='warn-t'>메모리</span>"));
+      GP.stat("kc-o-t", fT(cur.time));
+      cv.redraw();
+    }
+    const cv = GP.canvas($("kc-cv"), (ctx, w, h) => {
+      if (!cur) return;
+      const P = GP.palette(), prec = gP(), bwT = GX.bw.hbm / 1e12;
+      const tensorPk = (prec === "fp32" ? GX.peak.fp32 : GX.peak.bf16) / 1e12;
+      const pts = Object.keys(KERNELS).filter((k) => k !== key).map((k) => {
+        const p = kernelPoint(k, defSize(k), prec);
+        return { x: p.I, y: p.P / 1e12, r: 4, color: GP.alpha(P.dim, 0.7), label: w > 520 ? KERNELS[k].name : null, labelColor: P.dim };
+      });
+      pts.push({ x: cur.I, y: cur.P / 1e12, r: 7, color: P.accent, label: KERNELS[key].name + " " + fI(cur.I) });
+      GP.chart(ctx, chartBox(w, h), {
+        x: [0.05, 2e4], y: [0.1, 3000], logX: true, logY: true, xLabel: "산술 강도 I (FLOP/B, HBM)", yLabel: "TFLOPS",
+        series: [
+          roofSeries(GX.peak.fp32 / 1e12, bwT, 0.05, 2e4, { color: P.compute, width: 2, label: "FP32 벡터 (원소별 커널)" }),
+          roofSeries(tensorPk, bwT, 0.05, 2e4, { color: P.tensor, width: 2.6, label: prec === "fp32" ? "행렬 커널 (FP32 레인)" : "행렬 커널 (BF16 텐서)" }),
+        ],
+        legend: "br", points: pts,
+      });
+    }, { aspect: 0.62, minHeight: 300, maxHeight: 420 });
+    upd();
+  })();
+
+  /* =============================================================
+     3) GEMM 타일링 트래픽 계산기 + 쓸기 애니메이션
+     ============================================================= */
+  (function () {
+    if (!$("tl-cv")) return;
+    let res = null, wave = 0, kph = 0;
+    const gN = GP.range("tl-n", (v) => v.toLocaleString("en-US"), () => upd());
+    const gBM = GP.range("tl-bm", (v) => String(v), () => upd());
+    const gBN = GP.range("tl-bn", (v) => String(v), () => upd());
+    const gBK = GP.range("tl-bk", (v) => String(v), () => upd());
+    const gST = GP.range("tl-st", (v) => v + "단계", () => upd());
+    const gO = GP.seg("tl-o", () => upd());
+    function upd() {
+      const n = gN();
+      res = gemmTile({ M: n, N: n, K: n, bM: gBM(), bN: gBN(), bK: gBK(), stages: gST(), e: 2, order: gO(), prec: "bf16" });
+      wave = 0; kph = 0;
+      const kb = (b) => (b / 1024).toFixed(0) + "<small> KB</small>";
+      GP.stat("tl-o-sm", (res.okSmem ? "" : "<span class='bad-t'>") + kb(res.smem) + (res.okSmem ? "" : " 초과</span>"));
+      GP.stat("tl-o-rg", (res.okReg ? "" : "<span class='bad-t'>") + kb(res.regs) + (res.okReg ? "" : " 초과</span>"));
+      GP.stat("tl-o-we", small((res.waveEff * 100).toFixed(1), "% · " + res.waves + "웨이브"));
+      GP.stat("tl-o-i", fI(res.IL2) + " / " + fI(res.IHBM));
+      GP.stat("tl-o-p", res.ok ? fTF(res.P) : "<span class='bad-t'>타일 불가</span>");
+      GP.stat("tl-o-l", res.ok ? limHtml(res.lim) : "<span class='bad-t'>" + (!res.okReg ? "레지스터" : "공유 메모리") + "</span>");
+      cv.redraw();
+    }
+    const cv = GP.canvas($("tl-cv"), (ctx, w, h) => {
+      if (!res) return;
+      const P = GP.palette(), n = gN(), wide = w > 600;
+      const area = wide ? Math.min(h - 16, w * 0.62) : Math.min(w - 16, h - 120);
+      const S = area * 0.42, gap = 8, x0 = 8 + (wide ? 0 : (w - 16 - (S * 2 + gap)) / 2), y0 = 22;
+      const ax = x0, ay = y0 + S + gap, bx = x0 + S + gap, by = y0, cx = bx, cy = ay;
+      const TM = res.TM, TN = res.TN, tw = S / TN, th = S / TM;
+      const wv = Math.min(wave, res.waves - 1), i0 = wv * GX.sm, i1 = Math.min(res.T, i0 + GX.sm);
+      // 행렬 바탕
+      [[ax, ay, "A (M × K)"], [bx, by, "B (K × N)"], [cx, cy, "C (M × N)"]].forEach(([x, y, t]) => {
+        ctx.fillStyle = P.surface; ctx.fillRect(x, y, S, S); ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, S - 1, S - 1);
+        GP.text(ctx, t, x + S / 2, y - 4, { size: 11.5, color: P.dim, align: "center", baseline: "bottom" });
+      });
+      // 끝난 웨이브(옅게)와 지금 웨이브의 타일
+      const rows = new Uint8Array(TM), cols = new Uint8Array(TN);
+      const doneEnd = i0;
+      ctx.fillStyle = GP.alpha(P.tensor, 0.16);
+      if (TM * TN <= 40000) for (let i = 0; i < doneEnd; i++) { const rc = tileRC(i, TM, TN, gO(), res.G); ctx.fillRect(cx + rc[1] * tw, cy + rc[0] * th, Math.max(tw, 0.6), Math.max(th, 0.6)); }
+      ctx.fillStyle = GP.alpha(P.tensor, 0.85);
+      for (let i = i0; i < i1; i++) { const rc = tileRC(i, TM, TN, gO(), res.G); rows[rc[0]] = 1; cols[rc[1]] = 1; ctx.fillRect(cx + rc[1] * tw, cy + rc[0] * th, Math.max(tw, 0.8), Math.max(th, 0.8)); }
+      // 이 웨이브가 읽는 A 행 띠, B 열 띠와 지금 k 조각
+      const kx = Math.floor(kph * (n / gBK())) * gBK() / n, kw = Math.max(1.5, S * gBK() / n);
+      for (let r = 0; r < TM; r++) if (rows[r]) {
+        ctx.fillStyle = GP.alpha(P.sram, 0.28); ctx.fillRect(ax, ay + r * th, S, Math.max(th, 0.8));
+        ctx.fillStyle = GP.alpha(P.data, 0.9); ctx.fillRect(ax + kx * S, ay + r * th, kw, Math.max(th, 0.8));
+      }
+      for (let c = 0; c < TN; c++) if (cols[c]) {
+        ctx.fillStyle = GP.alpha(P.sram, 0.28); ctx.fillRect(bx + c * tw, by, Math.max(tw, 0.8), S);
+        ctx.fillStyle = GP.alpha(P.data, 0.9); ctx.fillRect(bx + c * tw, by + kx * S, Math.max(tw, 0.8), kw);
+      }
+      if (TN <= 64) { ctx.strokeStyle = GP.alpha(P.border, 0.8); ctx.lineWidth = 0.5; ctx.beginPath(); for (let c = 1; c < TN; c++) { ctx.moveTo(cx + c * tw, cy); ctx.lineTo(cx + c * tw, cy + S); } for (let r = 1; r < TM; r++) { ctx.moveTo(cx, cy + r * th); ctx.lineTo(cx + S, cy + r * th); } ctx.stroke(); }
+      const nr = rows.reduce((a, b) => a + b, 0), nc = cols.reduce((a, b) => a + b, 0);
+      // 범례·글자
+      const tx = wide ? x0 + 2 * S + gap + 18 : 10, ty = wide ? y0 + 6 : ay + S + 18;
+      const lines = [
+        ["웨이브 " + (wv + 1) + " / " + res.waves + " (블록 " + (i1 - i0) + "개)", P.text, 700],
+        ["읽는 A 행 띠 " + nr + "개, B 열 띠 " + nc + "개", P.dim, 400],
+        ["타일 " + gBM() + "×" + gBN() + ", 격자 " + TM + "×" + TN, P.dim, 400],
+        ["L2 트래픽 " + fBy(res.l2Bytes), P.data, 600],
+        ["HBM 트래픽 " + fBy(res.hbmBytes), P.dram, 600],
+        ["필수 트래픽 " + fBy(res.comp), P.dim, 400],
+      ];
+      lines.forEach((l, k) => GP.text(ctx, l[0], tx, ty + k * 18, { size: 12, weight: l[2], color: l[1], baseline: "top" }));
+      if (wide) {
+        // 트래픽 막대 (로그)
+        const bx0 = tx, bw0 = w - tx - 16, byb = ty + 6 * 18 + 16, mx = Math.log10(res.l2Bytes * 1.2), mn = Math.log10(res.comp / 3);
+        [[res.l2Bytes, P.data, "L2"], [res.hbmBytes, P.dram, "HBM"], [res.comp, P.faint, "필수"]].forEach(([v, c, t], k) => {
+          const L = GP.clamp((Math.log10(v) - mn) / (mx - mn), 0.02, 1) * (bw0 - 40);
+          ctx.fillStyle = GP.alpha(c, 0.75); ctx.fillRect(bx0 + 38, byb + k * 22, L, 14);
+          GP.text(ctx, t, bx0 + 32, byb + k * 22 + 7, { size: 11.5, color: P.dim, align: "right", baseline: "middle" });
+        });
+        if (!res.ok) GP.text(ctx, !res.okReg ? "누산기가 레지스터 파일을 넘는다" : "공유 메모리 228 KB를 넘는다", bx0, byb + 76, { size: 12, weight: 700, color: P.bad, baseline: "top" });
+      } else if (!res.ok) GP.text(ctx, !res.okReg ? "누산기가 레지스터 파일을 넘는다" : "공유 메모리 228 KB를 넘는다", tx, ty + 6 * 18 + 4, { size: 12, weight: 700, color: P.bad, baseline: "top" });
+    }, { height: (w) => (w > 600 ? Math.min(420, Math.max(320, w * 0.5)) : w * 0.92 + 130) });
+    const loop = GP.loop($("tl-cv"), (dt) => {
+      if (!res) return;
+      kph += dt / 1.6;
+      if (kph >= 1) { kph = 0; wave = (wave + 1) % res.waves; }
+      cv.redraw();
+    });
+    $("tl-play").addEventListener("click", () => { const on = loop.toggle(); $("tl-play").textContent = on ? "일시정지" : "재생"; });
+    upd();
+  })();
+
+  /* =============================================================
+     4) 계층별 루프라인
+     ============================================================= */
+  (function () {
+    if (!$("hr-cv")) return;
+    let res = null;
+    const gW = GP.range("hr-w", (v) => String(v), () => upd());
+    const gB = GP.range("hr-b", (v) => String(v), () => upd());
+    const gH = GP.range("hr-h", (v) => (v * 100).toFixed(0) + " %", () => upd());
+    function upd() {
+      if (gW() > gB()) gB.set(gW());
+      res = hierGemm({ n: 8192, w: gW(), b: gB(), h: gH(), e: 2 });
+      GP.stat("hr-o-s", small(fI(res.levels[0].I), "/ 32"));
+      GP.stat("hr-o-2", small(fI(res.levels[1].I), "/ 72"));
+      GP.stat("hr-o-h", small(fI(res.levels[2].I), "/ 128"));
+      GP.stat("hr-o-p", fTF(res.P));
+      GP.stat("hr-o-l", limHtml(res.lim));
+      cv.redraw();
+    }
+    const cv = GP.canvas($("hr-cv"), (ctx, w, h) => {
+      if (!res) return;
+      const P = GP.palette(), pk = GX.peak.bf16 / 1e12, X0 = 1, X1 = 1e4;
+      const cols = { smem: P.sram, l2: P.data, hbm: P.dram };
+      const series = res.levels.map((l) => roofSeries(pk, l.bw / 1e12, X0, X1, { color: cols[l.name], width: l.name === res.lim ? 3 : 1.8, label: LEVEL_NAME[l.name] + " " + GP.fmt(l.bw / 1e12, 3) + " TB/s" }));
+      const pts = res.levels.map((l) => ({ x: GP.clamp(l.I, X0, X1), y: Math.min(pk, l.I * l.bw / 1e12), r: 6.5, color: cols[l.name], label: LEVEL_NAME[l.name] + " " + fI(l.I) }));
+      GP.chart(ctx, chartBox(w, h), {
+        x: [X0, X1], y: [10, 3000], logX: true, logY: true, xLabel: "그 층 기준 산술 강도 (FLOP/B)", yLabel: "TFLOPS",
+        series, legend: "br", points: pts,
+        hlines: [{ y: res.P / 1e12, color: P.bad, label: "달성 " + GP.fmt(res.P / 1e12, 3) + " TFLOPS", align: "left" }],
+      });
+    }, { aspect: 0.62, minHeight: 300, maxHeight: 420 });
+    upd();
+  })();
+
+  /* =============================================================
+     5) 연산 융합
+     ============================================================= */
+  (function () {
+    if (!$("fu-cv")) return;
+    let res = null;
+    const gK = GP.range("fu-k", (v) => String(v), () => upd());
+    const gF = GP.range("fu-f", (v) => String(v), () => upd());
+    const gN = GP.range("fu-n", (v) => "2^" + v + " = " + GP.si(Math.pow(2, v), "", 3).trim(), () => upd());
+    const gL = GP.range("fu-l", (v) => v.toFixed(1) + " µs", () => upd());
+    const gP = GP.seg("fu-p", () => upd());
+    function upd() {
+      res = fusion({ n: Math.pow(2, gN()), k: gK(), f: gF(), e: GX.bytes[gP()], launch: gL() * 1e-6 });
+      GP.stat("fu-o-q", fBy(res.unf.bytes) + " → " + fBy(res.fus.bytes));
+      GP.stat("fu-o-tu", fT(res.unf.time));
+      GP.stat("fu-o-tf", fT(res.fus.time));
+      GP.stat("fu-o-s", small("×" + res.speed.toFixed(2), ""));
+      GP.stat("fu-o-i", small(fI(res.fus.I), res.fus.I >= GX.peak.fp32 / GX.bw.hbm ? "연산 제한" : "메모리 제한"));
+      cv.redraw();
+    }
+    const cv = GP.canvas($("fu-cv"), (ctx, w, h) => {
+      if (!res) return;
+      const P = GP.palette(), k = gK(), L = gL() * 1e-6, x0 = 92, x1 = w - 16, span = res.unf.time * 1.04, sx = (t) => x0 + (t / span) * (x1 - x0);
+      const one = { mem: res.unf.mem / k, cmp: res.unf.cmp / k };
+      const row = (y, label, segs) => {
+        GP.text(ctx, label, x0 - 8, y + 14, { size: 12, weight: 700, color: P.text, align: "right", baseline: "middle" });
+        segs.forEach((s) => { const a = sx(s.t0), b = sx(s.t1); if (b - a < 0.3) return; ctx.fillStyle = s.c; ctx.fillRect(a, y, Math.max(1, b - a - 1), 28); });
+      };
+      const segU = [];
+      let t = 0;
+      for (let i = 0; i < k; i++) {
+        segU.push({ t0: t, t1: t + L, c: GP.alpha(P.faint, 0.6) }); t += L;
+        const body = Math.max(one.mem, one.cmp);
+        segU.push({ t0: t, t1: t + body, c: one.mem >= one.cmp ? GP.alpha(P.dram, 0.8) : GP.alpha(P.compute, 0.8) }); t += body;
+      }
+      const fb = Math.max(res.fus.mem, res.fus.cmp);
+      const segF = [{ t0: 0, t1: L, c: GP.alpha(P.faint, 0.6) }, { t0: L, t1: L + fb, c: res.fus.mem >= res.fus.cmp ? GP.alpha(P.dram, 0.8) : GP.alpha(P.compute, 0.8) }];
+      row(26, "따로 " + k + "개", segU);
+      row(84, "합쳐서", segF);
+      GP.text(ctx, fT(res.unf.time).replace(/<[^>]+>/g, ""), sx(res.unf.time) - 4, 20, { size: 11.5, color: P.dim, align: "right", baseline: "bottom" });
+      GP.text(ctx, fT(res.fus.time).replace(/<[^>]+>/g, ""), Math.min(x1 - 4, sx(res.fus.time) + 6), 98, { size: 11.5, color: P.dim, align: sx(res.fus.time) + 60 > x1 ? "right" : "left", baseline: "middle" });
+      // 범례
+      const ly = 136;
+      [[P.faint, "커널 고정 비용"], [P.dram, "HBM 이동이 긴 구간"], [P.compute, "연산이 긴 구간"]].forEach(([c, t], i) => {
+        const lx = x0 + i * Math.max(120, (x1 - x0) / 3);
+        ctx.fillStyle = GP.alpha(c, 0.8); ctx.fillRect(lx, ly - 6, 12, 12);
+        GP.text(ctx, t, lx + 18, ly, { size: 11.5, color: P.dim, baseline: "middle" });
+      });
+      // 바이트 막대
+      const by = 164, mx = res.unf.bytes;
+      [[res.unf.bytes, "따로 HBM 바이트"], [res.fus.bytes, "합친 HBM 바이트"]].forEach(([v, t], i) => {
+        ctx.fillStyle = GP.alpha(P.data, 0.75); ctx.fillRect(x0, by + i * 24, Math.max(2, (v / mx) * (x1 - x0)), 16);
+        GP.text(ctx, t, x0 - 8, by + i * 24 + 8, { size: 11.5, color: P.dim, align: "right", baseline: "middle" });
+        GP.text(ctx, fBy(v), x0 + 6, by + i * 24 + 8, { size: 11.5, weight: 600, color: P.text, baseline: "middle", halo: true });
+      });
+    }, { height: 220 });
+    upd();
+  })();
+
+  /* =============================================================
+     6) 정밀도 하향
+     ============================================================= */
+  (function () {
+    if (!$("pr-cv")) return;
+    const gB = GP.range("pr-b", (v) => Math.round(Math.pow(2, v)).toLocaleString("en-US"), () => upd());
+    const gM = GP.seg("pr-m", () => upd());
+    const Bv = () => Math.round(Math.pow(2, gB()));
+    let res = null, base = null;
+    function upd() {
+      res = linearLayer(Bv(), gM()); base = linearLayer(Bv(), "w16a16");
+      GP.stat("pr-o-i", small(fI(res.I), "FLOP/B"));
+      GP.stat("pr-o-p", fTF(res.P) + " " + (res.bound === "compute" ? "<span class='ok-t'>연산</span>" : "<span class='warn-t'>메모리</span>"));
+      GP.stat("pr-o-t", fT(res.time));
+      GP.stat("pr-o-s", small("×" + (base.time / res.time).toFixed(2), ""));
+      GP.stat("pr-o-b", small(isFinite(res.Bstar) ? "약 " + Math.round(res.Bstar) : "—", "토큰"));
+      cv.redraw();
+    }
+    const cv = GP.canvas($("pr-cv"), (ctx, w, h) => {
+      if (!res) return;
+      const P = GP.palette(), bwT = GX.bw.hbm / 1e12, X0 = 0.5, X1 = 1e4;
+      const roofs = [["bf16", 1], ["fp8", 0.7], ["fp4", 0.45]].map(([p, a]) => roofSeries(GX.peak[p] / 1e12, bwT, X0, X1, { color: GP.alpha(P.tensor, a), width: GX.peak[p] === res.peak ? 3 : 1.6, label: PREC_NAME[p] + " 지붕 (리지 " + Math.round(GX.peak[p] / GX.bw.hbm) + ")" }));
+      const cur = gM();
+      const pts = Object.keys(PMODES).map((m) => { const r = linearLayer(Bv(), m); return { x: r.I, y: r.P / 1e12, r: m === cur ? 7.5 : 4.5, color: m === cur ? P.accent : GP.alpha(P.dim, 0.75), label: m === cur || w > 560 ? PMODES[m].name : null, labelColor: m === cur ? P.text : P.dim }; });
+      GP.chart(ctx, chartBox(w, h), {
+        x: [X0, X1], y: [1, 6000], logX: true, logY: true, xLabel: "산술 강도 (FLOP/B, HBM)", yLabel: "TFLOPS",
+        series: roofs, legend: "br", points: pts,
+      });
+    }, { aspect: 0.62, minHeight: 300, maxHeight: 420 });
+    upd();
+  })();
+
+  /* =============================================================
+     7) 메모리 장벽 추세
+     ============================================================= */
+  (function () {
+    if (!$("wl-cv")) return;
+    let res = null;
+    const gPg = GP.range("wl-p", (v) => "×" + v.toFixed(1), () => upd());
+    const gBg = GP.range("wl-b", (v) => "×" + v.toFixed(1), () => upd());
+    const gR = GP.range("wl-r", (v) => String(v), () => upd());
+    const gI = GP.range("wl-i", (v) => fI(Math.pow(10, v)), () => upd());
+    const gY = GP.range("wl-y", (v) => v + "년", () => upd());
+    function upd() {
+      res = wall({ gP: gPg(), gB: gBg(), years: gY(), R0: gR(), I: Math.pow(10, gI()) });
+      GP.stat("wl-o-d", isFinite(res.dbl) ? small(res.dbl.toFixed(1), "년") : "늘지 않음");
+      GP.stat("wl-o-r", small(fI(res.end.R), "FLOP/B"));
+      GP.stat("wl-o-f", small((res.end.frac * 100).toPrecision(3), "%"));
+      GP.stat("wl-o-g", "×" + GP.fmt(res.end.P, 3) + " / ×" + GP.fmt(res.end.B, 3));
+      cv.redraw();
+    }
+    const cv = GP.canvas($("wl-cv"), (ctx, w, h) => {
+      if (!res) return;
+      const P = GP.palette(), Y = gY(), h1 = Math.round(h * 0.6);
+      const top = Math.max(10, res.end.P * 1.5);
+      GP.chart(ctx, { x: 62, y: 14, w: w - 78, h: h1 - 14 - 34 }, {
+        x: [0, Y], y: [0.5, top], logY: true, yLabel: "기준 대비 배수",
+        series: [
+          { data: res.pts.map((p) => [p.t, p.P]), color: P.tensor, width: 2.6, label: "피크 연산" },
+          { data: res.pts.map((p) => [p.t, p.B]), color: P.dram, width: 2.6, label: "대역폭" },
+          { data: res.pts.map((p) => [p.t, p.R / res.pts[0].R]), color: P.accent, width: 2, dash: [6, 4], label: "리지 (상대)" },
+        ],
+        legend: "tl", xFmt: (x) => x + "년",
+      });
+      GP.chart(ctx, { x: 62, y: h1 + 10, w: w - 78, h: h - h1 - 10 - 40 }, {
+        x: [0, Y], y: [0, 100], xLabel: "경과 연수", yLabel: "피크 대비 %",
+        series: [{ data: res.pts.map((p) => [p.t, p.frac * 100]), color: P.warn, width: 2.6, fill: true, label: "강도 " + fI(Math.pow(10, gI())) + " 커널" }],
+        legend: "tr", xFmt: (x) => x + "년",
+      });
+    }, { aspect: 0.75, minHeight: 360, maxHeight: 480 });
+    upd();
+  })();
+
+  /* =============================================================
+     8) 설계자 관점: HBM 스택 수
+     ============================================================= */
+  (function () {
+    if (!$("ds-cv")) return;
+    let res = null, best = null;
+    const gS = GP.range("ds-s", (v) => v + (v > 8 ? "개 (쇼어라인 초과)" : "개"), () => upd());
+    const gM = GP.seg("ds-m", () => upd());
+    function upd() {
+      res = designPoint(gS(), gM()); best = designBest(gM(), 1, 8);
+      GP.stat("ds-o-bw", small(GP.fmt(res.bw / 1e12, 3), "TB/s"));
+      GP.stat("ds-o-pk", fTF(res.peak));
+      GP.stat("ds-o-r", small(fI(res.ridge), "FLOP/B"));
+      GP.stat("ds-o-p", fTF(res.P));
+      GP.stat("ds-o-b", small(best.s + "개", GP.fmt(best.P / 1e12, 3) + " TFLOPS"));
+      $("ds-parts").innerHTML = "<b>시간 비중</b> · " + res.parts.map((p) => p.n + " (I " + p.I + ", " + (p.bound === "compute" ? "연산" : "메모리") + " 제한) " + (p.share * 100).toFixed(0) + " %").join(" · ");
+      cv.redraw();
+    }
+    const cv = GP.canvas($("ds-cv"), (ctx, w, h) => {
+      if (!res) return;
+      const P = GP.palette(), m = gM(), ss = [];
+      for (let s = 1; s <= 12; s++) ss.push(designPoint(s, m));
+      GP.chart(ctx, chartBox(w, h), {
+        x: [1, 12], y: [0, 1200], xLabel: "HBM 스택 수 s", yLabel: "TFLOPS",
+        series: [
+          { data: ss.map((d) => [d.s, d.peak / 1e12]), color: P.tensor, width: 2, dash: [6, 4], label: "피크 BF16" },
+          { data: ss.map((d) => [d.s, d.P / 1e12]), color: P.accent, width: 3, dots: 3, label: "평균 달성" },
+        ],
+        bands: [{ x0: 8, x1: 12, color: GP.alpha(P.bad, 0.07), label: "쇼어라인 초과", labelPos: "bottom" }],
+        vlines: [{ x: 6, color: P.faint, label: "GX-1" }],
+        points: [{ x: res.s, y: res.P / 1e12, r: 7, color: P.accent, label: GP.fmt(res.P / 1e12, 3) }],
+        legend: "tr", hover: { xFmt: (x) => "s = " + x.toFixed(1), yFmt: (y) => GP.fmt(y, 3) },
+      });
+    }, { aspect: 0.6, minHeight: 300, maxHeight: 400, hover: true });
+    upd();
+  })();
+})();
+</script>
+</body>
+</html>

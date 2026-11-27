@@ -1,0 +1,1228 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>처리량 기계: 지연을 숨기는 법 · GPUBook</title>
+<meta name="description" content="GPU가 메모리 지연을 줄이는 대신 숨기도록 설계된 이유를 리틀의 법칙(HBM 7.37 TB/s × 500 ns ≈ 3.7 MB)으로 계산하고, 워프 수와 ALU 활용률, 캐시·추측 실행과 멀티스레딩의 비용, 레지스터 파일에 상주하는 문맥, SIMD·SIMT·MIMD, 스레드·워프·블록·그리드의 하드웨어 매핑과 웨이브 양자화, 암달·구스타프손 법칙, 파이프라인 깊이를 시뮬레이터로 다룬다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+  svg .lb12 { fill: var(--text); font-family: var(--mono); font-size: 12px; }
+  svg .lbd { fill: var(--text-dim); font-family: var(--font); font-size: 12px; }
+  svg .lbb { fill: var(--text); font-family: var(--font); font-size: 13px; font-weight: 700; }
+  p.why { border-left: 3px solid var(--accent-2); padding: 4px 0 4px 12px; margin: 16px 0; }
+  p.why > b:first-child { color: var(--accent-2); }
+  .sim-view canvas + canvas { margin-top: 6px; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="throughput">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 02</div>
+    <h1>처리량 기계: 지연을 숨기는 법</h1>
+    <p class="lead">GX-1에서 HBM까지 왕복하는 데 약 500 ns, 부스트 클럭으로 약 800사이클이 걸린다. CPU는 이 시간을 줄이려고 큰 캐시와 비순차·추측 실행에 면적을 쓴다. GPU는 지연을 그대로 두고, 그동안 할 일을 다른 스레드에서 가져온다. 이 장은 그 선택을 <span class="term">리틀의 법칙</span> 하나로 계산한다. 동시에 떠 있어야 할 요청 수는 지연 × 대역폭이다. 이 곱이 워프 수, 레지스터 파일 크기, 스레드 블록을 SM에 나누는 방식까지 정한다.</p>
+    <ul class="objectives">
+      <li>지연과 처리량을 구분하고, 리틀의 법칙으로 HBM 7.37 TB/s × 500 ns ≈ 3.7 MB가 늘 전송 중이어야 함을 계산할 수 있다.</li>
+      <li>워프 수 \(N\), 메모리 사이 연산 \(k\), 지연 \(L\)로 연산 유닛 활용률 \(\min(1, Nk/(k+L))\)을 구할 수 있다.</li>
+      <li>캐시·추측 실행(지연 줄이기)과 하드웨어 멀티스레딩(지연 숨기기)의 저장 비용을 비교할 수 있다.</li>
+      <li>워프 전환이 0사이클인 이유(문맥이 레지스터 파일에 상주)와 그 대가인 레지스터 파일 크기를 계산할 수 있다.</li>
+      <li>SIMD·SIMT·MIMD의 차이, 스레드·워프·블록·그리드가 레인·서브파티션·SM·칩에 매핑되는 방식, 웨이브 양자화를 설명할 수 있다.</li>
+      <li>암달·구스타프손 법칙과 파이프라인 깊이로 병렬 효율의 한계를 계산할 수 있다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="latency">
+    <h2>지연과 처리량</h2>
+    <p><span class="term">지연</span><span class="en">(latency)</span>은 일 하나가 시작해서 끝날 때까지 걸리는 시간이고, <span class="term">처리량</span><span class="en">(throughput)</span>은 단위 시간에 끝나는 일의 수다. 둘은 서로 다른 손잡이다. 고속도로 차선을 늘리면 차 한 대가 도착하는 시간은 그대로지만 한 시간에 지나가는 차는 늘어난다. 칩에서도 같다. 명령어 하나의 지연을 반으로 줄이는 일은 어렵고 비싸지만, 같은 명령을 두 배 많이 동시에 돌리는 일은 레인을 늘리면 된다.</p>
+    <p>CPU 코어는 <b>지연 최적화</b> 기계다. 스레드 하나가 빨리 끝나도록 높은 클럭(약 3 GHz), 큰 캐시, 분기 예측, 비순차 실행에 면적을 쓴다. 1장에서 본 것처럼 서버 CPU(SC-64)는 다이 면적의 약 10–15 %만 연산 레인이다. GPU는 <b>처리량 최적화</b> 기계다. 스레드 하나는 느려도 되니 수십만 개를 동시에 돌린다. GX-1은 다이의 약 66 %가 SM이다. 그림 2-1은 두 방식의 시간표를 나란히 놓았다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 300" role="img" aria-label="CPU식은 작업 하나를 짧은 지연으로 차례로 처리하고, GPU식은 지연이 세 배인 작업 12개를 겹쳐 처리량을 네 배로 만든다">
+        <text x="110" y="56" class="lbb" text-anchor="end">CPU식</text>
+        <text x="110" y="74" class="lbd" text-anchor="end">지연 최적화</text>
+        <text x="110" y="176" class="lbb" text-anchor="end">GPU식</text>
+        <text x="110" y="194" class="lbd" text-anchor="end">처리량 최적화</text>
+        <text x="120" y="30" class="lbd">작업 하나의 지연 = 1단위(캐시 적중·추측 실행으로 짧게) · 처리량 = 단위당 1개</text>
+<rect x="120" y="40" width="114" height="22" rx="3" class="k-ctrl"/><text x="177" y="56" class="t-dim" text-anchor="middle">작업 1</text>
+<rect x="240" y="40" width="114" height="22" rx="3" class="k-ctrl"/><text x="297" y="56" class="t-dim" text-anchor="middle">작업 2</text>
+<rect x="360" y="40" width="114" height="22" rx="3" class="k-ctrl"/><text x="417" y="56" class="t-dim" text-anchor="middle">작업 3</text>
+<rect x="480" y="40" width="114" height="22" rx="3" class="k-ctrl"/><text x="537" y="56" class="t-dim" text-anchor="middle">작업 4</text>
+<rect x="600" y="40" width="114" height="22" rx="3" class="k-ctrl"/><text x="657" y="56" class="t-dim" text-anchor="middle">작업 5</text>
+<rect x="720" y="40" width="114" height="22" rx="3" class="k-ctrl"/><text x="777" y="56" class="t-dim" text-anchor="middle">작업 6</text>
+<rect x="120" y="104" width="30" height="10" class="kf-compute"/>
+<rect x="150" y="104" width="330" height="10" class="k-data"/>
+<rect x="480" y="104" width="30" height="10" class="kf-compute"/>
+<rect x="510" y="104" width="330" height="10" class="k-data"/>
+<rect x="150" y="117" width="30" height="10" class="kf-compute"/>
+<rect x="180" y="117" width="330" height="10" class="k-data"/>
+<rect x="510" y="117" width="30" height="10" class="kf-compute"/>
+<rect x="540" y="117" width="300" height="10" class="k-data"/>
+<rect x="180" y="130" width="30" height="10" class="kf-compute"/>
+<rect x="210" y="130" width="330" height="10" class="k-data"/>
+<rect x="540" y="130" width="30" height="10" class="kf-compute"/>
+<rect x="570" y="130" width="270" height="10" class="k-data"/>
+<rect x="210" y="143" width="30" height="10" class="kf-compute"/>
+<rect x="240" y="143" width="330" height="10" class="k-data"/>
+<rect x="570" y="143" width="30" height="10" class="kf-compute"/>
+<rect x="600" y="143" width="240" height="10" class="k-data"/>
+<rect x="240" y="156" width="30" height="10" class="kf-compute"/>
+<rect x="270" y="156" width="330" height="10" class="k-data"/>
+<rect x="600" y="156" width="30" height="10" class="kf-compute"/>
+<rect x="630" y="156" width="210" height="10" class="k-data"/>
+<rect x="270" y="169" width="30" height="10" class="kf-compute"/>
+<rect x="300" y="169" width="330" height="10" class="k-data"/>
+<rect x="630" y="169" width="30" height="10" class="kf-compute"/>
+<rect x="660" y="169" width="180" height="10" class="k-data"/>
+<rect x="300" y="182" width="30" height="10" class="kf-compute"/>
+<rect x="330" y="182" width="330" height="10" class="k-data"/>
+<rect x="660" y="182" width="30" height="10" class="kf-compute"/>
+<rect x="690" y="182" width="150" height="10" class="k-data"/>
+<rect x="330" y="195" width="30" height="10" class="kf-compute"/>
+<rect x="360" y="195" width="330" height="10" class="k-data"/>
+<rect x="690" y="195" width="30" height="10" class="kf-compute"/>
+<rect x="720" y="195" width="120" height="10" class="k-data"/>
+<rect x="360" y="208" width="30" height="10" class="kf-compute"/>
+<rect x="390" y="208" width="330" height="10" class="k-data"/>
+<rect x="720" y="208" width="30" height="10" class="kf-compute"/>
+<rect x="750" y="208" width="90" height="10" class="k-data"/>
+<rect x="390" y="221" width="30" height="10" class="kf-compute"/>
+<rect x="420" y="221" width="330" height="10" class="k-data"/>
+<rect x="750" y="221" width="30" height="10" class="kf-compute"/>
+<rect x="780" y="221" width="60" height="10" class="k-data"/>
+<rect x="420" y="234" width="30" height="10" class="kf-compute"/>
+<rect x="450" y="234" width="330" height="10" class="k-data"/>
+<rect x="780" y="234" width="30" height="10" class="kf-compute"/>
+<rect x="810" y="234" width="30" height="10" class="k-data"/>
+<rect x="450" y="247" width="30" height="10" class="kf-compute"/>
+<rect x="480" y="247" width="330" height="10" class="k-data"/>
+<rect x="810" y="247" width="30" height="10" class="kf-compute"/>
+        <text x="120" y="96" class="lbd">작업 하나의 지연 = 3단위(대부분 메모리 대기) · 처리량 = 단위당 4개 · 동시에 12개 진행</text>
+        <line x1="120" y1="270" x2="845" y2="270" class="arr"/>
+        <text x="845" y="290" class="lbd" text-anchor="end">시간 →</text>
+        <rect x="120" y="280" width="12" height="10" class="kf-compute"/><text x="138" y="290" class="lbd">명령 발행(연산)</text>
+        <rect x="250" y="280" width="12" height="10" class="k-data"/><text x="268" y="290" class="lbd">메모리 응답 대기</text>
+        <rect x="390" y="280" width="12" height="10" class="k-ctrl"/><text x="408" y="290" class="lbd">CPU 작업</text>
+      </svg>
+      <figcaption><b>그림 2-1.</b> 지연 최적화와 처리량 최적화. 위: CPU식 코어는 작업 하나를 1단위 만에 끝내고 다음 작업으로 넘어간다. 아래: GPU식은 작업 하나가 3단위 걸리지만(대부분 메모리를 기다린다) 0.25단위마다 새 작업을 시작하므로 처리량이 4배다. 발행(진한 칸)이 시간축을 빈틈없이 덮는 데 필요한 동시 작업 수는 지연 ÷ 시작 간격 = 3 ÷ 0.25 = 12개다. 이것이 다음 절의 리틀의 법칙이다.</figcaption>
+    </figure>
+    <p>아래 줄에서 연산 칸(진한 색)이 이어 붙어 시간축을 다 덮는다는 점이 중요하다. 연산 유닛은 한 번도 쉬지 않는데, 각 작업은 자기 시간의 90 % 이상을 기다리며 보낸다. 기다리는 일을 없앤 것이 아니라 <b>기다리는 동안 다른 일을 한</b> 것이다. 이 방식을 <span class="term">지연 숨기기</span><span class="en">(latency hiding)</span>라고 한다.</p>
+    <p class="why"><b>왜 이렇게 설계하는가.</b> 지연을 줄이는 회로(큰 캐시, 예측기, 재정렬 버퍼)는 면적과 전력을 많이 쓰면서 연산을 하나도 늘리지 않는다. 행렬곱이나 그래픽처럼 독립적인 일이 수백만 개 있는 작업은 지연을 그대로 두고 그 면적을 연산 레인에 주는 편이 같은 mm²·같은 W에서 FLOPS가 훨씬 높다. 대가로, 동시에 떠 있는 일을 관리할 저장 공간이 필요하다. 그 크기를 다음 절이 계산한다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="little">
+    <h2>리틀의 법칙: 동시에 떠 있어야 할 양</h2>
+    <p>대기열 이론의 <span class="term">리틀의 법칙</span><span class="en">(Little's law)</span>은 정상 상태의 어떤 시스템에서도 성립한다. 시스템 안에 평균적으로 머무는 항목 수는 도착률 × 평균 체류 시간이다. 메모리 시스템에 적용하면, 대역폭 \(BW\)를 다 쓰려면 지연 \(L\) 동안 보낸 요청이 모두 아직 돌아오지 않은 채 떠 있어야 한다.</p>
+    <div class="formula">$$N_{\text{flight}} = BW \times L,\qquad BW_{\text{달성}} = \min\!\left(BW_{\text{피크}},\ \frac{Q \cdot S}{L}\right)$$
+      <div class="where">여기서 \(N_{\text{flight}}\)는 전송 중인 바이트, \(L\)은 요청을 보내고 데이터가 돌아올 때까지의 왕복 지연, \(Q\)는 칩 전체에서 동시에 낼 수 있는 미처리 요청 수, \(S\)는 요청 하나의 크기(32 B 섹터, 64 B, 128 B 라인). 동시 요청이 모자라면 대역폭은 \(Q S / L\)로 떨어진다. 이 경우 HBM을 더 빠르게 만들어도 성능이 늘지 않는다.</div></div>
+    <p>숫자를 넣어 보자. GX-1 HBM은 7.37 TB/s이고 지연은 약 500 ns다. 곱하면 \(7.37 \times 10^{12} \times 500 \times 10^{-9} \approx 3.69 \times 10^{6}\) B, 약 3.7 MB다. 64 B 요청으로 세면 57,600개, 활성 SM 144개로 나누면 SM 하나당 25.6 KB(요청 400개)가 늘 전송 중이어야 한다. 같은 계산을 사이클로 하면 SM 하나의 몫은 7.37 TB/s ÷ 144 ÷ 1.6 GHz = 클럭당 32 B이고, 지연이 800사이클이므로 32 × 800 = 25,600 B다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="SM에서 HBM으로 가는 요청과 돌아오는 데이터가 왕복 500 나노초 관을 채우고, 대역폭 곱하기 지연이 약 3.7 메가바이트임을 보인다">
+        <text x="430" y="26" class="t-acc" text-anchor="middle">BW × L = 7.37 TB/s × 500 ns ≈ 3.69 MB가 늘 관 속에 있어야 한다</text>
+        <rect x="20" y="50" width="150" height="120" rx="8" class="k-compute"/>
+        <text x="95" y="104" class="kt-compute" text-anchor="middle">SM 144개</text>
+        <text x="95" y="124" class="lbd" text-anchor="middle">요청 발행·데이터 소비</text>
+        <rect x="690" y="50" width="150" height="120" rx="8" class="k-dram"/>
+        <text x="765" y="104" class="kt-dram" text-anchor="middle">HBM 스택 6개</text>
+        <text x="765" y="124" class="lbd" text-anchor="middle">7.37 TB/s</text>
+        <rect x="170" y="70" width="520" height="28" class="k-data"/>
+        <rect x="170" y="122" width="520" height="28" class="k-data"/>
+        <g class="kf-ctrl"><rect x="184" y="78" width="12" height="12" rx="2"/><rect x="224" y="78" width="12" height="12" rx="2"/><rect x="264" y="78" width="12" height="12" rx="2"/><rect x="304" y="78" width="12" height="12" rx="2"/><rect x="344" y="78" width="12" height="12" rx="2"/><rect x="384" y="78" width="12" height="12" rx="2"/><rect x="424" y="78" width="12" height="12" rx="2"/><rect x="464" y="78" width="12" height="12" rx="2"/><rect x="504" y="78" width="12" height="12" rx="2"/><rect x="544" y="78" width="12" height="12" rx="2"/><rect x="584" y="78" width="12" height="12" rx="2"/><rect x="624" y="78" width="12" height="12" rx="2"/><rect x="664" y="78" width="12" height="12" rx="2"/></g>
+        <g class="kf-data"><rect x="180" y="129" width="26" height="14" rx="2"/><rect x="220" y="129" width="26" height="14" rx="2"/><rect x="260" y="129" width="26" height="14" rx="2"/><rect x="300" y="129" width="26" height="14" rx="2"/><rect x="340" y="129" width="26" height="14" rx="2"/><rect x="380" y="129" width="26" height="14" rx="2"/><rect x="420" y="129" width="26" height="14" rx="2"/><rect x="460" y="129" width="26" height="14" rx="2"/><rect x="500" y="129" width="26" height="14" rx="2"/><rect x="540" y="129" width="26" height="14" rx="2"/><rect x="580" y="129" width="26" height="14" rx="2"/><rect x="620" y="129" width="26" height="14" rx="2"/><rect x="660" y="129" width="26" height="14" rx="2"/></g>
+        <line x1="300" y1="62" x2="560" y2="62" class="arr"/><text x="290" y="66" class="lbd" text-anchor="end">요청(주소) →</text>
+        <line x1="560" y1="162" x2="300" y2="162" class="arr"/><text x="570" y="166" class="lbd">← 데이터 64 B씩</text>
+        <line x1="170" y1="190" x2="690" y2="190" class="dimline"/>
+        <line x1="170" y1="182" x2="170" y2="198" class="s-line"/><line x1="690" y1="182" x2="690" y2="198" class="s-line"/>
+        <text x="430" y="212" class="t" text-anchor="middle">왕복 지연 L ≈ 500 ns ≈ 800사이클(1.6 GHz)</text>
+        <text x="95" y="196" class="lbd" text-anchor="middle">SM당 25.6 KB</text>
+        <text x="765" y="196" class="lbd" text-anchor="middle">요청 57,600개</text>
+      </svg>
+      <figcaption><b>그림 2-2.</b> 리틀의 법칙. 메모리 시스템을 길이 \(L\)인 관으로 보면, 관이 꽉 찬 상태에서만 피크 대역폭이 나온다. GX-1 HBM의 관에는 약 3.69 MB(64 B 요청 57,600개, SM당 400개)가 늘 들어 있어야 한다. 요청을 보내 놓고 응답을 기다리는 동안 SM은 다른 일을 해야 한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-little">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>리틀의 법칙 큐: 대역폭 × 지연 = 떠 있는 바이트</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="lt-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>메모리 계층</span><div class="seg" id="lt-pre"><button data-value="hbm" class="on">HBM</button><button data-value="l2">L2</button><button data-value="cpu">SC-64 DDR5</button></div></div>
+          <label class="ctrl"><span>피크 대역폭 <output id="lt-bw-out"></output></span><input type="range" id="lt-bw" min="100" max="15000" step="1" value="7373"></label>
+          <label class="ctrl"><span>왕복 지연 <output id="lt-lat-out"></output></span><input type="range" id="lt-lat" min="20" max="1000" step="5" value="500"></label>
+          <div class="ctrl"><span>요청 크기</span><div class="seg" id="lt-sz"><button data-value="32">32 B</button><button data-value="64" class="on">64 B</button><button data-value="128">128 B</button></div></div>
+          <label class="ctrl"><span>SM(코어)당 동시 요청 한도 <output id="lt-q-out"></output></span><input type="range" id="lt-q" min="1" max="1000" step="1" value="400"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">떠 있어야 할 바이트</span><span class="v" id="lt-o-b">—</span></div>
+        <div class="stat"><span class="k">필요한 요청 수(전체 · SM당)</span><span class="v" id="lt-o-r">—</span></div>
+        <div class="stat"><span class="k">SM당 몫</span><span class="v" id="lt-o-sm">—</span></div>
+        <div class="stat"><span class="k">지연(1.6 GHz 사이클)</span><span class="v" id="lt-o-c">—</span></div>
+        <div class="stat"><span class="k">달성 대역폭</span><span class="v" id="lt-o-a">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① HBM 기본값(7.37 TB/s, 500 ns, 64 B, 한도 400)에서 떠 있는 바이트가 3.69 MB, SM당 400개임을 확인한다. ② 한도를 200으로 내리면 관이 반만 차서 달성 대역폭이 3.69 TB/s(50 %)로 떨어진다. ③ SC-64 DDR5(460 GB/s, 약 100 ns, 코어 64개)를 고르면 떠 있을 양이 46 KB, 코어당 64 B 요청 약 11개뿐이다. CPU의 미처리 미스 레지스터(MSHR)가 수십 개면 되는 이유다.</div>
+    </div>
+
+    <div class="callout fab"><strong>HBM 관을 채우는 데 필요한 워프</strong>SM 하나가 25.6 KB를 늘 띄워 두려면 무엇이 필요한가. 워프 하나의 로드 명령은 32 스레드 × 4 B = 128 B를 가져오므로 SM당 미처리 워프 로드가 200개 필요하다. 그런데 SM에 상주할 수 있는 워프는 최대 64개다. 따라서 워프마다 서로 독립인 로드를 평균 3개 이상 동시에 내야 한다(명령 수준 병렬성). 스레드당 16 B 벡터 로드를 쓰면 워프 로드 하나가 512 B라 50개면 된다. 같은 계산을 L2(약 13.1 TB/s, 약 200사이클 = 125 ns)에 하면 칩 전체 약 1.64 MB, SM당 약 11.4 KB다. 전송 중인 데이터가 돌아올 자리(목적지 레지스터)도 그동안 비워 두어야 하므로, SM당 25.6 KB는 레지스터 파일 256 KB의 10 %를 응답 대기에 묶어 둔다.</div>
+    <p class="why"><b>왜 이렇게 설계하는가.</b> HBM 대역폭을 두 배로 올려도(스택 수·핀 속도) 지연은 거의 그대로이므로, 떠 있어야 할 바이트가 두 배가 된다. 대역폭을 사는 비용은 HBM과 인터포저에서 끝나지 않는다. SM 쪽에서 더 많은 미처리 요청을 추적하는 큐, 응답을 받을 레지스터, 그 사이에 실행할 워프가 함께 늘어야 한다. 그렇지 않으면 산 대역폭을 쓰지 못한다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="hiding">
+    <h2>지연 숨기기 세 가지</h2>
+    <p>연산 유닛이 메모리를 기다리지 않게 하는 방법은 크게 세 가지다(그림 2-3). (a) <span class="term">캐시</span>로 지연 자체를 줄인다. 자주 쓰는 데이터를 가까운 SRAM에 두어 평균 지연을 몇십 사이클로 만든다. (b) <span class="term">비순차 실행</span><span class="en">(out-of-order execution)</span>과 <span class="term">추측 실행</span><span class="en">(speculative execution)</span>으로 한 스레드 안에서 겹친다. 미스가 난 로드 뒤의 독립 명령을 먼저 실행하고, 분기 결과를 예측해 미리 달린다. (c) <span class="term">하드웨어 멀티스레딩</span>으로 다른 스레드의 명령을 끼워 넣는다. CPU는 (a)와 (b)에, GPU는 (c)에 면적을 쓴다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 290" role="img" aria-label="캐시, 비순차와 추측 실행, 멀티스레딩 세 가지 지연 숨기기 방식의 시간표">
+        <text x="10" y="50" class="lbb">(a) 캐시</text><text x="10" y="66" class="lbd">지연을 줄인다</text>
+        <rect x="150" y="44" width="100" height="20" class="k-compute"/><rect x="250" y="44" width="30" height="20" class="k-sram"/>
+        <rect x="280" y="44" width="100" height="20" class="k-compute"/><rect x="380" y="44" width="30" height="20" class="k-sram"/>
+        <rect x="410" y="44" width="100" height="20" class="k-compute"/><rect x="510" y="44" width="300" height="20" class="f-bad-soft"/>
+        <text x="265" y="38" class="lbd" text-anchor="middle">적중</text><text x="395" y="38" class="lbd" text-anchor="middle">적중</text>
+        <text x="660" y="59" class="t" text-anchor="middle">미스: 수백 사이클 정지</text>
+        <text x="10" y="114" class="lbb">(b) 비순차·추측</text><text x="10" y="130" class="lbd">한 스레드 안에서 겹친다</text>
+        <rect x="150" y="108" width="100" height="20" class="k-compute"/><rect x="250" y="108" width="300" height="20" class="f-bad-soft"/>
+        <rect x="250" y="108" width="140" height="20" class="k-ctrl"/><rect x="550" y="108" width="100" height="20" class="k-compute"/>
+        <text x="320" y="123" class="lbd" text-anchor="middle">독립 명령·예측 경로</text>
+        <text x="470" y="123" class="t" text-anchor="middle">창이 차면 정지</text>
+        <text x="250" y="146" class="lbd">명령 창(재정렬 버퍼 수백 항목)이 찰 때까지만 미스를 덮는다</text>
+        <text x="10" y="184" class="lbb">(c) 멀티스레딩</text><text x="10" y="200" class="lbd">다른 스레드로 덮는다</text>
+        <rect x="150" y="166" width="100" height="12" class="kf-compute"/><rect x="250" y="166" width="300" height="12" class="k-dram"/><rect x="550" y="166" width="100" height="12" class="kf-compute"/><rect x="650" y="166" width="200" height="12" class="k-dram"/>
+        <rect x="250" y="182" width="100" height="12" class="kf-compute"/><rect x="350" y="182" width="300" height="12" class="k-dram"/><rect x="650" y="182" width="100" height="12" class="kf-compute"/><rect x="750" y="182" width="100" height="12" class="k-dram"/>
+        <rect x="350" y="198" width="100" height="12" class="kf-compute"/><rect x="450" y="198" width="300" height="12" class="k-dram"/><rect x="750" y="198" width="100" height="12" class="kf-compute"/>
+        <rect x="450" y="214" width="100" height="12" class="kf-compute"/><rect x="550" y="214" width="300" height="12" class="k-dram"/>
+        <rect x="150" y="236" width="700" height="14" class="k-compute"/>
+        <text x="500" y="247" class="lbd" text-anchor="middle">발행 슬롯: 스레드 4개가 번갈아 채워 쉬지 않는다</text>
+        <rect x="150" y="270" width="12" height="10" class="k-compute"/><text x="168" y="280" class="lbd">연산</text>
+        <rect x="220" y="270" width="12" height="10" class="k-sram"/><text x="238" y="280" class="lbd">캐시 적중</text>
+        <rect x="320" y="270" width="12" height="10" class="f-bad-soft"/><text x="338" y="280" class="lbd">정지(연산 유닛이 논다)</text>
+        <rect x="500" y="270" width="12" height="10" class="k-ctrl"/><text x="518" y="280" class="lbd">추측 실행</text>
+        <rect x="610" y="270" width="12" height="10" class="k-dram"/><text x="628" y="280" class="lbd">메모리 대기(다른 스레드가 일한다)</text>
+      </svg>
+      <figcaption><b>그림 2-3.</b> 지연 숨기기 세 가지. (a) 캐시는 대부분의 접근을 짧게 만들지만 미스 하나가 오면 그대로 멈춘다. (b) 비순차·추측 실행은 미스 뒤의 독립 명령을 먼저 처리하지만 명령 창이 차면 멈춘다. (c) 멀티스레딩은 스레드마다 기다리는 시간이 그대로여도, 다른 스레드의 명령으로 발행 슬롯을 채운다.</figcaption>
+    </figure>
+    <p>세 방식 모두 리틀의 법칙을 피하지 못한다. 발행 슬롯 하나가 매 클럭 명령 하나를 내려면, 평균 지연 \(t_{avg}\) 동안 명령 \(t_{avg}\)개가 동시에 진행 중이어야 한다. 차이는 그 명령들을 <b>어디서 찾고 어디에 보관하느냐</b>다.</p>
+    <div class="formula">$$t_{avg} = (1-m)\,t_{ALU} + m\left[h\,t_{hit} + (1-h)\,L\right],\qquad T_{GPU} = \frac{(1-m)\,t_{ALU} + m\,L}{ILP}$$
+      <div class="where">여기서 \(m\)은 명령 중 메모리 로드 비율, \(h\)는 캐시 적중률, \(t_{ALU}\)는 연산 명령 지연(약 4사이클), \(t_{hit}\)는 캐시 적중 지연(약 14사이클로 가정). CPU식은 슬롯마다 \(t_{avg}\)개 항목의 명령 창과 적중률 \(h\)를 만드는 캐시가 필요하다. GPU식은 캐시 없이 지연 \(L\)을 그대로 받아들이고, 한 스레드가 독립 명령 \(ILP\)개를 동시에 낼 수 있을 때 레인마다 스레드 \(T_{GPU}\)개의 문맥을 둔다.</div></div>
+
+    <div class="sim" id="sim-hide">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>지연 숨기기의 저장 비용: CPU식 vs GPU식</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="hd-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>메모리 지연 \(L\) <output id="hd-l-out"></output></span><input type="range" id="hd-l" min="100" max="1000" step="10" value="800"></label>
+          <label class="ctrl"><span>로드 비율 \(m\) <output id="hd-m-out"></output></span><input type="range" id="hd-m" min="0.02" max="0.5" step="0.01" value="0.2"></label>
+          <label class="ctrl"><span>CPU 캐시 적중률 \(h\) <output id="hd-h-out"></output></span><input type="range" id="hd-h" min="0.5" max="0.99" step="0.01" value="0.95"></label>
+          <label class="ctrl"><span>스레드당 독립 명령 \(ILP\) <output id="hd-i-out"></output></span><input type="range" id="hd-i" min="1" max="8" step="1" value="2"></label>
+          <label class="ctrl"><span>스레드당 레지스터 <output id="hd-r-out"></output></span><input type="range" id="hd-r" min="16" max="128" step="8" value="32"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">CPU 평균 로드 지연</span><span class="v" id="hd-o-a">—</span></div>
+        <div class="stat"><span class="k">CPU 슬롯당 명령 창</span><span class="v" id="hd-o-w">—</span></div>
+        <div class="stat"><span class="k">CPU 슬롯당 저장(창+캐시)</span><span class="v" id="hd-o-c">—</span></div>
+        <div class="stat"><span class="k">GPU 레인당 스레드</span><span class="v" id="hd-o-t">—</span></div>
+        <div class="stat"><span class="k">GPU 레인당 레지스터</span><span class="v" id="hd-o-g">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(\(L\) = 800, \(m\) = 0.2, \(h\) = 0.95)에서 CPU식은 슬롯당 약 34 KB(대부분 캐시), GPU식은 레인당 스레드 82개·약 10.5 KB가 필요하다. GX-1은 레인당 스레드 16개(2 KB)뿐이라 모자란다. ② \(m\)을 0.05, \(ILP\)를 4로 하면(데이터 재사용이 많은 커널) 스레드 11개로 줄어 GX-1에 들어간다. ③ \(h\)를 0.99로 올리면 CPU 캐시가 슬롯당 0.8 MB로 25배 커진다. 적중률의 마지막 몇 %가 가장 비싸다. (명령 창 항목 16 B·SRAM 대비 면적 4배, 캐시 \(h\) = 0.9에 32 KB·제곱근 법칙은 교육용 가정이다.)</div>
+    </div>
+    <p>모델은 거칠지만 방향은 분명하다. 캐시는 적중률을 0.9에서 0.99로 올리는 데 용량이 약 100배 든다(미스율이 용량의 제곱근에 반비례한다는 경험칙). 명령 창은 항목마다 비교기(CAM)와 이름 바꾸기 레지스터가 붙어 비트당 면적이 SRAM보다 몇 배 크고, 수백 항목을 넘기기 어렵다. 멀티스레딩은 문맥을 평범한 SRAM(레지스터 파일)에 두므로 비트당 가장 싸다. 대신 <b>독립 스레드가 충분히 있어야</b> 하고, 스레드 하나의 지연은 전혀 줄지 않는다.</p>
+    <p class="why"><b>왜 이렇게 설계하는가.</b> GPU의 작업은 독립 스레드가 수백만 개이므로 (c)의 전제가 공짜로 주어진다. 그래서 GPU는 비순차 실행과 분기 예측을 거의 두지 않고(순차 발행), 남는 면적을 연산 레인과 레지스터 파일에 준다. 그래도 레지스터만으로 800사이클을 다 덮기는 어렵다. GPU도 L1·L2로 평균 지연을 줄이고, 소프트웨어가 타일링으로 로드 비율 \(m\)을 낮춘다(7장 <a href="roofline.html">루프라인</a>).</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="warps">
+    <h2>워프를 번갈아 발행하기</h2>
+    <p>GPU에서 하드웨어 스레드 묶음의 단위는 <span class="term">워프</span><span class="en">(warp)</span>다. 스레드 32개가 같은 명령을 함께 실행한다. GX-1의 서브파티션에는 <span class="term">워프 스케줄러</span>가 하나 있고, 매 클럭 준비된 워프 하나를 골라 명령 하나를 발행한다. 서브파티션당 상주 워프는 최대 16개(SM당 64개)다.</p>
+    <p>단순한 모델을 세우자. 워프마다 독립 연산 명령 \(k\)개를 내고, 그다음 메모리 로드 하나를 내고 응답이 올 때까지 \(L\)사이클 기다린다. 워프 하나의 한 주기는 \(k + L\)사이클이고, 그중 발행 슬롯을 쓰는 시간은 \(k\)사이클이다. 워프가 \(N\)개면 발행 수요는 \(N k\)사이클이므로</p>
+    <div class="formula">$$U = \min\!\left(1,\ \frac{N\,k}{k + L}\right),\qquad N_{\min} = \left\lceil \frac{k + L}{k} \right\rceil$$
+      <div class="where">여기서 \(U\)는 발행 슬롯(곧 연산 유닛) 활용률, \(N_{\min}\)은 활용률 100 %에 필요한 워프 수. 리틀의 법칙을 발행 슬롯에 쓴 것이다. 처리량 1명령/클럭 × 체류 \((k+L)/k\)사이클(명령 하나당)이 동시에 필요한 워프 수다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="워프 네 개가 연산 네 사이클과 메모리 대기 열두 사이클을 번갈아 하며 발행 슬롯을 빈틈없이 채우는 간트 차트">
+        <text x="110" y="20" class="lbd">사이클 0</text><text x="430" y="20" class="lbd" text-anchor="middle">16</text><text x="750" y="20" class="lbd" text-anchor="end">32</text>
+<text x="100" y="45" class="t" text-anchor="end">워프 0</text>
+<rect x="110" y="30" width="80" height="20" class="kf-compute"/>
+<rect x="190" y="30" width="240" height="20" class="k-dram"/>
+<rect x="430" y="30" width="80" height="20" class="kf-compute"/>
+<rect x="510" y="30" width="240" height="20" class="k-dram"/>
+<text x="100" y="75" class="t" text-anchor="end">워프 1</text>
+<rect x="190" y="60" width="80" height="20" class="kf-compute"/>
+<rect x="270" y="60" width="240" height="20" class="k-dram"/>
+<rect x="510" y="60" width="80" height="20" class="kf-compute"/>
+<rect x="590" y="60" width="160" height="20" class="k-dram"/>
+<text x="100" y="105" class="t" text-anchor="end">워프 2</text>
+<rect x="270" y="90" width="80" height="20" class="kf-compute"/>
+<rect x="350" y="90" width="240" height="20" class="k-dram"/>
+<rect x="590" y="90" width="80" height="20" class="kf-compute"/>
+<rect x="670" y="90" width="80" height="20" class="k-dram"/>
+<text x="100" y="135" class="t" text-anchor="end">워프 3</text>
+<rect x="350" y="120" width="80" height="20" class="kf-compute"/>
+<rect x="430" y="120" width="240" height="20" class="k-dram"/>
+<rect x="670" y="120" width="80" height="20" class="kf-compute"/>
+<text x="100" y="177" class="t" text-anchor="end">발행 슬롯</text>
+<rect x="111" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="120.0" y="177" class="lb12" text-anchor="middle">0</text>
+<rect x="131" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="140.0" y="177" class="lb12" text-anchor="middle">0</text>
+<rect x="151" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="160.0" y="177" class="lb12" text-anchor="middle">0</text>
+<rect x="171" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="180.0" y="177" class="lb12" text-anchor="middle">0</text>
+<rect x="191" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="200.0" y="177" class="lb12" text-anchor="middle">1</text>
+<rect x="211" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="220.0" y="177" class="lb12" text-anchor="middle">1</text>
+<rect x="231" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="240.0" y="177" class="lb12" text-anchor="middle">1</text>
+<rect x="251" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="260.0" y="177" class="lb12" text-anchor="middle">1</text>
+<rect x="271" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="280.0" y="177" class="lb12" text-anchor="middle">2</text>
+<rect x="291" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="300.0" y="177" class="lb12" text-anchor="middle">2</text>
+<rect x="311" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="320.0" y="177" class="lb12" text-anchor="middle">2</text>
+<rect x="331" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="340.0" y="177" class="lb12" text-anchor="middle">2</text>
+<rect x="351" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="360.0" y="177" class="lb12" text-anchor="middle">3</text>
+<rect x="371" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="380.0" y="177" class="lb12" text-anchor="middle">3</text>
+<rect x="391" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="400.0" y="177" class="lb12" text-anchor="middle">3</text>
+<rect x="411" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="420.0" y="177" class="lb12" text-anchor="middle">3</text>
+<rect x="431" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="440.0" y="177" class="lb12" text-anchor="middle">0</text>
+<rect x="451" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="460.0" y="177" class="lb12" text-anchor="middle">0</text>
+<rect x="471" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="480.0" y="177" class="lb12" text-anchor="middle">0</text>
+<rect x="491" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="500.0" y="177" class="lb12" text-anchor="middle">0</text>
+<rect x="511" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="520.0" y="177" class="lb12" text-anchor="middle">1</text>
+<rect x="531" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="540.0" y="177" class="lb12" text-anchor="middle">1</text>
+<rect x="551" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="560.0" y="177" class="lb12" text-anchor="middle">1</text>
+<rect x="571" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="580.0" y="177" class="lb12" text-anchor="middle">1</text>
+<rect x="591" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="600.0" y="177" class="lb12" text-anchor="middle">2</text>
+<rect x="611" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="620.0" y="177" class="lb12" text-anchor="middle">2</text>
+<rect x="631" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="640.0" y="177" class="lb12" text-anchor="middle">2</text>
+<rect x="651" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="660.0" y="177" class="lb12" text-anchor="middle">2</text>
+<rect x="671" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="680.0" y="177" class="lb12" text-anchor="middle">3</text>
+<rect x="691" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="700.0" y="177" class="lb12" text-anchor="middle">3</text>
+<rect x="711" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="720.0" y="177" class="lb12" text-anchor="middle">3</text>
+<rect x="731" y="162" width="18" height="20" rx="2" class="k-compute"/><text x="740.0" y="177" class="lb12" text-anchor="middle">3</text>
+        <text x="110" y="222" class="lbd">k = 4, L = 12, N = 4 → N·k = k + L = 16: 워프 하나가 돌아오는 순간 마지막 워프가 막 발행을 끝낸다. 활용률 100 %.</text>
+        <rect x="110" y="234" width="12" height="10" class="kf-compute"/><text x="128" y="244" class="lbd">발행(연산)</text>
+        <rect x="220" y="234" width="12" height="10" class="k-dram"/><text x="238" y="244" class="lbd">메모리 응답 대기</text>
+        <rect x="370" y="234" width="12" height="10" class="k-compute"/><text x="388" y="244" class="lbd">발행 슬롯(숫자 = 발행한 워프)</text>
+      </svg>
+      <figcaption><b>그림 2-4.</b> 워프 네 개가 발행 슬롯 하나를 나눠 쓴다. 워프 0이 연산 4개를 내고 메모리로 가면 스케줄러는 다음 사이클에 워프 1을 고른다. 이 예에서는 \(N_{\min} = \lceil 16/4 \rceil = 4\)라 슬롯이 한 번도 비지 않는다. 워프가 3개면 매 주기 4사이클씩 빈다(활용률 75 %).</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-warps">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>워프 수 vs ALU 활용률: 사이클 시뮬레이션</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="wp-cv"></canvas><canvas id="wp-cv2"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>스케줄러당 워프 \(N\) <output id="wp-n-out"></output></span><input type="range" id="wp-n" min="1" max="32" step="1" value="8"></label>
+          <label class="ctrl"><span>메모리 사이 연산 \(k\) <output id="wp-k-out"></output></span><input type="range" id="wp-k" min="1" max="100" step="1" value="10"></label>
+          <label class="ctrl"><span>메모리 지연 \(L\) <output id="wp-l-out"></output></span><input type="range" id="wp-l" min="10" max="1000" step="10" value="200"></label>
+          <div class="ctrl"><span>발행 정책</span><div class="seg" id="wp-pol"><button data-value="gto" class="on">한 워프 먼저(GTO)</button><button data-value="lrr">한 사이클씩 돌아가며(LRR)</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">시뮬레이션 활용률</span><span class="v" id="wp-o-u">—</span></div>
+        <div class="stat"><span class="k">식 min(1, Nk/(k+L))</span><span class="v" id="wp-o-f">—</span></div>
+        <div class="stat"><span class="k">100 %에 필요한 워프</span><span class="v" id="wp-o-n">—</span></div>
+        <div class="stat"><span class="k">GX-1(스케줄러당 16워프)에 필요한 k</span><span class="v" id="wp-o-g">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① L2 적중 수준(\(L\) = 200, \(k\) = 10)에서 \(N\) = 16이면 160/210 ≈ 76 %다. \(N\) = 21에서 100 %가 된다. ② \(L\) = 800(HBM)에서 \(N\) = 16이면 \(k\) = 10일 때 약 20 %, \(k\) = 54로 올려야 100 %다(800/15 ≈ 53.3). ③ 정책을 LRR로 바꾸면 모든 워프가 거의 같은 순간에 메모리로 가서 \(N \gt L\)이 되기 전에는 100 %에 닿지 않는다. 발행 정책은 3장에서 자세히 다룬다.</div>
+    </div>
+    <p>시뮬레이터의 간트 차트에서 보이듯, 워프가 \(N_{\min}\)보다 적으면 발행 슬롯에 구멍이 생기고 그 구멍만큼 FLOPS를 잃는다. \(L\)이 800사이클이면 \(k = 10\)인 커널은 워프 81개가 필요하다. GX-1 스케줄러가 가질 수 있는 16개의 5배다. 그래서 실제 커널은 세 가지를 함께 쓴다. 로드를 앞당겨 여러 개를 동시에 내고(명령 수준 병렬성), 공유 메모리에 타일을 올려 HBM 로드 사이의 연산 \(k\)를 늘리고, L1·L2 적중으로 평균 \(L\)을 줄인다.</p>
+    <p class="why"><b>왜 이렇게 설계하는가.</b> \(N_{\min} = (k+L)/k\)에서 설계자가 고를 수 있는 손잡이는 \(N\)(상주 워프 수) 하나다. \(N\)을 늘리려면 워프마다 문맥(레지스터)을 둘 자리가 있어야 한다. GX-1이 서브파티션마다 64 KB, SM마다 256 KB의 레지스터 파일을 가진 이유가 여기에 있다. 다음 절에서 그 크기를 계산한다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="context">
+    <h2>문맥 전환이 공짜인 이유</h2>
+    <p>운영체제가 CPU 스레드를 바꿀 때는 레지스터, 프로그램 카운터, 상태 레지스터를 메모리에 저장하고 다음 스레드의 것을 불러온다. 정수 레지스터 32개와 512비트 벡터 레지스터 32개면 약 2.3 KB이고, 커널 진입·스케줄러 실행·캐시 오염까지 합치면 수천 사이클이 든다. 그래서 CPU는 메모리 미스마다 스레드를 바꾸지 않는다. 동시 멀티스레딩(SMT)도 코어당 문맥 2개 정도다.</p>
+    <p>GPU는 다르게 한다. 상주하는 워프의 문맥 전부가 처음부터 끝까지 <span class="term">레지스터 파일</span>에 있다. 워프 스케줄러는 매 클럭 어느 워프의 레지스터를 읽을지만 고르면 된다. 저장도 복원도 없으므로 <b>전환 비용이 0사이클</b>이다(그림 2-5). 대가는 레지스터 파일 크기다.</p>
+    <div class="formula">$$S_{ctx} = 32 \times R \times 4\ \text{B},\qquad N_{res} = \min\!\left(16,\ \left\lfloor \frac{64\ \text{KB}}{S_{ctx}} \right\rfloor\right)$$
+      <div class="where">여기서 \(R\)은 스레드당 32비트 레지스터 수, \(S_{ctx}\)는 워프 하나의 문맥 크기, \(N_{res}\)는 서브파티션 하나(레지스터 16,384개 = 64 KB)에 상주할 수 있는 워프 수. \(R = 32\)이면 4 KB × 16 = 64 KB로 딱 맞고, \(R = 64\)면 8워프, \(R = 255\)면 2워프만 들어간다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 260" role="img" aria-label="CPU는 문맥 하나를 레지스터에 두고 나머지를 메모리에 저장하지만, GPU 서브파티션은 워프 문맥 16개를 레지스터 파일에 상주시켜 스케줄러가 매 클럭 하나를 고른다">
+        <text x="20" y="26" class="lbb">CPU 코어: 하드웨어 문맥 1–2개</text>
+        <rect x="20" y="38" width="250" height="176" rx="8" class="f-surface"/>
+        <rect x="40" y="56" width="210" height="40" rx="4" class="k-sram"/><text x="145" y="81" class="kt-sram" text-anchor="middle">레지스터: 스레드 A</text>
+        <line x1="120" y1="98" x2="120" y2="148" class="arr-warn"/><line x1="170" y1="148" x2="170" y2="98" class="arr-warn"/>
+        <text x="180" y="122" class="lbd">저장·복원</text>
+        <text x="40" y="122" class="lbd">수천</text><text x="40" y="138" class="lbd">사이클</text>
+        <rect x="40" y="152" width="210" height="44" rx="4" class="k-dram"/><text x="145" y="172" class="kt-dram" text-anchor="middle">메모리(스택)</text><text x="145" y="189" class="lbd" text-anchor="middle">스레드 B·C·D 문맥</text>
+        <text x="310" y="26" class="lbb">GPU 서브파티션: 워프 문맥 16개가 레지스터 파일에 상주</text>
+        <rect x="310" y="38" width="530" height="176" rx="8" class="f-surface"/>
+        <g>
+          <rect x="326" y="52" width="70" height="30" rx="3" class="k-sram"/><rect x="402" y="52" width="70" height="30" rx="3" class="k-sram"/><rect x="478" y="52" width="70" height="30" rx="3" class="k-sram"/><rect x="554" y="52" width="70" height="30" rx="3" class="k-sram"/>
+          <rect x="326" y="88" width="70" height="30" rx="3" class="k-sram"/><rect x="402" y="88" width="70" height="30" rx="3" class="f-acc-soft"/><rect x="478" y="88" width="70" height="30" rx="3" class="k-sram"/><rect x="554" y="88" width="70" height="30" rx="3" class="k-sram"/>
+          <rect x="326" y="124" width="70" height="30" rx="3" class="k-sram"/><rect x="402" y="124" width="70" height="30" rx="3" class="k-sram"/><rect x="478" y="124" width="70" height="30" rx="3" class="k-sram"/><rect x="554" y="124" width="70" height="30" rx="3" class="k-sram"/>
+          <rect x="326" y="160" width="70" height="30" rx="3" class="k-sram"/><rect x="402" y="160" width="70" height="30" rx="3" class="k-sram"/><rect x="478" y="160" width="70" height="30" rx="3" class="k-sram"/><rect x="554" y="160" width="70" height="30" rx="3" class="k-sram"/>
+        </g>
+        <g class="lb12" text-anchor="middle">
+          <text x="361" y="72">W0</text><text x="437" y="72">W1</text><text x="513" y="72">W2</text><text x="589" y="72">W3</text>
+          <text x="361" y="108">W4</text><text x="437" y="108">W5</text><text x="513" y="108">W6</text><text x="589" y="108">W7</text>
+          <text x="361" y="144">W8</text><text x="437" y="144">W9</text><text x="513" y="144">W10</text><text x="589" y="144">W11</text>
+          <text x="361" y="180">W12</text><text x="437" y="180">W13</text><text x="513" y="180">W14</text><text x="589" y="180">W15</text>
+        </g>
+        <path d="M640 60 L700 84 L700 162 L640 186 Z" class="k-ctrl"/>
+        <text x="670" y="118" class="kt-ctrl" text-anchor="middle">선택</text><text x="670" y="136" class="lbd" text-anchor="middle">0사이클</text>
+        <line x1="700" y1="123" x2="742" y2="123" class="arr-a"/>
+        <rect x="746" y="88" width="82" height="70" rx="5" class="k-compute"/><text x="787" y="118" class="kt-compute" text-anchor="middle">FP32</text><text x="787" y="138" class="lbd" text-anchor="middle">32레인</text>
+        <text x="575" y="238" class="lbd" text-anchor="middle">64 KB = 워프 16개 × 스레드 32개 × 레지스터 32개 × 4 B · 이번 클럭은 W5(강조)를 발행</text>
+        <text x="145" y="238" class="lbd" text-anchor="middle">문맥 약 2.3 KB(정수 + 512비트 벡터)</text>
+      </svg>
+      <figcaption><b>그림 2-5.</b> 문맥이 있는 곳. 왼쪽: CPU는 실행 중인 문맥만 레지스터에 두고 나머지는 메모리에 저장하므로 전환에 수천 사이클이 든다. 오른쪽: GPU 서브파티션의 레지스터 파일은 워프 16개의 문맥을 모두 담는다. 스케줄러(멀티플렉서)는 준비된 워프 하나를 골라 그 워프의 레지스터를 연산 레인에 연결할 뿐이다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ctx">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>문맥 전환 비용: 소프트웨어 저장 vs 레지스터 파일 상주</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="cx-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>스레드당 레지스터 \(R\) <output id="cx-r-out"></output></span><input type="range" id="cx-r" min="16" max="255" step="1" value="32"></label>
+          <label class="ctrl"><span>원하는 워프 수(스케줄러당) <output id="cx-n-out"></output></span><input type="range" id="cx-n" min="1" max="16" step="1" value="16"></label>
+          <label class="ctrl"><span>메모리 사이 연산 \(k\) <output id="cx-k-out"></output></span><input type="range" id="cx-k" min="1" max="200" step="1" value="20"></label>
+          <label class="ctrl"><span>메모리 지연 \(L\) <output id="cx-l-out"></output></span><input type="range" id="cx-l" min="30" max="1000" step="10" value="800"></label>
+          <label class="ctrl"><span>저장·복원 대역폭 <output id="cx-b-out"></output></span><input type="range" id="cx-b" min="32" max="512" step="32" value="128"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">워프 문맥 크기</span><span class="v" id="cx-o-s">—</span></div>
+        <div class="stat"><span class="k">상주 가능 워프</span><span class="v" id="cx-o-m">—</span></div>
+        <div class="stat"><span class="k">소프트웨어 전환 비용</span><span class="v" id="cx-o-c">—</span></div>
+        <div class="stat"><span class="k">활용률: 상주(0사이클)</span><span class="v" id="cx-o-h">—</span></div>
+        <div class="stat"><span class="k">활용률: 소프트웨어 전환</span><span class="v" id="cx-o-w">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① \(R\) = 32, 워프 16, \(k\) = 20, \(L\) = 800: 상주 방식 활용률 16 × 20/820 ≈ 39 %, 소프트웨어 전환(문맥 4 KB를 128 B/클럭으로 저장+복원 64사이클 + 파이프라인 비우기 20사이클 = 84사이클)은 약 19 %다. ② \(k\)를 60으로 올리면 상주 방식은 100 %, 소프트웨어 방식은 60/144 ≈ 42 %에 그친다. ③ \(R\)을 64로 올리면 상주 워프가 8개로 줄어 활용률이 절반이 된다. 레지스터를 많이 쓰는 커널이 지연을 덜 숨기는 이유다(점유율은 3장).</div>
+    </div>
+    <p>소프트웨어 전환이 불리한 이유는 전환 비용 \(s\)가 연산 \(k\)와 같은 발행 슬롯을 먹기 때문이다. 활용률 상한이 \(k/(k+s)\)로 묶인다. 상주 방식은 \(s = 0\)이라 상한이 1이고, 워프 수만 충분하면 된다. 그 워프 수를 담는 레지스터 파일이 GX-1 SM 하나에 256 KB, 칩 전체 36 MB다. L1/공유 메모리(SM당 256 KB)와 같은 크기이고, CPU 코어의 L1 데이터 캐시(수십 KB)보다 훨씬 크다.</p>
+    <p class="why"><b>왜 이렇게 설계하는가.</b> 레지스터 파일은 매 클럭 워프 하나의 레지스터 3개를 읽고 1개를 써야 하므로(32레인 × 4 B × 4 = 512 B/클럭) 뱅크를 나눈 넓은 SRAM으로 만든다. 그 면적이 SM 면적의 큰 몫을 차지한다. 레지스터 파일을 키우면 상주 워프가 늘어 지연 숨기기가 좋아지지만, SM이 커지고 레지스터 읽기 에너지(약 0.5 pJ/32비트)와 배선 길이도 늘어난다. 이 균형은 <a href="sm.html">3장</a>에서 뱅크·오퍼랜드 수집기·점유율과 함께 다룬다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="simt">
+    <h2>SIMD, SIMT, MIMD</h2>
+    <p>워프 하나의 스레드 32개는 명령어 하나를 함께 실행한다. 명령어 인출·디코드·발행 논리(제어) 하나가 레인 32개를 움직인다. 제어 면적과 전력을 레인 32개가 나눠 내는 셈이다. 같은 생각을 하드웨어에 표현하는 방식은 세 가지다(그림 2-6).</p>
+    <ul>
+      <li><span class="term">SIMD</span><span class="en">(single instruction, multiple data)</span>: 명령어 하나가 넓은 벡터 레지스터(예: 512비트 = FP32 16개)를 한꺼번에 처리한다. 분기는 컴파일러나 프로그래머가 비교·마스크·블렌드 명령으로 직접 바꾼다(if 변환). CPU의 벡터 확장이 이 방식이다.</li>
+      <li><span class="term">SIMT</span><span class="en">(single instruction, multiple threads)</span>: 실행 하드웨어는 SIMD와 같지만, 프로그래머는 스레드 하나의 스칼라 코드를 쓴다. 스레드마다 자기 레지스터와 주소가 있고, 분기는 하드웨어가 <span class="term">활성 마스크</span>로 처리한다. 워프 안 스레드가 다른 길로 가면(<span class="term">분기 발산</span>) 두 길을 차례로 실행하고 해당 레인만 켠다.</li>
+      <li><span class="term">MIMD</span><span class="en">(multiple instruction, multiple data)</span>: 코어마다 자기 제어를 가진다. 분기 발산 손실이 없지만 레인마다 인출·디코드 논리를 따로 내야 한다. 멀티코어 CPU가 이 방식이다.</li>
+    </ul>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 270" role="img" aria-label="SIMD는 제어 하나와 넓은 벡터 레지스터, SIMT는 제어 하나와 스레드별 레지스터와 활성 마스크, MIMD는 레인마다 제어를 가진다">
+        <text x="140" y="22" class="lbb" text-anchor="middle">SIMD</text>
+        <text x="430" y="22" class="lbb" text-anchor="middle">SIMT</text>
+        <text x="720" y="22" class="lbb" text-anchor="middle">MIMD</text>
+        <rect x="40" y="34" width="200" height="30" rx="4" class="k-ctrl"/><text x="140" y="54" class="kt-ctrl" text-anchor="middle">인출·디코드 1개</text>
+        <line x1="140" y1="64" x2="140" y2="84" class="arr"/>
+        <rect x="20" y="86" width="240" height="30" rx="3" class="k-sram"/><text x="140" y="106" class="kt-sram" text-anchor="middle">벡터 레지스터 v1 (8 × 32비트)</text>
+        <g class="k-compute"><rect x="20" y="128" width="26" height="40" rx="3"/><rect x="50" y="128" width="26" height="40" rx="3"/><rect x="80" y="128" width="26" height="40" rx="3"/><rect x="110" y="128" width="26" height="40" rx="3"/><rect x="140" y="128" width="26" height="40" rx="3"/><rect x="170" y="128" width="26" height="40" rx="3"/><rect x="200" y="128" width="26" height="40" rx="3"/><rect x="230" y="128" width="26" height="40" rx="3"/></g>
+        <text x="20" y="194" class="lb12">vcmp  k1, v1, 0</text><text x="20" y="212" class="lb12">vmul  v2{k1}, v1, a</text>
+        <text x="20" y="236" class="lbd">마스크는 소프트웨어가 만든다</text><text x="20" y="254" class="lbd">제어 1 : 레인 8</text>
+        <rect x="330" y="34" width="200" height="30" rx="4" class="k-ctrl"/><text x="430" y="54" class="kt-ctrl" text-anchor="middle">인출·디코드 1개</text>
+        <line x1="430" y1="64" x2="430" y2="84" class="arr"/>
+        <g class="k-sram"><rect x="310" y="86" width="26" height="30" rx="3"/><rect x="340" y="86" width="26" height="30" rx="3"/><rect x="370" y="86" width="26" height="30" rx="3"/><rect x="400" y="86" width="26" height="30" rx="3"/><rect x="430" y="86" width="26" height="30" rx="3"/><rect x="460" y="86" width="26" height="30" rx="3"/><rect x="490" y="86" width="26" height="30" rx="3"/><rect x="520" y="86" width="26" height="30" rx="3"/></g>
+        <g class="k-compute"><rect x="310" y="128" width="26" height="40" rx="3"/><rect x="340" y="128" width="26" height="40" rx="3"/><rect x="400" y="128" width="26" height="40" rx="3"/><rect x="430" y="128" width="26" height="40" rx="3"/><rect x="460" y="128" width="26" height="40" rx="3"/><rect x="520" y="128" width="26" height="40" rx="3"/></g>
+        <g class="f-surface"><rect x="370" y="128" width="26" height="40" rx="3"/><rect x="490" y="128" width="26" height="40" rx="3"/></g>
+        <g class="lb12" text-anchor="middle"><text x="323" y="182">1</text><text x="353" y="182">1</text><text x="383" y="182">0</text><text x="413" y="182">1</text><text x="443" y="182">1</text><text x="473" y="182">1</text><text x="503" y="182">0</text><text x="533" y="182">1</text></g>
+        <text x="310" y="204" class="lb12">if (x &gt; 0) y = a * x;</text>
+        <text x="310" y="222" class="lbd">스레드 하나의 스칼라 코드</text>
+        <text x="310" y="240" class="lbd">활성 마스크는 하드웨어가 만든다</text><text x="310" y="258" class="lbd">제어 1 : 레인 8</text>
+        <g class="k-ctrl"><rect x="600" y="34" width="26" height="30" rx="3"/><rect x="630" y="34" width="26" height="30" rx="3"/><rect x="660" y="34" width="26" height="30" rx="3"/><rect x="690" y="34" width="26" height="30" rx="3"/><rect x="720" y="34" width="26" height="30" rx="3"/><rect x="750" y="34" width="26" height="30" rx="3"/><rect x="780" y="34" width="26" height="30" rx="3"/><rect x="810" y="34" width="26" height="30" rx="3"/></g>
+        <g class="k-sram"><rect x="600" y="86" width="26" height="30" rx="3"/><rect x="630" y="86" width="26" height="30" rx="3"/><rect x="660" y="86" width="26" height="30" rx="3"/><rect x="690" y="86" width="26" height="30" rx="3"/><rect x="720" y="86" width="26" height="30" rx="3"/><rect x="750" y="86" width="26" height="30" rx="3"/><rect x="780" y="86" width="26" height="30" rx="3"/><rect x="810" y="86" width="26" height="30" rx="3"/></g>
+        <g class="k-compute"><rect x="600" y="128" width="26" height="40" rx="3"/><rect x="630" y="128" width="26" height="40" rx="3"/><rect x="660" y="128" width="26" height="40" rx="3"/><rect x="690" y="128" width="26" height="40" rx="3"/><rect x="720" y="128" width="26" height="40" rx="3"/><rect x="750" y="128" width="26" height="40" rx="3"/><rect x="780" y="128" width="26" height="40" rx="3"/><rect x="810" y="128" width="26" height="40" rx="3"/></g>
+        <text x="600" y="194" class="lbd">코어마다 자기 PC와 명령</text>
+        <text x="600" y="212" class="lbd">분기 발산 손실 없음</text>
+        <text x="600" y="236" class="lbd">제어 면적·전력이 레인 수만큼</text><text x="600" y="254" class="lbd">제어 8 : 레인 8</text>
+      </svg>
+      <figcaption><b>그림 2-6.</b> 같은 연산 \(y = a x\ (x \gt 0)\)을 레인 8개에 뿌리는 세 방식. SIMD는 벡터 레지스터 하나와 소프트웨어 마스크, SIMT는 스레드별 레지스터와 하드웨어 활성 마스크(0인 레인은 쉰다), MIMD는 레인마다 제어(주황)를 가진다. SIMD와 SIMT의 실행 하드웨어는 거의 같고, 다른 것은 프로그래밍 모델과 마스크·주소를 누가 다루느냐다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-simt">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>SIMD·SIMT·MIMD: 같은 분기 코드를 레인에 뿌리기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="si-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>레인 수(워프 폭) \(W\) <output id="si-w-out"></output></span><input type="range" id="si-w" min="4" max="32" step="4" value="8"></label>
+          <label class="ctrl"><span>B 길로 갈 확률 \(p\) <output id="si-p-out"></output></span><input type="range" id="si-p" min="0" max="1" step="0.05" value="0.25"></label>
+          <label class="ctrl"><span>A 길 명령 수 <output id="si-a-out"></output></span><input type="range" id="si-a" min="1" max="16" step="1" value="6"></label>
+          <label class="ctrl"><span>B 길 명령 수 <output id="si-b-out"></output></span><input type="range" id="si-b" min="1" max="16" step="1" value="4"></label>
+          <button class="btn" id="si-re">데이터 다시 뽑기</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">SIMD 사이클 · 레인 활용</span><span class="v" id="si-o-d">—</span></div>
+        <div class="stat"><span class="k">SIMT 사이클 · 레인 활용</span><span class="v" id="si-o-t">—</span></div>
+        <div class="stat"><span class="k">MIMD 사이클 · 레인 활용</span><span class="v" id="si-o-m">—</span></div>
+        <div class="stat"><span class="k">제어 유닛 수(SIMD · SIMT · MIMD)</span><span class="v" id="si-o-c">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① \(p\) = 0이면 SIMT는 원소 256개를 (1 + 6) × 32 = 224사이클에 끝내고(활용률 100 %), if 변환한 SIMD는 두 길을 다 돌아 (6 + 4 + 2) × 32 = 384사이클이다. ② \(p\) = 0.25, \(W\) = 32로 올리면 워프마다 거의 늘 두 길이 섞여 SIMT도 두 길을 다 돈다. 워프가 넓을수록 분기 발산에 약하다. ③ A와 B를 같게 하면 MIMD는 늘 100 %지만, 제어 유닛이 레인 수만큼 필요하다. (원소 256개, 비교·분기 1사이클, SIMD 블렌드 1사이클 가정)</div>
+    </div>
+    <p>SIMT의 장점은 프로그래머가 레인 폭을 몰라도 된다는 점과, 스레드마다 다른 주소로 읽고 쓰는 일(gather·scatter)이 평범한 로드·스토어라는 점이다. 단점은 분기 발산과, 워프 안 스레드의 주소가 흩어지면 메모리 트랜잭션이 늘어난다는 점이다(병합은 <a href="onchip.html">6장</a>). 발산했다가 다시 합쳐지는 재수렴 하드웨어는 3장에서 다룬다.</p>
+    <p class="why"><b>왜 이렇게 설계하는가.</b> 제어 하나가 레인 32개를 움직이면, 명령어 인출·디코드·스케줄링의 면적과 에너지가 명령당 1/32로 나뉜다. 대신 워프 폭이 클수록 분기 발산 손실이 커진다. 32는 제어 비용을 충분히 나누면서 그래픽·행렬 계산의 분기 패턴에서 발산이 견딜 만한 타협점이다. 행렬곱처럼 분기가 거의 없는 일은 아예 더 큰 단위로 묶어 텐서 코어(5장)에 맡긴다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="mapping">
+    <h2>스레드·워프·블록·그리드의 하드웨어 매핑</h2>
+    <p>프로그래머는 커널 하나를 <span class="term">그리드</span><span class="en">(grid)</span>로 띄운다. 그리드는 <span class="term">스레드 블록</span><span class="en">(thread block)</span> 수천~수백만 개로 이루어지고, 블록 하나는 스레드 1,024개 이하다(교육용 가정). 하드웨어는 이 계층을 그대로 자기 계층에 대응시킨다(그림 2-7). 블록 하나는 SM 하나에 통째로 배정되어 끝날 때까지 그 SM에 머문다. 그래서 블록 안 스레드는 SM의 공유 메모리를 함께 쓰고 장벽으로 동기화할 수 있다. 블록끼리는 서로 기다리지 않으므로, 하드웨어는 블록을 아무 SM에 아무 순서로 나눠 줄 수 있다. 이것이 같은 프로그램이 SM 96개짜리 칩에서도, 144개짜리 칩에서도 도는 이유다.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="소프트웨어의 스레드, 워프, 스레드 블록, 그리드가 하드웨어의 레인, 서브파티션, SM, GPU 칩에 대응한다">
+        <text x="200" y="20" class="lbb" text-anchor="middle">소프트웨어(프로그래밍 모델)</text>
+        <text x="660" y="20" class="lbb" text-anchor="middle">하드웨어(GX-1)</text>
+        <rect x="40" y="30" width="320" height="42" rx="6" class="k-compute"/><text x="56" y="56" class="t">스레드: 스칼라 코드 하나, 자기 레지스터</text>
+        <rect x="40" y="86" width="320" height="42" rx="6" class="k-ctrl"/><text x="56" y="112" class="t">워프: 스레드 32개, 명령 하나를 함께</text>
+        <rect x="40" y="142" width="320" height="42" rx="6" class="k-sram"/><text x="56" y="168" class="t">스레드 블록: 워프 1–32개, 공유 메모리</text>
+        <rect x="40" y="198" width="320" height="42" rx="6" class="f-surface"/><text x="56" y="224" class="t">그리드: 블록 수천 개, 서로 독립</text>
+        <rect x="500" y="30" width="320" height="42" rx="6" class="k-compute"/><text x="516" y="56" class="t">레인: FP32 1개(SM당 128개)</text>
+        <rect x="500" y="86" width="320" height="42" rx="6" class="k-ctrl"/><text x="516" y="112" class="t">서브파티션: 스케줄러 1개, 워프 ≤ 16</text>
+        <rect x="500" y="142" width="320" height="42" rx="6" class="k-sram"/><text x="516" y="168" class="t">SM: 블록 ≤ 32, 워프 ≤ 64, 스레드 ≤ 2,048</text>
+        <rect x="500" y="198" width="320" height="42" rx="6" class="f-surface"/><text x="516" y="224" class="t">칩: 활성 SM 144개, 블록 배분기</text>
+        <line x1="364" y1="51" x2="494" y2="51" class="arr"/><text x="430" y="45" class="lbd" text-anchor="middle">실행</text>
+        <line x1="364" y1="107" x2="494" y2="107" class="arr"/><text x="430" y="101" class="lbd" text-anchor="middle">발행 단위</text>
+        <line x1="364" y1="163" x2="494" y2="163" class="arr"/><text x="430" y="157" class="lbd" text-anchor="middle">SM 하나에 상주</text>
+        <line x1="364" y1="219" x2="494" y2="219" class="arr"/><text x="430" y="213" class="lbd" text-anchor="middle">웨이브로 배분</text>
+      </svg>
+      <figcaption><b>그림 2-7.</b> 프로그래밍 모델의 계층과 하드웨어 계층. 스레드는 레인에서, 워프는 서브파티션의 스케줄러에서 실행된다. 블록은 SM 하나에 상주하며, 블록의 워프들은 SM의 서브파티션 4개에 나뉜다. 그리드의 블록은 SM 144개에 한 번에 채울 수 있는 만큼씩 <span class="term">웨이브</span>로 나뉘어 들어간다.</figcaption>
+    </figure>
+    <p>블록 크기는 두 군데서 효율을 깎는다. 첫째, 워프는 32 스레드 단위이므로 블록이 48 스레드면 워프 2개(64 슬롯)를 쓰고 레인 25 %가 빈다. 둘째, SM에 동시에 들어가는 블록 수 \(b_{SM}\)은 스레드(2,048), 워프(64), 블록(32), 레지스터(65,536개) 한도 중 가장 작은 것으로 정해지고, 그리드의 블록 수 \(B\)가 칩 전체 슬롯 \(144\,b_{SM}\)의 정수배가 아니면 마지막 웨이브가 덜 찬다. 이를 <span class="term">웨이브 양자화</span><span class="en">(wave quantization)</span> 또는 꼬리 효과라고 한다.</p>
+    <div class="formula">$$n_{wave} = \left\lceil \frac{B}{144\, b_{SM}} \right\rceil,\qquad \eta_{wave} = \frac{B}{n_{wave} \cdot 144\, b_{SM}}$$
+      <div class="where">블록마다 실행 시간이 같다고 가정한다. 블록이 1,152개(= 144 × 8)면 한 웨이브로 끝나 \(\eta = 100\,\%\), 1,153개면 두 번째 웨이브에 블록 하나만 돌아 \(\eta \approx 50\,\%\)이다.</div></div>
+
+    <div class="sim" id="sim-grid">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>그리드를 SM 144개에 배분하기: 웨이브 양자화</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gd-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>블록 크기(스레드) <output id="gd-bs-out"></output></span><input type="range" id="gd-bs" min="16" max="1024" step="16" value="256"></label>
+          <label class="ctrl"><span>그리드의 블록 수 \(B\) <output id="gd-b-out"></output></span><input type="range" id="gd-b" min="1" max="5000" step="1" value="1153"></label>
+          <label class="ctrl"><span>스레드당 레지스터 <output id="gd-r-out"></output></span><input type="range" id="gd-r" min="16" max="255" step="1" value="32"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">블록당 워프 · 레인 효율</span><span class="v" id="gd-o-w">—</span></div>
+        <div class="stat"><span class="k">SM당 동시 블록(제한 요인)</span><span class="v" id="gd-o-s">—</span></div>
+        <div class="stat"><span class="k">웨이브 수</span><span class="v" id="gd-o-n">—</span></div>
+        <div class="stat"><span class="k">웨이브 효율</span><span class="v" id="gd-o-e">—</span></div>
+        <div class="stat"><span class="k">상주 스레드(첫 웨이브)</span><span class="v" id="gd-o-t">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(256 스레드, 1,153블록)은 SM당 8블록, 슬롯 1,152개라 두 번째 웨이브에 블록 하나가 남아 효율 50.0 %다. \(B\)를 1,152로 내리면 100 %. ② 블록 크기를 48로 하면 워프 2개에 스레드 48개라 레인 효율이 75 %로 떨어진다. ③ 레지스터를 128로 올리면 레지스터 한도(65,536 ÷ (128 × 256) = 2)가 SM당 블록 수를 2로 묶는다. 같은 1,153블록이 5웨이브(효율 80 %)가 된다.</div>
+    </div>
+
+    <div class="callout fab"><strong>한 번에 떠 있는 스레드 29만 개</strong>GX-1이 동시에 품을 수 있는 스레드는 활성 SM 144개 × 2,048 = 294,912개, 워프로 9,216개다. FP32 레인은 144 × 128 = 18,432개이므로 레인 하나에 스레드 16개가 대기한다. 레지스터 파일 36 MB를 레인 수로 나누면 레인당 2 KB(32비트 레지스터 512개)다. 서버 CPU SC-64는 코어 64개 × 512비트 FMA 2개 = FP32 레인 2,048개에 L3 256 MB를 둔다. L3만 세어도 레인당 128 KB다. GX-1은 레지스터·L1·L2를 다 합쳐도(136 MB) 레인당 약 7.4 KB다. GPU는 레인당 저장을 약 1/17로 줄이고, 그 차이를 스레드 수로 메운다.</div>
+    <p class="why"><b>왜 이렇게 설계하는가.</b> 블록을 서로 독립으로 정의한 덕분에 블록 배분기는 아주 단순한 하드웨어(빈 SM에 다음 블록 넣기)로 끝나고, SM 수가 다른 칩(하베스팅으로 144개만 살린 칩, SM 96개 게이밍 변형)에서 같은 바이너리가 돈다. 대가는 웨이브 양자화다. SM 수를 늘릴수록 한 웨이브가 커져서, 작은 그리드(블록 수백 개)에서는 꼬리 손실이 커진다. 큰 칩이 작은 문제(배치 1 추론 등)에서 FLOPS를 다 못 쓰는 이유 중 하나다.</p>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="amdahl">
+    <h2>암달과 구스타프손: 병렬의 한계</h2>
+    <p>프로그램의 일 중 비율 \(s\)가 직렬(한 스레드만 할 수 있는 일)이고 나머지가 \(N\)개로 완벽히 나뉜다면, 실행 시간은 \(s + (1-s)/N\)으로 준다. <span class="term">암달의 법칙</span><span class="en">(Amdahl's law)</span>은 이 고정된 문제의 속도 향상이 \(1/s\)를 넘지 못한다고 말한다. <span class="term">구스타프손의 법칙</span><span class="en">(Gustafson's law)</span>은 반대 질문을 한다. 프로세서가 \(N\)배면 문제도 키우는 것이 보통이다. 직렬 시간은 그대로 두고 병렬 부분만 \(N\)배로 키우면 속도 향상은 거의 \(N\)에 비례한다.</p>
+    <div class="formula">$$S_A(N) = \frac{1}{s + (1-s)/N},\qquad S_G(N) = s + (1-s)\,N$$
+      <div class="where">여기서 \(s\)는 직렬 비율(단일 프로세서 기준 시간 비율). 병렬 효율은 \(S/N\). 암달 기준으로 효율 \(E\)를 지키려면 \(s \le (1/E - 1)/(N-1)\)이어야 한다.</div></div>
+
+    <div class="sim" id="sim-amdahl">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>암달·구스타프손 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="am-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>직렬 비율 \(s\) <output id="am-s-out"></output></span><input type="range" id="am-s" min="0" max="5" step="0.01" value="1"></label>
+          <div class="ctrl"><span>병렬 단위 수 \(N\)</span><div class="seg" id="am-n"><button data-value="64">64 (SC-64 코어)</button><button data-value="144" class="on">144 (SM)</button><button data-value="18432">18,432 (레인)</button></div></div>
+          <label class="ctrl"><span>목표 병렬 효율 <output id="am-e-out"></output></span><input type="range" id="am-e" min="50" max="99" step="1" value="90"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">암달 속도 향상 · 효율</span><span class="v" id="am-o-a">—</span></div>
+        <div class="stat"><span class="k">구스타프손 속도 향상</span><span class="v" id="am-o-g">—</span></div>
+        <div class="stat"><span class="k">상한 1/s</span><span class="v" id="am-o-l">—</span></div>
+        <div class="stat"><span class="k">목표 효율에 허용되는 s</span><span class="v" id="am-o-n">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① \(s\) = 1 %, \(N\) = 144에서 암달 속도 향상은 약 59배(효율 41 %), 구스타프손은 약 143배다. ② 효율 90 %를 지키려면 144 SM에서 \(s \le\) 0.078 %, 레인 18,432개 단위에서는 0.0006 %까지 내려가야 한다. ③ \(s\) = 0으로 놓으면 두 곡선이 이상적인 직선과 겹친다. 직렬 부분이 조금만 있어도 GPU 앞에 CPU가 필요한 이유를 곡선에서 읽는다.</div>
+    </div>
+    <p>GPU는 구스타프손 쪽 세계에서 산다. 행렬 크기, 배치, 해상도를 칩에 맞춰 키운다. 그래도 암달은 사라지지 않는다. 커널 실행 사이의 동기화, 호스트 CPU가 하는 준비 작업, 리덕션의 마지막 단계, 앞 절의 웨이브 꼬리는 모두 \(s\)를 만든다. 칩이 커질수록 같은 \(s\)가 더 큰 손실이 된다.</p>
+    <p class="why"><b>왜 이렇게 설계하는가.</b> GPU는 직렬 성능을 포기했으므로 직렬 부분은 옆에 붙은 CPU가 맡는다(이종 시스템). 칩 설계자는 직렬 비율을 줄이는 하드웨어에 투자한다. 커널 시작 지연을 줄이는 명령 큐, 블록 사이 동기화를 칩 안에서 하는 장치, CPU를 거치지 않는 칩간 통신이 그 예다. FLOPS를 늘린 만큼 이런 부분이 같이 빨라지지 않으면 늘어난 FLOPS는 놀게 된다.</p>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="pipeline">
+    <h2>파이프라인 깊이와 처리량</h2>
+    <p>파이프라인은 시간 방향의 병렬화다. 논리 지연 \(T_{logic}\)인 연산을 \(n\)단으로 자르면 클럭 주기가 \(T_{logic}/n + t_{ov}\)로 준다. \(t_{ov}\)는 래치(플립플롭)의 설정·지연 시간과 클럭 스큐다. 대신 명령 하나의 지연은 \(T_{logic} + n\,t_{ov}\)로 늘어난다. 처리량이 실제로 오르려면 파이프라인의 \(n\)단이 모두 서로 독립인 명령으로 차 있어야 한다. 여기서도 리틀의 법칙이다. 체류 \(n\)사이클 × 처리량 1명령/클럭 = 독립 명령 \(n\)개.</p>
+    <div class="formula">$$t_{clk} = \frac{T_{logic}}{n} + t_{ov},\qquad \text{처리량} = \frac{1}{t_{clk}} \min\!\left(1,\ \frac{W}{n}\right)$$
+      <div class="where">여기서 \(W\)는 서로 독립인 워프 수(한 워프의 연속 명령이 서로 의존한다고 가정). GX-1의 FMA를 \(T_{logic}\) = 2,300 ps, \(t_{ov}\) = 50 ps, \(n\) = 4로 놓으면 주기 625 ps(1.6 GHz), 지연 2.5 ns = 4사이클이다(교육용 분해). 타이밍 일반론은 <a href="../../digital/chapters/timing.html">DigitalBook 타이밍 장</a>.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 860 260" role="img" aria-label="논리 2300 피코초를 1단, 4단, 8단으로 나누면 주기는 짧아지지만 래치 오버헤드 때문에 지연은 늘어난다">
+        <text x="110" y="24" class="lbd">논리 2,300 ps를 n단으로 자른다(진한 띠 = 래치 50 ps)</text>
+<rect x="110.0" y="40" width="460.0" height="30" class="k-compute"/>
+<rect x="570.0" y="36" width="10.0" height="38" class="kf-clock"/>
+<text x="98" y="60" class="t" text-anchor="end">n = 1</text>
+<text x="590.0" y="53" class="lbd">주기 2350 ps · 0.43 GHz</text>
+<text x="590.0" y="69" class="lbd">지연 2.35 ns = 1사이클</text>
+<rect x="110.0" y="110" width="115.0" height="30" class="k-compute"/>
+<rect x="225.0" y="106" width="10.0" height="38" class="kf-clock"/>
+<rect x="235.0" y="110" width="115.0" height="30" class="k-compute"/>
+<rect x="350.0" y="106" width="10.0" height="38" class="kf-clock"/>
+<rect x="360.0" y="110" width="115.0" height="30" class="k-compute"/>
+<rect x="475.0" y="106" width="10.0" height="38" class="kf-clock"/>
+<rect x="485.0" y="110" width="115.0" height="30" class="k-compute"/>
+<rect x="600.0" y="106" width="10.0" height="38" class="kf-clock"/>
+<text x="98" y="130" class="t" text-anchor="end">n = 4</text>
+<text x="620.0" y="123" class="lbd">주기 625 ps · 1.60 GHz</text>
+<text x="620.0" y="139" class="lbd">지연 2.50 ns = 4사이클</text>
+<rect x="110.0" y="180" width="57.5" height="30" class="k-compute"/>
+<rect x="167.5" y="176" width="10.0" height="38" class="kf-clock"/>
+<rect x="177.5" y="180" width="57.5" height="30" class="k-compute"/>
+<rect x="235.0" y="176" width="10.0" height="38" class="kf-clock"/>
+<rect x="245.0" y="180" width="57.5" height="30" class="k-compute"/>
+<rect x="302.5" y="176" width="10.0" height="38" class="kf-clock"/>
+<rect x="312.5" y="180" width="57.5" height="30" class="k-compute"/>
+<rect x="370.0" y="176" width="10.0" height="38" class="kf-clock"/>
+<rect x="380.0" y="180" width="57.5" height="30" class="k-compute"/>
+<rect x="437.5" y="176" width="10.0" height="38" class="kf-clock"/>
+<rect x="447.5" y="180" width="57.5" height="30" class="k-compute"/>
+<rect x="505.0" y="176" width="10.0" height="38" class="kf-clock"/>
+<rect x="515.0" y="180" width="57.5" height="30" class="k-compute"/>
+<rect x="572.5" y="176" width="10.0" height="38" class="kf-clock"/>
+<rect x="582.5" y="180" width="57.5" height="30" class="k-compute"/>
+<rect x="640.0" y="176" width="10.0" height="38" class="kf-clock"/>
+<text x="98" y="200" class="t" text-anchor="end">n = 8</text>
+<text x="660.0" y="193" class="lbd">주기 337.5 ps · 2.96 GHz</text>
+<text x="660.0" y="209" class="lbd">지연 2.70 ns = 8사이클</text>
+        <text x="110" y="240" class="lbd">깊이 n이면 파이프라인 안에 명령 n개가 동시에 떠 있다 → 독립 워프 n개가 있어야 매 클럭 발행할 수 있다.</text>
+      </svg>
+      <figcaption><b>그림 2-8.</b> 파이프라인 깊이. 단을 늘리면 주기가 짧아져 클럭이 오르지만, 래치 오버헤드가 단마다 붙어 명령 하나의 지연은 2.35 ns → 2.5 ns → 2.7 ns로 늘어난다. 8단 파이프라인을 채우려면 독립 명령 8개가 필요하다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-pipe">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>파이프라인 깊이 vs 처리량·지연</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>파이프라인 깊이 \(n\) <output id="pp-n-out"></output></span><input type="range" id="pp-n" min="1" max="20" step="1" value="4"></label>
+          <label class="ctrl"><span>독립 워프 \(W\) <output id="pp-w-out"></output></span><input type="range" id="pp-w" min="1" max="32" step="1" value="4"></label>
+          <label class="ctrl"><span>래치 오버헤드 \(t_{ov}\) <output id="pp-o-out"></output></span><input type="range" id="pp-o" min="10" max="150" step="5" value="50"></label>
+          <label class="ctrl"><span>논리 지연 \(T_{logic}\) <output id="pp-t-out"></output></span><input type="range" id="pp-t" min="1000" max="5000" step="100" value="2300"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">클럭</span><span class="v" id="pp-o-f">—</span></div>
+        <div class="stat"><span class="k">명령 지연</span><span class="v" id="pp-o-l">—</span></div>
+        <div class="stat"><span class="k">처리량(명령/ns)</span><span class="v" id="pp-o-p">—</span></div>
+        <div class="stat"><span class="k">이 W에서 최적 깊이</span><span class="v" id="pp-o-b">—</span></div>
+        <div class="stat"><span class="k">주기 중 래치 몫</span><span class="v" id="pp-o-v">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(\(n\) = 4, \(W\) = 4)은 1.6 GHz, 처리량 1.6명령/ns이고 최적 깊이도 4다. ② \(n\)을 8로 올리면 클럭은 2.96 GHz지만 독립 워프가 4개뿐이라 처리량은 1.48로 오히려 준다. ③ \(W\)를 1로 내리면(의존 사슬 하나) 처리량은 \(n\)과 거의 무관하게 1/지연 ≈ 0.4명령/ns에 묶인다. CPU가 의존 명령의 지연을 줄이려 애쓰는 이유이고, GPU가 워프를 많이 두는 이유다.</div>
+    </div>
+    <p class="why"><b>왜 이렇게 설계하는가.</b> GPU는 워프가 많아 파이프라인을 깊게 해도 채울 수 있지만, 클럭을 올리는 대신 전력을 아낀다. 동적 전력은 \(f\)에, 그리고 높은 \(f\)를 내기 위한 \(V_{DD}^2\)에 비례하므로(12장) 같은 FLOPS를 낮은 클럭·많은 레인으로 내는 편이 에너지가 적다. GX-1이 약 1.6 GHz에서 4단 안팎의 FMA를 쓰고 레인을 18,432개 두는 것은 이 계산의 결과다. 단마다 붙는 래치도 면적과 클럭 전력을 먹는다.</p>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="design">
+    <h2>처리량 기계의 설계 결과</h2>
+    <p>이 장의 계산을 손잡이와 결과로 정리하면 다음과 같다. 모두 리틀의 법칙의 변형이다. 지연 × 처리량만큼의 일이 동시에 진행 중이어야 하고, 그 일들의 상태를 어딘가에 보관해야 한다.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>조건(손잡이)</th><th>결과</th><th>GX-1 예</th></tr></thead>
+      <tbody>
+        <tr><td>메모리 대역폭 \(BW\) ↑ (스택·핀 속도)</td><td>떠 있어야 할 바이트 \(BW \cdot L\) ↑ → 미처리 요청 큐·워프·레지스터 ↑</td><td>7.37 TB/s × 500 ns ≈ 3.69 MB, SM당 25.6 KB</td></tr>
+        <tr><td>메모리 지연 \(L\) ↑ (칩이 크고 HBM이 멀다)</td><td>필요한 워프 \((k+L)/k\) ↑</td><td>\(k\) = 10: L2(200) 21워프, HBM(800) 81워프</td></tr>
+        <tr><td>메모리 사이 연산 \(k\) ↑ (타일링·재사용)</td><td>필요한 워프 ↓ → 같은 레지스터로 100 % 활용</td><td>스케줄러당 16워프 → \(k \ge 54\)면 HBM 지연을 덮음</td></tr>
+        <tr><td>스레드당 레지스터 \(R\) ↑</td><td>상주 워프 ↓ → 지연 숨기기 ↓</td><td>\(R\) = 32: 16워프, 64: 8워프, 255: 2워프</td></tr>
+        <tr><td>문맥 전환 비용 \(s\) (소프트웨어 → 상주)</td><td>활용률 상한 \(k/(k+s)\) → 1</td><td>\(R\) = 32 문맥 4 KB: 84사이클 → 0사이클</td></tr>
+        <tr><td>워프 폭 ↑, 분기 발산 ↑</td><td>제어 비용 ↓, SIMT 레인 활용 ↓</td><td>32레인 워프, 분기 확률 25 %면 거의 늘 두 길</td></tr>
+        <tr><td>블록 수가 \(144\,b_{SM}\)의 배수를 조금 넘음</td><td>마지막 웨이브가 비어 효율 ↓</td><td>1,152 → 100 %, 1,153 → 50 %</td></tr>
+        <tr><td>직렬 비율 \(s\) ↑</td><td>속도 향상 상한 \(1/s\)</td><td>\(s\) = 1 %: 144 SM에서 59배</td></tr>
+        <tr><td>파이프라인 깊이 \(n\) ↑</td><td>클럭 ↑, 지연 ↑, 독립 워프 \(n\)개 필요</td><td>\(W\) = 4면 \(n\) = 4가 최적</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="callout fab"><strong>레지스터 파일이 L1만큼 큰 이유</strong>GX-1 SM 하나의 레지스터 파일 256 KB는 워프 64개 × 스레드 32개 × 레지스터 32개 × 4 B = 262,144 B로 정확히 계산된다. "스레드당 32개 레지스터로 최대 상주 워프를 다 채운다"가 설계 목표였다는 뜻이다. 칩 전체로는 36 MB로, L2(64 MB)의 절반을 넘는다. 이 SRAM은 캐시처럼 데이터를 재사용하려고 있는 것이 아니라 <b>기다리는 스레드의 상태를 보관하려고</b> 있다. 지연을 숨기기로 한 결정의 저장 비용이다.</div>
+    <p class="why"><b>왜 이렇게 설계하는가.</b> GPU는 지연을 줄이는 대신 숨기기로 했다. 그 결정 하나에서 큰 레지스터 파일(문맥 상주), 많은 워프(\(N \ge (k+L)/k\)), 단순한 순차 발행 스케줄러, 넓은 SIMT 레인, 독립 블록과 웨이브 배분이 차례로 따라 나온다. 다음 장(<a href="sm.html">3장 SM 해부</a>)은 이 부품들이 SM 3.2 mm² 안에 어떻게 배치되는지, 스코어보드와 레지스터 뱅크가 어떻게 매 클럭 워프 하나를 발행하게 하는지, 점유율이 어떻게 계산되는지 들여다본다. 모바일 GPU가 같은 원리를 작은 전력에서 어떻게 쓰는지는 <a href="../../soc/chapters/gpu.html">SoCBook GPU 장</a>, 메모리 계층 일반론은 <a href="../../memory/chapters/hierarchy.html">MemoryBook 메모리 계층 장</a>을 보자.</p>
+  </section>
+
+  <section class="keypoints" id="summary"><h2>핵심 정리</h2><ol>
+    <li>지연은 일 하나의 시간, 처리량은 단위 시간당 일의 수다. CPU는 지연을, GPU는 처리량을 최적화한다.</li>
+    <li>리틀의 법칙: 떠 있어야 할 양 = 대역폭 × 지연. GX-1 HBM은 7.37 TB/s × 500 ns ≈ 3.69 MB(64 B 요청 57,600개, SM당 25.6 KB)가 늘 전송 중이어야 피크가 나온다.</li>
+    <li>지연 숨기기는 캐시(지연 줄이기), 비순차·추측 실행(한 스레드 안에서 겹치기), 멀티스레딩(다른 스레드로 덮기) 세 가지다. GPU는 문맥을 값싼 SRAM에 두는 멀티스레딩을 고른다.</li>
+    <li>워프 \(N\)개, 메모리 사이 연산 \(k\), 지연 \(L\)이면 활용률은 \(\min(1, Nk/(k+L))\)이다. 스케줄러당 16워프로 HBM 800사이클을 덮으려면 \(k \ge 54\)여야 한다.</li>
+    <li>워프 전환이 0사이클인 것은 모든 문맥이 레지스터 파일에 상주하기 때문이다. 그래서 SM당 레지스터 파일이 256 KB(= 64워프 × 32스레드 × 32레지스터 × 4 B)다. 스레드당 레지스터가 늘면 상주 워프가 준다.</li>
+    <li>SIMT는 SIMD 하드웨어에 스레드별 레지스터·주소와 하드웨어 활성 마스크를 얹은 것이다. 제어 비용을 32레인이 나누는 대신 분기 발산에 약하다.</li>
+    <li>블록은 SM 하나에 상주하고, 그리드는 \(144\,b_{SM}\)개씩 웨이브로 배분된다. 블록 수가 그 배수를 조금 넘으면 웨이브 효율이 50 % 가까이 떨어질 수 있다.</li>
+    <li>암달 법칙은 직렬 비율 \(s\)가 속도 향상을 \(1/s\)로 묶는다고 말한다(\(s\) = 1 %, 144 SM → 59배). 파이프라인 깊이 \(n\)은 독립 명령 \(n\)개가 있을 때만 처리량을 올린다.</li>
+  </ol></section>
+
+  <section class="quiz-sec" id="quiz"><h2>확인 퀴즈</h2><div class="quiz">
+    <div class="quiz-q"><p>1. 피크 대역폭 7.37 TB/s, 왕복 지연 500 ns인 HBM을 다 쓰려면 전송 중인 데이터가 대략 얼마여야 하는가?</p><div class="opts">
+      <button class="opt">약 3.7 KB</button><button class="opt">약 37 KB</button><button class="opt" data-correct>약 3.7 MB</button><button class="opt">약 37 MB</button>
+    </div><div class="quiz-exp">리틀의 법칙: \(7.37 \times 10^{12} \times 500 \times 10^{-9} \approx 3.69 \times 10^6\) B. SM 144개로 나누면 SM당 25.6 KB다.</div></div>
+    <div class="quiz-q"><p>2. 스케줄러당 워프가 16개, 메모리 지연이 800사이클이다. 활용률 100 %를 내려면 워프마다 메모리 로드 사이에 독립 연산이 최소 몇 개 있어야 하는가?</p><div class="opts">
+      <button class="opt">8</button><button class="opt">16</button><button class="opt">50</button><button class="opt" data-correct>54</button>
+    </div><div class="quiz-exp">\(16k \ge k + 800\) → \(k \ge 800/15 \approx 53.3\), 정수로 54. 이때 \(16 \times 54 / 854 \approx 1.01\)이다.</div></div>
+    <div class="quiz-q"><p>3. GPU의 워프 전환이 0사이클인 가장 직접적인 이유는?</p><div class="opts">
+      <button class="opt" data-correct>상주 워프의 문맥이 모두 레지스터 파일에 있어 저장·복원이 없다</button><button class="opt">워프 스케줄러가 분기 예측을 하기 때문이다</button><button class="opt">L2 캐시가 문맥을 빠르게 저장하기 때문이다</button><button class="opt">운영체제가 전환을 미리 준비하기 때문이다</button>
+    </div><div class="quiz-exp">스케줄러는 어느 워프의 레지스터를 읽을지만 고른다. 대가는 큰 레지스터 파일(SM당 256 KB)이다.</div></div>
+    <div class="quiz-q"><p>4. SIMT가 SIMD와 가장 크게 다른 점은?</p><div class="opts">
+      <button class="opt">레인마다 별도의 명령어 디코더를 둔다</button><button class="opt" data-correct>스레드별 스칼라 코드·레지스터·주소를 쓰고, 분기 마스크를 하드웨어가 만든다</button><button class="opt">분기 발산이 일어나도 손실이 없다</button><button class="opt">벡터 레지스터 폭이 더 넓다</button>
+    </div><div class="quiz-exp">실행 하드웨어는 비슷하다. 다른 것은 프로그래밍 모델과 마스크·주소를 누가 다루느냐다. 레인마다 디코더를 두는 것은 MIMD이고, 발산 손실은 SIMT에도 있다.</div></div>
+    <div class="quiz-q"><p>5. 블록 크기 256, 스레드당 레지스터 32인 커널은 GX-1 SM에 블록 8개씩 들어간다. 블록 1,153개짜리 그리드의 웨이브 효율은 대략?</p><div class="opts">
+      <button class="opt">약 99.9 %</button><button class="opt">약 87 %</button><button class="opt" data-correct>약 50 %</button><button class="opt">약 12.5 %</button>
+    </div><div class="quiz-exp">슬롯은 144 × 8 = 1,152개. 블록 1,153개는 2웨이브가 필요하고 두 번째 웨이브에는 블록 하나만 돈다. \(1153 / 2304 \approx 50.0\,\%\).</div></div>
+    <div class="quiz-q"><p>6. 직렬 비율 1 %인 고정 크기 문제를 SM 144개로 나누면 암달 법칙에 따른 속도 향상은?</p><div class="opts">
+      <button class="opt">약 144배</button><button class="opt">약 100배</button><button class="opt">약 99배</button><button class="opt" data-correct>약 59배</button>
+    </div><div class="quiz-exp">\(1/(0.01 + 0.99/144) = 1/0.016875 \approx 59.3\). 상한은 \(1/s = 100\)배다. 구스타프손식으로 문제를 키우면 약 143배.</div></div>
+    <div class="quiz-q"><p>7. 독립 워프가 4개뿐인데 FMA 파이프라인을 4단에서 8단으로 깊게 했다(논리 2,300 ps, 래치 50 ps). 처리량은?</p><div class="opts">
+      <button class="opt" data-correct>클럭은 1.6 → 2.96 GHz로 오르지만 처리량은 1.6에서 약 1.48명령/ns로 준다</button><button class="opt">클럭에 비례해 약 1.85배 오른다</button><button class="opt">변하지 않는다</button><button class="opt">0이 된다</button>
+    </div><div class="quiz-exp">8단을 채우려면 독립 명령 8개가 필요하다. 워프 4개로는 절반만 차므로 2.96 × 4/8 ≈ 1.48. 지연은 2.5 → 2.7 ns로 늘었다.</div></div>
+    <div class="quiz-q"><p>8. 스레드당 레지스터를 32에서 128로 늘린 커널은 GX-1 서브파티션(레지스터 16,384개)에 워프가 몇 개 상주하는가? 그 결과는?</p><div class="opts">
+      <button class="opt">16개, 변화 없음</button><button class="opt">8개, 활용률 소폭 감소</button><button class="opt" data-correct>4개, 지연을 숨길 워프가 1/4로 줄어든다</button><button class="opt">1개, 실행 불가</button>
+    </div><div class="quiz-exp">워프 문맥 = 32 × 128 × 4 B = 16 KB, 64 KB ÷ 16 KB = 4워프. \(k\) = 20, \(L\) = 800이면 활용률이 39 %에서 4 × 20/820 ≈ 10 %로 떨어진다.</div></div>
+  </div></section>
+</main>
+<script>
+(function () {
+  "use strict";
+
+  /* ================================================== 계산 모델(DOM과 분리, scripts/throughput-sims.cjs가 잘라 검사) */
+  /* model:little */
+  // 리틀의 법칙: 떠 있는 바이트 = BW × L. 동시 요청 한도 q(SM당)가 모자라면 BW_달성 = sms·q·size / L.
+  function littleModel(o) {
+    const bw = Math.max(0, o.bw), lat = Math.max(0, o.lat), size = Math.max(1, o.size);
+    const sms = Math.max(1, o.sms), clk = Math.max(1, o.clk), q = Math.max(0, o.q);
+    const bytes = bw * lat, reqs = bytes / size, cap = sms * q * size;
+    const achieved = lat > 0 ? Math.min(bw, cap / lat) : bw;
+    return {
+      bytes, reqs, perSm: bytes / sms, perSmReq: reqs / sms, latCyc: lat * clk, bpc: bw / sms / clk,
+      cap, achieved, util: bw > 0 ? achieved / bw : 0, inflight: Math.min(bytes, cap), qNeed: Math.ceil(reqs / sms - 1e-9),
+    };
+  }
+  /* /model:little */
+
+  /* model:warps */
+  // 워프마다 독립 연산 k개 → 로드 1개 → L사이클 대기. 스케줄러는 매 클럭 준비된 워프 하나를 발행한다.
+  function warpUtilFormula(N, k, L) { return Math.min(1, (N * k) / (k + L)); }
+  function warpsNeeded(k, L) { return Math.ceil((k + L) / k - 1e-9); }
+  function warpSim(N, k, L, pol, T, trace) {
+    N = Math.max(1, Math.round(N)); k = Math.max(1, Math.round(k)); L = Math.max(0, Math.round(L));
+    const p = k + L;
+    T = Math.max(1, Math.round(T || Math.max(4000, 20 * p)));
+    const rem = new Array(N).fill(k), ready = new Array(N).fill(0);
+    const issue = trace ? new Int16Array(T).fill(-1) : null;
+    const st = trace ? new Uint8Array(N * T) : null;   // 0 준비(발행 대기), 1 발행, 2 메모리 대기
+    // 측정 구간: 뒤쪽 절반을 정상 상태 주기의 정수배로 잡는다(GTO는 k+L, LRR은 워프가 한꺼번에 돌아 Nk−N+L+1)
+    const per = pol === "gto" || N > L ? p : N * k - N + L + 1;
+    const m = Math.max(1, Math.floor(T / 2 / per)), t0 = Math.max(0, T - m * per);
+    let last = pol === "gto" ? 0 : N - 1, busy = 0;
+    for (let t = 0; t < T; t++) {
+      let pick = -1;
+      if (pol === "gto") {
+        if (ready[last] <= t) pick = last;
+        else for (let i = 0; i < N; i++) if (ready[i] <= t) { pick = i; break; }
+      } else {
+        for (let j = 1; j <= N; j++) { const i = (last + j) % N; if (ready[i] <= t) { pick = i; break; } }
+      }
+      if (st) for (let i = 0; i < N; i++) st[i * T + t] = ready[i] > t ? 2 : 0;
+      if (pick >= 0) {
+        if (issue) { issue[t] = pick; st[pick * T + t] = 1; }
+        last = pick;
+        if (t >= t0) busy++;
+        if (--rem[pick] === 0) { rem[pick] = k; ready[pick] = t + 1 + L; } else ready[pick] = t + 1;
+      }
+    }
+    return { util: busy / (T - t0), issue, st, T, N };
+  }
+  /* /model:warps */
+
+  /* model:hide */
+  // 지연 숨기기 저장 비용(교육용): CPU식 = 명령 창 + 캐시, GPU식 = 레지스터 파일의 스레드 문맥
+  const HIDE = { tAlu: 4, tHit: 14, entryB: 16, camX: 4, c0: 32768, h0: 0.9, slots: 4, gxThreads: 16 };
+  function hideModel(o) {
+    const L = Math.max(1, o.L), m = Math.min(1, Math.max(0, o.m)), h = Math.min(0.999, Math.max(0, o.h));
+    const ilp = Math.max(1, o.ilp), R = Math.max(1, o.R);
+    const amat = h * HIDE.tHit + (1 - h) * L;
+    const win = (1 - m) * HIDE.tAlu + m * amat;              // 슬롯당 동시에 진행 중인 명령(리틀)
+    const winB = win * HIDE.entryB * HIDE.camX;               // SRAM 환산 바이트
+    const cacheB = (HIDE.c0 * Math.pow((1 - HIDE.h0) / Math.max(1e-3, 1 - h), 2)) / HIDE.slots;
+    const gIn = (1 - m) * HIDE.tAlu + m * L;                  // GPU: 캐시 없이 L을 그대로
+    const thr = gIn / ilp;
+    const regB = Math.ceil(thr - 1e-9) * R * 4;
+    return { amat, win, winB, cacheB, cpuB: winB + cacheB, gIn, thr, regB, fits: thr <= HIDE.gxThreads };
+  }
+  /* /model:hide */
+
+  /* model:ctx */
+  // 서브파티션: 레지스터 16,384개(64 KB), 워프 ≤ 16. 소프트웨어 전환 = 문맥 저장 + 복원 + 파이프라인 비우기.
+  function ctxModel(o) {
+    const R = Math.max(1, Math.round(o.R)), N = Math.max(1, Math.round(o.N)), k = Math.max(1, o.k), L = Math.max(0, o.L);
+    const bw = Math.max(1, o.bw), drain = o.drain == null ? 20 : Math.max(0, o.drain);
+    const ctxB = 32 * R * 4;
+    const maxRes = Math.min(16, Math.floor(16384 / (32 * R)));
+    const nHw = Math.min(N, maxRes);
+    const uHw = Math.min(1, (nHw * k) / (k + L));
+    const sw = (2 * ctxB) / bw + drain;
+    const uStay = k / (k + L);
+    const uSw = Math.max(uStay, Math.min(k / (k + sw), (N * k) / (k + L)));
+    return { ctxB, maxRes, nHw, uHw, sw, uSw, uStay, rfNeed: N * ctxB, rfHave: 65536 };
+  }
+  /* /model:ctx */
+
+  /* model:simt */
+  function simtRng(seed) { let a = seed >>> 0; return function () { a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  // 원소 n개에 if (x>0) A(a 명령) else B(b 명령). 비교·분기 1사이클, SIMD 블렌드 1사이클.
+  function simtModel(o) {
+    const W = Math.max(1, Math.round(o.W)), n = Math.max(1, Math.round(o.n)), a = Math.max(1, o.a), b = Math.max(1, o.b), p = Math.min(1, Math.max(0, o.p));
+    const rnd = simtRng(o.seed || 1), path = [];
+    for (let e = 0; e < n; e++) path.push(rnd() < p ? 1 : 0);
+    const groups = Math.ceil(n / W);
+    let useful = 0, simt = 0;
+    for (let e = 0; e < n; e++) useful += 1 + (path[e] ? b : a);
+    for (let g = 0; g < groups; g++) {
+      let anyA = false, anyB = false;
+      for (let e = g * W; e < Math.min(n, (g + 1) * W); e++) { if (path[e]) anyB = true; else anyA = true; }
+      simt += 1 + (anyA ? a : 0) + (anyB ? b : 0);
+    }
+    const simd = groups * (a + b + 2);
+    const core = new Array(W).fill(0);
+    for (let e = 0; e < n; e++) core[e % W] += 1 + (path[e] ? b : a);
+    const mimd = Math.max.apply(null, core);
+    const u = (c) => useful / (W * c);
+    return { path, groups, useful, simd: { cyc: simd, util: u(simd), ctrl: 1 }, simt: { cyc: simt, util: u(simt), ctrl: 1 }, mimd: { cyc: mimd, util: u(mimd), ctrl: W } };
+  }
+  /* /model:simt */
+
+  /* model:grid */
+  // GX-1 SM 한도: 스레드 2,048, 워프 64, 블록 32, 레지스터 65,536개. 활성 SM 144개.
+  const GXSM = { sms: 144, threads: 2048, warps: 64, blocks: 32, regs: 65536 };
+  function gridModel(o) {
+    const B = Math.max(1, Math.round(o.B)), bs = Math.max(1, Math.round(o.bs)), R = Math.max(1, Math.round(o.R));
+    const wpb = Math.ceil(bs / 32), slotsT = wpb * 32, laneEff = bs / slotsT;
+    const lim = { threads: Math.floor(GXSM.warps / wpb), blocks: GXSM.blocks, regs: Math.floor(GXSM.regs / (R * slotsT)) };
+    let bps = Infinity, limiter = "";
+    for (const key of ["threads", "blocks", "regs"]) if (lim[key] < bps) { bps = lim[key]; limiter = key; }
+    const slots = GXSM.sms * bps;
+    if (bps <= 0) return { ok: false, B, bs, wpb, laneEff, lim, bps: 0, limiter, slots: 0, waves: 0, eff: 0, lastFill: 0, threads: 0, occ: 0 };
+    const waves = Math.ceil(B / slots), eff = B / (waves * slots), lastFill = B - (waves - 1) * slots;
+    return { ok: true, B, bs, wpb, laneEff, lim, bps, limiter, slots, waves, eff, lastFill, threads: Math.min(B, slots) * bs, occ: (bps * wpb) / GXSM.warps };
+  }
+  /* /model:grid */
+
+  /* model:amdahl */
+  function amdahl(s, N) { return 1 / (s + (1 - s) / N); }
+  function gustafson(s, N) { return s + (1 - s) * N; }
+  function serialFor(E, N) { return N > 1 ? (1 / E - 1) / (N - 1) : 1; }
+  /* /model:amdahl */
+
+  /* model:pipe */
+  // 논리 T(ps)를 n단으로: 주기 T/n + t_ov. 독립 워프 W개가 n단을 채울 때만 매 클럭 발행.
+  function pipeModel(o) {
+    const T = Math.max(1, o.T), tov = Math.max(0, o.tov), n = Math.max(1, Math.round(o.n)), W = Math.max(1, o.W);
+    const period = T / n + tov, f = 1000 / period, lat = n * period;
+    return { period, f, lat, thr: f * Math.min(1, W / n), ovFrac: tov / period };
+  }
+  function pipeBest(T, tov, W, nMax) {
+    let best = 1, bt = -1;
+    for (let n = 1; n <= (nMax || 32); n++) { const t = pipeModel({ T, tov, n, W }).thr; if (t > bt + 1e-12) { bt = t; best = n; } }
+    return { n: best, thr: bt };
+  }
+  /* /model:pipe */
+
+  /* ================================================== 공통 도구 */
+  const NARROW = 520;
+  const pct = (x, d) => (x * 100).toFixed(d == null ? 1 : d) + " %";
+  const kB = (b) => (b >= 1e6 ? GP.fmt(b / 1e6, 3) + " MB" : b >= 1e3 ? GP.fmt(b / 1e3, 3) + " KB" : Math.round(b) + " B");
+  const bwFmt = (v) => (v >= 1000 ? GP.fmt(v / 1000, 3) + " TB/s" : Math.round(v) + " GB/s");
+  const int = (x) => Math.round(x).toLocaleString("en-US");
+  // 범례 한 줄(넘치면 위로 줄을 늘린다: y는 마지막 줄의 기준선)
+  const legendRow = (ctx, items, x, y, P) => {
+    const maxX = ctx.canvas.width / ((ctx.getTransform && ctx.getTransform().a) || 1) - 6;
+    const ws = items.map((it) => 15 + GP.textWidth(ctx, it.t, { size: 11.5 }) + 14);
+    const lines = [[]]; let cx = x;
+    items.forEach((it, i) => { if (cx + ws[i] - 14 > maxX && lines[lines.length - 1].length) { lines.push([]); cx = x; } lines[lines.length - 1].push(i); cx += ws[i]; });
+    lines.forEach((ln, li) => {
+      let lx = x; const ly = y - (lines.length - 1 - li) * 16;
+      ln.forEach((i) => {
+        const it = items[i];
+        ctx.fillStyle = it.c; ctx.fillRect(lx, ly - 5, 11, 10);
+        if (it.stroke) { ctx.strokeStyle = it.stroke; ctx.lineWidth = 1; ctx.strokeRect(lx + 0.5, ly - 4.5, 10, 9); }
+        GP.text(ctx, it.t, lx + 15, ly, { size: 11.5, color: P.dim, baseline: "middle" });
+        lx += ws[i];
+      });
+    });
+    return lines.length;
+  };
+
+  /* ================================================== 1. 리틀의 법칙 */
+  (function () {
+    const PRE = { hbm: { bw: 7373, lat: 500, sms: 144, q: 400 }, l2: { bw: 13107, lat: 125, sms: 144, q: 200 }, cpu: { bw: 460, lat: 100, sms: 64, q: 12 } };
+    let sms = 144, cv = null, tt = 0;
+    const gBw = GP.range("lt-bw", bwFmt, upd), gLat = GP.range("lt-lat", (v) => v + " ns", upd), gQ = GP.range("lt-q", (v) => v + "개", upd);
+    const gSz = GP.seg("lt-sz", upd);
+    GP.seg("lt-pre", (v) => { const p = PRE[v]; sms = p.sms; gBw.set(p.bw); gLat.set(p.lat); gQ.set(p.q); upd(); });
+    // 7.3728 TB/s를 정확히 쓰기 위해 슬라이더 값 7373은 7372.8로 읽는다
+    const bwOf = () => (gBw() === 7373 ? 7372.8 : gBw() === 13107 ? 13107.2 : gBw()) * 1e9;
+    let R = null;
+    function upd() {
+      R = littleModel({ bw: bwOf(), lat: gLat() * 1e-9, size: Number(gSz()), sms, clk: 1.6e9, q: gQ() });
+      GP.stat("lt-o-b", kB(R.bytes));
+      GP.stat("lt-o-r", int(R.reqs) + " · " + GP.fmt(R.perSmReq, 3));
+      GP.stat("lt-o-sm", kB(R.perSm) + " <small>(" + GP.fmt(R.bpc, 3) + " B/클럭)</small>");
+      GP.stat("lt-o-c", int(R.latCyc) + "사이클");
+      GP.stat("lt-o-a", bwFmt(R.achieved / 1e9) + " <small>(" + pct(R.util, 0) + ")</small>");
+      cv && cv.redraw();
+    }
+    upd();
+    const DOT = 92160;   // 점 하나 ≈ 92 KB(GX-1 HBM 관 = 점 40개)
+    cv = GP.canvas("#lt-cv", (ctx, w, h) => {
+      const P = GP.palette(), narrow = w < NARROW;
+      const bx = narrow ? 64 : 110, x0 = 8 + bx, x1 = w - 8 - bx, yT = h * 0.24, yB = h * 0.56, lh = Math.max(16, h * 0.13);
+      // 양 끝 상자
+      const box = (x, label, sub, col) => {
+        ctx.fillStyle = GP.alpha(col, 0.14); ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+        GP.rrect(ctx, x, yT - 10, bx, yB - yT + lh + 20, 8); ctx.fill(); ctx.stroke();
+        GP.text(ctx, label, x + bx / 2, (yT + yB + lh) / 2 - 8, { size: narrow ? 11.5 : 13, weight: 700, color: col, align: "center", baseline: "middle" });
+        GP.text(ctx, sub, x + bx / 2, (yT + yB + lh) / 2 + 10, { size: 11, color: P.dim, align: "center", baseline: "middle" });
+      };
+      box(8, sms === 64 ? "코어 64개" : "SM 144개", "요청 발행", P.compute);
+      box(w - 8 - bx, "메모리", bwFmt(bwOf() / 1e9), P.dram);
+      // 관
+      [yT, yB].forEach((y) => { ctx.fillStyle = GP.alpha(P.data, 0.1); ctx.fillRect(x0, y, x1 - x0, lh); ctx.strokeStyle = GP.alpha(P.data, 0.5); ctx.strokeRect(x0 + 0.5, y + 0.5, x1 - x0 - 1, lh - 1); });
+      GP.text(ctx, "요청 →", x0 + 4, yT - 6, { size: 11, color: P.dim, baseline: "bottom" });
+      GP.text(ctx, "← 데이터", x1 - 4, yB + lh + 6, { size: 11, color: P.dim, align: "right", baseline: "top" });
+      // 점: 개수 ∝ 실제로 떠 있는 바이트, 왕복 시간 ∝ 지연
+      const n = Math.max(1, Math.min(80, Math.round(R.inflight / DOT)));
+      const Tan = 1.2 + (3 * gLat()) / 1000, len = x1 - x0 - 16;
+      for (let i = 0; i < n; i++) {
+        const ph = (tt / Tan + i / n) % 1;
+        if (ph < 0.5) { const x = x0 + 8 + (ph / 0.5) * len; ctx.fillStyle = P.ctrl; ctx.fillRect(x - 3, yT + lh / 2 - 3, 6, 6); }
+        else { const x = x1 - 8 - ((ph - 0.5) / 0.5) * len; ctx.fillStyle = P.data; ctx.fillRect(x - 6, yB + lh / 2 - 4, 12, 8); }
+      }
+      // 지연 치수선과 게이지
+      const yd = yB + lh + 26;
+      GP.arrow(ctx, x0, yd, x1, yd, { both: true, color: P.dim, width: 1.2, head: 6 });
+      GP.text(ctx, "왕복 " + gLat() + " ns = " + int(R.latCyc) + "사이클 · 점 1개 ≈ 92 KB", (x0 + x1) / 2, yd + 4, { size: 11.5, color: P.text, align: "center", baseline: "top", halo: true });
+      const gy = h - 22, gw = w - 16;
+      ctx.fillStyle = GP.alpha(P.text, 0.07); ctx.fillRect(8, gy, gw, 12);
+      ctx.fillStyle = R.util > 0.999 ? P.ok : P.warn; ctx.fillRect(8, gy, gw * R.util, 12);
+      GP.text(ctx, "달성 대역폭 " + pct(R.util, 0) + " · 떠 있는 바이트 " + kB(R.inflight) + " / 필요 " + kB(R.bytes), 12, gy - 4, { size: 11.5, color: P.text, baseline: "bottom" });
+    }, { aspect: 0.5, minHeight: 230, maxHeight: 300 });
+    GP.loop(document.getElementById("lt-cv"), (dt) => { tt += dt; cv.redraw(); });
+  })();
+
+  /* ================================================== 2. 워프 수 vs 활용률 */
+  (function () {
+    let cv = null, cv2 = null, S = null, curve = [];
+    const gN = GP.range("wp-n", (v) => v + "개", upd), gK = GP.range("wp-k", (v) => v + "개", upd), gL = GP.range("wp-l", (v) => v + "사이클", upd);
+    const gP = GP.seg("wp-pol", upd);
+    function upd() {
+      const N = gN(), k = gK(), L = gL(), pol = gP();
+      S = warpSim(N, k, L, pol, Math.max(600, 3 * (k + L) + 40), true);
+      const full = warpSim(N, k, L, pol);
+      curve = [];
+      for (let n = 1; n <= 32; n++) curve.push([n, warpSim(n, k, L, pol, Math.max(2000, 8 * (k + L))).util]);
+      GP.stat("wp-o-u", pct(full.util));
+      GP.stat("wp-o-f", pct(warpUtilFormula(N, k, L)));
+      GP.stat("wp-o-n", warpsNeeded(k, L) + "개");
+      GP.stat("wp-o-g", "k ≥ " + Math.ceil(L / 15 - 1e-9));
+      cv && cv.redraw(); cv2 && cv2.redraw();
+    }
+    upd();
+    cv = GP.canvas("#wp-cv", (ctx, w, h) => {
+      const P = GP.palette(), T = S.T, N = S.N, lx = 46, gw = w - lx - 8;
+      const rows = N + 1, rh = Math.max(3, Math.min(16, (h - 44) / (rows + 0.6)));
+      const X = (c) => lx + (c / T) * gw;
+      const col = [GP.alpha(P.text, 0.07), P.compute, GP.alpha(P.dram, 0.38)];
+      for (let i = 0; i < N; i++) {
+        const y = 18 + i * rh;
+        let c0 = 0, s0 = S.st[i * T];
+        for (let c = 1; c <= T; c++) {
+          const s = c < T ? S.st[i * T + c] : -1;
+          if (s !== s0) { ctx.fillStyle = col[s0]; ctx.fillRect(X(c0), y, Math.max(0.6, X(c) - X(c0)), rh - (rh > 5 ? 1.5 : 0.5)); c0 = c; s0 = s; }
+        }
+        if (rh >= 9 && (N <= 12 || i % 4 === 0)) GP.text(ctx, "W" + i, lx - 6, y + rh / 2, { size: 10.5, color: P.dim, align: "right", baseline: "middle", mono: true });
+      }
+      const yi = 18 + N * rh + rh * 0.6;
+      let c0 = 0, b0 = S.issue[0] >= 0;
+      for (let c = 1; c <= T; c++) {
+        const b = c < T ? S.issue[c] >= 0 : !b0;
+        if (b !== b0) { ctx.fillStyle = b0 ? P.compute : GP.alpha(P.bad, 0.35); ctx.fillRect(X(c0), yi, Math.max(0.6, X(c) - X(c0)), Math.max(6, rh)); c0 = c; b0 = b; }
+      }
+      GP.text(ctx, "발행", lx - 6, yi + Math.max(6, rh) / 2, { size: 10.5, color: P.text, align: "right", baseline: "middle" });
+      GP.text(ctx, "사이클 0 → " + int(T) + " (처음부터)", lx, 9, { size: 11, color: P.dim, baseline: "middle" });
+      legendRow(ctx, [{ c: P.compute, t: "발행" }, { c: GP.alpha(P.dram, 0.38), t: "메모리 대기" }, { c: GP.alpha(P.text, 0.07), t: "준비(차례 대기)", stroke: P.border }, { c: GP.alpha(P.bad, 0.35), t: "빈 슬롯" }], lx, h - 9, P);
+    }, { height: (w) => (w < NARROW ? 230 : 250) });
+    cv2 = GP.canvas("#wp-cv2", (ctx, w, h) => {
+      const P = GP.palette(), k = gK(), L = gL(), N = gN(), f = [];
+      for (let n = 1; n <= 32; n += 0.25) f.push([n, warpUtilFormula(n, k, L)]);
+      GP.chart(ctx, { x: 52, y: 24, w: w - 70, h: h - 64 }, {
+        x: [1, 32], y: [0, 1.05], xLabel: "스케줄러당 워프 N", yLabel: "활용률", yFmt: (v) => Math.round(v * 100) + "%",
+        series: [{ data: f, color: P.accent, width: 2, label: "식 min(1, Nk/(k+L))" }, { data: curve, color: P.compute, width: 0, line: false, dots: 3, label: "사이클 시뮬레이션" }],
+        vlines: [{ x: N, color: P.warn, label: "N = " + N }, { x: 16, color: P.faint, label: "GX-1 한도 16" }],
+        legend: "above", hover: true,
+      });
+    }, { height: 220, hover: true });
+  })();
+
+  /* ================================================== 3. 지연 숨기기 저장 비용 */
+  (function () {
+    let cv = null, R = null;
+    const gL = GP.range("hd-l", (v) => v + "사이클", upd), gM = GP.range("hd-m", (v) => v.toFixed(2), upd), gH = GP.range("hd-h", (v) => v.toFixed(2), upd);
+    const gI = GP.range("hd-i", (v) => v + "개", upd), gR = GP.range("hd-r", (v) => v + "개", upd);
+    function upd() {
+      R = hideModel({ L: gL(), m: gM(), h: gH(), ilp: gI(), R: gR() });
+      GP.stat("hd-o-a", GP.fmt(R.amat, 3) + "사이클");
+      GP.stat("hd-o-w", GP.fmt(R.win, 3) + "항목");
+      GP.stat("hd-o-c", kB(R.cpuB));
+      GP.stat("hd-o-t", GP.fmt(R.thr, 3) + "개 " + (R.fits ? "<small>(GX-1 16개 안)</small>" : "<small>(GX-1 16개 초과)</small>"));
+      GP.stat("hd-o-g", kB(R.regB));
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas("#hd-cv", (ctx, w, h) => {
+      const P = GP.palette(), narrow = w < NARROW, lx = narrow ? 8 : 150, bx = narrow ? 8 : lx + 6, bw = w - bx - 14;
+      const lo = 2, hi = 7, X = (v) => bx + ((Math.log10(Math.max(100, v)) - lo) / (hi - lo)) * bw;
+      const rows = [
+        { t: "CPU 명령 창(SRAM 환산)", v: R.winB, c: P.ctrl },
+        { t: "CPU 캐시(슬롯당 몫)", v: R.cacheB, c: P.sram },
+        { t: "CPU 합계", v: R.cpuB, c: P.ctrl, bold: true },
+        { t: "GPU 레지스터(레인당)", v: R.regB, c: P.compute, bold: true },
+      ];
+      const top = 30, rh = narrow ? 44 : 38, yEnd = top + rows.length * rh;
+      for (let e = lo; e <= hi; e++) {
+        const x = X(Math.pow(10, e));
+        ctx.strokeStyle = P.grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, top - 6); ctx.lineTo(Math.round(x) + 0.5, yEnd); ctx.stroke();
+        GP.text(ctx, ["100 B", "1 KB", "10 KB", "100 KB", "1 MB", "10 MB"][e - lo], x, yEnd + 12, { size: 11, color: P.dim, align: "center", baseline: "middle", mono: true });
+      }
+      rows.forEach((r, i) => {
+        const y = top + i * rh;
+        const ty = narrow ? y + 6 : y + rh / 2 - 2, by = narrow ? y + 14 : y + 6;
+        GP.text(ctx, r.t, narrow ? bx : lx, ty, { size: 12, weight: r.bold ? 700 : 400, color: P.text, align: narrow ? "left" : "right", baseline: "middle" });
+        const xe = X(r.v);
+        ctx.fillStyle = GP.alpha(r.c, r.bold ? 0.85 : 0.5); ctx.fillRect(bx, by, Math.max(2, xe - bx), rh - (narrow ? 20 : 14));
+        GP.text(ctx, kB(r.v), Math.min(xe + 6, w - 60), by + (rh - (narrow ? 20 : 14)) / 2, { size: 11.5, weight: 600, color: P.text, baseline: "middle", halo: true });
+      });
+      const mk = (v, t, c, yy) => { const x = X(v); ctx.strokeStyle = c; ctx.setLineDash([4, 3]); ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(x, top - 8); ctx.lineTo(x, yEnd); ctx.stroke(); ctx.setLineDash([]); GP.text(ctx, t, x, yy, { size: 11, color: c, align: x > w * 0.7 ? "right" : "center", baseline: "middle", halo: true }); };
+      mk(2048, "GX-1 레인당 레지스터 2 KB", P.compute, 12);
+      mk(128000, "SC-64 레인당 L3 128 KB", P.sram, 24);
+      GP.text(ctx, "레인(발행 슬롯)당 지연 숨기기 저장량 · 로그 축", bx, h - 8, { size: 11, color: P.dim, baseline: "bottom" });
+    }, { height: (w) => (w < NARROW ? 250 : 220) });
+  })();
+
+  /* ================================================== 4. 문맥 전환 비용 */
+  (function () {
+    let cv = null, R = null;
+    const gR = GP.range("cx-r", (v) => v + "개", upd), gN = GP.range("cx-n", (v) => v + "개", upd), gK = GP.range("cx-k", (v) => v + "개", upd);
+    const gL = GP.range("cx-l", (v) => v + "사이클", upd), gB = GP.range("cx-b", (v) => v + " B/클럭", upd);
+    function upd() {
+      R = ctxModel({ R: gR(), N: gN(), k: gK(), L: gL(), bw: gB() });
+      GP.stat("cx-o-s", kB(R.ctxB) + " <small>(32 × " + gR() + " × 4 B)</small>");
+      GP.stat("cx-o-m", R.maxRes + "개" + (gN() > R.maxRes ? " <small>(원하는 " + gN() + "개 중)</small>" : ""));
+      GP.stat("cx-o-c", GP.fmt(R.sw, 3) + "사이클");
+      GP.stat("cx-o-h", pct(R.uHw));
+      GP.stat("cx-o-w", pct(R.uSw));
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas("#cx-cv", (ctx, w, h) => {
+      const P = GP.palette(), narrow = w < NARROW;
+      // 왼쪽(좁으면 위): 레지스터 파일 64 KB를 워프 문맥으로 나눈 그림
+      const rfW = narrow ? w - 16 : w * 0.52, rfH = narrow ? 92 : h - 70, rx = 8, ry = 26;
+      GP.text(ctx, "서브파티션 레지스터 파일 64 KB", rx, 12, { size: 12, weight: 700, color: P.text, baseline: "middle" });
+      ctx.strokeStyle = P.sram; ctx.lineWidth = 1.5; ctx.strokeRect(rx + 0.5, ry + 0.5, rfW - 1, rfH - 1);
+      const frac = R.ctxB / 65536, cols = narrow ? 16 : 4;
+      // 문맥 칸: 64 KB를 4 KB 단위 16칸 격자로 그리고 워프 문맥마다 칸을 묶는다
+      const cells = 16, cw = rfW / cols, ch = rfH / (cells / cols), per = R.ctxB / 4096;
+      for (let c = 0; c < cells; c++) {
+        const wi = Math.floor(c / per), used = wi < R.maxRes, act = wi < R.nHw;
+        const x = rx + (c % cols) * cw, y = ry + Math.floor(c / cols) * ch;
+        ctx.fillStyle = act ? GP.alpha(P.sram, 0.5) : used ? GP.alpha(P.sram, 0.15) : GP.alpha(P.text, 0.05);
+        ctx.fillRect(x + 2, y + 2, cw - 4, ch - 4);
+        if (per <= 1 || c % Math.round(per) === 0) if (used && cw > 26) GP.text(ctx, "W" + wi, x + cw / 2, y + ch / 2, { size: 11, color: P.text, align: "center", baseline: "middle", mono: true });
+      }
+      GP.text(ctx, "워프 문맥 " + kB(R.ctxB) + " → 상주 " + R.maxRes + "개" + (frac * R.maxRes < 0.99 ? " (남는 칸 " + pct(1 - frac * R.maxRes, 0) + ")" : ""), rx, ry + rfH + 14, { size: 11.5, color: P.dim, baseline: "middle" });
+      // 오른쪽(좁으면 아래): 활용률 막대
+      const gx = narrow ? 8 : rfW + 36, gy = narrow ? ry + rfH + 40 : 30, gw = narrow ? w - 16 : w - gx - 12;
+      const bars = [{ t: "상주(전환 0사이클)", v: R.uHw, c: P.compute }, { t: "소프트웨어 전환(" + Math.round(R.sw) + "사이클)", v: R.uSw, c: P.warn }, { t: "전환 없이 기다림", v: R.uStay, c: P.faint }];
+      const bh = narrow ? 18 : Math.min(26, (h - gy - 40) / 3 - 18);
+      bars.forEach((b, i) => {
+        const y = gy + i * (bh + 26);
+        GP.text(ctx, b.t, gx, y, { size: 11.5, color: P.text, baseline: "middle" });
+        ctx.fillStyle = GP.alpha(P.text, 0.07); ctx.fillRect(gx, y + 8, gw, bh);
+        ctx.fillStyle = b.c; ctx.fillRect(gx, y + 8, gw * GP.clamp(b.v, 0, 1), bh);
+        GP.text(ctx, pct(b.v), gx + Math.min(gw - 40, gw * b.v + 6), y + 8 + bh / 2, { size: 11.5, weight: 700, color: P.text, baseline: "middle", halo: true });
+      });
+    }, { height: (w) => (w < NARROW ? 300 : 240) });
+  })();
+
+  /* ================================================== 5. SIMD·SIMT·MIMD */
+  (function () {
+    let cv = null, M = null, seed = 7, tt = 0;
+    const gW = GP.range("si-w", (v) => v + "레인", upd), gP = GP.range("si-p", (v) => v.toFixed(2), upd);
+    const gA = GP.range("si-a", (v) => v + "개", upd), gB = GP.range("si-b", (v) => v + "개", upd);
+    document.getElementById("si-re").addEventListener("click", () => { seed = (seed * 48271 + 11) % 2147483647; upd(); });
+    function upd() {
+      M = simtModel({ W: gW(), n: 256, a: gA(), b: gB(), p: gP(), seed });
+      GP.stat("si-o-d", M.simd.cyc + " · " + pct(M.simd.util, 0));
+      GP.stat("si-o-t", M.simt.cyc + " · " + pct(M.simt.util, 0));
+      GP.stat("si-o-m", M.mimd.cyc + " · " + pct(M.mimd.util, 0));
+      GP.stat("si-o-c", "1 · 1 · " + M.mimd.ctrl);
+      tt = 0;
+    }
+    upd();
+    // 첫 워프(원소 0..W-1)의 레인 × 사이클 표: 0 쉼, 1 비교·분기, 2 A, 3 B, 4 다음 원소(MIMD), 5 블렌드
+    function table(kind) {
+      const W = gW(), a = gA(), b = gB(), path = M.path.slice(0, W);
+      const anyA = path.some((x) => !x), anyB = path.some((x) => x);
+      const rows = [];
+      if (kind === "simd") {
+        rows.push(path.map(() => 1));
+        for (let i = 0; i < a; i++) rows.push(path.map((x) => (x ? 0 : 2)));
+        for (let i = 0; i < b; i++) rows.push(path.map((x) => (x ? 3 : 0)));
+        rows.push(path.map(() => 5));
+      } else if (kind === "simt") {
+        rows.push(path.map(() => 1));
+        if (anyA) for (let i = 0; i < a; i++) rows.push(path.map((x) => (x ? 0 : 2)));
+        if (anyB) for (let i = 0; i < b; i++) rows.push(path.map((x) => (x ? 3 : 0)));
+      } else {
+        const len = path.map((x) => 1 + (x ? b : a)), mx = Math.max.apply(null, len);
+        for (let r = 0; r < mx; r++) rows.push(path.map((x, j) => (r === 0 ? 1 : r < len[j] ? (x ? 3 : 2) : 4)));
+      }
+      return rows;
+    }
+    cv = GP.canvas("#si-cv", (ctx, w, h) => {
+      const P = GP.palette(), narrow = w < NARROW, W = gW();
+      const kinds = [["simd", "SIMD (if 변환)"], ["simt", "SIMT (활성 마스크)"], ["mimd", "MIMD (코어별 PC)"]];
+      const tabs = kinds.map((k) => table(k[0])), rmax = Math.max.apply(null, tabs.map((t) => t.length));
+      const pw = narrow ? w - 16 : (w - 32) / 3, ph = narrow ? (h - 40) / 3 - 22 : h - 58;
+      const cell = Math.max(2, Math.min(pw / W, ph / rmax, 18));
+      const cur = (tt * 6) % (rmax + 6);
+      const colOf = [GP.alpha(P.text, 0.06), P.ctrl, P.compute, P.tensor, GP.alpha(P.compute, 0.22), P.warn];
+      kinds.forEach((k, ki) => {
+        const ox = narrow ? 8 : 8 + ki * (pw + 8), oy = narrow ? 18 + ki * (ph + 22) : 22;
+        GP.text(ctx, k[1] + " · " + tabs[ki].length + "사이클", ox, oy - 8, { size: 12, weight: 700, color: P.text, baseline: "middle" });
+        tabs[ki].forEach((row, r) => row.forEach((v, j) => {
+          ctx.globalAlpha = r < cur ? 1 : 0.28;
+          ctx.fillStyle = colOf[v]; ctx.fillRect(ox + j * cell, oy + r * cell, Math.max(1, cell - 1), Math.max(1, cell - 1));
+        }));
+        ctx.globalAlpha = 1;
+        if (cur < tabs[ki].length) { ctx.strokeStyle = P.accent; ctx.lineWidth = 1.5; ctx.strokeRect(ox - 1, oy + Math.floor(cur) * cell - 0.5, W * cell + 1, cell); }
+      });
+      legendRow(ctx, [{ c: P.ctrl, t: "비교·분기" }, { c: P.compute, t: "A 길" }, { c: P.tensor, t: "B 길" }, { c: P.warn, t: "블렌드" }, { c: GP.alpha(P.text, 0.06), t: "꺼진 레인", stroke: P.border }, { c: GP.alpha(P.compute, 0.22), t: "다음 원소" }], 8, h - 9, P);
+    }, { height: (w) => (w < NARROW ? 420 : 280) });
+    GP.loop(document.getElementById("si-cv"), (dt) => { tt += dt; cv.redraw(); });
+  })();
+
+  /* ================================================== 6. 그리드 배분과 웨이브 */
+  (function () {
+    let cv = null, G = null, tt = 0;
+    const gBs = GP.range("gd-bs", (v) => v + " 스레드", upd), gB = GP.range("gd-b", (v) => int(v) + "개", upd), gR = GP.range("gd-r", (v) => v + "개", upd);
+    const LIM = { threads: "스레드·워프", blocks: "블록 32개", regs: "레지스터" };
+    function upd() {
+      G = gridModel({ B: gB(), bs: gBs(), R: gR() });
+      GP.stat("gd-o-w", G.wpb + "워프 · " + pct(G.laneEff, 0));
+      if (!G.ok) {
+        GP.stat("gd-o-s", "0 <small>(레지스터 초과: 실행 불가)</small>");
+        ["gd-o-n", "gd-o-e", "gd-o-t"].forEach((id) => GP.stat(id, "—"));
+      } else {
+        GP.stat("gd-o-s", G.bps + "개 <small>(" + LIM[G.limiter] + ")</small>");
+        GP.stat("gd-o-n", G.waves + " <small>(슬롯 " + int(G.slots) + "개)</small>");
+        GP.stat("gd-o-e", pct(G.eff));
+        GP.stat("gd-o-t", int(G.threads));
+      }
+      tt = 0; cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas("#gd-cv", (ctx, w, h) => {
+      const P = GP.palette(), narrow = w < NARROW;
+      if (!G.ok) { GP.text(ctx, "스레드당 레지스터 × 블록 크기가 SM 레지스터 65,536개를 넘어 블록 하나도 올라가지 않는다", w / 2, h / 2, { size: 12, color: P.bad, align: "center", baseline: "middle" }); return; }
+      const cols = narrow ? 12 : 18, rowsN = Math.ceil(144 / cols), tlH = 46;
+      const tw = (w - 16) / cols, th = Math.min(tw * 0.8, (h - tlH - 30) / rowsN);
+      const wv = Math.min(G.waves - 1, Math.floor(tt / 1.4) % Math.max(1, G.waves + 1));
+      const inWave = wv === G.waves - 1 ? G.lastFill : G.slots;
+      GP.text(ctx, "웨이브 " + (wv + 1) + " / " + G.waves + " · 블록 " + int(inWave) + "개가 SM 144개에 상주", 8, 10, { size: 12, weight: 700, color: P.text, baseline: "middle" });
+      for (let s = 0; s < 144; s++) {
+        const x = 8 + (s % cols) * tw, y = 22 + Math.floor(s / cols) * th;
+        ctx.fillStyle = GP.alpha(P.text, 0.05); ctx.fillRect(x + 1, y + 1, tw - 2, th - 2);
+        // 블록 j는 SM (j mod 144)의 슬롯 floor(j/144)에 들어간다(돌아가며 배분)
+        const nb = Math.max(0, Math.min(G.bps, Math.floor(inWave / 144) + (s < inWave % 144 ? 1 : 0)));
+        const sw = (tw - 4) / G.bps;
+        ctx.fillStyle = wv === G.waves - 1 && G.waves > 1 ? P.warn : P.compute;
+        for (let b = 0; b < nb; b++) ctx.fillRect(x + 2 + b * sw, y + 2, Math.max(0.8, sw - (sw > 3 ? 1 : 0)), th - 4);
+      }
+      // 아래: 웨이브 시간선(막대 높이 = 채운 비율)
+      const ty = h - tlH, tw2 = (w - 16) / G.waves;
+      GP.text(ctx, "시간 → 웨이브마다 같은 시간이 든다(빈 슬롯도 시간을 쓴다)", 8, ty - 2, { size: 11, color: P.dim, baseline: "bottom" });
+      for (let i = 0; i < G.waves; i++) {
+        const f = i === G.waves - 1 ? G.lastFill / G.slots : 1, x = 8 + i * tw2;
+        ctx.fillStyle = GP.alpha(P.text, 0.07); ctx.fillRect(x + 1, ty + 6, tw2 - 2, 24);
+        ctx.fillStyle = i === wv ? P.accent : GP.alpha(i === G.waves - 1 && G.waves > 1 ? P.warn : P.compute, 0.7);
+        ctx.fillRect(x + 1, ty + 6 + 24 * (1 - f), tw2 - 2, 24 * f);
+      }
+      GP.text(ctx, "웨이브 효율 " + pct(G.eff), w - 8, h - 6, { size: 11.5, weight: 700, color: P.text, align: "right", baseline: "bottom" });
+    }, { height: (w) => (w < NARROW ? 300 : 280) });
+    GP.loop(document.getElementById("gd-cv"), (dt) => { tt += dt; cv.redraw(); });
+  })();
+
+  /* ================================================== 7. 암달·구스타프손 */
+  (function () {
+    let cv = null;
+    const gS = GP.range("am-s", (v) => v.toFixed(2) + " %", upd), gE = GP.range("am-e", (v) => v + " %", upd);
+    const gN = GP.seg("am-n", upd);
+    function upd() {
+      const s = gS() / 100, N = Number(gN()), A = amdahl(s, N), G = gustafson(s, N), sf = serialFor(gE() / 100, N);
+      GP.stat("am-o-a", GP.fmt(A, 4) + "배 · " + pct(A / N));
+      GP.stat("am-o-g", GP.fmt(G, 4) + "배");
+      GP.stat("am-o-l", s > 0 ? GP.fmt(1 / s, 4) + "배" : "∞");
+      GP.stat("am-o-n", "s ≤ " + GP.fmt(sf * 100, 3) + " %");
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas("#am-cv", (ctx, w, h) => {
+      const P = GP.palette(), s = gS() / 100, N = Number(gN()), a = [], g = [], id = [];
+      for (let e = 0; e <= 5; e += 0.05) { const n = Math.pow(10, e); a.push([n, amdahl(s, n)]); g.push([n, gustafson(s, n)]); id.push([n, n]); }
+      GP.chart(ctx, { x: 60, y: 26, w: w - 78, h: h - 70 }, {
+        x: [1, 1e5], y: [1, 1e5], logX: true, logY: true, xLabel: "병렬 단위 수 N", yLabel: "속도 향상 S",
+        series: [{ data: id, color: P.faint, dash: [4, 4], width: 1.4, label: "이상(S = N)" }, { data: g, color: P.ok, width: 2.2, label: "구스타프손(문제를 키움)" }, { data: a, color: P.accent, width: 2.4, label: "암달(고정 문제)" }],
+        vlines: [{ x: N, color: P.warn, label: "N = " + int(N) }],
+        hlines: s > 0 ? [{ y: 1 / s, color: P.accent, label: "상한 1/s", align: "left" }] : [],
+        points: [{ x: N, y: amdahl(s, N), color: P.accent, r: 4 }, { x: N, y: gustafson(s, N), color: P.ok, r: 4 }],
+        legend: "above", hover: true,
+      });
+    }, { height: 260, hover: true });
+  })();
+
+  /* ================================================== 8. 파이프라인 깊이 */
+  (function () {
+    let cv = null;
+    const gN = GP.range("pp-n", (v) => v + "단", upd), gW = GP.range("pp-w", (v) => v + "개", upd);
+    const gO = GP.range("pp-o", (v) => v + " ps", upd), gT = GP.range("pp-t", (v) => int(v) + " ps", upd);
+    function upd() {
+      const r = pipeModel({ T: gT(), tov: gO(), n: gN(), W: gW() }), b = pipeBest(gT(), gO(), gW(), 20);
+      GP.stat("pp-o-f", GP.fmt(r.f, 3) + " GHz");
+      GP.stat("pp-o-l", GP.fmt(r.lat / 1000, 3) + " ns <small>(" + gN() + "사이클)</small>");
+      GP.stat("pp-o-p", GP.fmt(r.thr, 3));
+      GP.stat("pp-o-b", b.n + "단 <small>(" + GP.fmt(b.thr, 3) + ")</small>");
+      GP.stat("pp-o-v", pct(r.ovFrac, 0));
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas("#pp-cv", (ctx, w, h) => {
+      const P = GP.palette(), narrow = w < NARROW, T = gT(), tov = gO(), W = gW(), n0 = gN();
+      const thr = [], inf = [], lat = [];
+      for (let n = 1; n <= 20; n++) { const r = pipeModel({ T, tov, n, W }); thr.push([n, r.thr]); inf.push([n, r.f]); lat.push([n, r.lat / 1000]); }
+      const ymax = Math.max(1, Math.ceil(Math.max.apply(null, inf.map((p) => p[1])) * 1.1));
+      const b1 = narrow ? { x: 52, y: 26, w: w - 66, h: (h - 110) / 2 } : { x: 52, y: 26, w: (w - 120) * 0.6, h: h - 70 };
+      const b2 = narrow ? { x: 52, y: b1.y + b1.h + 70, w: w - 66, h: (h - 110) / 2 } : { x: b1.x + b1.w + 62, y: 26, w: w - (b1.x + b1.w + 62) - 12, h: h - 70 };
+      GP.chart(ctx, b1, {
+        x: [1, 20], y: [0, ymax], xLabel: "깊이 n", yLabel: "처리량(명령/ns)",
+        series: [{ data: inf, color: P.faint, dash: [4, 4], width: 1.4, label: "워프 무한(= 클럭)" }, { data: thr, color: P.compute, width: 2.4, label: "W = " + W }],
+        vlines: [{ x: n0, color: P.warn }], points: [{ x: n0, y: pipeModel({ T, tov, n: n0, W }).thr, color: P.compute, r: 4 }], legend: "above",
+      });
+      GP.chart(ctx, b2, {
+        x: [1, 20], y: [0, Math.ceil((T + 20 * tov) / 1000 + 0.5)], xLabel: "깊이 n", yLabel: "지연(ns)",
+        series: [{ data: lat, color: P.clock, width: 2.2, label: "명령 지연" }], vlines: [{ x: n0, color: P.warn }], legend: "above",
+      });
+    }, { height: (w) => (w < NARROW ? 420 : 250) });
+  })();
+})();
+</script>
+</body>
+</html>

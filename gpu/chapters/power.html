@@ -1,0 +1,1197 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>전력 공급과 DVFS · GPUBook</title>
+<meta name="description" content="1,000 W GPU 패키지의 전력은 어디로 가고 어떻게 공급되는가. 동적·누설 전력, 알파 전력 법칙 V–f 곡선과 전력 상한 아래 최적 동작점, DVFS 제어 루프, 0.75 V·1,000 A 전류 경로, PDN 임피던스와 목표 임피던스, 부하 급변 전압 강하, IR 드롭 격자, 후면 전력, 전력 게이팅과 다크 실리콘을 계산 모델로 익힌다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+.pw2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0; }
+.pw2 > div { min-width: 0; position: relative; }
+.sim-readout .v.bad { color: var(--bad); }
+.sim-readout .v.ok { color: var(--ok); }
+.sim-readout .v.warn { color: var(--warn); }
+.pw-legend { justify-content: center; padding: 10px 0 0; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="power">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 12</div>
+    <h1>전력 공급과 DVFS</h1>
+    <p class="lead">GX-1 로직 다이는 손톱 몇 개 크기의 실리콘에서 약 760 W를 쓴다. 전압이 0.75 V밖에 안 되므로 전류는 약 1,000 A다. 가정용 전기 레인지 몇 대분의 전력을 전선 한 가닥 굵기도 안 되는 거리 안에서 받아야 하고, 부하가 나노초 단위로 수백 암페어씩 바뀌어도 전압은 수십 mV 안에 머물러야 한다. 이 장은 GPU가 왜 <b>전력 상한에 묶인 칩</b>인지, 그 상한 아래에서 클럭과 전압을 어떻게 고르는지, 그리고 1,000 A를 0.75 V로 다이 구석까지 보내는 전력망(PDN)을 어떻게 설계하는지를 계산한다.</p>
+    <ul class="objectives">
+      <li>\(P_{dyn} = \alpha C V^2 f\)와 온도에 지수로 늘어나는 누설 전력으로 GX-1의 전력 760 W를 나누고, 유효 정전 용량 \(C_{eff}\)를 역산한다.</li>
+      <li>알파 전력 법칙 V–f 곡선과 전력 상한 1,000 W로 워크로드별 최적 동작점(전압·클럭·성능)을 구한다.</li>
+      <li>DVFS·부스트를 수행하는 전력 관리 제어 루프(PI)의 응답과 불안정 조건을 이해한다.</li>
+      <li>48 V → 12 V → 0.75 V 전류 경로의 손실과 범프·볼 수, 수직 전력 공급과 패키지 내장 레귤레이터의 효과를 계산한다.</li>
+      <li>PDN 임피던스 주파수 응답과 목표 임피던스 \(Z_t = \Delta V/\Delta I\), 디커플링 계층, 부하 급변 전압 강하, IR 드롭 격자를 풀어 본다.</li>
+      <li>전력 게이팅과 다크 실리콘, 같은 전력에서 "넓고 느리게"가 이기는 이유와 FLOPS/W를 설명한다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="budget">
+    <h2>1,000 W는 어디로 가나</h2>
+    <p>GX-1 모듈의 <span class="term">열 설계 전력(TDP)</span><span class="en">(thermal design power)</span>은 1,000 W다. 이 숫자는 칩이 낼 수 있는 최대 전력이 아니라 <b>냉각과 전원이 견디도록 약속한 상한</b>이다. 칩은 이 상한을 넘지 않게 스스로 클럭과 전압을 조절한다. 그래서 GPU의 성능은 "몇 GHz까지 돌 수 있나"보다 "1,000 W 안에서 몇 GHz를 유지할 수 있나"로 정해진다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="GX-1 모듈 1,000 W의 분해. 로직 다이 동적 640 W, 누설 120 W, HBM 150 W, 변환 손실과 기타 90 W. 아래 막대는 동적 640 W 중 텐서 연산 자체가 약 94 W이고 나머지가 데이터 이동, 클럭, 제어임을 보여 준다">
+        <text x="20" y="30" class="t t-b">모듈 1,000 W</text>
+        <rect x="20" y="42" width="512" height="44" class="k-heat"/>
+        <rect x="532" y="42" width="96" height="44" class="k-heat p-hatch"/>
+        <rect x="532" y="42" width="96" height="44" class="k-heat" style="fill-opacity:.55"/>
+        <rect x="628" y="42" width="120" height="44" class="k-dram"/>
+        <rect x="748" y="42" width="72" height="44" class="k-volt"/>
+        <text x="276" y="69" class="t t-c t-b">동적 약 640 W</text>
+        <text x="580" y="62" class="t t-c">누설</text><text x="580" y="79" class="t t-c">약 120 W</text>
+        <text x="688" y="62" class="t t-c">HBM 6개</text><text x="688" y="79" class="t t-c">약 150 W</text>
+        <text x="784" y="62" class="t t-c">변환·기타</text><text x="784" y="79" class="t t-c">약 90 W</text>
+        <path d="M20 96v8h608v-8" class="s-line"/>
+        <text x="324" y="122" class="t-dim t-c">로직 다이 약 760 W (85 °C, 0.75 V, 1.6 GHz) → 코어 전류 약 1,013 A</text>
+        <text x="20" y="160" class="t t-b">동적 640 W의 쓰임 (추정)</text>
+        <rect x="20" y="172" width="76" height="40" class="k-tensor"/>
+        <rect x="96" y="172" width="250" height="40" class="k-data"/>
+        <rect x="346" y="172" width="110" height="40" class="k-clock"/>
+        <rect x="456" y="172" width="76" height="40" class="k-ctrl"/>
+        <text x="58" y="197" class="t t-c">텐서 연산</text>
+        <text x="221" y="197" class="t t-c">피연산자 이동(레지스터·공유 메모리·L2·배선)</text>
+        <text x="401" y="197" class="t t-c">클럭 분배</text>
+        <text x="494" y="197" class="t t-c">제어·기타</text>
+        <text x="20" y="236" class="t-dim">텐서 연산 약 94 W = 943.7 TFLOPS × 0.1 pJ/FLOP(BF16 FMA 0.2 pJ). 나머지 약 550 W는 연산이 아니라 데이터를 옮기고 박자를 맞추는 데 쓴다(비율은 교육용 추정).</text>
+      </svg>
+      <figcaption><b>그림 12-1.</b> GX-1 모듈 1,000 W의 분해. 로직 다이가 760 W, 그중 동적 전력이 640 W다. 에너지 표로 계산하면 BF16 곱셈-누산 자체는 약 94 W뿐이다. 전력 예산의 대부분은 연산기 주변의 데이터 이동과 클럭에 쓰인다(<a href="onchip.html">6장</a>에서 본 "연산은 싸고 데이터 이동은 비싸다"가 전력에서도 그대로 성립한다).</figcaption>
+    </figure>
+    <p>전력은 세 가지 이유로 GPU 설계를 묶는다. 첫째, <b>열</b>: 760 W / 7.8 cm² ≈ 97 W/cm²를 냉각판으로 빼내야 한다(<a href="thermal.html">13장</a>). 둘째, <b>전류</b>: 0.75 V에서 1,000 A를 수십 mV 오차로 공급해야 한다. 셋째, <b>데이터센터 전력</b>: 랙 하나가 약 50 kW이고, 같은 전력으로 더 많은 FLOP를 내는 칩이 이긴다. 이 장은 둘째 문제를 중심에 두고, 첫째는 13장에 넘긴다.</p>
+    <div class="callout fab"><strong>1,000 A라는 숫자</strong>로직 다이 760 W ÷ 0.75 V ≈ 1,013 A. 전원 전압을 10 % 낮추면 같은 일을 하는 동적 전력은 약 19 % 줄지만(\(V^2\)), 전류는 \(P/V\)라 10 % 감소에 그치고 같은 저항에서의 강하 허용치(예: 5 % = 37.5 mV)도 함께 작아진다. 코어 전압이 1 V 아래로 내려온 뒤로 전력 공급의 어려움은 전력보다 <b>전류</b>에서 온다. 이 전류는 마이크로범프 약 10,000개(범프당 약 0.1 A 가정)와 같은 수의 접지 범프로 다이에 들어간다.</div>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="dynamic">
+    <h2>동적 전력과 누설 전력</h2>
+    <p>CMOS 게이트가 출력을 0에서 1로 바꿀 때 전원은 부하 정전 용량 \(C\)를 \(V_{DD}\)까지 충전하며 \(CV_{DD}^2\)의 에너지를 내놓는다. 절반은 PMOS에서 열이 되고 절반은 커패시터에 저장되었다가 방전 때 NMOS에서 열이 된다. 클럭 주기마다 전체 정전 용량의 비율 \(\alpha\)(활동도)만 0→1로 바뀐다고 하면 평균 <span class="term">동적 전력</span><span class="en">(dynamic power)</span>은 다음과 같다.</p>
+    <div class="formula">$$P_{dyn} = \alpha\, C\, V_{DD}^2\, f_{clk}, \qquad P_{leak} = V_{DD}\, I_{leak}(V_{DD}, T)$$<div class="where">여기서 \(\alpha\)는 한 클럭에 0→1로 바뀌는 정전 용량의 비율, \(C\)는 칩 전체의 스위칭 가능한 정전 용량(게이트·접합·배선), \(\alpha C\)를 묶어 <span class="term">유효 스위칭 정전 용량</span> \(C_{eff}\)라 부른다. \(I_{leak}\)은 트랜지스터가 꺼져 있어도 흐르는 누설 전류다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 820 260" role="img" aria-label="CMOS 인버터의 충전과 방전 경로, 그리고 누설 전류 경로. 왼쪽은 PMOS를 통해 부하 커패시터를 충전하는 전류, 가운데는 NMOS를 통한 방전, 오른쪽은 꺼진 트랜지스터를 지나는 문턱 이하 누설과 게이트 누설">
+        <g>
+          <text x="40" y="24" class="t t-b">① 충전 0→1: 전원이 CV² 공급</text>
+          <path d="M60 46H240" class="ks-volt"/><text x="246" y="50" class="t kt-volt">V<tspan dy="4" style="font-size:11px">DD</tspan></text>
+          <rect x="120" y="70" width="40" height="34" rx="4" class="k-volt"/><text x="140" y="92" class="t t-c">P</text>
+          <rect x="120" y="150" width="40" height="34" rx="4" class="f-elev"/><text x="140" y="172" class="t t-c t-dim">N</text>
+          <path d="M140 46V70M140 104V150M140 184V214" class="s-line"/>
+          <path d="M140 127H210" class="s-line"/>
+          <path d="M200 140H220M200 148H220" class="s-line" style="stroke-width:2.5"/><path d="M210 127V140M210 148V214" class="s-line"/>
+          <path d="M60 214H240" class="s-axis"/><text x="246" y="218" class="t-dim">GND</text>
+          <text x="226" y="150" class="t">C</text>
+          <path d="M150 56V118H196" class="arr arr-a" style="stroke:var(--volt)"/>
+          <text x="40" y="244" class="t-dim">PMOS에서 ½CV² 열, C에 ½CV² 저장</text>
+        </g>
+        <g transform="translate(290 0)">
+          <text x="0" y="24" class="t t-b">② 방전 1→0: 저장 에너지가 열로</text>
+          <path d="M20 46H200" class="s-line"/>
+          <rect x="80" y="70" width="40" height="34" rx="4" class="f-elev"/><text x="100" y="92" class="t t-c t-dim">P</text>
+          <rect x="80" y="150" width="40" height="34" rx="4" class="k-heat"/><text x="100" y="172" class="t t-c">N</text>
+          <path d="M100 46V70M100 104V150M100 184V214" class="s-line"/>
+          <path d="M100 127H170" class="s-line"/>
+          <path d="M160 140H180M160 148H180" class="s-line" style="stroke-width:2.5"/><path d="M170 127V140M170 148V214" class="s-line"/>
+          <path d="M20 214H200" class="s-axis"/>
+          <path d="M160 134H112V200" class="arr" style="stroke:var(--heat)"/>
+          <text x="0" y="244" class="t-dim">NMOS에서 ½CV² 열. 한 번 오르내리면 CV²</text>
+        </g>
+        <g transform="translate(560 0)">
+          <text x="0" y="24" class="t t-b">③ 누설: 꺼져 있어도 흐름</text>
+          <path d="M20 46H230" class="ks-volt"/>
+          <rect x="80" y="80" width="56" height="44" rx="4" class="f-elev"/><text x="108" y="107" class="t t-c t-dim">꺼진 N</text>
+          <path d="M108 46V80M108 124V214" class="s-line"/>
+          <path d="M20 214H230" class="s-axis"/>
+          <path d="M98 52V206" class="arr arr-bad dash"/>
+          <text x="146" y="96" class="t t-bad">문턱 이하 누설</text><text x="146" y="114" class="t-dim">∝ exp(−qV<tspan dy="4" style="font-size:11px">th</tspan><tspan dy="-4">/nkT)</tspan></text>
+          <text x="146" y="150" class="t t-bad">게이트·접합 누설</text>
+          <text x="146" y="168" class="t-dim">온도 25 K마다 약 2배</text>
+          <text x="0" y="244" class="t-dim">V<tspan dy="4" style="font-size:11px">DD</tspan><tspan dy="-4">가 높으면 DIBL로 더 증가</tspan></text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-2.</b> 동적 전력과 누설 전력의 근원. 충전·방전 한 번에 \(CV^2\)가 열이 되므로 전압이 전력을 제곱으로 지배한다. 누설은 스위칭과 무관하게 흐르며, 문턱 전압이 낮을수록·온도가 높을수록 지수로 커진다. 4 nm급 공정에서 누설은 다이 전력의 약 15 %다.</figcaption>
+    </figure>
+    <p>누설은 이 장에서 다음 모델로 둔다. 85 °C·0.75 V에서 120 W, 온도 25 K마다 2배, 전압에는 DIBL 효과로 \(e^{3(V-0.75)}\)배가 붙는다(문턱 이하 기울기 약 75 mV/dec, DIBL 계수 약 0.1을 단순화한 값).</p>
+    <div class="formula">$$P_{leak}(V,T) = 120\,\text{W}\cdot\frac{V}{0.75}\cdot e^{3(V-0.75)}\cdot 2^{(T-85)/25}$$<div class="where">25 °C에서 약 23 W, 105 °C에서 약 209 W. 같은 0.75 V에서 온도만으로 누설이 9배 차이 난다. 이 양의 되먹임(전력 → 온도 → 누설 → 전력)은 <a href="thermal.html">13장</a>의 열 폭주 분석으로 이어진다.</div></div>
+
+    <div class="sim" id="sim-pw">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>동적·누설 전력 계산기: GX-1 760 W 재현과 C<sub>eff</sub> 역산</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pw-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>활동도 α <output id="pw-a-out"></output></span><input type="range" id="pw-a" min="0.05" max="0.4" step="0.01" value="0.2"></label>
+          <label class="ctrl"><span>스위칭 정전 용량 C <output id="pw-c-out"></output></span><input type="range" id="pw-c" min="1" max="6" step="0.02" value="3.56"></label>
+          <label class="ctrl"><span>전압 V<sub>DD</sub> <output id="pw-v-out"></output></span><input type="range" id="pw-v" min="0.55" max="0.9" step="0.005" value="0.75"></label>
+          <label class="ctrl"><span>클럭 f <output id="pw-f-out"></output></span><input type="range" id="pw-f" min="0.4" max="2" step="0.01" value="1.6"></label>
+          <label class="ctrl"><span>접합 온도 T<sub>j</sub> <output id="pw-t-out"></output></span><input type="range" id="pw-t" min="25" max="110" step="1" value="85"></label>
+          <label class="check"><input type="checkbox" id="pw-lock"> 클럭을 V–f 곡선에 묶기(3절)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">P<sub>dyn</sub></span><span class="v" id="pw-pd">—</span></div>
+        <div class="stat"><span class="k">P<sub>leak</sub></span><span class="v" id="pw-pl">—</span></div>
+        <div class="stat"><span class="k">다이 합계</span><span class="v" id="pw-pt">—</span></div>
+        <div class="stat"><span class="k">코어 전류</span><span class="v" id="pw-i">—</span></div>
+        <div class="stat"><span class="k">누설 비중</span><span class="v" id="pw-ls">—</span></div>
+        <div class="stat"><span class="k">640 W가 되는 C</span><span class="v" id="pw-cinv">—</span></div>
+      </div>
+      <div class="sim-note">그래프는 지금 전압·클럭에서 온도에 따른 전력(동적은 수평, 누설은 지수). 마지막 칸은 지금 α·V·f에서 동적 전력 640 W를 내려면 필요한 \(C = 640/(\alpha V^2 f)\)다. 해볼 것: ① 기본값(α 0.20, 3.56 µF, 0.75 V, 1.6 GHz, 85 °C)에서 640 + 120 = 760 W, 전류 약 1,013 A. ② 전압을 0.85 V로 올리고 곡선에 묶으면 1.8 GHz에서 동적 약 925 W, 누설 약 184 W로 다이가 1,100 W를 넘는다(클럭 12 % 위해 전력 46 %). ③ 온도를 25 °C로 내리면 누설이 약 23 W로 줄어 같은 동작점에서 약 97 W를 아낀다. 냉각이 곧 성능인 이유다.</div>
+    </div>
+    <p>왜 이렇게 설계하는가. \(C\)는 트랜지스터 수와 배선 길이로 정해지고, 920억 개 트랜지스터가 만드는 약 3.6 µF는 설계 뒤에는 거의 바꿀 수 없다. 운전 중에 돌릴 수 있는 손잡이는 \(V\)와 \(f\)이고, \(f\)를 낮추려면 \(V\)도 낮춰야 한다(다음 절). 그래서 전력을 다루는 하드웨어는 <b>전압을 빠르게 바꿀 수 있는 레귤레이터와 클럭 발생기</b>에 면적과 핀을 쓰고, 활동도 \(\alpha\)를 줄이는 클럭 게이팅을 설계 전반에 넣는다(<a href="../../digital/chapters/power.html">DigitalBook 전력 장</a>).</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="vf">
+    <h2>V–f 곡선과 전력 상한 아래 최적 동작점</h2>
+    <p>게이트 지연은 부하 정전 용량을 구동 전류로 충전하는 시간이다. 짧은 채널 트랜지스터의 포화 전류는 \((V-V_{th})^{a}\)(\(a\)는 1과 2 사이, 속도 포화가 강할수록 1에 가까움)로 늘어난다는 <span class="term">알파 전력 법칙</span><span class="en">(alpha-power law)</span>을 쓰면 최대 클럭은 다음과 같다.</p>
+    <div class="formula">$$f_{max}(V) = K\,\frac{(V - V_{th})^{a}}{V}, \qquad V_{th} = 0.35\ \text{V},\ a = 1.5,\ K = 4.74\ \text{GHz}\cdot\text{V}^{-0.5}$$<div class="where">GX-1 표의 기본 1.2 GHz(0.65 V)와 부스트 1.6 GHz(0.75 V)를 지나도록 맞췄다. 곡선은 약 0.80 V에서 클럭 상한 1.8 GHz에 닿는다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 290" role="img" aria-label="왼쪽: 전압에 따른 최대 클럭 곡선. 0.65 V에서 1.2 GHz, 0.75 V에서 1.6 GHz, 약 0.80 V에서 클럭 상한 1.8 GHz에 닿아 평평해진다. 오른쪽: 활동도 0.2와 0.1에서 전압에 따른 모듈 전력. 0.2 곡선은 0.75 V에서 1,000 W 상한을 지나고 0.1 곡선은 전 범위에서 상한 아래">
+        <path d="M70 30V250H400" class="s-axis"/>
+        <path d="M70 140H400M70 85H400M70 195H400" style="stroke:var(--grid)"/>
+        <text x="62" y="254" class="t-dim t-e">0</text><text x="62" y="199" class="t-dim t-e">0.5</text><text x="62" y="144" class="t-dim t-e">1.0</text><text x="62" y="89" class="t-dim t-e">1.5</text><text x="62" y="34" class="t-dim t-e">2.0</text>
+        <text x="70" y="270" class="t-dim t-c">0.60</text><text x="180" y="270" class="t-dim t-c">0.70</text><text x="290" y="270" class="t-dim t-c">0.80</text><text x="400" y="270" class="t-dim t-c">0.90</text>
+        <text x="235" y="288" class="t-dim t-c">V<tspan dy="4" style="font-size:11px">DD</tspan><tspan dy="-4"> (V)</tspan></text>
+        <text transform="translate(22 140) rotate(-90)" class="t-dim t-c">최대 클럭 (GHz)</text>
+        <path d="M290.0 53.1L301.0 49.0L312.0 45.0L323.0 40.9L334.0 36.9L345.0 33.0L356.0 29.0" class="s-faint dash" style="fill:none"/>
+        <path d="M70.0 141.3L81.0 136.6L92.0 131.9L103.0 127.3L114.0 122.7L125.0 118.1L136.0 113.5L147.0 109.0L158.0 104.5L169.0 100.1L180.0 95.7L191.0 91.3L202.0 86.9L213.0 82.6L224.0 78.3L235.0 74.0L246.0 69.8L257.0 65.6L268.0 61.4L279.0 57.2L290.0 53.1L301.0 52.0L400.0 52.0" class="ks-clock"/>
+        <circle cx="125" cy="118.1" r="5" class="kf-clock"/><text x="132" y="136" class="t">기본 1.2 GHz</text>
+        <circle cx="235" cy="74" r="5" class="kf-clock"/><text x="160" y="66" class="t">부스트 1.6</text>
+        <circle cx="293" cy="52" r="5" class="kf-clock"/><text x="300" y="72" class="t">상한 1.8 (0.80 V)</text>
+        <path d="M345 40V250" class="s-bad dash"/><text x="340" y="232" class="t t-bad t-e">V<tspan dy="4" style="font-size:11px">max</tspan><tspan dy="-4"> 0.85</tspan></text>
+        <path d="M490 30V250H850" class="s-axis"/>
+        <path d="M490 92.9H850" class="s-bad dash"/><text x="846" y="88" class="t t-bad t-e">상한 1,000 W</text>
+        <text x="482" y="254" class="t-dim t-e">0</text><text x="482" y="175" class="t-dim t-e">500</text><text x="482" y="96" class="t-dim t-e">1000</text><text x="482" y="38" class="t-dim t-e">1400</text>
+        <text x="490" y="270" class="t-dim t-c">0.60</text><text x="610" y="270" class="t-dim t-c">0.70</text><text x="730" y="270" class="t-dim t-c">0.80</text><text x="850" y="270" class="t-dim t-c">0.90</text>
+        <text x="670" y="288" class="t-dim t-c">V<tspan dy="4" style="font-size:11px">DD</tspan><tspan dy="-4"> (V)</tspan></text>
+        <path d="M490.0 171.2L502.0 167.2L514.0 163.1L526.0 158.8L538.0 154.3L550.0 149.6L562.0 144.8L574.0 139.7L586.0 134.5L598.0 129.2L610.0 123.6L622.0 117.8L634.0 111.9L646.0 105.8L658.0 99.4L670.0 92.9L682.0 86.2L694.0 79.2L706.0 72.1L718.0 64.7L730.0 57.2L742.0 51.6L754.0 46.8L766.0 41.8L778.0 36.8L790.0 31.7" class="ks-heat"/>
+        <path d="M490.0 193.4L502.0 191.2L514.0 188.9L526.0 186.4L538.0 183.9L550.0 181.2L562.0 178.5L574.0 175.7L586.0 172.7L598.0 169.7L610.0 166.5L622.0 163.3L634.0 159.9L646.0 156.4L658.0 152.8L670.0 149.1L682.0 145.3L694.0 141.3L706.0 137.3L718.0 133.1L730.0 128.7L742.0 125.4L754.0 122.4L766.0 119.3L778.0 116.2L790.0 112.9L802.0 109.6L814.0 106.3L826.0 102.8L838.0 99.3L850.0 95.7" class="ks-compute"/>
+        <circle cx="670" cy="92.9" r="5" class="kf-heat"/><text x="560" y="84" class="t">α 0.2: 0.75 V에서 상한</text>
+        <text x="700" y="160" class="t">α 0.1(디코드)</text><text x="700" y="178" class="t-dim">상한까지 여유 → 1.8 GHz</text>
+      </svg>
+      <figcaption><b>그림 12-3.</b> 왼쪽: 알파 전력 법칙으로 맞춘 V–f 곡선. 점선은 클럭 상한이 없을 때의 곡선이다. 오른쪽: 곡선을 따라 전압을 올릴 때의 모듈 전력(동적 + 누설, 변환 손실 12 %, HBM 150 W). 전력은 대략 \(V^3\)으로 오르므로 상한과의 교점이 곧 동작점이다. 활동도가 낮은 워크로드는 같은 상한에서 더 높은 클럭을 얻는다.</figcaption>
+    </figure>
+    <p>클럭을 따라 전압이 오르므로 동적 전력은 \(V^2 f \sim V^3\)에 가깝게 늘어난다. 상한 \(P_{cap}\)이 주어지면 동작점은 <b>모듈 전력이 상한과 만나는 가장 높은 전압</b>이고, 이는 이분법 한 번으로 풀린다. 이 장은 모듈 전력을 다음처럼 둔다.</p>
+    <div class="formula">$$P_{module} = 1.118\,\big[P_{dyn}(V, f(V)) + P_{leak}(V, T)\big] + P_{HBM}, \qquad P_{HBM} = 150\ \text{W}$$<div class="where">1.118은 변환 손실·기타(로직 다이 전력의 약 12 %, 760 W에서 약 90 W). 5절에서 이 손실을 단계별로 다시 계산한다.</div></div>
+
+    <div class="sim" id="sim-vf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>V–f 곡선과 전력 상한 아래 최적 동작점</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="vf-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>활동도 α(워크로드) <output id="vf-a-out"></output></span><input type="range" id="vf-a" min="0.05" max="0.35" step="0.01" value="0.2"></label>
+          <div class="ctrl"><span>워크로드 예</span><div class="seg" id="vf-w"><button data-value="0.08">디코드</button><button data-value="0.2" class="on">GEMM</button><button data-value="0.3">전력 바이러스</button></div></div>
+          <label class="ctrl"><span>모듈 전력 상한 <output id="vf-cap-out"></output></span><input type="range" id="vf-cap" min="400" max="1200" step="10" value="1000"></label>
+          <label class="ctrl"><span>접합 온도 T<sub>j</sub> <output id="vf-t-out"></output></span><input type="range" id="vf-t" min="45" max="105" step="1" value="85"></label>
+          <label class="check"><input type="checkbox" id="vf-boost" checked> 부스트 허용(끄면 기본 0.65 V까지)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">전압</span><span class="v" id="vf-v">—</span></div>
+        <div class="stat"><span class="k">클럭</span><span class="v" id="vf-f">—</span></div>
+        <div class="stat"><span class="k">모듈 전력</span><span class="v" id="vf-p">—</span></div>
+        <div class="stat"><span class="k">BF16 밀집</span><span class="v" id="vf-tf">—</span></div>
+        <div class="stat"><span class="k">TFLOPS/W</span><span class="v" id="vf-eff">—</span></div>
+        <div class="stat"><span class="k">제한 요인</span><span class="v" id="vf-lim">—</span></div>
+      </div>
+      <div class="sim-note">위: V–f 곡선과 동작점. 아래: 곡선을 따라간 모듈 전력과 상한. 성능은 연산 제한 워크로드에서 클럭에 비례한다고 둔다. 해볼 것: ① GEMM(α 0.2), 1,000 W, 85 °C → 0.75 V·1.6 GHz·약 944 TFLOPS(표의 부스트점). ② 디코드(α 0.08)는 상한에 닿기 전에 1.8 GHz 클럭 상한에 걸린다(약 690 W). 전력 바이러스(α 0.3)는 약 0.68 V·1.34 GHz로 내려간다. ③ 온도를 45 °C로 내리면 누설이 줄어 약 1.69 GHz, 105 °C면 약 1.51 GHz. 상한을 700 W로 줄이면 약 1.28 GHz다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>조건 (나머지는 기본)</th><th>전압</th><th>클럭</th><th>BF16 TFLOPS</th><th>결과의 원인</th></tr></thead>
+      <tbody>
+        <tr><td>GEMM α 0.20, 1,000 W, 85 °C</td><td>0.75 V</td><td>1.60 GHz</td><td>약 944</td><td>전력 상한</td></tr>
+        <tr><td>활동도 α 0.20 → 0.28</td><td>0.70 V</td><td>1.38 GHz</td><td>약 816</td><td>같은 전력에 스위칭 ↑ → 전압 ↓</td></tr>
+        <tr><td>활동도 α 0.20 → 0.08(디코드)</td><td>0.80 V</td><td>1.80 GHz</td><td>(대역폭 제한)</td><td>클럭 상한, 전력 약 690 W</td></tr>
+        <tr><td>접합 온도 85 → 45 °C</td><td>0.77 V</td><td>1.69 GHz</td><td>약 995</td><td>누설 120 → 44 W, 남은 전력을 동적에</td></tr>
+        <tr><td>접합 온도 85 → 105 °C</td><td>0.73 V</td><td>1.51 GHz</td><td>약 893</td><td>누설 약 190 W</td></tr>
+        <tr><td>상한 1,000 → 700 W</td><td>0.67 V</td><td>1.28 GHz</td><td>약 755</td><td>전력 30 % ↓ → 성능 약 20 % ↓</td></tr>
+        <tr><td>부스트 금지(기본 클럭)</td><td>0.65 V</td><td>1.20 GHz</td><td>약 707</td><td>모듈 약 640 W, 효율은 1.11 TFLOPS/W로 ↑</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout fab"><strong>표의 "최대 1.8 GHz(0.85 V)" 읽기</strong>GX-1 표의 최대점은 두 한계를 함께 적은 것이다. 클럭 상한 1.8 GHz는 타이밍 사인오프와 PLL이 정한 값이고, 이 장의 V–f 곡선에서는 약 0.80 V에서 닿는다. 0.85 V는 산화막·전자 이동 신뢰성이 허용하는 전압 상한(\(V_{max}\))이며, 0.80 V와의 차이 약 50 mV는 노화(문턱 전압 이동)와 전압 강하(7절)에 대비한 가드밴드로 쓴다. 효율로 보면 0.75 V·1.6 GHz에서 BF16 밀집 943.7 TFLOPS / 1,000 W ≈ 0.94 TFLOPS/W(다이만 1.24), 기본 클럭에서는 약 1.11 TFLOPS/W다. 클럭을 25 % 낮추면 성능은 25 % 줄지만 FLOP당 에너지는 약 15 % 준다.</div>
+    <p>왜 이렇게 설계하는가. 같은 칩이 워크로드에 따라 0.7–0.8 V 사이 어디에서든 돌 수 있게 만들면, 대역폭 제한 작업은 남는 전력으로 클럭을 올리고 연산 제한 작업은 상한에 맞춰 전압을 낮춘다. 고정 클럭 칩이라면 가장 나쁜 워크로드(전력 바이러스)에 맞춰 클럭을 정해야 했을 것이다. 그래서 GPU는 V–f 곡선을 칩마다 측정해 저장(비닝·퓨즈)하고, 넓은 전압 범위를 지원하는 레귤레이터에 원가를 쓴다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="dvfs">
+    <h2>DVFS·부스트와 전력 관리 루프</h2>
+    <p><span class="term">동적 전압·주파수 조정(DVFS)</span><span class="en">(dynamic voltage and frequency scaling)</span>은 위의 동작점 찾기를 실시간으로 한다. 칩 안의 전력 관리 제어기(작은 마이크로컨트롤러와 펌웨어)가 전류·전압·온도 센서를 밀리초마다 읽어 목표(전력 상한, 온도 상한, 전류 상한)와 비교하고, 클럭 발생기(PLL)의 주파수와 레귤레이터의 전압 지령(VID)을 바꾼다. 클럭을 올릴 때는 전압을 먼저 올리고, 내릴 때는 클럭을 먼저 내린다(반대로 하면 잠깐이라도 타이밍이 깨진다).</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="전력 관리 제어 루프. 센서가 전력과 온도를 재고 제어기가 목표와 비교해 클럭과 전압 지령을 바꾼다. 아래에는 나노초 단위로 동작하는 빠른 경로: 전압 강하 감지기가 클럭을 늘이는 회로">
+        <rect x="20" y="40" width="150" height="56" rx="8" class="k-ctrl"/><text x="95" y="64" class="t t-c t-b">전력 관리 제어기</text><text x="95" y="83" class="t-dim t-c">PI, 주기 약 1 ms</text>
+        <rect x="240" y="20" width="140" height="44" rx="8" class="k-clock"/><text x="310" y="47" class="t t-c">PLL 클럭 f</text>
+        <rect x="240" y="76" width="140" height="44" rx="8" class="k-volt"/><text x="310" y="103" class="t t-c">VR 전압 지령</text>
+        <rect x="450" y="34" width="180" height="76" rx="8" class="k-compute"/><text x="540" y="66" class="t t-c t-b">GPU 다이</text><text x="540" y="86" class="t-dim t-c">P = αCV²f + P<tspan dy="4" style="font-size:11px">leak</tspan></text>
+        <rect x="700" y="40" width="140" height="56" rx="8" class="k-heat"/><text x="770" y="64" class="t t-c">센서</text><text x="770" y="83" class="t-dim t-c">전류·온도(필터)</text>
+        <path d="M170 60H238M170 84L238 98" class="arr"/>
+        <path d="M380 42H448M380 98H448" class="arr"/>
+        <path d="M630 72H698" class="arr"/>
+        <path d="M770 96V140H95V98" class="arr dash"/>
+        <text x="430" y="134" class="t-dim t-c">측정 전력 P<tspan dy="4" style="font-size:11px">meas</tspan><tspan dy="-4"> → 오차 e = P</tspan><tspan dy="4" style="font-size:11px">cap</tspan><tspan dy="-4"> − P</tspan><tspan dy="4" style="font-size:11px">meas</tspan></text>
+        <rect x="20" y="170" width="820" height="66" rx="8" class="f-warn-soft"/>
+        <text x="40" y="194" class="t t-b">빠른 경로(나노초)</text>
+        <text x="40" y="216" class="t">다이 안 전압 감지기가 강하를 보면 → 클럭 위상을 늘여 한 사이클을 길게(클럭 스트레칭) → 펌웨어보다 10⁵배 빠름</text>
+      </svg>
+      <figcaption><b>그림 12-4.</b> 두 겹의 전력 관리. 느린 루프(밀리초)는 전력·온도 상한을 평균적으로 지키고, 빠른 경로(나노초)는 순간적인 전압 강하와 과전류에서 칩을 보호한다. 느린 루프만으로는 부하가 갑자기 늘어난 순간의 초과를 막을 수 없다.</figcaption>
+    </figure>
+    <p>느린 루프의 제어기는 대개 비례–적분(PI) 형태다. 제어 주기 \(T_s\)마다 오차 \(e_k = P_{cap} - P_{meas,k}\)를 계산해 클럭을 바꾼다.</p>
+    <div class="formula">$$f_{k+1} = f_k + K_p\,(e_k - e_{k-1}) + K_i\,T_s\,e_k, \qquad f_{min} \le f \le 1.8\ \text{GHz}$$<div class="where">속도형 PI(적분기를 클럭 자체에 둔 꼴). \(K_p\)의 단위는 MHz/W, \(K_i\)는 MHz/(W·ms). 측정 전력은 시정수 \(\tau_s\)의 1차 필터를 거친다. 전압은 클럭에 맞춰 V–f 곡선을 따라간다고 둔다.</div></div>
+
+    <div class="sim" id="sim-pi">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>전력 관리 제어 루프: 부하 계단에 대한 클럭·전력 응답</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pi-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>비례 이득 K<sub>p</sub> <output id="pi-kp-out"></output></span><input type="range" id="pi-kp" min="0" max="1" step="0.05" value="0.2"></label>
+          <label class="ctrl"><span>적분 이득 K<sub>i</sub> <output id="pi-ki-out"></output></span><input type="range" id="pi-ki" min="0" max="3" step="0.05" value="0.6"></label>
+          <label class="ctrl"><span>제어 주기 T<sub>s</sub> <output id="pi-ts-out"></output></span><input type="range" id="pi-ts" min="0.5" max="10" step="0.5" value="1"></label>
+          <label class="ctrl"><span>센서 필터 τ<sub>s</sub> <output id="pi-tau-out"></output></span><input type="range" id="pi-tau" min="0.2" max="5" step="0.1" value="1"></label>
+          <label class="ctrl"><span>무거운 구간 활동도 <output id="pi-a-out"></output></span><input type="range" id="pi-a" min="0.12" max="0.3" step="0.01" value="0.2"></label>
+          <label class="check"><input type="checkbox" id="pi-fast"> 빠른 보호(클럭 스트레칭)</label>
+          <button class="btn primary" id="pi-run">재생</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최대 초과</span><span class="v" id="pi-over">—</span></div>
+        <div class="stat"><span class="k">2 % 넘는 시간</span><span class="v" id="pi-tover">—</span></div>
+        <div class="stat"><span class="k">정착 시간</span><span class="v" id="pi-settle">—</span></div>
+        <div class="stat"><span class="k">무거운 구간 평균 클럭</span><span class="v" id="pi-favg">—</span></div>
+      </div>
+      <div class="sim-note">t = 20 ms에 활동도가 0.08(디코드)에서 무거운 값으로, 70 ms에 다시 돌아간다. 상한 1,000 W, 85 °C. 위: 모듈 전력(실선)과 필터된 측정값(점선). 아래: 클럭. 해볼 것: ① 기본값(\(K_p\) 0.2, \(K_i\) 0.6, 1 ms)은 약 3 ms에 1,000 W·1.6 GHz로 정착하지만, 계단 순간에는 1.8 GHz 그대로 약 1,240 W까지 튄다. ② \(T_s\)를 5 ms로 늘리면 약 500 W와 1,240 W 사이를 오가는 진동(한계 순환)이 생겨 평균 클럭이 약 1.39 GHz로 떨어진다. \(K_i\)를 0.15로 낮추면 진동은 없지만 정착이 약 13 ms로 느리다. ③ 빠른 보호를 켜면 순간 최대가 약 1,050 W로 줄어든다.</div>
+    </div>
+    <p>왜 이렇게 설계하는가. 펌웨어 루프는 정확하지만 느리고, 하드웨어 보호는 빠르지만 거칠다. 둘을 겹치면 레귤레이터와 냉각은 <b>짧은 초과(수 ms)</b>만 견디도록 설계하면 되고, 평균 전력은 정확히 상한에 붙일 수 있다. 상한에 가깝게 붙일수록 평균 클럭이 높아지므로, 센서 정확도(전류 측정 오차 1 %가 곧 10 W)가 그대로 성능이 된다. 모바일 칩의 DVFS는 <a href="../../soc/chapters/power.html">SoCBook 전력 장</a>에서 다룬다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="delivery">
+    <h2>1,000 A를 0.75 V로: 전류 경로</h2>
+    <p>데이터센터 랙은 전력을 48 V(또는 그 근처의 직류 버스)로 나른다. 같은 전력에서 전류가 낮아 배선 손실 \(I^2R\)이 작기 때문이다. GX-1 보드에서는 중간 버스 변환기(IBC)가 48 V를 12 V로 낮추고, 다이 가까이의 <span class="term">다상 벅 변환기</span><span class="en">(multiphase buck converter)</span>가 12 V를 0.75 V로 바꾼다. 상 하나가 약 50 A씩 나누어 맡고, 각 상은 위상을 엇갈려 스위칭해 출력 리플을 상 수만큼 상쇄한다(변환기 자체는 <a href="../../power/chapters/converters.html">PowerBook 컨버터 장</a>).</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 270" role="img" aria-label="전류 경로. 48 V 버스 17 A에서 중간 버스 변환기를 거쳐 12 V 68 A, 다상 벅 변환기 20상을 거쳐 0.75 V 1,013 A. 보드 평면, BGA 볼, 유기 기판, C4 범프, 인터포저, 마이크로범프를 지나 다이에 도달한다">
+        <rect x="10" y="40" width="110" height="70" rx="8" class="k-volt"/><text x="65" y="68" class="t t-c t-b">48 V 버스</text><text x="65" y="90" class="t t-c">약 17 A</text>
+        <rect x="150" y="40" width="120" height="70" rx="8" class="f-elev"/><text x="210" y="68" class="t t-c">IBC 48→12 V</text><text x="210" y="90" class="t-dim t-c">η 약 98 %</text>
+        <rect x="300" y="40" width="110" height="70" rx="8" class="k-volt"/><text x="355" y="68" class="t t-c t-b">12 V</text><text x="355" y="90" class="t t-c">약 68 A</text>
+        <rect x="440" y="40" width="160" height="70" rx="8" class="f-elev"/><text x="520" y="64" class="t t-c">다상 벅 약 20상</text><text x="520" y="84" class="t-dim t-c">상당 약 50 A</text><text x="520" y="102" class="t-dim t-c">η 약 94 %</text>
+        <rect x="630" y="40" width="240" height="70" rx="8" class="k-volt"/><text x="750" y="68" class="t t-c t-b">0.75 V</text><text x="750" y="90" class="t t-c t-b">약 1,013 A</text>
+        <path d="M120 75H148M270 75H298M410 75H438M600 75H628" class="arr"/>
+        <g transform="translate(0 130)">
+          <rect x="10" y="10" width="128" height="40" rx="6" class="m-pcb"/><text x="74" y="35" class="t t-c">보드 전원 평면</text>
+          <rect x="156" y="10" width="128" height="40" rx="6" class="m-sol"/><text x="220" y="35" class="t t-c">BGA 볼 1 mm</text>
+          <rect x="302" y="10" width="128" height="40" rx="6" class="m-sub"/><text x="366" y="35" class="t t-c">유기 기판 20층</text>
+          <rect x="448" y="10" width="128" height="40" rx="6" class="m-sol"/><text x="512" y="35" class="t t-c">C4 150 µm</text>
+          <rect x="594" y="10" width="128" height="40" rx="6" class="m-interp"/><text x="658" y="35" class="t t-c">인터포저 TSV</text>
+          <rect x="740" y="10" width="130" height="40" rx="6" class="m-si"/><text x="805" y="35" class="t t-c">µ범프 → 다이</text>
+          <path d="M138 30H154M284 30H300M430 30H446M576 30H592M722 30H738" class="arr"/>
+          <text x="220" y="72" class="t-dim t-c">VDD 볼 약 1,000개</text>
+          <text x="512" y="72" class="t-dim t-c">VDD C4 약 2,500개</text>
+          <text x="805" y="72" class="t-dim t-c">VDD µ범프 약 10,000개</text>
+          <text x="10" y="112" class="t-dim">접지(VSS)도 같은 수가 필요하다. 0.75 V로 볼을 지나면 BGA 4,500개 중 약 45 %가 코어 전원에 묶인다.</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 12-5.</b> 48 V에서 다이까지. 전압이 64분의 1로 내려가는 동안 전류는 약 60배로 늘어난다. 저전압·대전류 구간이 짧을수록 손실과 커넥터 수가 준다. 범프·볼 수는 범프당 0.1 A(마이크로범프), 0.4 A(C4), 1 A(BGA 볼)의 전자 이동 한계를 가정해 계산했다.</figcaption>
+    </figure>
+    <p>손실은 세 갈래다. 레귤레이터의 변환 손실(상당 고정 손실 + 전도 손실 \(I_{ph}^2 R_{ph}\)), 0.75 V 배전 경로의 \(I^2R_{dist}\), 그리고 48 → 12 V 변환. 저전압 경로 저항이 15 µΩ만 되어도 \(1{,}013^2 \times 15\,\mu\Omega \approx 15\) W다. 레귤레이터를 보드 옆이 아니라 패키지 <b>바로 아래</b>(보드 뒷면)에 두는 <span class="term">수직 전력 공급</span><span class="en">(vertical power delivery)</span>은 이 경로를 몇 mm로 줄이고, 레귤레이터를 패키지 안에 넣으면 볼을 지나는 전류가 12 V의 약 68 A로 바뀐다.</p>
+
+    <div class="sim" id="sim-path">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>전류 경로 계산기: 단계 효율, 배전 손실, 범프·볼 수</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pa-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>레귤레이터 배치</span><div class="seg" id="pa-arr"><button data-value="lateral" class="on">보드 측면</button><button data-value="vertical">수직(바로 아래)</button><button data-value="onpkg">패키지 내장</button></div></div>
+          <label class="ctrl"><span>벅 상 수 <output id="pa-ph-out"></output></span><input type="range" id="pa-ph" min="4" max="48" step="1" value="20"></label>
+          <label class="ctrl"><span>로직 다이 전력 <output id="pa-p-out"></output></span><input type="range" id="pa-p" min="300" max="1000" step="10" value="760"></label>
+          <label class="ctrl"><span>코어 전압 <output id="pa-v-out"></output></span><input type="range" id="pa-v" min="0.6" max="1" step="0.01" value="0.75"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">코어 전류</span><span class="v" id="pa-i">—</span></div>
+        <div class="stat"><span class="k">48 V 입력</span><span class="v" id="pa-in">—</span></div>
+        <div class="stat"><span class="k">총 손실</span><span class="v" id="pa-loss">—</span></div>
+        <div class="stat"><span class="k">48 V → 다이 효율</span><span class="v" id="pa-eta">—</span></div>
+        <div class="stat"><span class="k">BGA 전원 볼(VDD+VSS)</span><span class="v" id="pa-balls">—</span></div>
+        <div class="stat"><span class="k">손실 최소 상 수</span><span class="v" id="pa-best">—</span></div>
+      </div>
+      <div class="sim-note">위: 48 V 입력에서 다이까지 전력 흐름(회색 조각이 각 단계의 손실). 아래: 상 수에 따른 벅 손실(상당 고정 손실 1 W + 상 저항 0.5 mΩ의 전도 손실). 해볼 것: ① 기본(보드 측면, 20상)에서 손실 약 79 W(벅 약 46, 배전 약 15, IBC 약 17), 효율 약 90.6 %. GX-1 표의 "변환 손실·기타 약 90 W"와 맞는다. ② 수직 배치로 바꾸면 배전 손실이 약 4 W로 줄어 총 약 67 W. 패키지 내장이면 전원 볼이 약 2,030개(45 %)에서 약 140개로 준다. ③ 코어 전압을 0.6 V로 낮추면 같은 760 W에서 전류가 약 1,270 A로 늘어 배전 손실이 약 24 W가 된다. 상 수를 8로 줄이면 상당 약 127 A가 되어 벅 손실이 약 72 W로 뛴다.</div>
+    </div>
+    <p>왜 이렇게 설계하는가. 0.75 V 구간의 \(I^2R\)은 전압이 낮을수록 \(1/V^2\)로 커지므로, 변환은 가능한 한 다이에 가까이 가져온다. 보드 뒷면에 레귤레이터를 두면 보드 면적과 부품 높이 제약이 생기고, 패키지 안에 넣으면 인덕터와 스위치의 열이 다이 옆에 더해진다. 그래도 1,000 A급 칩은 결국 이 방향으로 간다. 볼과 범프는 전원과 신호가 나누어 쓰는 자원이어서, 전원에 덜 쓰면 그만큼 HBM·링크 신호에 쓸 수 있다(<a href="package.html">11장</a>).</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="pdn">
+    <h2>PDN 모델과 목표 임피던스</h2>
+    <p>레귤레이터는 출력 전압을 일정하게 유지하려 하지만 제어 대역폭이 수백 kHz를 넘지 못한다. 그보다 빠른 전류 변화는 레귤레이터와 다이 사이의 <span class="term">디커플링 커패시터</span><span class="en">(decoupling capacitor)</span>가 공급한다. 전력망(PDN) 전체를 다이에서 바라본 임피던스 \(Z(f)\)로 나타내면, 전류가 \(\Delta I\)만큼 바뀔 때 전압 변동은 대략 \(\Delta I \cdot |Z|\)다. 허용 전압 변동 \(\Delta V\)가 주어지면 PDN이 넘지 말아야 할 <span class="term">목표 임피던스</span><span class="en">(target impedance)</span>가 정해진다.</p>
+    <div class="formula">$$Z_t = \frac{\Delta V}{\Delta I} = \frac{0.05 \times 0.75\ \text{V}}{300\ \text{A}} = 125\ \mu\Omega$$<div class="where">허용 변동 5 %(37.5 mV), 부하 계단 300 A(최대 전류의 약 30 %) 가정. 이 값이 직류부터 수백 MHz까지 지켜져야 한다. 실제 칩은 계단을 몇 사이클에 걸쳐 완만하게 하는 방식(작업 시작 지연, 클럭 게이팅 해제 순서)으로 \(\Delta I\)와 \(di/dt\)를 줄인다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 880 250" role="img" aria-label="PDN 사다리 회로. VRM의 출력 인덕턴스, 보드 벌크 커패시터, 보드에서 패키지까지의 인덕턴스, 패키지 커패시터, 기판과 C4 인덕턴스, 인터포저 깊은 트렌치 커패시터, 마이크로범프 인덕턴스, 다이 커패시터와 부하 전류원">
+        <path d="M30 60H850" class="ks-volt"/>
+        <path d="M30 200H850" class="s-axis"/>
+        <rect x="20" y="70" width="70" height="120" rx="6" class="k-volt"/><text x="55" y="126" class="t t-c t-b">VRM</text><text x="55" y="146" class="t-dim t-c">L 30 pH</text>
+        <g>
+          <rect x="120" y="46" width="70" height="28" rx="4" class="f-elev"/><text x="155" y="65" class="t t-c">R·L</text>
+          <rect x="210" y="96" width="70" height="70" rx="4" class="k-volt"/><text x="245" y="122" class="t t-c">보드</text><text x="245" y="140" class="t-dim t-c">5 mF</text><text x="245" y="157" class="t-dim t-c">ESL 10 pH</text>
+          <path d="M245 60V96M245 166V200" class="s-line"/>
+          <rect x="300" y="46" width="80" height="28" rx="4" class="f-elev"/><text x="340" y="65" class="t t-c">1.5 pH</text>
+          <rect x="400" y="96" width="80" height="70" rx="4" class="k-volt"/><text x="440" y="122" class="t t-c">패키지</text><text x="440" y="140" class="t-dim t-c">800 µF</text><text x="440" y="157" class="t-dim t-c">ESL 1 pH</text>
+          <path d="M440 60V96M440 166V200" class="s-line"/>
+          <rect x="500" y="46" width="80" height="28" rx="4" class="f-elev"/><text x="540" y="65" class="t t-c">0.5 pH</text>
+          <rect x="600" y="96" width="80" height="70" rx="4" class="m-interp"/><text x="640" y="122" class="t t-c">인터포저</text><text x="640" y="140" class="t-dim t-c">DTC 150 µF</text><text x="640" y="157" class="t-dim t-c">ESR 90 µΩ</text>
+          <path d="M640 60V96M640 166V200" class="s-line"/>
+          <rect x="694" y="46" width="70" height="28" rx="4" class="f-elev"/><text x="729" y="65" class="t t-c">0.05 pH</text>
+          <rect x="770" y="96" width="62" height="70" rx="4" class="m-si"/><text x="801" y="122" class="t t-c">다이</text><text x="801" y="140" class="t-dim t-c">5.5 µF</text>
+          <path d="M801 60V96M801 166V200" class="s-line"/>
+          <circle cx="858" cy="130" r="14" class="k-heat"/><path d="M858 120V140" class="arr" style="stroke:var(--heat)"/><path d="M850 60H858V116M858 144V200H850" class="s-line"/>
+        </g>
+        <text x="30" y="230" class="t-dim">직렬 저항 합 23 µΩ(직류 강하 1,000 A에서 23 mV). 다이 쪽으로 갈수록 C는 작아지지만 L이 작아 높은 주파수를 맡는다.</text>
+      </svg>
+      <figcaption><b>그림 12-6.</b> 이 장의 PDN 사다리 모델. 각 노드에 디커플링 가지(C·ESR·ESL)와 평면 정전 용량이 있고, 노드 사이는 직렬 R·L이다. 다이 노드의 5.5 µF는 MOS 디커플링 셀과 스위칭하지 않는 회로의 정전 용량을 합친 값, 인터포저의 150 µF는 깊은 트렌치 커패시터(DTC) 가정이다.</figcaption>
+    </figure>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 200" role="img" aria-label="주파수 대역별로 전류를 공급하는 구성 요소. 직류부터 수백 kHz는 전압 레귤레이터, 수백 kHz에서 수 MHz는 보드 벌크 커패시터, 수 MHz에서 수십 MHz는 패키지 커패시터, 수십 MHz 이상은 인터포저 트렌치 커패시터와 다이 커패시터">
+        <path d="M60 160H840" class="s-axis"/>
+        <g class="t-dim t-c"><text x="60" y="182">1 kHz</text><text x="190" y="182">10 kHz</text><text x="320" y="182">100 kHz</text><text x="450" y="182">1 MHz</text><text x="580" y="182">10 MHz</text><text x="710" y="182">100 MHz</text><text x="840" y="182">1 GHz</text></g>
+        <path d="M60 156V164M190 156V164M320 156V164M450 156V164M580 156V164M710 156V164M840 156V164" class="s-axis"/>
+        <rect x="60" y="24" width="300" height="26" rx="5" class="k-volt"/><text x="210" y="42" class="t t-c">전압 레귤레이터(제어 대역폭)</text>
+        <rect x="300" y="56" width="200" height="26" rx="5" class="k-volt" style="fill-opacity:.6"/><text x="400" y="74" class="t t-c">보드 벌크·MLCC</text>
+        <rect x="440" y="88" width="190" height="26" rx="5" class="k-volt" style="fill-opacity:.4"/><text x="535" y="106" class="t t-c">패키지 커패시터</text>
+        <rect x="560" y="120" width="160" height="26" rx="5" class="m-interp"/><text x="640" y="138" class="t t-c">인터포저 DTC</text>
+        <rect x="690" y="120" width="150" height="26" rx="5" class="m-si"/><text x="765" y="138" class="t t-c">온다이 C</text>
+      </svg>
+      <figcaption><b>그림 12-7.</b> 디커플링 계층. 커패시터는 \(1/(2\pi\sqrt{L_{ESL}C})\) 근처에서만 낮은 임피던스를 내므로, 큰 C(느림)부터 작은 C(빠름)까지 계단처럼 쌓는다. 이웃한 두 단계 사이에서는 한쪽의 인덕턴스와 다른 쪽의 C가 병렬 공진(반공진)을 만들어 임피던스 봉우리가 생긴다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-pdn">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>PDN 임피던스 주파수 응답과 목표 임피던스</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pd-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>온다이 C <output id="pd-cdie-out"></output></span><input type="range" id="pd-cdie" min="1" max="30" step="0.5" value="5"></label>
+          <label class="ctrl"><span>인터포저 DTC <output id="pd-dtc-out"></output></span><input type="range" id="pd-dtc" min="0" max="400" step="10" value="150"></label>
+          <label class="ctrl"><span>패키지 C <output id="pd-cpkg-out"></output></span><input type="range" id="pd-cpkg" min="0" max="2000" step="50" value="800"></label>
+          <label class="ctrl"><span>패키지 C의 ESL <output id="pd-esl-out"></output></span><input type="range" id="pd-esl" min="0.2" max="10" step="0.1" value="1"></label>
+          <label class="ctrl"><span>온다이 C의 ESR <output id="pd-esr-out"></output></span><input type="range" id="pd-esr" min="5" max="100" step="1" value="20"></label>
+          <label class="ctrl"><span>부하 계단 ΔI <output id="pd-di-out"></output></span><input type="range" id="pd-di" min="100" max="600" step="10" value="300"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">목표 Z<sub>t</sub></span><span class="v" id="pd-zt">—</span></div>
+        <div class="stat"><span class="k">최대 |Z|</span><span class="v" id="pd-pk">—</span></div>
+        <div class="stat"><span class="k">최대 / Z<sub>t</sub></span><span class="v" id="pd-ratio">—</span></div>
+        <div class="stat"><span class="k">직류 저항</span><span class="v" id="pd-dc">—</span></div>
+        <div class="stat"><span class="k">Z<sub>t</sub> 넘는 대역</span><span class="v" id="pd-band">—</span></div>
+      </div>
+      <div class="sim-note">로그–로그 그래프. 빨간 점선이 목표 임피던스, 점은 가장 높은 봉우리. 해볼 것: ① 기본값에서는 약 2 MHz까지 목표 아래지만 약 200 MHz의 첫 공진(온다이 C와 마이크로범프·인터포저 인덕턴스)이 약 195 µΩ로 목표의 1.6배다. ② 온다이 C를 10 µF로 늘리면 그 봉우리가 사라지고 최대가 약 121 µΩ(목표 아래)이 된다. 다이 면적 몇 %를 디커플링 셀에 쓰는 이유다. ③ DTC를 0으로 하면 약 55 MHz에 약 2 mΩ 봉우리가 생긴다. 패키지 C의 ESL을 10 pH로 키우면 약 6 MHz 봉우리가 약 280 µΩ로 솟는다.</div>
+    </div>
+    <p>왜 이렇게 설계하는가. 다이 위의 디커플링 셀은 트랜지스터를 놓을 면적을 쓰고 누설도 더한다. 그래서 높은 주파수는 어쩔 수 없이 온다이 C가 맡되, 수십 MHz 대역은 다이 바로 아래 인터포저의 트렌치 커패시터가 맡게 하면 로직 다이 면적을 아낄 수 있다. 실리콘 인터포저가 HBM 배선 말고도 전력에서 값을 하는 지점이다. 칩 설계에서의 전력망 설계 흐름은 <a href="../../design/chapters/power.html">DesignBook 전력망 장</a>에 있다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="droop">
+    <h2>부하 급변과 전압 강하</h2>
+    <p>수천 개의 워프가 한꺼번에 텐서 연산을 시작하면 다이 전류가 수 나노초 안에 수백 A 늘어난다. 이 \(di/dt\)가 PDN 인덕턴스를 지나며 \(L\,di/dt\) 강하를 만들고, 각 공진이 차례로 울린다. 다이 전압 파형에는 보통 세 개의 골이 보인다. 수 ns 뒤의 <b>첫째 강하</b>(온다이 C ↔ 패키지·인터포저 인덕턴스, 수십–수백 MHz), 수백 ns의 <b>둘째 강하</b>(패키지 C ↔ 보드 인덕턴스), 수 µs의 <b>셋째 강하</b>(보드 벌크 ↔ 레귤레이터)다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 230" role="img" aria-label="부하 전류 계단에 대한 다이 전압 파형. 첫째 강하는 수 나노초에 가장 깊고 빠르게 울리며, 둘째 강하는 수백 나노초, 셋째 강하는 수 마이크로초에 나타난다. 아래에 직류 IR 강하 수준이 남는다">
+        <path d="M60 30V190H840" class="s-axis"/>
+        <path d="M60 60H160L170 60" class="ks-volt"/>
+        <path d="M170 60C176 60 180 150 186 150C192 150 196 80 202 92C208 104 212 120 220 106C232 88 250 96 270 100C300 104 330 128 360 128C400 128 430 104 470 100C520 96 560 116 620 118C680 120 740 82 800 74L840 74" class="ks-volt"/>
+        <path d="M60 74H840" class="s-faint dash"/><text x="836" y="90" class="t-dim t-e">정상 상태(직류 IR 강하)</text>
+        <path d="M60 128H840" class="s-bad dash" style="stroke-opacity:.6"/>
+        <text x="190" y="172" class="t t-c t-b">첫째</text><text x="190" y="188" class="t-dim t-c">수 ns</text>
+        <text x="360" y="150" class="t t-c t-b">둘째</text><text x="360" y="166" class="t-dim t-c">수백 ns</text>
+        <text x="620" y="140" class="t t-c t-b">셋째</text><text x="620" y="156" class="t-dim t-c">수 µs</text>
+        <text x="66" y="52" class="t-dim">V<tspan dy="4" style="font-size:11px">die</tspan></text>
+        <path d="M60 214H168L176 200H840" class="ks-heat"/><text x="66" y="226" class="t-dim">I<tspan dy="4" style="font-size:11px">load</tspan><tspan dy="-4">: 계단 ΔI</tspan></text>
+        <text x="836" y="122" class="t t-bad t-e">허용 하한 (−5 %)</text>
+      </svg>
+      <figcaption><b>그림 12-8.</b> 부하 계단에 대한 다이 전압(개념도, 시간축은 로그처럼 눌러 그림). 첫째 강하가 가장 깊고 짧아서 레귤레이터가 손쓸 수 없다. 이 골을 줄이는 방법은 온다이·인터포저 C를 늘리는 것과, 부하 쪽에서 \(di/dt\)를 줄이는 것, 그리고 강하가 오면 클럭을 늘이는 것(적응형 클럭)이다.</figcaption>
+    </figure>
+    <p>시뮬레이터는 6절과 같은 사다리를 시간 영역에서 적분한다. 상태 변수는 직렬 인덕터 전류 4개, 노드 전압 4개, 디커플링 가지의 전류와 커패시터 전압 각 4개(모두 16개)이며, \(\dot{\mathbf x} = A\mathbf x + B\,I_{load}(t)\)를 사다리꼴 공식(암시적, 무조건 안정)으로 0.2 ns 간격에 푼다. 가장 짧은 공진 주기(수 ns)보다 간격이 충분히 작다.</p>
+    <div class="formula">$$\Big(I - \tfrac{h}{2}A\Big)\mathbf x_{n+1} = \Big(I + \tfrac{h}{2}A\Big)\mathbf x_n + \tfrac{h}{2}B\,(I_n + I_{n+1}) + h\,E$$<div class="where">\(h\)는 시간 간격, \(E\)는 레귤레이터 전압원 항. 계수 행렬은 한 번만 역행렬로 바꿔 두고 매 단계 행렬–벡터 곱만 한다.</div></div>
+
+    <div class="sim" id="sim-dr">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>부하 급변 과도 응답: 전류 계단 → 다이 전압 강하</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="dr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>계단 ΔI <output id="dr-di-out"></output></span><input type="range" id="dr-di" min="50" max="600" step="10" value="300"></label>
+          <label class="ctrl"><span>상승 시간 t<sub>r</sub> <output id="dr-tr-out"></output></span><input type="range" id="dr-tr" min="-0.3" max="2.3" step="0.05" value="0.3"></label>
+          <label class="ctrl"><span>계단 전 전류 I<sub>0</sub> <output id="dr-i0-out"></output></span><input type="range" id="dr-i0" min="100" max="700" step="10" value="500"></label>
+          <label class="ctrl"><span>온다이 C <output id="dr-cdie-out"></output></span><input type="range" id="dr-cdie" min="1" max="30" step="0.5" value="5"></label>
+          <label class="ctrl"><span>인터포저 DTC <output id="dr-dtc-out"></output></span><input type="range" id="dr-dtc" min="0" max="400" step="10" value="150"></label>
+          <div class="ctrl"><span>시간 창</span><div class="seg" id="dr-win"><button data-value="short" class="on">300 ns</button><button data-value="long">4 µs</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최대 강하</span><span class="v" id="dr-droop">—</span></div>
+        <div class="stat"><span class="k">골의 시각</span><span class="v" id="dr-tmin">—</span></div>
+        <div class="stat"><span class="k">di/dt</span><span class="v" id="dr-didt">—</span></div>
+        <div class="stat"><span class="k">직류 IR 강하 ΔI·R</span><span class="v" id="dr-static">—</span></div>
+        <div class="stat"><span class="k">37.5 mV 예산</span><span class="v" id="dr-ok">—</span></div>
+      </div>
+      <div class="sim-note">위: 다이 전압. 빨간 점선은 계단 전 전압에서 37.5 mV(5 %) 아래. 아래: 부하 전류. 강하 값은 4 µs 전체에서의 최댓값이다. 해볼 것: ① 기본(500 → 800 A, 2 ns)에서 약 2.6 ns에 첫째 강하 약 40 mV로 예산을 조금 넘는다. 온다이 C를 10 µF로 늘리면 약 33 mV. ② 상승 시간을 10 ns로 늦추면 첫째 공진이 덜 울려 약 32 mV, 200 ns면 약 29 mV(이제는 둘째 강하가 최대). ③ DTC를 0으로 하면 약 154 mV(20 %)까지 떨어진다. ΔI를 500 A로 키우면 기본 PDN에서도 약 66 mV다.</div>
+    </div>
+    <div class="callout fab"><strong>강하 예산과 가드밴드</strong>GX-1의 0.75 V 동작점에서 첫째 강하 약 40 mV(기본 PDN, 300 A 계단)는 클럭으로 환산하면 V–f 곡선 기울기 약 3.9 GHz/V × 0.04 V ≈ 155 MHz, 약 10 %다. 강하를 견디려고 정적인 가드밴드를 40 mV 더 주면 전력이 \((0.79/0.75)^2 \approx 1.11\)배, 약 11 % 늘어난다. 그래서 GX-1은 전압 감지기 + 클럭 스트레칭(적응형 클럭)으로 드문 강하만 그 순간에 처리하고, 가드밴드는 노화분 위주로 둔다(3절 노트의 50 mV).</div>
+    <p>왜 이렇게 설계하는가. 첫째 강하의 크기는 대략 \(\Delta I\sqrt{L/C_{die}}\)로, 줄이려면 다이 가까이에 C를 두거나 \(\Delta I\)를 줄여야 한다. C는 면적, \(\Delta I\) 완화는 성능(작업 시작 지연)으로 값을 치른다. 측정과 적응형 클럭은 둘 다를 아끼는 대신 다이 곳곳에 감지 회로와 빠른 클럭 제어 회로를 둔다(클럭 분배는 <a href="../../soc/chapters/clock.html">SoCBook 클럭 장</a>).</p>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="ir">
+    <h2>IR 드롭 격자와 후면 전력 공급</h2>
+    <p>범프에서 들어온 전류는 다이 맨 위의 두꺼운 금속층으로 이루어진 전원 격자를 따라 옆으로 퍼진 뒤 비아 기둥을 타고 트랜지스터까지 내려간다. 격자의 저항 때문에 범프에서 먼 곳일수록 전압이 낮다. 이 <span class="term">IR 드롭</span><span class="en">(IR drop)</span>은 정적(평균 전류) 문제이며, 격자를 저항망으로 놓고 각 노드의 키르히호프 전류 법칙을 풀면 얻는다.</p>
+    <div class="formula">$$\sum_{j \in \text{이웃}} \frac{d_i - d_j}{R_s} + \frac{d_i}{R_b}\,[\text{범프}] = I_i \quad\Rightarrow\quad d_i \leftarrow (1-\omega)\,d_i + \omega\,\frac{I_i + \sum_j d_j/R_s}{n_i/R_s + [\text{범프}]/R_b}$$<div class="where">\(d_i\)는 노드 \(i\)의 강하(\(V_{DD} - V_i\)), \(R_s\)는 격자 면저항(정사각 셀 한 칸의 저항), \(R_b\)는 범프 자리 하나의 저항, \(I_i\)는 그 셀이 끌어가는 전류. 오른쪽은 가우스–자이델에 과완화 계수 \(\omega\)를 곱한 SOR 반복이다. \(\omega = 1\)이면 가우스–자이델.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="앞면 전력 공급과 후면 전력 공급의 단면 비교. 앞면 방식은 신호 배선층 위에 전원 격자가 있고 범프가 위에서 전류를 내려보낸다. 후면 방식은 웨이퍼를 얇게 한 뒤 뒷면에 두꺼운 전원 금속을 두고 나노 관통 비아로 트랜지스터에 직접 공급한다">
+        <text x="20" y="22" class="t t-b">앞면 전력 공급(지금의 GX-1)</text>
+        <rect x="20" y="34" width="380" height="22" class="m-sol"/><text x="210" y="50" class="t t-c">범프(전원·신호가 자리를 나눔)</text>
+        <rect x="20" y="56" width="380" height="26" class="m-cu"/><text x="210" y="74" class="t t-c">두꺼운 전원 격자(상위 금속)</text>
+        <rect x="20" y="82" width="380" height="64" class="m-ox"/><text x="210" y="112" class="t t-c">신호 배선 10여 층</text><text x="210" y="130" class="t-dim t-c">전원 비아 기둥이 사이를 뚫고 내려감</text>
+        <rect x="20" y="146" width="380" height="18" class="k-compute"/><text x="210" y="160" class="t t-c">트랜지스터</text>
+        <rect x="20" y="164" width="380" height="40" class="m-si"/><text x="210" y="190" class="t t-c">실리콘 기판</text>
+        <path d="M60 56V146M140 56V146M280 56V146M360 56V146" class="ks-volt" style="stroke-width:3"/>
+        <text x="20" y="232" class="t-dim">전원 비아가 배선 자원 약 20 %를 차지, 경로가 길어 IR 드롭↑</text>
+        <text x="460" y="22" class="t t-b">후면 전력 공급(BSPDN)</text>
+        <rect x="460" y="34" width="380" height="22" class="m-sol"/><text x="650" y="50" class="t t-c">신호 범프(전원 자리 불필요)</text>
+        <rect x="460" y="56" width="380" height="64" class="m-ox"/><text x="650" y="86" class="t t-c">신호 배선만</text><text x="650" y="104" class="t-dim t-c">배선 밀도 ↑</text>
+        <rect x="460" y="120" width="380" height="18" class="k-compute"/><text x="650" y="134" class="t t-c">트랜지스터</text>
+        <rect x="460" y="138" width="380" height="14" class="m-si"/>
+        <rect x="460" y="152" width="380" height="30" class="m-cu"/><text x="650" y="172" class="t t-c">두꺼운 후면 전원망(면저항 약 1/4)</text>
+        <rect x="460" y="182" width="380" height="22" class="m-sol"/><text x="650" y="198" class="t t-c">후면 전원 범프·패드</text>
+        <path d="M500 138V152M580 138V152M660 138V152M740 138V152M820 138V152" class="ks-volt" style="stroke-width:3"/>
+        <text x="460" y="232" class="t-dim">웨이퍼를 수 µm로 얇게 → 나노 TSV로 트랜지스터 바로 아래에서 공급</text>
+      </svg>
+      <figcaption><b>그림 12-9.</b> 앞면 전력 공급과 후면 전력 공급(BSPDN). 후면 방식은 전원이 신호 배선을 뚫고 지나가지 않으므로 신호 배선이 넉넉해지고(셀 면적 약 5–10 % 이득), 짧고 두꺼운 전원 경로로 IR 드롭이 준다. 대가는 웨이퍼 접합·박막화 공정과 트랜지스터 위에 남는 열 경로의 변화다(<a href="../../process/chapters/advanced.html">ProcessBook 첨단 공정 장</a>).</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-ir">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>IR 드롭 격자 풀이: 범프 배치·핫스팟 → 전압 지도</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ir-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>전원 공급 방식</span><div class="seg" id="ir-mode"><button data-value="area" class="on">앞면 전면 배열</button><button data-value="back">후면</button><button data-value="edge">가장자리만</button></div></div>
+          <label class="ctrl"><span>범프 자리 간격(셀) <output id="ir-p-out"></output></span><input type="range" id="ir-p" min="1" max="8" step="1" value="2"></label>
+          <label class="ctrl"><span>격자 면저항 R<sub>s</sub> <output id="ir-rs-out"></output></span><input type="range" id="ir-rs" min="2" max="50" step="1" value="10"></label>
+          <label class="ctrl"><span>핫스팟 배율 <output id="ir-hot-out"></output></span><input type="range" id="ir-hot" min="1" max="4" step="0.1" value="3"></label>
+          <label class="ctrl"><span>총 전류 <output id="ir-i-out"></output></span><input type="range" id="ir-i" min="200" max="1200" step="20" value="1000"></label>
+          <label class="ctrl"><span>SOR 계수 ω <output id="ir-w-out"></output></span><input type="range" id="ir-w" min="1" max="1.95" step="0.05" value="1.5"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최대 강하</span><span class="v" id="ir-max">—</span></div>
+        <div class="stat"><span class="k">평균 강하</span><span class="v" id="ir-avg">—</span></div>
+        <div class="stat"><span class="k">범프 자리 수</span><span class="v" id="ir-nb">—</span></div>
+        <div class="stat"><span class="k">자리당 최대 전류</span><span class="v" id="ir-ib">—</span></div>
+        <div class="stat"><span class="k">반복 횟수</span><span class="v" id="ir-it">—</span></div>
+      </div>
+      <div class="sim-note">40 × 40 격자(셀 하나 약 0.7 mm), 범프 자리 저항 \(R_b\) = 2 mΩ(작은 마이크로범프 묶음). 좌우 가장자리 띠는 HBM PHY 영역이라 앞면 방식에서는 전원 범프 자리가 없다. 점은 범프 자리, 고리는 최대 강하 지점. 해볼 것: ① 기본(간격 2, 10 mΩ/sq, 핫스팟 3배, 1,000 A)에서 최대 약 32 mV가 텐서 코어 핫스팟에 생긴다. 간격 4로 성기게 하면 약 125 mV, 간격 1이면 약 7 mV. ② 후면 방식은 같은 간격에서 약 16 mV. 가장자리만 범프를 두면 강하가 전원 전압을 넘는다(약 1 V, 동작 불가). ③ ω를 1(가우스–자이델)로 두면 약 120회, 1.5면 약 44회에 수렴한다. 1.95처럼 너무 크면 오히려 약 270회로 느려진다.</div>
+    </div>
+    <p>왜 이렇게 설계하는가. 범프 자리를 촘촘히 두면 IR 드롭은 줄지만 그 자리는 신호 범프가 쓸 수 없다. 핫스팟 아래에 전원 범프를 몰아 주고, 신호가 많은 PHY 가장자리는 전원을 옆에서 끌어오게 하는 식으로 범프 지도를 칩마다 최적화한다. 후면 전력 공급은 이 경쟁 자체를 없애므로, 1,000 A급 칩에서 가장 먼저 도입될 동기를 갖는다.</p>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="gating">
+    <h2>전력 게이팅, 다크 실리콘, FLOPS/W</h2>
+    <p>클럭 게이팅은 동적 전력만 줄인다. 쓰지 않는 블록의 누설까지 없애려면 전원 자체를 끊어야 한다. <span class="term">전력 게이팅</span><span class="en">(power gating)</span>은 블록과 전원 격자 사이에 큰 PMOS 스위치(헤더)를 두어, 쉬는 SM이나 유닛의 가상 전원을 떨어뜨린다. 끈 블록은 누설의 약 5 %만 남기지만, 다시 켤 때 수 µs의 시간과 돌입 전류가 든다(스위치를 차례로 켜는 이유).</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 860 220" role="img" aria-label="전력 게이팅 회로. 전역 전원 격자와 SM 블록 사이에 헤더 스위치가 있고, 슬립 신호로 꺼진다. 오른쪽은 같은 전력에서 SM 144개를 낮은 전압으로 켜는 경우와 72개를 높은 전압으로 켜고 나머지를 끄는 경우의 비교">
+        <path d="M30 40H380" class="ks-volt"/><text x="30" y="30" class="t kt-volt">전역 VDD</text>
+        <g>
+          <rect x="60" y="58" width="60" height="30" rx="4" class="k-ctrl"/><text x="90" y="78" class="t t-c">헤더</text>
+          <path d="M90 40V58M90 88V110" class="s-line"/>
+          <rect x="40" y="110" width="100" height="56" rx="6" class="k-compute"/><text x="90" y="135" class="t t-c">SM (켜짐)</text><text x="90" y="154" class="t-dim t-c">가상 VDD</text>
+          <rect x="200" y="58" width="60" height="30" rx="4" class="k-ctrl"/><text x="230" y="78" class="t t-c">헤더</text>
+          <path d="M230 40V58" class="s-line"/><path d="M230 88V110" class="s-faint dash"/>
+          <rect x="180" y="110" width="100" height="56" rx="6" class="f-elev p-hatch"/><text x="230" y="135" class="t t-c t-dim">SM (꺼짐)</text><text x="230" y="154" class="t-dim t-c">누설 약 5 %</text>
+          <path d="M290 73H320" class="arr"/><text x="326" y="78" class="t-dim">슬립 신호</text>
+          <path d="M30 186H380" class="s-axis"/><text x="30" y="206" class="t-dim">헤더는 약간의 직렬 저항(IR 드롭 수 mV)과 면적 수 %를 먹는다</text>
+        </g>
+        <rect x="430" y="20" width="410" height="180" rx="8" class="f-elev"/>
+        <text x="450" y="46" class="t t-b">같은 760 W, 완전 병렬 작업</text>
+        <text x="450" y="74" class="t">SM 144개 × 0.75 V × 1.6 GHz</text><text x="820" y="74" class="t t-ok t-e">약 944 TFLOPS</text>
+        <text x="450" y="100" class="t">SM 72개 × 0.80 V × 1.8 GHz (나머지 끔)</text><text x="820" y="100" class="t t-bad t-e">약 531</text>
+        <text x="450" y="134" class="t t-b">병렬도가 SM 64개분뿐인 작업</text>
+        <text x="450" y="160" class="t">64개만 켜고 1.8 GHz로</text><text x="820" y="160" class="t t-ok t-e">약 472</text>
+        <text x="450" y="186" class="t">144개 모두 켜고 1.6 GHz</text><text x="820" y="186" class="t t-bad t-e">약 419</text>
+      </svg>
+      <figcaption><b>그림 12-10.</b> 왼쪽: 헤더 스위치로 하는 전력 게이팅. 오른쪽: 같은 전력에서 "넓고 느리게"와 "좁고 빠르게". 일이 충분히 병렬이면 넓고 느린 쪽이 이기고(전력이 \(V^2\)로 줄어서), 병렬도가 모자라면 남는 SM을 끄고 그 전력을 켠 SM의 클럭에 준다.</figcaption>
+    </figure>
+    <p>시뮬레이터는 SM \(n\)개를 켜고 나머지를 게이팅했을 때, 전력 예산 안에서 낼 수 있는 가장 높은 전압과 클럭을 찾고 성능을 \(\min(n, n_{par})\cdot f\)로 계산한다. 다이 동적 전력의 70 %와 누설의 80 %가 SM에 있고 나머지(L2·NoC·PHY)는 항상 켜져 있다고 둔다. 전압은 SRAM이 안정하게 동작하는 최저 전압 \(V_{min}\) = 0.6 V 아래로 내릴 수 없다.</p>
+
+    <div class="sim" id="sim-gate">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>전력 게이팅과 다크 실리콘: 넓고 느리게 vs 좁고 빠르게</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gt-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>로직 다이 전력 예산 <output id="gt-cap-out"></output></span><input type="range" id="gt-cap" min="200" max="900" step="10" value="760"></label>
+          <label class="ctrl"><span>작업 병렬도(SM 수) <output id="gt-par-out"></output></span><input type="range" id="gt-par" min="16" max="144" step="4" value="144"></label>
+          <label class="ctrl"><span>끈 SM의 잔여 누설 <output id="gt-res-out"></output></span><input type="range" id="gt-res" min="0" max="0.5" step="0.01" value="0.05"></label>
+          <label class="ctrl"><span>접합 온도 <output id="gt-t-out"></output></span><input type="range" id="gt-t" min="45" max="105" step="1" value="85"></label>
+          <label class="ctrl"><span>직접 고른 활성 SM <output id="gt-n-out"></output></span><input type="range" id="gt-n" min="8" max="144" step="4" value="72"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최적 활성 SM</span><span class="v" id="gt-best">—</span></div>
+        <div class="stat"><span class="k">그때 V·f</span><span class="v" id="gt-vf">—</span></div>
+        <div class="stat"><span class="k">최적 성능</span><span class="v" id="gt-tf">—</span></div>
+        <div class="stat"><span class="k">TFLOPS/W(다이)</span><span class="v" id="gt-eff">—</span></div>
+        <div class="stat"><span class="k">직접 고른 n의 성능</span><span class="v" id="gt-man">—</span></div>
+      </div>
+      <div class="sim-note">위: 활성 SM 수에 따른 성능(BF16 밀집, 예산 안 최고 클럭). 아래: 그때의 전압. 해볼 것: ① 760 W, 병렬도 144: 144개 모두 0.75 V가 최적(약 944 TFLOPS), 72개로 줄이면 1.8 GHz로 올려도 약 531. ② 병렬도를 64로 낮추면 64개만 켜고 1.8 GHz가 최적(약 472, 모두 켜면 약 419). ③ 예산을 300 W로 낮추면 144개를 0.6 V로 켜도 약 314 W라 예산을 넘는다. 이제 최적은 약 132개, 250 W면 약 100개만 켜고 나머지는 어둡게 둔다(다크 실리콘). 효율은 0.75 V의 1.24에서 0.6 V의 약 1.85 TFLOPS/W로 오른다.</div>
+    </div>
+    <p>트랜지스터는 공정마다 늘지만 트랜지스터당 전력은 데너드 스케일링이 끝난 뒤(<a href="../../device/chapters/scaling.html">DeviceBook 스케일링 장</a>) 예전만큼 줄지 않는다. 같은 전력 밀도에서 한꺼번에 최대 속도로 켤 수 있는 트랜지스터의 비율이 해마다 줄어드는 현상을 <span class="term">다크 실리콘</span><span class="en">(dark silicon)</span>이라 부른다. GPU는 이 문제를 비교적 잘 견디는 구조다. 일이 대량으로 병렬이므로 SM을 늘리고 전압을 낮추는 쪽으로 면적을 전력 효율로 바꿀 수 있기 때문이다. 다만 \(V_{min}\) 아래로는 내려갈 수 없어서, 예산이 아주 작으면 결국 일부를 꺼야 한다.</p>
+    <p>왜 이렇게 설계하는가. 같은 공정에서 FLOPS/W를 올리는 세 가지 길은 ① 낮은 전압에서 넓게(면적으로 효율을 산다), ② 데이터 이동을 줄이는 구조(텐서 코어 안 재사용, 큰 SRAM: 그림 12-1의 550 W), ③ 낮은 정밀도(FP8은 BF16 FMA 에너지의 절반)다. GX-1의 다이가 레티클 한계 가까이 큰 이유의 절반은 전력이다. 다이를 키워 SM을 늘리면 같은 1,000 W에서 더 낮은 전압으로 돌 수 있다(다이 원가와의 균형은 <a href="die.html">10장</a>).</p>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="design">
+    <h2>손잡이 → 결과</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>손잡이</th><th>바뀌는 것</th><th>이 장의 숫자</th><th>대가</th></tr></thead>
+      <tbody>
+        <tr><td>전압 0.75 → 0.85 V (곡선 따라)</td><td>클럭 ↑, 전력 ~V³ ↑</td><td>1.6 → 1.8 GHz, 다이 760 → 약 1,110 W</td><td>열·전류·신뢰성</td></tr>
+        <tr><td>접합 온도 85 → 45 °C</td><td>누설 ↓ → 상한 안 클럭 ↑</td><td>누설 120 → 44 W, 1.6 → 1.69 GHz</td><td>냉각 원가(13장)</td></tr>
+        <tr><td>제어 주기 1 → 5 ms</td><td>루프 위상 지연 ↑</td><td>정착 3 ms → 진동, 평균 1.39 GHz</td><td>—</td></tr>
+        <tr><td>레귤레이터를 수직·패키지 안으로</td><td>0.75 V 경로 ↓</td><td>손실 79 → 65–67 W, 전원 볼 약 2,030 → 140개</td><td>보드·패키지 복잡도, 열</td></tr>
+        <tr><td>온다이 C 5 → 10 µF</td><td>첫째 공진 봉우리 ↓</td><td>195 → 121 µΩ, 강하 40 → 33 mV</td><td>다이 면적·누설</td></tr>
+        <tr><td>인터포저 DTC 제거</td><td>수십 MHz 공진 ↑</td><td>강하 40 → 154 mV</td><td>(DTC 원가 절감)</td></tr>
+        <tr><td>범프 자리 간격 2 → 4셀</td><td>IR 드롭 ↑</td><td>32 → 125 mV</td><td>(신호 범프 자리 ↑)</td></tr>
+        <tr><td>앞면 → 후면 전력 공급</td><td>격자 저항 ↓, 범프 경쟁 없음</td><td>32 → 16 mV</td><td>웨이퍼 접합·박막화 공정</td></tr>
+        <tr><td>예산 760 → 250 W(다이)</td><td>전압이 V<sub>min</sub>에 닿음</td><td>144 → 약 100 SM만 활성</td><td>다크 실리콘</td></tr>
+      </tbody>
+    </table></div>
+    <p>이 장의 전력은 <a href="thermal.html">13장</a>의 열 모델 입력이 된다. 13장은 760 W와 핫스팟 지도를 받아 접합 온도를 계산하고, 그 온도가 다시 이 장의 누설과 동작점을 바꾸는 고리를 닫는다.</p>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>\(P_{dyn} = \alpha C V^2 f\). GX-1은 α 0.2, C 약 3.56 µF로 0.75 V·1.6 GHz에서 동적 약 640 W, 누설 약 120 W(85 °C), 다이 760 W, 전류 약 1,013 A.</li>
+      <li>누설은 온도 25 K마다 약 2배(25 °C 23 W → 105 °C 209 W)로 커져, 냉각이 곧 상한 안 클럭이 된다.</li>
+      <li>알파 전력 법칙 V–f 곡선(\(V_{th}\) 0.35 V, \(a\) 1.5)에서 전력은 약 \(V^3\)으로 오른다. 동작점은 모듈 전력이 상한 1,000 W와 만나는 전압이며, 활동도가 낮은 워크로드는 클럭 상한 1.8 GHz까지 부스트한다.</li>
+      <li>DVFS는 밀리초 단위 PI 루프와 나노초 단위 보호(클럭 스트레칭)의 두 겹이다. 제어 주기와 센서 지연이 길면 루프가 진동한다.</li>
+      <li>48 V → 12 V → 0.75 V. 저전압 구간 \(I^2R\)과 볼·범프 수가 문제이며, 수직 전력 공급과 패키지 내장 레귤레이터가 이를 줄인다. GX-1 손실 약 79 W, 48 V → 다이 효율 약 91 %.</li>
+      <li>목표 임피던스 \(Z_t = \Delta V/\Delta I\) = 125 µΩ(5 %, 300 A). 레귤레이터 → 보드 → 패키지 → 인터포저 DTC → 온다이 C가 주파수 대역을 나눠 맡고, 그 사이 반공진이 봉우리를 만든다.</li>
+      <li>부하 계단의 첫째 강하(수 ns)가 가장 깊다. 크기는 약 \(\Delta I\sqrt{L/C_{die}}\)이고, 온다이·인터포저 C, \(di/dt\) 완화, 적응형 클럭으로 줄인다.</li>
+      <li>IR 드롭은 저항망 풀이(가우스–자이델·SOR)로 구한다. 범프 자리 간격과 격자 면저항이 지배하며, 후면 전력 공급은 격자 저항과 범프 경쟁을 함께 줄인다.</li>
+      <li>같은 전력에서 병렬 작업은 "넓고 느리게"가 이긴다. 병렬도가 모자라거나 전압이 \(V_{min}\)에 닿으면 SM을 게이팅해 전력을 켠 SM에 준다(다크 실리콘).</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. GX-1에서 활동도와 클럭은 그대로 두고 전압만 0.75 V에서 0.70 V로 낮출 수 있다면 동적 전력 640 W는 약 얼마가 되는가?</p><div class="opts">
+        <button class="opt">약 597 W</button>
+        <button class="opt" data-correct>약 557 W</button>
+        <button class="opt">약 520 W</button>
+        <button class="opt">약 480 W</button>
+      </div><div class="quiz-exp">\(640 \times (0.70/0.75)^2 = 640 \times 0.871 \approx 557\) W. 실제로는 클럭도 V–f 곡선을 따라 내려가야 하므로(1.6 → 약 1.40 GHz) 동적 전력은 약 489 W까지 준다.</div></div>
+
+      <div class="quiz-q"><p>2. 같은 0.75 V에서 접합 온도가 85 °C에서 110 °C로 오르면 이 장의 모델에서 누설 전력 120 W는?</p><div class="opts">
+        <button class="opt">약 125 W (거의 같다)</button>
+        <button class="opt">약 150 W</button>
+        <button class="opt">약 180 W</button>
+        <button class="opt" data-correct>약 240 W</button>
+      </div><div class="quiz-exp">25 K마다 2배이므로 \(120 \times 2^{25/25} = 240\) W. 늘어난 120 W만큼 동적 전력을 줄여야 상한을 지키므로 클럭이 내려간다.</div></div>
+
+      <div class="quiz-q"><p>3. 전력 상한 1,000 W에서 대역폭 제한 디코드(α 0.08)가 클럭 1.8 GHz에 머무는데 모듈 전력이 약 690 W에 그치는 이유는?</p><div class="opts">
+        <button class="opt" data-correct>전력이 아니라 클럭 상한(타이밍)이 먼저 걸렸기 때문</button>
+        <button class="opt">HBM이 전력을 모두 썼기 때문</button>
+        <button class="opt">누설이 0이 되기 때문</button>
+        <button class="opt">전력 관리 루프가 고장 났기 때문</button>
+      </div><div class="quiz-exp">활동도가 낮으면 같은 전압에서 동적 전력이 작아 상한에 닿기 전에 V–f 곡선의 클럭 상한 1.8 GHz(약 0.80 V)에 닿는다. 남는 전력은 쓰지 못한다.</div></div>
+
+      <div class="quiz-q"><p>4. 허용 전압 변동 5 %(0.75 V 기준), 부하 계단 500 A일 때 목표 임피던스는?</p><div class="opts">
+        <button class="opt">약 750 µΩ</button>
+        <button class="opt">약 125 µΩ</button>
+        <button class="opt" data-correct>약 75 µΩ</button>
+        <button class="opt">약 7.5 µΩ</button>
+      </div><div class="quiz-exp">\(Z_t = 0.0375\,\text{V} / 500\,\text{A} = 75\,\mu\Omega\). 계단이 커질수록 목표가 낮아져 디커플링을 더 넣어야 한다.</div></div>
+
+      <div class="quiz-q"><p>5. 부하 계단 직후 수 ns 안에 오는 첫째 강하를 줄이는 데 가장 효과적인 것은?</p><div class="opts">
+        <button class="opt">보드 벌크 커패시터를 두 배로</button>
+        <button class="opt">레귤레이터 상 수를 늘림</button>
+        <button class="opt" data-correct>온다이 C를 늘리고 다이–인터포저 인덕턴스를 줄임</button>
+        <button class="opt">48 V 버스 전압을 높임</button>
+      </div><div class="quiz-exp">첫째 강하는 온다이 C와 그 바로 위의 패키지·인터포저 인덕턴스가 만드는 수십–수백 MHz 공진이다. 보드·레귤레이터는 그 주파수에서 인덕턴스 뒤에 숨어 보이지 않는다.</div></div>
+
+      <div class="quiz-q"><p>6. 레귤레이터를 보드 옆에서 패키지 안으로 옮겼을 때 BGA 전원 볼 수가 크게 주는 이유는?</p><div class="opts">
+        <button class="opt">패키지 안에서는 전자 이동이 일어나지 않아서</button>
+        <button class="opt" data-correct>볼을 지나는 전압이 12 V가 되어 전류가 약 1/15로 줄어서</button>
+        <button class="opt">다이 전력이 줄어서</button>
+        <button class="opt">접지 볼이 필요 없어져서</button>
+      </div><div class="quiz-exp">같은 약 800 W를 12 V로 나르면 약 68 A, 0.75 V로 나르면 약 1,013 A다. 볼당 전류 한계가 같으면 필요한 볼 수가 전류에 비례해 준다.</div></div>
+
+      <div class="quiz-q"><p>7. IR 드롭 격자를 SOR로 풀 때 ω에 대한 설명으로 옳은 것은?</p><div class="opts">
+        <button class="opt">ω가 클수록 항상 빨리 수렴한다</button>
+        <button class="opt">ω는 해(전압 지도)를 바꾼다</button>
+        <button class="opt">ω = 0이면 가우스–자이델이다</button>
+        <button class="opt" data-correct>ω는 수렴 속도만 바꾸며, 1과 2 사이에 최적값이 있다</button>
+      </div><div class="quiz-exp">과완화 계수는 반복의 보폭만 바꾸고 수렴한 해는 같다. ω = 1이 가우스–자이델이고, 너무 크면 진동해 오히려 느려진다(시뮬레이터에서 1 → 약 120회, 1.5 → 약 44회, 1.95 → 약 270회).</div></div>
+
+      <div class="quiz-q"><p>8. 같은 760 W에서 완전히 병렬인 작업이라면 SM 144개를 0.75 V로 켜는 쪽이 SM 72개를 0.80 V·1.8 GHz로 켜는 쪽보다 빠른 근본 이유는?</p><div class="opts">
+        <button class="opt">SM 수가 많으면 클럭이 저절로 오른다</button>
+        <button class="opt">게이팅한 SM의 누설이 더 크다</button>
+        <button class="opt" data-correct>동적 전력은 SM 수에 선형, 전압에는 제곱으로 늘어 같은 일을 낮은 전압에서 하면 에너지가 덜 든다</button>
+        <button class="opt">72개일 때는 HBM 대역폭이 모자라다</button>
+      </div><div class="quiz-exp">처리량은 \(n \cdot f\), 전력은 대략 \(n \cdot V^2 f\)다. 전압을 낮추면 FLOP당 에너지가 \(V^2\)로 줄어 같은 전력으로 더 많은 일을 한다. 다만 \(V_{min}\) 아래로는 못 내려간다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const raf = (fn) => { let q = 0; return () => { if (q) return; q = requestAnimationFrame(() => { q = 0; fn(); }); }; };
+  const cls = (id, c) => { const el = $(id); if (el) el.className = "v" + (c ? " " + c : ""); };
+  const f1 = (x) => (isFinite(x) ? x.toFixed(1) : "—"), f0 = (x) => (isFinite(x) ? Math.round(x).toLocaleString("en-US") : "—");
+
+/* model:power */
+/* GX-1 전력 모델. 동적 αCV²f(C 3.556 µF: α 0.2·0.75 V·1.6 GHz에서 640 W), 누설 120 W(85 °C·0.75 V)·25 K마다 2배·e^{3(V−0.75)},
+   알파 전력 법칙 f = K(V−0.35)^1.5/V(0.65 V→1.2 GHz, 0.75 V→1.6 GHz), 클럭 상한 1.8 GHz. 모듈 = 1.118·다이 + HBM 150 W. */
+var GX = { C: 3.556e-6, A0: 0.2, V0: 0.75, F0: 1.6, PL0: 120, T0: 85, T2: 25, KV: 3, VTH: 0.35, AP: 1.5, FMAX: 1.8, VMIN: 0.6, VMAX: 0.85, PHBM: 150, KLOSS: 0.118, TF16: 943.7 };
+GX.FK = GX.F0 / (Math.pow(GX.V0 - GX.VTH, GX.AP) / GX.V0);
+function pDyn(a, C, V, fG) { return a * C * V * V * fG * 1e9; }
+function pLeak(V, T, PL0) { return (PL0 == null ? GX.PL0 : PL0) * (V / GX.V0) * Math.exp(GX.KV * (V - GX.V0)) * Math.pow(2, (T - GX.T0) / GX.T2); }
+function fRaw(V) { return V <= GX.VTH ? 0 : GX.FK * Math.pow(V - GX.VTH, GX.AP) / V; }
+function fOfV(V) { return Math.min(GX.FMAX, fRaw(V)); }
+function vOfF(fG) { let lo = GX.VTH + 1e-4, hi = 1.2; for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (fRaw(m) < fG) lo = m; else hi = m; } return hi; }
+GX.VCAP = Math.min(GX.VMAX, vOfF(GX.FMAX));
+function pDie(a, V, T, fG) { const f = fG == null ? fOfV(V) : fG; return pDyn(a, GX.C, V, f) + pLeak(V, T); }
+function pModule(a, V, T, hbm, fG) { return pDie(a, V, T, fG) * (1 + GX.KLOSS) + (hbm == null ? GX.PHBM : hbm); }
+/* 전력 상한 아래 가장 높은 전압(=클럭) 찾기: 이분법. vTop: 부스트 금지 시 0.65 V */
+function opPoint(a, T, cap, vTop, hbm) {
+  const top = Math.min(vTop == null ? GX.VCAP : vTop, GX.VCAP);
+  let V;
+  if (pModule(a, top, T, hbm) <= cap) V = top;
+  else if (pModule(a, GX.VMIN, T, hbm) > cap) V = GX.VMIN;
+  else { let lo = GX.VMIN, hi = top; for (let i = 0; i < 50; i++) { const m = (lo + hi) / 2; if (pModule(a, m, T, hbm) <= cap) lo = m; else hi = m; } V = lo; }
+  const f = fOfV(V), Pd = pDyn(a, GX.C, V, f), Pl = pLeak(V, T), Pm = (Pd + Pl) * (1 + GX.KLOSS) + (hbm == null ? GX.PHBM : hbm);
+  return { V, f, Pd, Pl, Pdie: Pd + Pl, Pm, I: (Pd + Pl) / V, tflops: GX.TF16 * f / GX.F0, limited: Pm > cap + 1e-6 ? "vmin" : V >= top - 1e-9 ? (top < GX.VCAP ? "base" : "fmax") : "power" };
+}
+/* /model:power */
+
+/* model:pi */
+/* 속도형 PI 전력 제어 루프. 0.05 ms 간격으로 적분, 제어기는 Ts마다. f는 MHz, Kp MHz/W, Ki MHz/(W·ms). */
+function piRun(o) {
+  const dt = 0.05, N = Math.round((o.tEnd || 100) / dt), Ts = o.Ts || 1, ts = o.tauS || 1, cap = o.cap || 1000, T = o.T || 85;
+  const aLo = o.aLo == null ? 0.08 : o.aLo, aHi = o.aHi == null ? 0.2 : o.aHi, t1 = o.t1 == null ? 20 : o.t1, t2 = o.t2 == null ? 70 : o.t2;
+  const fMin = fOfV(GX.VMIN) * 1000, fMax = GX.FMAX * 1000;
+  let f = o.f0 || fMax, Pm = null, eP = 0, nextC = 0, over = 0, tOver = 0, settle = null, fSum = 0, fN = 0, Pmax = 0;
+  const out = [];
+  for (let k = 0; k <= N; k++) {
+    const t = k * dt, a = t >= t1 && t < t2 ? aHi : aLo;
+    let fG = f / 1000, V = vOfF(fG), P = pModule(a, V, T, o.hbm, fG);
+    // 빠른 보호(전류 한계 → 클럭 늘이기): 순시 전력이 상한의 105 %를 넘으면 다음 0.05 ms 안에 클럭을 비례로 깎는다
+    if (o.fast && P > 1.05 * cap) { f = Math.max(fMin, f * cap / P); fG = f / 1000; V = vOfF(fG); P = pModule(a, V, T, o.hbm, fG); }
+    Pm = Pm == null ? P : Pm + (P - Pm) * (1 - Math.exp(-dt / ts));
+    if (t >= nextC - 1e-9) {
+      nextC += Ts; const e = cap - Pm;
+      f += (o.Kp || 0) * (e - eP) + (o.Ki || 0) * Ts * e; eP = e;
+      f = Math.max(fMin, Math.min(fMax, f));
+    }
+    if (t >= t1 && t < t2) { Pmax = Math.max(Pmax, P); if (P > cap) over = Math.max(over, P - cap); if (P > 1.02 * cap) tOver += dt; if (t > t2 - 20) { fSum += f; fN++; } }
+    out.push([t, P, f, Pm]);
+  }
+  // 정착 시간: 부하 상승 뒤 |P − cap| ≤ 2 %가 무거운 구간 끝까지 유지되기 시작한 시각
+  for (let k = out.length - 1; k >= 0; k--) { const t = out[k][0], P = out[k][1]; if (t < t1) break; if (t >= t2) continue; if (Math.abs(P - cap) > 0.02 * cap) { settle = t - t1 + dt; break; } }
+  if (settle == null) settle = 0;
+  return { out, over, tOver, settle, fAvg: fN ? fSum / fN : 0, Pmax };
+}
+/* /model:pi */
+
+/* model:pdn */
+/* 사다리: VRM(R0,L0) → 노드1 보드 → (R1,L1) → 노드2 패키지 → (R2,L2) → 노드3 인터포저 → (R3,L3) → 노드4 다이.
+   각 노드: 평면 정전 용량 Cp + 디커플링 가지(C, ESR, ESL). 입력 단위 µF·µΩ·pH, 내부는 SI. */
+function pdnParams(o) {
+  o = o || {};
+  const u = 1e-6, p = 1e-12, g = (k, d) => (o[k] != null ? o[k] : d);
+  return {
+    R: [5 * u, 6 * u, 6 * u, 6 * u], L: [g("Lvrm", 30) * p, g("L1", 1.5) * p, g("L2", 0.5) * p, g("L3", 0.05) * p],
+    node: [
+      { Cp: 0.1 * u, C: g("Cb", 5000) * u, ESR: g("esrB", 90) * u, ESL: 10 * p },
+      { Cp: 0.05 * u, C: g("Cpkg", 800) * u, ESR: g("esrPkg", 120) * u, ESL: g("eslPkg", 1) * p },
+      { Cp: 0.05 * u, C: g("Cdtc", 150) * u, ESR: g("esrDtc", 90) * u, ESL: 0.05 * p },
+      { Cp: 0.5 * u, C: g("Cdie", 5) * u, ESR: g("esrDie", 20) * u, ESL: 0.005 * p },
+    ],
+  };
+}
+/* 다이에서 본 임피던스 |Z(f)| (Ω). 복소수는 [re, im] */
+function pdnZ(P, f) {
+  const w = 2 * Math.PI * f;
+  const add = (a, b) => [a[0] + b[0], a[1] + b[1]];
+  const inv = (a) => { const d = a[0] * a[0] + a[1] * a[1]; return [a[0] / d, -a[1] / d]; };
+  let Z = [P.R[0], w * P.L[0]];
+  for (let k = 0; k < 4; k++) {
+    if (k > 0) Z = add(Z, [P.R[k], w * P.L[k]]);
+    const n = P.node[k];
+    let Y = add(inv(Z), [0, w * n.Cp]);
+    if (n.C > 0) Y = add(Y, inv([n.ESR, w * n.ESL - 1 / (w * n.C)]));
+    Z = inv(Y);
+  }
+  return Math.hypot(Z[0], Z[1]);
+}
+function pdnSweep(P, f0, f1, n) {
+  const out = []; let pk = { f: 0, z: 0 };
+  for (let i = 0; i <= n; i++) {
+    const f = f0 * Math.pow(f1 / f0, i / n), z = pdnZ(P, f); out.push([f, z]);
+    if (f > 1e5 && z > pk.z) pk = { f, z };
+  }
+  return { data: out, peak: pk };
+}
+function zTarget(V, ripplePct, dI) { return V * ripplePct / 100 / Math.max(1, dI); }
+/* /model:pdn */
+
+/* model:droop */
+/* 같은 사다리의 시간 영역. 상태 x = [i0..i3, v1..v4, ib1..ib4, vc1..vc4], 사다리꼴(암시적) 적분. t = 0에 부하가 I0에서 I0+ΔI로 tr 동안 선형 상승 */
+function droopRun(P, o) {
+  const I0 = o.I0, dI = o.dI, tr = Math.max(1e-10, o.tr), tEnd = o.tEnd || 4e-6, dt = o.dt || 2e-10, Vs = o.Vs || 0.75, pts = o.pts || 600;
+  const n = 16, A = [...Array(n)].map(() => new Float64Array(n)), B = new Float64Array(n), E = new Float64Array(n);
+  const iL = (k) => k, vN = (k) => 4 + k, iB = (k) => 8 + k, vC = (k) => 12 + k;
+  for (let k = 0; k < 4; k++) {
+    const L = P.L[k];
+    if (k > 0) A[iL(k)][vN(k - 1)] += 1 / L; else E[iL(0)] = Vs / L;
+    A[iL(k)][vN(k)] -= 1 / L; A[iL(k)][iL(k)] -= P.R[k] / L;
+    const nd = P.node[k], Cn = nd.Cp;
+    A[vN(k)][iL(k)] += 1 / Cn;
+    if (k < 3) A[vN(k)][iL(k + 1)] -= 1 / Cn; else B[vN(3)] = -1 / Cn;
+    if (nd.C > 0) {
+      A[vN(k)][iB(k)] -= 1 / Cn;
+      const Le = Math.max(nd.ESL, 1e-15);
+      A[iB(k)][vN(k)] += 1 / Le; A[iB(k)][vC(k)] -= 1 / Le; A[iB(k)][iB(k)] -= nd.ESR / Le;
+      A[vC(k)][iB(k)] += 1 / nd.C;
+    } else { A[iB(k)][iB(k)] = -1; A[vC(k)][vC(k)] = -1; }
+  }
+  const h = dt, M1 = A.map((r, i) => r.map((v, j) => (i === j ? 1 : 0) - h / 2 * v));
+  const inv = matInv(M1), Mx = matMul(inv, A.map((r, i) => r.map((v, j) => (i === j ? 1 : 0) + h / 2 * v))), Mb = matVec(inv, B.map((v) => v * h / 2)), Me = matVec(inv, E.map((v) => v * h));
+  // 직류 초기 상태: 모든 직렬 인덕터 전류 I0, 노드 전압 = Vs − I0 × 누적 R
+  let x = new Float64Array(n), y = new Float64Array(n), v = Vs;
+  for (let k = 0; k < 4; k++) { x[iL(k)] = I0; v -= I0 * P.R[k]; x[vN(k)] = v; x[vC(k)] = v; }
+  const Iload = (t) => (t <= 0 ? I0 : t >= tr ? I0 + dI : I0 + dI * t / tr);
+  const N = Math.round(tEnd / dt), stride = Math.max(1, Math.round(N / pts)), wave = [], t0 = 50e-9;
+  const vInit = x[vN(3)];
+  let vmin = vInit, tmin = 0;
+  for (let s = 0; s <= N; s++) {
+    const t = s * dt - t0;
+    if (s % stride === 0) wave.push([t, x[vN(3)], Iload(t)]);
+    if (x[vN(3)] < vmin) { vmin = x[vN(3)]; tmin = t; }
+    const uu = Iload(t) + Iload(t + dt);
+    for (let i = 0; i < n; i++) { let acc = Me[i] + Mb[i] * uu; const r = Mx[i]; for (let j = 0; j < n; j++) acc += r[j] * x[j]; y[i] = acc; }
+    const tmp = x; x = y; y = tmp;
+  }
+  const Rdc = P.R.reduce((s, r) => s + r, 0);
+  return { wave, vInit, vmin, droop: vInit - vmin, tmin, static: dI * Rdc, didt: dI / tr, Rdc };
+}
+function matInv(M) {
+  const n = M.length, a = M.map((r) => Float64Array.from(r)), I = [...Array(n)].map((_, i) => { const r = new Float64Array(n); r[i] = 1; return r; });
+  for (let c = 0; c < n; c++) {
+    let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(a[r][c]) > Math.abs(a[p][c])) p = r;
+    let t = a[c]; a[c] = a[p]; a[p] = t; t = I[c]; I[c] = I[p]; I[p] = t;
+    const d = a[c][c]; for (let j = 0; j < n; j++) { a[c][j] /= d; I[c][j] /= d; }
+    for (let r = 0; r < n; r++) if (r !== c) { const m = a[r][c]; if (m) for (let j = 0; j < n; j++) { a[r][j] -= m * a[c][j]; I[r][j] -= m * I[c][j]; } }
+  }
+  return I;
+}
+function matMul(X, Y) { const n = X.length; return X.map((r) => { const o = new Float64Array(n); for (let k = 0; k < n; k++) { const v = r[k]; if (v) for (let j = 0; j < n; j++) o[j] += v * Y[k][j]; } return o; }); }
+function matVec(X, v) { return Float64Array.from(X.map((r) => r.reduce((s, x, j) => s + x * v[j], 0))); }
+/* /model:droop */
+
+/* model:ir */
+/* 다이 전원망 격자: N×N 노드(다이 26 × 30 mm를 정사각 격자로 근사). 긴 변 두 쪽 6 % 폭은 HBM PHY 띠라 전원 범프 자리가 없다(신호 범프가 차지).
+   mode: area(전면 배열, 앞면 전원망) / edge(가장자리만) / back(후면 전원망: 면저항 1/4, PHY 아래도 범프).
+   이웃 사이 저항 Rs(정사각 셀), 범프 자리 노드는 Rb로 이상 전원에 연결, 모든 노드가 부하 전류를 끌어간다. SOR로 강하 d = VDD − V를 푼다. */
+function irSolve(o) {
+  const N = o.N || 40, Itot = o.I == null ? 1000 : o.I, Rs = (o.Rs == null ? 10 : o.Rs) * 1e-3, step = Math.max(1, Math.round(o.pitch || 2));
+  const Rb = (o.Rb == null ? 2 : o.Rb) * 1e-3, hot = o.hot == null ? 3 : o.hot, w = o.omega || 1.5, tol = o.tol || 1e-7, maxIt = o.maxIt || 5000;
+  const mode = o.mode || "area", back = mode === "back", phyW = back || o.phy === false ? 0 : Math.round(0.06 * N);
+  const RsE = back ? Rs / 4 : Rs;
+  const isB = new Uint8Array(N * N), load = new Float64Array(N * N);
+  let nb = 0;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    let b = false;
+    if (mode === "edge") b = (x === 0 || y === 0 || x === N - 1 || y === N - 1) && (x + y) % step === 0;
+    else if (back) b = x % step === (step >> 1) && y % step === (step >> 1);
+    else b = x >= phyW && x < N - phyW && x % step === (step >> 1) && y % step === (step >> 1);
+    if (b) { isB[y * N + x] = 1; nb++; }
+  }
+  // 부하: 균일 + 가운데보다 약간 위의 핫스팟(텐서 코어 밀집부, 면적 약 6 %), PHY 띠는 0.3배
+  const hx = 0.5 * N, hy = 0.4 * N, hr = 0.14 * N; let wsum = 0;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const r = Math.hypot(x + 0.5 - hx, y + 0.5 - hy); const v = r < hr ? hot : x < phyW || x >= N - phyW ? 0.3 : 1; load[y * N + x] = v; wsum += v; }
+  for (let i = 0; i < N * N; i++) load[i] *= Itot / wsum;
+  const g = 1 / RsE, gb = 1 / Rb, d = new Float64Array(N * N);
+  let it = 0, res = 0;
+  for (; it < maxIt; it++) {
+    let dmax = 0;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x; let G = 0, S = load[i];
+      if (x > 0) { G += g; S += g * d[i - 1]; } if (x < N - 1) { G += g; S += g * d[i + 1]; }
+      if (y > 0) { G += g; S += g * d[i - N]; } if (y < N - 1) { G += g; S += g * d[i + N]; }
+      if (isB[i]) G += gb;
+      const nv = d[i] + w * (S / G - d[i]); dmax = Math.max(dmax, Math.abs(nv - d[i])); d[i] = nv;
+    }
+    res = dmax; if (dmax < tol) { it++; break; }
+  }
+  let mx = 0, sum = 0, imx = 0; for (let i = 0; i < N * N; i++) { sum += d[i]; if (d[i] > mx) { mx = d[i]; imx = i; } }
+  let bmax = 0; for (let i = 0; i < N * N; i++) if (isB[i]) bmax = Math.max(bmax, d[i] / Rb);
+  return { N, d, isB, nb, max: mx, avg: sum / (N * N), at: [imx % N, Math.floor(imx / N)], it, conv: isFinite(mx) && res < 1e-4, Ibump: bmax, phyW };
+}
+/* /model:ir */
+
+/* model:path */
+/* 48 V → 12 V(중간 버스 변환기, η 98 %) → V_core(다상 벅) → 배전(보드·소켓·패키지) → 다이. */
+function pathCalc(o) {
+  const Pdie = o.P == null ? 760 : o.P, V = o.V || 0.75, nph = Math.max(1, Math.round(o.phases || 20)), arr = o.arr || "lateral";
+  const Iload = Pdie / V;
+  // 배전 저항(VR 출력 → 다이 범프): 측면 배치는 보드 평면을 가로질러 오고, 수직 배치는 기판 바로 아래에서 올라온다
+  const Rdist = { lateral: 15e-6, vertical: 4e-6, onpkg: 1.5e-6 }[arr];
+  const Pdist = Iload * Iload * Rdist, Pbuckout = Pdie + Pdist;
+  // 벅 상당 손실 = 고정(스위칭·게이트 구동) + I²R(전도). 패키지 내장 VR은 작은 상을 쓰므로 고정 손실은 작고 상 저항은 크다
+  const P0 = arr === "onpkg" ? 0.8 : 1.0, Rph = arr === "onpkg" ? 0.6e-3 : 0.5e-3;
+  const Iph = Iload / nph, Pbuck = nph * (P0 + Iph * Iph * Rph), Pin12 = Pbuckout + Pbuck;
+  const I12 = Pin12 / 12, R12 = arr === "onpkg" ? 60e-6 : 200e-6, P12dist = I12 * I12 * R12;
+  const P48 = (Pin12 + P12dist) / 0.98, Pibc = P48 - Pin12 - P12dist;
+  // 범프·볼 수: 코어 전류를 나르는 VDD 경로만(VSS도 같은 수). 전류 한계: 마이크로범프 0.1 A, C4 0.4 A, BGA 볼 1 A
+  const ballI = arr === "onpkg" ? I12 : Iload, balls = Math.ceil(ballI / 1.0);
+  return { I: Iload, Iph, Rdist, Pdist, Pbuck, P12dist, Pibc, P48, loss: P48 - Pdie, eta: Pdie / P48, I12, I48: P48 / 48,
+    ubump: Math.ceil(Iload / 0.1), c4: Math.ceil(Iload / 0.4), balls, ballShare: 2 * balls / 4500 };
+}
+function bestPhases(o) { let b = null; for (let n = 4; n <= 64; n++) { const r = pathCalc(Object.assign({}, o, { phases: n })); if (!b || r.Pbuck < b.Pbuck) b = { n, Pbuck: r.Pbuck }; } return b; }
+/* /model:path */
+
+/* model:gate */
+/* 같은 전력 예산에서 SM n개를 켜고 나머지는 전력 게이팅. SM이 다이 동적 전력의 70 %, 누설의 80 %를 차지하고
+   나머지(L2·NoC·PHY)는 항상 켜져 있다. 끈 SM은 누설의 res 비율만 남는다. 성능 = min(n, 병렬도) × f. */
+function gateEval(n, V, o) {
+  const T = o.T == null ? 85 : o.T, a = o.a == null ? 0.2 : o.a, res = o.res == null ? 0.05 : o.res, par = o.par == null ? 144 : o.par;
+  const f = fOfV(V), Pd = pDyn(a, GX.C, V, f), Pl = pLeak(V, T), smD = 0.7, smL = 0.8, on = n / 144;
+  const P = Pd * (1 - smD) + Pd * smD * on + Pl * (1 - smL) + Pl * smL * (on + (1 - on) * res);
+  const perf = Math.min(n, par) * f / (144 * GX.F0);
+  return { n, V, f, P, perf, tflops: perf * GX.TF16, eff: perf * GX.TF16 / P };
+}
+function gateBest(n, o) {
+  const cap = o.cap == null ? 760 : o.cap;
+  let lo = GX.VMIN, hi = GX.VCAP;
+  if (gateEval(n, hi, o).P <= cap) return gateEval(n, hi, o);
+  if (gateEval(n, lo, o).P > cap) return Object.assign(gateEval(n, lo, o), { over: true });
+  for (let i = 0; i < 50; i++) { const m = (lo + hi) / 2; if (gateEval(n, m, o).P <= cap) lo = m; else hi = m; }
+  return gateEval(n, lo, o);
+}
+function gateSweep(o) { const out = []; let best = null; for (let n = 8; n <= 144; n += 4) { const r = gateBest(n, o); out.push(r); if (!r.over && (!best || r.perf > best.perf + 1e-12)) best = r; } return { out, best }; }
+/* /model:gate */
+
+  /* ============================================================ 1) 동적·누설 전력 */
+  (function () {
+    let cv;
+    const redraw = () => cv && cv.redraw();
+    const gA = GP.range("pw-a", (v) => v.toFixed(2), () => upd());
+    const gC = GP.range("pw-c", (v) => v.toFixed(2) + " µF", () => upd());
+    const gV = GP.range("pw-v", (v) => v.toFixed(3) + " V", () => upd());
+    const gF = GP.range("pw-f", (v) => v.toFixed(2) + " GHz", () => upd());
+    const gT = GP.range("pw-t", (v) => v + " °C", () => upd());
+    const lock = $("pw-lock");
+    lock.addEventListener("change", () => upd());
+    function upd() {
+      if (lock.checked) { gF.el.value = fOfV(gV()).toFixed(2); gF.refresh(); }
+      gF.el.disabled = lock.checked;
+      const a = gA(), C = gC() * 1e-6, V = gV(), f = lock.checked ? fOfV(V) : gF(), T = gT();
+      const Pd = pDyn(a, C, V, f), Pl = pLeak(V, T), Pt = Pd + Pl;
+      GP.stat("pw-pd", f0(Pd) + " W"); GP.stat("pw-pl", f0(Pl) + " W"); GP.stat("pw-pt", f0(Pt) + " W");
+      GP.stat("pw-i", f0(Pt / V) + " A"); GP.stat("pw-ls", (100 * Pl / Pt).toFixed(1) + " %");
+      GP.stat("pw-cinv", (640 / (a * V * V * f * 1e9) * 1e6).toFixed(2) + " µF");
+      cls("pw-pt", Pt > 800 ? "bad" : Pt > 770 ? "warn" : "");
+      redraw();
+    }
+    cv = GP.canvas($("pw-cv"), (ctx) => {
+      const p = GP.palette(), a = gA(), C = gC() * 1e-6, V = gV(), f = lock.checked ? fOfV(V) : gF(), T = gT();
+      const Pd = pDyn(a, C, V, f), mk = (fn) => { const d = []; for (let t = 20; t <= 110; t += 2) d.push([t, fn(t)]); return d; };
+      const top = Math.max(400, Math.ceil((Pd + pLeak(V, 110)) / 200) * 200);
+      GP.chart(ctx, null, { x: [20, 110], y: [0, top], xLabel: "접합 온도 T_j (°C)", yLabel: "전력 (W)", legend: { pos: "tl" }, hover: { xFmt: (v) => v.toFixed(0) + " °C" },
+        series: [{ data: mk((t) => Pd + pLeak(V, t)), color: p.heat, label: "다이 합계", width: 2.6, fmt: (v) => f0(v) + " W" },
+          { data: mk(() => Pd), color: p.compute, label: "동적 P_{dyn}", dash: [6, 4], fmt: (v) => f0(v) + " W" },
+          { data: mk((t) => pLeak(V, t)), color: p.volt, label: "누설 P_{leak}", fmt: (v) => f0(v) + " W" }],
+        hlines: [{ y: 760, label: "GX-1 다이 760 W", color: p.dim }],
+        points: [{ x: T, y: Pd + pLeak(V, T), color: p.heat, label: f0(Pd + pLeak(V, T)) + " W" }, { x: T, y: pLeak(V, T), color: p.volt }] });
+    }, { aspect: 0.62, maxHeight: 380, minHeight: 260, hover: true });
+    upd();
+  })();
+
+  /* ============================================================ 2) V–f 곡선과 동작점 */
+  (function () {
+    let cv;
+    let fromSeg = false;
+    const gA = GP.range("vf-a", (v) => v.toFixed(2), () => { if (!fromSeg) gW.set("", false); upd(); });
+    const gW = GP.seg("vf-w", (v) => { if (!v) return; fromSeg = true; gA.set(Number(v)); fromSeg = false; });
+    const gCap = GP.range("vf-cap", (v) => v + " W", () => upd());
+    const gT = GP.range("vf-t", (v) => v + " °C", () => upd());
+    const boost = $("vf-boost"); boost.addEventListener("change", () => upd());
+    let op = null;
+    const limTxt = { power: "전력 상한", fmax: "클럭 상한 1.8 GHz", base: "부스트 금지(0.65 V)", vmin: "V_min에서도 초과" };
+    function upd() {
+      op = opPoint(gA(), gT(), gCap(), boost.checked ? null : 0.65);
+      GP.stat("vf-v", op.V.toFixed(3) + " V"); GP.stat("vf-f", op.f.toFixed(2) + " GHz"); GP.stat("vf-p", f0(op.Pm) + " W");
+      GP.stat("vf-tf", f0(op.tflops) + " TFLOPS"); GP.stat("vf-eff", (op.tflops / op.Pm).toFixed(2));
+      GP.stat("vf-lim", limTxt[op.limited]); cls("vf-lim", op.limited === "vmin" ? "bad" : op.limited === "power" ? "warn" : "ok");
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("vf-cv"), (ctx, w, h) => {
+      const p = GP.palette(), a = gA(), T = gT(), cap = gCap(), gap = 50, hh = (h - 16 - 46 - gap) / 2;
+      const b1 = { x: 58, y: 16, w: w - 76, h: hh }, b2 = { x: 58, y: 16 + hh + gap, w: w - 76, h: hh };
+      const fv = [], fr = [], pm = [];
+      for (let v = 0.6; v <= 0.9001; v += 0.005) { fv.push([v, fOfV(v)]); fr.push([v, fRaw(v)]); pm.push([v, pModule(a, v, T)]); }
+      GP.chart(ctx, b1, { x: [0.6, 0.9], y: [0, 2.2], yLabel: "f (GHz)", hover: { xFmt: (v) => v.toFixed(3) + " V" },
+        series: [{ data: fr, color: p.faint, dash: [4, 4], width: 1.4, hover: false }, { data: fv, color: p.clock, label: "f_{max}(V)", width: 2.6, fmt: (v) => v.toFixed(2) + " GHz" }],
+        vlines: [{ x: op.V, color: p.accent, label: op.V.toFixed(3) + " V" }, { x: GX.VMAX, color: p.bad, label: "V_{max}" }],
+        points: [{ x: op.V, y: op.f, color: p.clock, label: op.f.toFixed(2) + " GHz" }] });
+      const top = Math.max(1400, cap + 200);
+      GP.chart(ctx, b2, { x: [0.6, 0.9], y: [0, top], xLabel: "V_{DD} (V)", yLabel: "모듈 전력 (W)", hover: { xFmt: (v) => v.toFixed(3) + " V" },
+        series: [{ data: pm, color: p.heat, label: "P_{module}", width: 2.6, fmt: (v) => f0(v) + " W" }],
+        hlines: [{ y: cap, color: p.bad, label: "상한 " + cap + " W" }], vlines: [{ x: op.V, color: p.accent }],
+        points: [{ x: op.V, y: op.Pm, color: p.heat, label: f0(op.Pm) + " W" }] });
+    }, { height: (w) => Math.max(380, Math.min(470, w * 0.75)), hover: true });
+  })();
+
+  /* ============================================================ 3) 전력 관리 PI 루프 */
+  (function () {
+    let cv, res = null, tShow = 100, playing = false;
+    const g = {
+      kp: GP.range("pi-kp", (v) => v.toFixed(2) + " MHz/W", () => upd()),
+      ki: GP.range("pi-ki", (v) => v.toFixed(2) + " MHz/(W·ms)", () => upd()),
+      ts: GP.range("pi-ts", (v) => v.toFixed(1) + " ms", () => upd()),
+      tau: GP.range("pi-tau", (v) => v.toFixed(1) + " ms", () => upd()),
+      a: GP.range("pi-a", (v) => v.toFixed(2), () => upd()),
+    };
+    const fast = $("pi-fast"); fast.addEventListener("change", () => upd());
+    function upd() {
+      res = piRun({ Kp: g.kp(), Ki: g.ki(), Ts: g.ts(), tauS: g.tau(), aHi: g.a(), fast: fast.checked });
+      GP.stat("pi-over", "+" + f0(res.over) + " W"); GP.stat("pi-tover", res.tOver.toFixed(1) + " ms");
+      const osc = res.settle >= 49.9;
+      GP.stat("pi-settle", osc ? "정착 안 함" : res.settle.toFixed(1) + " ms"); cls("pi-settle", osc ? "bad" : res.settle > 10 ? "warn" : "ok");
+      GP.stat("pi-favg", (res.fAvg / 1000).toFixed(2) + " GHz");
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("pi-cv"), (ctx, w, h) => {
+      const p = GP.palette(), gap = 46, hh = (h - 16 - 46 - gap) / 2;
+      const b1 = { x: 58, y: 16, w: w - 76, h: hh }, b2 = { x: 58, y: 16 + hh + gap, w: w - 76, h: hh };
+      const d = res.out.filter((q, i) => i % 4 === 0 && q[0] <= tShow);
+      GP.chart(ctx, b1, { x: [0, 100], y: [400, 1400], yLabel: "전력 (W)", hover: { xFmt: (v) => v.toFixed(1) + " ms" },
+        series: [{ data: d.map((q) => [q[0], q[1]]), color: p.heat, label: "P_{module}", width: 2.2, fmt: (v) => f0(v) + " W" }, { data: d.map((q) => [q[0], q[3]]), color: p.dim, dash: [4, 3], width: 1.4, label: "측정(필터)", fmt: (v) => f0(v) + " W" }],
+        hlines: [{ y: 1000, color: p.bad, label: "상한 1,000 W" }], bands: [{ x0: 20, x1: 70, color: GP.alpha(p.heat, 0.07), label: "무거운 구간" }] });
+      GP.chart(ctx, b2, { x: [0, 100], y: [0.8, 1.9], xLabel: "시간 (ms)", yLabel: "클럭 (GHz)", hover: { xFmt: (v) => v.toFixed(1) + " ms" },
+        series: [{ data: d.map((q) => [q[0], q[2] / 1000]), color: p.clock, label: "f", width: 2.2, fmt: (v) => v.toFixed(2) + " GHz" }],
+        hlines: [{ y: 1.6, color: p.faint, label: "1.6 GHz" }] });
+    }, { height: (w) => Math.max(360, Math.min(440, w * 0.7)), hover: true });
+    const loop = GP.loop($("pi-cv"), (dt) => { if (!playing) return; tShow = Math.min(100, tShow + dt * 25); if (tShow >= 100) playing = false; cv.redraw(); });
+    $("pi-run").addEventListener("click", () => { tShow = 0; playing = true; loop.start(); });
+  })();
+
+  /* ============================================================ 5) 전류 경로 */
+  (function () {
+    let cv, r = null, best = null;
+    const gArr = GP.seg("pa-arr", () => upd());
+    const gPh = GP.range("pa-ph", (v) => v + "상", () => upd());
+    const gP = GP.range("pa-p", (v) => v + " W", () => upd());
+    const gV = GP.range("pa-v", (v) => v.toFixed(2) + " V", () => upd());
+    const opt = () => ({ arr: gArr(), phases: gPh(), P: gP(), V: gV() });
+    function upd() {
+      r = pathCalc(opt()); best = bestPhases(opt());
+      GP.stat("pa-i", f0(r.I) + " A (상당 " + f0(r.Iph) + " A)"); GP.stat("pa-in", f0(r.P48) + " W, " + f1(r.I48) + " A");
+      GP.stat("pa-loss", f1(r.loss) + " W"); GP.stat("pa-eta", (100 * r.eta).toFixed(1) + " %");
+      GP.stat("pa-balls", f0(2 * r.balls) + "개 (" + (100 * r.ballShare).toFixed(0) + " %)"); cls("pa-balls", r.ballShare > 0.4 ? "bad" : r.ballShare > 0.15 ? "warn" : "ok");
+      GP.stat("pa-best", best.n + "상 (" + f1(best.Pbuck) + " W)");
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("pa-cv"), (ctx, w, h) => {
+      const p = GP.palette(), top = 150, x0 = 12, W = w - 24, sc = W / Math.max(r.P48, 1);
+      // 위: 전력 흐름 막대(입력 → 단계별 손실 → 다이)
+      const stages = [["IBC 48→12 V", r.Pibc, p.faint], ["12 V 배전", r.P12dist, p.faint], ["벅 " + gPh() + "상", r.Pbuck, p.warn], ["0.75 V 배전", r.Pdist, p.bad]];
+      GP.text(ctx, "48 V 입력 " + f0(r.P48) + " W → 다이 " + f0(gP()) + " W", x0, 16, { size: 13, weight: 700, color: p.text });
+      let x = x0 + gP() * sc;
+      GP.rrect(ctx, x0, 30, gP() * sc, 34, 4); ctx.fillStyle = GP.alpha(p.heat, 0.35); ctx.fill(); ctx.strokeStyle = p.heat; ctx.lineWidth = 1.2; ctx.stroke();
+      GP.text(ctx, "다이 " + f0(gP()) + " W", x0 + 8, 47, { size: 12.5, weight: 600, color: p.text, baseline: "middle" });
+      stages.forEach(([nm, pw, col], i) => {
+        const ww = Math.max(1, pw * sc);
+        ctx.fillStyle = GP.alpha(col, 0.55); ctx.fillRect(x, 30, ww, 34); x += ww;
+        const lx = Math.min(w - 12, x0 + gP() * sc + 4), ly = 84 + i * 16;
+        ctx.fillStyle = col; ctx.fillRect(lx - 2, ly - 5, 8, 8);
+        GP.text(ctx, nm + " " + f1(pw) + " W", lx + 10, ly, { size: 12, color: p.dim, baseline: "middle", align: "left" });
+      });
+      // 전류
+      GP.text(ctx, "48 V " + f1(r.I48) + " A · 12 V " + f1(r.I12) + " A · " + gV().toFixed(2) + " V " + f0(r.I) + " A", x0, 84, { size: 12, color: p.text, baseline: "middle" });
+      GP.text(ctx, "VDD µ범프 " + f0(r.ubump) + " · C4 " + f0(r.c4) + " · BGA " + f0(r.balls), x0, 102, { size: 12, color: p.dim, baseline: "middle" });
+      // 아래: 상 수에 따른 벅 손실
+      const d = []; for (let n = 4; n <= 48; n++) d.push([n, pathCalc(Object.assign(opt(), { phases: n })).Pbuck]);
+      const ymax = Math.min(250, Math.max(80, Math.ceil(Math.max(...d.map((q) => q[1])) / 20) * 20));
+      GP.chart(ctx, { x: 58, y: top, w: w - 76, h: h - top - 46 }, { x: [4, 48], y: [0, ymax], xLabel: "벅 상 수", yLabel: "벅 손실 (W)", hover: { xFmt: (v) => Math.round(v) + "상" },
+        series: [{ data: d, color: p.volt, label: "벅 손실", width: 2.4, fmt: (v) => f1(v) + " W" }],
+        vlines: [{ x: best.n, color: p.ok, label: "최소 " + best.n + "상" }],
+        points: [{ x: gPh(), y: r.Pbuck, color: p.volt, label: f1(r.Pbuck) + " W" }] });
+    }, { height: (w) => Math.max(340, Math.min(400, w * 0.62)), hover: true });
+  })();
+
+  /* ============================================================ 6) PDN 임피던스 */
+  (function () {
+    let cv, sw = null, zt = 0;
+    const g = {
+      cdie: GP.range("pd-cdie", (v) => v.toFixed(1) + " µF", () => upd()),
+      dtc: GP.range("pd-dtc", (v) => v + " µF", () => upd()),
+      cpkg: GP.range("pd-cpkg", (v) => v + " µF", () => upd()),
+      esl: GP.range("pd-esl", (v) => v.toFixed(1) + " pH", () => upd()),
+      esr: GP.range("pd-esr", (v) => v + " µΩ", () => upd()),
+      di: GP.range("pd-di", (v) => v + " A", () => upd()),
+    };
+    const hz = (f) => (f >= 1e9 ? (f / 1e9).toPrecision(3) + " GHz" : f >= 1e6 ? (f / 1e6).toPrecision(3) + " MHz" : (f / 1e3).toPrecision(3) + " kHz");
+    function upd() {
+      const P = pdnParams({ Cdie: g.cdie(), Cdtc: g.dtc(), Cpkg: g.cpkg(), eslPkg: g.esl(), esrDie: g.esr() });
+      sw = pdnSweep(P, 1e3, 1e9, 360); zt = zTarget(0.75, 5, g.di());
+      const ratio = sw.peak.z / zt;
+      GP.stat("pd-zt", f0(zt * 1e6) + " µΩ"); GP.stat("pd-pk", f0(sw.peak.z * 1e6) + " µΩ @ " + hz(sw.peak.f));
+      GP.stat("pd-ratio", ratio.toFixed(2) + "×"); cls("pd-ratio", ratio > 1.2 ? "bad" : ratio > 1 ? "warn" : "ok");
+      GP.stat("pd-dc", f0(P.R.reduce((s, x) => s + x, 0) * 1e6) + " µΩ");
+      let a = null, b = null; sw.data.forEach(([f, z]) => { if (z > zt) { if (a == null) a = f; b = f; } });
+      GP.stat("pd-band", a == null ? "없음" : hz(a) + " – " + hz(b));
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("pd-cv"), (ctx) => {
+      const p = GP.palette();
+      GP.chart(ctx, null, { x: [1e3, 1e9], y: [5, 20000], logX: true, logY: true, xLabel: "주파수 (Hz)", yLabel: "|Z| (µΩ)",
+        xFmt: (v) => (v >= 1e9 ? "1G" : v >= 1e6 ? v / 1e6 + "M" : v / 1e3 + "k"), yFmt: (v) => (v >= 1000 ? v / 1000 + "m" : String(v)),
+        hover: { xFmt: hz }, series: [{ data: sw.data.map(([f, z]) => [f, z * 1e6]), color: p.volt, label: "|Z(f)|", width: 2.6, fmt: (v) => f0(v) + " µΩ" }],
+        hlines: [{ y: zt * 1e6, color: p.bad, label: "Z_t " + f0(zt * 1e6) + " µΩ", dash: [6, 4] }],
+        points: [{ x: sw.peak.f, y: sw.peak.z * 1e6, color: sw.peak.z > zt ? p.bad : p.ok, label: f0(sw.peak.z * 1e6) + " µΩ" }] });
+    }, { aspect: 0.62, maxHeight: 400, minHeight: 280, hover: true });
+  })();
+
+  /* ============================================================ 7) 부하 급변 과도 응답 */
+  (function () {
+    let cv, rl = null, rs = null;
+    const trOf = (v) => Math.pow(10, v);
+    const run = raf(() => upd());
+    const g = {
+      di: GP.range("dr-di", (v) => v + " A", run),
+      tr: GP.range("dr-tr", (v) => { const t = trOf(v); return (t < 10 ? t.toFixed(1) : f0(t)) + " ns"; }, run),
+      i0: GP.range("dr-i0", (v) => v + " A", run),
+      cdie: GP.range("dr-cdie", (v) => v.toFixed(1) + " µF", run),
+      dtc: GP.range("dr-dtc", (v) => v + " µF", run),
+    };
+    const gWin = GP.seg("dr-win", () => cv && cv.redraw());
+    function upd() {
+      const P = pdnParams({ Cdie: g.cdie(), Cdtc: g.dtc() }), o = { I0: g.i0(), dI: g.di(), tr: trOf(g.tr()) * 1e-9 };
+      rl = droopRun(P, Object.assign({ tEnd: 4e-6, dt: 2e-10, pts: 800 }, o));
+      rs = droopRun(P, Object.assign({ tEnd: 350e-9, dt: 1e-10, pts: 900 }, o));
+      const dr = rl.droop * 1e3, tm = rl.tmin;
+      GP.stat("dr-droop", dr > 750 ? "&gt; V<sub>DD</sub> (동작 불가)" : f1(dr) + " mV (" + (dr / 7.5).toFixed(1) + " %)");
+      GP.stat("dr-tmin", tm < 1e-6 ? f1(tm * 1e9) + " ns" : (tm * 1e6).toFixed(2) + " µs");
+      GP.stat("dr-didt", f0(rl.didt * 1e-9) + " A/ns"); GP.stat("dr-static", f1(rl.static * 1e3) + " mV");
+      GP.stat("dr-ok", dr <= 37.5 ? "충족" : "초과 " + f1(dr - 37.5) + " mV"); cls("dr-ok", dr <= 37.5 ? "ok" : "bad"); cls("dr-droop", dr <= 37.5 ? "ok" : "bad");
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("dr-cv"), (ctx, w, h) => {
+      const p = GP.palette(), longW = gWin() === "long", r = longW ? rl : rs, sc = longW ? 1e6 : 1e9, unit = longW ? "µs" : "ns";
+      const gap = 46, hv = (h - 16 - 46 - gap) * 0.66, hi = (h - 16 - 46 - gap) - hv;
+      const b1 = { x: 64, y: 16, w: w - 82, h: hv }, b2 = { x: 64, y: 16 + hv + gap, w: w - 82, h: hi };
+      const xr = longW ? [-0.05, 3.95] : [-50, 300];
+      const vmin = Math.min(...r.wave.map((q) => q[1])), lo = Math.min(r.vInit - 0.045, vmin - 0.005), hiV = r.vInit + 0.012;
+      GP.chart(ctx, b1, { x: xr, y: [Math.max(-0.1, lo), hiV], yLabel: "V_{die} (V)", hover: { xFmt: (v) => (longW ? v.toFixed(3) : v.toFixed(1)) + " " + unit }, yFmt: (v) => v.toFixed(2),
+        series: [{ data: r.wave.map((q) => [q[0] * sc, q[1]]), color: p.volt, label: "V_{die}", width: 2.2, fmt: (v) => v.toFixed(4) + " V" }],
+        hlines: [{ y: r.vInit - 0.0375, color: p.bad, label: "−37.5 mV" }, { y: r.vInit, color: p.faint }] });
+      GP.chart(ctx, b2, { x: xr, y: [0, 1300], xLabel: "시간 (" + unit + ")", yLabel: "I (A)",
+        series: [{ data: r.wave.map((q) => [q[0] * sc, q[2]]), color: p.heat, width: 2, label: "I_{load}" }] });
+    }, { height: (w) => Math.max(340, Math.min(420, w * 0.66)), hover: true });
+  })();
+
+  /* ============================================================ 8) IR 드롭 격자 */
+  (function () {
+    let cv, r = null;
+    const run = raf(() => upd());
+    const gMode = GP.seg("ir-mode", run);
+    const g = {
+      p: GP.range("ir-p", (v) => v + "셀 (" + (v * 0.75).toFixed(2) + " mm)", run),
+      rs: GP.range("ir-rs", (v) => v + " mΩ/sq", run),
+      hot: GP.range("ir-hot", (v) => v.toFixed(1) + "배", run),
+      i: GP.range("ir-i", (v) => v + " A", run),
+      w: GP.range("ir-w", (v) => v.toFixed(2), run),
+    };
+    function upd() {
+      r = irSolve({ mode: gMode(), pitch: g.p(), Rs: g.rs(), hot: g.hot(), I: g.i(), omega: g.w() });
+      const mx = r.max * 1e3;
+      GP.stat("ir-max", mx > 750 ? "&gt; V<sub>DD</sub> (동작 불가)" : f1(mx) + " mV (" + (mx / 7.5).toFixed(1) + " %)"); cls("ir-max", mx > 37.5 ? "bad" : mx > 22.5 ? "warn" : "ok");
+      GP.stat("ir-avg", f1(r.avg * 1e3) + " mV"); GP.stat("ir-nb", f0(r.nb)); GP.stat("ir-ib", f1(r.Ibump) + " A");
+      GP.stat("ir-it", r.it + (r.conv ? "" : " (미수렴)"));
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("ir-cv"), (ctx, w, h) => {
+      const p = GP.palette(), N = r.N, side = Math.min(h - 40, w - 120), c = side / N, ox = 16, oy = 14, mx = Math.max(r.max, 1e-6);
+      const col = (t) => (t < 0.5 ? GP.mix(p.ok, p.warn, t * 2) : GP.mix(p.warn, p.bad, (t - 0.5) * 2));
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { ctx.fillStyle = col(r.d[y * N + x] / mx); ctx.fillRect(ox + x * c, oy + y * c, c + 0.6, c + 0.6); }
+      ctx.fillStyle = p.text;
+      if (c > 3) for (let i = 0; i < N * N; i++) if (r.isB[i]) { ctx.beginPath(); ctx.arc(ox + (i % N + 0.5) * c, oy + (Math.floor(i / N) + 0.5) * c, Math.max(1, c * 0.16), 0, 7); ctx.fill(); }
+      if (r.phyW) { ctx.strokeStyle = p.dram; ctx.setLineDash([4, 3]); ctx.lineWidth = 1.4; ctx.strokeRect(ox, oy, r.phyW * c, side); ctx.strokeRect(ox + (N - r.phyW) * c, oy, r.phyW * c, side); ctx.setLineDash([]);
+        GP.text(ctx, "PHY", ox + r.phyW * c / 2, oy + side + 13, { size: 12, color: p.dram, align: "center", baseline: "middle" }); }
+      ctx.strokeStyle = p.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ox + (r.at[0] + 0.5) * c, oy + (r.at[1] + 0.5) * c, Math.max(5, c * 0.9), 0, 7); ctx.stroke();
+      ctx.strokeStyle = p.border; ctx.lineWidth = 1; ctx.strokeRect(ox, oy, side, side);
+      // 색 막대
+      const bx = ox + side + 22, bh = side * 0.8;
+      for (let k = 0; k < 60; k++) { ctx.fillStyle = col(1 - k / 59); ctx.fillRect(bx, oy + k * bh / 60, 14, bh / 60 + 0.6); }
+      ctx.strokeStyle = p.border; ctx.strokeRect(bx, oy, 14, bh);
+      GP.text(ctx, f1(mx * 1e3) + " mV", bx + 20, oy + 6, { size: 12, color: p.text, baseline: "middle" });
+      GP.text(ctx, "0", bx + 20, oy + bh, { size: 12, color: p.dim, baseline: "middle" });
+      GP.text(ctx, "강하", bx, oy + bh + 18, { size: 12, color: p.dim, baseline: "middle" });
+    }, { height: (w) => Math.max(260, Math.min(420, w - 100)) });
+  })();
+
+  /* ============================================================ 9) 전력 게이팅·다크 실리콘 */
+  (function () {
+    let cv, s = null, man = null;
+    const g = {
+      cap: GP.range("gt-cap", (v) => v + " W", () => upd()),
+      par: GP.range("gt-par", (v) => v + "개", () => upd()),
+      res: GP.range("gt-res", (v) => (v * 100).toFixed(0) + " %", () => upd()),
+      t: GP.range("gt-t", (v) => v + " °C", () => upd()),
+      n: GP.range("gt-n", (v) => v + "개", () => upd()),
+    };
+    const opt = () => ({ cap: g.cap(), par: g.par(), res: g.res(), T: g.t() });
+    function upd() {
+      s = gateSweep(opt()); man = gateBest(g.n(), opt());
+      const b = s.best;
+      if (b) {
+        GP.stat("gt-best", b.n + "개 / 144"); GP.stat("gt-vf", b.V.toFixed(3) + " V · " + b.f.toFixed(2) + " GHz");
+        GP.stat("gt-tf", f0(b.tflops) + " TFLOPS"); GP.stat("gt-eff", b.eff.toFixed(2));
+        cls("gt-best", b.n < 144 ? "warn" : "ok");
+      } else { GP.stat("gt-best", "예산 부족"); GP.stat("gt-vf", "—"); GP.stat("gt-tf", "—"); GP.stat("gt-eff", "—"); cls("gt-best", "bad"); }
+      GP.stat("gt-man", man.over ? "예산 초과" : f0(man.tflops) + " TFLOPS (" + man.f.toFixed(2) + " GHz)");
+      cv && cv.redraw();
+    }
+    upd();
+    cv = GP.canvas($("gt-cv"), (ctx, w, h) => {
+      const p = GP.palette(), gap = 46, hp = (h - 16 - 46 - gap) * 0.62, hv = (h - 16 - 46 - gap) - hp;
+      const b1 = { x: 58, y: 16, w: w - 76, h: hp }, b2 = { x: 58, y: 16 + hp + gap, w: w - 76, h: hv };
+      const ok = s.out.filter((q) => !q.over), bad = s.out.filter((q) => q.over);
+      const pts = [{ x: man.n, y: man.over ? 0 : man.tflops, color: p.accent, label: "n = " + man.n }];
+      if (s.best) pts.push({ x: s.best.n, y: s.best.tflops, color: p.ok, label: "최적 " + s.best.n });
+      GP.chart(ctx, b1, { x: [0, 144], y: [0, 1100], yLabel: "BF16 TFLOPS", hover: { xFmt: (v) => Math.round(v) + " SM" },
+        series: [{ data: ok.map((q) => [q.n, q.tflops]), color: p.tensor, label: "예산 안 최고 성능", width: 2.6, fmt: (v) => f0(v) }],
+        bands: bad.length ? [{ x0: bad[0].n - 2, x1: bad[bad.length - 1].n + 2, color: GP.alpha(p.bad, 0.1), label: "V_{min}에서도 예산 초과" }] : [],
+        vlines: g.par() < 144 ? [{ x: g.par(), color: p.dim, label: "병렬도 " + g.par() }] : [], points: pts });
+      GP.chart(ctx, b2, { x: [0, 144], y: [0.55, 0.85], xLabel: "활성 SM 수", yLabel: "V (V)", yFmt: (v) => v.toFixed(2),
+        series: [{ data: s.out.map((q) => [q.n, q.V]), color: p.volt, width: 2.2, label: "V" }],
+        hlines: [{ y: GX.VMIN, color: p.bad, label: "V_{min} 0.6 V" }] });
+    }, { height: (w) => Math.max(340, Math.min(420, w * 0.66)), hover: true });
+  })();
+})();
+</script>
+</body>
+</html>

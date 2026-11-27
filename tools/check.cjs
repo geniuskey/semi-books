@@ -51,6 +51,7 @@ function checkPage(rel, opts = {}) {
   if (rel.startsWith("cmp/") && /\bIB\.|class="ib-/.test(html)) fail(`${rel}: uses InfraBook globals (IB / ib-) — use CB / cb-`);
   if (rel.startsWith("plasma/") && /\b(?:TF|CB|IB)\.|class="(?:tf|cb|ib)-/.test(html)) fail(`${rel}: uses ThinFilmBook/CMPBook/InfraBook globals (TF / CB / IB) — use PB / pb-`);
   if (rel.startsWith("power/") && /\b(?:PB|TF|CB|IB)\.|class="(?:pb|tf|cb|ib)-/.test(html)) fail(`${rel}: uses PlasmaBook/ThinFilmBook/CMPBook/InfraBook globals — use PW / pw-`);
+  if (rel.startsWith("gpu/") && /\b(?:PB|PW|TF|CB|IB|MB)\.[a-zA-Z_]|class="(?:pb|pw|tf|cb|ib|mb)-/.test(html)) fail(`${rel}: uses another book's globals (PB / PW / TF / CB / IB / MB) — use GP / gp-`);
   if (rel.startsWith("thinfilm/") && /\b(?:CB|IB)\.|class="(?:cb|ib)-/.test(html)) fail(`${rel}: uses CMPBook/InfraBook globals (CB / IB) — use TF / tf-`);
   // JavaScript template strings contain reusable id patterns, not static DOM ids.
   const markup = html.replace(/(<script\b[^>]*>)[\s\S]*?<\/script>/gi, "$1</script>").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
@@ -97,7 +98,7 @@ function checkPage(rel, opts = {}) {
     const figs = (html.match(/<figure\b/g) || []).length;
     const quiz = (html.match(/class="quiz-q"/g) || []).length;
     if (rel.startsWith("infra/") && opts.chapter !== "glossary" && (sims < 6 || figs < 6 || quiz < 6)) warn.push(`${rel}: sims ${sims}, figures ${figs}, quiz ${quiz} (기준 6/6/6)`);
-    if (/^(?:cmp|thinfilm|plasma|power)\//.test(rel) && opts.chapter !== "glossary" && (sims < 7 || figs < 7 || quiz < 6)) warn.push(`${rel}: sims ${sims}, figures ${figs}, quiz ${quiz} (기준 7/7/6)`);
+    if (/^(?:cmp|thinfilm|plasma|power|gpu)\//.test(rel) && opts.chapter !== "glossary" && (sims < 7 || figs < 7 || quiz < 6)) warn.push(`${rel}: sims ${sims}, figures ${figs}, quiz ${quiz} (기준 7/7/6)`);
     if (rel.startsWith("sensor/") && opts.chapter !== "glossary") {
       const [s, f, q] = opts.chapter === "design" ? [6, 6, 8] : [8, 9, 8];
       if (sims < s || figs < f || quiz < q) warn.push(`${rel}: sims ${sims}, figures ${figs}, quiz ${quiz} (기준 ${s}/${f}/${q})`);

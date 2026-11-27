@@ -229,7 +229,7 @@
       range(6).forEach((i) => { s += `<rect x="${30 + i * 26}" y="22" width="6" height="8" fill="${W}" fill-opacity=".5"/>`; });
       return svg(s);
     },
-    // 이하 fab·process·etch·cmp·film·plasma·power는 SemiBooks에서 만들어 books 포털과 함께 쓰는 표지다. 움직임은 .fb-·.pr-·.et- 클래스가 맡고,
+    // 이하 fab·process·etch·cmp·film·plasma·power·gpu는 SemiBooks에서 만들어 books 포털과 함께 쓰는 표지다. 움직임은 .fb-·.pr-·.et- 클래스가 맡고,
     // 애니메이션이 없을 때(동작 줄이기)도 그 자체로 완성된 그림이 되도록 기본 도형을 첫 프레임과 같게 그린다.
     // 팹 인프라 단면: FFU가 내려보낸 공기는 바닥 구멍을 지나 양쪽 샤프트를 타고 천장으로 돌아가고,
     // 천장 레일의 OHT는 FOUP을 장비 앞 로드 포트에 내려놓는다. 바닥 아래 배관은 초순수와 가스를 장비로 올려 보낸다.
@@ -396,6 +396,24 @@
       s += `<rect x="96" y="114" width="96" height="7" rx="1.5" fill="${W}" fill-opacity=".45"/>`;
       [104, 134, 164].forEach((x, k) => { s += `<rect class="cv-pulse" style="animation-delay:${(k * 0.4).toFixed(1)}s" x="${x}" y="104" width="18" height="10" rx="1" fill="#ffc9a8" fill-opacity=".55"/>`; });
       s += `<path d="M150 82 l-8 12 h6 l-3 10 10 -14 h-6 z" fill="${W}" fill-opacity=".8"/>`;
+      return svg(s);
+    },
+    // GPU 패키지 위에서 본 모습: 가운데 로직 다이의 SM 격자가 번갈아 켜지고, 양옆 HBM 스택 3개씩에서 데이터가 인터포저를 건너 다이로 들어간다.
+    gpu() {
+      let s = `<rect x="22" y="14" width="160" height="104" rx="4" fill="${W}" fill-opacity=".08" stroke="${W}" stroke-opacity=".45" stroke-width="1.2"/>`;
+      s += `<rect x="70" y="24" width="64" height="84" rx="2" fill="${W}" fill-opacity=".14" stroke="${W}" stroke-opacity=".8" stroke-width="1.3"/>`;
+      for (let i = 0; i < 6; i++) for (let j = 0; j < 8; j++) {
+        const k = (i * 5 + j * 3) % 11;
+        s += `<rect class="gp-sm" style="animation-delay:${(k * 0.13).toFixed(2)}s" x="${75 + i * 9.4}" y="${29 + j * 9.6}" width="7.4" height="7.6" rx="1" fill="${W}" fill-opacity=".3"/>`;
+      }
+      [32, 58, 84].forEach((y, k) => {
+        [30, 146].forEach((x, side) => {
+          s += `<rect x="${x}" y="${y}" width="28" height="20" rx="2" fill="${W}" fill-opacity=".22" stroke="${W}" stroke-opacity=".6"/>`;
+          s += `<path d="M${x + 4} ${y + 7} H${x + 24} M${x + 4} ${y + 13} H${x + 24}" stroke="${W}" stroke-opacity=".35"/>`;
+          const x0 = side ? x : x + 28, x1 = side ? 134 : 70;
+          s += `<path class="gp-bw" style="animation-delay:${((k + side * 3) * 0.17).toFixed(2)}s" d="M${x0} ${y + 10} H${x1}" stroke="#ffd8a8" stroke-width="2" stroke-dasharray="3 3"/>`;
+        });
+      });
       return svg(s);
     },
     // 인과적 어텐션 히트맵

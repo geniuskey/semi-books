@@ -3,7 +3,7 @@
 
 Usage: python3 tools/sync-catalog.py [path/to/books/data/books.json]
 Default source: migration/books.json. An external portal catalog is optional.
-InfraBook, CMPBook, ThinFilmBook, PlasmaBook and PowerBook metadata live in LOCAL below. Chapter and simulator counts come from the sources.
+InfraBook, CMPBook, ThinFilmBook, PlasmaBook, PowerBook and GPUBook metadata live in LOCAL below. Chapter and simulator counts come from the sources.
 """
 import json
 import re
@@ -15,7 +15,7 @@ SOURCE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "migration" / "books
 
 # 서가 순서와 semi.euiyun.com/{slug}/ 경로
 ORDER = [
-    ("devicebook", "device"), ("digitalbook", "digital"), ("designbook", "design"), ("socbook", "soc"),
+    ("devicebook", "device"), ("digitalbook", "digital"), ("designbook", "design"), ("socbook", "soc"), ("gpubook", "gpu"),
     ("analogbook", "analog"), ("processbook", "process"), ("lithobook", "litho"), ("etchbook", "etch"), ("thinfilmbook", "thinfilm"), ("plasmabook", "plasma"), ("cmpbook", "cmp"),
     ("dopingbook", "doping"), ("yieldbook", "yield"), ("failurebook", "failure"), ("tcadbook", "tcad"),
     ("infrabook", "infra"),
@@ -60,6 +60,15 @@ LOCAL = {
         "color": "#d9480f", "colorDark": "#ff8a4c",
         "topics": ["밴드갭·임계 전계", "항복·드리프트층", "다이오드·MOSFET·IGBT", "SiC·GaN", "스위칭 손실", "게이트 구동", "컨버터·인버터 PWM", "열·패키징·신뢰성"],
         "motif": "power",
+    },
+    "gpubook": {
+        "id": "gpubook", "code": "GPU", "title": "GPUBook", "subtitle": "GPU 칩 설계 교과서",
+        "headline": "GPU 칩은 왜 이렇게 생겼나",
+        "description": "연산 유닛, HBM, 패키징까지. GPU를 프로그래밍 대상이 아니라 칩으로 다루는 편. CPU와 다른 면적 배분, 워프 스케줄러와 레지스터 파일, 텐서 코어와 수 표현, 온칩 SRAM과 루프라인, HBM 대역폭, 다이 크기·수율·칩렛, 2.5D 인터포저, 전력 공급과 발열, 칩간 링크까지. 가상 기준 칩 GX-1의 면적·대역폭·전력·원가 예산을 직접 바꿔 보며 배우는 GPU 칩 설계 교과서.",
+        "url": "gpu/", "stage": "design", "status": "published", "chapters": 17,
+        "color": "#2b8a3e", "colorDark": "#69db7c",
+        "topics": ["CPU vs GPU 면적", "SM·워프 스케줄러", "텐서 코어·수 표현", "온칩 SRAM·루프라인", "HBM 대역폭", "다이·수율·칩렛", "2.5D 패키징", "전력·발열·링크"],
+        "motif": "gpu",
     },
     "cmpbook": {
         "id": "cmpbook", "code": "CMP", "title": "CMPBook", "subtitle": "반도체 CMP·세정 교과서",

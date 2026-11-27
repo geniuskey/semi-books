@@ -1,0 +1,1249 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>칩 사이의 링크와 스케일업 · GPUBook</title>
+<meta name="description" content="GPU 한 개로 모자란 이유에서 시작해 병렬화 방식별 통신량, 직렬화기(SerDes)의 구조, NRZ와 PAM4, 채널 손실과 눈 다이어그램, BER과 FEC, 링크 예산과 pJ/bit, 스위치 토폴로지, 올리듀스 시간 모델, 스케일업과 스케일아웃, 구리 도달 거리와 공동 패키징 광학까지 GX-1과 GX-8 노드의 숫자로 계산한다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+.sc-m { font-family: var(--mono); font-size: 12px; fill: var(--text-dim); }
+.sc-cell { stroke: var(--border); stroke-width: 1; }
+.sc-c0 { fill: var(--surface); }
+.sc-c1 { fill: color-mix(in srgb, var(--link) 30%, var(--bg-elev)); }
+.sc-c2 { fill: color-mix(in srgb, var(--link) 60%, var(--bg-elev)); }
+.sc-c3 { fill: var(--link); }
+.sc-wire { stroke: var(--link); stroke-width: 1.3; fill: none; opacity: .55; }
+.sc-legend { justify-content: center; padding: 10px 0 0; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="scale">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 14</div>
+    <h1>칩 사이의 링크와 스케일업</h1>
+    <p class="lead">GX-LM-70B를 학습하려면 모델 상태만 1.1 TB가 넘는다. HBM 144 GB짜리 GX-1 한 개에는 들어가지 않고, 계산 시간으로도 GPU 한 개로는 수백 년이 걸린다. 그래서 GPU 수천 개를 하나의 계산기처럼 묶는다. 묶는 순간 문제는 연산에서 통신으로 옮겨 간다. 이 장은 GPU 사이를 오가는 바이트 수를 병렬화 방식별로 세고, 그 바이트를 224 Gb/s로 구리선에 실어 보내는 직렬화기(SerDes)의 물리를 따라간다. 그다음 링크 18개가 다이 가장자리와 전력에서 얼마를 차지하는지, 스위치 칩으로 GPU 8개를 어떻게 잇는지, 올리듀스 한 번이 몇 밀리초 걸리는지 계산한다.</p>
+    <ul class="objectives">
+      <li>데이터·텐서·파이프라인·전문가 병렬이 학습 단계마다 주고받는 바이트를 계산하고, 어느 방식을 노드 안(스케일업)에 두어야 하는지 판단한다.</li>
+      <li>SerDes의 블록(직렬화·FFE·CTLE·DFE·CDR)과 NRZ/PAM4의 심볼률·나이퀴스트 주파수·눈 높이 손해(약 9.5 dB)를 설명한다.</li>
+      <li>채널 손실(dB)이 심볼 간 간섭으로 눈을 닫는 과정을 눈 다이어그램으로 보고, 이퀄라이저와 FEC가 BER을 어떻게 되돌리는지 계산한다.</li>
+      <li>GX-Link 18개 × 2레인 × 224 Gb/s가 900 GB/s, 약 40 W, 다이 가장자리 약 29 mm가 되는 링크 예산을 세운다.</li>
+      <li>링·트리·스위치 내 리덕션 올리듀스 시간을 \(\alpha\)–\(\beta\) 모델로 비교하고, 토폴로지의 이분 대역폭과 스케일업·스케일아웃의 차이를 숫자로 말한다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="why">
+    <h2>칩 하나로 모자란 이유</h2>
+    <p>GPU를 여러 개 묶는 이유는 두 가지다. 첫째는 <b>용량</b>이다. 혼합 정밀도 학습에서 파라미터 하나는 BF16 가중치 2 B, BF16 기울기 2 B, FP32 마스터 가중치 4 B, 아담(Adam) 옵티마이저의 1차·2차 모멘트 FP32 8 B로 합계 약 16 B를 차지한다. GX-LM-70B(파라미터 700억 개)면 \(16 \times 70\times10^9 = 1{,}120\) GB이고, 여기에 층마다 저장하는 활성값이 더 붙는다. GX-1의 HBM은 144 GB이므로 모델 상태만 나눠 담아도 최소 8개가 필요하다.</p>
+    <p>둘째는 <b>시간</b>이다. 학습 연산량은 토큰당 약 \(6N\) FLOP이므로 토큰 10조 개(\(D = 10^{13}\))면 \(6ND = 4.2\times10^{24}\) FLOP이다. GX-1의 BF16 밀집 피크 943.7 TFLOPS를 50 %만 써도(실효 약 472 TFLOPS) \(8.9\times10^9\) s, 약 280년이 걸린다. GPU 4,096개가 완벽하게 나눠 일하면 약 25일이다. "완벽하게"가 이 장의 주제다. GPU를 늘릴수록 각 GPU가 맡는 계산은 줄지만, 서로 맞춰야 할 데이터는 줄지 않거나 오히려 는다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="왼쪽: GX-LM-70B 학습에 필요한 모델 상태 1,120 GB를 가중치·기울기·마스터 가중치·옵티마이저 상태로 쌓은 막대와 GX-1 HBM 144 GB 선. 오른쪽: GPU 수에 따른 학습 기간 1개 280년, 8개 35년, 512개 200일, 4,096개 25일">
+        <text x="20" y="22" class="t t-b">모델 상태(파라미터당 16 B)</text>
+        <path d="M70 220H340" class="s-axis"/>
+        <rect x="110" y="196" width="80" height="24" class="k-tensor"/><text x="200" y="212" class="t-dim">BF16 가중치 140 GB</text>
+        <rect x="110" y="172" width="80" height="24" class="k-data"/><text x="200" y="188" class="t-dim">BF16 기울기 140 GB</text>
+        <rect x="110" y="124" width="80" height="48" class="k-sram"/><text x="200" y="152" class="t-dim">FP32 마스터 280 GB</text>
+        <rect x="110" y="28" width="80" height="96" class="k-dram"/><text x="200" y="72" class="t-dim">아담 모멘트 2개</text><text x="200" y="88" class="t-dim">FP32 560 GB</text>
+        <path d="M60 195.3H196" class="s-bad dash"/><text x="104" y="188" class="t-bad t-e">GX-1</text><text x="104" y="212" class="t-bad t-e">144 GB</text>
+        <text x="150" y="240" class="t t-c">합계 1,120 GB ≈ GX-1 7.8개분</text>
+        <text x="420" y="22" class="t t-b">학습 기간(6ND, D = 10조 토큰, MFU 50 %)</text>
+        <g>
+          <rect x="520" y="44" width="220" height="26" class="k-heat"/><text x="510" y="62" class="t t-e">1개</text><text x="730" y="62" class="t t-e">약 280년</text>
+          <rect x="520" y="86" width="178" height="26" class="k-heat"/><text x="510" y="104" class="t t-e">8개</text><text x="690" y="104" class="t t-e">약 35년</text>
+          <rect x="520" y="128" width="98" height="26" class="k-heat"/><text x="510" y="146" class="t t-e">512개</text><text x="628" y="146" class="t">약 200일</text>
+          <rect x="520" y="170" width="57" height="26" class="k-heat"/><text x="510" y="188" class="t t-e">4,096개</text><text x="587" y="188" class="t">약 25일</text>
+        </g>
+        <text x="630" y="230" class="t-dim t-c">막대 길이는 로그 눈금(완벽한 확장 가정)</text>
+      </svg>
+      <figcaption><b>그림 14-1.</b> GPU를 여러 개 묶는 두 가지 이유. 학습용 모델 상태는 HBM 하나에 들어가지 않고(왼쪽), 계산 시간은 GPU 수에 반비례해야 실용적인 기간이 된다(오른쪽). 활성값 메모리는 빠져 있으므로 실제로는 8개보다 더 필요하다.</figcaption>
+    </figure>
+    <p><b>왜 이렇게 설계하는가.</b> 다이를 더 키워 HBM을 더 붙이는 길은 레티클 한계(10장)와 패키지 크기(11장)에서 막힌다. 남은 길은 칩을 여럿 쓰는 것이고, 그러면 칩 하나의 성능만큼이나 <b>칩 밖으로 나가는 대역폭</b>이 설계 목표가 된다. GX-1이 HBM 대역폭(7.37 TB/s)의 약 1/8인 900 GB/s를 칩간 링크에 배정한 것은 이 때문이다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="parallel">
+    <h2>병렬화 방식과 통신량</h2>
+    <p>일을 나누는 방법은 네 가지가 있고, 각각 주고받는 데이터가 다르다.</p>
+    <ul>
+      <li><span class="term">데이터 병렬</span><span class="en">(data parallelism, DP)</span>: 모든 GPU가 모델 전체를 갖고 배치를 나눠 처리한다. 역전파가 끝나면 기울기를 평균해야 하므로 기울기 전체(\(2N\) 바이트, BF16)를 <span class="term">올리듀스</span><span class="en">(all-reduce)</span>한다. 통신량은 배치 크기와 무관하다.</li>
+      <li><span class="term">텐서 병렬</span><span class="en">(tensor parallelism, TP)</span>: 층 하나의 행렬을 열·행으로 쪼개 GPU들이 나눠 곱한다. 층마다 부분합을 합쳐야 해서 순전파에 올리듀스 2번, 역전파에 2번이 생긴다. 한 번의 크기는 활성값 \(B_t \cdot d_{model} \cdot 2\) 바이트(\(B_t\)는 그 GPU 그룹이 처리하는 토큰 수)다.</li>
+      <li><span class="term">파이프라인 병렬</span><span class="en">(pipeline parallelism, PP)</span>: 층을 구간(스테이지)으로 나눠 GPU마다 맡긴다. 경계에서 활성값을 앞으로, 그 기울기를 뒤로 한 번씩만 보낸다. 통신은 적지만 스테이지가 차고 비는 동안 노는 <span class="term">파이프라인 버블</span>이 생긴다(마이크로배치 \(m\)개, 스테이지 \(p\)개면 약 \((p-1)/(m+p-1)\)).</li>
+      <li><span class="term">전문가 병렬</span><span class="en">(expert parallelism, EP)</span>: 전문가 혼합(MoE) 모델에서 FFN 전문가들을 GPU에 나눠 두고, 토큰을 그 토큰이 고른 전문가가 있는 GPU로 보냈다가 돌려받는다. 층마다 <span class="term">올투올</span><span class="en">(all-to-all)</span> 통신이 순전파 2번, 역전파 2번 생긴다.</li>
+    </ul>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 236" role="img" aria-label="네 가지 병렬화. 데이터 병렬은 모델 복제와 기울기 올리듀스, 텐서 병렬은 행렬 분할과 층마다 활성값 올리듀스, 파이프라인 병렬은 층 구간 분할과 경계의 활성값 전달, 전문가 병렬은 전문가 분산과 토큰 올투올">
+        <g>
+          <rect x="10" y="10" width="178" height="216" rx="10" class="chip"/>
+          <text x="99" y="32" class="t t-b t-c">데이터 병렬</text>
+          <rect x="28" y="48" width="64" height="54" rx="6" class="k-compute"/><text x="60" y="80" class="t t-c">모델 전체</text>
+          <rect x="106" y="48" width="64" height="54" rx="6" class="k-compute"/><text x="138" y="80" class="t t-c">모델 전체</text>
+          <text x="60" y="122" class="t-dim t-c">배치 ½</text><text x="138" y="122" class="t-dim t-c">배치 ½</text>
+          <path d="M60 134V150H138V134" class="ks-link"/>
+          <text x="99" y="172" class="kt-link t-c">기울기 2N B</text>
+          <text x="99" y="192" class="t-dim t-c">단계당 1번 올리듀스</text>
+          <text x="99" y="212" class="t-dim t-c">배치와 무관</text>
+        </g>
+        <g>
+          <rect x="198" y="10" width="178" height="216" rx="10" class="chip"/>
+          <text x="287" y="32" class="t t-b t-c">텐서 병렬</text>
+          <rect x="216" y="48" width="64" height="54" rx="6" class="k-tensor"/><text x="248" y="72" class="t t-c">W 왼쪽</text><text x="248" y="90" class="t-dim t-c">열 ½</text>
+          <rect x="294" y="48" width="64" height="54" rx="6" class="k-tensor"/><text x="326" y="72" class="t t-c">W 오른쪽</text><text x="326" y="90" class="t-dim t-c">열 ½</text>
+          <path d="M248 110V126H326V110" class="ks-link"/>
+          <text x="287" y="150" class="kt-link t-c">활성값 B·d·2 B</text>
+          <text x="287" y="172" class="t-dim t-c">층마다 4번</text>
+          <text x="287" y="192" class="t-dim t-c">× 80층</text>
+          <text x="287" y="212" class="t-dim t-c">토큰 수에 비례</text>
+        </g>
+        <g>
+          <rect x="386" y="10" width="178" height="216" rx="10" class="chip"/>
+          <text x="475" y="32" class="t t-b t-c">파이프라인 병렬</text>
+          <rect x="404" y="48" width="64" height="54" rx="6" class="k-compute"/><text x="436" y="80" class="t t-c">층 1–40</text>
+          <rect x="482" y="48" width="64" height="54" rx="6" class="k-compute"/><text x="514" y="80" class="t t-c">층 41–80</text>
+          <path d="M468 66H480" class="arr"/><path d="M482 86H470" class="arr"/>
+          <text x="475" y="130" class="kt-link t-c">경계 활성값만</text>
+          <text x="475" y="152" class="t-dim t-c">앞으로 1번 + 뒤로 1번</text>
+          <rect x="404" y="168" width="142" height="14" class="k-compute"/><rect x="404" y="168" width="30" height="14" class="f-bad-soft"/>
+          <text x="475" y="204" class="t-dim t-c">대신 버블(빈 시간)</text>
+        </g>
+        <g>
+          <rect x="574" y="10" width="176" height="216" rx="10" class="chip"/>
+          <text x="662" y="32" class="t t-b t-c">전문가 병렬</text>
+          <rect x="592" y="48" width="64" height="54" rx="6" class="k-compute"/><text x="624" y="72" class="t t-c">전문가</text><text x="624" y="90" class="t-dim t-c">1–4</text>
+          <rect x="670" y="48" width="64" height="54" rx="6" class="k-compute"/><text x="702" y="72" class="t t-c">전문가</text><text x="702" y="90" class="t-dim t-c">5–8</text>
+          <path d="M624 110L702 136M702 110L624 136" class="ks-link"/>
+          <text x="662" y="160" class="kt-link t-c">토큰 올투올</text>
+          <text x="662" y="182" class="t-dim t-c">MoE 층마다 4번</text>
+          <text x="662" y="204" class="t-dim t-c">이분 대역폭 필요</text>
+        </g>
+      </svg>
+      <figcaption><b>그림 14-2.</b> 네 가지 병렬화가 주고받는 것. 데이터 병렬의 통신량은 모델 크기에, 텐서·전문가 병렬은 처리하는 토큰 수와 층 수에, 파이프라인 병렬은 경계 수에 비례한다.</figcaption>
+    </figure>
+    <p>GPU 한 개가 학습 단계 하나에서 보내는 바이트를 식으로 쓰면 다음과 같다(\(p\)는 그 병렬화에 참여하는 GPU 수, \(f = (p-1)/p\), \(L\)은 층 수, \(k\)는 토큰당 고르는 전문가 수).</p>
+    <div class="formula">$$ V_{DP} = 2f \cdot 2N, \quad V_{TP} = 4L \cdot 2f \cdot B_t d_{model} \cdot 2, \quad V_{PP} = 2 \cdot B_t d_{model} \cdot 2, \quad V_{EP} = 4L \cdot k f \cdot \frac{B_t}{p} d_{model} \cdot 2 $$
+      <div class="where">링 올리듀스 한 번에 GPU 하나가 보내는 양이 \(2f\)배(<a href="#allreduce">9절</a>). 계산 시간은 \(t_{comp} = 6NB_t/(p \cdot F_{eff})\), \(F_{eff}\) = 943.7 TFLOPS × MFU.</div>
+    </div>
+    <div class="sim" id="sim-par">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>병렬화 방식별 통신량과 계산 대비 통신 시간 (GX-LM-70B)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="par-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>자세히 볼 방식</span><div class="seg" id="par-mode"><button data-value="dp" class="on">DP</button><button data-value="tp">TP</button><button data-value="pp">PP</button><button data-value="ep">EP</button></div></div>
+          <label class="ctrl"><span>GPU 수 p <output id="par-p-out"></output></span><input type="range" id="par-p" min="2" max="64" step="1" value="8"></label>
+          <label class="ctrl"><span>전역 배치(시퀀스) <output id="par-b-out"></output></span><input type="range" id="par-b" min="64" max="2048" step="64" value="512"></label>
+          <label class="ctrl"><span>MFU <output id="par-u-out"></output></span><input type="range" id="par-u" min="0.2" max="0.8" step="0.05" value="0.5"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">GPU당 단계 통신량</span><span class="v" id="par-bytes">—</span></div>
+        <div class="stat"><span class="k">스케일업 900 GB/s</span><span class="v" id="par-up">—</span></div>
+        <div class="stat"><span class="k">NIC 100 GB/s</span><span class="v" id="par-out">—</span></div>
+        <div class="stat"><span class="k">단계 계산 시간</span><span class="v" id="par-comp">—</span></div>
+        <div class="stat"><span class="k">GPU당 모델 상태</span><span class="v" id="par-mem">—</span></div>
+      </div>
+      <div class="sim-note">막대는 통신 시간을 계산 시간의 백분율로 나타낸다(로그 눈금, 보라색은 노드 안 900 GB/s, 주황색은 노드 밖 NIC 800 Gb/s = 100 GB/s). EP는 같은 \(d_{model}\)에 전문가 2개를 고르는 가상의 MoE 변형으로 계산한다. 해볼 것: ① p = 8, 시퀀스 512개(약 420만 토큰)에서 TP는 900 GB/s로 계산의 약 9 %지만 NIC로 보내면 약 82 %다. 텐서 병렬을 노드 안에 두는 이유다. ② 같은 조건에서 DP는 900 GB/s로 약 0.06 %, NIC로도 약 0.5 %다. 기울기 올리듀스는 노드 밖으로 보내도 된다. ③ DP의 GPU당 모델 상태는 p와 무관하게 1,120 GB라 "메모리 초과"다. 그래서 실제로는 상태를 나눠 담는 방식(옵티마이저 상태 분할)과 TP·PP를 섞는다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>방식</th><th>통신량이 비례하는 것</th><th>통신 형태</th><th>지연 민감도</th><th>두는 곳</th></tr></thead>
+      <tbody>
+        <tr><td>텐서 병렬</td><td>토큰 수 × \(d_{model}\) × 층 수</td><td>층마다 올리듀스 4번</td><td>높음(계산 사이에 끼어 있음)</td><td>노드 안(스케일업)</td></tr>
+        <tr><td>전문가 병렬</td><td>토큰 수 × \(k\) × MoE 층 수</td><td>올투올</td><td>높음, 이분 대역폭 필요</td><td>노드 안 또는 큰 스케일업 도메인</td></tr>
+        <tr><td>파이프라인 병렬</td><td>토큰 수 × \(d_{model}\) × 경계 수</td><td>점대점</td><td>중간(버블이 더 문제)</td><td>노드 사이 가능</td></tr>
+        <tr><td>데이터 병렬</td><td>파라미터 수</td><td>단계당 올리듀스 1번</td><td>낮음(역전파와 겹치기 가능)</td><td>노드 사이(스케일아웃)</td></tr>
+      </tbody>
+    </table></div>
+    <p><b>왜 이렇게 설계하는가.</b> 통신량이 가장 크고 계산 사이사이에 끼어 숨길 수 없는 텐서 병렬이 GPU 8개짜리 노드의 크기를 정한다. 노드 안 링크를 NIC보다 9배 넓게 만드는 비용(SerDes 면적·전력, 스위치 칩)은 텐서 병렬을 쓸 수 있게 해 주는 값이다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="serdes">
+    <h2>SerDes: 병렬 데이터를 한 쌍의 선으로</h2>
+    <p>다이 안에서 데이터는 수백~수천 비트 폭의 버스로 느린 클럭(1–2 GHz)에 움직인다. 패키지 밖으로 나가는 선은 비싸다. 범프·볼·보드 배선 한 가닥마다 면적과 원가가 들고, 수천 가닥을 1 m 넘게 끌고 갈 수는 없다. 그래서 칩 밖 링크는 <span class="term">직렬화기</span><span class="en">(serializer/deserializer, SerDes)</span>로 넓은 버스를 소수의 아주 빠른 차동 선 쌍(레인)으로 바꾼다. 224 Gb/s 레인 하나는 1.6 GHz 버스 140비트 폭과 맞먹는다.</p>
+    <p>레인에는 클럭 선이 따로 없다. 수신기는 데이터 전이에서 클럭을 다시 뽑아내는데, 이것이 <span class="term">클럭·데이터 복원</span><span class="en">(clock and data recovery, CDR)</span>이다. 선을 지나며 신호는 고주파일수록 크게 감쇠하므로, 송신단의 <span class="term">FFE</span><span class="en">(feed-forward equalizer)</span>가 전이를 미리 강조하고, 수신단의 <span class="term">CTLE</span><span class="en">(continuous-time linear equalizer)</span>가 고주파를 상대적으로 끌어올리며, <span class="term">DFE</span><span class="en">(decision feedback equalizer)</span>가 이미 판정한 앞 심볼의 꼬리를 빼낸다. 112 Gb/s 이상에서는 수신 신호를 ADC로 디지털화해 DSP에서 수십 탭 FFE로 이퀄라이징하는 구조가 흔하다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 210" role="img" aria-label="SerDes 블록도. 송신기: 병렬 데이터, FEC 인코더, 직렬화기, FFE, 드라이버. 채널: 패키지, 보드 또는 케이블, 커넥터. 수신기: CTLE, ADC 또는 샘플러, DFE와 DSP, CDR, 역직렬화기, FEC 디코더">
+        <rect x="10" y="20" width="270" height="150" rx="10" class="chip"/><text x="145" y="40" class="t t-b t-c">송신기(TX)</text>
+        <rect x="22" y="56" width="58" height="44" rx="6" class="k-data"/><text x="51" y="76" class="t t-c">병렬</text><text x="51" y="92" class="t-dim t-c">N비트</text>
+        <rect x="88" y="56" width="58" height="44" rx="6" class="k-ctrl"/><text x="117" y="83" class="t t-c">FEC</text>
+        <rect x="154" y="56" width="58" height="44" rx="6" class="k-link"/><text x="183" y="76" class="t t-c">직렬화</text><text x="183" y="92" class="t-dim t-c">MUX</text>
+        <rect x="220" y="56" width="52" height="44" rx="6" class="k-link"/><text x="246" y="76" class="t t-c">FFE</text><text x="246" y="92" class="t-dim t-c">드라이버</text>
+        <path d="M80 78H86M146 78H152M212 78H218" class="arr"/>
+        <rect x="88" y="118" width="124" height="34" rx="6" class="k-clock"/><text x="150" y="140" class="t t-c">PLL(기준 클럭)</text>
+        <path d="M183 118V102" class="arr"/>
+        <path d="M272 70C300 70 300 70 330 70M272 86C300 86 300 86 330 86" class="ks-link"/>
+        <rect x="330" y="50" width="110" height="56" rx="8" class="f-warn-soft"/><text x="385" y="74" class="t t-c">채널</text><text x="385" y="94" class="t-dim t-c">보드·케이블</text>
+        <path d="M440 70H470M440 86H470" class="ks-link"/>
+        <text x="385" y="132" class="t-dim t-c">손실 수십 dB @ 나이퀴스트</text>
+        <rect x="470" y="20" width="280" height="150" rx="10" class="chip"/><text x="610" y="40" class="t t-b t-c">수신기(RX)</text>
+        <rect x="480" y="56" width="52" height="44" rx="6" class="k-link"/><text x="506" y="83" class="t t-c">CTLE</text>
+        <rect x="540" y="56" width="60" height="44" rx="6" class="k-link"/><text x="570" y="76" class="t t-c">ADC</text><text x="570" y="92" class="t-dim t-c">샘플러</text>
+        <rect x="608" y="56" width="60" height="44" rx="6" class="k-ctrl"/><text x="638" y="76" class="t t-c">DSP</text><text x="638" y="92" class="t-dim t-c">FFE·DFE</text>
+        <rect x="676" y="56" width="66" height="44" rx="6" class="k-data"/><text x="709" y="76" class="t t-c">역직렬</text><text x="709" y="92" class="t-dim t-c">FEC 복호</text>
+        <path d="M532 78H538M600 78H606M668 78H674" class="arr"/>
+        <rect x="540" y="118" width="128" height="34" rx="6" class="k-clock"/><text x="604" y="140" class="t t-c">CDR(클럭 복원)</text>
+        <path d="M638 102V116M570 116V102" class="arr"/>
+      </svg>
+      <figcaption><b>그림 14-3.</b> SerDes 한 레인의 블록. 송신단은 FEC 부호를 붙여 직렬화하고 FFE로 전이를 강조한다. 수신단은 CTLE로 고주파를 보상하고, 샘플(또는 ADC 값)을 DSP의 FFE·DFE로 다듬은 뒤, CDR이 데이터 전이에서 뽑은 클럭으로 판정한다.</figcaption>
+    </figure>
+    <p><b>왜 이렇게 설계하는가.</b> 레인 하나의 속도를 올리면 같은 대역폭에 필요한 범프·볼·케이블 가닥이 줄어 패키지와 커넥터 원가가 내려간다. 대가는 이퀄라이저·ADC·DSP의 면적과 전력이다. 레인 속도를 두 배로 올릴 때마다 SerDes의 pJ/bit가 그만큼 내려가지 않으면 링크 전력이 대역폭과 함께 커진다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="pam4">
+    <h2>NRZ와 PAM4</h2>
+    <p><span class="term">NRZ</span><span class="en">(non-return-to-zero)</span>는 심볼 하나에 1비트(두 레벨)를 싣는다. <span class="term">PAM4</span><span class="en">(4-level pulse amplitude modulation)</span>는 네 레벨로 2비트를 싣는다. 같은 비트율이면 PAM4의 <span class="term">심볼률</span><span class="en">(baud)</span>은 절반이고, 신호의 가장 빠른 변화(1010… 패턴)의 주파수인 <span class="term">나이퀴스트 주파수</span> \(f_N\)도 절반이다.</p>
+    <div class="formula">$$ f_{baud} = \frac{R_b}{\log_2 M}, \qquad f_N = \frac{f_{baud}}{2}, \qquad \Delta_{SNR} = 20\log_{10}(M-1)\ \text{dB} $$
+      <div class="where">\(R_b\) 비트율, \(M\) 레벨 수. 224 Gb/s PAM4: 112 GBd, \(f_N\) = 56 GHz. 같은 전압 진폭을 레벨 4개로 나누면 눈 하나의 높이는 NRZ의 1/3이므로 PAM4는 약 \(20\log_{10}3 \approx 9.5\) dB 불리하다.</div>
+    </div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 220" role="img" aria-label="같은 16비트를 NRZ와 PAM4로 보낸 파형. NRZ는 두 레벨 16심볼, PAM4는 네 레벨 8심볼로 심볼 길이가 두 배이고, 눈이 세 개로 쌓여 각 눈 높이가 1/3이다">
+        <text x="20" y="24" class="t t-b">NRZ: 16심볼</text>
+        <path d="M60 40H700M60 100H700" class="s-faint dash"/>
+        <text x="52" y="44" class="sc-m t-e">+1</text><text x="52" y="104" class="sc-m t-e">−1</text>
+        <path d="M60 40H100V100H140V40H220V100H300V40H420V100H540V40H580V100H620V40H700" class="ks-link"/>
+        <g class="sc-m t-c"><text x="80" y="118">1</text><text x="120" y="118">0</text><text x="160" y="118">1</text><text x="200" y="118">1</text><text x="240" y="118">0</text><text x="280" y="118">0</text><text x="320" y="118">1</text><text x="360" y="118">1</text><text x="400" y="118">1</text><text x="440" y="118">0</text><text x="480" y="118">0</text><text x="520" y="118">0</text><text x="560" y="118">1</text><text x="600" y="118">0</text><text x="640" y="118">1</text><text x="680" y="118">1</text></g>
+        <text x="20" y="144" class="t t-b">PAM4: 8심볼(그레이 부호)</text>
+        <path d="M60 150H700M60 170H700M60 190H700M60 210H700" class="s-faint dash"/>
+        <text x="52" y="154" class="sc-m t-e">10</text><text x="52" y="174" class="sc-m t-e">11</text><text x="52" y="194" class="sc-m t-e">01</text><text x="52" y="214" class="sc-m t-e">00</text>
+        <path d="M60 150H140V170H220V210H300V170H380V150H460V210H540V150H620V170H700" class="ks-data"/>
+        <path d="M720 150V170M720 170V190M720 190V210" class="dimline"/>
+        <text x="732" y="184" class="t-dim">⅓</text>
+        <path d="M720 40V100" class="dimline"/><text x="732" y="74" class="t-dim">1</text>
+      </svg>
+      <figcaption><b>그림 14-4.</b> 같은 16비트(1011 0011 1000 1011)를 NRZ와 PAM4로 보낸 파형. PAM4는 두 비트를 그레이 부호(00, 01, 11, 10)로 레벨 하나에 실어 심볼이 두 배 길다. 대신 전압 간격이 1/3로 좁다.</figcaption>
+    </figure>
+    <p>채널 손실은 주파수에 따라 커진다(<a href="#channel">5절</a>). 손실을 \(f_N\)에서의 dB 값으로 단순화하고 손실이 주파수에 비례한다고 하면(\(IL = a f_N\)), NRZ의 손실은 PAM4의 두 배다. PAM4가 이기는 조건은 \(a \cdot R_b/4 \gt 9.5\) dB, 즉 비트율이 \(R_b \gt 38/a\) Gb/s일 때다. 손실 계수가 약 0.7 dB/GHz면 약 54 Gb/s부터 PAM4가 유리하고, 실제 산업도 50 Gb/s급 레인부터 PAM4로 넘어갔다.</p>
+    <div class="sim" id="sim-pam">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>NRZ vs PAM4: 심볼률·나이퀴스트·등가 손실</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="pam-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>비트율 <output id="pam-r-out"></output></span><input type="range" id="pam-r" min="10" max="448" step="2" value="224"></label>
+          <label class="ctrl"><span>채널 손실 계수 a <output id="pam-a-out"></output></span><input type="range" id="pam-a" min="0.1" max="1.5" step="0.05" value="0.5"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">NRZ 심볼률 / f<sub>N</sub></span><span class="v" id="pam-nrz">—</span></div>
+        <div class="stat"><span class="k">PAM4 심볼률 / f<sub>N</sub></span><span class="v" id="pam-p4">—</span></div>
+        <div class="stat"><span class="k">NRZ 손실</span><span class="v" id="pam-ln">—</span></div>
+        <div class="stat"><span class="k">PAM4 손실 + 9.5 dB</span><span class="v" id="pam-lp">—</span></div>
+        <div class="stat"><span class="k">교차 비트율</span><span class="v" id="pam-x">—</span></div>
+      </div>
+      <div class="sim-note">위: 같은 비트열의 NRZ와 PAM4 파형. 아래: 비트율에 따른 "등가 손실"(NRZ는 \(a f_N\), PAM4는 \(a f_N\) + 9.5 dB). 낮은 쪽이 유리하다. 해볼 것: ① a = 0.5 dB/GHz, 224 Gb/s에서 NRZ 56 dB, PAM4 28 + 9.5 = 37.5 dB로 PAM4가 약 18 dB 유리하다. ② 비트율을 50 Gb/s로 내리면 NRZ 12.5 dB, PAM4 15.8 dB로 NRZ가 유리하다(교차점 약 76 Gb/s). ③ a를 1.0으로 올리면 교차점이 약 38 Gb/s로 내려간다. 손실이 큰 채널일수록 다중 레벨이 일찍 필요하다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> PAM4는 같은 선에 두 배를 싣는 대신 SNR 9.5 dB를 내준다. 그 손해를 메우는 것이 수신단 ADC·DSP와 FEC이고, 이것이 PAM4 SerDes의 면적·전력·지연(FEC 수십 ns)을 늘린다. 더 높은 레벨(PAM6, PAM8)은 SNR 손해가 각각 약 14, 17 dB로 커서, 448 Gb/s급에서도 PAM4를 유지하고 심볼률을 올리는 쪽과 경쟁한다.</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="channel">
+    <h2>채널 손실과 눈 다이어그램</h2>
+    <p>구리 선로의 손실은 두 가지에서 온다. 고주파 전류가 도체 표면으로 몰리는 <span class="term">표피 효과</span><span class="en">(skin effect)</span>는 \(\sqrt f\)에 비례하고, 유전체가 전계 에너지를 흡수하는 <span class="term">유전 손실</span><span class="en">(dielectric loss)</span>은 \(f\)에 비례한다. 길이 \(\ell\)인 선로의 삽입 손실은</p>
+    <div class="formula">$$ IL(f) \approx \ell\,\big(a_s \sqrt{f} + a_d f\big)\ \text{dB} $$
+      <div class="where">\(a_s, a_d\)는 매체 상수. 저손실 보드 배선은 56 GHz에서 약 80 dB/m(약 2 dB/인치), 동축형 쌍심 케이블은 약 12.5 dB/m(이 장의 교육용 값).</div>
+    </div>
+    <p>손실은 진폭만 줄이는 것이 아니다. 고주파가 더 많이 깎이면 1 UI(단위 간격, 심볼 하나의 시간)짜리 펄스가 퍼져 뒤 심볼들 위에 꼬리를 남긴다. 이것이 <span class="term">심볼 간 간섭</span><span class="en">(inter-symbol interference, ISI)</span>이다. 펄스 응답을 1 UI 간격으로 샘플한 값 \(h_{-1}, h_0, h_1, h_2, \dots\)를 커서라고 부른다. \(h_0\)가 신호이고 나머지는 모두 간섭이다.</p>
+    <figure class="diagram">
+      <div class="sim-view"><canvas id="pulse-cv"></canvas></div>
+      <figcaption><b>그림 14-5.</b> 1 UI 펄스가 손실 5·15·25 dB(@ \(f_N\), 2차 저역 통과 근사) 채널을 지난 응답(이 장의 눈 시뮬레이터와 같은 모델). 점은 1 UI 간격 커서다. 손실이 커지면 주 커서 \(h_0\)가 작아지고 뒤 커서 \(h_1, h_2\)가 커져, 최악의 경우 앞 심볼들의 꼬리가 \(h_0\)보다 커지면 눈이 닫힌다.</figcaption>
+    </figure>
+    <p><span class="term">눈 다이어그램</span><span class="en">(eye diagram)</span>은 수신 파형을 2 UI 길이로 잘라 겹쳐 그린 것이다. 가운데 열린 부분의 높이(<span class="term">눈 높이</span>)와 폭(<span class="term">눈 폭</span>)이 판정 여유다. 이퀄라이저 셋은 역할이 다르다. FFE는 송신 진폭 일부를 앞뒤 심볼 보정에 쓰고(최대 진폭이 고정이라 주 커서가 줄어든다), CTLE는 저주파를 깎아 상대적으로 고주파를 올리지만 고주파 잡음도 함께 키운다. DFE는 이미 판정한 심볼에 커서 값을 곱해 빼므로 잡음을 키우지 않지만 판정이 틀리면 오류가 번진다.</p>
+    <div class="sim" id="sim-eye">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>눈 다이어그램: PRBS → 채널 → 이퀄라이저 → BER</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="eye-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>변조</span><div class="seg" id="eye-mod"><button data-value="nrz">NRZ</button><button data-value="pam4" class="on">PAM4</button></div></div>
+          <div class="ctrl"><span>채널 모델</span><div class="seg" id="eye-ord"><button data-value="1">1차</button><button data-value="2" class="on">2차</button></div></div>
+          <label class="ctrl"><span>손실 @ f<sub>N</sub> <output id="eye-loss-out"></output></span><input type="range" id="eye-loss" min="0" max="30" step="0.5" value="20"></label>
+          <label class="ctrl"><span>TX FFE 앞 탭 <output id="eye-pre-out"></output></span><input type="range" id="eye-pre" min="-0.25" max="0" step="0.01" value="-0.05"></label>
+          <label class="ctrl"><span>TX FFE 뒤 탭 <output id="eye-post-out"></output></span><input type="range" id="eye-post" min="-0.4" max="0" step="0.01" value="-0.15"></label>
+          <label class="ctrl"><span>CTLE 피킹 <output id="eye-ctle-out"></output></span><input type="range" id="eye-ctle" min="0" max="15" step="0.5" value="6"></label>
+          <label class="ctrl"><span>DFE 탭 수 <output id="eye-dfe-out"></output></span><input type="range" id="eye-dfe" min="0" max="4" step="1" value="2"></label>
+          <label class="ctrl"><span>입력 잡음 <output id="eye-n-out"></output></span><input type="range" id="eye-n" min="0" max="10" step="0.5" value="3"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">눈 높이(가장 작은 눈)</span><span class="v" id="eye-h">—</span></div>
+        <div class="stat"><span class="k">눈 폭</span><span class="v" id="eye-w">—</span></div>
+        <div class="stat"><span class="k">샘플러 잡음 σ</span><span class="v" id="eye-s">—</span></div>
+        <div class="stat"><span class="k">추정 BER(FEC 전)</span><span class="v" id="eye-ber">—</span></div>
+        <div class="stat"><span class="k">RS(544,514) 후</span><span class="v" id="eye-post-fec">—</span></div>
+      </div>
+      <div class="sim-note">PRBS9 비트열(PAM4는 두 비트씩 그레이 부호)을 1 UI당 16샘플로 만들고, 손실을 맞춘 1차 또는 2차 저역 통과 채널, CTLE(영점·극점 하나, 저주파를 깎는 형태), 3탭 TX FFE를 차례로 통과시킨다. 송신 진폭 ±400 mV. 왼쪽은 DFE로 보정한 눈(2 UI), 오른쪽은 펄스 응답과 커서. BER은 샘플마다 가장 가까운 판정 문턱까지 거리 \(d\)를 재어 가우스 잡음의 \(Q(d/\sigma)\)를 평균한 통계적 추정이다. 해볼 것: ① 기본값(PAM4, 20 dB, CTLE 6 dB, DFE 2탭, 잡음 3 mV)은 눈 높이 약 12 mV, BER 약 2×10<sup>−5</sup>이지만 RS FEC 뒤에는 10<sup>−30</sup>대다. DFE를 0으로 줄이면 눈이 닫혀 BER 약 0.2가 되고 FEC도 고치지 못한다. ② 잡음을 4 mV로 올리면 BER이 약 2.5×10<sup>−4</sup>로 FEC 문턱(그림 14-6)에 닿아 FEC 뒤 약 10<sup>−15</sup>이 된다. ③ NRZ로 바꾸면 눈 높이가 약 7배(약 87 mV)로 커진다. PAM4에서 DFE 4탭이면 CTLE 없이 손실 25 dB에서도 눈이 열리지만, 손실을 22 dB로만 올려도 DFE 2탭으로는 닫힌다.</div>
+    </div>
+    <h3>거리와 매체: 구리는 어디까지 가는가</h3>
+    <p>SerDes가 감당할 수 있는 손실(범프에서 범프까지, \(f_N\)에서)은 224 Gb/s급에서 약 30 dB 안팎이다. 여기서 양쪽 패키지와 커넥터가 일부를 먼저 쓰고, 남는 만큼이 선로 길이가 된다. 손실은 \(f_N\)에 따라 커지므로 레인 속도를 두 배로 올리면 같은 매체의 도달 거리는 절반 이하로 줄어든다.</p>
+    <div class="sim" id="sim-reach">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>채널 손실 vs 거리·매체와 도달 거리</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="reach-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>레인 속도(PAM4)</span><div class="seg" id="reach-rate"><button data-value="56">56G</button><button data-value="112">112G</button><button data-value="224" class="on">224G</button><button data-value="448">448G</button></div></div>
+          <label class="ctrl"><span>손실 예산 <output id="reach-b-out"></output></span><input type="range" id="reach-b" min="20" max="40" step="1" value="30"></label>
+          <label class="ctrl"><span>선로 길이 <output id="reach-l-out"></output></span><input type="range" id="reach-l" min="0.05" max="5" step="0.05" value="1"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">f<sub>N</sub></span><span class="v" id="reach-fn">—</span></div>
+        <div class="stat"><span class="k">보드 배선 도달</span><span class="v" id="reach-pcb">—</span></div>
+        <div class="stat"><span class="k">구리 케이블 도달</span><span class="v" id="reach-cab">—</span></div>
+        <div class="stat"><span class="k">이 길이 케이블 손실</span><span class="v" id="reach-il">—</span></div>
+        <div class="stat"><span class="k">36레인 전력 구리 / 광 / CPO</span><span class="v" id="reach-pw">—</span></div>
+      </div>
+      <div class="sim-note">총 손실 = 고정 손실(양쪽 패키지·커넥터, \(0.15\,\text{dB/GHz} \times f_N\)) + 길이 × 매체 손실. 광섬유는 km당 0.3–0.4 dB라 길이 손실이 사실상 없고, 전기 구간(칩 → 광 엔진)만 남는다. 전력은 GX-1의 36레인(18링크 × 2)을 그 속도로 돌릴 때 SerDes 5 pJ/bit, 플러그형 광 모듈 15 pJ/bit, CPO 5 pJ/bit(에너지 표)로 계산한다. 해볼 것: ① 224G, 예산 30 dB에서 케이블은 약 1.7 m, 보드 배선은 약 27 cm다. GPU 8개를 한 섀시 안에 두고 스위치까지 케이블로 잇는 이유다. ② 112G로 내리면 케이블 도달이 약 3.3 m로 늘어난다. ③ 448G에서는 케이블이 약 0.6 m로 줄어 랙 안 연결조차 빠듯해진다. 광으로 가면 36레인 전력이 약 40 W에서 약 121 W(플러그형)로 3배가 된다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 스케일업 도메인의 크기는 구리의 도달 거리로 정해진다. 1–2 m 안에 GPU와 스위치를 몰아넣어야 하므로 노드는 GPU 8개, 크게 잡아도 랙 하나다. 그보다 멀리 가려면 광을 써야 하는데, 플러그형 광 모듈은 비트당 에너지가 3배라 900 GB/s급 링크를 모두 광으로 바꾸면 GPU당 약 80 W가 더 든다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="fec">
+    <h2>비트 오류율과 FEC</h2>
+    <p><span class="term">비트 오류율</span><span class="en">(bit error rate, BER)</span>은 받은 비트 중 틀린 비율이다. 900 GB/s 링크에서 BER \(10^{-12}\)이면 \(7.2\times10^{12}\) b/s × \(10^{-12}\) = 초당 약 7개가 틀린다. 학습은 몇 주씩 돌기 때문에 실효 BER은 \(10^{-15}\) 이하가 필요하다. PAM4의 9.5 dB 손해를 안고 원시 BER을 그만큼 낮추는 것은 불가능하므로, <span class="term">순방향 오류 정정</span><span class="en">(forward error correction, FEC)</span>을 붙인다.</p>
+    <p>대표적인 것이 리드–솔로몬 부호 <span class="term">RS(544,514)</span>다. 10비트 심볼 514개에 검사 심볼 30개를 붙여 544개로 보내고, 한 부호어 안에서 심볼 오류 15개까지(\(t = (n-k)/2\)) 고친다. 오버헤드는 약 5.8 %다. 심볼 오류율이 \(p_s = 1-(1-p_b)^{10}\)일 때 부호어가 복구되지 않을 확률은 이항 분포의 꼬리</p>
+    <div class="formula">$$ P_{fail} = \sum_{i=t+1}^{n} \binom{n}{i} p_s^{\,i} (1-p_s)^{n-i}, \qquad BER_{post} \approx \sum_{i=t+1}^{n} \frac{i}{n}\binom{n}{i} p_s^{\,i}(1-p_s)^{n-i} \cdot \frac{p_b}{p_s} $$
+      <div class="where">\(n\) = 544, \(k\) = 514, \(t\) = 15. 오류가 서로 독립이라는 가정(DFE 오류 전파나 버스트가 있으면 인터리빙이 필요하다).</div>
+    </div>
+    <figure class="diagram">
+      <div class="sim-view"><canvas id="fec-cv"></canvas></div>
+      <figcaption><b>그림 14-6.</b> RS(544,514) 앞뒤 BER(위 식으로 계산). FEC 전 BER \(2.4\times10^{-4}\)이 FEC 후 약 \(2\times10^{-15}\)이 된다. 곡선이 매우 가파르다. FEC 전 BER이 10배 나빠지면(\(2.4\times10^{-3}\)) FEC 후는 약 \(7.5\times10^{-4}\)로 무너진다(절벽 효과).</figcaption>
+    </figure>
+    <p>FEC는 공짜가 아니다. 부호어 하나(5,440비트)를 다 받아야 복호를 시작하므로 224 Gb/s 레인 하나에서 수십 ns가 걸리고, 여러 레인에 나눠 실어도 수 ns~수십 ns의 지연과 복호기 면적·전력이 든다. 224 Gb/s 레인의 유효 데이터율이 200 Gb/s인 것은 FEC와 부호화 오버헤드를 뺀 값이다(이 장의 교육용 가정, 약 11 %).</p>
+    <p><b>왜 이렇게 설계하는가.</b> FEC는 "아날로그를 덜 완벽하게 만들고 디지털로 메우는" 선택이다. 이퀄라이저로 BER을 \(10^{-15}\)까지 낮추는 것보다 \(10^{-4}\)까지만 낮추고 FEC로 11자리를 버는 편이 면적·전력이 훨씬 싸다. 대가는 지연이므로, 지연에 민감한 텐서 병렬 통신이 FEC 지연까지 감수하는지가 링크 설계의 한 축이 된다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="budget">
+    <h2>링크 예산: 대역폭·전력·가장자리</h2>
+    <p>칩간 링크의 비용은 세 가지로 센다. 대역폭은 레인 수 × 레인 속도, 전력은 비트율 × pJ/bit, 면적은 SerDes 매크로가 차지하는 <span class="term">다이 가장자리</span><span class="en">(shoreline, beachfront)</span> 길이다. SerDes는 범프를 거쳐 패키지 밖으로 나가야 하므로 다이 둘레에 붙는다. GX-1의 긴 변 두 개(30 mm × 2)는 HBM PHY가 이미 차지하고 있으므로(8장), 링크는 짧은 변 두 개(26 mm × 2 = 52 mm)를 쓴다.</p>
+    <div class="formula">$$ BW_{dir} = n_{link}\, n_{lane}\, R_{lane}\, \eta, \qquad P_{SerDes} = n_{link}\, n_{lane}\, R_{lane}\, E_{bit} $$
+      <div class="where">\(\eta\) = 200/224(FEC·부호화 후 유효 비율), \(E_{bit}\) = 레인 하나의 송신 + 수신을 합친 비트당 에너지. 이 장의 교육용 가정: 레인(송수신 한 쌍) 하나가 가장자리 약 0.8 mm, 면적 약 0.5 mm².</div>
+    </div>
+    <div class="callout fab"><strong>GX-Link 예산</strong>GX-Link 18개 × 방향당 2레인 = 레인 36개. 방향당 \(36 \times 200\) Gb/s = 7.2 Tb/s = <b>900 GB/s</b>, 양방향 1.8 TB/s. SerDes는 원시 속도 224 Gb/s로 돌므로 전력은 \(36 \times 224\,\text{Gb/s} \times 5\,\text{pJ/bit} \approx\) <b>40 W</b>(로직 다이 760 W의 약 5 %, 유효 비트당 약 5.6 pJ). 가장자리는 \(36 \times 0.8 \approx 29\) mm로 짧은 변 52 mm의 약 55 %, 면적은 약 18 mm²(다이의 약 2.3 %)다. 나머지 가장자리에는 PCIe 6.0 x16(방향당 원시 약 128 GB/s)과 전원·기타 I/O가 놓인다. HBM 7.37 TB/s와 비교하면 칩 밖 링크 대역폭은 약 1/8이다.</div>
+    <figure class="diagram">
+      <svg viewBox="0 0 600 330" role="img" aria-label="GX-1 다이 평면의 가장자리 배분. 26 × 30 mm 다이의 좌우 긴 변에 HBM PHY와 HBM 스택 3개씩, 위아래 짧은 변에 SerDes 레인 18개씩, 아래쪽 일부에 PCIe">
+        <rect x="40" y="60" width="74" height="70" rx="4" class="m-dram"/><rect x="40" y="135" width="74" height="70" rx="4" class="m-dram"/><rect x="40" y="210" width="74" height="70" rx="4" class="m-dram"/>
+        <rect x="486" y="60" width="74" height="70" rx="4" class="m-dram"/><rect x="486" y="135" width="74" height="70" rx="4" class="m-dram"/><rect x="486" y="210" width="74" height="70" rx="4" class="m-dram"/>
+        <text x="77" y="50" class="t t-c">HBM ×3</text><text x="523" y="50" class="t t-c">HBM ×3</text>
+        <rect x="170" y="50" width="260" height="240" class="m-si"/>
+        <rect x="170" y="50" width="16" height="240" class="kf-dram" opacity=".75"/><rect x="414" y="50" width="16" height="240" class="kf-dram" opacity=".75"/>
+        <rect x="196" y="50" width="208" height="12" class="kf-link"/>
+        <rect x="196" y="278" width="208" height="12" class="kf-link"/>
+        <text x="300" y="42" class="kt-link t-c">SerDes 18레인 ≈ 14 mm</text>
+        <text x="300" y="312" class="kt-link t-c">SerDes 18레인 ≈ 14 mm</text>
+        <text x="300" y="150" class="t t-b t-c">GX-1 로직 다이</text>
+        <text x="300" y="172" class="t-dim t-c">26 × 30 mm = 780 mm²</text>
+        <text x="300" y="194" class="t-dim t-c">짧은 변 26 mm × 2 = 52 mm</text>
+        <text x="300" y="216" class="t-dim t-c">링크가 약 29 mm 사용</text>
+        <text x="142" y="174" class="t-dim t-c" transform="rotate(-90 142 174)">HBM PHY 30 mm</text>
+        <text x="458" y="174" class="t-dim t-c" transform="rotate(90 458 174)">HBM PHY 30 mm</text>
+        <text x="300" y="250" class="t-dim t-c">짧은 변 나머지: PCIe·전원·기타 I/O</text>
+      </svg>
+      <figcaption><b>그림 14-7.</b> GX-1 다이 가장자리의 배분(교육용 배치). 긴 변은 HBM PHY, 짧은 변은 칩간 링크 SerDes가 쓴다. 칩 밖으로 나가는 대역폭은 결국 다이 둘레 길이 × 가장자리 밀도(Gb/s/mm)로 제한된다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-budget">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>링크 예산: 링크 수 × 레인 × 속도 → 대역폭·전력·가장자리</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bud-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>링크 수 <output id="bud-n-out"></output></span><input type="range" id="bud-n" min="1" max="36" step="1" value="18"></label>
+          <label class="ctrl"><span>링크당 레인(방향당) <output id="bud-l-out"></output></span><input type="range" id="bud-l" min="1" max="4" step="1" value="2"></label>
+          <div class="ctrl"><span>레인 속도</span><div class="seg" id="bud-r"><button data-value="56">56G</button><button data-value="112">112G</button><button data-value="224" class="on">224G</button></div></div>
+          <label class="ctrl"><span>SerDes 에너지 <output id="bud-e-out"></output></span><input type="range" id="bud-e" min="1" max="10" step="0.5" value="5"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">방향당 대역폭</span><span class="v" id="bud-bw">—</span></div>
+        <div class="stat"><span class="k">SerDes 전력</span><span class="v" id="bud-p">—</span></div>
+        <div class="stat"><span class="k">가장자리 사용</span><span class="v" id="bud-edge">—</span></div>
+        <div class="stat"><span class="k">SerDes 면적</span><span class="v" id="bud-area">—</span></div>
+        <div class="stat"><span class="k">HBM 대비</span><span class="v" id="bud-hbm">—</span></div>
+      </div>
+      <div class="sim-note">다이 그림은 축척대로 그린 GX-1이다. 짧은 변 두 개에 레인을 채우고, 넘치면 빨간색으로 표시한다. 해볼 것: ① 기본값 18 × 2 × 224G에서 900 GB/s, 40 W, 29 mm다. ② 112G로 같은 900 GB/s를 내려면 레인이 72개 필요하다(링크 36 × 2). 가장자리 58 mm로 짧은 변을 넘친다. 레인 속도를 올리는 이유다. ③ 링크를 36개로 늘려 1.8 TB/s를 만들면 전력 81 W, 가장자리도 넘친다. 그다음은 가장자리 대신 면 전체를 쓰는 광 연결(CPO)이나 더 큰 패키지의 문제다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 칩 밖 대역폭은 둘레에 비례하고 칩 안 연산은 면적에 비례한다. 다이를 키우면 연산은 제곱으로, 둘레는 1차로 늘어 FLOP당 칩 밖 대역폭이 줄어든다. 그래서 레인 속도(Gb/s/mm)를 세대마다 두 배로 올려야 하고, 그 속도를 감당하는 이퀄라이저와 FEC가 pJ/bit를 정한다.</p>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="topology">
+    <h2>스위치 칩과 토폴로지: GX-8 노드</h2>
+    <p>GPU 8개를 잇는 방법은 여러 가지다. 링크를 이웃에게만 주는 <b>링</b>, 격자로 잇고 끝을 감는 <b>2D 토러스</b>, 모든 쌍을 직접 잇는 <b>전연결 메시</b>, 그리고 모든 링크를 <span class="term">스위치 칩</span>으로 보내 스위치가 갈 곳을 고르는 <b>스위치형</b>이다. 토폴로지를 비교하는 숫자는 <span class="term">이분 대역폭</span><span class="en">(bisection bandwidth)</span>, 즉 GPU를 절반씩 나누었을 때 한쪽에서 다른 쪽으로 동시에 보낼 수 있는 대역폭과, 평균 홉 수다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 720 270" role="img" aria-label="GX-8 노드. 위에 GX-1 네 개, 아래에 네 개, 가운데 GX-Switch 칩 네 개. 각 GPU의 링크 18개가 네 스위치에 4–5개씩 나뉘어 연결된다">
+        <g>
+          <rect x="30" y="20" width="120" height="46" rx="8" class="k-compute"/><text x="90" y="49" class="t t-c">GX-1 #0</text>
+          <rect x="205" y="20" width="120" height="46" rx="8" class="k-compute"/><text x="265" y="49" class="t t-c">GX-1 #1</text>
+          <rect x="395" y="20" width="120" height="46" rx="8" class="k-compute"/><text x="455" y="49" class="t t-c">GX-1 #2</text>
+          <rect x="570" y="20" width="120" height="46" rx="8" class="k-compute"/><text x="630" y="49" class="t t-c">GX-1 #3</text>
+          <rect x="30" y="204" width="120" height="46" rx="8" class="k-compute"/><text x="90" y="233" class="t t-c">GX-1 #4</text>
+          <rect x="205" y="204" width="120" height="46" rx="8" class="k-compute"/><text x="265" y="233" class="t t-c">GX-1 #5</text>
+          <rect x="395" y="204" width="120" height="46" rx="8" class="k-compute"/><text x="455" y="233" class="t t-c">GX-1 #6</text>
+          <rect x="570" y="204" width="120" height="46" rx="8" class="k-compute"/><text x="630" y="233" class="t t-c">GX-1 #7</text>
+        </g>
+        <g class="sc-wire">
+          <path d="M90 66L120 112M90 66L285 112M90 66L435 112M90 66L600 112"/>
+          <path d="M265 66L120 112M265 66L285 112M265 66L435 112M265 66L600 112"/>
+          <path d="M455 66L120 112M455 66L285 112M455 66L435 112M455 66L600 112"/>
+          <path d="M630 66L120 112M630 66L285 112M630 66L435 112M630 66L600 112"/>
+          <path d="M90 204L120 158M90 204L285 158M90 204L435 158M90 204L600 158"/>
+          <path d="M265 204L120 158M265 204L285 158M265 204L435 158M265 204L600 158"/>
+          <path d="M455 204L120 158M455 204L285 158M455 204L435 158M455 204L600 158"/>
+          <path d="M630 204L120 158M630 204L285 158M630 204L435 158M630 204L600 158"/>
+        </g>
+        <rect x="70" y="112" width="100" height="46" rx="8" class="k-link"/><text x="120" y="140" class="t t-c">스위치 A</text>
+        <rect x="235" y="112" width="100" height="46" rx="8" class="k-link"/><text x="285" y="140" class="t t-c">스위치 B</text>
+        <rect x="385" y="112" width="100" height="46" rx="8" class="k-link"/><text x="435" y="140" class="t t-c">스위치 C</text>
+        <rect x="550" y="112" width="100" height="46" rx="8" class="k-link"/><text x="600" y="140" class="t t-c">스위치 D</text>
+        <text x="360" y="186" class="t-dim t-c">GPU당 링크 18개 = 스위치마다 4–5개 · 스위치당 포트 36개(8 GPU × 4.5)</text>
+      </svg>
+      <figcaption><b>그림 14-8.</b> GX-8 노드의 스위치형 전연결. 모든 GPU가 모든 스위치에 링크를 나눠 꽂으므로 어떤 GPU 쌍이든 900 GB/s 전부로 통신할 수 있고(동시에 한 상대일 때), 이분 대역폭은 4 × 900 GB/s = 3.6 TB/s다. 경로는 항상 GPU → 스위치 → GPU의 2링크다.</figcaption>
+    </figure>
+    <div class="sim" id="sim-topo">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>토폴로지 비교: 이분 대역폭·홉·스위치 수</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="topo-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>토폴로지</span><div class="seg" id="topo-k"><button data-value="switch" class="on">스위치</button><button data-value="ring">링</button><button data-value="torus">2D 토러스</button><button data-value="mesh">직접 메시</button></div></div>
+          <div class="ctrl"><span>GPU 수</span><div class="seg" id="topo-p"><button data-value="8" class="on">8</button><button data-value="16">16</button><button data-value="32">32</button><button data-value="64">64</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">이분 대역폭(방향당)</span><span class="v" id="topo-bis">—</span></div>
+        <div class="stat"><span class="k">평균 / 최대 홉</span><span class="v" id="topo-hop">—</span></div>
+        <div class="stat"><span class="k">이웃(쌍) 대역폭</span><span class="v" id="topo-nb">—</span></div>
+        <div class="stat"><span class="k">스위치 칩</span><span class="v" id="topo-sw">—</span></div>
+        <div class="stat"><span class="k">올리듀스 1 GB / 올투올 1 GB</span><span class="v" id="topo-t">—</span></div>
+      </div>
+      <div class="sim-note">모든 경우 GPU당 링크 18개 × 50 GB/s(방향당 900 GB/s)를 쓴다. 링은 이웃 둘에 9개씩, 토러스는 이웃 넷에 4.5개씩, 직접 메시는 상대마다 \(\lfloor 18/(p-1) \rfloor\)개다. 스위치는 포트 36개, GPU 36개를 넘으면 2단(리프·스파인)으로 계산한다. 올투올 시간은 \(\max\big(m(p-1)/p \div BW_{inj},\ (pm/4) \div BW_{bis}\big)\). 해볼 것: ① p = 8에서 올리듀스는 네 토폴로지가 거의 같다(약 2 ms, 직접 메시만 링크 4개가 남아 약 2.5 ms). 링 올리듀스는 이웃 대역폭만 쓰기 때문이다. ② 같은 p = 8의 올투올은 스위치 약 0.97 ms, 링 약 2.2 ms다. ③ p = 64로 늘리면 링의 올투올은 약 18 ms, 토러스 약 4.4 ms, 스위치(2단) 약 1.1 ms다. 전문가 병렬을 큰 도메인에서 쓰려면 스위치가 필요하다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 스위치형은 스위치 칩(GX-8에서 4개)과 그 전력·보드 면적이 추가 비용이지만, 어떤 통신 패턴이든 GPU당 900 GB/s를 낼 수 있어 소프트웨어가 토폴로지를 신경 쓰지 않아도 된다. 링·토러스는 스위치가 없어 싸고 확장이 쉽지만, 올투올과 임의 점대점 통신에서 이분 대역폭이 \(p\)만큼 늘지 않는다.</p>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="allreduce">
+    <h2>올리듀스 시간 모델</h2>
+    <p>올리듀스는 GPU \(p\)개가 각자 가진 크기 \(n\) 바이트의 벡터를 원소별로 더해, 그 합을 모두가 갖게 하는 연산이다. 가장 널리 쓰는 <span class="term">링 올리듀스</span>는 벡터를 \(p\)조각으로 나누고, 두 단계로 진행한다. <b>리듀스–스캐터</b>에서는 \(p-1\)번에 걸쳐 각 GPU가 한 조각을 다음 GPU에 보내고 받은 조각을 자기 것에 더한다. 끝나면 GPU마다 완성된 조각 하나를 갖는다. <b>올개더</b>에서는 다시 \(p-1\)번에 걸쳐 완성된 조각을 돌린다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 720 220" role="img" aria-label="GPU 4개의 링 올리듀스. 처음에는 각 GPU가 네 조각 모두 자기 값 하나씩만 갖고, 리듀스-스캐터 3단계 뒤에는 GPU마다 완성된 조각 하나, 올개더 3단계 뒤에는 모든 조각이 완성된다">
+        <text x="110" y="22" class="t t-b t-c">시작</text><text x="360" y="22" class="t t-b t-c">리듀스–스캐터 3단계 뒤</text><text x="610" y="22" class="t t-b t-c">올개더 3단계 뒤</text>
+        <g class="sc-m"><text x="20" y="62">GPU 0</text><text x="20" y="100">GPU 1</text><text x="20" y="138">GPU 2</text><text x="20" y="176">GPU 3</text></g>
+        <g class="sc-cell">
+          <rect x="72" y="46" width="36" height="26" class="sc-c0"/><rect x="110" y="46" width="36" height="26" class="sc-c0"/><rect x="148" y="46" width="36" height="26" class="sc-c0"/><rect x="186" y="46" width="36" height="26" class="sc-c0"/>
+          <rect x="72" y="84" width="36" height="26" class="sc-c0"/><rect x="110" y="84" width="36" height="26" class="sc-c0"/><rect x="148" y="84" width="36" height="26" class="sc-c0"/><rect x="186" y="84" width="36" height="26" class="sc-c0"/>
+          <rect x="72" y="122" width="36" height="26" class="sc-c0"/><rect x="110" y="122" width="36" height="26" class="sc-c0"/><rect x="148" y="122" width="36" height="26" class="sc-c0"/><rect x="186" y="122" width="36" height="26" class="sc-c0"/>
+          <rect x="72" y="160" width="36" height="26" class="sc-c0"/><rect x="110" y="160" width="36" height="26" class="sc-c0"/><rect x="148" y="160" width="36" height="26" class="sc-c0"/><rect x="186" y="160" width="36" height="26" class="sc-c0"/>
+          <rect x="290" y="46" width="36" height="26" class="sc-c0"/><rect x="328" y="46" width="36" height="26" class="sc-c3"/><rect x="366" y="46" width="36" height="26" class="sc-c2"/><rect x="404" y="46" width="36" height="26" class="sc-c1"/>
+          <rect x="290" y="84" width="36" height="26" class="sc-c1"/><rect x="328" y="84" width="36" height="26" class="sc-c0"/><rect x="366" y="84" width="36" height="26" class="sc-c3"/><rect x="404" y="84" width="36" height="26" class="sc-c2"/>
+          <rect x="290" y="122" width="36" height="26" class="sc-c2"/><rect x="328" y="122" width="36" height="26" class="sc-c1"/><rect x="366" y="122" width="36" height="26" class="sc-c0"/><rect x="404" y="122" width="36" height="26" class="sc-c3"/>
+          <rect x="290" y="160" width="36" height="26" class="sc-c3"/><rect x="328" y="160" width="36" height="26" class="sc-c2"/><rect x="366" y="160" width="36" height="26" class="sc-c1"/><rect x="404" y="160" width="36" height="26" class="sc-c0"/>
+          <rect x="540" y="46" width="36" height="26" class="sc-c3"/><rect x="578" y="46" width="36" height="26" class="sc-c3"/><rect x="616" y="46" width="36" height="26" class="sc-c3"/><rect x="654" y="46" width="36" height="26" class="sc-c3"/>
+          <rect x="540" y="84" width="36" height="26" class="sc-c3"/><rect x="578" y="84" width="36" height="26" class="sc-c3"/><rect x="616" y="84" width="36" height="26" class="sc-c3"/><rect x="654" y="84" width="36" height="26" class="sc-c3"/>
+          <rect x="540" y="122" width="36" height="26" class="sc-c3"/><rect x="578" y="122" width="36" height="26" class="sc-c3"/><rect x="616" y="122" width="36" height="26" class="sc-c3"/><rect x="654" y="122" width="36" height="26" class="sc-c3"/>
+          <rect x="540" y="160" width="36" height="26" class="sc-c3"/><rect x="578" y="160" width="36" height="26" class="sc-c3"/><rect x="616" y="160" width="36" height="26" class="sc-c3"/><rect x="654" y="160" width="36" height="26" class="sc-c3"/>
+        </g>
+        <path d="M232 116H278" class="arr"/><path d="M450 116H528" class="arr"/>
+        <text x="360" y="208" class="t-dim t-c">색 진하기 = 더해진 GPU 수(1 → 4). 조각 c는 GPU c−1에서 완성된다</text>
+      </svg>
+      <figcaption><b>그림 14-9.</b> GPU 4개의 링 올리듀스. 리듀스–스캐터 \(p-1\)단계 뒤 GPU마다 완성된 조각(진한 칸) 하나, 올개더 \(p-1\)단계 뒤 모두 완성. 각 단계에서 GPU는 조각 하나(\(n/p\) 바이트)를 보내고 받는다.</figcaption>
+    </figure>
+    <p>단계가 \(2(p-1)\)개이고 단계마다 \(n/p\)를 보내므로, 링크 대역폭 \(BW\)와 단계당 고정 지연 \(\alpha\)(소프트웨어·링크·스위치 지연)로 쓰면</p>
+    <div class="formula">$$ T_{ring} = 2\frac{p-1}{p}\cdot\frac{n}{BW} + 2(p-1)\,\alpha, \qquad T_{tree} \approx 2\frac{n}{BW} + 2\lceil\log_2 p\rceil\,\alpha, \qquad T_{switch} \approx \frac{n}{BW} + 2\alpha $$
+      <div class="where">트리는 조각을 파이프라인으로 흘리는 이중 이진 트리의 근사. 스위치 내 리덕션은 GPU가 \(n\)을 스위치로 한 번 보내면 스위치가 더해서 결과를 돌려보내는(멀티캐스트) 방식이라 대역폭 항이 링의 약 절반이다.</div>
+    </div>
+    <p>큰 메시지에서는 대역폭 항이, 작은 메시지에서는 지연 항이 지배한다. 링의 지연 항은 \(p\)에 비례해 커지므로 GPU가 많고 메시지가 작으면 트리가 이긴다. 대역폭 항은 \(p\)가 커져도 \(2n/BW\)를 넘지 않는다. 이것이 링 올리듀스가 "GPU 수에 무관하게 확장된다"는 말의 뜻이다.</p>
+    <div class="sim" id="sim-ar">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>올리듀스: 링 단계 애니메이션과 링·트리·스위치 시간</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ar-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>GPU 수 p <output id="ar-p-out"></output></span><input type="range" id="ar-p" min="2" max="16" step="1" value="8"></label>
+          <label class="ctrl"><span>메시지 크기 n <output id="ar-n-out"></output></span><input type="range" id="ar-n" min="3" max="11" step="0.1" value="9"></label>
+          <label class="ctrl"><span>링크 대역폭 BW <output id="ar-bw-out"></output></span><input type="range" id="ar-bw" min="25" max="900" step="25" value="900"></label>
+          <label class="ctrl"><span>단계 지연 α <output id="ar-a-out"></output></span><input type="range" id="ar-a" min="0.5" max="20" step="0.5" value="3"></label>
+          <div class="btn-row"><button class="btn primary" id="ar-play">멈춤</button><button class="btn" id="ar-step">한 단계</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">링</span><span class="v" id="ar-ring">—</span></div>
+        <div class="stat"><span class="k">트리</span><span class="v" id="ar-tree">—</span></div>
+        <div class="stat"><span class="k">스위치 내 리덕션</span><span class="v" id="ar-sw">—</span></div>
+        <div class="stat"><span class="k">링의 지연 항 비중</span><span class="v" id="ar-lat">—</span></div>
+        <div class="stat"><span class="k">링 = 트리 교차 크기</span><span class="v" id="ar-x">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽: GPU마다 조각 \(p\)개의 칸, 색 진하기는 더해진 기여 수. 움직이는 점이 이번 단계에 보내는 조각이다. 오른쪽: 메시지 크기에 따른 세 알고리즘의 시간(로그–로그). 해볼 것: ① p = 8, 1 GB, 900 GB/s, α = 3 µs에서 링은 약 1.99 ms(대역폭 항 1.94 ms + 지연 42 µs), 스위치 내 리덕션은 약 1.12 ms다. ② 메시지를 1 MB(n = 6)로 줄이면 링 약 44 µs 중 지연이 약 95 %이고 트리(약 20 µs)가 이긴다. ③ BW를 100 GB/s(NIC 수준)로 낮추면 1 GB 링이 약 17.5 ms로 9배 길어진다.</div>
+    </div>
+    <div class="callout fab"><strong>GX-8 노드 안의 기울기 올리듀스</strong>GX-LM-70B의 BF16 기울기는 \(2N\) = 140 GB다. GX-8에서 데이터 병렬로만 나눈다면(메모리는 맞지 않지만 통신만 보면) 링 올리듀스는 \(2 \times 7/8 \times 140\,\text{GB} / 900\,\text{GB/s} \approx\) <b>0.27 s</b>, 스위치 내 리덕션이면 약 0.16 s다. 같은 양을 NIC 100 GB/s로 보내면 링 약 2.45 s다. 실제 구성(노드 안 TP 8, 노드 사이 DP)에서는 GPU마다 기울기의 1/8인 17.5 GB만 노드 사이로 올리듀스하므로, NIC 100 GB/s에서 큰 DP 그룹은 약 0.35 s가 된다(<a href="#scaleout">10절</a>).</div>
+    <p><b>왜 이렇게 설계하는가.</b> 링 올리듀스의 대역폭 항 \(2n/BW\)는 링크 대역폭만으로 정해진다. 그래서 칩간 링크의 GB/s는 학습 단계 시간에 곧바로 들어간다. 스위치 칩 안에 덧셈기를 넣는 스위치 내 리덕션은 스위치 면적을 조금 더 써서 대역폭 항을 절반으로 줄이고, 지연 항도 단계 수와 무관하게 만든다.</p>
+  </section>
+
+  <!-- ============================================================ 10 -->
+  <section id="scaleout">
+    <h2>스케일업과 스케일아웃, 그리고 광</h2>
+    <p><span class="term">스케일업</span><span class="en">(scale-up)</span> 네트워크는 GPU의 칩간 링크와 스위치 칩으로 GPU들을 메모리 접근 수준으로 묶는다(GX-8 노드 안, GPU당 900 GB/s, 지연 1 µs 안팎). <span class="term">스케일아웃</span><span class="en">(scale-out)</span> 네트워크는 노드마다 NIC를 달아 이더넷·인피니밴드류 스위치로 수천 노드를 묶는다(GPU당 NIC 800 Gb/s = 100 GB/s, 지연 수 µs). 대역폭 차이는 9배다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 740 250" role="img" aria-label="계층 구조. GX-8 노드 안은 구리 케이블과 스위치 칩으로 GPU당 900 GB/s, 노드 밖은 NIC와 광 모듈로 GPU당 100 GB/s, 리프·스파인 스위치로 수천 노드 연결. 오른쪽에 매체별 도달 거리와 pJ/bit 비교">
+        <rect x="14" y="14" width="200" height="120" rx="10" class="chip"/><text x="114" y="34" class="t t-b t-c">GX-8 노드</text>
+        <g><rect x="28" y="46" width="34" height="24" rx="4" class="k-compute"/><rect x="66" y="46" width="34" height="24" rx="4" class="k-compute"/><rect x="104" y="46" width="34" height="24" rx="4" class="k-compute"/><rect x="142" y="46" width="34" height="24" rx="4" class="k-compute"/>
+        <rect x="28" y="96" width="34" height="24" rx="4" class="k-compute"/><rect x="66" y="96" width="34" height="24" rx="4" class="k-compute"/><rect x="104" y="96" width="34" height="24" rx="4" class="k-compute"/><rect x="142" y="96" width="34" height="24" rx="4" class="k-compute"/></g>
+        <rect x="28" y="74" width="148" height="18" rx="4" class="k-link"/><text x="102" y="88" class="t-dim t-c">스위치 ×4 · 구리</text>
+        <rect x="182" y="46" width="24" height="74" rx="4" class="k-data"/><text x="194" y="88" class="t-dim t-c">NIC</text>
+        <rect x="14" y="150" width="200" height="86" rx="10" class="chip"/><text x="114" y="172" class="t t-b t-c">GX-8 노드 …</text><text x="114" y="196" class="t-dim t-c">× 수백 대</text><text x="114" y="220" class="t-dim t-c">GX-Rack = 노드 4대</text>
+        <path d="M214 82H270M214 194H270" class="ks-data"/>
+        <rect x="270" y="60" width="96" height="40" rx="8" class="k-data"/><text x="318" y="85" class="t t-c">리프</text>
+        <rect x="270" y="172" width="96" height="40" rx="8" class="k-data"/><text x="318" y="197" class="t t-c">리프</text>
+        <rect x="390" y="116" width="96" height="40" rx="8" class="k-data"/><text x="438" y="141" class="t t-c">스파인</text>
+        <path d="M366 80L390 130M366 192L390 142" class="ks-data"/>
+        <text x="318" y="40" class="t-dim t-c">광 모듈 · 100 GB/s/GPU</text>
+        <text x="500" y="26" class="t t-b">매체별 도달 거리와 비트당 에너지</text>
+        <text x="500" y="54" class="t">구리 SerDes</text><rect x="600" y="42" width="40" height="16" class="kf-link"/><text x="648" y="55" class="t-dim">5 pJ · ~2 m</text>
+        <text x="500" y="88" class="t">플러그형 광</text><rect x="600" y="76" width="120" height="16" class="kf-data"/><text x="604" y="112" class="t-dim">15 pJ · 100 m–2 km</text>
+        <text x="500" y="140" class="t">CPO</text><rect x="600" y="128" width="40" height="16" class="kf-data"/><text x="648" y="141" class="t-dim">5 pJ · 100 m+</text>
+        <text x="500" y="176" class="t-dim">막대 = pJ/bit(에너지 표).</text>
+        <text x="500" y="196" class="t-dim">CPO는 광 엔진을 스위치·GPU</text>
+        <text x="500" y="216" class="t-dim">패키지 안에 넣어 긴 전기 구간을</text>
+        <text x="500" y="236" class="t-dim">없앤다.</text>
+      </svg>
+      <figcaption><b>그림 14-10.</b> 스케일업(노드 안, 구리, 900 GB/s)과 스케일아웃(노드 밖, NIC와 광, 100 GB/s). 플러그형 광 모듈은 호스트 칩에서 모듈까지의 전기 SerDes와 모듈 안 DSP·레이저 드라이버가 에너지를 더 쓴다. 공동 패키징 광학(CPO)은 그 전기 구간을 수 mm로 줄여 구리 SerDes 수준의 pJ/bit로 광 도달 거리를 얻는다.</figcaption>
+    </figure>
+    <div class="table-wrap"><table>
+      <thead><tr><th>연결</th><th>대표 대역폭(GPU당, 방향당)</th><th>도달 거리</th><th>비트당 에너지</th><th>900 GB/s(7.2 Tb/s 유효)에 드는 전력</th></tr></thead>
+      <tbody>
+        <tr><td>HBM(참고, 패키지 안)</td><td>7.37 TB/s</td><td>수 mm(인터포저)</td><td>약 3 pJ/bit</td><td>—</td></tr>
+        <tr><td>GX-Link 구리 SerDes</td><td>900 GB/s</td><td>약 1–2 m(224G)</td><td>약 5 pJ/bit</td><td>약 40 W(원시 8.06 Tb/s 기준)</td></tr>
+        <tr><td>플러그형 광 모듈</td><td>(NIC) 100 GB/s</td><td>100 m–2 km</td><td>약 15 pJ/bit</td><td>약 121 W</td></tr>
+        <tr><td>공동 패키징 광학(CPO)</td><td>설계에 따라</td><td>100 m 이상</td><td>약 5 pJ/bit</td><td>약 40 W</td></tr>
+      </tbody>
+    </table></div>
+    <p>학습 단계 하나의 시간은 계산, 노드 안 텐서 병렬 통신, 노드 사이 데이터 병렬 통신의 합에서 겹쳐 숨긴 만큼을 뺀 것이다. 데이터 병렬 기울기 올리듀스는 역전파가 층별로 끝나는 대로 시작할 수 있어 역전파 계산(전체 계산의 약 2/3)과 겹칠 수 있다. 텐서 병렬 통신은 다음 계산이 그 결과를 기다리므로 대부분 드러난다고 가정한다.</p>
+    <div class="formula">$$ T_{step} = t_{comp} + t_{TP} + t_{DP} - \min\!\big(\phi\, t_{DP},\ \tfrac{2}{3} t_{comp}\big), \qquad t_{DP} = 2\frac{d-1}{d}\cdot\frac{2N/8}{BW_{NIC}} $$
+      <div class="where">노드 \(d\)대, 노드 안 TP 8, 노드 사이 DP \(d\). \(\phi\) 겹치기 비율. 효율 \(= t_{comp}/T_{step}\).</div>
+    </div>
+    <div class="sim" id="sim-scale">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>스케일업 vs 스케일아웃: 학습 단계 시간 분해</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sc-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>노드 수 d <output id="sc-d-out"></output></span><input type="range" id="sc-d" min="0" max="10" step="1" value="6"></label>
+          <label class="ctrl"><span>전역 배치(시퀀스) <output id="sc-b-out"></output></span><input type="range" id="sc-b" min="256" max="4096" step="256" value="512"></label>
+          <label class="ctrl"><span>DP 겹치기 φ <output id="sc-o-out"></output></span><input type="range" id="sc-o" min="0" max="1" step="0.05" value="0.8"></label>
+          <label class="check"><input type="checkbox" id="sc-tpout"> 텐서 병렬을 NIC로(노드 4 GPU씩 쪼갠 경우처럼)</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">GPU 수</span><span class="v" id="sc-n">—</span></div>
+        <div class="stat"><span class="k">계산 / TP / DP</span><span class="v" id="sc-parts">—</span></div>
+        <div class="stat"><span class="k">단계 시간</span><span class="v" id="sc-step">—</span></div>
+        <div class="stat"><span class="k">효율</span><span class="v" id="sc-eff">—</span></div>
+        <div class="stat"><span class="k">처리량</span><span class="v" id="sc-tok">—</span></div>
+      </div>
+      <div class="sim-note">위: 이 설정의 단계 시간 막대(계산, 드러난 TP, 드러난 DP, 숨긴 DP는 빗금). 아래: 노드 수에 따른 효율(실선: 지금 설정, 점선: TP를 NIC로). MFU 50 % 가정. 해볼 것: ① 노드 64대(GPU 512개), 시퀀스 512개에서 계산 약 7.3 s, TP 약 0.67 s, DP 약 0.34 s(80 % 겹침)로 효율 약 91 %다. ② 노드를 1,024대(GPU 8,192개)로 늘리면 계산이 약 0.46 s로 줄어 DP 0.36 s가 상대적으로 커지고 효율이 약 80 %로 떨어진다. 여기서 φ를 0으로 하면 약 53 %다. 배치를 4,096 시퀀스로 키우면 약 90 %로 돌아온다. ③ TP를 NIC로 보내면 64대에서 TP가 약 6 s로 9배가 되어 효율이 약 55 %로 떨어진다.</div>
+    </div>
+    <div class="callout fab"><strong>노드 안 9배가 사는 것</strong>노드 64대, 시퀀스 512개 기준으로 GX-8의 900 GB/s 스케일업은 TP 통신을 약 0.67 s로 묶는다. 같은 TP를 NIC 100 GB/s로 하면 약 6.0 s가 되어 단계 시간이 약 8.0 s에서 약 13.4 s로 늘어난다. GPU당 SerDes 약 40 W, 노드당 스위치 칩 4개를 들여 학습 처리량 약 1.7배를 산 셈이다. 노드 사이 광 링크까지 모두 플러그형 광으로 바꾸어 900 GB/s를 내면 GPU당 약 121 W, CPO면 약 40 W다. 스케일업 도메인을 랙 너머로 넓히려는 시도가 CPO와 묶여 있는 이유다.</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>손잡이</th><th>바뀌는 것</th><th>결과</th></tr></thead>
+      <tbody>
+        <tr><td>레인 속도 112G → 224G</td><td>\(f_N\) 28 → 56 GHz, 같은 대역폭에 레인 절반</td><td>가장자리 절반, 구리 도달 약 3.3 → 1.7 m, 이퀄라이저·FEC 부담↑</td></tr>
+        <tr><td>NRZ → PAM4</td><td>심볼률 절반, 눈 높이 1/3</td><td>채널 손실 절반, SNR 약 9.5 dB 손해 → ADC·DSP·FEC 필요</td></tr>
+        <tr><td>채널 손실 15 → 25 dB</td><td>뒤 커서 \(h_1, h_2\) 증가</td><td>DFE 탭↑ 필요, 없으면 눈이 닫혀 BER 10<sup>−1</sup>대</td></tr>
+        <tr><td>링크 수 18 → 36</td><td>대역폭 900 → 1,800 GB/s</td><td>SerDes 40 → 81 W, 짧은 변 가장자리를 넘침</td></tr>
+        <tr><td>링 → 스위치 내 리덕션</td><td>대역폭 항 \(2f\,n/BW\) → \(n/BW\)</td><td>큰 올리듀스 시간 약 절반, 스위치 면적·전력↑</td></tr>
+        <tr><td>TP를 노드 안 → NIC</td><td>TP 대역폭 900 → 100 GB/s</td><td>TP 시간 9배, 64노드 효율 약 91 % → 55 %</td></tr>
+        <tr><td>플러그형 광 → CPO</td><td>15 → 5 pJ/bit</td><td>900 GB/s 광 전력 약 121 → 40 W, 광 도달 거리 유지</td></tr>
+      </tbody>
+    </table></div>
+    <p><b>왜 이렇게 설계하는가.</b> 통신의 계층은 거리와 비트당 에너지의 계층이다. 짧고 싸고 넓은 링크(인터포저, 구리 SerDes)에 통신량이 큰 병렬화(TP·EP)를 배치하고, 길고 비싸고 좁은 링크(광 NIC)에는 숨기기 쉬운 데이터 병렬을 둔다. 스케일업 도메인을 키우는 것은 칩 설계(링크 수·속도), 패키지(가장자리, CPO), 시스템(스위치·케이블·수냉 랙)이 함께 움직여야 하는 일이다. 열과 랙 전력은 <a href="thermal.html">13장</a>, 다이 간 단거리 병렬 링크는 <a href="die.html">10장</a>, 전체 워크로드의 성능 모델은 <a href="workloads.html">15장</a>에서 이어진다.</p>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>GX-LM-70B 학습 상태는 파라미터당 약 16 B, 1,120 GB라 GX-1(144 GB) 최소 8개가 필요하고, 10조 토큰 학습은 GPU 한 개로 약 280년, 4,096개로 약 25일이다.</li>
+      <li>통신량은 DP가 \(2f \cdot 2N\)(배치 무관), TP가 \(8Lf \cdot B_t d_{model} \cdot 2\)(토큰 비례, 층마다 4번), PP가 경계 활성값, EP가 올투올이다. TP·EP는 노드 안, DP는 노드 사이에 둔다.</li>
+      <li>SerDes는 넓은 버스를 소수의 고속 차동 레인으로 바꾼다. 블록은 직렬화·FFE·드라이버 → 채널 → CTLE·ADC·DSP(FFE·DFE)·CDR·역직렬화이고, 양 끝에 FEC가 붙는다.</li>
+      <li>PAM4는 같은 비트율에서 심볼률과 \(f_N\)이 절반(224 Gb/s → 112 GBd, 56 GHz)이지만 눈 높이가 1/3, 약 9.5 dB 손해다. 손실이 큰 고속 채널에서 이득이 손해보다 크다.</li>
+      <li>채널 손실은 펄스를 퍼뜨려 ISI를 만든다. FFE·CTLE는 잡음이나 진폭을 내주고, DFE는 잡음 증폭 없이 뒤 커서를 지운다. 224G 구리 케이블 도달은 약 1–2 m다.</li>
+      <li>RS(544,514)는 심볼 15개까지 고쳐 FEC 전 BER \(2.4\times10^{-4}\)을 약 \(10^{-15}\)으로 만든다. 대가는 약 5.8 % 오버헤드와 수십 ns 지연이다.</li>
+      <li>GX-Link 18 × 2 × 224G(유효 200G) = 방향당 900 GB/s, SerDes 약 40 W, 짧은 변 가장자리 약 29 mm. 칩 밖 대역폭은 둘레에 비례해 연산보다 느리게 는다.</li>
+      <li>링 올리듀스 \(T = 2(p-1)/p \cdot n/BW + 2(p-1)\alpha\). 대역폭 항은 \(p\)에 거의 무관하고, 지연 항은 \(p\)에 비례한다. 스위치 내 리덕션은 대역폭 항을 \(n/BW\)로 줄인다.</li>
+      <li>스위치형 토폴로지는 이분 대역폭이 \(p/2 \times 900\) GB/s로 커져 올투올에 강하고, 링·토러스는 올리듀스는 비슷하지만 올투올이 느리다. 스케일업 900 GB/s 대 스케일아웃 100 GB/s, 플러그형 광 15 pJ/bit 대 CPO 5 pJ/bit가 시스템 계층을 정한다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 224 Gb/s PAM4 레인의 심볼률과 나이퀴스트 주파수는?</p><div class="opts">
+        <button class="opt">224 GBd, 112 GHz</button>
+        <button class="opt">112 GBd, 112 GHz</button>
+        <button class="opt" data-correct>112 GBd, 56 GHz</button>
+        <button class="opt">56 GBd, 28 GHz</button>
+      </div><div class="quiz-exp">PAM4는 심볼당 2비트이므로 224/2 = 112 GBd, 나이퀴스트 주파수는 심볼률의 절반인 56 GHz다. 같은 비트율의 NRZ는 224 GBd, 112 GHz다.</div></div>
+
+      <div class="quiz-q"><p>2. 같은 송신 진폭에서 PAM4의 눈 하나의 높이가 NRZ의 몇 배이고, 이를 dB로 나타내면?</p><div class="opts">
+        <button class="opt" data-correct>1/3, 약 9.5 dB 손해</button>
+        <button class="opt">1/2, 약 6 dB 손해</button>
+        <button class="opt">1/4, 약 12 dB 손해</button>
+        <button class="opt">1/3, 약 4.8 dB 손해</button>
+      </div><div class="quiz-exp">레벨 4개 사이에 눈이 3개 쌓이므로 눈 하나는 전체 진폭의 1/3이다. 전압비이므로 \(20\log_{10}3 \approx 9.5\) dB다(4.8 dB는 전력비 10log로 잘못 계산한 값).</div></div>
+
+      <div class="quiz-q"><p>3. GX-Link 18개, 링크당 방향별 2레인, 레인 유효 200 Gb/s일 때 GPU 하나의 방향당 칩간 대역폭은?</p><div class="opts">
+        <button class="opt">450 GB/s</button>
+        <button class="opt">1,008 GB/s</button>
+        <button class="opt">7.2 TB/s</button>
+        <button class="opt" data-correct>900 GB/s</button>
+      </div><div class="quiz-exp">\(18 \times 2 \times 200\) Gb/s = 7,200 Gb/s = 900 GB/s. 원시 224 Gb/s로 계산한 1,008 GB/s에는 FEC·부호화 오버헤드가 포함되어 있다. 양방향 합은 1.8 TB/s다.</div></div>
+
+      <div class="quiz-q"><p>4. GPU 8개, 메시지 36 GB, 링크 대역폭 900 GB/s에서 링 올리듀스의 대역폭 항은?</p><div class="opts">
+        <button class="opt">40 ms</button>
+        <button class="opt" data-correct>70 ms</button>
+        <button class="opt">80 ms</button>
+        <button class="opt">280 ms</button>
+      </div><div class="quiz-exp">\(2 \times 7/8 \times 36 / 900 = 0.07\) s. 단순히 \(n/BW\) = 40 ms로 계산하면 리듀스–스캐터와 올개더 두 단계를 빠뜨린 것이다. 스위치 내 리덕션이면 약 40 ms에 가까워진다.</div></div>
+
+      <div class="quiz-q"><p>5. 텐서 병렬을 노드 안 스케일업 도메인에 두는 가장 큰 이유는?</p><div class="opts">
+        <button class="opt">텐서 병렬은 기울기를 한 번만 보내기 때문</button>
+        <button class="opt">텐서 병렬은 FEC가 필요 없기 때문</button>
+        <button class="opt" data-correct>층마다 활성값 올리듀스가 4번씩 생겨 통신량이 토큰 수 × 층 수에 비례하고, 다음 계산이 결과를 기다려 숨기기 어렵기 때문</button>
+        <button class="opt">텐서 병렬은 파이프라인 버블을 만들기 때문</button>
+      </div><div class="quiz-exp">GX-LM-70B, 8-way, 시퀀스 512개에서 TP 통신은 900 GB/s로 계산의 약 9 %지만 100 GB/s NIC로는 약 82 %다. 데이터 병렬은 단계당 한 번이고 역전파와 겹칠 수 있다.</div></div>
+
+      <div class="quiz-q"><p>6. 수신단 DFE가 CTLE보다 유리한 점은?</p><div class="opts">
+        <button class="opt">앞 커서(\(h_{-1}\))를 지울 수 있다</button>
+        <button class="opt">판정 오류가 전파되지 않는다</button>
+        <button class="opt">클럭 복원이 필요 없다</button>
+        <button class="opt" data-correct>이미 판정한 심볼로 뒤 커서를 빼므로 고주파 잡음을 키우지 않는다</button>
+      </div><div class="quiz-exp">CTLE는 선형 필터라 신호와 함께 잡음의 고주파 성분도 상대적으로 키운다. DFE는 판정값(잡음 없음) × 커서를 빼므로 잡음 증폭이 없다. 대신 앞 커서는 못 지우고, 판정이 틀리면 오류가 번진다.</div></div>
+
+      <div class="quiz-q"><p>7. RS(544,514) FEC(10비트 심볼)에 대한 설명으로 옳은 것은?</p><div class="opts">
+        <button class="opt" data-correct>부호어당 심볼 오류 15개까지 고치고, FEC 전 BER 약 \(2.4\times10^{-4}\)을 약 \(10^{-15}\)대로 낮춘다</button>
+        <button class="opt">부호어당 비트 오류 30개까지 고치며 지연은 없다</button>
+        <button class="opt">FEC 전 BER이 나빠질수록 FEC 후 BER도 같은 비율로 천천히 나빠진다</button>
+        <button class="opt">오버헤드가 약 30 %다</button>
+      </div><div class="quiz-exp">\(t = (544-514)/2 = 15\) 심볼, 오버헤드 30/514 ≈ 5.8 %. 곡선은 절벽처럼 가팔라서 FEC 전 BER이 10배 나빠지면 FEC 후는 수십 자릿수 나빠진다. 부호어를 다 받아야 복호하므로 지연이 생긴다.</div></div>
+
+      <div class="quiz-q"><p>8. 36레인 × 224 Gb/s를 플러그형 광 모듈(15 pJ/bit)로 바꾸면 구리 SerDes(5 pJ/bit) 대비 GPU당 전력이 대략 얼마나 늘어나는가?</p><div class="opts">
+        <button class="opt">약 10 W</button>
+        <button class="opt">약 40 W</button>
+        <button class="opt" data-correct>약 80 W</button>
+        <button class="opt">약 400 W</button>
+      </div><div class="quiz-exp">\(36 \times 224\) Gb/s ≈ 8.06 Tb/s. 구리 \(8.06\times10^{12} \times 5\times10^{-12}\) ≈ 40 W, 광 ≈ 121 W, 차이 약 81 W. CPO(약 5 pJ/bit)는 광 도달 거리를 구리 수준 전력으로 얻으려는 방법이다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const sup = (e) => String(e).replace(/-/g, "⁻").replace(/[0-9]/g, (d) => "⁰¹²³⁴⁵⁶⁷⁸⁹"[d]);
+  const fBer = (x) => { if (!(x > 0)) return "0"; if (x < 1e-30) return "< 10⁻³⁰"; const e = Math.floor(Math.log10(x)), m = x / Math.pow(10, e); return m.toFixed(1) + "×10" + sup(e); };
+  const fT = (s) => !isFinite(s) ? "—" : s < 1e-3 ? (s * 1e6).toPrecision(3) + " µs" : s < 1 ? (s * 1e3).toPrecision(3) + " ms" : s < 600 ? s.toPrecision(3) + " s" : (s / 60).toPrecision(3) + " min";
+  const fB = (b) => !isFinite(b) ? "—" : b >= 1e12 ? (b / 1e12).toPrecision(3) + " TB" : b >= 1e9 ? (b / 1e9).toPrecision(3) + " GB" : b >= 1e6 ? (b / 1e6).toPrecision(3) + " MB" : b >= 1e3 ? (b / 1e3).toPrecision(3) + " kB" : Math.round(b) + " B";
+  const fBW = (x) => x >= 1e12 ? (x / 1e12).toPrecision(3) + " TB/s" : (x / 1e9).toPrecision(3) + " GB/s";
+
+  /* model:gx */
+  const GX = {
+    N: 70e9, L: 80, d: 8192, seq: 8192,          // GX-LM-70B
+    peak: 943.7e12, hbm: 144e9, hbmBW: 7.3728e12, // GX-1 BF16 밀집 피크, HBM 용량·대역폭
+    links: 18, lanes: 2, laneRaw: 224e9, laneEff: 200e9, pJ: 5, linkBW: 50e9,
+    up: 900e9, nic: 100e9,                        // 스케일업(방향당), NIC 800 Gb/s
+    edgeAvail: 52, lanePitch: 0.8, laneArea: 0.5, dieArea: 780
+  };
+  /* /model:gx */
+
+  /* model:par */
+  function parComm(mode, p, Bt, mfu) {
+    const N = GX.N, L = GX.L, d = GX.d, k = 2, f = (p - 1) / p, act = Bt * d * 2;
+    const F = GX.peak * (mfu || 0.5);
+    let bytes;
+    if (mode === "dp") bytes = 2 * f * 2 * N;
+    else if (mode === "tp") bytes = 4 * L * 2 * f * act;
+    else if (mode === "pp") bytes = 2 * act;
+    else bytes = 4 * L * k * f * act / p;
+    const state = mode === "dp" ? 16 * N : 16 * N / p;
+    const tComp = 6 * N * Bt / (p * F);
+    return { bytes, state, fit: state <= GX.hbm, tComp, tUp: bytes / GX.up, tOut: bytes / GX.nic, rUp: bytes / GX.up / tComp, rOut: bytes / GX.nic / tComp };
+  }
+  /* /model:par */
+
+  /* model:pam */
+  function pamCompare(rateG, a) {
+    const pen = 20 * Math.log10(3);
+    const nrz = { baud: rateG, fN: rateG / 2 }, p4 = { baud: rateG / 2, fN: rateG / 4 };
+    nrz.loss = a * nrz.fN; p4.loss = a * p4.fN; p4.eq = p4.loss + pen;
+    return { nrz, p4, pen, cross: 4 * pen / a, pam4Wins: p4.eq < nrz.loss };
+  }
+  /* /model:pam */
+
+  /* model:eye */
+  function erfcM(x) {
+    const z = Math.abs(x), t = 1 / (1 + 0.5 * z);
+    const r = t * Math.exp(-z * z - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+    return x >= 0 ? r : 2 - r;
+  }
+  function qfunc(x) { return 0.5 * erfcM(x / Math.SQRT2); }
+  function prbs(n, order) {
+    const tp = { 7: [7, 6], 9: [9, 5], 11: [11, 9] }[order || 9], mask = (1 << tp[0]) - 1, out = new Array(n);
+    let s = mask;
+    for (let i = 0; i < n; i++) { const b = ((s >> (tp[0] - 1)) ^ (s >> (tp[1] - 1))) & 1; s = ((s << 1) | b) & mask; out[i] = b; }
+    return out;
+  }
+  const EYE = { spu: 16, mv: 400, fb: 0.75, fp: 1.0 };
+  function eyeFc(loss, poles) {
+    const L = Math.max(0, loss), fN = 0.5;
+    if (L < 0.01) return 1e3;
+    return poles === 2 ? fN / Math.sqrt(Math.pow(10, L / 20) - 1) : fN / Math.sqrt(Math.pow(10, L / 10) - 1);
+  }
+  /* 송신 심볼(구형파) → 채널(1·2차 저역 통과) → CTLE(DC 이득 1/K, 고주파 이득 1). 시간 단위 UI, 1 UI = spu 샘플 */
+  function eyeChain(tx, o) {
+    const spu = EYE.spu, n = tx.length * spu, y = new Float64Array(n), dt = 1 / spu;
+    const a = 1 - Math.exp(-2 * Math.PI * eyeFc(o.loss, o.poles) * dt);
+    const K = Math.pow(10, Math.max(0, o.ctle || 0) / 20), ap = 1 - Math.exp(-2 * Math.PI * EYE.fp * dt);
+    let s1 = 0, s2 = 0, lp = 0;
+    for (let i = 0; i < n; i++) {
+      const x = tx[(i / spu) | 0]; s1 += a * (x - s1); let c = s1;
+      if (o.poles === 2) { s2 += a * (s1 - s2); c = s2; }
+      lp += ap * (c - lp); y[i] = c + (1 / K - 1) * lp;
+    }
+    return y;
+  }
+  function ctleNoiseGain(ctle) {
+    const K = Math.pow(10, Math.max(0, ctle || 0) / 20), fp = EYE.fp, fz = fp / K, fb = EYE.fb;
+    let num = 0, den = 0;
+    for (let i = 0; i <= 800; i++) {
+      const f = i * 0.005, s = 1 / (1 + (f / fb) * (f / fb));
+      num += (1 + (f / fz) * (f / fz)) / (1 + (f / fp) * (f / fp)) / (K * K) * s; den += s;
+    }
+    return Math.sqrt(num / den);
+  }
+  function ffe(sym, pre, post) {
+    const c0 = 1 - Math.abs(pre) - Math.abs(post), n = sym.length, out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = c0 * sym[i] + pre * (i + 1 < n ? sym[i + 1] : 0) + post * (i > 0 ? sym[i - 1] : 0);
+    return out;
+  }
+  function eyeSim(o) {
+    const M = o.mod === "pam4" ? 4 : 2, spu = EYE.spu, nSym = o.nSym || 600, warm = 48, nb = M === 4 ? 2 : 1;
+    const bits = prbs((nSym + warm) * nb, 9), sym = [], lvl = [];
+    for (let i = 0; i < nSym + warm; i++) {
+      const g = M === 2 ? bits[i] : [0, 1, 3, 2][bits[2 * i] * 2 + bits[2 * i + 1]];   // 그레이 부호 00·01·11·10
+      lvl.push(g); sym.push(-1 + 2 * g / (M - 1));
+    }
+    const pre = o.pre || 0, post = o.post || 0;
+    const y = eyeChain(ffe(sym, pre, post), o);
+    const ps = new Array(40).fill(0); ps[8] = 1;                    // 1 UI 펄스 응답
+    const h = eyeChain(ffe(ps, pre, post), o);
+    let m = 8 * spu; for (let i = 8 * spu; i < 20 * spu; i++) if (h[i] > h[m]) m = i;
+    const off = m - 8 * spu, cur = []; for (let k = -1; k <= 4; k++) cur.push(h[m + k * spu] || 0);
+    const sigma = Math.max(0, o.noise || 0) / EYE.mv * ctleNoiseGain(o.ctle);
+    const nd = Math.max(0, Math.min(4, Math.round(o.dfe || 0)));
+    const sample = (n, d) => { let v = y[n * spu + off + d]; for (let k = 1; k <= nd; k++) v -= (h[m + d + k * spu] || 0) * sym[n - k]; return v; };
+    let best = null; const opens = [];
+    for (let d = -spu / 2; d < spu / 2; d++) {
+      const hi = new Array(M).fill(-Infinity), lo = new Array(M).fill(Infinity);
+      for (let n = warm; n < nSym + warm - 2; n++) { const v = sample(n, d), g = lvl[n]; if (v > hi[g]) hi[g] = v; if (v < lo[g]) lo[g] = v; }
+      let open = Infinity; const th = [];
+      for (let g = 0; g < M - 1; g++) { open = Math.min(open, lo[g + 1] - hi[g]); th.push((lo[g + 1] + hi[g]) / 2); }
+      opens.push(open);
+      if (!best || open > best.open) best = { d, open, th };
+    }
+    let ser = 0, cnt = 0;
+    for (let n = warm; n < nSym + warm - 2; n++) {
+      const v = sample(n, best.d), g = lvl[n]; let pe = 0;
+      if (g < M - 1) pe += sigma > 0 ? qfunc((best.th[g] - v) / sigma) : (v >= best.th[g] ? 1 : 0);
+      if (g > 0) pe += sigma > 0 ? qfunc((v - best.th[g - 1]) / sigma) : (v <= best.th[g - 1] ? 1 : 0);
+      ser += Math.min(1, pe); cnt++;
+    }
+    const ber = Math.min(0.5, ser / cnt / Math.log2(M));
+    return { M, y, h, m, off, nd, sym, lvl, warm, nSym, spu, cur, best, sample,
+      open: best.open * EYE.mv, eyeH: Math.max(0, best.open) * EYE.mv, width: opens.filter((x) => x > 0).length / spu, sigma: sigma * EYE.mv, ber };
+  }
+  /* /model:eye */
+
+  /* model:fec */
+  function rsPostBer(pb, n, k, m) {
+    n = n || 544; k = k || 514; m = m || 10;
+    if (!(pb > 0)) return 0;
+    pb = Math.min(pb, 0.5);
+    const t = Math.floor((n - k) / 2), ps = -Math.expm1(m * Math.log1p(-pb));   // 심볼 오류율
+    if (!(ps > 0)) return 0;
+    if (ps >= 1) return pb;
+    const lp = Math.log(ps), lq = Math.log1p(-ps);
+    let logC = 0, ser = 0;
+    for (let i = 1; i <= n; i++) {
+      logC += Math.log((n - i + 1) / i);
+      if (i > t) ser += Math.exp(logC + i * lp + (n - i) * lq) * (i / n);
+    }
+    return Math.min(pb, ser * pb / ps);
+  }
+  /* /model:fec */
+
+  /* model:chan */
+  const MEDIA = { pcb: { as: 4.0, ad: 0.9 }, cable: { as: 1.0, ad: 0.09 } };
+  const FIXED = 0.15;   // dB/GHz × f_N: 양쪽 패키지 + 커넥터
+  function lossPerM(medium, fG) { const md = MEDIA[medium]; return md.as * Math.sqrt(fG) + md.ad * fG; }
+  function chanLoss(medium, fG, len) { return FIXED * fG + Math.max(0, len) * lossPerM(medium, fG); }
+  function chanReach(medium, fG, budget) { return Math.max(0, (budget - FIXED * fG) / lossPerM(medium, fG)); }
+  function linkPower(lanes, rateG, pJ) { return lanes * rateG * 1e9 * pJ * 1e-12; }
+  /* /model:chan */
+
+  /* model:budget */
+  function linkBudget(links, lanes, rateG, pJ) {
+    const n = links * lanes, eff = 200 / 224;
+    const bw = n * rateG * 1e9 * eff / 8;                 // B/s, 방향당
+    const power = n * rateG * 1e9 * pJ * 1e-12;            // W (레인 하나 = 송신 + 수신)
+    const edge = n * GX.lanePitch, area = n * GX.laneArea;
+    return { lanes: n, bw, power, edge, area, edgeFrac: edge / GX.edgeAvail, areaFrac: area / GX.dieArea, hbmRatio: bw / GX.hbmBW, pJeff: pJ / eff, fits: edge <= GX.edgeAvail };
+  }
+  /* /model:budget */
+
+  /* model:allreduce */
+  function allreduce(alg, p, n, bw, alpha) {
+    if (p <= 1) return 0;
+    if (alg === "ring") return 2 * (p - 1) / p * n / bw + 2 * (p - 1) * alpha;
+    if (alg === "tree") return 2 * n / bw + 2 * Math.ceil(Math.log2(p)) * alpha;
+    return n / bw + 2 * alpha;   // 스위치 내 리덕션
+  }
+  function ringCross(p, bw, alpha) {   // 링 = 트리가 되는 메시지 크기
+    const dl = (2 * (p - 1) - 2 * Math.ceil(Math.log2(p))) * alpha, db = (2 - 2 * (p - 1) / p) / bw;
+    return dl > 0 ? dl / db : 0;
+  }
+  /* 링 올리듀스의 상태: cnt[i][c] = GPU i의 조각 c에 더해진 기여 수, step 0..2(p-1) */
+  function ringState(p, step) {
+    const cnt = []; for (let i = 0; i < p; i++) cnt.push(new Array(p).fill(1));
+    const sends = [];
+    for (let s = 0; s < Math.min(step, 2 * (p - 1)); s++) {
+      const prev = cnt.map((r) => r.slice()), rs = s < p - 1, j = rs ? s : s - (p - 1);
+      for (let i = 0; i < p; i++) {
+        const to = (i + 1) % p, c = rs ? ((i - j) % p + p) % p : ((i + 1 - j) % p + p) % p;
+        if (rs) cnt[to][c] = prev[to][c] + prev[i][c]; else cnt[to][c] = prev[i][c];
+      }
+    }
+    if (step < 2 * (p - 1)) {
+      const rs = step < p - 1, j = rs ? step : step - (p - 1);
+      for (let i = 0; i < p; i++) sends.push({ from: i, to: (i + 1) % p, c: rs ? ((i - j) % p + p) % p : ((i + 1 - j) % p + p) % p });
+    }
+    return { cnt, sends, phase: step < p - 1 ? "rs" : step < 2 * (p - 1) ? "ag" : "done" };
+  }
+  /* /model:allreduce */
+
+  /* model:topo */
+  function ringDist(k, n) { k = ((k % n) + n) % n; return Math.min(k, n - k); }
+  function torusDims(p) { let r = Math.floor(Math.sqrt(p)); while (p % r) r--; return [r, p / r]; }
+  function topo(kind, p) {
+    const L = GX.links, lb = GX.linkBW, inj = L * lb;
+    const r = { kind, p, ok: true, switches: 0, hops: 1, diam: 1, nbr: inj, bis: 0, injUsed: inj, ringBW: inj };
+    if (kind === "switch") {
+      const one = p <= 36;
+      r.tiers = one ? 1 : 2; r.switches = one ? Math.ceil(p * L / 36) : p + p / 2;
+      r.hops = one ? 2 : 4; r.diam = r.hops; r.bis = p / 2 * inj;
+    } else if (kind === "ring") {
+      r.nbr = L / 2 * lb; r.bis = 2 * r.nbr; r.ringBW = 2 * r.nbr;
+      let s = 0; for (let k = 1; k < p; k++) s += ringDist(k, p); r.hops = s / (p - 1); r.diam = Math.floor(p / 2);
+    } else if (kind === "torus") {
+      const [a, b] = torusDims(p); r.dims = [a, b]; r.nbr = L / 4 * lb; r.bis = 2 * a * r.nbr; r.ringBW = 4 * r.nbr;
+      let s = 0; for (let x = 0; x < a; x++) for (let y = 0; y < b; y++) s += ringDist(x, a) + ringDist(y, b);
+      r.hops = s / (p - 1); r.diam = Math.floor(a / 2) + Math.floor(b / 2);
+    } else {
+      if (p - 1 > L) { r.ok = false; r.nbr = 0; r.bis = 0; r.injUsed = 0; r.ringBW = 0; return r; }
+      const k = Math.floor(L / (p - 1)); r.nbr = k * lb; r.injUsed = (p - 1) * r.nbr; r.ringBW = r.injUsed;
+      r.bis = (p / 2) * (p / 2) * r.nbr;
+    }
+    return r;
+  }
+  function topoTimes(t, n, m) {
+    if (!t.ok) return { ar: Infinity, a2a: Infinity };
+    const p = t.p;
+    return { ar: 2 * (p - 1) / p * n / t.ringBW, a2a: Math.max(m * (p - 1) / p / t.injUsed, (p * m / 4) / t.bis) };
+  }
+  /* /model:topo */
+
+  /* model:scale */
+  function stepTime(o) {
+    const d = Math.max(1, o.nodes), p = 8 * d, Bt = o.Bt, F = GX.peak * (o.mfu || 0.5);
+    const tComp = 6 * GX.N * Bt / (p * F);
+    const tpBytes = 4 * GX.L * 2 * (7 / 8) * (Bt / d) * GX.d * 2;
+    const tTP = tpBytes / (o.tpOut ? GX.nic : GX.up);
+    const dpBytes = d > 1 ? 2 * (d - 1) / d * (2 * GX.N / 8) : 0;
+    const tDP = dpBytes / GX.nic + (d > 1 ? 2 * (d - 1) * 5e-6 : 0);
+    const hidden = Math.min((o.overlap || 0) * tDP, tComp * 2 / 3);
+    const step = tComp + tTP + tDP - hidden;
+    return { p, tComp, tTP, tDP, hidden, step, eff: tComp / step, tok: Bt / step };
+  }
+  /* /model:scale */
+
+  /* ============================================================ 시뮬레이터 1: 병렬화 통신량 */
+  (function () {
+    const cv = $("par-cv"); if (!cv) return;
+    const names = { dp: "데이터 병렬", tp: "텐서 병렬", pp: "파이프라인", ep: "전문가 병렬" };
+    let c;
+    const redraw = () => c && c.redraw();
+    const mode = GP.seg("par-mode", redraw);
+    const gp = GP.range("par-p", (v) => v + "개", redraw);
+    const gb = GP.range("par-b", (v) => v + " (" + (v * 8192 / 1e6).toFixed(2) + "M 토큰)", redraw);
+    const gu = GP.range("par-u", (v) => Math.round(v * 100) + " %", redraw);
+    c = GP.canvas(cv, (ctx, w, h) => {
+      const P = GP.palette(), p = gp(), Bt = gb() * GX.seq, sel = mode(), keys = ["tp", "ep", "dp", "pp"];
+      const R = {}; keys.forEach((k) => (R[k] = parComm(k, p, Bt, gu())));
+      const lx = Math.min(104, w * 0.26), box = { x: lx, y: 34, w: w - lx - 18, h: h - 34 - 44 };
+      GP.chart(ctx, box, {
+        x: [1e-3, 1e4], y: [0, 4], logX: true, yTicks: [], xLabel: "통신 시간 / 계산 시간 (%)",
+        vlines: [{ x: 100, color: P.bad, label: "계산과 같음" }],
+        legend: { pos: "above", items: [{ label: "노드 안 900 GB/s", color: P.link, type: "box" }, { label: "NIC 100 GB/s", color: P.warn, type: "box" }] },
+        after: (g, s) => {
+          keys.forEach((k, i) => {
+            const yc = s.box.y + (i + 0.5) * s.box.h / 4, bh = Math.min(14, s.box.h / 12), r = R[k];
+            const x0 = s.X(1e-3), xu = s.X(GP.clamp(r.rUp * 100, 1e-3, 1e4)), xo = s.X(GP.clamp(r.rOut * 100, 1e-3, 1e4));
+            g.fillStyle = GP.alpha(P.link, k === sel ? 0.95 : 0.55); g.fillRect(x0, yc - bh - 1, xu - x0, bh);
+            g.fillStyle = GP.alpha(P.warn, k === sel ? 0.95 : 0.55); g.fillRect(x0, yc + 1, xo - x0, bh);
+            GP.text(g, names[k], s.box.x - 8, yc, { align: "right", baseline: "middle", size: 12, weight: k === sel ? 700 : 400, color: k === sel ? P.text : P.dim });
+            GP.text(g, GP.fmt(r.rOut * 100, 2) + " %", Math.min(xo + 4, s.box.x + s.box.w - 50), yc + 1 + bh / 2, { baseline: "middle", size: 11, color: P.dim, halo: true });
+          });
+        },
+      });
+      const r = R[sel];
+      GP.stat("par-bytes", fB(r.bytes));
+      GP.stat("par-up", fT(r.tUp) + " (" + GP.fmt(r.rUp * 100, 2) + " %)");
+      GP.stat("par-out", fT(r.tOut) + " (" + GP.fmt(r.rOut * 100, 2) + " %)");
+      GP.stat("par-comp", fT(r.tComp));
+      GP.stat("par-mem", fB(r.state) + (r.fit ? "" : " · 메모리 초과"));
+    }, { aspect: (w) => (w < 520 ? 0.78 : 0.5), maxHeight: 360 });
+  })();
+
+  /* ============================================================ 시뮬레이터 2: NRZ vs PAM4 */
+  (function () {
+    const cv = $("pam-cv"); if (!cv) return;
+    let c; const redraw = () => c && c.redraw();
+    const gr = GP.range("pam-r", (v) => v + " Gb/s", redraw);
+    const ga = GP.range("pam-a", (v) => v.toFixed(2) + " dB/GHz", redraw);
+    const bits = [1, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1];
+    c = GP.canvas(cv, (ctx, w, h) => {
+      const P = GP.palette(), rate = gr(), a = ga(), r = pamCompare(rate, a);
+      const top = Math.round(h * 0.36), x0 = 56, x1 = w - 16, uw = (x1 - x0) / 16;
+      // 파형
+      const yN = (b) => 14 + (b ? 0 : (top / 2 - 22)), yP = (g) => top / 2 + 6 + (3 - g) * (top / 2 - 14) / 3;
+      ctx.lineWidth = 2; ctx.strokeStyle = P.link; ctx.beginPath();
+      bits.forEach((b, i) => { const y = yN(b); if (i === 0) ctx.moveTo(x0, y); else ctx.lineTo(x0 + i * uw, y); ctx.lineTo(x0 + (i + 1) * uw, y); }); ctx.stroke();
+      ctx.strokeStyle = P.data; ctx.beginPath();
+      for (let i = 0; i < 8; i++) { const g = [0, 1, 3, 2][bits[2 * i] * 2 + bits[2 * i + 1]], y = yP(g); if (i === 0) ctx.moveTo(x0, y); else ctx.lineTo(x0 + 2 * i * uw, y); ctx.lineTo(x0 + 2 * (i + 1) * uw, y); }
+      ctx.stroke();
+      GP.text(ctx, "NRZ", 8, 14 + (top / 2 - 22) / 2, { size: 12, weight: 700, color: P.link, baseline: "middle" });
+      GP.text(ctx, "PAM4", 8, top / 2 + 6 + (top / 2 - 14) / 2, { size: 12, weight: 700, color: P.data, baseline: "middle" });
+      GP.text(ctx, "1 UI(NRZ) = " + GP.fmt(1000 / rate, 3) + " ps · PAM4 심볼 = " + GP.fmt(2000 / rate, 3) + " ps", x1, top + 2, { align: "right", size: 11, color: P.dim, baseline: "bottom" });
+      // 등가 손실 그래프
+      const ymax = Math.max(20, a * 448 / 2 * 1.05);
+      const sN = [], sP = []; for (let x = 10; x <= 448; x += 4) { sN.push([x, a * x / 2]); sP.push([x, a * x / 4 + r.pen]); }
+      GP.chart(ctx, { x: 56, y: top + 22, w: w - 56 - 16, h: h - top - 22 - 40 }, {
+        x: [0, 448], y: [0, ymax], xLabel: "비트율 (Gb/s)", yLabel: "등가 손실 (dB)",
+        series: [{ data: sN, color: P.link, label: "NRZ: a·f_N" }, { data: sP, color: P.data, label: "PAM4: a·f_N + 9.5" }],
+        vlines: [{ x: rate, color: P.text, label: GP.fmt(rate, 3) + " Gb/s", dash: [2, 3] }].concat(r.cross < 448 ? [{ x: r.cross, color: P.bad, label: "교차 " + GP.fmt(r.cross, 3) }] : []),
+        legend: "tl",
+      });
+      GP.stat("pam-nrz", GP.fmt(r.nrz.baud, 3) + " GBd / " + GP.fmt(r.nrz.fN, 3) + " GHz");
+      GP.stat("pam-p4", GP.fmt(r.p4.baud, 3) + " GBd / " + GP.fmt(r.p4.fN, 3) + " GHz");
+      GP.stat("pam-ln", GP.fmt(r.nrz.loss, 3) + " dB");
+      GP.stat("pam-lp", GP.fmt(r.p4.eq, 3) + " dB" + (r.pam4Wins ? " · PAM4 유리" : " · NRZ 유리"));
+      GP.stat("pam-x", GP.fmt(r.cross, 3) + " Gb/s");
+    }, { aspect: (w) => (w < 520 ? 0.95 : 0.62), maxHeight: 440 });
+  })();
+
+  /* ============================================================ 그림 14-5: 펄스 응답 */
+  (function () {
+    const cv = $("pulse-cv"); if (!cv) return;
+    GP.canvas(cv, (ctx, w, h) => {
+      const P = GP.palette(), cols = [P.ok, P.warn, P.bad], spu = EYE.spu, series = [], pts = [];
+      [5, 15, 25].forEach((L, j) => {
+        const ps = new Array(16).fill(0); ps[2] = 1;
+        const y = eyeChain(ps, { loss: L, poles: 2, ctle: 0 }), data = [];
+        let m = 0; for (let i = 0; i < y.length; i++) if (y[i] > y[m]) m = i;
+        for (let i = 0; i < 10 * spu; i++) data.push([i / spu - 1, y[i]]);
+        series.push({ data, color: cols[j], label: L + " dB" });
+        for (let k = -1; k <= 4; k++) { const ix = m + k * spu; if (ix >= 0 && ix < y.length) pts.push({ x: ix / spu - 1, y: y[ix], color: cols[j], r: 3.5 }); }
+      });
+      const inp = []; for (let i = 0; i < 10 * spu; i++) inp.push([i / spu - 1, i >= 2 * spu && i < 3 * spu ? 1 : 0]);
+      series.unshift({ data: inp, color: P.dim, dash: [4, 3], width: 1.2, label: "송신 펄스(1 UI)" });
+      GP.chart(ctx, null, { x: [0, 9], y: [-0.05, 1.05], xLabel: "시간 (UI)", yLabel: "진폭", series, points: pts, legend: "tr" });
+    }, { aspect: (w) => (w < 520 ? 0.7 : 0.4), maxHeight: 300 });
+  })();
+
+  /* ============================================================ 시뮬레이터 3: 눈 다이어그램 */
+  (function () {
+    const cv = $("eye-cv"); if (!cv) return;
+    let c; const redraw = () => c && c.redraw();
+    const gmod = GP.seg("eye-mod", redraw), gord = GP.seg("eye-ord", redraw);
+    const gl = GP.range("eye-loss", (v) => v.toFixed(1) + " dB", redraw);
+    const gpre = GP.range("eye-pre", (v) => v.toFixed(2), redraw);
+    const gpost = GP.range("eye-post", (v) => v.toFixed(2), redraw);
+    const gc = GP.range("eye-ctle", (v) => v.toFixed(1) + " dB", redraw);
+    const gd = GP.range("eye-dfe", (v) => v + "탭", redraw);
+    const gn = GP.range("eye-n", (v) => v.toFixed(1) + " mV rms", redraw);
+    c = GP.canvas(cv, (ctx, w, h) => {
+      const P = GP.palette();
+      const r = eyeSim({ mod: gmod(), poles: Number(gord()), loss: gl(), pre: gpre(), post: gpost(), ctle: gc(), dfe: gd(), noise: gn() });
+      const narrow = w < 560, ew = narrow ? w : Math.round(w * 0.62), eh = narrow ? Math.round(h * 0.62) : h;
+      const ebox = { x: 50, y: 14, w: ew - 50 - 12, h: eh - 14 - 34 };
+      const spu = r.spu, rng = GP.rng(7), sig = r.sigma / EYE.mv;
+      const Ymax = Math.max(0.2, Math.abs(r.cur[1]) + r.cur.reduce((s, v, i) => s + (i === 1 ? 0 : Math.abs(v)), 0)) * 1.08;
+      GP.chart(ctx, ebox, {
+        x: [-1, 1], y: [-Ymax * EYE.mv, Ymax * EYE.mv], xLabel: "시간 (UI)", yLabel: "mV", grid: true,
+        after: (g, s) => {
+          g.lineWidth = 1; g.strokeStyle = GP.alpha(P.link, 0.18);
+          const nTr = Math.min(r.nSym - 4, 360);
+          for (let n = r.warm + 2; n < r.warm + 2 + nTr; n++) {
+            const cidx = n * spu + r.off + r.best.d;
+            let fb = 0; for (let k = 1; k <= r.nd; k++) fb += (r.h[r.m + r.best.d + k * spu] || 0) * r.sym[n - k];
+            g.beginPath();
+            for (let j = -spu; j <= spu; j++) {
+              const v = (r.y[cidx + j] - fb + sig * gauss(rng)) * EYE.mv, X = s.X(j / spu), Y = s.Y(GP.clamp(v, -Ymax * EYE.mv, Ymax * EYE.mv));
+              if (j === -spu) g.moveTo(X, Y); else g.lineTo(X, Y);
+            }
+            g.stroke();
+          }
+          g.setLineDash([3, 3]); g.strokeStyle = P.bad; g.lineWidth = 1.2;
+          r.best.th.forEach((t) => { const Y = s.Y(t * EYE.mv); g.beginPath(); g.moveTo(s.box.x, Y); g.lineTo(s.box.x + s.box.w, Y); g.stroke(); });
+          g.setLineDash([]); g.strokeStyle = P.text; g.beginPath(); g.moveTo(s.X(0), s.box.y); g.lineTo(s.X(0), s.box.y + s.box.h); g.stroke();
+          GP.text(g, r.open > 0 ? "눈 열림" : "눈 닫힘", s.box.x + 6, s.box.y + 12, { size: 12, weight: 700, color: r.open > 0 ? P.ok : P.bad, halo: true });
+        },
+      });
+      // 펄스 응답
+      const pbox = narrow ? { x: 50, y: eh + 10, w: w - 50 - 12, h: h - eh - 10 - 34 } : { x: ew + 44, y: 14, w: w - ew - 44 - 12, h: h - 14 - 34 };
+      const pd = []; for (let i = r.m - 2 * spu; i < r.m + 6 * spu; i++) pd.push([(i - r.m) / spu, r.h[i] || 0]);
+      const pts = r.cur.map((v, i) => ({ x: i - 1, y: v, color: i === 1 ? P.ok : P.warn, r: 4, label: i === 1 ? "h_0" : i === 2 ? "h_1" : "" }));
+      const pmax = Math.max(0.1, ...pd.map((q) => q[1])) * 1.15, pmin = Math.min(0, ...pd.map((q) => q[1])) * 1.2 - 0.02;
+      GP.chart(ctx, pbox, { x: [-2, 6], y: [pmin, pmax], xLabel: "커서 (UI)", series: [{ data: pd, color: P.link, label: "펄스 응답" }], points: pts, hlines: [{ y: 0, color: P.faint }] });
+      GP.stat("eye-h", r.open > 0 ? GP.fmt(r.open, 3) + " mV" : "닫힘 (" + GP.fmt(r.open, 3) + " mV)");
+      GP.stat("eye-w", GP.fmt(r.width, 2) + " UI");
+      GP.stat("eye-s", GP.fmt(r.sigma, 2) + " mV");
+      GP.stat("eye-ber", fBer(r.ber));
+      GP.stat("eye-post-fec", fBer(rsPostBer(r.ber)));
+    }, { aspect: (w) => (w < 560 ? 1.15 : 0.52), maxHeight: 520 });
+    function gauss(rng) { let u = 0, v = 0; while (u === 0) u = rng(); v = rng(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+  })();
+
+  /* ============================================================ 시뮬레이터 4: 도달 거리 */
+  (function () {
+    const cv = $("reach-cv"); if (!cv) return;
+    let c; const redraw = () => c && c.redraw();
+    const grate = GP.seg("reach-rate", redraw);
+    const gb = GP.range("reach-b", (v) => v + " dB", redraw);
+    const gl = GP.range("reach-l", (v) => (v < 1 ? Math.round(v * 100) + " cm" : v.toFixed(2) + " m"), redraw);
+    c = GP.canvas(cv, (ctx, w, h) => {
+      const P = GP.palette(), rate = Number(grate()), fN = rate / 4, B = gb(), len = gl();
+      const sP = [], sC = []; for (let i = 0; i <= 120; i++) { const x = 0.05 * Math.pow(100, i / 120); sP.push([x, chanLoss("pcb", fN, x)]); sC.push([x, chanLoss("cable", fN, x)]); }
+      const rp = chanReach("pcb", fN, B), rc = chanReach("cable", fN, B);
+      GP.chart(ctx, null, {
+        x: [0.05, 5], y: [0, 60], logX: true, xLabel: "선로 길이 (m)", yLabel: "손실 @ f_N (dB)",
+        series: [{ data: sP, color: P.warn, label: "보드 배선" }, { data: sC, color: P.link, label: "구리 케이블" }],
+        hlines: [{ y: B, color: P.bad, label: "손실 예산 " + B + " dB" }, { y: FIXED * fN, color: P.faint, label: "고정 손실", labelPos: "below" }],
+        vlines: [{ x: len, color: P.text, dash: [2, 3] }],
+        points: [rp >= 0.05 && rp <= 5 ? { x: rp, y: B, color: P.warn, label: GP.fmt(rp * 100, 2) + " cm" } : null, rc >= 0.05 && rc <= 5 ? { x: rc, y: B, color: P.link, label: GP.fmt(rc, 2) + " m" } : null].filter(Boolean),
+        legend: "br",
+      });
+      GP.stat("reach-fn", GP.fmt(fN, 3) + " GHz");
+      GP.stat("reach-pcb", rp < 1 ? GP.fmt(rp * 100, 2) + " cm" : GP.fmt(rp, 2) + " m");
+      GP.stat("reach-cab", GP.fmt(rc, 2) + " m");
+      const il = chanLoss("cable", fN, len);
+      GP.stat("reach-il", GP.fmt(il, 3) + " dB" + (il <= B ? " · 통과" : " · 초과"));
+      const lanes = GX.links * GX.lanes;
+      GP.stat("reach-pw", [5, 15, 5].map((e) => Math.round(linkPower(lanes, rate, e))).join(" / ") + " W");
+    }, { aspect: (w) => (w < 520 ? 0.8 : 0.5), maxHeight: 360, hover: true });
+  })();
+
+  /* ============================================================ 그림 14-6: FEC 곡선 */
+  (function () {
+    const cv = $("fec-cv"); if (!cv) return;
+    GP.canvas(cv, (ctx) => {
+      const P = GP.palette(), s = [], id = [];
+      for (let i = 0; i <= 120; i++) { const pb = Math.pow(10, -6 + 4 * i / 120); s.push([pb, Math.max(1e-30, rsPostBer(pb))]); id.push([pb, pb]); }
+      const x0 = 2.4e-4, y0 = rsPostBer(x0);
+      GP.chart(ctx, null, {
+        x: [1e-6, 1e-2], y: [1e-30, 1e-1], logX: true, logY: true, xLabel: "FEC 전 BER", yLabel: "FEC 후 BER",
+        series: [{ data: id, color: P.dim, dash: [4, 3], label: "FEC 없음" }, { data: s, color: P.link, label: "RS(544,514)" }],
+        hlines: [{ y: 1e-15, color: P.ok, label: "목표 10^{−15}", align: "left" }],
+        points: [{ x: x0, y: y0, color: P.bad, label: "2.4×10^{−4} → " + GP.num(y0, 2) }],
+        legend: "br",
+      });
+    }, { aspect: (w) => (w < 520 ? 0.75 : 0.42), maxHeight: 320, hover: true });
+  })();
+
+  /* ============================================================ 시뮬레이터 5: 링크 예산 */
+  (function () {
+    const cv = $("bud-cv"); if (!cv) return;
+    let c; const redraw = () => c && c.redraw();
+    const gn = GP.range("bud-n", (v) => v + "개", redraw);
+    const gl = GP.range("bud-l", (v) => v + "레인", redraw);
+    const grate = GP.seg("bud-r", redraw);
+    const ge = GP.range("bud-e", (v) => v.toFixed(1) + " pJ/bit", redraw);
+    c = GP.canvas(cv, (ctx, w, h) => {
+      const P = GP.palette(), rate = Number(grate()), b = linkBudget(gn(), gl(), rate, ge());
+      const s = Math.min((w - 140) / 26, (h - 70) / 30), dw = 26 * s, dh = 30 * s, x0 = (w - dw) / 2, y0 = (h - dh) / 2;
+      // HBM 스택
+      for (let i = 0; i < 3; i++) { GP.matRect(ctx, x0 - 6 - 11 * s, y0 + i * dh / 3 + 2, 11 * s * 0.9, dh / 3 - 4, "dram"); GP.matRect(ctx, x0 + dw + 6 + 11 * s * 0.1, y0 + i * dh / 3 + 2, 11 * s * 0.9, dh / 3 - 4, "dram"); }
+      GP.matRect(ctx, x0, y0, dw, dh, "si");
+      ctx.fillStyle = GP.alpha(P.dram, 0.7); ctx.fillRect(x0, y0, 1.4 * s, dh); ctx.fillRect(x0 + dw - 1.4 * s, y0, 1.4 * s, dh);
+      // 레인: 위·아래 짧은 변
+      const per = b.lanes / 2, pitch = GX.lanePitch * s, avail = 26 * s;
+      [0, 1].forEach((side) => {
+        const n = side === 0 ? Math.ceil(per) : Math.floor(per), y = side === 0 ? y0 : y0 + dh - 1.2 * s, start = x0 + (avail - Math.min(n * pitch, avail)) / 2;
+        for (let i = 0; i < n; i++) {
+          const over = i * pitch + pitch > avail, x = over ? x0 + avail + 4 + (i * pitch - avail) * 0.6 : start + i * pitch;
+          ctx.fillStyle = over ? P.bad : P.link; ctx.fillRect(x + pitch * 0.12, y, pitch * 0.76, 1.2 * s);
+        }
+      });
+      GP.text(ctx, "26 × 30 mm", x0 + dw / 2, y0 + dh / 2 - 8, { align: "center", size: 13, weight: 700, color: P.text });
+      GP.text(ctx, "레인 " + b.lanes + "개 · 가장자리 " + GP.fmt(b.edge, 3) + " / 52 mm", x0 + dw / 2, y0 + dh / 2 + 12, { align: "center", size: 12, color: b.fits ? P.dim : P.bad });
+      GP.text(ctx, "HBM PHY", x0 + 1.6 * s + 2, y0 + dh - 2.2 * s, { size: 11, color: P.dim });
+      GP.stat("bud-bw", fBW(b.bw) + " (양방향 " + fBW(2 * b.bw) + ")");
+      GP.stat("bud-p", GP.fmt(b.power, 3) + " W");
+      GP.stat("bud-edge", GP.fmt(b.edge, 3) + " mm (" + Math.round(b.edgeFrac * 100) + " %)" + (b.fits ? "" : " · 넘침"));
+      GP.stat("bud-area", GP.fmt(b.area, 3) + " mm² (" + GP.fmt(b.areaFrac * 100, 2) + " %)");
+      GP.stat("bud-hbm", "1/" + GP.fmt(1 / b.hbmRatio, 2));
+    }, { aspect: (w) => (w < 520 ? 1.0 : 0.6), maxHeight: 380 });
+  })();
+
+  /* ============================================================ 시뮬레이터 7: 토폴로지 */
+  (function () {
+    const cv = $("topo-cv"); if (!cv) return;
+    let c; const redraw = () => c && c.redraw();
+    const gk = GP.seg("topo-k", redraw), gp = GP.seg("topo-p", redraw);
+    c = GP.canvas(cv, (ctx, w, h) => {
+      const P = GP.palette(), kind = gk(), p = Number(gp()), t = topo(kind, p), tm = topoTimes(t, 1e9, 1e9);
+      const cx = w / 2, cy = h / 2, R = Math.min(w, h) * 0.38, nr = Math.max(3, Math.min(9, 120 / p));
+      let pos = [];
+      if (kind === "torus") {
+        const [a, b] = t.dims, gx = Math.min((w - 60) / b, (h - 60) / a);
+        for (let i = 0; i < p; i++) { const r0 = Math.floor(i / b), c0 = i % b; pos.push([cx + (c0 - (b - 1) / 2) * gx, cy + (r0 - (a - 1) / 2) * gx]); }
+        ctx.strokeStyle = GP.alpha(P.link, 0.6); ctx.lineWidth = 1.4;
+        for (let i = 0; i < p; i++) {
+          const r0 = Math.floor(i / b), c0 = i % b, right = r0 * b + (c0 + 1) % b, down = ((r0 + 1) % a) * b + c0;
+          [[right, c0 === b - 1], [down, r0 === a - 1]].forEach(([j, wrap]) => {
+            ctx.beginPath(); ctx.setLineDash(wrap ? [3, 3] : []);
+            if (wrap) { const [x1, y1] = pos[i], dx = j === right ? gx * 0.45 : 0, dy = j === down ? gx * 0.45 : 0; ctx.moveTo(x1, y1); ctx.lineTo(x1 + dx, y1 + dy); }
+            else { ctx.moveTo(pos[i][0], pos[i][1]); ctx.lineTo(pos[j][0], pos[j][1]); }
+            ctx.stroke();
+          });
+        }
+        ctx.setLineDash([]);
+      } else {
+        for (let i = 0; i < p; i++) { const th = -Math.PI / 2 + 2 * Math.PI * i / p; pos.push([cx + R * Math.cos(th), cy + R * Math.sin(th)]); }
+        ctx.lineWidth = 1.2;
+        if (kind === "ring") { ctx.strokeStyle = GP.alpha(P.link, 0.8); ctx.lineWidth = 2.4; ctx.beginPath(); pos.forEach((q, i) => (i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]))); ctx.closePath(); ctx.stroke(); }
+        else if (kind === "mesh" && t.ok) { ctx.strokeStyle = GP.alpha(P.link, 0.35); for (let i = 0; i < p; i++) for (let j = i + 1; j < p; j++) { ctx.beginPath(); ctx.moveTo(pos[i][0], pos[i][1]); ctx.lineTo(pos[j][0], pos[j][1]); ctx.stroke(); } }
+        else if (kind === "switch") {
+          const ns = Math.min(t.switches, 12), sw = Math.min(46, R * 1.6 / ns), sp = [];
+          for (let k = 0; k < ns; k++) sp.push([cx + (k - (ns - 1) / 2) * (sw + 4), cy]);
+          ctx.strokeStyle = GP.alpha(P.link, p > 16 ? 0.12 : 0.3);
+          pos.forEach((q) => sp.forEach((s) => { ctx.beginPath(); ctx.moveTo(q[0], q[1]); ctx.lineTo(s[0], s[1]); ctx.stroke(); }));
+          sp.forEach((s) => { ctx.fillStyle = P.link; GP.rrect(ctx, s[0] - sw / 2, s[1] - 9, sw, 18, 4); ctx.fill(); });
+          GP.text(ctx, "스위치 " + t.switches + "개" + (t.tiers === 2 ? " (2단: 리프 + 스파인)" : ""), cx, cy + 26, { align: "center", size: 12, color: P.dim, halo: true });
+        }
+      }
+      pos.forEach((q) => { ctx.fillStyle = P.compute; ctx.beginPath(); ctx.arc(q[0], q[1], nr, 0, 2 * Math.PI); ctx.fill(); });
+      if (!t.ok) GP.text(ctx, "불가: 링크 18개로 상대 " + (p - 1) + "개를 직접 이을 수 없다", cx, cy, { align: "center", size: 13, weight: 700, color: P.bad, halo: true });
+      GP.stat("topo-bis", t.ok ? fBW(t.bis) : "—");
+      GP.stat("topo-hop", t.ok ? GP.fmt(t.hops, 3) + " / " + t.diam : "—");
+      GP.stat("topo-nb", t.ok ? fBW(t.nbr) : "—");
+      GP.stat("topo-sw", String(t.switches));
+      GP.stat("topo-t", t.ok ? fT(tm.ar) + " / " + fT(tm.a2a) : "—");
+    }, { aspect: (w) => (w < 520 ? 0.85 : 0.55), maxHeight: 360 });
+  })();
+
+  /* ============================================================ 시뮬레이터 6: 올리듀스 */
+  (function () {
+    const cv = $("ar-cv"); if (!cv) return;
+    let c, step = 0, ph = 0, playing = true; const redraw = () => c && c.redraw();
+    const gp = GP.range("ar-p", (v) => v + "개", () => { step = 0; ph = 0; redraw(); });
+    const gn = GP.range("ar-n", (v) => fB(Math.pow(10, v)), redraw);
+    const gbw = GP.range("ar-bw", (v) => v + " GB/s", redraw);
+    const ga = GP.range("ar-a", (v) => v.toFixed(1) + " µs", redraw);
+    $("ar-play").addEventListener("click", () => { playing = !playing; $("ar-play").textContent = playing ? "멈춤" : "재생"; });
+    $("ar-step").addEventListener("click", () => { playing = false; $("ar-play").textContent = "재생"; ph = 0; step = step >= 2 * (gp() - 1) ? 0 : step + 1; redraw(); });
+    c = GP.canvas(cv, (ctx, w, h) => {
+      const P = GP.palette(), p = gp(), n = Math.pow(10, gn()), bw = gbw() * 1e9, al = ga() * 1e-6;
+      const narrow = w < 560, aw = narrow ? w : Math.round(w * 0.46), ah = narrow ? Math.round(h * 0.52) : h;
+      const st = ringState(p, step), cx = aw / 2, cy = ah / 2 + 6, R = Math.min(aw, ah) * 0.34, cell = Math.max(3, Math.min(9, 90 / p));
+      const pos = []; for (let i = 0; i < p; i++) { const th = -Math.PI / 2 + 2 * Math.PI * i / p; pos.push([cx + R * Math.cos(th), cy + R * Math.sin(th)]); }
+      ctx.strokeStyle = GP.alpha(P.link, 0.35); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(cx, cy, R, 0, 2 * Math.PI); ctx.stroke();
+      pos.forEach((q, i) => {
+        const bwid = cell * Math.min(p, 8), rows = Math.ceil(p / 8);
+        for (let k = 0; k < p; k++) {
+          const v = st.cnt[i][k] / p, x = q[0] - bwid / 2 + (k % 8) * cell, y = q[1] - rows * cell / 2 + Math.floor(k / 8) * cell;
+          ctx.fillStyle = GP.mix(P.surface, P.link, v); ctx.fillRect(x, y, cell - 1, cell - 1);
+        }
+        GP.text(ctx, String(i), q[0], q[1] - rows * cell / 2 - 8, { align: "center", size: 11, color: P.dim });
+      });
+      st.sends.forEach((s) => {
+        const a0 = -Math.PI / 2 + 2 * Math.PI * s.from / p, a1 = a0 + 2 * Math.PI / p * GP.ease.inOut(ph);
+        const x = cx + R * Math.cos(a1), y = cy + R * Math.sin(a1);
+        ctx.fillStyle = st.phase === "rs" ? P.warn : P.ok; ctx.beginPath(); ctx.arc(x, y, 4, 0, 2 * Math.PI); ctx.fill();
+      });
+      const lbl = st.phase === "rs" ? "리듀스–스캐터 " + (step + 1) + "/" + (p - 1) : st.phase === "ag" ? "올개더 " + (step - p + 2) + "/" + (p - 1) : "완료: 모든 조각 합산됨";
+      GP.text(ctx, lbl, 8, 14, { size: 12, weight: 700, color: P.text });
+      // 시간 그래프
+      const gbox = narrow ? { x: 56, y: ah + 8, w: w - 56 - 14, h: h - ah - 8 - 40 } : { x: aw + 52, y: 14, w: w - aw - 52 - 14, h: h - 14 - 40 };
+      const sr = [], stt = [], ssw = [];
+      for (let e = 3; e <= 11.001; e += 0.1) { const m = Math.pow(10, e); sr.push([m, allreduce("ring", p, m, bw, al)]); stt.push([m, allreduce("tree", p, m, bw, al)]); ssw.push([m, allreduce("switch", p, m, bw, al)]); }
+      GP.chart(ctx, gbox, {
+        x: [1e3, 1e11], y: [1e-6, 10], logX: true, logY: true, xLabel: "메시지 (B)", yLabel: "시간 (s)",
+        series: [{ data: sr, color: P.link, label: "링" }, { data: stt, color: P.warn, label: "트리" }, { data: ssw, color: P.ok, label: "스위치" }],
+        vlines: [{ x: n, color: P.text, dash: [2, 3] }], legend: "tl",
+      });
+      const tr = allreduce("ring", p, n, bw, al), lat = 2 * (p - 1) * al;
+      GP.stat("ar-ring", fT(tr));
+      GP.stat("ar-tree", fT(allreduce("tree", p, n, bw, al)));
+      GP.stat("ar-sw", fT(allreduce("switch", p, n, bw, al)));
+      GP.stat("ar-lat", p > 1 ? Math.round(lat / tr * 100) + " %" : "—");
+      const xc = ringCross(p, bw, al);
+      GP.stat("ar-x", xc > 0 ? fB(xc) : "항상 링 ≤ 트리");
+    }, { aspect: (w) => (w < 560 ? 1.2 : 0.5), maxHeight: 460 });
+    GP.loop(cv, (dt) => {
+      if (!playing) return;
+      ph += dt / 0.9;
+      if (ph >= 1) { ph = 0; step++; if (step > 2 * (gp() - 1) + 1) step = 0; }
+      redraw();
+    });
+  })();
+
+  /* ============================================================ 시뮬레이터 8: 스케일업 vs 스케일아웃 */
+  (function () {
+    const cv = $("sc-cv"); if (!cv) return;
+    let c; const redraw = () => c && c.redraw();
+    const gd = GP.range("sc-d", (v) => Math.pow(2, v) + "대", redraw);
+    const gb = GP.range("sc-b", (v) => v + " (" + (v * 8192 / 1e6).toFixed(1) + "M 토큰)", redraw);
+    const go = GP.range("sc-o", (v) => Math.round(v * 100) + " %", redraw);
+    const tpo = $("sc-tpout"); tpo.addEventListener("change", redraw);
+    c = GP.canvas(cv, (ctx, w, h) => {
+      const P = GP.palette(), d = Math.pow(2, gd()), Bt = gb() * GX.seq, ov = go();
+      const r = stepTime({ nodes: d, Bt, overlap: ov, tpOut: tpo.checked });
+      // 막대
+      const bx = 60, bw0 = w - bx - 16, by = 26, bh = 26, tot = Math.max(r.step + r.hidden, 1e-9), sc = bw0 / tot;
+      const parts = [[r.tComp, P.compute, "계산"], [r.tTP, P.link, "TP"], [r.tDP - r.hidden, P.warn, "DP"]];
+      let x = bx;
+      parts.forEach(([v, col, nm]) => { const ww = Math.max(0, v) * sc; ctx.fillStyle = col; ctx.fillRect(x, by, ww, bh); if (ww > 34) GP.text(ctx, nm, x + ww / 2, by + bh / 2, { align: "center", baseline: "middle", size: 11, weight: 700, color: P.bg }); x += ww; });
+      if (r.hidden > 0) { const ww = r.hidden * sc, x0 = bx + r.tComp * sc - ww; ctx.save(); ctx.strokeStyle = P.warn; ctx.lineWidth = 1; ctx.beginPath(); ctx.rect(x0, by + bh + 3, ww, 8); ctx.stroke(); for (let k = x0; k < x0 + ww; k += 5) { ctx.beginPath(); ctx.moveTo(k, by + bh + 11); ctx.lineTo(Math.min(k + 6, x0 + ww), by + bh + 3); ctx.stroke(); } ctx.restore(); }
+      GP.text(ctx, "단계", 8, by + bh / 2, { baseline: "middle", size: 12, color: P.dim });
+      GP.text(ctx, fT(r.step), bx + bw0, by - 6, { align: "right", size: 12, weight: 700, color: P.text });
+      // 효율 곡선
+      const s1 = [], s2 = [];
+      for (let e = 0; e <= 10; e += 0.25) { const dd = Math.pow(2, e); s1.push([dd, 100 * stepTime({ nodes: dd, Bt, overlap: ov, tpOut: tpo.checked }).eff]); s2.push([dd, 100 * stepTime({ nodes: dd, Bt, overlap: ov, tpOut: !tpo.checked }).eff]); }
+      GP.chart(ctx, { x: 60, y: by + bh + 34, w: w - 60 - 16, h: h - (by + bh + 34) - 40 }, {
+        x: [1, 1024], y: [0, 100], logX: true, xLabel: "노드 수 (× 8 GPU)", yLabel: "효율 (%)",
+        series: [{ data: s1, color: P.accent, label: tpo.checked ? "TP를 NIC로" : "TP 노드 안" }, { data: s2, color: P.dim, dash: [4, 3], label: tpo.checked ? "TP 노드 안" : "TP를 NIC로" }],
+        points: [{ x: d, y: 100 * r.eff, color: P.accent }], legend: "bl",
+      });
+      GP.stat("sc-n", String(r.p));
+      GP.stat("sc-parts", fT(r.tComp) + " / " + fT(r.tTP) + " / " + fT(r.tDP));
+      GP.stat("sc-step", fT(r.step));
+      GP.stat("sc-eff", Math.round(r.eff * 100) + " %");
+      GP.stat("sc-tok", GP.fmt(r.tok / 1e6, 3) + "M 토큰/s");
+    }, { aspect: (w) => (w < 520 ? 0.95 : 0.55), maxHeight: 400 });
+  })();
+})();
+</script>
+</body>
+</html>

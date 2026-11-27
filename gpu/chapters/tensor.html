@@ -1,0 +1,1157 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>텐서 코어와 행렬 엔진 · GPUBook</title>
+<meta name="description" content="행렬곱은 연산이 세제곱, 데이터가 제곱으로 늘어 재사용을 만든다. 벡터 레인으로는 레지스터 파일 대역폭이 막히는 이유, 내적 트리와 외적, 시스톨릭 배열의 사이클 시뮬레이션과 채움·비움 손실, 텐서 코어 입출력 대역폭, 2:4 구조적 희소성, 마이크로스케일링 포맷, 텐서 코어의 면적·전력과 NPU식 거대 배열과의 비교를 계산 모델로 익힌다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+.tn-bars { display: grid; gap: 4px; }
+.tn-mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.tn-ok { color: var(--ok); font-weight: 700; } .tn-bad { color: var(--bad); font-weight: 700; } .tn-warn { color: var(--warn); font-weight: 700; }
+.sim .btn-row { display: flex; flex-wrap: wrap; gap: 6px; }
+svg .tn-s, .tn-s:not(html *) { font-size: 12px; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="tensor">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 05</div>
+    <h1>텐서 코어와 행렬 엔진</h1>
+    <p class="lead">GX-1의 BF16 텐서 성능은 943.7 TFLOPS로, 같은 칩의 FP32 벡터 성능 59.0 TFLOPS의 16배다. 그런데 텐서 코어가 SM 면적에서 차지하는 비중은 FP32 레인의 두 배가 안 된다(이 장의 교육용 가정으로 20 % 대 12 %). 이 차이는 곱셈기를 더 촘촘히 깔아서 생기지 않는다. 행렬곱은 한 번 읽은 수를 여러 번 쓸 수 있는 연산이다. 텐서 코어는 그 재사용을 회로 안에 고정해 두어 레지스터 파일에서 수를 꺼내는 비용을 대부분 없앤다. 이 장은 행렬곱의 연산량과 데이터량에서 출발해 내적 트리와 외적, 시스톨릭 배열, 텐서 코어에 수를 공급하는 대역폭, 희소성과 마이크로스케일링, NPU식 거대 배열과의 비교까지를 모두 계산으로 따라간다.</p>
+    <ul class="objectives">
+      <li>행렬곱 \(C = AB\)의 연산량 \(2MNK\)와 데이터량을 계산하고, 행렬 모양에 따른 산술 강도를 구한다.</li>
+      <li>벡터 레인의 FMA는 레지스터 파일 읽기 12 B가 필요하고, 텐서 코어는 FMA당 1 B 미만이면 된다는 것을 레지스터 파일 대역폭으로 설명한다.</li>
+      <li>내적 트리, 외적, 시스톨릭 배열(가중치 고정·출력 고정)의 입력 대역폭·누산기 수·채움과 비움 손실을 비교한다.</li>
+      <li>클럭당 512 FMA를 공급하는 데 필요한 레지스터·공유 메모리 대역폭에서 워프 타일 크기를 정하고, GX-1의 943.7 TFLOPS를 재현한다.</li>
+      <li>2:4 구조적 희소성과 마이크로스케일링 포맷의 저장 형식과 이론 이득·실효 이득을 계산한다.</li>
+      <li>거대 시스톨릭 배열 몇 개(NPU식)와 작은 텐서 코어 수백 개(GPU식)의 활용률을 행렬 크기별로 비교한다.</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ 1 -->
+  <section id="matmul">
+    <h2>행렬곱: 연산은 세제곱, 데이터는 제곱</h2>
+    <p>\(M\times K\) 행렬 \(A\)와 \(K\times N\) 행렬 \(B\)를 곱해 \(M\times N\) 행렬 \(C\)를 만든다. \(C\)의 원소 하나는 길이 \(K\)인 내적이고, 원소가 \(MN\)개 있으므로 곱-누산(FMA)은 \(MNK\)번이다. FMA 하나를 곱셈과 덧셈 두 번의 부동소수점 연산으로 세어 연산량은 \(2MNK\) FLOP이다. 입력과 출력의 원소 수는 \(MK + KN + MN\)개다. 연산은 세 차원의 곱으로, 데이터는 두 차원의 곱으로 늘어난다. 그래서 행렬이 커지면 원소 하나가 감당하는 연산이 늘어난다. \(A\)의 원소 \(a_{ik}\)는 \(C\)의 \(i\)행 \(N\)개를 계산할 때 모두 쓰이므로 \(N\)번, \(B\)의 원소는 \(M\)번 재사용된다. 이 성질을 <span class="term">데이터 재사용</span><span class="en">(data reuse)</span>이라 한다.</p>
+    <div class="formula">$$F = 2MNK,\qquad Q = (MK + KN)\,b + MN\,b_{out},\qquad I = \frac{F}{Q}$$
+      <div class="where">\(b\)는 입력 원소 바이트(BF16 2, FP8 1, FP4 0.5), \(b_{out}\)은 출력 원소 바이트(여기서는 BF16 출력 2 B, FP32 행렬이면 4 B). \(I\)는 <span class="term">산술 강도</span>(FLOP/B)로, 모든 원소를 HBM에서 정확히 한 번씩 읽고 쓴다고 본 이상적인 값이다. 정사각 \(n\times n\times n\)을 BF16으로 하면 \(I = 2n^3/(6n^2) = n/3\)이다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="행렬 A의 한 행과 B의 한 열이 C의 원소 하나를 만들고, A의 원소 하나는 C의 한 행 전체에서 N번 쓰인다는 재사용 그림">
+        <rect x="40" y="60" width="150" height="120" class="k-compute" style="stroke-width:1.5"/>
+        <rect x="40" y="104" width="150" height="16" class="kf-compute" style="opacity:.55"/>
+        <text x="115" y="50" class="t t-c t-b">A (M × K)</text>
+        <text x="115" y="200" class="t-dim t-c">i행: K개</text>
+        <text x="220" y="125" class="t t-c t-lg">×</text>
+        <rect x="250" y="20" width="200" height="150" class="k-sram" style="stroke-width:1.5"/>
+        <rect x="370" y="20" width="16" height="150" class="kf-sram" style="opacity:.55"/>
+        <text x="350" y="14" class="t t-c t-b">B (K × N)</text>
+        <text x="420" y="188" class="t-dim t-c">j열: K개</text>
+        <text x="480" y="125" class="t t-c t-lg">=</text>
+        <rect x="510" y="60" width="200" height="120" class="k-tensor" style="stroke-width:1.5"/>
+        <rect x="510" y="104" width="200" height="16" style="fill:var(--tensor);opacity:.18"/>
+        <rect x="630" y="104" width="16" height="16" class="kf-tensor"/>
+        <text x="610" y="50" class="t t-c t-b">C (M × N)</text>
+        <text x="610" y="200" class="t-dim t-c">c_ij = Σ_k a_ik · b_kj (FMA K번)</text>
+        <path d="M190 112 C 330 240, 520 240, 640 122" class="s-acc dash" style="fill:none"/>
+        <text x="372" y="236" class="t t-c t-acc">a_ik 하나가 C의 i행 N개에 모두 쓰인다 → 재사용 N번</text>
+      </svg>
+      <figcaption><b>그림 5-1.</b> 행렬곱의 재사용. \(A\)의 \(i\)행(진한 띠)은 \(C\)의 \(i\)행 전체(옅은 띠)를 만드는 데 \(N\)번, \(B\)의 \(j\)열은 \(C\)의 \(j\)열을 만드는 데 \(M\)번 쓰인다. 원소마다 한 번씩만 읽는다면 FMA \(MNK\)번에 원소 \(MK+KN\)개만 있으면 된다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-gm">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>행렬곱 연산량 vs 데이터량</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="gm-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>M (A의 행, 배치·토큰 수) <output id="gm-m-out"></output></span><input type="range" id="gm-m" min="0" max="14" step="1" value="12"></label>
+          <label class="ctrl"><span>N (B의 열) <output id="gm-n-out"></output></span><input type="range" id="gm-n" min="0" max="14" step="1" value="12"></label>
+          <label class="ctrl"><span>K (내적 길이) <output id="gm-k-out"></output></span><input type="range" id="gm-k" min="0" max="14" step="1" value="12"></label>
+          <div class="ctrl"><span>정밀도</span><div class="seg" id="gm-p"><button data-value="bf16" class="on">BF16 텐서</button><button data-value="fp8">FP8 텐서</button><button data-value="fp32">FP32 벡터</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">연산량 2MNK</span><span class="v" id="gm-flop">—</span></div>
+        <div class="stat"><span class="k">데이터량 Q</span><span class="v" id="gm-bytes">—</span></div>
+        <div class="stat"><span class="k">산술 강도 I</span><span class="v" id="gm-i">—</span></div>
+        <div class="stat"><span class="k">GX-1에서</span><span class="v" id="gm-bound">—</span></div>
+        <div class="stat"><span class="k">달성 성능 / 시간</span><span class="v" id="gm-perf">—</span></div>
+      </div>
+      <div class="sim-note">그래프: 정사각 행렬(실선)과 M=1 행렬-벡터곱(점선)의 산술 강도, 가로선은 GX-1 리지 포인트(피크 ÷ HBM 7.37 TB/s). 점은 지금 행렬(가로 위치는 등가 크기 (MNK)<sup>1/3</sup>). 시간은 \(\max(F/P_{peak},\ Q/BW)\)로 계산했다(루프라인 자체는 <a href="roofline.html">7장</a>). 해볼 것: ① 4096³ BF16은 I 약 1,365 FLOP/B, 약 146 µs로 연산 제한이다. ② M을 1로 내리면(배치 1 디코드의 행렬-벡터곱, N=K=8192) I는 약 1.0이고 성능은 7.4 TFLOPS(피크의 0.8 %)로 떨어진다. ③ 정사각 BF16에서 n=384면 I = 128로 리지 포인트와 같다. FP8로 바꾸면 리지가 256으로 오른다.</div>
+    </div>
+    <p>행렬곱이 커지면 연산 제한이 되고 작아지면 대역폭 제한이 된다. 이 장의 나머지는 그 재사용을 칩 안에서 실제로 거두는 장치를 다룬다. HBM에서 한 번 읽은 수를 공유 메모리와 레지스터에 붙들어 두고(<a href="roofline.html">7장</a>의 타일링), 레지스터에서 꺼낸 수를 연산 유닛 안에서 다시 여러 번 쓰는 장치가 텐서 코어다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> 행렬곱은 데이터 이동보다 연산이 많은 드문 작업이다. 그래서 같은 면적과 전력을 연산 유닛에 몰아줄 가치가 있다. 다만 그 가치는 재사용을 하드웨어가 실제로 붙잡을 때만 생긴다. 칩 설계는 재사용을 어디에서 얼마나 붙잡느냐의 문제가 된다.</p>
+  </section>
+
+  <!-- ============================================================ 2 -->
+  <section id="lanes">
+    <h2>벡터 레인의 벽: 레지스터 파일 대역폭</h2>
+    <p>FP32 벡터 레인으로 행렬곱을 하면 레인 하나가 FMA \(d = a\cdot b + c\)를 한 클럭에 하나 실행한다. 명령어 하나가 소스 오퍼랜드 세 개(\(a, b, c\))를 레지스터 파일에서 읽고 결과 하나를 쓴다. 스레드마다 \(r\times r\) 출력 타일을 레지스터에 두는 <span class="term">레지스터 블로킹</span><span class="en">(register blocking)</span>을 하면, 공유 메모리에서 가져오는 양은 FMA당 \(8/r\) B로 줄어든다. 그래도 레지스터 파일을 읽는 양은 FMA당 12 B 그대로다. 명령어 형식이 오퍼랜드를 매번 레지스터에서 읽게 되어 있기 때문이다.</p>
+    <p>GX-1 서브파티션의 레지스터 파일은 FP32 레인 32개가 클럭마다 오퍼랜드 셋을 읽도록 만들어져 있다. 읽기 대역폭은 \(32 \times 3 \times 4 = 384\) B/클럭, 쓰기는 128 B/클럭이다. 텐서 코어 하나의 몫인 클럭당 512 FMA를 벡터 방식으로 하려면 \(512 \times 12 = 6{,}144\) B/클럭이 필요하다. 레지스터 파일 포트를 16배로 늘려야 한다는 뜻인데, SRAM 면적은 포트 수에 따라 거의 제곱으로 커지므로(<a href="sm.html">3장</a>) 이 방법은 쓸 수 없다.</p>
+    <div class="formula">$$\text{벡터: } B_{RF} = 3 \times 4 = 12\ \text{B/FMA},\qquad \text{텐서 } (m\times n\times k): B_{RF} = b\left(\frac{1}{n} + \frac{1}{m}\right) + \frac{4}{k}$$
+      <div class="where">텐서 코어 명령 하나는 \(A\) 조각 \(m\times k\), \(B\) 조각 \(k\times n\)을 한 번 읽어 \(mnk\)번의 FMA에 쓴다. 누산기 \(C\)(FP32, \(m\times n\))는 명령마다 읽고 쓴다. BF16(\(b = 2\)), \(16\times 8\times 16\)이면 \(2(1/8 + 1/16) + 4/16 = 0.625\) B/FMA로, 벡터의 1/19이다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 760 270" role="img" aria-label="왼쪽은 벡터 레인: 레지스터 파일에서 레인마다 오퍼랜드 세 개를 읽는다. 오른쪽은 텐서 코어: A 조각과 B 조각을 한 번 읽어 곱셈기 격자에 방송한다">
+        <text x="180" y="20" class="t t-c t-b">벡터 레인 32개</text>
+        <rect x="30" y="34" width="300" height="40" rx="6" class="k-sram"/>
+        <text x="180" y="59" class="t t-c">레지스터 파일 (서브파티션 64 KB)</text>
+        <g class="ks-data" style="stroke-width:1.6">
+          <path d="M60 74V128M70 74V128M80 74V128"/><path d="M130 74V128M140 74V128M150 74V128"/><path d="M200 74V128M210 74V128M220 74V128"/><path d="M280 74V128M290 74V128M300 74V128"/>
+        </g>
+        <text x="250" y="105" class="t t-c t-dim">⋯</text>
+        <g><rect x="48" y="128" width="44" height="34" rx="5" class="k-compute"/><rect x="118" y="128" width="44" height="34" rx="5" class="k-compute"/><rect x="188" y="128" width="44" height="34" rx="5" class="k-compute"/><rect x="268" y="128" width="44" height="34" rx="5" class="k-compute"/></g>
+        <g class="t t-c tn-s"><text x="70" y="150">FMA</text><text x="140" y="150">FMA</text><text x="210" y="150">FMA</text><text x="290" y="150">FMA</text></g>
+        <path d="M70 162V186M140 162V186M210 162V186M290 162V186" class="ks-data" style="stroke-dasharray:3 3"/>
+        <text x="180" y="208" class="t t-c">레인마다 a, b, c 3 × 4 B 읽기 + 4 B 쓰기</text>
+        <text x="180" y="230" class="kt-data t-c">FMA당 레지스터 읽기 12 B</text>
+        <text x="180" y="252" class="t-dim t-c">512 FMA/클럭 → 6,144 B/클럭 (포트 16배)</text>
+        <line x1="380" y1="20" x2="380" y2="256" class="s-faint dash"/>
+        <text x="580" y="20" class="t t-c t-b">텐서 코어 1개 (512 FMA/클럭)</text>
+        <rect x="430" y="34" width="300" height="40" rx="6" class="k-sram"/>
+        <text x="580" y="59" class="t t-c">레지스터 파일</text>
+        <path d="M470 74V104M690 74V104" class="ks-data" style="stroke-width:3"/>
+        <text x="470" y="118" class="t t-c tn-s">A 조각 16×16</text><text x="690" y="118" class="t t-c tn-s">B 조각 16×8</text>
+        <rect x="500" y="128" width="160" height="78" rx="6" class="k-tensor"/>
+        <g style="fill:var(--tensor);opacity:.55">
+          <rect x="510" y="136" width="14" height="10"/><rect x="530" y="136" width="14" height="10"/><rect x="550" y="136" width="14" height="10"/><rect x="570" y="136" width="14" height="10"/><rect x="590" y="136" width="14" height="10"/><rect x="610" y="136" width="14" height="10"/><rect x="630" y="136" width="14" height="10"/>
+          <rect x="510" y="152" width="14" height="10"/><rect x="530" y="152" width="14" height="10"/><rect x="550" y="152" width="14" height="10"/><rect x="570" y="152" width="14" height="10"/><rect x="590" y="152" width="14" height="10"/><rect x="610" y="152" width="14" height="10"/><rect x="630" y="152" width="14" height="10"/>
+          <rect x="510" y="168" width="14" height="10"/><rect x="530" y="168" width="14" height="10"/><rect x="550" y="168" width="14" height="10"/><rect x="570" y="168" width="14" height="10"/><rect x="590" y="168" width="14" height="10"/><rect x="610" y="168" width="14" height="10"/><rect x="630" y="168" width="14" height="10"/>
+          <rect x="510" y="184" width="14" height="10"/><rect x="530" y="184" width="14" height="10"/><rect x="550" y="184" width="14" height="10"/><rect x="570" y="184" width="14" height="10"/><rect x="590" y="184" width="14" height="10"/><rect x="610" y="184" width="14" height="10"/><rect x="630" y="184" width="14" height="10"/>
+        </g>
+        <path d="M470 118 C 470 140, 490 160, 500 166M690 118 C 690 140, 670 160, 660 166" class="ks-data" style="stroke-width:1.4"/>
+        <text x="580" y="230" class="kt-data t-c">FMA당 레지스터 읽기 0.625 B</text>
+        <text x="580" y="252" class="t-dim t-c">명령 하나(4클럭) 1,280 B → 320 B/클럭 &lt; 384</text>
+      </svg>
+      <figcaption><b>그림 5-2.</b> 같은 레지스터 파일, 다른 사용법. 벡터 레인은 FMA마다 오퍼랜드를 새로 읽는다. 텐서 코어는 \(16\times 8\times 16\) 명령 하나(FMA 2,048번)에 \(A\) 512 B, \(B\) 256 B, 누산기 512 B만 읽고, 그 수를 내부 배선으로 곱셈기 격자 전체에 방송한다. 그래서 기존 레지스터 포트(384 B/클럭) 안에서 512 FMA/클럭이 돌아간다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-rf">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>FMA당 레지스터 읽기와 에너지: 벡터 레인 vs 텐서 코어</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="rf-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>벡터: 스레드당 출력 타일 r×r <output id="rf-r-out"></output></span><input type="range" id="rf-r" min="1" max="8" step="1" value="4"></label>
+          <div class="ctrl"><span>텐서 명령 타일 m×n×k</span><div class="seg" id="rf-t"><button data-value="16,8,16" class="on">16×8×16</button><button data-value="16,16,16">16×16×16</button><button data-value="8,8,4">8×8×4</button></div></div>
+          <div class="ctrl"><span>텐서: 워프 타일 W×W</span><div class="seg" id="rf-w"><button data-value="32">32</button><button data-value="64" class="on">64</button><button data-value="128">128</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">벡터 FP32 FMA</span><span class="v" id="rf-v">—</span></div>
+        <div class="stat"><span class="k">텐서 BF16 FMA</span><span class="v" id="rf-tt">—</span></div>
+        <div class="stat"><span class="k">FMA당 에너지 비</span><span class="v" id="rf-x">—</span></div>
+        <div class="stat"><span class="k">512 FMA/클럭의 RF 읽기</span><span class="v" id="rf-bw">—</span></div>
+      </div>
+      <div class="sim-note">막대는 FMA 하나의 에너지 분해다. 에너지 표 값으로 계산했다: FP32 FMA 0.8 pJ, BF16 FMA(텐서 코어 안) 0.2 pJ, 레지스터 32비트 접근 0.5 pJ, 공유 메모리 32비트 1.5 pJ. 해볼 것: ① r=1이면 벡터 FMA 하나가 5.8 pJ인데, 그중 연산은 0.8 pJ뿐이다. ② r을 8까지 올려도 약 3.2 pJ에 머문다. 연산 0.8 pJ과 레지스터 2.0 pJ, 합 2.8 pJ이 바닥으로 남기 때문이다. ③ 텐서 16×8×16, 워프 타일 64는 0.33 pJ/FMA로, r=4 벡터(3.55 pJ)의 약 1/11이다.</div>
+    </div>
+    <div class="callout fab"><strong>레지스터 포트는 그대로, 처리량은 16배</strong>서브파티션 하나의 레지스터 파일 읽기 포트는 FP32 레인 32개 × 오퍼랜드 3개 × 4 B = 384 B/클럭이다. BF16 \(16\times 8\times 16\) 명령은 4클럭(2,048 FMA ÷ 512)에 1,280 B를 읽으므로 320 B/클럭(포트의 83 %)이고, 결과 쓰기는 512 B ÷ 4 = 128 B/클럭(쓰기 포트의 100 %)이다. 같은 포트로 FP32 벡터는 서브파티션당 32 FMA/클럭, 텐서 코어는 512 FMA/클럭을 한다. 칩 전체로는 FP32 59.0 TFLOPS 대 BF16 943.7 TFLOPS, 정확히 16배다.</div>
+    <p><b>왜 이렇게 설계하는가.</b> 레지스터 파일은 SM에서 가장 큰 SRAM이고, 포트 하나를 늘릴 때마다 면적과 에너지가 크게 는다. 레지스터 포트를 키우는 대신 오퍼랜드 하나를 연산 유닛 안에서 여러 번 쓰게 하면, 같은 포트와 같은 면적으로 처리량을 16배 얻는다. 이 해법이 텐서 코어다. FMA당 에너지도 약 1/10로 준다. 에너지 대부분이 연산이 아니라 레지스터 접근에 들기 때문이다.</p>
+  </section>
+
+  <!-- ============================================================ 3 -->
+  <section id="dot">
+    <h2>내적 트리와 외적</h2>
+    <p>클럭당 512 FMA를 하는 회로를 배치하는 방법은 크게 두 가지다. <span class="term">내적 유닛</span><span class="en">(dot-product unit)</span>은 길이 \(L\)인 두 벡터의 곱 \(L\)개를 <span class="term">덧셈기 트리</span><span class="en">(adder tree)</span>로 모아 누산기 하나에 더한다. 깊이는 \(\log_2 L\)단이다. <span class="term">외적</span><span class="en">(outer product)</span> 구조는 \(A\)의 열 \(r\)개와 \(B\)의 행 \(c\)개를 받아 \(r\times c\)개의 FMA가 각자 자기 누산기에 더한다. 실제 텐서 코어는 그 중간이다. 길이 \(L\)인 내적 유닛을 \(r\times c\) 출력 타일로 늘어놓고 \(rcL = 512\)로 맞춘다.</p>
+    <div class="formula">$$\text{입력} = (r + c)\,L\ \text{원소/클럭},\qquad \text{누산기(넓은 덧셈기)} = rc = \frac{512}{L},\qquad \text{트리 깊이} = \log_2 L$$
+      <div class="where">\(L = 1\)은 순수 외적(\(16\times 32\)), \(L = 512\)는 내적 유닛 하나. 덧셈기 총수는 \(rc(L-1) + rc = 512\)로 언제나 같다. 달라지는 것은 그중 몇 개가 FP32 폭의 누산기이고 몇 개가 곱 폭의 좁은 트리 덧셈기인가, 그리고 입력 배선이 몇 가닥인가다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 760 260" role="img" aria-label="왼쪽: 길이 4 내적 유닛, 곱셈기 네 개와 덧셈기 트리와 누산기. 오른쪽: 4×4 외적, a 네 개와 b 네 개가 격자 16칸에 방송되고 칸마다 누산기가 있다">
+        <text x="180" y="20" class="t t-c t-b">내적 유닛 (L = 4)</text>
+        <g class="t t-c tn-s"><text x="60" y="44">a₀ b₀</text><text x="140" y="44">a₁ b₁</text><text x="220" y="44">a₂ b₂</text><text x="300" y="44">a₃ b₃</text></g>
+        <g><circle cx="60" cy="74" r="16" class="k-tensor"/><circle cx="140" cy="74" r="16" class="k-tensor"/><circle cx="220" cy="74" r="16" class="k-tensor"/><circle cx="300" cy="74" r="16" class="k-tensor"/></g>
+        <g class="t t-c"><text x="60" y="79">×</text><text x="140" y="79">×</text><text x="220" y="79">×</text><text x="300" y="79">×</text></g>
+        <path d="M60 90L100 122M140 90L100 122M220 90L260 122M300 90L260 122M100 152L180 182M260 152L180 182" class="s-line" style="fill:none"/>
+        <g><circle cx="100" cy="137" r="15" class="k-compute"/><circle cx="260" cy="137" r="15" class="k-compute"/><circle cx="180" cy="197" r="15" class="k-compute"/></g>
+        <g class="t t-c"><text x="100" y="142">+</text><text x="260" y="142">+</text><text x="180" y="202">+</text></g>
+        <rect x="150" y="222" width="60" height="26" rx="5" class="k-sram"/><text x="180" y="240" class="t t-c tn-s">누산기</text>
+        <text x="320" y="142" class="t-dim tn-s">깊이 log₂L</text>
+        <text x="20" y="250" class="t-dim tn-s">입력 2L, 출력 1</text>
+        <line x1="380" y1="20" x2="380" y2="250" class="s-faint dash"/>
+        <text x="580" y="20" class="t t-c t-b">외적 (4 × 4)</text>
+        <g class="t t-c tn-s"><text x="470" y="80">a₀</text><text x="470" y="120">a₁</text><text x="470" y="160">a₂</text><text x="470" y="200">a₃</text>
+          <text x="520" y="50">b₀</text><text x="570" y="50">b₁</text><text x="620" y="50">b₂</text><text x="670" y="50">b₃</text></g>
+        <g class="ks-data" style="stroke-width:1.2"><path d="M484 76H700M484 116H700M484 156H700M484 196H700M520 58V216M570 58V216M620 58V216M670 58V216"/></g>
+        <g class="k-tensor">
+          <rect x="506" y="64" width="28" height="24" rx="4"/><rect x="556" y="64" width="28" height="24" rx="4"/><rect x="606" y="64" width="28" height="24" rx="4"/><rect x="656" y="64" width="28" height="24" rx="4"/>
+          <rect x="506" y="104" width="28" height="24" rx="4"/><rect x="556" y="104" width="28" height="24" rx="4"/><rect x="606" y="104" width="28" height="24" rx="4"/><rect x="656" y="104" width="28" height="24" rx="4"/>
+          <rect x="506" y="144" width="28" height="24" rx="4"/><rect x="556" y="144" width="28" height="24" rx="4"/><rect x="606" y="144" width="28" height="24" rx="4"/><rect x="656" y="144" width="28" height="24" rx="4"/>
+          <rect x="506" y="184" width="28" height="24" rx="4"/><rect x="556" y="184" width="28" height="24" rx="4"/><rect x="606" y="184" width="28" height="24" rx="4"/><rect x="656" y="184" width="28" height="24" rx="4"/>
+        </g>
+        <text x="580" y="240" class="t-dim t-c tn-s">칸마다 FMA + 자기 누산기 · 입력 r + c, 누산기 rc</text>
+      </svg>
+      <figcaption><b>그림 5-3.</b> 내적 트리와 외적. 내적 유닛은 입력을 \(2L\)개 받아 출력 하나를 낸다. 곱셈 결과를 지수에 맞춰 정렬해 더하는 트리가 깊어진다. 외적은 입력 \(r+c\)개를 격자 전체에 방송하므로 입력 배선이 가장 적다. 대신 칸마다 FP32 누산기를 두어야 한다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-do">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>512 FMA를 어떻게 늘어놓을까: 내적 길이 L</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="do-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>내적 길이 L <output id="do-l-out"></output></span><input type="range" id="do-l" min="0" max="9" step="1" value="2"></label>
+          <div class="ctrl"><span>클럭당 FMA</span><div class="seg" id="do-f"><button data-value="256">256</button><button data-value="512" class="on">512</button><button data-value="1024">1,024</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">출력 타일 r×c</span><span class="v" id="do-rc">—</span></div>
+        <div class="stat"><span class="k">입력 (BF16)</span><span class="v" id="do-in">—</span></div>
+        <div class="stat"><span class="k">FP32 누산기</span><span class="v" id="do-acc">—</span></div>
+        <div class="stat"><span class="k">트리 깊이 / 팬아웃</span><span class="v" id="do-d">—</span></div>
+      </div>
+      <div class="sim-note">그래프는 로그 눈금이다. 클럭당 입력 원소, 누산기 수, 누산기 상태(KB), 입력 하나가 방송되는 곳의 수(팬아웃)를 L에 따라 그렸다. 해볼 것: ① L=1(순수 외적, 16×32)은 입력이 48원소/클럭으로 가장 적지만 FP32 누산기가 512개(상태 2 KB)다. ② L=4(8×16 타일)는 입력 96원소, 누산기 128개다. 입력과 누산기가 균형을 이루는 지점이다. ③ L=512(내적 유닛 하나)는 입력이 1,024원소/클럭(2 KB/클럭)으로 레지스터 포트를 크게 넘는다.</div>
+    </div>
+    <p>실제 텐서 코어 설계는 길이 4–16 정도의 내적을 \(4\times 8\)에서 \(8\times 16\) 크기로 늘어놓는 경우가 많다(Hot Chips류 발표의 일반적 범위). 내적 트리 안에서는 곱 \(L\)개의 지수 중 최댓값을 찾아 나머지를 오른쪽으로 밀어 정렬한 뒤 정수처럼 더한다. 정렬을 \(L\)개 곱 전체에 한 번만 하므로, 곱마다 따로 정규화하고 반올림하는 FMA \(L\)개보다 회로가 훨씬 작다. 대신 반올림 순서가 IEEE 754의 순차 FMA와 달라져 결과가 비트 단위로 다를 수 있다(누산 정밀도는 <a href="alu.html">4장</a>).</p>
+    <p><b>왜 이렇게 설계하는가.</b> 입력 배선과 누산기 상태는 서로 바꿀 수 있다. 외적은 입력 대역폭을 아끼는 대신 넓은 누산기를 많이 둔다. 내적은 누산기를 아끼는 대신 입력 배선과 트리 깊이를 쓴다. 텐서 코어는 레지스터 포트(입력)와 누산기 면적이 모두 감당할 수 있는 중간 \(L\)을 고른다.</p>
+  </section>
+
+  <!-- ============================================================ 4 -->
+  <section id="systolic">
+    <h2>시스톨릭 배열: 수를 흘려 재사용한다</h2>
+    <p><span class="term">시스톨릭 배열</span><span class="en">(systolic array)</span>은 처리 요소(PE)를 \(N\times N\) 격자로 놓고 이웃끼리만 연결한다. 수는 클럭마다 한 칸씩 옆으로 흘러가고, 지나가는 PE마다 한 번씩 쓰인다. 방송 배선이 없고 배선이 모두 짧다. 1978년 H. T. Kung과 C. Leiserson이 제안했고, 2010년대 후반의 데이터센터 AI 가속기(Jouppi 외 TPU 논문)가 \(256\times 256\) 배열로 크게 알려졌다. 어떤 수를 PE에 고정하느냐에 따라 두 방식이 있다.</p>
+    <ul>
+      <li><span class="term">가중치 고정</span><span class="en">(weight stationary, WS)</span>: \(B\)(가중치) \(N\times N\)을 먼저 PE마다 하나씩 적재한다. \(A\)의 행이 왼쪽에서 들어와 오른쪽으로 흐르고, 부분합이 위에서 아래로 흐르며 열마다 내적이 완성된다. 흘려 넣는 길이 \(S\)는 \(A\)의 행 수 \(M\)이다.</li>
+      <li><span class="term">출력 고정</span><span class="en">(output stationary, OS)</span>: \(C\)의 원소가 PE에 머문다. \(A\)는 오른쪽으로, \(B\)는 아래로 흐르고, PE는 만나는 두 수를 곱해 자기 누산기에 더한다. 흘려 넣는 길이 \(S\)는 내적 길이 \(K\)다. 끝나면 결과를 밖으로 빼내야 한다.</li>
+    </ul>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 760 270" role="img" aria-label="가중치 고정과 출력 고정 시스톨릭 배열의 데이터 흐름. 3×3 PE 격자에서 화살표로 A, B, 부분합이 흐르는 방향을 표시">
+        <text x="190" y="20" class="t t-c t-b">가중치 고정 (WS)</text>
+        <g class="k-tensor"><rect x="100" y="50" width="56" height="50" rx="6"/><rect x="176" y="50" width="56" height="50" rx="6"/><rect x="252" y="50" width="56" height="50" rx="6"/>
+          <rect x="100" y="120" width="56" height="50" rx="6"/><rect x="176" y="120" width="56" height="50" rx="6"/><rect x="252" y="120" width="56" height="50" rx="6"/>
+          <rect x="100" y="190" width="56" height="50" rx="6"/><rect x="176" y="190" width="56" height="50" rx="6"/><rect x="252" y="190" width="56" height="50" rx="6"/></g>
+        <g class="t t-c tn-s"><text x="128" y="80">w₀₀</text><text x="204" y="80">w₀₁</text><text x="280" y="80">w₀₂</text><text x="128" y="150">w₁₀</text><text x="204" y="150">w₁₁</text><text x="280" y="150">w₁₂</text><text x="128" y="220">w₂₀</text><text x="204" y="220">w₂₁</text><text x="280" y="220">w₂₂</text></g>
+        <g class="arr arr-a"><path d="M40 75H96"/><path d="M40 145H96"/><path d="M40 215H96"/><path d="M158 75H172"/><path d="M234 75H248"/><path d="M158 145H172"/><path d="M234 145H248"/><path d="M158 215H172"/><path d="M234 215H248"/></g>
+        <g class="arr arr-a2"><path d="M128 102V116"/><path d="M204 102V116"/><path d="M280 102V116"/><path d="M128 172V186"/><path d="M204 172V186"/><path d="M280 172V186"/><path d="M128 242V262"/><path d="M204 242V262"/><path d="M280 242V262"/></g>
+        <text x="20" y="64" class="t-acc tn-s">A 행 →</text>
+        <text x="320" y="258" class="t-acc2 tn-s">부분합 ↓ = C</text>
+        <text x="320" y="44" class="t-dim tn-s">0 ↓</text>
+        <line x1="380" y1="20" x2="380" y2="260" class="s-faint dash"/>
+        <text x="570" y="20" class="t t-c t-b">출력 고정 (OS)</text>
+        <g class="k-tensor"><rect x="480" y="50" width="56" height="50" rx="6"/><rect x="556" y="50" width="56" height="50" rx="6"/><rect x="632" y="50" width="56" height="50" rx="6"/>
+          <rect x="480" y="120" width="56" height="50" rx="6"/><rect x="556" y="120" width="56" height="50" rx="6"/><rect x="632" y="120" width="56" height="50" rx="6"/>
+          <rect x="480" y="190" width="56" height="50" rx="6"/><rect x="556" y="190" width="56" height="50" rx="6"/><rect x="632" y="190" width="56" height="50" rx="6"/></g>
+        <g class="t t-c tn-s"><text x="508" y="80">c₀₀</text><text x="584" y="80">c₀₁</text><text x="660" y="80">c₀₂</text><text x="508" y="150">c₁₀</text><text x="584" y="150">c₁₁</text><text x="660" y="150">c₁₂</text><text x="508" y="220">c₂₀</text><text x="584" y="220">c₂₁</text><text x="660" y="220">c₂₂</text></g>
+        <g class="arr arr-a"><path d="M420 75H476"/><path d="M420 145H476"/><path d="M420 215H476"/><path d="M538 75H552"/><path d="M614 75H628"/><path d="M538 145H552"/><path d="M614 145H628"/><path d="M538 215H552"/><path d="M614 215H628"/></g>
+        <g class="arr arr-a2"><path d="M508 30V46"/><path d="M584 30V46"/><path d="M660 30V46"/><path d="M508 102V116"/><path d="M584 102V116"/><path d="M660 102V116"/><path d="M508 172V186"/><path d="M584 172V186"/><path d="M660 172V186"/></g>
+        <text x="400" y="64" class="t-acc tn-s">A →</text><text x="696" y="40" class="t-acc2 tn-s">B ↓</text>
+        <text x="570" y="262" class="t-dim t-c tn-s">끝나면 C를 밖으로 빼낸다(N사이클)</text>
+      </svg>
+      <figcaption><b>그림 5-4.</b> 두 가지 시스톨릭 데이터 흐름. WS는 가중치를 PE에 두고 활성값(가로 화살표)과 부분합(세로 화살표)을 흘린다. OS는 결과를 PE에 두고 두 입력을 흘린다. 어느 쪽이든 \(i\)행 입력은 \(i\)사이클 늦게 들어가야(스큐) 맞는 수끼리 같은 PE에서 만난다.</figcaption>
+    </figure>
+
+    <p>스큐 때문에 배열은 대각선 물결처럼 차오르고 빠진다. \(A\)의 \(s\)번째 원소가 PE \((i, j)\)에 도착하는 시각은 \(t = s + i + j\)다. 마지막 PE \((N-1, N-1)\)이 마지막 원소를 처리하는 시각은 \(S - 1 + 2(N-1)\)이다. 여기에 WS의 가중치 적재 \(N\)사이클이나 OS의 결과 배출 \(N\)사이클이 더해진다. 다음 타일의 적재를 지금 타일 계산과 겹치는 이중 버퍼를 쓰면 이 \(N\)이 숨는다.</p>
+    <div class="formula">$$T = S + 2N - 2 + N_{\text{적재/배출}},\qquad U = \frac{S N^2}{N^2\, T} = \frac{S}{S + 3N - 2}\ \ (\text{겹치면 } \tfrac{S}{S + 2N - 2})$$
+      <div class="where">\(U\)는 <span class="term">활용률</span>(쓸모 있는 MAC ÷ 가능한 MAC). \(N = 128\)인 배열은 \(S = 128\)이면 25 %, \(S = 8{,}192\)이어야 약 96 %다. 배열이 클수록 흘려 넣는 길이가 길어야 채움·비움 손실이 묻힌다.</div></div>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 760 230" role="img" aria-label="시공간 그림: 가로는 사이클, 세로는 PE 대각선 번호. 활성 구간이 평행사변형을 이루고 왼쪽 삼각형은 채움, 오른쪽 삼각형은 비움 손실">
+        <path d="M80 30V190H720" class="s-axis" style="fill:none"/>
+        <text x="400" y="222" class="t-dim t-c">사이클 t →</text>
+        <text transform="translate(30 110) rotate(-90)" class="t-dim t-c">대각선 i + j</text>
+        <rect x="80" y="40" width="620" height="150" class="f-bad-soft" style="opacity:.6"/>
+        <path d="M100 190L420 190L680 40L360 40Z" class="kf-tensor" style="opacity:.75"/>
+        <text x="390" y="120" class="t t-c t-b" style="fill:var(--bg-elev)">쓸모 있는 MAC S·N²</text>
+        <text x="190" y="80" class="t t-c t-bad">채움</text>
+        <text x="590" y="170" class="t t-c t-bad">비움</text>
+        <g class="dimline"><path d="M100 202H420"/></g>
+        <text x="260" y="214" class="t t-c tn-s">S</text>
+        <path d="M420 32H680" class="s-line"/><text x="550" y="28" class="t t-c tn-s">2N − 2</text>
+        <text x="72" y="44" class="t-dim t-e tn-s">2N−2</text><text x="72" y="190" class="t-dim t-e tn-s">0</text>
+      </svg>
+      <figcaption><b>그림 5-5.</b> 채움과 비움. 대각선 \(d = i+j\)의 PE는 \(t = d\)부터 \(S\)사이클 동안 일한다. 활성 영역은 평행사변형이고, 직사각형(배열 × 시간)에서 남는 두 삼각형이 손실이다. 손실의 폭 \(2N-2\)은 배열 크기에만 의존하고 \(S\)와 무관하다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-sy">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>시스톨릭 배열 사이클 시뮬레이션</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sy-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>데이터 흐름</span><div class="seg" id="sy-f"><button data-value="ws" class="on">가중치 고정</button><button data-value="os">출력 고정</button></div></div>
+          <label class="ctrl"><span>배열 N×N <output id="sy-n-out"></output></span><input type="range" id="sy-n" min="2" max="16" step="1" value="4"></label>
+          <label class="ctrl"><span>흘려 넣는 길이 S <output id="sy-s-out"></output></span><input type="range" id="sy-s" min="1" max="64" step="1" value="8"></label>
+          <label class="check"><input type="checkbox" id="sy-ov"> 적재/배출을 다음 타일과 겹치기(이중 버퍼)</label>
+          <div class="btn-row"><button class="btn primary" id="sy-play">재생</button><button class="btn" id="sy-step">한 사이클</button><button class="btn" id="sy-reset">처음으로</button><button class="btn" id="sy-new">새 행렬</button></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">사이클</span><span class="v" id="sy-c">—</span></div>
+        <div class="stat"><span class="k">유용 MAC</span><span class="v" id="sy-mac">—</span></div>
+        <div class="stat"><span class="k">활용률 (시뮬)</span><span class="v" id="sy-u">—</span></div>
+        <div class="stat"><span class="k">해석식 S/T</span><span class="v" id="sy-uf">—</span></div>
+        <div class="stat"><span class="k">결과 검증</span><span class="v" id="sy-ok">—</span></div>
+      </div>
+      <div class="sim-note">PE마다 레지스터를 두고 사이클 단위로 수를 옮기는 시뮬레이션이다. -3에서 3 사이의 정수 행렬을 곱하고, 바닥으로 나온 C(WS)나 PE에 남은 C(OS)를 직접 계산한 행렬곱과 원소마다 비교한다. 진한 칸은 이번 사이클에 MAC을 한 PE다. 칸 안 숫자는 WS에서 고정된 가중치 w와 지나가는 부분합, OS에서 누산값이다. 해볼 것: ① N=4, S=8, WS면 적재 4 + 계산 14 = 18사이클, 활용률 44.4 %로 해석식과 같다. 겹치기를 켜면 14사이클, 57.1 %가 된다. ② N=16, S=4면 활용률이 8 %(겹치기를 켜도 약 12 %)뿐이다. 작은 행렬을 큰 배열에 넣으면 대부분의 시간이 채움과 비움이다. ③ 출력 고정으로 바꿔도 사이클 수는 같다. 손실이 적재에서 배출로 옮겨 갈 뿐이다.</div>
+    </div>
+    <p>시스톨릭 배열은 같은 수를 이웃에게 넘겨 주므로, \(N\times N\) 배열이 클럭당 받는 입력은 가장자리의 \(2N\)개뿐이다. 계산은 \(N^2\)이다. 배열을 두 배로 키우면 입력 대역폭은 두 배, 연산은 네 배가 된다. 배선이 이웃 사이로만 짧아 높은 클럭과 낮은 배선 에너지에도 유리하다. 대가는 채움·비움 손실과, 행렬이 배열 크기의 배수가 아닐 때 남는 칸이다.</p>
+    <p><b>왜 이렇게 설계하는가.</b> 큰 시스톨릭 배열은 입력 대역폭 대비 연산이 \(N/2\)배로 가장 효율적이다. 다만 \(S \gg N\)인 큰 행렬에서만 그렇다. 행렬 크기가 들쭉날쭉한 범용 GPU는 배열 하나를 키우기보다 작은 행렬 엔진을 많이 두고 소프트웨어가 타일을 나누게 한다(<a href="#npu">마지막 절</a>).</p>
+  </section>
+
+  <!-- ============================================================ 5 -->
+  <section id="feed">
+    <h2>텐서 코어 먹이기: 입출력 대역폭과 워프 행렬 명령</h2>
+    <p>텐서 코어는 레지스터 파일과 공유 메모리에서 수를 받는다. 프로그램에서는 <span class="term">워프 행렬 명령</span><span class="en">(warp-level matrix instruction)</span>으로 보인다. 워프 32개 스레드가 \(A, B, C\) 조각(fragment)을 레지스터에 나눠 들고, 명령 하나가 \(m\times n\times k\) 행렬곱-누산을 한다. 행렬 전체는 세 단계 타일로 나뉜다. 스레드 블록 타일은 공유 메모리에, 워프 타일 \(W_m\times W_n\)은 워프의 레지스터(누산기)에, 명령 타일은 텐서 코어에 놓인다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 240" role="img" aria-label="타일 계층: HBM의 큰 행렬, 공유 메모리의 블록 타일, 레지스터의 워프 타일 64×64, 텐서 코어의 명령 타일 16×8×16">
+        <rect x="20" y="40" width="170" height="160" class="k-dram"/><text x="105" y="30" class="t t-c t-b">행렬 (HBM)</text>
+        <rect x="30" y="50" width="60" height="60" class="kf-sram" style="opacity:.5"/>
+        <text x="105" y="222" class="t-dim t-c tn-s">M × N × K, 144 GB 중 일부</text>
+        <path d="M90 60L230 50M90 110L230 170" class="s-faint dash"/>
+        <rect x="230" y="50" width="120" height="120" class="k-sram"/><text x="290" y="40" class="t t-c t-b">블록 타일</text>
+        <g style="fill:var(--sram);opacity:.35"><rect x="232" y="52" width="58" height="58"/></g>
+        <text x="290" y="190" class="t-dim t-c tn-s">공유 메모리 (최대 228 KB)</text>
+        <path d="M290 52L400 60M290 110L400 140" class="s-faint dash"/>
+        <rect x="400" y="60" width="90" height="80" class="k-tensor"/><text x="445" y="50" class="t t-c t-b">워프 타일</text>
+        <g style="fill:var(--tensor);opacity:.5"><rect x="402" y="62" width="22" height="11"/></g>
+        <text x="445" y="160" class="t-dim t-c tn-s">64 × 64 FP32 누산기</text>
+        <text x="445" y="178" class="t-dim t-c tn-s">= 스레드당 128 레지스터</text>
+        <path d="M424 62L540 80M424 73L540 120" class="s-faint dash"/>
+        <rect x="540" y="80" width="64" height="40" class="kf-tensor" style="opacity:.8"/><text x="572" y="70" class="t t-c t-b">명령 타일</text>
+        <text x="572" y="140" class="t-dim t-c tn-s">16 × 8 × 16</text>
+        <text x="572" y="158" class="t-dim t-c tn-s">2,048 FMA = 4클럭</text>
+        <text x="690" y="96" class="t t-c">텐서 코어</text><text x="690" y="114" class="t-dim t-c tn-s">512 FMA/클럭</text>
+        <path d="M606 100H640" class="arr"/>
+      </svg>
+      <figcaption><b>그림 5-6.</b> 타일 계층. 바깥 타일이 클수록 안쪽으로 공급할 바이트가 줄어든다. 워프 타일 \(W_m\times W_n\)은 공유 메모리 트래픽을, 명령 타일 \(m\times n\times k\)는 레지스터 파일 트래픽을 정한다. 타일링이 HBM 트래픽에 주는 효과는 <a href="roofline.html">7장</a>, 공유 메모리 뱅크는 <a href="onchip.html">6장</a>에서 다룬다.</figcaption>
+    </figure>
+    <p>텐서 코어 하나가 클럭당 \(F_{tc}\)번 FMA를 할 때 필요한 바이트를 단계마다 세어 보자. 워프가 \(A\) 조각 \(W_m\times k\)를 공유 메모리에서 레지스터로 한 번 가져오면 \(W_n\)열에 걸쳐 쓰고, \(B\) 조각은 \(W_m\)행에 걸쳐 쓴다. 여러 텐서 코어가 같은 \(B\) 타일을 함께 읽는 방송(\(g\)개 공유)을 하면 \(B\) 몫이 \(1/g\)로 준다.</p>
+    <div class="formula">$$B_{smem}^{SM} = 4\,F_{tc}\,b\left(\frac{1}{W_n} + \frac{1}{g\,W_m}\right),\qquad B_{RF,rd} = F_{tc}\,b\left(\frac{1}{n} + \frac{1}{m}\right) + \frac{4F_{tc}}{k},\qquad B_{RF,wr} = \frac{4F_{tc}}{k}$$
+      <div class="where">SM당 텐서 코어 4개. GX-1 한계는 공유 메모리 128 B/클럭/SM, 레지스터 파일 읽기 384 B/클럭·쓰기 128 B/클럭(서브파티션당). 누산기 레지스터는 스레드당 \(W_m W_n/32\)개(한계 255). 정밀도를 BF16 → FP8 → FP4로 낮추면 \(F_{tc}\)는 512 → 1,024 → 2,048로 늘고 \(b\)는 2 → 1 → 0.5로 줄어 \(F_{tc}\,b\)가 일정하다. 누산기 항 \(4F_{tc}/k\)만 커지므로, 저정밀 명령은 \(k\)를 키운다.</div></div>
+
+    <div class="sim" id="sim-tc">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>텐서 코어 입출력 대역폭 계산기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="tc-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>정밀도</span><div class="seg" id="tc-p"><button data-value="bf16" class="on">BF16</button><button data-value="fp8">FP8</button><button data-value="fp4">FP4</button></div></div>
+          <label class="ctrl"><span>명령 m <output id="tc-m-out"></output></span><input type="range" id="tc-m" min="3" max="6" step="1" value="4"></label>
+          <label class="ctrl"><span>명령 n <output id="tc-n-out"></output></span><input type="range" id="tc-n" min="3" max="7" step="1" value="3"></label>
+          <label class="ctrl"><span>명령 k <output id="tc-k-out"></output></span><input type="range" id="tc-k" min="2" max="7" step="1" value="4"></label>
+          <label class="ctrl"><span>워프 타일 W<sub>m</sub> <output id="tc-wm-out"></output></span><input type="range" id="tc-wm" min="4" max="8" step="1" value="6"></label>
+          <label class="ctrl"><span>워프 타일 W<sub>n</sub> <output id="tc-wn-out"></output></span><input type="range" id="tc-wn" min="4" max="8" step="1" value="6"></label>
+          <div class="ctrl"><span>B 타일 공유 g</span><div class="seg" id="tc-g"><button data-value="1" class="on">1 (워프별)</button><button data-value="4">4 (SM 방송)</button></div></div>
+          <label class="check"><input type="checkbox" id="tc-acc"> 누산기를 텐서 코어 안에 둔다</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">명령 1개</span><span class="v" id="tc-cyc">—</span></div>
+        <div class="stat"><span class="k">RF 읽기 / 쓰기</span><span class="v" id="tc-rf">—</span></div>
+        <div class="stat"><span class="k">공유 메모리 / SM</span><span class="v" id="tc-sm">—</span></div>
+        <div class="stat"><span class="k">누산 레지스터 / 스레드</span><span class="v" id="tc-reg">—</span></div>
+        <div class="stat"><span class="k">GX-1 달성</span><span class="v" id="tc-tf">—</span></div>
+      </div>
+      <div class="sim-note">막대는 자원마다 필요량 ÷ 공급 한계다. 100 %를 넘는 자원이 있으면 텐서 코어는 그 비율만큼 기다린다. 달성 성능 = 피크 × min(1, 한계/필요). 누산기가 255개를 넘으면 레지스터가 넘쳐 실행할 수 없다(0으로 표시). 해볼 것: ① 기본값(BF16, 16×8×16, 64×64)은 RF 읽기 83 %, 쓰기 100 %, 공유 메모리 100 %로 943.7 TFLOPS가 꼭 맞게 나온다. ② 워프 타일을 32×32로 줄이면 공유 메모리가 256 B/클럭(200 %)이 필요해 471.9 TFLOPS로 반토막 난다. ③ FP8로 바꾸고 k를 16에 두면 RF 쓰기가 200 %다. k를 32로 키우면 1,887 TFLOPS가 회복된다. g=4는 공유 메모리를 80 B/클럭으로 낮춘다.</div>
+    </div>
+    <div class="callout fab"><strong>943.7 TFLOPS와 64×64 워프 타일</strong>피크는 활성 SM 144개 × 텐서 코어 4개 × 512 FMA × 2 FLOP × 1.6 GHz = 943.7 TFLOPS다. HBM 7.37 TB/s로 나누면 리지 포인트는 정확히 128 FLOP/B다. 이 피크를 공유 메모리 128 B/클럭/SM으로 먹이려면 \(4 \times 512 \times 2 \times (1/W_n + 1/W_m) \le 128\)이어야 하고, 정사각이면 \(W \ge 64\)다. 64×64 FP32 누산기는 16 KB, 워프 32스레드에 나누면 스레드당 128개로 최대 255개의 절반이다. 그래서 GX-1 커널의 워프 타일은 64×64 이상이어야 피크가 나오고, 레지스터 파일(SM당 256 KB)도 그만큼 커야 한다. 저장 공간보다 공급 대역폭이 레지스터 파일 크기를 정한다는 점이 여기서 숫자로 드러난다(레지스터 파일 구조는 <a href="sm.html">3장</a>).</div>
+    <p><b>왜 이렇게 설계하는가.</b> 텐서 코어 하나를 빠르게 만들기는 쉽다. 그 속도로 수를 대는 레지스터 포트, 공유 메모리 대역폭, 누산기 레지스터를 함께 키우기가 어렵다. GX-1의 레지스터 파일 크기, 공유 메모리 대역폭, 텐서 코어 처리량은 서로 맞물려 정해진 값이다. 최근 설계가 공유 메모리에서 텐서 코어로 직접 읽는 명령과, 여러 텐서 코어가 \(B\) 타일을 함께 쓰는 방송을 두는 것도 공유 메모리 대역폭을 아끼기 위해서다.</p>
+  </section>
+
+  <!-- ============================================================ 6 -->
+  <section id="sparse">
+    <h2>2:4 구조적 희소성</h2>
+    <p>학습된 가중치에는 0에 가까운 값이 많다. 무작위로 0을 섞으면 하드웨어가 이득을 보기 어렵다. 0이 어디 있는지 모르므로 곱셈기에 줄 수를 고르는 회로가 복잡해진다. <span class="term">2:4 구조적 희소성</span><span class="en">(2:4 structured sparsity)</span>은 연속한 가중치 4개마다 정확히 2개를 0으로 만든다. 남은 2개의 값과 각각의 위치(0–3, 2비트)만 저장한다. 텐서 코어는 2비트 메타데이터로 활성값 4개 중 맞는 2개를 멀티플렉서로 골라, 곱셈기 절반으로 같은 내적을 계산한다. 같은 곱셈기 수로 클럭당 유효 FMA가 2배가 된다.</p>
+    <div class="formula">$$\text{저장 비율} = \frac{2b + 4}{4b}\quad(\text{BF16 } 0.5625,\ \text{FP8 } 0.625,\ \text{FP4 } 0.75),\qquad \text{실효 가속} = \frac{1}{f\,\dfrac{\max(t_c/2,\ t_m')}{\max(t_c, t_m)} + (1 - f)}$$
+      <div class="where">\(b\)는 원소 비트 수, 4비트는 그룹당 메타데이터(위치 2비트 × 2). \(f\)는 전체 시간 중 희소 행렬곱 비중(암달의 법칙), \(t_c, t_m\)은 그 행렬곱의 연산·메모리 시간. 희소화 후 메모리 시간 \(t_m' = t_m\,(w s + 1 - w)\), \(w\)는 바이트 중 가중치 비중, \(s\)는 저장 비율.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 220" role="img" aria-label="2:4 희소성: 가중치 8개 중 그룹마다 2개를 남기고, 값 4개와 2비트 인덱스 4개로 압축한 뒤, 인덱스로 활성값을 골라 곱한다">
+        <text x="20" y="28" class="t t-b">밀집 가중치 8개</text>
+        <g>
+          <rect x="20" y="40" width="44" height="34" class="k-tensor"/><rect x="64" y="40" width="44" height="34" class="f-surface" style="stroke:var(--border)"/><rect x="108" y="40" width="44" height="34" class="f-surface" style="stroke:var(--border)"/><rect x="152" y="40" width="44" height="34" class="k-tensor"/>
+          <rect x="206" y="40" width="44" height="34" class="f-surface" style="stroke:var(--border)"/><rect x="250" y="40" width="44" height="34" class="k-tensor"/><rect x="294" y="40" width="44" height="34" class="k-tensor"/><rect x="338" y="40" width="44" height="34" class="f-surface" style="stroke:var(--border)"/>
+        </g>
+        <g class="t t-c t-mono"><text x="42" y="62">0.9</text><text x="86" y="62" class="t-faint">0.1</text><text x="130" y="62" class="t-faint">−0.2</text><text x="174" y="62">−1.3</text><text x="228" y="62" class="t-faint">0.0</text><text x="272" y="62">0.7</text><text x="316" y="62">−0.5</text><text x="360" y="62" class="t-faint">0.3</text></g>
+        <text x="108" y="92" class="t-dim t-c tn-s">그룹 1: 큰 2개 (0, 3)</text><text x="294" y="92" class="t-dim t-c tn-s">그룹 2: 큰 2개 (1, 2)</text>
+        <path d="M200 100V118" class="arr"/>
+        <text x="20" y="138" class="t t-b">압축 값 4개</text>
+        <g><rect x="20" y="148" width="44" height="30" class="k-tensor"/><rect x="64" y="148" width="44" height="30" class="k-tensor"/><rect x="118" y="148" width="44" height="30" class="k-tensor"/><rect x="162" y="148" width="44" height="30" class="k-tensor"/></g>
+        <g class="t t-c t-mono"><text x="42" y="168">0.9</text><text x="86" y="168">−1.3</text><text x="140" y="168">0.7</text><text x="184" y="168">−0.5</text></g>
+        <text x="240" y="138" class="t t-b">메타데이터 2비트 × 4</text>
+        <g><rect x="240" y="148" width="34" height="30" class="k-ctrl"/><rect x="274" y="148" width="34" height="30" class="k-ctrl"/><rect x="314" y="148" width="34" height="30" class="k-ctrl"/><rect x="348" y="148" width="34" height="30" class="k-ctrl"/></g>
+        <g class="t t-c t-mono"><text x="257" y="168">00</text><text x="291" y="168">11</text><text x="331" y="168">01</text><text x="365" y="168">10</text></g>
+        <line x1="410" y1="20" x2="410" y2="210" class="s-faint dash"/>
+        <text x="430" y="28" class="t t-b">텐서 코어 안</text>
+        <g><rect x="430" y="44" width="36" height="28" class="k-compute"/><rect x="470" y="44" width="36" height="28" class="k-compute"/><rect x="510" y="44" width="36" height="28" class="k-compute"/><rect x="550" y="44" width="36" height="28" class="k-compute"/></g>
+        <g class="t t-c tn-s"><text x="448" y="63">x₀</text><text x="488" y="63">x₁</text><text x="528" y="63">x₂</text><text x="568" y="63">x₃</text></g>
+        <path d="M440 80L500 116H566L626 80" class="s-line" style="fill:none"/>
+        <rect x="486" y="104" width="96" height="26" rx="5" class="k-ctrl"/><text x="534" y="122" class="t t-c tn-s">MUX ← 00, 11</text>
+        <path d="M510 130V150M558 130V150" class="arr"/>
+        <circle cx="510" cy="166" r="14" class="k-tensor"/><circle cx="558" cy="166" r="14" class="k-tensor"/>
+        <g class="t t-c"><text x="510" y="171">×</text><text x="558" y="171">×</text></g>
+        <text x="640" y="160" class="t tn-s">0.9·x₀</text><text x="640" y="178" class="t tn-s">−1.3·x₃</text>
+        <text x="430" y="204" class="t-dim tn-s">곱셈기 2개로 길이 4 내적 → FMA/클럭 2배</text>
+      </svg>
+      <figcaption><b>그림 5-7.</b> 2:4 희소 형식. 크기가 작은 2개(흐린 칸)를 버리고 남은 값과 위치만 저장한다. BF16이면 64비트가 32비트 값 + 4비트 메타데이터 = 36비트가 된다. 텐서 코어는 메타데이터로 활성값을 골라 곱셈기 절반만 쓴다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-sp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>2:4 희소성: 압축 형식과 실효 가속</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sp-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>가중치 정밀도</span><div class="seg" id="sp-p"><button data-value="16" class="on">BF16</button><button data-value="8">FP8</button><button data-value="4">FP4</button></div></div>
+          <label class="ctrl"><span>밀집 산술 강도 ÷ 리지 <output id="sp-x-out"></output></span><input type="range" id="sp-x" min="-1.5" max="1.5" step="0.1" value="0.6"></label>
+          <label class="ctrl"><span>희소 행렬곱 시간 비중 f <output id="sp-f-out"></output></span><input type="range" id="sp-f" min="0" max="100" step="5" value="80"></label>
+          <label class="ctrl"><span>바이트 중 가중치 비중 w <output id="sp-w-out"></output></span><input type="range" id="sp-w" min="0" max="100" step="5" value="80"></label>
+          <button class="btn" id="sp-new">새 가중치</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">저장 비율</span><span class="v" id="sp-st">—</span></div>
+        <div class="stat"><span class="k">이론 가속</span><span class="v" id="sp-th">2×</span></div>
+        <div class="stat"><span class="k">실효 가속</span><span class="v" id="sp-ef">—</span></div>
+        <div class="stat"><span class="k">버린 에너지 (이 블록)</span><span class="v" id="sp-er">—</span></div>
+      </div>
+      <div class="sim-note">위: 가우스 난수 가중치 4×16 블록. 그룹(4개)마다 크기 순으로 2개를 남기고 X 표시한 칸을 버린다. 아래: 압축된 값 4×8과 2비트 위치. 버린 에너지 = Σ버린 w² ÷ Σw². 해볼 것: ① 연산 제한(÷리지 4), f=80 %, w=80 %면 실효 1.67배다. ② ÷리지를 0.1(배치 1 디코드처럼 대역폭 제한)로 내리면 연산 절반은 소용없고 바이트 절감만 남아 1.39배다. ③ f=100 %, 연산 제한일 때만 2배가 나온다. 학습하지 않은 가우스 가중치는 에너지의 약 13 %를 버린다. 그래서 2:4는 가지치기 후 재학습이 필요하다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 무작위 희소성은 0을 건너뛰는 회로(인덱스 비교, 불규칙한 공급)가 아낀 곱셈기보다 비싸다. 2:4처럼 패턴을 고정하면 4:2 멀티플렉서와 2비트 메타데이터만으로 곱셈기 효율이 2배가 된다. 다만 그 2배는 연산 제한이고 희소 행렬곱이 시간 전부일 때의 상한이다. 대역폭 제한 구간에서는 저장량이 25–44 % 주는 만큼만 빨라진다.</p>
+  </section>
+
+  <!-- ============================================================ 7 -->
+  <section id="mx">
+    <h2>마이크로스케일링: 블록이 지수를 나눠 쓴다</h2>
+    <p>FP4(E2M1)는 표현할 수 있는 크기가 0, 0.5, 1, 1.5, 2, 3, 4, 6의 여덟 가지뿐이다. 텐서 전체에 스케일 하나를 곱해 이 범위에 맞추면, 이상치 하나가 스케일을 키워 나머지 값이 모두 0 근처로 뭉개진다. <span class="term">마이크로스케일링</span><span class="en">(microscaling, MX)</span>은 연속한 원소 32개(블록)마다 8비트 공유 지수 \(X\)(E8M0, 2의 거듭제곱만 표현)를 두고, 원소는 그 블록 안에서만 맞춘다. 공유 지수는 블록 최댓값에서 정한다. 원소 포맷의 최대 지수 \(e_{max}\)(E2M1 2, E3M2 4, E4M3 8)를 뺀다.</p>
+    <div class="formula">$$x_i \approx 2^{X}\,q_i,\qquad X = \left\lfloor \log_2 \max_{i \in \text{블록}} |x_i| \right\rfloor - e_{max},\qquad \text{비트/원소} = b_{elem} + \frac{8}{B}$$
+      <div class="where">\(q_i\)는 \(x_i/2^X\)를 원소 포맷의 가장 가까운 값으로 반올림한 것(최댓값을 넘으면 포화). \(B\)는 블록 크기. FP4 블록 32면 \(4 + 8/32 = 4.25\)비트/원소. 공유 지수가 2의 거듭제곱이라 곱셈기는 지수 덧셈 하나만 더하면 된다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 170" role="img" aria-label="MX 블록: 8비트 공유 지수 하나와 4비트 원소 32개">
+        <rect x="20" y="40" width="70" height="44" class="k-ctrl"/><text x="55" y="58" class="t t-c t-b">X</text><text x="55" y="76" class="t t-c tn-s">E8M0</text>
+        <g class="k-tensor">
+          <rect x="100" y="40" width="20" height="44"/><rect x="120" y="40" width="20" height="44"/><rect x="140" y="40" width="20" height="44"/><rect x="160" y="40" width="20" height="44"/><rect x="180" y="40" width="20" height="44"/><rect x="200" y="40" width="20" height="44"/><rect x="220" y="40" width="20" height="44"/><rect x="240" y="40" width="20" height="44"/>
+          <rect x="260" y="40" width="20" height="44"/><rect x="280" y="40" width="20" height="44"/><rect x="300" y="40" width="20" height="44"/><rect x="320" y="40" width="20" height="44"/><rect x="340" y="40" width="20" height="44"/><rect x="360" y="40" width="20" height="44"/><rect x="380" y="40" width="20" height="44"/><rect x="400" y="40" width="20" height="44"/>
+        </g>
+        <text x="440" y="68" class="t t-dim">⋯</text>
+        <g class="k-tensor"><rect x="470" y="40" width="20" height="44"/><rect x="490" y="40" width="20" height="44"/><rect x="510" y="40" width="20" height="44"/><rect x="530" y="40" width="20" height="44"/></g>
+        <text x="330" y="30" class="t t-c">원소 32개 × FP4 E2M1 (부호 1 · 지수 2 · 가수 1)</text>
+        <text x="55" y="104" class="t-dim t-c tn-s">8비트</text><text x="325" y="104" class="t-dim t-c tn-s">128비트</text>
+        <text x="20" y="134" class="t">값 = 2<tspan dy="-6" class="sub">X</tspan><tspan dy="6"> × q</tspan><tspan dy="4" class="sub">i</tspan><tspan dy="-4">   ·   (8 + 128) / 32 = 4.25 비트/원소</tspan></text>
+        <text x="20" y="158" class="t-dim tn-s">블록마다 스케일이 따로 → 이상치는 자기 블록 32개만 망친다</text>
+        <rect x="590" y="40" width="150" height="44" rx="6" class="k-compute"/><text x="665" y="58" class="t t-c tn-s">곱: q_a·q_b (4비트)</text><text x="665" y="76" class="t t-c tn-s">지수: X_a + X_b</text>
+      </svg>
+      <figcaption><b>그림 5-8.</b> 마이크로스케일링 블록. 블록 32개가 8비트 지수 하나를 나눠 쓰므로 원소당 추가 비용은 0.25비트다. 텐서 코어는 블록 안의 4비트 곱을 모두 더한 뒤 지수 합 \(X_a + X_b\)만큼 한 번 이동한다. FP4 마이크로스케일링 3,775 TFLOPS는 BF16 피크의 4배다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-mx">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>블록 공유 지수와 양자화 오차</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="mx-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>원소 포맷</span><div class="seg" id="mx-f"><button data-value="fp4" class="on">FP4 E2M1</button><button data-value="fp6">FP6 E3M2</button><button data-value="fp8">FP8 E4M3</button><button data-value="int8">INT8</button></div></div>
+          <label class="ctrl"><span>블록 크기 B <output id="mx-b-out"></output></span><input type="range" id="mx-b" min="3" max="12" step="1" value="5"></label>
+          <div class="ctrl"><span>데이터 분포 (4,096개)</span><div class="seg" id="mx-d"><button data-value="gauss">가우스</button><button data-value="outlier" class="on">이상치 0.5 %</button><button data-value="rows">행마다 크기 다름</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">SNR (블록 B)</span><span class="v" id="mx-snr">—</span></div>
+        <div class="stat"><span class="k">SNR (텐서 하나에 스케일 하나)</span><span class="v" id="mx-snr0">—</span></div>
+        <div class="stat"><span class="k">비트/원소</span><span class="v" id="mx-bits">—</span></div>
+        <div class="stat"><span class="k">포화된 원소</span><span class="v" id="mx-clip">—</span></div>
+      </div>
+      <div class="sim-note">SNR = 10 log₁₀(Σx² / Σ(x − q)²). 이 장의 양자화 함수로 직접 계산했다(최근접 반올림, 비정규수 포함, 최댓값 포화). 4장의 비트 시뮬레이터와 따로 구현했다. "행마다 크기 다름"은 64개씩 끊은 행마다 크기가 10<sup>±1.5</sup>배 다르다. 해볼 것: ① 이상치 분포, FP4에서 블록 32는 약 15.6 dB, 텐서 하나에 스케일 하나는 약 7.2 dB다. ② INT8은 블록 32에서 약 35 dB, 텐서 하나에서 약 24 dB로 블록 이득이 크다. ③ FP8 E4M3는 지수가 넓어 블록 크기에 둔감하다. 공유 지수 규칙 때문에 블록 최댓값이 448을 넘어 포화되는 원소가 생겨 오히려 조금 나빠지기도 한다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 원소를 4비트로 줄이면 곱셈기 면적과 대역폭이 BF16의 약 1/4이 되지만, 동적 범위가 거의 없어진다. 범위를 원소마다 두면 비트가 늘고, 텐서 전체에 하나만 두면 이상치에 진다. 블록 32개에 8비트 지수 하나는 원소당 0.25비트로 범위를 국소화하는 절충이다. 하드웨어 쪽에서는 블록 지수 덧셈기와 시프터 하나가 추가되는 정도라 비용이 거의 들지 않는다.</p>
+  </section>
+
+  <!-- ============================================================ 8 -->
+  <section id="budget">
+    <h2>텐서 코어의 면적과 전력</h2>
+    <p>교육용 가정으로 GX-1 SM(약 3.2 mm²)에서 FP32 레인 128개가 약 12 %(0.38 mm²), 텐서 코어 4개가 약 20 %(0.64 mm²)를 쓴다고 하자. FP32 레인은 mm²당 FMA 333개/클럭, 텐서 코어는 BF16 3,200개/클럭이다. 같은 면적에서 약 9.6배다. 곱셈기 면적이 가수 비트 제곱에 비례한다는 <a href="alu.html">4장</a> 모델(FP32 24² 대 BF16 8², 9배)과 비슷한 크기이고, 여기에 레지스터 포트를 공유하는 효과가 더해진다. FP8은 같은 곱셈기를 둘로 나눠 써 2배, 마이크로스케일링 FP4는 4배다.</p>
+    <div class="sim" id="sim-ar">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>같은 면적에서 FLOPS와 FLOP당 에너지</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ar-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>SM 면적 중 텐서 코어 <output id="ar-f-out"></output></span><input type="range" id="ar-f" min="5" max="50" step="1" value="20"></label>
+          <div class="ctrl"><span>텐서 정밀도</span><div class="seg" id="ar-p"><button data-value="bf16" class="on">BF16</button><button data-value="fp8">FP8</button><button data-value="int8">INT8</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">칩 피크 (144 SM)</span><span class="v" id="ar-tf">—</span></div>
+        <div class="stat"><span class="k">mm²당 FMA, FP32 대비</span><span class="v" id="ar-den">—</span></div>
+        <div class="stat"><span class="k">FLOP당 에너지</span><span class="v" id="ar-e">—</span></div>
+        <div class="stat"><span class="k">다이 면적 비중</span><span class="v" id="ar-share">—</span></div>
+        <div class="stat"><span class="k">텐서 곱셈 전력 (피크)</span><span class="v" id="ar-pw">—</span></div>
+      </div>
+      <div class="sim-note">왼쪽 막대: 1 mm²가 클럭당 하는 FMA. 오른쪽 막대: FLOP 하나의 에너지(연산 + 레지스터 + 공유 메모리, 벡터는 r=4 블로킹, 텐서는 16×8×16·워프 타일 64). 다이 비중은 물리 SM 160개 기준. 해볼 것: ① 20 %면 943.7 TFLOPS, 다이의 약 13 %다. ② FP8로 바꾸면 같은 면적에서 1,887 TFLOPS, FLOP당 약 0.083 pJ로 FP32 벡터(1.78 pJ)의 약 1/21이다. ③ 텐서 곱셈 자체의 전력은 피크에서 약 94 W로, 로직 다이 동적 전력 약 640 W의 15 % 정도다. 나머지는 데이터를 옮기는 SRAM·배선·클럭·제어가 쓴다.</div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>손잡이 (조건)</th><th>무엇이 바뀌나</th><th>결과</th></tr></thead>
+      <tbody>
+        <tr><td>FP32 벡터 → BF16 텐서 코어</td><td>FMA당 RF 읽기 12 B → 0.625 B</td><td>같은 레지스터 포트로 처리량 16배, FMA당 에너지 약 1/10</td></tr>
+        <tr><td>워프 타일 32×32 → 64×64</td><td>공유 메모리 256 → 128 B/클럭/SM, 누산 레지스터 32 → 128</td><td>공유 메모리 제한 해소(471.9 → 943.7 TFLOPS), 점유율↓</td></tr>
+        <tr><td>BF16 → FP8 (k 16 → 32)</td><td>\(F_{tc}\) 2배, \(b\) 1/2, 누산 쓰기 일정</td><td>같은 면적·같은 대역폭으로 1,887 TFLOPS, 리지 포인트 128 → 256</td></tr>
+        <tr><td>시스톨릭 배열 N↑ (S 고정)</td><td>채움·비움 \(2N-2\)↑</td><td>입력당 연산↑, 작은 행렬 활용률↓</td></tr>
+        <tr><td>2:4 희소성 켜기</td><td>곱셈기당 유효 FMA 2배, 가중치 바이트 56–75 %</td><td>연산 제한이면 최대 2배, 대역폭 제한이면 1.3–1.8배</td></tr>
+        <tr><td>MX 블록 크기 4,096 → 32</td><td>스케일 비트 +0.25/원소</td><td>이상치가 있는 FP4·INT8에서 SNR 약 8–11 dB↑</td></tr>
+        <tr><td>SM 면적 중 텐서 비중↑</td><td>FP32·SRAM 면적↓</td><td>행렬 처리량↑, 그래픽·비행렬 작업 처리량↓</td></tr>
+      </tbody>
+    </table></div>
+    <p><b>왜 이렇게 설계하는가.</b> 텐서 코어는 면적당 FLOPS가 FP32 레인의 약 10배이고 FLOP당 에너지는 약 1/10이다. 전력 상한(<a href="power.html">12장</a>)에 묶인 칩에서 이 차이는 성능 차이가 된다. 그래서 AI용 GPU는 세대마다 SM 면적에서 텐서 코어와 그것을 먹일 SRAM의 비중을 늘리고, FP32·FP64 레인은 비례해서 늘리지 않는다. 이 면적 배분은 <a href="workloads.html">15장</a>에서 다시 실험한다.</p>
+  </section>
+
+  <!-- ============================================================ 9 -->
+  <section id="npu">
+    <h2>거대 배열 몇 개 vs 작은 엔진 수백 개</h2>
+    <p>GX-1 텐서 코어 576개(144 SM × 4)는 합쳐서 클럭당 294,912 FMA를 한다. 같은 총량을 \(128\times 128\) 시스톨릭 배열 18개로 만들 수도 있다(18 × 16,384 = 294,912). 모바일 NPU(<a href="../../soc/chapters/npu.html#systolic">SoCBook NPU 장</a>)와 데이터센터 AI 전용 가속기는 이렇게 큰 배열 몇 개를 두는 쪽을 택한다. 제어가 단순하고 입력 대역폭 대비 연산이 크기 때문이다. GPU는 작은 엔진을 많이 두고, 소프트웨어가 행렬 모양에 맞춰 타일 크기와 K 분할을 고른다. 두 방식의 차이는 행렬이 작을 때 드러난다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 760 250" role="img" aria-label="왼쪽: 128×128 배열 하나에 64×64 행렬이 4분의 1만 채운다. 오른쪽: 작은 텐서 코어 격자가 작은 타일을 하나씩 맡는다">
+        <text x="170" y="22" class="t t-c t-b">128 × 128 배열 (18개 중 하나)</text>
+        <rect x="60" y="36" width="200" height="200" class="k-tensor" style="opacity:.35"/>
+        <rect x="60" y="36" width="100" height="100" class="kf-tensor" style="opacity:.75"/>
+        <text x="110" y="90" class="t t-c t-b" style="fill:var(--bg-elev)">64×64</text>
+        <text x="210" y="190" class="t-dim t-c">빈 칸 75 %</text>
+        <text x="170" y="248" class="t-dim t-c tn-s">공간 활용 25 % × 시간 활용 (64 ÷ 128) = 12.5 %</text>
+        <line x1="380" y1="20" x2="380" y2="240" class="s-faint dash"/>
+        <text x="570" y="22" class="t t-c t-b">텐서 코어 576개 (일부)</text>
+        <g class="kf-tensor" style="opacity:.75">
+          <rect x="430" y="40" width="40" height="40" rx="4"/><rect x="480" y="40" width="40" height="40" rx="4"/><rect x="530" y="40" width="40" height="40" rx="4"/><rect x="580" y="40" width="40" height="40" rx="4"/><rect x="630" y="40" width="40" height="40" rx="4"/><rect x="680" y="40" width="40" height="40" rx="4"/>
+          <rect x="430" y="90" width="40" height="40" rx="4"/><rect x="480" y="90" width="40" height="40" rx="4"/><rect x="530" y="90" width="40" height="40" rx="4"/><rect x="580" y="90" width="40" height="40" rx="4"/><rect x="630" y="90" width="40" height="40" rx="4"/><rect x="680" y="90" width="40" height="40" rx="4"/>
+          <rect x="430" y="140" width="40" height="40" rx="4"/><rect x="480" y="140" width="40" height="40" rx="4"/><rect x="530" y="140" width="40" height="40" rx="4"/><rect x="580" y="140" width="40" height="40" rx="4"/><rect x="630" y="140" width="40" height="40" rx="4"/>
+        </g>
+        <rect x="680" y="140" width="40" height="40" rx="4" class="k-tensor" style="opacity:.5"/>
+        <text x="575" y="208" class="t-dim t-c tn-s">작은 GEMM 하나 = 타일 몇 개 → 코어마다 하나씩</text>
+        <text x="575" y="228" class="t-dim t-c tn-s">배치가 크면 거의 모든 코어가 바쁘다</text>
+      </svg>
+      <figcaption><b>그림 5-9.</b> 같은 피크, 다른 단위. 큰 배열은 배열 크기보다 작은 행렬에서 칸이 비고, 흘려 넣는 길이가 짧아 채움·비움이 묻히지 않는다. 작은 엔진 여러 개는 행렬 하나를 잘게 나눠 맡거나 여러 행렬을 동시에 맡는다. 대신 엔진마다 공급 경로와 제어가 따로 필요하다.</figcaption>
+    </figure>
+    <div class="formula">$$U_{NPU} = \frac{MNK\cdot\text{배치}}{294{,}912\cdot\left(\lceil T/E\rceil\,\max(M, R) + 2R - 2\right)},\qquad T = \left\lceil\frac{K}{R}\right\rceil\left\lceil\frac{N}{R}\right\rceil\cdot\text{배치}$$
+      <div class="where">\(R\times R\) 가중치 고정 배열 \(E = 294{,}912/R^2\)개. 가중치 타일 \(T\)개를 배열에 나눠 주고, 타일마다 \(A\)의 \(M\)행을 흘린다(가중치 적재 \(R\)사이클은 이중 버퍼로 숨기되 \(M \lt R\)이면 드러남). GPU 쪽은 워프 타일 \(\{16, 32, 64\}^2\)와 K 분할 \(s\)를 모두 시도해 가장 빠른 것을 고르고, 타일이 작을 때의 공유 메모리 대역폭 감속(앞 절 모델)과 명령 파이프라인 채움 32사이클을 넣었다. 둘 다 연산 쪽만 본 모델이고 HBM 대역폭 한계는 따로다.</div></div>
+    <div class="sim" id="sim-np">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>NPU식 거대 배열 vs GPU식 소형 텐서 코어: 활용률</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="np-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>예제</span><div class="seg" id="np-pre"><button data-value="big">대형 8192³</button><button data-value="mid">중형 512³</button><button data-value="att" class="on">헤드 64³×4096</button><button data-value="dec">디코드 M=8</button></div></div>
+          <label class="ctrl"><span>M (흘리는 행) <output id="np-m-out"></output></span><input type="range" id="np-m" min="3" max="14" step="1" value="6"></label>
+          <label class="ctrl"><span>N <output id="np-n-out"></output></span><input type="range" id="np-n" min="3" max="14" step="1" value="6"></label>
+          <label class="ctrl"><span>K <output id="np-k-out"></output></span><input type="range" id="np-k" min="3" max="14" step="1" value="6"></label>
+          <label class="ctrl"><span>독립 행렬곱 수 (배치) <output id="np-b-out"></output></span><input type="range" id="np-b" min="0" max="12" step="1" value="12"></label>
+          <div class="ctrl"><span>NPU 배열 크기 R</span><div class="seg" id="np-r"><button data-value="32">32</button><button data-value="64">64</button><button data-value="128" class="on">128</button></div></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">NPU 활용률</span><span class="v" id="np-un">—</span></div>
+        <div class="stat"><span class="k">GPU 활용률</span><span class="v" id="np-ug">—</span></div>
+        <div class="stat"><span class="k">GPU가 고른 타일</span><span class="v" id="np-tile">—</span></div>
+        <div class="stat"><span class="k">NPU 배열 / 타일</span><span class="v" id="np-x">—</span></div>
+      </div>
+      <div class="sim-note">그래프: 지금 N·K·배치에서 M을 바꿀 때의 활용률(GPU 실선, NPU 점선). 같은 피크 294,912 FMA/클럭, 같은 클럭이다. 해볼 것: ① 어텐션 헤드처럼 64×64×64가 4,096개면 128 배열은 약 12 %, GPU는 약 97 %다. ② 8192³에서는 둘 다 99.7 % 이상으로 차이가 없다. ③ 512³ 하나면 128 배열 약 59 %, GPU 약 84 %다. R을 32로 줄이면 NPU도 약 79 %로 오른다. 대신 배열이 288개가 되어 제어와 공급 경로가 GPU와 비슷해진다. ④ 디코드(M=8)는 둘 다 낮다(128 배열 약 6 %, GPU 약 19 %). 어차피 HBM 대역폭 제한이다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가.</b> 거대 배열은 입력 대역폭과 제어 면적을 아끼지만 큰 행렬에만 맞는다. GPU는 어텐션 헤드, 작은 배치, 들쭉날쭉한 전문가 혼합 행렬, 그래픽과 과학 계산까지 받아야 한다. 그래서 512 FMA짜리 엔진을 SM마다 4개씩 흩어 두고 레지스터·공유 메모리·워프 스케줄러를 그대로 쓴다. 활용률이 행렬 모양에 덜 민감한 값을 SM 제어 면적으로 치르는 셈이다. 워크로드가 정해진 전용 가속기는 반대 쪽을 택한다(<a href="roadmap.html">16장</a>).</p>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>행렬곱은 연산 \(2MNK\), 데이터 \((MK+KN)b + MNb_{out}\)이다. 정사각 BF16이면 \(I = n/3\)이고, \(n = 384\)에서 GX-1 리지 포인트 128 FLOP/B에 닿는다. M=1 행렬-벡터곱은 \(I \approx 1\)이다.</li>
+      <li>벡터 FMA는 레지스터 읽기 12 B가 필요하다. 512 FMA/클럭을 벡터로 하면 6,144 B/클럭으로 포트의 16배다. 텐서 코어 \(16\times8\times16\)은 0.625 B/FMA로, 기존 384 B/클럭 포트 안에서 돈다.</li>
+      <li>FMA당 에너지는 벡터 약 3.6 pJ(r=4), 텐서 약 0.33 pJ다. 에너지 대부분은 연산이 아니라 레지스터 접근이다.</li>
+      <li>내적 길이 \(L\)은 입력 대역폭 \((r+c)L\)과 FP32 누산기 수 \(512/L\)를 맞바꾼다. 실제 설계는 \(L\) 4–16 정도의 중간을 고른다.</li>
+      <li>\(N\times N\) 시스톨릭 배열은 \(T = S + 2N - 2\ (+N)\)사이클, 활용률 \(S/(S+3N-2)\)이다. 큰 배열은 긴 \(S\)가 있어야 효율이 난다.</li>
+      <li>GX-1 피크 943.7 TFLOPS를 공유 메모리 128 B/클럭/SM으로 먹이려면 워프 타일이 64×64 이상이어야 하고, 누산기는 스레드당 128 레지스터다. 저정밀 명령은 \(k\)를 키워 누산 쓰기를 일정하게 둔다.</li>
+      <li>2:4 희소성은 저장 56–75 %, 이론 2배이고 실효는 \(f\)와 대역폭 제한에 따라 1.3–1.8배 정도다. MX는 블록 32개가 8비트 지수를 공유해 4.25비트/원소로 이상치를 국소화한다.</li>
+      <li>텐서 코어는 면적당 FMA가 FP32 레인의 약 9.6배(BF16)이고, 피크에서 곱셈 전력은 약 94 W다. 같은 피크라도 거대 배열은 작은 행렬에서 활용률이 크게 떨어진다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. BF16 입력·BF16 출력으로 \(n\times n\times n\) 행렬곱을 할 때, HBM 기준 산술 강도가 GX-1 리지 포인트(128 FLOP/B)와 같아지는 \(n\)은?</p><div class="opts">
+        <button class="opt">128</button><button class="opt">256</button><button class="opt" data-correct>384</button><button class="opt">1,024</button>
+      </div><div class="quiz-exp">\(I = 2n^3/(3n^2 \cdot 2\,\text{B}) = n/3\)이므로 \(n = 3 \times 128 = 384\)다. 이보다 작은 정사각 행렬곱은 이상적으로 재사용해도 HBM 대역폭 제한이다.</div></div>
+
+      <div class="quiz-q"><p>2. 벡터 레인으로 행렬곱을 할 때 스레드당 레지스터 타일 \(r\)을 키워도 줄지 않는 것은?</p><div class="opts">
+        <button class="opt" data-correct>FMA당 레지스터 파일 읽기 바이트(12 B)</button><button class="opt">FMA당 공유 메모리 바이트</button><button class="opt">HBM 트래픽</button><button class="opt">스레드당 필요한 레지스터 수</button>
+      </div><div class="quiz-exp">FMA 명령은 오퍼랜드 셋을 매번 레지스터 파일에서 읽는다. 블로킹은 공유 메모리 트래픽(\(8/r\) B/FMA)을 줄이지만 레지스터 읽기 12 B는 그대로다. 레지스터 수는 오히려 늘어난다. 이 바닥을 없앤 것이 텐서 코어다.</div></div>
+
+      <div class="quiz-q"><p>3. 서브파티션 텐서 코어가 BF16 \(16\times 8\times 16\) 명령을 연속 실행할 때 레지스터 파일 읽기 대역폭은?</p><div class="opts">
+        <button class="opt">128 B/클럭</button><button class="opt">192 B/클럭</button><button class="opt" data-correct>320 B/클럭</button><button class="opt">6,144 B/클럭</button>
+      </div><div class="quiz-exp">명령 하나는 2,048 FMA ÷ 512 = 4클럭이다. \(A\) 512 B + \(B\) 256 B + 누산기 512 B = 1,280 B를 4클럭에 읽으므로 320 B/클럭이다. 384 B/클럭 포트의 83 %다. 6,144는 같은 일을 벡터 FMA로 할 때의 값이다.</div></div>
+
+      <div class="quiz-q"><p>4. 16×16 가중치 고정 시스톨릭 배열에 \(A\)의 행 16개를 흘린다. 가중치 적재를 겹치지 않을 때 활용률은?</p><div class="opts">
+        <button class="opt">100 %</button><button class="opt">약 50 %</button><button class="opt">약 35 %</button><button class="opt" data-correct>약 25 %</button>
+      </div><div class="quiz-exp">\(T = S + 2N - 2 + N = 16 + 30 + 16 = 62\), \(U = 16/62 \approx 25.8\,\%\)다. 배열 크기와 비슷한 짧은 행렬은 채움·비움과 적재가 시간의 3/4을 쓴다.</div></div>
+
+      <div class="quiz-q"><p>5. 길이 \(L\)인 내적 유닛을 늘어놓아 클럭당 512 FMA를 만들 때, \(L\)을 키우면 일어나는 일로 옳은 것은?</p><div class="opts">
+        <button class="opt">입력 대역폭과 FP32 누산기 수가 함께 준다</button><button class="opt" data-correct>FP32 누산기 수는 줄고 입력 원소/클럭과 트리 깊이는 는다</button><button class="opt">덧셈기 총수가 \(L\)배 는다</button><button class="opt">출력 타일 \(r\times c\)가 커진다</button>
+      </div><div class="quiz-exp">누산기는 \(rc = 512/L\)개로 줄고, 입력은 \((r+c)L\), 깊이는 \(\log_2 L\)로 는다. 덧셈기 총수는 \(rc \cdot L = 512\)로 일정하다. 바뀌는 것은 넓은 누산기와 좁은 트리 덧셈기의 비율이다.</div></div>
+
+      <div class="quiz-q"><p>6. GX-1 SM의 공유 메모리(128 B/클럭)로 BF16 텐서 코어 4개를 피크로 먹이려 한다. B 타일 방송 없이(\(g = 1\)) 정사각 워프 타일의 최소 크기는?</p><div class="opts">
+        <button class="opt">16×16</button><button class="opt">32×32</button><button class="opt" data-correct>64×64</button><button class="opt">256×256</button>
+      </div><div class="quiz-exp">\(4 \times 512 \times 2 \times (2/W) \le 128\)에서 \(W \ge 64\)다. 32×32면 256 B/클럭이 필요해 성능이 절반(471.9 TFLOPS)이 된다. 64×64 FP32 누산기는 스레드당 128 레지스터다.</div></div>
+
+      <div class="quiz-q"><p>7. BF16 가중치에 2:4 희소성을 적용하면 가중치 저장량은 밀집의 몇 배가 되는가(메타데이터 포함)?</p><div class="opts">
+        <button class="opt">0.5</button><button class="opt" data-correct>0.5625</button><button class="opt">0.625</button><button class="opt">0.75</button>
+      </div><div class="quiz-exp">그룹 4개(64비트)가 값 2개 32비트 + 위치 2비트 × 2 = 36비트가 되어 36/64 = 0.5625다. FP8이면 0.625, FP4면 0.75로, 원소가 작을수록 메타데이터 비중이 커진다.</div></div>
+
+      <div class="quiz-q"><p>8. 마이크로스케일링 FP4(E2M1) 블록 32개에 E8M0 공유 지수 하나를 두는 형식의 비트/원소와, 텐서 하나에 스케일 하나를 두는 방식보다 나은 이유는?</p><div class="opts">
+        <button class="opt">4비트. 지수를 따로 저장하지 않는다</button><button class="opt">5비트. 원소마다 지수 1비트를 더한다</button><button class="opt">4.25비트. 블록마다 가수를 공유한다</button><button class="opt" data-correct>4.25비트. 이상치가 자기 블록의 스케일만 키운다</button>
+      </div><div class="quiz-exp">\(4 + 8/32 = 4.25\)비트다. 공유하는 것은 지수(2의 거듭제곱 스케일)다. 이상치가 있어도 그 블록 32개만 거칠어지고 나머지 블록은 자기 범위에 맞춰 양자화된다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+/* ============================================================ 모델 (DOM과 분리, gpu/scripts/tensor-sims.cjs가 잘라 실행) */
+/* model:gemm */
+const GX = { sm: 144, tcPerSm: 4, fmaPerTc: 512, f: 1.6e9, fp32Lanes: 128, hbm: 6 * 1228.8e9 };
+const BYTES = { fp32: 4, bf16: 2, fp8: 1, fp4: 0.5 };
+const TC_MULT = { bf16: 1, fp8: 2, fp4: 4, int8: 2 };
+function gxPeak(prec) {
+  if (prec === "fp32") return GX.sm * GX.fp32Lanes * 2 * GX.f;
+  return GX.sm * GX.tcPerSm * GX.fmaPerTc * TC_MULT[prec] * 2 * GX.f;
+}
+function gemmModel(M, N, K, prec) {
+  const b = BYTES[prec], bOut = prec === "fp32" ? 4 : 2;
+  const flop = 2 * M * N * K;
+  const bytes = (M * K + K * N) * b + M * N * bOut;
+  const I = flop / bytes, peak = gxPeak(prec), ridge = peak / GX.hbm;
+  const tc = flop / peak, tm = bytes / GX.hbm, t = Math.max(tc, tm);
+  return { flop, bytes, I, ridge, peak, tc, tm, t, perf: flop / t, bound: tc >= tm ? "compute" : "memory" };
+}
+/* /model:gemm */
+
+/* model:rf */
+const EN = { rf: 0.5, smem: 1.5, fp32: 0.8, bf16: 0.2, fp8: 0.1, int8: 0.05 };
+const SP = { rfRead: 32 * 3 * 4, rfWrite: 32 * 4, smemSM: 128 };
+function vectorFma(r) {
+  const rfRead = 12, rfWrite = 4, smem = 8 / r;
+  const e = { alu: EN.fp32, rf: ((rfRead + rfWrite) / 4) * EN.rf, smem: (smem / 4) * EN.smem };
+  return { rfRead, rfWrite, smem, e, eTot: e.alu + e.rf + e.smem, regs: r * r + 2 * r };
+}
+function tensorFma(m, n, k, W) {
+  const b = 2, rfRead = b * (1 / n + 1 / m) + 4 / k, rfWrite = 4 / k, smem = b * (2 / W);
+  const e = { alu: EN.bf16, rf: ((rfRead + rfWrite) / 4) * EN.rf, smem: (smem / 4) * EN.smem };
+  return { rfRead, rfWrite, smem, e, eTot: e.alu + e.rf + e.smem };
+}
+/* /model:rf */
+
+/* model:systolic */
+function sysRng(seed) { let a = seed >>> 0; return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function sysFormula(N, S, overlap) { const T = S + 2 * N - 2 + (overlap ? 0 : N); return { T, U: S / T }; }
+function sysRun(N, S, flow, overlap, seed) {
+  const rnd = sysRng(seed || 1), ri = () => Math.floor(rnd() * 7) - 3;
+  const mk = (r, c) => Array.from({ length: r }, () => Array.from({ length: c }, ri));
+  const ws = flow === "ws";
+  const A = ws ? mk(S, N) : mk(N, S), B = ws ? mk(N, N) : mk(S, N);
+  const R = A.length, Kd = B.length;
+  const ref = A.map((row) => B[0].map((_, j) => row.reduce((s, v, k) => s + v * B[k][j], 0)));
+  const C = A.map(() => B[0].map(() => null));
+  const nul = () => Array.from({ length: N }, () => Array(N).fill(null));
+  let aR = nul(), xR = nul(), acc = Array.from({ length: N }, () => Array(N).fill(0));
+  const frames = [], pre = overlap ? 0 : N;
+  let macs = 0, last = -1, ok = true;
+  if (ws) for (let i = 0; i < pre; i++) frames.push({ phase: "preload", act: null, row: i });
+  for (let t = 0; t < S + 3 * N + 4; t++) {
+    const nA = nul(), nX = nul(), act = new Uint8Array(N * N);
+    let any = false;
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      const inA = j === 0 ? (t - i >= 0 && t - i < S ? (ws ? { v: A[t - i][i], s: t - i } : { v: A[i][t - i], s: t - i }) : null) : aR[i][j - 1];
+      nA[i][j] = inA;
+      if (ws) {
+        const pin = i === 0 ? (inA ? { v: 0, s: inA.s } : null) : xR[i - 1][j];
+        if (inA) {
+          if (!pin || pin.s !== inA.s) ok = false;
+          nX[i][j] = { v: (pin ? pin.v : 0) + inA.v * B[i][j], s: inA.s };
+          macs++; act[i * N + j] = 1; last = t; any = true;
+        }
+      } else {
+        const inB = i === 0 ? (t - j >= 0 && t - j < S ? { v: B[t - j][j], s: t - j } : null) : xR[i - 1][j];
+        nX[i][j] = inB;
+        if (inA && inB) {
+          if (inA.s !== inB.s) ok = false;
+          acc[i][j] += inA.v * inB.v; macs++; act[i * N + j] = 1; last = t; any = true;
+        } else if (inA || inB) ok = false;
+      }
+    }
+    if (ws) for (let j = 0; j < N; j++) { const p = nX[N - 1][j]; if (p) C[p.s][j] = p.v; }
+    aR = nA; xR = nX;
+    if (!any && t > last && last >= 0) break;
+    frames.push({ phase: "run", t, act, a: nA.map((r) => r.map((x) => (x ? x.v : null))), x: nX.map((r) => r.map((x) => (x ? x.v : null))), acc: ws ? null : acc.map((r) => r.slice()) });
+  }
+  if (!ws) { for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) C[i][j] = acc[i][j]; for (let i = 0; i < pre; i++) frames.push({ phase: "drain", act: null, row: i }); }
+  const T = frames.length, match = ok && C.every((r, i) => r.every((v, j) => v === ref[i][j]));
+  return { A, B, C, ref, frames, T, macs, util: macs / (N * N * T), runCycles: last + 1, match, W: ws ? B : null };
+}
+/* /model:systolic */
+
+/* model:dot */
+function dotOuter(L, F) {
+  F = F || 512;
+  const rc = F / L, r = Math.pow(2, Math.floor(Math.log2(rc) / 2)), c = rc / r;
+  return { L, r, c, outs: rc, inputs: (r + c) * L, inBytes: (r + c) * L * 2, wide: rc, narrow: rc * (L - 1), adders: rc * L, depth: Math.log2(L), accBits: rc * 32, fanout: Math.max(r, c) };
+}
+/* /model:dot */
+
+/* model:tcio */
+const TCP = { bf16: { b: 2, F: 512 }, fp8: { b: 1, F: 1024 }, fp4: { b: 0.5, F: 2048 } };
+function tcio(prec, m, n, k, Wm, Wn, g, accIn) {
+  const P = TCP[prec];
+  Wm = Math.max(Wm, m); Wn = Math.max(Wn, n);
+  const cyc = (m * n * k) / P.F;
+  const rfRead = P.F * P.b * (1 / n + 1 / m) + (accIn ? 0 : (P.F * 4) / k);
+  const rfWrite = accIn ? 0 : (P.F * 4) / k;
+  const smem = GX.tcPerSm * P.F * P.b * (1 / Wn + 1 / (g * Wm));
+  const regs = (Wm * Wn) / 32;
+  const lim = [SP.rfRead / rfRead, rfWrite ? SP.rfWrite / rfWrite : Infinity, SP.smemSM / smem];
+  const fit = regs <= 255;
+  const frac = fit ? Math.min(1, ...lim) : 0;
+  return { cyc, rfRead, rfWrite, smem, regs, fit, frac, Wm, Wn, tflops: (gxPeak(prec) * frac) / 1e12 };
+}
+/* /model:tcio */
+
+/* model:sparse */
+function sp24Prune(w) {
+  const keep = [], idx = [], mask = w.map(() => 0);
+  let tot = 0, rem = 0;
+  for (let g = 0; g < w.length; g += 4) {
+    const o = [0, 1, 2, 3].sort((a, b) => Math.abs(w[g + b]) - Math.abs(w[g + a]) || a - b).slice(0, 2).sort((a, b) => a - b);
+    for (let q = 0; q < 4; q++) { tot += w[g + q] * w[g + q]; if (o.indexOf(q) < 0) rem += w[g + q] * w[g + q]; else mask[g + q] = 1; }
+    o.forEach((q) => { keep.push(w[g + q]); idx.push(q); });
+  }
+  return { keep, idx, mask, removed: tot ? rem / tot : 0 };
+}
+const sp24Storage = (bits) => (2 * bits + 4) / (4 * bits);
+function sp24Speedup(x, f, wfrac, bits) {
+  const tm = 1 / x, dense = Math.max(1, tm), s = sp24Storage(bits);
+  const sparse = Math.max(0.5, tm * (wfrac * s + 1 - wfrac));
+  return 1 / ((f * sparse) / dense + 1 - f);
+}
+/* /model:sparse */
+
+/* model:mx */
+const MXF = {
+  fp4: { e: 2, m: 1, max: 6, emax: 2, bits: 4 },
+  fp6: { e: 3, m: 2, max: 28, emax: 4, bits: 6 },
+  fp8: { e: 4, m: 3, max: 448, emax: 8, bits: 8 },
+  int8: { int: true, max: 127 / 64, emax: 0, bits: 8 },
+};
+function mxElem(x, f) {
+  if (f.int) return Math.max(-127, Math.min(127, Math.round(x * 64))) / 64;
+  const s = x < 0 ? -1 : 1, a = Math.abs(x);
+  if (a >= f.max) return s * f.max;
+  const bias = Math.pow(2, f.e - 1) - 1, ex = Math.max(Math.floor(Math.log2(a || 1e-300)), 1 - bias);
+  const step = Math.pow(2, ex - f.m);
+  return s * Math.min(f.max, Math.round(a / step) * step);
+}
+function mxRng(seed) { let a = seed >>> 0; return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function mxData(dist, n, seed) {
+  const r = mxRng(seed || 7), g = () => Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r());
+  const rowScale = Array.from({ length: Math.ceil(n / 64) }, () => Math.pow(10, -1.5 + 3 * r()));
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    let v = g();
+    if (dist === "outlier" && r() < 0.005) v *= 25;
+    if (dist === "rows") v *= rowScale[i >> 6];
+    out[i] = v;
+  }
+  return out;
+}
+function mxQuant(x, B, f) {
+  let sig = 0, err = 0, clip = 0;
+  for (let s0 = 0; s0 < x.length; s0 += B) {
+    let amax = 0;
+    for (let i = s0; i < Math.min(x.length, s0 + B); i++) amax = Math.max(amax, Math.abs(x[i]));
+    const X = amax > 0 ? Math.max(-127, Math.min(127, Math.floor(Math.log2(amax)) - f.emax)) : 0, sc = Math.pow(2, X);
+    for (let i = s0; i < Math.min(x.length, s0 + B); i++) {
+      const u = x[i] / sc, q = mxElem(u, f) * sc;
+      if (Math.abs(u) > f.max) clip++;
+      sig += x[i] * x[i]; err += (x[i] - q) * (x[i] - q);
+    }
+  }
+  return { snr: err > 0 ? 10 * Math.log10(sig / err) : 200, clip, bits: f.bits + 8 / B };
+}
+/* /model:mx */
+
+/* model:area */
+const AR = { smArea: 3.2, fp32Frac: 0.12, tcFracGX: 0.2 };
+const AR_DENS = (GX.tcPerSm * GX.fmaPerTc) / (AR.smArea * AR.tcFracGX);   // BF16 FMA / mm²
+const FP32_DENS = GX.fp32Lanes / (AR.smArea * AR.fp32Frac);                // FP32 FMA / mm²
+function areaModel(tcFrac, prec) {
+  const mult = TC_MULT[prec], fmaClk = AR.smArea * tcFrac * AR_DENS * mult;
+  const tflops = (GX.sm * fmaClk * 2 * GX.f) / 1e12;
+  const v = vectorFma(4), t = tensorFma(16, 8, 16, 64);
+  const ePerFlopT = (EN[prec] + (t.e.rf + t.e.smem) / mult) / 2;
+  return {
+    fmaClk, tflops, densRatio: (AR_DENS * mult) / FP32_DENS,
+    dieShare: (160 * AR.smArea * tcFrac) / 780,
+    ePerFlopV: v.eTot / 2, ePerFlopT, eRatio: v.eTot / 2 / ePerFlopT,
+    pTensor: (tflops * 1e12 / 2) * EN[prec] * 1e-12,
+  };
+}
+/* /model:area */
+
+/* model:npu */
+const NPU_TOTAL = GX.sm * GX.tcPerSm * GX.fmaPerTc; // 294,912 FMA/clk
+function npuUtil(M, N, K, batch, R, overlap) {
+  const E = NPU_TOTAL / (R * R), tiles = Math.ceil(K / R) * Math.ceil(N / R) * batch, rounds = Math.ceil(tiles / E);
+  const tTile = Math.max(M, R), fill = 2 * R - 2;
+  const cyc = overlap ? rounds * tTile + fill : rounds * (tTile + fill);
+  return { E, tiles, rounds, cyc, util: (M * N * K * batch) / (NPU_TOTAL * cyc) };
+}
+function gpuUtil(M, N, K, batch, overlap) {
+  // 소프트웨어가 워프 타일(Wm×Wn)과 K 분할 수 s를 고른다. 타일이 작으면 공유 메모리 대역폭(그림 5-6 모델)이 처리량을 깎는다.
+  const E = GX.sm * GX.tcPerSm;
+  let best = null;
+  for (const Wm of [16, 32, 64]) for (const Wn of [16, 32, 64]) for (let s = 1; s <= 64 && (s === 1 || K / s >= 16); s *= 2) {
+    const eff = Math.min(1, SP.smemSM / (GX.tcPerSm * 512 * 2 * (1 / Wn + 1 / Wm)));
+    const tiles = Math.ceil(M / Wm) * Math.ceil(N / Wn) * batch * s, rounds = Math.ceil(tiles / E);
+    const tTile = (Math.ceil(K / (16 * s)) * ((Wm * Wn * 16) / 512)) / eff, fill = 32;
+    const cyc = overlap ? rounds * tTile + fill : rounds * (tTile + fill);
+    if (!best || cyc < best.cyc) best = { E, Wm, Wn, s, eff, tiles, rounds, cyc };
+  }
+  best.util = (M * N * K * batch) / (NPU_TOTAL * best.cyc);
+  return best;
+}
+/* /model:npu */
+/* ============================================================ UI */
+(function () {
+  "use strict";
+  const P2 = (v) => Math.pow(2, v);
+  const fmtN = (v) => v >= 1024 ? GP.fmt(v, 4).replace(/\B(?=(\d{3})+(?!\d))/g, ",") : String(v);
+  const pct = (x, d = 1) => (x * 100).toFixed(d) + " %";
+  const fl = (x) => GP.si(x, "FLOP", 3);
+  const by = (x) => GP.si(x, "B", 3);
+  const small = (v, u) => v + "<small> " + u + "</small>";
+
+  /* ---------------------------------------------------- 1. GEMM */
+  (function () {
+    const gM = GP.range("gm-m", (v) => fmtN(P2(v)), upd), gN = GP.range("gm-n", (v) => fmtN(P2(v)), upd), gK = GP.range("gm-k", (v) => fmtN(P2(v)), upd);
+    const gP = GP.seg("gm-p", upd);
+    let cv = null;
+    function upd() {
+      const r = gemmModel(P2(gM()), P2(gN()), P2(gK()), gP());
+      GP.stat("gm-flop", fl(r.flop));
+      GP.stat("gm-bytes", by(r.bytes));
+      GP.stat("gm-i", small(GP.fmt(r.I, 3), "FLOP/B"));
+      GP.stat("gm-bound", r.bound === "compute" ? "<span class='tn-ok'>연산 제한</span>" : "<span class='tn-warn'>대역폭 제한</span>");
+      const t = r.t < 1e-3 ? GP.fmt(r.t * 1e6, 3) + " µs" : GP.fmt(r.t * 1e3, 3) + " ms";
+      GP.stat("gm-perf", GP.fmt(r.perf / 1e12, 4) + "<small> TFLOPS · " + t + "</small>");
+      cv && cv.redraw();
+    }
+    cv = GP.canvas("#gm-cv", (ctx, w, h) => {
+      const P = GP.palette(), prec = gP(), r = gemmModel(P2(gM()), P2(gN()), P2(gK()), prec);
+      const sq = [], mv = [];
+      for (let e = 0; e <= 14; e += 0.25) { const n = P2(e); sq.push([n, gemmModel(n, n, n, prec).I]); mv.push([n, gemmModel(1, n, n, prec).I]); }
+      const col = prec === "fp32" ? P.compute : P.tensor;
+      GP.chart(ctx, null, {
+        x: [1, 16384], y: [0.1, 10000], logX: true, logY: true, xLabel: "정사각 크기 n (또는 등가 크기)", yLabel: "산술 강도 I (FLOP/B)",
+        series: [{ data: sq, color: col, width: 2.4, label: "n×n×n" }, { data: mv, color: P.data, width: 2, dash: [6, 4], label: "M=1, N=K=n" }],
+        hlines: [{ y: r.ridge, color: P.dram, dash: [4, 3], label: "리지 " + GP.fmt(r.ridge, 3) + " FLOP/B" }],
+        points: [{ x: Math.cbrt(P2(gM()) * P2(gN()) * P2(gK())), y: r.I, color: P.accent, r: 6, ring: true }],
+        legend: "tl", hover: true,
+      });
+    }, { aspect: 0.6, maxHeight: 380, hover: true });
+    upd();
+  })();
+
+  /* ---------------------------------------------------- 2. 레지스터 대역폭·에너지 */
+  (function () {
+    const gR = GP.range("rf-r", (v) => v + "×" + v, upd), gT = GP.seg("rf-t", upd), gW = GP.seg("rf-w", upd);
+    let cv = null;
+    const cur = () => { const [m, n, k] = gT().split(",").map(Number); return { v: vectorFma(gR()), t: tensorFma(m, n, k, Number(gW())) }; };
+    function upd() {
+      const { v, t } = cur();
+      GP.stat("rf-v", GP.fmt(v.eTot, 3) + "<small> pJ · RF " + v.rfRead + " B</small>");
+      GP.stat("rf-tt", GP.fmt(t.eTot, 3) + "<small> pJ · RF " + GP.fmt(t.rfRead, 3) + " B</small>");
+      GP.stat("rf-x", GP.fmt(v.eTot / t.eTot, 3) + "×");
+      GP.stat("rf-bw", "벡터 " + fmtN(512 * v.rfRead) + "<small> B/클럭 · 텐서 " + GP.fmt(512 * t.rfRead, 3) + " (포트 384)</small>");
+      cv && cv.redraw();
+    }
+    cv = GP.canvas("#rf-cv", (ctx, w, h) => {
+      const P = GP.palette(), { v, t } = cur();
+      const x0 = 112, x1 = w - 20, sc = (x1 - x0) / 6;
+      const rows = [["벡터 FP32", v, P.compute], ["텐서 BF16", t, P.tensor]];
+      GP.text(ctx, "FMA 하나의 에너지 (pJ)", x0, 18, { size: 12, color: P.dim });
+      for (let g = 0; g <= 6; g++) { const x = x0 + g * sc; ctx.strokeStyle = P.grid; ctx.beginPath(); ctx.moveTo(x, 30); ctx.lineTo(x, h - 50); ctx.stroke(); GP.text(ctx, String(g), x, h - 40, { size: 11, color: P.dim, align: "center", mono: true }); }
+      rows.forEach(([name, r, c], i) => {
+        const y = 50 + i * ((h - 110) / 2), bh = Math.min(46, (h - 130) / 2);
+        GP.text(ctx, name, x0 - 10, y + bh / 2, { size: 13, weight: 700, align: "right", baseline: "middle", color: P.text });
+        let x = x0;
+        [[r.e.alu, c, "연산"], [r.e.rf, P.sram, "레지스터"], [r.e.smem, P.data, "공유 메모리"]].forEach(([e, cc, lab]) => {
+          const ww = e * sc; ctx.fillStyle = cc; ctx.fillRect(x, y, Math.max(0, ww), bh);
+          if (ww > 54) GP.text(ctx, lab + " " + GP.fmt(e, 2), x + ww / 2, y + bh / 2, { size: 11, color: "#fff", align: "center", baseline: "middle" });
+          x += ww;
+        });
+        GP.text(ctx, GP.fmt(r.eTot, 3) + " pJ", Math.min(x + 6, w - 70), y + bh + 12, { size: 12, weight: 700, color: P.text });
+        GP.text(ctx, "RF 읽기 " + GP.fmt(r.rfRead, 3) + " B · 공유 메모리 " + GP.fmt(r.smem, 3) + " B / FMA", x0, y + bh + 12, { size: 11, color: P.dim });
+      });
+      const key = [["연산", P.compute], ["레지스터", P.sram], ["공유 메모리", P.data]];
+      let kx = x0; key.forEach(([l, c]) => { ctx.fillStyle = c; ctx.fillRect(kx, h - 22, 11, 11); GP.text(ctx, l, kx + 15, h - 16, { size: 11, color: P.dim, baseline: "middle" }); kx += GP.textWidth(ctx, l, { size: 11 }) + 34; });
+    }, { aspect: 0.5, minHeight: 250, maxHeight: 320 });
+    upd();
+  })();
+
+  /* ---------------------------------------------------- 3. 내적 vs 외적 */
+  (function () {
+    const gL = GP.range("do-l", (v) => String(P2(v)), upd), gF = GP.seg("do-f", upd);
+    let cv = null;
+    function upd() {
+      const F = Number(gF()), L = Math.min(P2(gL()), F), d = dotOuter(L, F);
+      GP.stat("do-rc", d.r + " × " + d.c + "<small> (L=" + L + ")</small>");
+      GP.stat("do-in", fmtN(d.inputs) + "<small> 원소 = " + fmtN(d.inBytes) + " B/클럭</small>");
+      GP.stat("do-acc", fmtN(d.wide) + "<small> 개 · " + GP.fmt(d.accBits / 8 / 1024, 3) + " KB</small>");
+      GP.stat("do-d", d.depth + "<small> 단 · 팬아웃 " + d.fanout + "</small>");
+      cv && cv.redraw();
+    }
+    cv = GP.canvas("#do-cv", (ctx) => {
+      const P = GP.palette(), F = Number(gF()), Ls = [];
+      for (let L = 1; L <= F; L *= 2) Ls.push(dotOuter(L, F));
+      const L = Math.min(P2(gL()), F);
+      GP.chart(ctx, null, {
+        x: [1, F], y: [1, 4096], logX: true, logY: true, xLabel: "내적 길이 L", yLabel: "개수 (로그)",
+        series: [
+          { data: Ls.map((d) => [d.L, d.inputs]), color: P.data, width: 2.4, label: "입력 원소/클럭", dots: 3 },
+          { data: Ls.map((d) => [d.L, d.wide]), color: P.sram, width: 2.4, label: "FP32 누산기", dots: 3 },
+          { data: Ls.map((d) => [d.L, d.fanout]), color: P.link, width: 2, dash: [5, 4], label: "팬아웃", dots: 3 },
+          { data: Ls.map((d) => [d.L, d.depth + 1]), color: P.clock, width: 2, dash: [2, 3], label: "트리 깊이 + 1", dots: 3 },
+        ],
+        vlines: [{ x: L, color: P.accent, dash: [4, 3] }], legend: "auto", hover: true,
+      });
+    }, { aspect: 0.6, maxHeight: 360, hover: true });
+    upd();
+  })();
+
+  /* ---------------------------------------------------- 4. 시스톨릭 배열 */
+  (function () {
+    const gF = GP.seg("sy-f", rebuild), gN = GP.range("sy-n", (v) => v + "×" + v, rebuild), gS = GP.range("sy-s", (v) => String(v), rebuild);
+    const ov = document.getElementById("sy-ov"), btnPlay = document.getElementById("sy-play");
+    let seed = 3, run = null, fi = 0, cum = [], playing = false, acc = 0, cv = null;
+    function rebuild() {
+      run = sysRun(gN(), gS(), gF(), ov.checked, seed);
+      cum = []; let c = 0; run.frames.forEach((f) => { if (f.act) for (let i = 0; i < f.act.length; i++) c += f.act[i]; cum.push(c); });
+      fi = 0; show();
+    }
+    function show() {
+      const f = sysFormula(gN(), gS(), ov.checked);
+      GP.stat("sy-c", (fi + 1) + " / " + run.T);
+      GP.stat("sy-mac", fmtN(cum[fi]) + "<small> / " + fmtN(run.macs) + "</small>");
+      GP.stat("sy-u", pct(cum[fi] / (gN() * gN() * (fi + 1))) + "<small> → " + pct(run.util) + "</small>");
+      GP.stat("sy-uf", pct(f.U) + "<small> (T=" + f.T + ")</small>");
+      GP.stat("sy-ok", run.match ? "<span class='tn-ok'>C 일치 ✓</span>" : "<span class='tn-bad'>불일치</span>");
+      cv && cv.redraw();
+    }
+    ov.addEventListener("change", rebuild);
+    btnPlay.addEventListener("click", () => { if (fi >= run.T - 1) fi = 0; playing = !playing; btnPlay.textContent = playing ? "멈춤" : "재생"; show(); });
+    document.getElementById("sy-step").addEventListener("click", () => { playing = false; btnPlay.textContent = "재생"; fi = Math.min(run.T - 1, fi + 1); show(); });
+    document.getElementById("sy-reset").addEventListener("click", () => { fi = 0; show(); });
+    document.getElementById("sy-new").addEventListener("click", () => { seed = (seed * 7 + 11) % 9973; rebuild(); });
+    GP.loop(document.getElementById("sim-sy"), (dt) => {
+      if (!playing) return;
+      acc += dt; const step = Math.max(0.06, Math.min(0.45, 9 / run.T));
+      if (acc < step) return; acc = 0;
+      if (fi < run.T - 1) { fi++; show(); } else { playing = false; btnPlay.textContent = "재생"; }
+    });
+    rebuild();
+    cv = GP.canvas("#sy-cv", (ctx, w, h) => {
+      const P = GP.palette(), N = gN(), ws = gF() === "ws", fr = run.frames[fi], narrow = w < 560;
+      const gridW = narrow ? w - 60 : Math.min(w * 0.62, h - 70) , cs = Math.floor(Math.min(gridW, h - 70) / N);
+      const x0 = 46, y0 = 40, txt = cs >= 26;
+      GP.text(ctx, ws ? "A 행 →" : "A →", 6, y0 - 12, { size: 12, color: P.compute, weight: 700 });
+      GP.text(ctx, ws ? "부분합 ↓ (위에서 0)" : "B ↓", x0 + 6, 16, { size: 12, color: P.data, weight: 700 });
+      for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+        const x = x0 + j * cs, y = y0 + i * cs, on = fr.act && fr.act[i * N + j];
+        const has = fr.phase === "run" && (fr.a[i][j] !== null || fr.x[i][j] !== null);
+        let fill = has ? GP.alpha(P.tensor, 0.16) : P.surface;
+        if (fr.phase === "preload" && i <= fr.row) fill = GP.alpha(P.sram, 0.35);
+        if (fr.phase === "drain" && i >= N - 1 - fr.row) fill = GP.alpha(P.data, 0.3);
+        if (on) fill = GP.alpha(P.tensor, 0.75);
+        ctx.fillStyle = fill; ctx.fillRect(x + 1, y + 1, cs - 2, cs - 2);
+        ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(x + 1.5, y + 1.5, cs - 3, cs - 3);
+        if (!txt) continue;
+        const fs = Math.min(13, cs / 3.4);
+        if (ws) {
+          GP.text(ctx, "w" + run.W[i][j], x + 4, y + fs, { size: fs * 0.82, color: P.dim, mono: true });
+          if (fr.phase === "run" && fr.x[i][j] !== null) GP.text(ctx, String(fr.x[i][j]), x + cs / 2, y + cs * 0.62, { size: fs, weight: 700, color: on ? "#fff" : P.text, align: "center", baseline: "middle", mono: true });
+        } else if (fr.acc || fr.phase === "drain") {
+          const a = fr.acc ? fr.acc[i][j] : run.C[i][j];
+          GP.text(ctx, String(a), x + cs / 2, y + cs * 0.55, { size: fs, weight: 700, color: on ? "#fff" : P.text, align: "center", baseline: "middle", mono: true });
+        }
+        if (fr.phase === "run" && fr.a[i][j] !== null && cs >= 34) GP.text(ctx, String(fr.a[i][j]), x + cs - 4, y + cs - 5, { size: fs * 0.78, color: on ? "#fff" : P.compute, align: "right", mono: true });
+      }
+      // 정보 패널
+      const ix = narrow ? x0 : x0 + N * cs + 24, iy = narrow ? y0 + N * cs + 18 : y0 + 4;
+      const phase = fr.phase === "preload" ? "가중치 적재 (행 " + (fr.row + 1) + "/" + N + ")" : fr.phase === "drain" ? "결과 배출 (" + (fr.row + 1) + "/" + N + ")" : "계산 t = " + fr.t;
+      const lines = [["사이클", (fi + 1) + " / " + run.T], ["단계", phase], ["이번 사이클 MAC", fr.act ? String(fr.act.reduce((s, v) => s + v, 0)) + " / " + N * N : "0 / " + N * N], ["누적 활용률", pct(cum[fi] / (N * N * (fi + 1)))]];
+      if (!narrow || h > y0 + N * cs + 90) lines.forEach(([k, v], q) => { GP.text(ctx, k, ix, iy + q * 34, { size: 11, color: P.dim }); GP.text(ctx, v, ix, iy + q * 34 + 16, { size: 13, weight: 700, color: P.text }); });
+    }, { height: (w) => (w < 560 ? Math.min(w - 60, 420) + 170 : Math.min(420, Math.max(300, w * 0.52))) });
+  })();
+
+  /* ---------------------------------------------------- 5. 텐서 코어 입출력 */
+  (function () {
+    const fm = (v) => String(P2(v));
+    const gP = GP.seg("tc-p", upd), gM = GP.range("tc-m", fm, upd), gN = GP.range("tc-n", fm, upd), gK = GP.range("tc-k", fm, upd);
+    const gWm = GP.range("tc-wm", fm, upd), gWn = GP.range("tc-wn", fm, upd), gG = GP.seg("tc-g", upd), acc = document.getElementById("tc-acc");
+    acc.addEventListener("change", upd);
+    let cv = null;
+    const cur = () => tcio(gP(), P2(gM()), P2(gN()), P2(gK()), P2(gWm()), P2(gWn()), Number(gG()), acc.checked);
+    function upd() {
+      const r = cur();
+      GP.stat("tc-cyc", GP.fmt(r.cyc, 3) + "<small> 클럭</small>");
+      GP.stat("tc-rf", GP.fmt(r.rfRead, 3) + " / " + GP.fmt(r.rfWrite, 3) + "<small> B/클럭</small>");
+      GP.stat("tc-sm", GP.fmt(r.smem, 3) + "<small> B/클럭</small>");
+      GP.stat("tc-reg", (r.fit ? "" : "<span class='tn-bad'>") + GP.fmt(r.regs, 3) + (r.fit ? "" : " 넘침</span>") + "<small> (워프 " + r.Wm + "×" + r.Wn + ")</small>");
+      GP.stat("tc-tf", GP.fmt(r.tflops, 4) + "<small> TFLOPS · " + pct(r.frac, 0) + "</small>");
+      cv && cv.redraw();
+    }
+    cv = GP.canvas("#tc-cv", (ctx, w, h) => {
+      const P = GP.palette(), r = cur();
+      const items = [["RF 읽기", r.rfRead / SP.rfRead, GP.fmt(r.rfRead, 3) + " / 384 B"], ["RF 쓰기", r.rfWrite / SP.rfWrite, GP.fmt(r.rfWrite, 3) + " / 128 B"], ["공유 메모리", r.smem / SP.smemSM, GP.fmt(r.smem, 3) + " / 128 B"], ["누산 레지스터", r.regs / 255, GP.fmt(r.regs, 3) + " / 255"]];
+      const x0 = 104, x1 = w - 16, sc = (x1 - x0) / 2.5, bh = Math.min(34, (h - 70) / 4 - 12);
+      for (const g of [0, 0.5, 1, 1.5, 2, 2.5]) { const x = x0 + g * sc; ctx.strokeStyle = g === 1 ? P.bad : P.grid; ctx.lineWidth = g === 1 ? 1.6 : 1; ctx.beginPath(); ctx.moveTo(x, 20); ctx.lineTo(x, h - 34); ctx.stroke(); GP.text(ctx, g * 100 + "%", x, h - 24, { size: 11, color: g === 1 ? P.bad : P.dim, align: "center", mono: true }); }
+      items.forEach(([lab, q, s], i) => {
+        const y = 28 + i * ((h - 66) / 4);
+        GP.text(ctx, lab, x0 - 8, y + bh / 2, { size: 12, weight: 700, align: "right", baseline: "middle", color: P.text });
+        ctx.fillStyle = q > 1 ? P.bad : i < 2 ? P.sram : i === 2 ? P.data : P.tensor;
+        ctx.fillRect(x0, y, Math.min(2.5, q) * sc, bh);
+        GP.text(ctx, s + " (" + pct(q, 0) + ")", x0 + 6, y + bh + 11, { size: 11, color: P.dim });
+      });
+      GP.text(ctx, "필요량 ÷ 공급 한계 (서브파티션·SM당)", x0, 12, { size: 11, color: P.dim });
+    }, { aspect: 0.55, minHeight: 260, maxHeight: 330 });
+    upd();
+  })();
+
+  /* ---------------------------------------------------- 6. 2:4 희소성 */
+  (function () {
+    const gP = GP.seg("sp-p", upd), gX = GP.range("sp-x", (v) => GP.fmt(Math.pow(10, v), 2), upd);
+    const gF = GP.range("sp-f", (v) => v + " %", upd), gW = GP.range("sp-w", (v) => v + " %", upd);
+    let seed = 5, W = [], pr = [], cv = null;
+    function gen() {
+      const r = GP.rng(seed), g = () => Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r());
+      W = []; pr = [];
+      for (let i = 0; i < 4; i++) { const row = Array.from({ length: 16 }, g); W.push(row); pr.push(sp24Prune(row)); }
+    }
+    function upd() {
+      const bits = Number(gP()), s = sp24Storage(bits);
+      GP.stat("sp-st", GP.fmt(s, 4) + "<small> (" + (2 * bits + 4) + "/" + 4 * bits + " 비트)</small>");
+      GP.stat("sp-ef", GP.fmt(sp24Speedup(Math.pow(10, gX()), gF() / 100, gW() / 100, bits), 3) + "×");
+      let tot = 0, rem = 0; W.forEach((row, i) => row.forEach((v, j) => { tot += v * v; if (!pr[i].mask[j]) rem += v * v; }));
+      GP.stat("sp-er", pct(rem / tot));
+      cv && cv.redraw();
+    }
+    document.getElementById("sp-new").addEventListener("click", () => { seed = (seed * 13 + 7) % 10007; gen(); upd(); });
+    cv = GP.canvas("#sp-cv", (ctx, w, h) => {
+      const P = GP.palette(), cw = Math.min(40, (w - 40) / 16), chh = Math.min(26, (h - 120) / 8), x0 = 20;
+      let amax = 0; W.forEach((r) => r.forEach((v) => (amax = Math.max(amax, Math.abs(v)))));
+      GP.text(ctx, "밀집 4×16 (그룹 4개마다 2개 남김)", x0, 14, { size: 12, color: P.dim });
+      W.forEach((row, i) => row.forEach((v, j) => {
+        const x = x0 + j * cw + Math.floor(j / 4) * 3, y = 24 + i * chh, keep = pr[i].mask[j];
+        ctx.fillStyle = keep ? GP.alpha(v >= 0 ? P.tensor : P.heat, 0.25 + 0.7 * Math.abs(v) / amax) : P.surface;
+        ctx.fillRect(x, y, cw - 2, chh - 2);
+        if (!keep) { ctx.strokeStyle = P.faint; ctx.beginPath(); ctx.moveTo(x + 3, y + 3); ctx.lineTo(x + cw - 5, y + chh - 5); ctx.moveTo(x + cw - 5, y + 3); ctx.lineTo(x + 3, y + chh - 5); ctx.stroke(); }
+        if (cw >= 30) GP.text(ctx, v.toFixed(1), x + cw / 2 - 1, y + chh / 2, { size: 10, color: keep ? P.text : P.faint, align: "center", baseline: "middle", mono: true });
+      }));
+      const y1 = 24 + 4 * chh + 30;
+      GP.text(ctx, "압축 값 4×8", x0, y1 - 10, { size: 12, color: P.dim });
+      const mx = x0 + 8 * cw + 30;
+      GP.text(ctx, "메타데이터 (2비트 위치)", mx, y1 - 10, { size: 12, color: P.dim });
+      pr.forEach((p, i) => p.keep.forEach((v, j) => {
+        const x = x0 + j * cw + Math.floor(j / 2) * 3, y = y1 + i * chh;
+        ctx.fillStyle = GP.alpha(v >= 0 ? P.tensor : P.heat, 0.25 + 0.7 * Math.abs(v) / amax); ctx.fillRect(x, y, cw - 2, chh - 2);
+        if (cw >= 30) GP.text(ctx, v.toFixed(1), x + cw / 2 - 1, y + chh / 2, { size: 10, color: P.text, align: "center", baseline: "middle", mono: true });
+        const xm = mx + j * Math.min(cw, (w - mx - 10) / 8);
+        if (xm + 10 < w) GP.text(ctx, GP.bin(p.idx[j], 2), xm + 4, y + chh / 2, { size: 11, color: P.ctrl, baseline: "middle", mono: true });
+      }));
+    }, { aspect: 0.5, minHeight: 250, maxHeight: 320 });
+    gen(); upd();
+  })();
+
+  /* ---------------------------------------------------- 7. 마이크로스케일링 */
+  (function () {
+    const gF = GP.seg("mx-f", upd), gB = GP.range("mx-b", (v) => fmtN(P2(v)), upd), gD = GP.seg("mx-d", upd);
+    const cache = {};
+    const data = (d) => cache[d] || (cache[d] = mxData(d, 4096, 7));
+    let cv = null;
+    function upd() {
+      const x = data(gD()), f = MXF[gF()], q = mxQuant(x, P2(gB()), f), q0 = mxQuant(x, 4096, f);
+      GP.stat("mx-snr", GP.fmt(q.snr, 3) + "<small> dB</small>");
+      GP.stat("mx-snr0", GP.fmt(q0.snr, 3) + "<small> dB</small>");
+      GP.stat("mx-bits", GP.fmt(q.bits, 4));
+      GP.stat("mx-clip", q.clip + "<small> / 4,096</small>");
+      cv && cv.redraw();
+    }
+    cv = GP.canvas("#mx-cv", (ctx) => {
+      const P = GP.palette(), x = data(gD()), cols = { fp4: P.tensor, fp6: P.compute, fp8: P.data, int8: P.sram }, names = { fp4: "FP4", fp6: "FP6", fp8: "FP8", int8: "INT8" };
+      const series = Object.keys(MXF).map((k) => ({ data: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((e) => [P2(e), mxQuant(x, P2(e), MXF[k]).snr]), color: cols[k], width: k === gF() ? 3 : 1.6, label: names[k], dots: 2.5 }));
+      GP.chart(ctx, null, {
+        x: [8, 4096], y: [0, 50], logX: true, xLabel: "블록 크기 B (4,096 = 텐서 하나)", yLabel: "SNR (dB)", series,
+        vlines: [{ x: P2(gB()), color: P.accent, dash: [4, 3] }], legend: "auto", hover: true,
+      });
+    }, { aspect: 0.6, maxHeight: 360, hover: true });
+    upd();
+  })();
+
+  /* ---------------------------------------------------- 8. 면적·전력 */
+  (function () {
+    const gF = GP.range("ar-f", (v) => v + " %", upd), gP = GP.seg("ar-p", upd);
+    let cv = null;
+    function upd() {
+      const p = gP(), r = areaModel(gF() / 100, p), u = p === "int8" ? " TOPS" : " TFLOPS";
+      GP.stat("ar-tf", GP.fmt(r.tflops, 4) + "<small>" + u + "</small>");
+      GP.stat("ar-den", GP.fmt(r.densRatio, 3) + "×");
+      GP.stat("ar-e", GP.fmt(r.ePerFlopT, 3) + "<small> pJ (FP32 " + GP.fmt(r.ePerFlopV, 3) + ")</small>");
+      GP.stat("ar-share", pct(r.dieShare));
+      GP.stat("ar-pw", GP.fmt(r.pTensor, 3) + "<small> W</small>");
+      cv && cv.redraw();
+    }
+    cv = GP.canvas("#ar-cv", (ctx, w, h) => {
+      const P = GP.palette(), p = gP(), r = areaModel(gF() / 100, p);
+      const half = w / 2, base = h - 40, top = 40;
+      const panel = (x0, wd, title, vals, max, fmt) => {
+        GP.text(ctx, title, x0 + wd / 2, 18, { size: 12, color: P.dim, align: "center" });
+        const bw = Math.min(56, wd / vals.length - 14);
+        vals.forEach(([lab, v, c], i) => {
+          const cx = x0 + (i + 0.5) * (wd / vals.length), bh = (v / max) * (base - top);
+          ctx.fillStyle = c; ctx.fillRect(cx - bw / 2, base - bh, bw, bh);
+          GP.text(ctx, fmt(v), cx, base - bh - 8, { size: 12, weight: 700, color: P.text, align: "center" });
+          GP.text(ctx, lab, cx, base + 16, { size: 11, color: P.dim, align: "center" });
+        });
+        ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(x0 + 4, base); ctx.lineTo(x0 + wd - 4, base); ctx.stroke();
+      };
+      const lab = p.toUpperCase() + " 텐서";
+      panel(8, half - 16, "mm²당 FMA/클럭", [["FP32 레인", FP32_DENS, P.compute], [lab, FP32_DENS * r.densRatio, P.tensor]], FP32_DENS * r.densRatio * 1.15, (v) => GP.fmt(v, 4));
+      panel(half + 8, half - 16, "FLOP당 에너지 (pJ)", [["FP32 벡터", r.ePerFlopV, P.compute], [lab, r.ePerFlopT, P.tensor]], r.ePerFlopV * 1.15, (v) => GP.fmt(v, 3));
+    }, { aspect: 0.5, minHeight: 240, maxHeight: 320 });
+    upd();
+  })();
+
+  /* ---------------------------------------------------- 9. NPU vs GPU */
+  (function () {
+    const fm = (v) => fmtN(P2(v));
+    const gM = GP.range("np-m", fm, upd), gN = GP.range("np-n", fm, upd), gK = GP.range("np-k", fm, upd), gB = GP.range("np-b", fm, upd);
+    const gR = GP.seg("np-r", upd);
+    const PRE = { big: [13, 13, 13, 0], mid: [9, 9, 9, 0], att: [6, 6, 6, 12], dec: [3, 13, 13, 0] };
+    GP.seg("np-pre", (v) => { const p = PRE[v]; [gM, gN, gK, gB].forEach((g, i) => { g.el.value = p[i]; g.refresh(); }); upd(); });
+    let cv = null;
+    function upd() {
+      const M = P2(gM()), N = P2(gN()), K = P2(gK()), b = P2(gB()), R = Number(gR());
+      const n = npuUtil(M, N, K, b, R, true), g = gpuUtil(M, N, K, b, true);
+      GP.stat("np-un", pct(n.util));
+      GP.stat("np-ug", pct(g.util));
+      GP.stat("np-tile", g.Wm + "×" + g.Wn + (g.s > 1 ? "<small> · K 분할 " + g.s + "</small>" : ""));
+      GP.stat("np-x", n.E + "<small> 개 · 타일 " + fmtN(n.tiles) + "</small>");
+      cv && cv.redraw();
+    }
+    cv = GP.canvas("#np-cv", (ctx) => {
+      const P = GP.palette(), N = P2(gN()), K = P2(gK()), b = P2(gB()), R = Number(gR());
+      const sn = [], sg = [];
+      for (let e = 3; e <= 14; e += 0.5) { const M = Math.round(P2(e)); sn.push([M, npuUtil(M, N, K, b, R, true).util * 100]); sg.push([M, gpuUtil(M, N, K, b, true).util * 100]); }
+      GP.chart(ctx, null, {
+        x: [8, 16384], y: [0, 100], logX: true, xLabel: "M (흘려 넣는 행 수)", yLabel: "활용률 (%)",
+        series: [{ data: sg, color: P.tensor, width: 2.6, label: "GPU 텐서 코어 576개" }, { data: sn, color: P.ctrl, width: 2.4, dash: [6, 4], label: "NPU " + R + "×" + R + " × " + 294912 / (R * R) }],
+        vlines: [{ x: P2(gM()), color: P.accent, dash: [4, 3] }], legend: "br", hover: true,
+      });
+    }, { aspect: 0.6, maxHeight: 360, hover: true });
+    upd();
+  })();
+})();
+</script>
+</body>
+</html>

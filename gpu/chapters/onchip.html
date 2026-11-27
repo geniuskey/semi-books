@@ -1,0 +1,1134 @@
+<!doctype html>
+<!-- Copyright (c) 2026 geniuskey and GPUBook contributors.
+     Executable code: MIT (see ../LICENSE-MIT).
+     Text, illustrations, questions and explanations: CC-BY-4.0 (see ../LICENSE.md). -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>온칩 메모리: 레지스터에서 L2까지 · GPUBook</title>
+<meta name="description" content="6T SRAM 비트셀과 매크로 면적, 레지스터·공유 메모리·L1·L2·HBM의 용량·대역폭·지연·에너지, 워프 메모리 접근 병합과 공유 메모리 뱅크 충돌, 집합 연관 캐시와 LRU 적중률, L1/공유 메모리 분할, 거리에 비례하는 데이터 이동 에너지, 비동기 복사와 더블 버퍼링을 계산 모델로 익힌다.">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="stylesheet" href="../css/style.css">
+<script src="../js/common.js"></script>
+<style>
+svg .oc-mono, .oc-mono:not(html *) { fill: var(--text-dim); font-family: var(--mono); font-size: 12px; }
+svg .oc-cell, .oc-cell:not(html *) { fill: var(--text); font-family: var(--mono); font-size: 10px; }
+svg .oc-grid, .oc-grid:not(html *) { stroke: var(--grid); stroke-width: 1; fill: none; }
+svg .oc-hit, .oc-hit:not(html *) { fill: color-mix(in srgb, var(--bad) 55%, var(--bg-elev)); stroke: var(--bad); }
+svg .oc-ok, .oc-ok:not(html *) { fill: color-mix(in srgb, var(--ok) 45%, var(--bg-elev)); stroke: var(--ok); }
+svg .oc-waste, .oc-waste:not(html *) { fill: color-mix(in srgb, var(--data) 12%, var(--bg-elev)); stroke: var(--data); }
+.oc-flag { font-size: 13px; color: var(--text-dim); min-height: 1.4em; }
+.oc-flag b { color: var(--bad); }
+td.oc-up { color: var(--bad); font-weight: 700; } td.oc-dn { color: var(--ok); font-weight: 700; }
+</style>
+<link rel="stylesheet" href="../../shared/css/book-ui.css">
+<script defer src="../../shared/js/book-ui.js"></script>
+<script defer src="../../shared/js/book-shell.js" data-book="gpu"></script>
+</head>
+<body data-chapter="onchip">
+<main class="chapter">
+  <header class="chapter-hero">
+    <div class="eyebrow">Chapter 06</div>
+    <h1>온칩 메모리: 레지스터에서 L2까지</h1>
+    <p class="lead">GX-1은 텐서 코어로 BF16 943.7 TFLOPS를 낼 수 있지만, HBM은 초당 7.37 TB밖에 공급하지 못한다. 그 사이를 메우는 것이 다이 위의 SRAM이다. 레지스터 파일 36 MB, L1·공유 메모리 36 MB, L2 64 MB가 데이터를 연산 유닛 가까이 붙잡아 두고, 같은 바이트를 여러 번 쓰게 만든다. 이 장은 SRAM 비트셀 하나의 면적에서 출발해, 워프 32개 스레드의 주소가 몇 개의 메모리 트랜잭션이 되는지(병합), 공유 메모리 32뱅크가 왜 같은 열을 읽으면 32배 느려지는지(뱅크 충돌), 캐시 용량이 작업 집합보다 작아지는 순간 적중률이 왜 절벽처럼 떨어지는지, 그리고 데이터를 1 mm 옮기는 데 FP32 FMA 두 번어치의 에너지가 드는 이유를 계산한다.</p>
+    <ul class="objectives">
+      <li>6T SRAM 비트셀 면적과 배열 효율로 64 MB L2가 차지하는 mm²를 계산하고, SRAM 축소가 로직보다 느려진 이유를 설명한다.</li>
+      <li>레지스터 → L1·공유 메모리 → L2 → HBM의 용량·대역폭·지연·에너지를 GX-1 수치로 비교한다.</li>
+      <li>워프의 주소 패턴을 32 B 섹터·128 B 라인 트랜잭션 수로 바꾸고 유효 대역폭을 구한다.</li>
+      <li>공유 메모리 32뱅크의 충돌 차수를 \(\gcd(s, 32)\)로 계산하고, 패딩 1열이 전치에서 충돌을 없애는 이유를 안다.</li>
+      <li>집합 연관 캐시와 LRU를 직접 돌려 용량·연관도·라인 크기와 접근 패턴이 적중률을 정하는 방식을 익힌다.</li>
+      <li>L1/공유 메모리 분할, 데이터 이동 에너지, 비동기 복사·더블 버퍼링이 칩 설계에 주는 요구를 정리한다.</li>
+    </ul>
+  </header>
+
+  <section id="why">
+    <h2>왜 칩 위에 메모리를 두는가</h2>
+    <p>2장의 리틀의 법칙으로 보면 HBM 7.37 TB/s를 다 쓰려면 약 3.7 MB가 늘 날아다녀야 했다. 7장의 루프라인으로 보면 BF16 텐서 코어를 쉬지 않게 하려면 HBM에서 가져온 바이트 하나로 약 128 FLOP을 해야 한다(<a href="roofline.html">리지 포인트</a>). 행렬곱의 데이터 재사용은 공짜가 아니다. 재사용하려면 데이터를 <b>어딘가에 붙잡아 두어야</b> 하고, 그 자리가 <span class="term">온칩 메모리</span><span class="en">(on-chip memory)</span>다. GPU의 온칩 메모리는 크게 세 층이다.</p>
+    <ul>
+      <li><span class="term">레지스터 파일</span>: 서브파티션마다 64 KB, SM마다 256 KB. 연산 유닛에 피연산자를 매 클럭 공급한다. 워프 문맥이 여기에 상주하므로 워프 전환이 공짜다(<a href="sm.html">3장</a>).</li>
+      <li><span class="term">L1·공유 메모리</span>: SM마다 256 KB 한 덩어리를 프로그램이 직접 관리하는 <b>공유 메모리</b>(스크래치패드)와 하드웨어가 관리하는 <b>L1 캐시</b>로 나눠 쓴다. 블록 안 스레드들이 데이터를 주고받는 곳이다.</li>
+      <li><span class="term">L2 캐시</span>: 다이 전체가 공유하는 64 MB 캐시다. 슬라이스 128개로 나뉘어 크로스바 건너편에 있다(<a href="noc.html">9장</a>). 모든 HBM 접근이 L2를 거친다.</li>
+    </ul>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 330" role="img" aria-label="GX-1 다이 평면 개략도. 위아래 GPC 여덟 개 사이에 L2 파티션 두 개가 가로로 놓이고 다이 양옆 긴 변에 HBM PHY와 HBM 스택 세 개씩이 붙는다. 오른쪽 확대도는 SM 하나에 서브파티션 네 개의 레지스터 파일 64 KB와 L1·공유 메모리 256 KB가 있음을 보인다">
+        <g class="k-dram" style="stroke-width:1.5">
+          <rect x="10" y="30" width="60" height="80" rx="4"/><rect x="10" y="125" width="60" height="80" rx="4"/><rect x="10" y="220" width="60" height="80" rx="4"/>
+          <rect x="450" y="30" width="60" height="80" rx="4"/><rect x="450" y="125" width="60" height="80" rx="4"/><rect x="450" y="220" width="60" height="80" rx="4"/>
+        </g>
+        <g class="t t-c"><text x="40" y="74">HBM</text><text x="40" y="169">HBM</text><text x="40" y="264">HBM</text><text x="480" y="74">HBM</text><text x="480" y="169">HBM</text><text x="480" y="264">HBM</text></g>
+        <rect x="80" y="10" width="360" height="310" rx="4" class="f-surface" style="stroke-width:1.5"/>
+        <rect x="82" y="14" width="12" height="302" class="k-data"/><rect x="426" y="14" width="12" height="302" class="k-data"/>
+        <g class="k-compute">
+          <rect x="102" y="20" width="74" height="118" rx="3"/><rect x="182" y="20" width="74" height="118" rx="3"/><rect x="262" y="20" width="74" height="118" rx="3"/><rect x="342" y="20" width="74" height="118" rx="3"/>
+          <rect x="102" y="192" width="74" height="118" rx="3"/><rect x="182" y="192" width="74" height="118" rx="3"/><rect x="262" y="192" width="74" height="118" rx="3"/><rect x="342" y="192" width="74" height="118" rx="3"/>
+        </g>
+        <g class="t t-c"><text x="139" y="84">GPC</text><text x="219" y="84">GPC</text><text x="299" y="84">GPC</text><text x="379" y="84">GPC</text><text x="139" y="256">GPC</text><text x="219" y="256">GPC</text><text x="299" y="256">GPC</text><text x="379" y="256">GPC</text></g>
+        <g class="t-dim t-c"><text x="139" y="102">SM 20</text><text x="219" y="102">SM 20</text><text x="299" y="102">SM 20</text><text x="379" y="102">SM 20</text><text x="139" y="274">SM 20</text><text x="219" y="274">SM 20</text><text x="299" y="274">SM 20</text><text x="379" y="274">SM 20</text></g>
+        <rect x="102" y="146" width="154" height="38" rx="3" class="k-sram"/><rect x="262" y="146" width="154" height="38" rx="3" class="k-sram"/>
+        <text x="179" y="170" class="t t-c">L2 파티션 0 · 32 MB</text><text x="339" y="170" class="t t-c">L2 파티션 1 · 32 MB</text>
+        <text x="88" y="327" class="t-dim">HBM PHY (긴 변 두 쪽)</text>
+        <path d="M416 40L530 40" class="lead"/>
+        <rect x="530" y="10" width="260" height="310" rx="8" class="card"/>
+        <text x="660" y="32" class="t t-b t-c">SM 하나 (활성 144개)</text>
+        <g>
+          <rect x="544" y="44" width="112" height="100" rx="4" class="f-elev"/><rect x="664" y="44" width="112" height="100" rx="4" class="f-elev"/>
+          <rect x="544" y="150" width="112" height="100" rx="4" class="f-elev"/><rect x="664" y="150" width="112" height="100" rx="4" class="f-elev"/>
+          <g class="k-sram"><rect x="550" y="50" width="100" height="30" rx="3"/><rect x="670" y="50" width="100" height="30" rx="3"/><rect x="550" y="156" width="100" height="30" rx="3"/><rect x="670" y="156" width="100" height="30" rx="3"/></g>
+          <g class="k-compute"><rect x="550" y="86" width="56" height="52" rx="3"/><rect x="670" y="86" width="56" height="52" rx="3"/><rect x="550" y="192" width="56" height="52" rx="3"/><rect x="670" y="192" width="56" height="52" rx="3"/></g>
+          <g class="k-tensor"><rect x="610" y="86" width="40" height="52" rx="3"/><rect x="730" y="86" width="40" height="52" rx="3"/><rect x="610" y="192" width="40" height="52" rx="3"/><rect x="730" y="192" width="40" height="52" rx="3"/></g>
+          <g class="t t-c"><text x="600" y="70">RF 64 KB</text><text x="720" y="70">RF 64 KB</text><text x="600" y="176">RF 64 KB</text><text x="720" y="176">RF 64 KB</text></g>
+          <g class="t-dim t-c"><text x="578" y="116">FP32</text><text x="698" y="116">FP32</text><text x="578" y="222">FP32</text><text x="698" y="222">FP32</text><text x="630" y="116">TC</text><text x="750" y="116">TC</text><text x="630" y="222">TC</text><text x="750" y="222">TC</text></g>
+        </g>
+        <rect x="544" y="258" width="232" height="50" rx="4" class="k-sram"/>
+        <text x="660" y="280" class="t t-b t-c">L1·공유 메모리 256 KB</text>
+        <text x="660" y="298" class="t-dim t-c">공유 메모리 최대 228 KB · 32뱅크</text>
+      </svg>
+      <figcaption><b>그림 6-1.</b> GX-1 다이의 온칩 메모리 자리(개략도, 축척 아님). 레지스터 파일과 L1·공유 메모리는 SM 안에 흩어져 연산 유닛 바로 옆에 있고, L2는 다이 가운데 두 파티션으로 모여 크로스바 건너편에 있다. HBM은 다이 밖, 긴 변의 PHY를 지나야 닿는다. 가까울수록 작고 빠르고 싸다.</figcaption>
+    </figure>
+    <p>물리 SM 160개 기준으로 레지스터 40 MB, L1·공유 메모리 40 MB, L2 64 MB, 합해 약 144 MB의 SRAM이 다이에 있다(활성 144 SM만 세면 36 + 36 + 64 = 136 MB). 이 장이 묻는 것은 두 가지다. 이 SRAM이 면적을 얼마나 먹는가, 그리고 이 SRAM을 어떤 규칙으로 써야 제값을 하는가. <b>왜 이렇게 설계하는가</b>: HBM에서 바이트 하나를 가져오는 에너지(약 24 pJ)로 BF16 FMA를 100번 넘게 할 수 있다. 같은 데이터를 칩 위에서 여러 번 쓰게 만드는 SRAM은 연산 유닛 몇 개를 포기하고라도 둘 가치가 있다.</p>
+  </section>
+
+  <section id="sram">
+    <h2>6T SRAM 비트셀과 면적</h2>
+    <p>온칩 메모리는 거의 모두 <span class="term">6T SRAM</span><span class="en">(six-transistor static RAM)</span>이다. 인버터 두 개를 맞물려 1비트를 붙잡고(트랜지스터 4개), 워드라인이 켜지면 접근 트랜지스터 두 개가 저장 노드를 비트라인 쌍에 잇는다. 셀 내부 동작(읽기 교란, 정적 잡음 여유)은 <a href="../../memory/chapters/sram.html">MemoryBook SRAM 장</a>에서 자세히 다루고, 여기서는 면적만 본다.</p>
+    <div class="fig-row">
+    <figure class="diagram">
+      <svg viewBox="0 0 520 250" role="img" aria-label="6T SRAM 셀 회로. 서로 맞물린 인버터 두 개가 노드 Q와 QB를 붙잡고, 워드라인 WL이 켜지면 접근 트랜지스터 PG 두 개가 Q와 QB를 비트라인 BL과 BLB에 잇는다">
+        <path d="M60 20V235M460 20V235" class="wire2"/>
+        <path d="M40 46H480" class="wire2" style="stroke:var(--ctrl)"/>
+        <text x="486" y="50" class="t t-b">WL</text>
+        <text x="60" y="246" class="t t-b t-c">BL</text><text x="460" y="246" class="t t-b t-c">BLB</text>
+        <rect x="96" y="124" width="48" height="28" rx="4" class="k-ctrl"/><text x="120" y="143" class="t t-c">PG</text>
+        <rect x="376" y="124" width="48" height="28" rx="4" class="k-ctrl"/><text x="400" y="143" class="t t-c">PG</text>
+        <path d="M120 46V124M400 46V124" class="wire2" style="stroke:var(--ctrl)"/>
+        <path d="M60 138H96M144 138H190M330 138H376M424 138H460" class="wire2"/>
+        <path d="M190 138V92H222M190 138V184H222" class="wire2"/>
+        <path d="M330 138V92H298M330 138V184H298" class="wire2"/>
+        <path d="M222 76L278 92L222 108Z" class="k-sram" style="stroke-width:1.6"/><circle cx="282" cy="92" r="4" class="node-o"/>
+        <path d="M298 168L242 184L298 200Z" class="k-sram" style="stroke-width:1.6"/><circle cx="238" cy="184" r="4" class="node-o"/>
+        <path d="M286 92H298M234 184H222" class="wire2"/>
+        <circle cx="190" cy="138" r="4" class="node"/><circle cx="330" cy="138" r="4" class="node"/>
+        <text x="182" y="132" class="t t-b t-e">Q</text><text x="338" y="132" class="t t-b">QB</text>
+        <text x="260" y="70" class="t-dim t-c">인버터 1 (PU + PD)</text>
+        <text x="260" y="222" class="t-dim t-c">인버터 2 (PU + PD)</text>
+      </svg>
+      <figcaption><b>그림 6-2.</b> 6T SRAM 셀. 맞물린 인버터 두 개(풀업 PU·풀다운 PD 각 2개)와 접근 트랜지스터(PG) 2개. 트랜지스터 6개가 모두 최소 크기 근처라서 셀 면적은 게이트 피치와 금속 피치로 정해진다.</figcaption>
+    </figure>
+    <figure class="diagram">
+      <svg viewBox="0 0 520 250" role="img" aria-label="SRAM 매크로 평면. 비트셀 배열 네 블록 사이로 행 디코더와 워드라인 드라이버가 세로로, 감지 증폭기와 열 선택 회로가 가로로 지나가고 한쪽에 제어와 입출력 블록이 있다. 오른쪽 막대는 면적의 약 60 %만 비트셀임을 보인다">
+        <rect x="14" y="14" width="160" height="90" class="k-sram"/><rect x="214" y="14" width="160" height="90" class="k-sram"/>
+        <rect x="14" y="134" width="160" height="90" class="k-sram"/><rect x="214" y="134" width="160" height="90" class="k-sram"/>
+        <path d="M14 30H174M14 46H174M14 62H174M14 78H174M14 94H174M214 30H374M214 46H374M214 62H374M214 78H374M214 94H374M14 150H174M14 166H174M14 182H174M14 198H174M14 214H174M214 150H374M214 166H374M214 182H374M214 198H374M214 214H374M40 14V104M66 14V104M92 14V104M118 14V104M144 14V104M240 14V104M266 14V104M292 14V104M318 14V104M344 14V104M40 134V224M66 134V224M92 134V224M118 134V224M144 134V224M240 134V224M266 134V224M292 134V224M318 134V224M344 134V224" class="oc-grid"/>
+        <rect x="178" y="14" width="32" height="210" class="k-ctrl"/>
+        <rect x="14" y="108" width="360" height="22" class="k-ctrl"/>
+        <rect x="178" y="108" width="32" height="22" class="kf-ctrl"/>
+        <text x="194" y="64" class="t t-c" transform="rotate(-90 194 64)">행 디코더</text>
+        <text x="100" y="124" class="t t-c">감지 증폭기 · 열 선택</text>
+        <text x="300" y="124" class="t t-c">감지 증폭기 · 열 선택</text>
+        <text x="94" y="64" class="t t-c t-halo">비트셀 배열</text>
+        <rect x="412" y="14" width="40" height="210" rx="3" class="f-surface"/>
+        <rect x="412" y="98" width="40" height="126" class="kf-sram"/>
+        <rect x="412" y="14" width="40" height="84" class="kf-ctrl" style="opacity:.75"/>
+        <text x="460" y="166" class="t t-b">약 60 %</text><text x="460" y="182" class="t-dim">비트셀</text>
+        <text x="460" y="56" class="t t-b">약 40 %</text><text x="460" y="72" class="t-dim">주변 회로</text>
+        <text x="432" y="242" class="t-dim t-c">배열 효율 η</text>
+      </svg>
+      <figcaption><b>그림 6-3.</b> SRAM 매크로. 비트셀 배열 사이를 행 디코더·워드라인 드라이버, 감지 증폭기·열 선택, 제어·입출력이 차지한다. 매크로 면적에서 비트셀이 차지하는 비율을 <b>배열 효율</b> \(\eta\)라 하며 대개 약 50–70 %다. 빠른 매크로일수록 배열을 잘게 나눠 주변 회로 몫이 커진다.</figcaption>
+    </figure>
+    </div>
+    <p>4 nm급 공정의 고밀도 6T 비트셀은 약 0.021 µm²다. 이 값은 셀만의 면적이고, 실제 칩이 받는 밀도는 주변 회로·ECC·태그까지 넣은 <b>실효 밀도</b>다.</p>
+    <div class="formula">$$A_{SRAM} = \frac{N_{bit}\,(1 + r_{ECC})(1 + r_{tag})\,A_{cell}}{\eta}$$<div class="where">여기서 \(N_{bit}\)는 저장할 데이터 비트 수, \(r_{ECC}\)는 오류 정정 부호 비트 비율(64비트당 8비트면 0.125), \(r_{tag}\)는 캐시 태그·상태 비트 비율(128 B 라인당 약 4 B면 약 0.03), \(A_{cell}\)은 비트셀 면적, \(\eta\)는 배열 효율.</div></div>
+    <p>64 MB L2의 데이터 비트는 \(64 \times 2^{20} \times 8 \approx 5.37 \times 10^{8}\)개다. 비트셀만 깔면 \(5.37\times10^8 \times 0.021\,\mu\text{m}^2 \approx 11.3\) mm²이고, ECC·태그를 더해 \(\eta = 0.6\)으로 나누면 약 21.8 mm²가 된다. 같은 데이터가 실효 밀도로는 비트셀만일 때의 약 절반이다.</p>
+    <p><b>SRAM 축소가 느려진 이유.</b> 28 nm급에서 7 nm급까지 비트셀은 세대마다 약 0.6배로 줄었지만 5·4 nm급 이후에는 세대당 몇 % 수준으로 둔화했다. 같은 기간 로직 밀도는 계속 1.3–1.6배씩 늘었다. 이유는 세 가지다. ① 6T 셀은 이미 최소 크기 트랜지스터 6개로 이루어져 핀 개수(트랜지스터당 핀 1개)를 더 줄일 수 없고, 게이트 피치와 금속 피치 축소가 느려졌다. ② 로직은 셀 높이(트랙 수)를 줄이고 배선 규칙을 바꿔 밀도를 얻지만, SRAM 셀은 이미 그 규칙의 한계에서 설계되어 있다. ③ 작은 트랜지스터일수록 문턱 전압 산포가 커져 셀이 안정하게 동작하는 최소 전압 \(V_{min}\)이 오르므로 셀을 무작정 줄일 수 없다. 그래서 같은 MB의 SRAM이 칩 면적에서 차지하는 비율은 세대가 갈수록 오히려 커진다.</p>
+
+    <div class="sim" id="sim-sram">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>SRAM 면적 계산기와 비트셀 축소 둔화</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sr-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>용량 <output id="sr-mb-out"></output></span><input type="range" id="sr-mb" min="4" max="256" step="4" value="64"></label>
+          <label class="ctrl"><span>공정 세대 <output id="sr-node-out"></output></span><input type="range" id="sr-node" min="0" max="6" step="1" value="4"></label>
+          <div class="ctrl"><span>셀 종류</span><div class="seg" id="sr-type"><button data-value="1" class="on">고밀도 6T</button><button data-value="1.25">고속 6T</button><button data-value="2">8T 2포트</button></div></div>
+          <label class="ctrl"><span>배열 효율 η <output id="sr-eff-out"></output></span><input type="range" id="sr-eff" min="0.3" max="0.9" step="0.05" value="0.6"></label>
+          <label class="check"><input type="checkbox" id="sr-ecc" checked> ECC(+12.5 %)·태그(+3 %) 포함</label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">비트셀만</span><span class="v" id="sr-o-cell">—</span></div>
+        <div class="stat"><span class="k">매크로 면적</span><span class="v" id="sr-o-mac">—</span></div>
+        <div class="stat"><span class="k">GX-1 다이 대비</span><span class="v" id="sr-o-die">—</span></div>
+        <div class="stat"><span class="k">같은 면적의 SM 수</span><span class="v" id="sr-o-sm">—</span></div>
+        <div class="stat"><span class="k">실효 밀도</span><span class="v" id="sr-o-den">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 64 MB, 5·4 nm급, 고밀도 6T, η 0.6, ECC·태그 포함 → 약 21.8 mm²(다이의 약 2.8 %, SM 약 6.8개). ② 공정을 2 nm급으로 옮기면 약 18.1 mm²로 0.83배밖에 줄지 않는다. 같은 구간에서 로직 밀도는 약 1.7배(그래프의 두 곡선 간격). ③ η를 0.4로 내리면(잘게 나눈 고속 매크로) 약 32.7 mm²로 커진다. 세대별 값은 공개 발표의 일반적인 경향값이다.</div>
+    </div>
+
+    <div class="callout fab"><strong>SRAM 144 MB가 다이에서 차지하는 몫</strong>L2 64 MB는 고밀도 셀·η 0.6·ECC·태그로 약 21.8 mm², 다이 780 mm²의 약 2.8 %, SM(3.2 mm²) 약 7개 면적이다. 물리 SM 160개의 레지스터 40 MB와 L1·공유 메모리 40 MB를 같은 밀도로 치면 약 27 mm²가 더해져 SRAM 비트셀 매크로만 약 49 mm²(약 6 %)다. 실제로는 레지스터 파일이 클럭당 피연산자 여러 개를 내는 다중 뱅크·고속 셀이고, L2는 슬라이스마다 태그 비교·크로스바 접속·일관성 제어 논리가 붙어 SRAM 관련 면적은 이 값의 약 2–3배가 된다. SM 7개 면적(약 5 % 연산)을 L2에 주고 HBM 트래픽을 줄이는 쪽이 이득이라는 판단이 L2 64 MB라는 숫자다.</div>
+    <p><b>왜 이렇게 설계하는가</b>: SRAM은 로직보다 덜 줄어들기 때문에 세대가 갈수록 "MB당 mm²"가 비싸진다. 칩 설계자는 SRAM을 무작정 늘리지 않고, 재사용이 가장 큰 곳(레지스터·공유 메모리)에 가깝게, 재사용 거리가 긴 데이터는 L2에 모은다. 최근에는 SRAM 다이를 따로 만들어 로직 위에 쌓는 3D 적층(<a href="package.html">11장</a>)이 대안으로 나온다.</p>
+  </section>
+
+  <section id="hier">
+    <h2>계층별 용량·대역폭·지연·에너지</h2>
+    <p>GX-1 표에서 계층마다 네 가지 수를 계산해 낸다. 레지스터 파일 대역폭은 서브파티션마다 클럭당 레인 32개 × 피연산자 3개 × 4 B = 384 B, SM마다 1,536 B다. 전체로는 \(144 \times 1536\,\text{B} \times 1.6\,\text{GHz} \approx 354\) TB/s다. 공유 메모리는 SM당 128 B/클럭 → 29.5 TB/s, L2는 슬라이스 128개 × 64 B/클럭 → 13.1 TB/s, HBM은 7.37 TB/s다.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>계층</th><th class="num">용량</th><th class="num">대역폭</th><th class="num">지연</th><th class="num">에너지 (32비트)</th><th class="num">최대 대역폭에서 전력</th></tr></thead>
+        <tbody>
+          <tr><td><span class="m-key sram">레지스터 파일</span></td><td class="num">36 MB</td><td class="num">약 354 TB/s</td><td class="num">약 1사이클</td><td class="num">약 0.5 pJ</td><td class="num">약 44 W</td></tr>
+          <tr><td><span class="m-key sram">L1·공유 메모리</span></td><td class="num">36 MB</td><td class="num">29.5 TB/s</td><td class="num">약 30사이클 (19 ns)</td><td class="num">약 1.5 pJ</td><td class="num">약 11 W</td></tr>
+          <tr><td><span class="m-key sram">L2</span></td><td class="num">64 MB</td><td class="num">13.1 TB/s</td><td class="num">약 200사이클 (125 ns)</td><td class="num">약 6 pJ</td><td class="num">약 20 W</td></tr>
+          <tr><td><span class="m-key dram">HBM</span></td><td class="num">144 GB</td><td class="num">7.37 TB/s</td><td class="num">약 500 ns (800사이클)</td><td class="num">약 100 pJ</td><td class="num">약 177 W</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>레지스터에서 HBM으로 갈수록 용량은 약 4,000배 커지고, 대역폭은 약 48배 줄고, 지연은 수백 배 늘고, 비트당 에너지는 약 190배 커진다. 계층이 존재하는 이유가 이 표 한 장이다. 큰 메모리는 멀리 있고, 멀리 있으면 느리고 비싸다.</p>
+
+    <div class="sim" id="sim-hier">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>GX-1 메모리 계층 비교 (로그 축)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="hi-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>지표</span><div class="seg" id="hi-m"><button data-value="cap">용량</button><button data-value="bw" class="on">대역폭</button><button data-value="lat">지연</button><button data-value="pj">비트당 에너지</button><button data-value="w">전력</button></div></div>
+          <label class="ctrl"><span>BF16 산술 강도 \(I\) <output id="hi-i-out"></output></span><input type="range" id="hi-i" min="1" max="512" step="1" value="128"></label>
+          <div class="step-desc" id="hi-d"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">가장 큰 값 / 가장 작은 값</span><span class="v" id="hi-o-r">—</span></div>
+        <div class="stat"><span class="k">이 강도에서 텐서 피크를 먹일 수 있는 계층</span><span class="v" id="hi-o-f">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① '대역폭' → 레지스터 354 TB/s는 HBM의 약 48배. ② 산술 강도를 128 FLOP/B로 두면 HBM이 겨우 피크를 먹이고(리지 포인트), 72 아래로 내리면 L2도 모자라며 공유 메모리는 32 이상이면 충분하다. ③ '전력' → HBM 약 177 W가 온칩 셋의 합(약 75 W)보다 크다. '비트당 에너지' → HBM 3 pJ/bit는 레지스터의 192배.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가</b>: 각 계층의 대역폭은 그 위 계층의 재사용을 전제로 정해진다. 텐서 코어 피크(943.7 TFLOPS)를 공유 메모리 29.5 TB/s로 먹이려면 공유 메모리 바이트당 32 FLOP, L2(13.1 TB/s)로는 약 72 FLOP, HBM으로는 약 128 FLOP이 필요하다. 레지스터 파일이 가장 넓은 이유는 모든 연산의 피연산자가 결국 거기서 나오기 때문이다. 대역폭을 계층마다 몇 배씩 줄여도 되는 것은 타일링이 각 층에서 재사용을 만들어 주기 때문이고(<a href="roofline.html">7장</a>), 그만큼 배선·SRAM 포트 면적과 전력을 아낀다.</p>
+  </section>
+
+  <section id="coalesce">
+    <h2>메모리 접근 병합</h2>
+    <p>워프 32개 스레드는 한 명령으로 로드를 낸다. 각 스레드가 자기 주소를 갖지만, 메모리 시스템은 주소 32개를 따로 처리하지 않는다. 로드·스토어 유닛이 주소들을 <span class="term">섹터</span><span class="en">(sector, 32 B)</span> 단위로 묶어 필요한 섹터 집합만 요청한다. 이것이 <span class="term">메모리 접근 병합</span><span class="en">(memory coalescing)</span>이다. 캐시는 <b>128 B 라인</b>을 하나의 태그로 관리하고 그 안의 32 B 섹터 4개를 따로 채운다. DRAM 쪽으로 가는 최소 단위도 32 B 섹터다.</p>
+    <div class="formula">$$N_{sec} = \left|\left\{\left\lfloor \frac{a_t + j}{32} \right\rfloor : t = 0..31,\; 0 \le j \lt b\right\}\right|, \qquad \eta_{co} = \frac{32\,b}{32\,\text{B} \cdot N_{sec}}$$<div class="where">여기서 \(a_t\)는 스레드 \(t\)의 바이트 주소, \(b\)는 원소 크기(B), \(N_{sec}\)는 서로 다른 섹터 수, \(\eta_{co}\)는 옮긴 바이트 중 쓸모 있는 비율(병합 효율). 128 B 라인 수 \(N_{line}\)도 같은 방식으로 센다.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 300" role="img" aria-label="두 경우의 병합 비교. 위: 스레드 32개가 연속한 4바이트 주소를 읽으면 주소가 섹터 네 개 128바이트로 모인다. 아래: 스레드마다 32바이트씩 떨어진 주소를 읽으면 섹터 32개 1,024바이트를 옮기고 그중 128바이트만 쓴다">
+        <text x="20" y="16" class="t t-b">(가) 연속 접근 a = 4t</text>
+        <g class="k-compute"><rect x="81" y="24" width="18" height="18" rx="3"/><rect x="101" y="24" width="18" height="18" rx="3"/><rect x="121" y="24" width="18" height="18" rx="3"/><rect x="141" y="24" width="18" height="18" rx="3"/><rect x="161" y="24" width="18" height="18" rx="3"/><rect x="181" y="24" width="18" height="18" rx="3"/><rect x="201" y="24" width="18" height="18" rx="3"/><rect x="221" y="24" width="18" height="18" rx="3"/><rect x="241" y="24" width="18" height="18" rx="3"/><rect x="261" y="24" width="18" height="18" rx="3"/><rect x="281" y="24" width="18" height="18" rx="3"/><rect x="301" y="24" width="18" height="18" rx="3"/><rect x="321" y="24" width="18" height="18" rx="3"/><rect x="341" y="24" width="18" height="18" rx="3"/><rect x="361" y="24" width="18" height="18" rx="3"/><rect x="381" y="24" width="18" height="18" rx="3"/><rect x="401" y="24" width="18" height="18" rx="3"/><rect x="421" y="24" width="18" height="18" rx="3"/><rect x="441" y="24" width="18" height="18" rx="3"/><rect x="461" y="24" width="18" height="18" rx="3"/><rect x="481" y="24" width="18" height="18" rx="3"/><rect x="501" y="24" width="18" height="18" rx="3"/><rect x="521" y="24" width="18" height="18" rx="3"/><rect x="541" y="24" width="18" height="18" rx="3"/><rect x="561" y="24" width="18" height="18" rx="3"/><rect x="581" y="24" width="18" height="18" rx="3"/><rect x="601" y="24" width="18" height="18" rx="3"/><rect x="621" y="24" width="18" height="18" rx="3"/><rect x="641" y="24" width="18" height="18" rx="3"/><rect x="661" y="24" width="18" height="18" rx="3"/><rect x="681" y="24" width="18" height="18" rx="3"/><rect x="701" y="24" width="18" height="18" rx="3"/></g>
+        <path d="M90 42L81.25 98M110 42L83.75 98M130 42L86.25 98M150 42L88.75 98M170 42L91.25 98M190 42L93.75 98M210 42L96.25 98M230 42L98.75 98M250 42L101.25 98M270 42L103.75 98M290 42L106.25 98M310 42L108.75 98M330 42L111.25 98M350 42L113.75 98M370 42L116.25 98M390 42L118.75 98M410 42L121.25 98M430 42L123.75 98M450 42L126.25 98M470 42L128.75 98M490 42L131.25 98M510 42L133.75 98M530 42L136.25 98M550 42L138.75 98M570 42L141.25 98M590 42L143.75 98M610 42L146.25 98M630 42L148.75 98M650 42L151.25 98M670 42L153.75 98M690 42L156.25 98M710 42L158.75 98" class="s-faint" style="stroke:var(--data)"/>
+        <rect x="80" y="100" width="640" height="22" class="f-surface"/>
+        <g class="kf-data"><rect x="80" y="100" width="20" height="22"/><rect x="100" y="100" width="20" height="22"/><rect x="120" y="100" width="20" height="22"/><rect x="140" y="100" width="20" height="22"/></g>
+        <path d="M100 100V122M120 100V122M140 100V122" style="stroke:var(--bg-elev);stroke-width:1.5"/>
+        <text x="168" y="116" class="t">섹터 4개 = 128 B (라인 1개) · 효율 100 %</text>
+        <text x="20" y="38" class="t-dim">스레드</text><text x="20" y="116" class="t-dim">메모리</text>
+        <text x="20" y="156" class="t t-b">(나) 스트라이드 8 원소 a = 32t</text>
+        <g class="k-compute"><rect x="81" y="164" width="18" height="18" rx="3"/><rect x="101" y="164" width="18" height="18" rx="3"/><rect x="121" y="164" width="18" height="18" rx="3"/><rect x="141" y="164" width="18" height="18" rx="3"/><rect x="161" y="164" width="18" height="18" rx="3"/><rect x="181" y="164" width="18" height="18" rx="3"/><rect x="201" y="164" width="18" height="18" rx="3"/><rect x="221" y="164" width="18" height="18" rx="3"/><rect x="241" y="164" width="18" height="18" rx="3"/><rect x="261" y="164" width="18" height="18" rx="3"/><rect x="281" y="164" width="18" height="18" rx="3"/><rect x="301" y="164" width="18" height="18" rx="3"/><rect x="321" y="164" width="18" height="18" rx="3"/><rect x="341" y="164" width="18" height="18" rx="3"/><rect x="361" y="164" width="18" height="18" rx="3"/><rect x="381" y="164" width="18" height="18" rx="3"/><rect x="401" y="164" width="18" height="18" rx="3"/><rect x="421" y="164" width="18" height="18" rx="3"/><rect x="441" y="164" width="18" height="18" rx="3"/><rect x="461" y="164" width="18" height="18" rx="3"/><rect x="481" y="164" width="18" height="18" rx="3"/><rect x="501" y="164" width="18" height="18" rx="3"/><rect x="521" y="164" width="18" height="18" rx="3"/><rect x="541" y="164" width="18" height="18" rx="3"/><rect x="561" y="164" width="18" height="18" rx="3"/><rect x="581" y="164" width="18" height="18" rx="3"/><rect x="601" y="164" width="18" height="18" rx="3"/><rect x="621" y="164" width="18" height="18" rx="3"/><rect x="641" y="164" width="18" height="18" rx="3"/><rect x="661" y="164" width="18" height="18" rx="3"/><rect x="681" y="164" width="18" height="18" rx="3"/><rect x="701" y="164" width="18" height="18" rx="3"/></g>
+        <path d="M90 182L81.25 228M110 182L101.25 228M130 182L121.25 228M150 182L141.25 228M170 182L161.25 228M190 182L181.25 228M210 182L201.25 228M230 182L221.25 228M250 182L241.25 228M270 182L261.25 228M290 182L281.25 228M310 182L301.25 228M330 182L321.25 228M350 182L341.25 228M370 182L361.25 228M390 182L381.25 228M410 182L401.25 228M430 182L421.25 228M450 182L441.25 228M470 182L461.25 228M490 182L481.25 228M510 182L501.25 228M530 182L521.25 228M550 182L541.25 228M570 182L561.25 228M590 182L581.25 228M610 182L601.25 228M630 182L621.25 228M650 182L641.25 228M670 182L661.25 228M690 182L681.25 228M710 182L701.25 228" class="s-faint" style="stroke:var(--data)"/>
+        <g class="oc-waste"><rect x="80" y="230" width="20" height="22"/><rect x="100" y="230" width="20" height="22"/><rect x="120" y="230" width="20" height="22"/><rect x="140" y="230" width="20" height="22"/><rect x="160" y="230" width="20" height="22"/><rect x="180" y="230" width="20" height="22"/><rect x="200" y="230" width="20" height="22"/><rect x="220" y="230" width="20" height="22"/><rect x="240" y="230" width="20" height="22"/><rect x="260" y="230" width="20" height="22"/><rect x="280" y="230" width="20" height="22"/><rect x="300" y="230" width="20" height="22"/><rect x="320" y="230" width="20" height="22"/><rect x="340" y="230" width="20" height="22"/><rect x="360" y="230" width="20" height="22"/><rect x="380" y="230" width="20" height="22"/><rect x="400" y="230" width="20" height="22"/><rect x="420" y="230" width="20" height="22"/><rect x="440" y="230" width="20" height="22"/><rect x="460" y="230" width="20" height="22"/><rect x="480" y="230" width="20" height="22"/><rect x="500" y="230" width="20" height="22"/><rect x="520" y="230" width="20" height="22"/><rect x="540" y="230" width="20" height="22"/><rect x="560" y="230" width="20" height="22"/><rect x="580" y="230" width="20" height="22"/><rect x="600" y="230" width="20" height="22"/><rect x="620" y="230" width="20" height="22"/><rect x="640" y="230" width="20" height="22"/><rect x="660" y="230" width="20" height="22"/><rect x="680" y="230" width="20" height="22"/><rect x="700" y="230" width="20" height="22"/></g>
+        <g class="kf-data"><rect x="80" y="230" width="2.5" height="22"/><rect x="100" y="230" width="2.5" height="22"/><rect x="120" y="230" width="2.5" height="22"/><rect x="140" y="230" width="2.5" height="22"/><rect x="160" y="230" width="2.5" height="22"/><rect x="180" y="230" width="2.5" height="22"/><rect x="200" y="230" width="2.5" height="22"/><rect x="220" y="230" width="2.5" height="22"/><rect x="240" y="230" width="2.5" height="22"/><rect x="260" y="230" width="2.5" height="22"/><rect x="280" y="230" width="2.5" height="22"/><rect x="300" y="230" width="2.5" height="22"/><rect x="320" y="230" width="2.5" height="22"/><rect x="340" y="230" width="2.5" height="22"/><rect x="360" y="230" width="2.5" height="22"/><rect x="380" y="230" width="2.5" height="22"/><rect x="400" y="230" width="2.5" height="22"/><rect x="420" y="230" width="2.5" height="22"/><rect x="440" y="230" width="2.5" height="22"/><rect x="460" y="230" width="2.5" height="22"/><rect x="480" y="230" width="2.5" height="22"/><rect x="500" y="230" width="2.5" height="22"/><rect x="520" y="230" width="2.5" height="22"/><rect x="540" y="230" width="2.5" height="22"/><rect x="560" y="230" width="2.5" height="22"/><rect x="580" y="230" width="2.5" height="22"/><rect x="600" y="230" width="2.5" height="22"/><rect x="620" y="230" width="2.5" height="22"/><rect x="640" y="230" width="2.5" height="22"/><rect x="660" y="230" width="2.5" height="22"/><rect x="680" y="230" width="2.5" height="22"/><rect x="700" y="230" width="2.5" height="22"/></g>
+        <text x="20" y="178" class="t-dim">스레드</text><text x="20" y="246" class="t-dim">메모리</text>
+        <text x="80" y="274" class="t">섹터 32개 = 1,024 B를 옮기고 128 B만 사용 · 효율 12.5 % · 라인 8개</text>
+        <text x="80" y="292" class="t-dim">진한 칸 = 쓸모 있는 4 B, 옅은 칸 = 같이 끌려온 28 B</text>
+      </svg>
+      <figcaption><b>그림 6-4.</b> 주소가 섹터로 합쳐지는 모습(메모리 축척은 두 그림이 같다). 연속한 주소는 32개 요청이 섹터 4개로 줄고, 32 B 간격이면 요청마다 섹터 하나를 통째로 옮겨 대역폭의 7/8을 버린다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-co">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>워프 주소 → 섹터·라인 트랜잭션</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="co-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>주소 패턴</span><div class="seg" id="co-p"><button data-value="seq" class="on">연속</button><button data-value="stride">스트라이드</button><button data-value="rand">무작위</button></div></div>
+          <div class="ctrl"><span>원소 크기</span><div class="seg" id="co-e"><button data-value="4" class="on">4 B</button><button data-value="8">8 B</button><button data-value="16">16 B</button></div></div>
+          <label class="ctrl"><span>스트라이드 s (원소) <output id="co-s-out"></output></span><input type="range" id="co-s" min="1" max="64" step="1" value="2"></label>
+          <label class="ctrl"><span>시작 오프셋 <output id="co-o-out"></output></span><input type="range" id="co-o" min="0" max="124" step="4" value="0"></label>
+          <button class="btn primary" id="co-play">다시 보기</button>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">32 B 섹터</span><span class="v" id="co-o-sec">—</span></div>
+        <div class="stat"><span class="k">128 B 라인</span><span class="v" id="co-o-line">—</span></div>
+        <div class="stat"><span class="k">쓸모 / 옮김</span><span class="v" id="co-o-b">—</span></div>
+        <div class="stat"><span class="k">병합 효율</span><span class="v" id="co-o-eff">—</span></div>
+        <div class="stat"><span class="k">유효 HBM 대역폭</span><span class="v" id="co-o-bw">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 연속·4 B·오프셋 0 → 섹터 4개·라인 1개·100 %. 오프셋을 4 B로 → 섹터 5개·라인 2개·80 %(정렬 어긋남). ② 스트라이드 2 → 섹터 8개·50 %, 스트라이드 8 이상 → 섹터 32개·12.5 %, 유효 대역폭 0.92 TB/s. ③ 원소 16 B 연속 → 섹터 16개지만 효율 100 %: 한 스레드가 넓게 읽는 것은 손해가 아니다.</div>
+    </div>
+    <p>병합이 깨지는 가장 흔한 원인은 데이터 배치다. 입자마다 위치·속도·질량을 한 구조체로 묶은 <b>구조체 배열</b>(AoS)에서 스레드 \(t\)가 입자 \(t\)의 질량만 읽으면 구조체 크기만큼의 스트라이드가 생긴다. 같은 필드끼리 모은 <b>배열 구조체</b>(SoA)로 바꾸면 연속 접근이 된다. 행렬의 열을 스레드에 나눠 주면 행 길이만큼의 스트라이드가 생기는데, 이것은 다음 절의 공유 메모리 전치로 푼다.</p>
+    <div class="callout fab"><strong>병합 효율이 곧 HBM 대역폭이다</strong>GX-1의 HBM 7.37 TB/s는 섹터를 꽉 채워 쓸 때의 값이다. 스트라이드 8 이상이나 무작위 4 B 접근이면 섹터 하나에 4 B만 쓰므로 유효 대역폭은 0.92 TB/s로 떨어지고, 쓸모 있는 바이트당 HBM 에너지는 8배(약 24 → 약 192 pJ/B)가 된다. 배치 1 디코드처럼 가중치를 한 번씩만 읽는 워크로드에서 병합 효율 12.5 %는 토큰/s를 8분의 1로 만든다.</div>
+    <p><b>왜 이렇게 설계하는가</b>: 스레드마다 따로 트랜잭션을 내면 태그 검사·크로스바 요청·DRAM 명령이 32배가 된다. 32 B 섹터는 DRAM 버스트(의사 채널 32비트 × 버스트 길이 8 = 32 B)와 맞춘 크기이고, 128 B 라인은 태그 하나로 섹터 넷을 관리해 태그 SRAM을 4분의 1로 줄인다. 섹터를 더 키우면 태그는 줄지만 흩어진 접근에서 버리는 바이트가 늘고, 더 줄이면 태그·요청 수가 늘어난다. 32 B / 128 B는 그 사이의 절충이다.</p>
+  </section>
+
+  <section id="bank">
+    <h2>공유 메모리 32뱅크와 뱅크 충돌</h2>
+    <p>공유 메모리는 클럭마다 워프 32개 스레드에 4 B씩 128 B를 내줘야 한다. 포트 32개짜리 SRAM은 면적이 너무 크므로, 대신 포트 하나짜리 SRAM <b>뱅크 32개</b>를 나란히 두고 4 B 워드를 번갈아 배치한다. 워드 주소 \(w\)는 뱅크 \(w \bmod 32\)에 산다. 32개 스레드가 서로 다른 뱅크를 건드리면 한 클럭에 끝나지만, 같은 뱅크의 <b>다른 워드</b>를 \(k\)개 스레드가 원하면 그 뱅크가 \(k\)번 읽어야 하므로 접근이 \(k\)클럭으로 늘어난다. 이것이 \(k\)-way <span class="term">뱅크 충돌</span><span class="en">(bank conflict)</span>이다. 같은 워드를 여러 스레드가 읽는 것은 한 번 읽어 나눠 주므로(브로드캐스트) 충돌이 아니다.</p>
+    <div class="formula">$$\text{bank}(w) = w \bmod 32, \qquad k = \max_{b}\,\bigl|\{w_t : \text{bank}(w_t) = b\}\bigr|, \qquad k_{stride} = \gcd(s, 32)$$<div class="where">여기서 \(w_t\)는 스레드 \(t\)가 읽는 4 B 워드 주소, \(k\)는 충돌 차수(한 뱅크에 몰린 서로 다른 워드 수). 스레드 \(t\)가 워드 \(s \cdot t\)를 읽으면 쓰이는 뱅크는 \(32/\gcd(s,32)\)개이고, 각 뱅크에 \(\gcd(s,32)\)개가 몰린다.</div></div>
+    <p>홀수 스트라이드는 32와 서로소이므로 충돌이 없고, 스트라이드 2는 2-way, 32는 32-way다. 대표 사례가 <b>행렬 전치</b>다. 32 × 32 float 타일을 공유 메모리에 행 우선으로 저장하고 열 하나를 스레드 32개가 읽으면, 원소 \((r, c)\)의 워드는 \(32r + c\)이므로 모두 뱅크 \(c\)에 몰려 32-way 충돌이 된다. 행 길이를 33으로 만드는 <span class="term">패딩</span><span class="en">(padding)</span> 1열을 넣으면 워드가 \(33r + c\), 뱅크가 \((r + c) \bmod 32\)로 대각선으로 퍼져 충돌이 사라진다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 220" role="img" aria-label="뱅크 32개 격자 두 개. 왼쪽 패딩 없는 32열 타일에서 열 0의 원소 0부터 5가 모두 뱅크 0에 세로로 쌓인다. 오른쪽 33열로 패딩한 타일에서는 같은 원소들이 뱅크 0, 1, 2, 3, 4, 5에 대각선으로 놓인다">
+        <text x="30" y="22" class="t t-b">(가) 행 길이 32: 열 0 읽기 → 32-way</text>
+        <text x="420" y="22" class="t t-b">(나) 행 길이 33 (패딩 1열) → 1-way</text>
+        <text x="30" y="50" class="t-dim">뱅크 0</text><text x="382" y="50" class="t-dim t-e">31</text>
+        <text x="420" y="50" class="t-dim">뱅크 0</text><text x="772" y="50" class="t-dim t-e">31</text>
+        <rect x="30" y="60" width="352" height="96" class="f-surface"/><rect x="420" y="60" width="352" height="96" class="f-surface"/>
+        <path d="M41 60V156M52 60V156M63 60V156M74 60V156M85 60V156M96 60V156M107 60V156M118 60V156M129 60V156M140 60V156M151 60V156M162 60V156M173 60V156M184 60V156M195 60V156M206 60V156M217 60V156M228 60V156M239 60V156M250 60V156M261 60V156M272 60V156M283 60V156M294 60V156M305 60V156M316 60V156M327 60V156M338 60V156M349 60V156M360 60V156M371 60V156M30 76H382M30 92H382M30 108H382M30 124H382M30 140H382" class="oc-grid"/>
+        <path d="M431 60V156M442 60V156M453 60V156M464 60V156M475 60V156M486 60V156M497 60V156M508 60V156M519 60V156M530 60V156M541 60V156M552 60V156M563 60V156M574 60V156M585 60V156M596 60V156M607 60V156M618 60V156M629 60V156M640 60V156M651 60V156M662 60V156M673 60V156M684 60V156M695 60V156M706 60V156M717 60V156M728 60V156M739 60V156M750 60V156M761 60V156M420 76H772M420 92H772M420 108H772M420 124H772M420 140H772" class="oc-grid"/>
+        <g class="oc-hit"><rect x="30" y="60" width="11" height="16"/><text x="35.5" y="72" class="t-c oc-cell">0</text><rect x="30" y="76" width="11" height="16"/><text x="35.5" y="88" class="t-c oc-cell">1</text><rect x="30" y="92" width="11" height="16"/><text x="35.5" y="104" class="t-c oc-cell">2</text><rect x="30" y="108" width="11" height="16"/><text x="35.5" y="120" class="t-c oc-cell">3</text><rect x="30" y="124" width="11" height="16"/><text x="35.5" y="136" class="t-c oc-cell">4</text><rect x="30" y="140" width="11" height="16"/><text x="35.5" y="152" class="t-c oc-cell">5</text></g>
+        <g class="oc-ok"><rect x="420" y="60" width="11" height="16"/><text x="425.5" y="72" class="t-c oc-cell">0</text><rect x="431" y="76" width="11" height="16"/><text x="436.5" y="88" class="t-c oc-cell">1</text><rect x="442" y="92" width="11" height="16"/><text x="447.5" y="104" class="t-c oc-cell">2</text><rect x="453" y="108" width="11" height="16"/><text x="458.5" y="120" class="t-c oc-cell">3</text><rect x="464" y="124" width="11" height="16"/><text x="469.5" y="136" class="t-c oc-cell">4</text><rect x="475" y="140" width="11" height="16"/><text x="480.5" y="152" class="t-c oc-cell">5</text></g>
+        <text x="30" y="178" class="t">뱅크 0 하나가 6번(타일 전체면 32번) 읽어야 한다</text>
+        <text x="420" y="178" class="t">원소마다 다른 뱅크 → 한 클럭</text>
+        <text x="30" y="200" class="t-dim">세로 = 뱅크 안의 워드 순서(메모리 행), 칸 숫자 = 행 번호 r</text>
+        <text x="420" y="200" class="t-dim">메모리 3 % 더 쓰고(33/32) 대역폭 32배</text>
+      </svg>
+      <figcaption><b>그림 6-5.</b> 전치에서 열 읽기의 뱅크 배치(행 0–5만 표시). 패딩 1열은 원소를 뱅크 방향으로 한 칸씩 밀어 대각선으로 펼친다. 패딩을 2열로 하면 \(\gcd(34, 32) = 2\)라 다시 2-way가 된다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-bk">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>공유 메모리 뱅크 충돌 (32뱅크 × 4 B)</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="bk-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>접근 패턴</span><div class="seg" id="bk-p"><button data-value="stride" class="on">스트라이드</button><button data-value="col">전치 열 읽기</button><button data-value="row">행 읽기</button><button data-value="bcast">브로드캐스트</button><button data-value="rand">무작위</button></div></div>
+          <label class="ctrl"><span>스트라이드 s (워드) <output id="bk-s-out"></output></span><input type="range" id="bk-s" min="0" max="40" step="1" value="2"></label>
+          <label class="ctrl"><span>패딩 (열) <output id="bk-pad-out"></output></span><input type="range" id="bk-pad" min="0" max="4" step="1" value="0"></label>
+          <div class="step-desc" id="bk-d"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">충돌 차수</span><span class="v" id="bk-o-k">—</span></div>
+        <div class="stat"><span class="k">걸리는 클럭</span><span class="v" id="bk-o-c">—</span></div>
+        <div class="stat"><span class="k">SM당 실효 대역폭</span><span class="v" id="bk-o-sm">—</span></div>
+        <div class="stat"><span class="k">GX-1 전체</span><span class="v" id="bk-o-bw">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 스트라이드 1 → 1-way, 2 → 2-way, 6 → 2-way, 16 → 16-way, 32 → 32-way, 33 → 1-way(홀수는 모두 1-way). ② '전치 열 읽기'에서 패딩 0 → 32-way(SM당 4 B/클럭), 패딩 1 → 1-way(128 B/클럭), 패딩 2 → 2-way, 4 → 4-way. ③ '브로드캐스트'는 32개 스레드가 같은 워드를 읽어도 1클럭이다.</div>
+    </div>
+    <p>8 B나 16 B 원소는 하드웨어가 워프를 반 워프·4분의 1 워프 단위의 단계로 나눠 처리하므로, 단계 안에서 같은 규칙으로 센다. 패딩 대신 열 인덱스를 행 번호로 XOR 하는 <b>스위즐</b><span class="en">(swizzle)</span>을 쓰면 메모리를 한 바이트도 더 쓰지 않고 같은 효과를 얻는다. 텐서 코어용 타일 복사 하드웨어는 이런 스위즐 배치를 직접 만들어 준다.</p>
+    <p><b>왜 이렇게 설계하는가</b>: \(N\)포트 SRAM 셀은 포트마다 워드라인·비트라인이 하나씩 늘어 면적이 대략 \(N^2\)로 커진다. 포트 하나짜리 뱅크 32개와 32 × 32 크로스바로 128 B/클럭을 내는 편이 훨씬 싸다. 그 대가로 접근 패턴에 따라 대역폭이 1/32까지 떨어질 수 있는데, 하드웨어는 이것을 막지 않고 소프트웨어(패딩·스위즐)와 복사 하드웨어에 맡긴다. 뱅크 수 32는 워프 크기 32, 4 B 워드는 FP32 한 개에 맞춘 것이다.</p>
+  </section>
+
+  <section id="cache">
+    <h2>캐시 구조와 LRU 적중률</h2>
+    <p>L1과 L2는 하드웨어가 관리하는 <span class="term">캐시</span>다. 주소를 세 부분으로 나눈다. 라인 안의 위치(오프셋), 어느 <b>집합</b>에 넣을지(인덱스), 그리고 집합 안에서 같은 주소인지 확인할 <b>태그</b>다. 집합마다 라인 \(W\)개(웨이)가 있으면 \(W\)-way <span class="term">집합 연관</span><span class="en">(set-associative)</span> 캐시라 부른다. \(W = 1\)이면 직접 사상, 집합이 하나면 완전 연관이다. 집합이 꽉 차면 가장 오래 쓰지 않은 라인을 내보내는 <span class="term">LRU</span><span class="en">(least recently used)</span>가 기본 정책이다.</p>
+    <div class="formula">$$S = \frac{C}{L \cdot W}, \qquad \text{offset} = \log_2 L\ \text{비트}, \quad \text{index} = \log_2 S\ \text{비트}, \quad \text{tag} = \text{나머지}$$<div class="where">여기서 \(C\)는 용량, \(L\)은 라인 크기, \(W\)는 연관도, \(S\)는 집합 수. 예: L2 슬라이스 512 KB, 16-way, 128 B 라인이면 \(S = 256\), 오프셋 7비트(섹터 2비트 + 바이트 5비트), 인덱스 8비트.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="주소 분해와 집합 연관 캐시. 위쪽 주소 막대가 태그, 집합 인덱스 8비트, 섹터 2비트, 바이트 5비트로 나뉜다. 아래쪽은 집합 256개 각각에 웨이 16개가 있고 웨이마다 태그, 유효 비트, 섹터별 유효 비트 4개, LRU 순서, 데이터 128바이트를 둔다">
+        <rect x="80" y="20" width="360" height="34" class="k-ctrl"/><rect x="440" y="20" width="150" height="34" class="k-sram"/><rect x="590" y="20" width="60" height="34" class="k-data"/><rect x="650" y="20" width="90" height="34" class="f-surface"/>
+        <text x="260" y="42" class="t t-c">태그 (나머지 상위 비트)</text><text x="515" y="42" class="t t-c">집합 인덱스 8</text><text x="620" y="42" class="t t-c">섹터 2</text><text x="695" y="42" class="t t-c">바이트 5</text>
+        <text x="72" y="42" class="t-dim t-e">주소</text>
+        <path d="M515 56V92" class="arr"/>
+        <text x="524" y="80" class="t-dim">집합 선택</text>
+        <path d="M260 56C260 120 170 120 170 140" class="arr-a"/>
+        <text x="190" y="96" class="t-dim">태그 16개 동시 비교</text>
+        <rect x="80" y="96" width="660" height="22" class="f-surface"/><text x="88" y="112" class="t-dim">집합 0 … 255 (256개)</text>
+        <rect x="80" y="126" width="660" height="110" class="f-elev"/>
+        <g class="k-sram"><rect x="92" y="138" width="150" height="88" rx="3"/><rect x="250" y="138" width="150" height="88" rx="3"/><rect x="408" y="138" width="150" height="88" rx="3"/></g>
+        <text x="600" y="186" class="t t-c">… 웨이 16개</text>
+        <g class="t t-c"><text x="167" y="156">웨이 0</text><text x="325" y="156">웨이 1</text><text x="483" y="156">웨이 2</text></g>
+        <g class="oc-mono"><text x="100" y="176">태그 · V · LRU</text><text x="258" y="176">태그 · V · LRU</text><text x="416" y="176">태그 · V · LRU</text></g>
+        <g class="kf-data"><rect x="100" y="186" width="32" height="30"/><rect x="134" y="186" width="32" height="30"/><rect x="258" y="186" width="32" height="30"/><rect x="292" y="186" width="32" height="30"/><rect x="326" y="186" width="32" height="30"/><rect x="360" y="186" width="32" height="30"/><rect x="416" y="186" width="32" height="30"/></g>
+        <g class="oc-waste"><rect x="168" y="186" width="32" height="30"/><rect x="202" y="186" width="32" height="30"/><rect x="450" y="186" width="32" height="30"/><rect x="484" y="186" width="32" height="30"/><rect x="518" y="186" width="32" height="30"/></g>
+        <text x="740" y="244" class="t-dim t-e">진한 칸 = 채워진 32 B 섹터, 옅은 칸 = 아직 비어 있는 섹터 (섹터별 유효 비트)</text>
+      </svg>
+      <figcaption><b>그림 6-6.</b> 섹터 캐시의 주소 분해와 집합 연관 구조(L2 슬라이스 512 KB, 16-way, 128 B 라인 예). 태그는 라인 단위로 하나지만 채우기는 32 B 섹터 단위라서, 흩어진 접근이 라인 전체 128 B를 끌어오지 않는다.</figcaption>
+    </figure>
+    <p>적중률을 정하는 것은 접근 패턴이다. 미스는 세 종류로 나눈다. 처음 보는 라인이라 생기는 <b>강제 미스</b>, 작업 집합이 용량보다 커서 생기는 <b>용량 미스</b>, 집합 하나에 라인이 몰려 생기는 <b>충돌 미스</b>다. 아래 시뮬레이터는 실제 집합 연관 캐시를 LRU로 구현해 32 B 단위 요청열을 흘려보낸다.</p>
+
+    <div class="sim" id="sim-ca">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>집합 연관 캐시 LRU 시뮬레이터</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="ca-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>용량 <output id="ca-c-out"></output></span><input type="range" id="ca-c" min="0" max="7" step="1" value="4"></label>
+          <div class="ctrl"><span>연관도</span><div class="seg" id="ca-w"><button data-value="1">1</button><button data-value="2">2</button><button data-value="4" class="on">4</button><button data-value="16">16</button><button data-value="0">완전</button></div></div>
+          <div class="ctrl"><span>라인 크기</span><div class="seg" id="ca-l"><button data-value="32">32 B</button><button data-value="64">64 B</button><button data-value="128" class="on">128 B</button></div></div>
+          <div class="ctrl"><span>접근 패턴</span><div class="seg" id="ca-p"><button data-value="stream">스트리밍</button><button data-value="reuse" class="on">재사용 창</button><button data-value="rand">무작위</button><button data-value="alias">두 배열</button><button data-value="mix">창+스트리밍</button></div></div>
+          <label class="ctrl"><span>작업 집합 <output id="ca-ws-out"></output></span><input type="range" id="ca-ws" min="0" max="6" step="1" value="3"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">적중률</span><span class="v" id="ca-o-h">—</span></div>
+        <div class="stat"><span class="k">집합 × 웨이</span><span class="v" id="ca-o-sw">—</span></div>
+        <div class="stat"><span class="k">요청 수</span><span class="v" id="ca-o-n">—</span></div>
+        <div class="stat"><span class="k">평균 지연 (L1 30 / L2 200)</span><span class="v" id="ca-o-amat">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① '재사용 창' 192 KB, 용량 256 KB, 4-way, 128 B → 적중률 약 96 %. 용량을 128 KB로 → 75 %(라인 안 공간 지역성만 남는 LRU 절벽). ② '두 배열'(A[k]와 1 MiB 떨어진 B[k]를 번갈아) 96 KB, 용량 128 KB → 직접 사상 0 %, 2-way 약 97 %(충돌 미스). ③ '창+스트리밍' 96 KB → 128 KB에서 75 %, 256 KB에서 약 85 %: 한 번 쓰고 버릴 스트리밍 데이터가 재사용할 데이터를 밀어낸다. 스트리밍만이면 용량과 무관하게 1 − 32/L.</div>
+    </div>
+    <p>재사용 창이 용량을 조금만 넘어도 적중률이 무너지는 것은 LRU의 성질이다. 창을 한 바퀴 도는 동안 매번 다음에 쓸 라인을 내보낸다. GPU는 수천 개 스레드가 L1을 나눠 쓰므로 스레드당 몫이 작고, 그래서 스트리밍 데이터에 "먼저 내보내기" 힌트를 주거나 L1을 거치지 않는 로드를 둔다. 쓰기는 정책 두 가지를 고른다.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>정책</th><th>동작</th><th>GPU에서 쓰는 곳과 이유</th></tr></thead>
+        <tbody>
+          <tr><td>라이트스루 (write-through)</td><td>쓰기를 곧바로 아래 계층에도 보낸다</td><td>L1: SM마다 L1이 따로 있어 일관성을 하드웨어로 맞추지 않는다. 쓰기를 L2로 바로 넘겨 L2를 일관성 지점으로 삼는다</td></tr>
+          <tr><td>라이트백 (write-back)</td><td>더티 비트를 켜 두고 내보낼 때 쓴다</td><td>L2: HBM 쓰기 대역폭·에너지를 아낀다. 섹터별 더티 비트로 부분 라인 쓰기를 처리</td></tr>
+          <tr><td>쓰기 할당 / 비할당</td><td>쓰기 미스에 라인을 채울지</td><td>스트리밍 출력은 비할당(읽어 올 필요 없음), 섹터 전체를 덮어쓰면 읽기 없이 할당</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><b>왜 이렇게 설계하는가</b>: GPU의 L1은 CPU처럼 지연을 줄이려는 캐시가 아니라 <b>대역폭 필터</b>다. 지연은 워프 전환으로 숨기므로 L1은 같은 섹터를 여러 워프가 다시 요청할 때 L2 트래픽을 줄이는 데 의미가 있다. 그래서 연관도는 높게, 일관성 하드웨어는 생략하고, 섹터 단위 채우기로 흩어진 접근의 낭비를 줄인다. CPU 캐시와의 비교는 <a href="../../soc/chapters/cache.html">SoCBook 캐시 장</a>에 있다.</p>
+  </section>
+
+  <section id="split">
+    <h2>L1과 공유 메모리의 분할</h2>
+    <p>GX-1 SM의 256 KB는 한 덩어리 SRAM이다. 커널을 띄울 때 공유 메모리 몫(0–228 KB)을 정하면 나머지가 L1 캐시가 된다. 같은 비트셀을 프로그램이 관리하느냐 하드웨어가 관리하느냐의 차이일 뿐이다. 이 선택은 두 방향으로 성능을 바꾼다. 공유 메모리를 많이 주면 블록이 많이 상주해 <span class="term">점유율</span>이 오르지만(<a href="sm.html">3장</a>), L1이 줄어 전역 메모리 재사용의 적중률이 떨어진다.</p>
+    <div class="formula">$$n_{blk} = \min\!\left(32,\ \left\lfloor \frac{2048}{T} \right\rfloor,\ \left\lfloor \frac{S_{carve}}{S_{blk}} \right\rfloor\right), \quad h = 0.9\,\min\!\left(1, \frac{256 - S_{carve}}{n_{warp} f}\right), \quad U = \min\!\left(1, \frac{n_{warp}}{4} \cdot \frac{C}{C + \bar L}\right)$$<div class="where">여기서 \(T\)는 블록당 스레드, \(S_{blk}\)는 블록당 공유 메모리(KB), \(S_{carve}\)는 공유 메모리 몫, \(f\)는 워프당 L1 작업 집합(KB), \(h\)는 L1 적중률(재사용 가능한 몫 90 % 가정), \(\bar L = 30h + 200(1-h)\) 사이클은 평균 로드 지연, \(C\)는 로드 사이의 독립 계산(8사이클 가정), \(U\)는 서브파티션 발행률(지연 숨기기 지표). 레지스터 제한은 충분하다고 가정한다.</div></div>
+
+    <div class="sim" id="sim-sp">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>256 KB를 공유 메모리와 L1로 나누기</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>공유 메모리 몫 <output id="sp-c-out"></output></span><input type="range" id="sp-c" min="0" max="9" step="1" value="9"></label>
+          <label class="ctrl"><span>블록당 공유 메모리 <output id="sp-s-out"></output></span><input type="range" id="sp-s" min="0" max="100" step="4" value="32"></label>
+          <div class="ctrl"><span>블록당 스레드</span><div class="seg" id="sp-t"><button data-value="128">128</button><button data-value="256" class="on">256</button><button data-value="512">512</button></div></div>
+          <label class="ctrl"><span>워프당 L1 작업 집합 <output id="sp-f-out"></output></span><input type="range" id="sp-f" min="0" max="16" step="0.5" value="4"></label>
+          <div class="oc-flag" id="sp-flag"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">SM당 블록</span><span class="v" id="sp-o-b">—</span></div>
+        <div class="stat"><span class="k">점유율</span><span class="v" id="sp-o-occ">—</span></div>
+        <div class="stat"><span class="k">L1 용량 · 적중률</span><span class="v" id="sp-o-h">—</span></div>
+        <div class="stat"><span class="k">평균 로드 지연</span><span class="v" id="sp-o-l">—</span></div>
+        <div class="stat"><span class="k">발행률 U</span><span class="v" id="sp-o-u">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 블록당 32 KB·256 스레드·워프당 4 KB에서 공유 메모리 228 KB → 블록 7개(점유율 87.5 %)지만 L1 28 KB로 적중률 약 11 %, U 약 59 %. ② 132 KB로 줄이면 블록 4개, 적중률 약 87 %, U 100 %. ③ 64 KB까지 줄이면 블록 2개로 워프가 모자라 U 약 58 %. 워프당 작업 집합을 0으로 두면(재사용 없음) 공유 메모리를 최대로 주는 쪽이 이긴다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가</b>: 공유 메모리와 L1을 따로 두면 커널마다 한쪽이 놀게 된다. 타일 GEMM은 공유 메모리를 다 쓰고 L1은 거의 필요 없으며, 그래프·스텐실 커널은 반대다. 한 SRAM 배열을 나눠 쓰면 같은 256 KB가 두 종류의 커널 모두에서 일한다. 비용은 태그 SRAM과 모드 전환 논리 정도다. 공유 메모리 최대치를 256 KB가 아니라 228 KB로 둔 것은 L1이 0이 되지 않게 최소 몫(텍스처·상수·스택 접근용)을 남기기 위해서다.</p>
+  </section>
+
+  <section id="energy">
+    <h2>데이터 이동 에너지는 거리에 비례한다</h2>
+    <p>칩 위 배선의 에너지는 배선 커패시턴스 \(C_w\)를 \(V_{DD}\)까지 충전하는 데서 온다. \(C_w\)는 길이에 비례하므로(약 0.2 fF/µm) 비트 하나를 1 mm 옮기는 에너지는 \(\alpha\, C_w V_{DD}^2\) 꼴로 약 0.05 pJ/bit/mm(0.75 V, 활동도 포함)다. 32비트 워드 하나를 1 mm 옮기면 1.6 pJ, FP32 FMA(0.8 pJ) 두 번어치다. 다이를 가로지르는 30 mm면 48 pJ, FP32 FMA 60번, BF16 FMA 240번이다.</p>
+    <div class="formula">$$E_{move} = e_w \cdot n_{bit} \cdot d, \qquad \frac{E_{move}}{E_{move} + r\,E_{op}} = \text{이동 몫}$$<div class="where">여기서 \(e_w \approx 0.05\) pJ/bit/mm, \(n_{bit}\)는 옮기는 비트 수, \(d\)는 거리(mm), \(r\)은 옮긴 워드 하나로 하는 연산 수(재사용), \(E_{op}\)는 연산 한 번의 에너지.</div></div>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 290" role="img" aria-label="왼쪽은 다이 위의 거리 개략도로 SM에서 가까운 L2 슬라이스까지 약 3 mm, 반대편 L2 파티션까지 약 15 mm, HBM까지 다이 가장자리와 인터포저를 지나는 경로를 보인다. 오른쪽은 동작별 32비트 에너지를 로그 막대로 비교해 INT8 곱-누산 0.05 pJ에서 HBM 100 pJ까지 약 2,000배 차이가 남을 보인다">
+        <rect x="14" y="40" width="170" height="200" rx="4" class="f-surface"/>
+        <rect x="14" y="128" width="170" height="24" class="k-sram"/>
+        <rect x="186" y="60" width="44" height="60" rx="3" class="k-dram"/><rect x="186" y="160" width="44" height="60" rx="3" class="k-dram"/>
+        <rect x="30" y="56" width="22" height="22" class="kf-compute"/>
+        <text x="41" y="96" class="t-dim t-c">SM</text>
+        <path d="M44 78L60 128" class="arr-a"/>
+        <path d="M52 66C120 70 150 110 160 140" class="arr-warn"/>
+        <path d="M52 62L200 84" class="arr-bad"/>
+        <text x="66" y="118" class="t t-b">~3 mm</text>
+        <text x="100" y="182" class="t t-c">L2 · 다이 가운데</text>
+        <text x="140" y="104" class="t-warn">~15 mm</text>
+        <text x="100" y="34" class="t-bad t-c">HBM: PHY + 인터포저</text>
+        <text x="100" y="262" class="t-dim t-c">다이 26 × 30 mm</text>
+        <text x="462" y="24" class="t-dim t-e">32비트 기준 (로그 축)</text>
+        <text x="462" y="53" class="t t-e">INT8 곱-누산</text><rect x="470" y="40" width="24.9" height="18" rx="3" class="kf-tensor"/><text x="500.9" y="53" class="oc-mono">0.05 pJ</text>
+        <text x="462" y="80" class="t t-e">BF16 FMA</text><rect x="470" y="67" width="62.5" height="18" rx="3" class="kf-tensor"/><text x="538.5" y="80" class="oc-mono">0.2 pJ</text>
+        <text x="462" y="107" class="t t-e">레지스터 32비트</text><rect x="470" y="94" width="87.4" height="18" rx="3" class="kf-sram"/><text x="563.4" y="107" class="oc-mono">0.5 pJ</text>
+        <text x="462" y="134" class="t t-e">FP32 FMA</text><rect x="470" y="121" width="100.1" height="18" rx="3" class="kf-compute"/><text x="576.1" y="134" class="oc-mono">0.8 pJ</text>
+        <text x="462" y="161" class="t t-e">L1·공유 32비트</text><rect x="470" y="148" width="117.2" height="18" rx="3" class="kf-sram"/><text x="593.2" y="161" class="oc-mono">1.5 pJ</text>
+        <text x="462" y="188" class="t t-e">배선 1 mm × 32비트</text><rect x="470" y="175" width="118.9" height="18" rx="3" class="kf-data"/><text x="594.9" y="188" class="oc-mono">1.6 pJ</text>
+        <text x="462" y="215" class="t t-e">L2 32비트</text><rect x="470" y="202" width="154.8" height="18" rx="3" class="kf-sram"/><text x="630.8" y="215" class="oc-mono">6 pJ</text>
+        <text x="462" y="242" class="t t-e">배선 30 mm × 32비트</text><rect x="470" y="229" width="211.3" height="18" rx="3" class="kf-data"/><text x="687.3" y="242" class="oc-mono">48 pJ</text>
+        <text x="462" y="269" class="t t-e">HBM 32비트</text><rect x="470" y="256" width="231.2" height="18" rx="3" class="kf-dram"/><text x="707.2" y="269" class="oc-mono">100 pJ</text>
+      </svg>
+      <figcaption><b>그림 6-7.</b> 거리와 에너지(에너지 표의 교육용 대표값). 연산 한 번은 0.05–0.8 pJ이고, 데이터를 다이 반대편 L2로 보내거나 HBM에서 가져오면 수십–100 pJ이 든다. "연산 ≪ SRAM ≪ DRAM" 순서와 수백 배 격차는 공정이 바뀌어도 유지된다.</figcaption>
+    </figure>
+
+    <div class="sim" id="sim-en">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>데이터 이동 에너지 대 연산 에너지</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="en-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>거리 d <output id="en-d-out"></output></span><input type="range" id="en-d" min="0" max="30" step="0.5" value="10"></label>
+          <div class="ctrl"><span>워드 크기</span><div class="seg" id="en-b"><button data-value="16">16비트</button><button data-value="32" class="on">32비트</button><button data-value="64">64비트</button></div></div>
+          <div class="ctrl"><span>연산</span><div class="seg" id="en-op"><button data-value="fma32" class="on">FP32 FMA</button><button data-value="bf16">BF16 FMA</button><button data-value="fp8">FP8 FMA</button></div></div>
+          <label class="ctrl"><span>워드당 연산 수 r <output id="en-r-out"></output></span><input type="range" id="en-r" min="0" max="8" step="1" value="0"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">이동 에너지</span><span class="v" id="en-o-e">—</span></div>
+        <div class="stat"><span class="k">연산 1번 대비</span><span class="v" id="en-o-x">—</span></div>
+        <div class="stat"><span class="k">총에너지 중 이동 몫</span><span class="v" id="en-o-f">—</span></div>
+        <div class="stat"><span class="k">GX-1 피크에서 전력</span><span class="v" id="en-o-p">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 30 mm·32비트·FP32 FMA → 48 pJ, 60배. 1 mm로 → 1.6 pJ, 2배. ② BF16·16비트·10 mm·r 64 → 이동 8 pJ, 이동 몫 약 38 %, BF16 피크 전력 약 153 W(연산만이면 약 94 W). ③ r를 1로 → 이동 몫 약 98 %, 전력 약 3.9 kW: 재사용 없는 장거리 이동으로는 피크를 낼 수 없다.</div>
+    </div>
+    <div class="callout fab"><strong>최대 대역폭에서 메모리 계층의 전력</strong>BF16 텐서 피크의 연산 에너지는 \(943.7\times10^{12}/2\) FMA/s × 0.2 pJ ≈ 94 W다. 같은 순간 HBM을 7.37 TB/s로 돌리면 24 pJ/B × 7.37 TB/s ≈ 177 W, L2 13.1 TB/s × 1.5 pJ/B ≈ 20 W, 공유 메모리 29.5 TB/s × 0.375 pJ/B ≈ 11 W, 레지스터 354 TB/s × 0.125 pJ/B ≈ 44 W다. 텐서 코어 자체보다 데이터를 나르는 쪽이 전력을 더 쓴다. 로직 다이 동적 전력 약 640 W 가운데 상당 부분이 크로스바·배선·SRAM 접근이다(<a href="power.html">12장</a>).</div>
+    <p><b>왜 이렇게 설계하는가</b>: 에너지가 거리에 비례하므로 칩 배치는 "자주 쓰는 데이터를 가깝게"가 원칙이다. 레지스터 파일을 연산 레인 바로 옆에 서브파티션마다 쪼개 두고, 공유 메모리를 SM 안에 두며, L2를 슬라이스로 나눠 다이 곳곳에 흩고, HBM PHY를 다이 가장자리에 붙이는 배치가 모두 여기서 나온다. 텐서 코어가 행렬 한 조각을 레지스터에 올려 여러 번 쓰는 것(<a href="tensor.html">5장</a>)도 같은 이유다.</p>
+  </section>
+
+  <section id="async">
+    <h2>비동기 복사와 타일 복사 하드웨어</h2>
+    <p>타일 GEMM의 기본 순서는 "다음 타일을 공유 메모리로 복사 → 동기화 → 계산"이다. 예전 방식(동기 복사)에서는 스레드가 전역 메모리를 레지스터로 로드하고, 레지스터에서 공유 메모리로 스토어한다. 데이터가 레지스터를 거치므로 레지스터를 차지하고, 로드가 돌아올 때까지(L2 약 200사이클, HBM 약 800사이클) 스레드가 기다리며, 복사 명령이 발행 슬롯을 먹는다.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 800 250" role="img" aria-label="세 가지 복사 경로. 동기 복사는 L2에서 L1, 레지스터를 거쳐 공유 메모리로 간다. 비동기 복사는 레지스터를 거치지 않고 L2에서 곧바로 공유 메모리에 쓴다. 타일 복사 엔진은 스레드 하나가 텐서 기술자를 넘기면 엔진이 주소를 만들어 타일 전체를 공유 메모리에 쓰고 배리어로 완료를 알린다">
+        <g class="t t-b"><text x="14" y="40">(가) 동기 복사</text><text x="14" y="120">(나) 비동기 복사</text><text x="14" y="200">(다) 타일 복사 엔진</text></g>
+        <g class="k-sram"><rect x="150" y="18" width="90" height="36" rx="4"/><rect x="150" y="98" width="90" height="36" rx="4"/><rect x="150" y="178" width="90" height="36" rx="4"/></g>
+        <g class="t t-c"><text x="195" y="41">L2</text><text x="195" y="121">L2</text><text x="195" y="201">L2</text></g>
+        <rect x="290" y="18" width="90" height="36" rx="4" class="k-sram"/><text x="335" y="41" class="t t-c">L1</text>
+        <rect x="430" y="18" width="100" height="36" rx="4" class="k-ctrl"/><text x="480" y="41" class="t t-c">레지스터</text>
+        <g class="k-sram"><rect x="580" y="18" width="120" height="36" rx="4"/><rect x="580" y="98" width="120" height="36" rx="4"/><rect x="580" y="178" width="120" height="36" rx="4"/></g>
+        <g class="t t-c"><text x="640" y="41">공유 메모리</text><text x="640" y="121">공유 메모리</text><text x="640" y="201">공유 메모리</text></g>
+        <path d="M240 36H286M380 36H426M530 36H576" class="arr"/>
+        <path d="M240 116H576" class="arr-a"/>
+        <text x="408" y="110" class="t-dim t-c">레지스터 우회, 스레드는 기다리지 않고 계산</text>
+        <rect x="300" y="160" width="140" height="36" rx="4" class="k-data"/><text x="370" y="183" class="t t-c">복사 엔진</text>
+        <path d="M240 196H296M440 196H576" class="arr-a"/>
+        <path d="M370 240V200" class="arr"/>
+        <text x="380" y="236" class="t-dim">스레드 1개가 타일 기술자(주소·모양·스위즐)를 넘김</text>
+        <path d="M700 196H760V150" class="arr-ok"/><text x="766" y="144" class="t-ok t-e">배리어</text>
+        <text x="610" y="74" class="t-dim t-c">명령: 로드 + 스토어 + 주소 계산</text>
+      </svg>
+      <figcaption><b>그림 6-8.</b> 타일을 공유 메모리로 옮기는 세 가지 경로. (나) 비동기 복사는 레지스터를 거치지 않고 복사를 걸어 둔 채 계산을 이어 간다. (다) 타일 복사 엔진(TMA류)은 다차원 타일 주소 생성까지 하드웨어가 맡아 스레드 발행 슬롯을 거의 쓰지 않는다.</figcaption>
+    </figure>
+    <p>비동기 복사가 있으면 <span class="term">더블 버퍼링</span><span class="en">(double buffering)</span>이 된다. 공유 메모리에 타일 버퍼를 둘(또는 여럿, 다단 파이프라인) 두고, 타일 \(i\)를 계산하는 동안 타일 \(i+1\)을 다른 버퍼로 가져온다. 정상 상태의 타일당 시간은 계산과 전송 중 긴 쪽이 된다.</p>
+    <div class="formula">$$T_{sync} \approx N\,(O + L + X + T_c), \qquad T_{s} \approx (O + L + X) + (N-1)\max\!\left(T_c,\ X,\ \frac{O + L + X + T_c}{s}\right) + T_c, \qquad X = \frac{B_{tile}}{BW_{SM}}$$<div class="where">여기서 \(N\)은 타일 수, \(O\)는 복사 명령 발행 시간, \(L\)은 지연(L2 200 / HBM 800사이클), \(X\)는 전송 시간, \(T_c\)는 타일 계산 시간, \(BW_{SM}\)은 SM 하나의 몫(L2 13.1 TB/s ÷ 144 ≈ 57 B/클럭, HBM 7.37 TB/s ÷ 144 = 32 B/클럭). \(s\)는 버퍼 단 수다. 세 번째 항은 버퍼 \(s\)개가 한 타일의 "복사 → 계산" 왕복을 덮을 수 있는지를 뜻하며, \(s = 1\)이면 동기 복사와 같아진다. 단이 충분하면 타일 간격은 \(\max(T_c, X)\)다.</div></div>
+
+    <div class="sim" id="sim-as">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>복사와 계산 겹치기: 더블 버퍼링 타임라인</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="as-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>복사 방식</span><div class="seg" id="as-m"><button data-value="sync">동기</button><button data-value="async" class="on">비동기</button><button data-value="tma">복사 엔진</button></div></div>
+          <div class="ctrl"><span>버퍼 단 수</span><div class="seg" id="as-st"><button data-value="1">1</button><button data-value="2" class="on">2</button><button data-value="3">3</button><button data-value="4">4</button></div></div>
+          <div class="ctrl"><span>원천</span><div class="seg" id="as-src"><button data-value="l2" class="on">L2 (57 B/클럭)</button><button data-value="hbm">HBM (32 B/클럭)</button></div></div>
+          <label class="ctrl"><span>타일당 계산 \(T_c\) <output id="as-tc-out"></output></span><input type="range" id="as-tc" min="256" max="4096" step="64" value="1024"></label>
+          <label class="ctrl"><span>타일 크기 <output id="as-b-out"></output></span><input type="range" id="as-b" min="8" max="96" step="8" value="48"></label>
+          <div class="oc-flag" id="as-flag"></div>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">타일 12개 총시간</span><span class="v" id="as-o-t">—</span></div>
+        <div class="stat"><span class="k">텐서 코어 활용률</span><span class="v" id="as-o-u">—</span></div>
+        <div class="stat"><span class="k">전송 X · 지연 L</span><span class="v" id="as-o-x">—</span></div>
+        <div class="stat"><span class="k">필요 공유 메모리</span><span class="v" id="as-o-s">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본값(48 KB 타일, \(T_c\) 1,024, L2)에서 동기 → 활용률 약 47 %, 비동기 2단 → 약 89 %, 복사 엔진 4단 → 약 92 %(나머지는 채움 시간). ② 원천을 HBM으로 → X 1,536 > \(T_c\)라 단을 늘려도 약 60 %(타일이 많아지면 \(T_c/X\) = 67 %로 다가간다): 대역폭 제한이다. ③ 4단에서 타일을 64 KB로 키우면 256 KB가 필요해 공유 메모리 228 KB를 넘는다.</div>
+    </div>
+    <p><b>왜 이렇게 설계하는가</b>: 지연을 숨기는 방법은 둘이다. 워프를 많이 띄우거나(점유율), 워프 하나가 여러 요청을 미리 걸어 두거나(메모리 수준 병렬성). 큰 타일 GEMM은 레지스터와 공유 메모리를 많이 써 점유율이 낮으므로 두 번째 방법이 필요하다. 비동기 복사와 복사 엔진은 작은 면적(주소 생성기·배리어 카운터)으로 레지스터 대역폭과 발행 슬롯을 텐서 코어에 돌려준다. 대가는 공유 메모리 용량이다. 단 수 × 타일 크기가 228 KB에 들어가야 하므로 공유 메모리를 키우는 것이 곧 파이프라인을 깊게 하는 것이다.</p>
+  </section>
+
+  <section id="knobs">
+    <h2>손잡이와 결과</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>손잡이 (조건)</th><th>직접 효과</th><th>결과</th></tr></thead>
+        <tbody>
+          <tr><td>워프 접근 스트라이드 1 → 8 원소 (4 B)</td><td>섹터 4 → 32개</td><td class="oc-up">유효 HBM 대역폭 7.37 → 0.92 TB/s</td></tr>
+          <tr><td>시작 주소 4 B 어긋남</td><td>섹터 4 → 5개, 라인 1 → 2개</td><td class="oc-up">병합 효율 100 → 80 %</td></tr>
+          <tr><td>공유 메모리 전치 타일에 패딩 1열</td><td>32-way → 1-way 충돌</td><td class="oc-dn">SM당 4 → 128 B/클럭, 메모리 +3 %</td></tr>
+          <tr><td>캐시 용량이 작업 집합보다 작아짐 (LRU)</td><td>재사용 라인이 매번 쫓겨남</td><td class="oc-up">적중률 약 96 → 75 % (공간 지역성만)</td></tr>
+          <tr><td>연관도 1 → 2 (같은 집합에 몰리는 두 배열)</td><td>충돌 미스 제거</td><td class="oc-dn">적중률 0 → 약 97 %</td></tr>
+          <tr><td>공유 메모리 몫 228 → 132 KB (블록당 32 KB)</td><td>점유율 87.5 → 50 %, L1 28 → 124 KB</td><td class="oc-dn">L1 적중 약 11 → 87 %, 발행률 59 → 100 %</td></tr>
+          <tr><td>32비트 이동 거리 1 → 30 mm</td><td>1.6 → 48 pJ</td><td class="oc-up">FP32 FMA의 2 → 60배</td></tr>
+          <tr><td>동기 복사 → 비동기 2단</td><td>전송이 계산 뒤에 숨음</td><td class="oc-dn">텐서 활용률 약 47 → 89 %, 공유 메모리 2배 필요</td></tr>
+          <tr><td>공정 5·4 → 2 nm급 (64 MB L2)</td><td>비트셀 0.021 → 0.0175 µm²</td><td class="oc-up">면적 0.83배만 축소 (로직은 약 1.7배 조밀)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="keypoints" id="summary">
+    <h2>핵심 정리</h2>
+    <ol>
+      <li>온칩 메모리는 6T SRAM이다. 4 nm급 고밀도 비트셀 약 0.021 µm², 배열 효율 약 0.6과 ECC·태그를 넣으면 64 MB L2가 약 22 mm²(SM 약 7개 면적)다. 비트셀 축소는 7 nm급 이후 크게 둔화해 SRAM의 면적 비중은 세대마다 커진다.</li>
+      <li>GX-1의 계층은 레지스터 36 MB·354 TB/s·0.5 pJ → L1·공유 36 MB·29.5 TB/s·1.5 pJ → L2 64 MB·13.1 TB/s·6 pJ → HBM 144 GB·7.37 TB/s·100 pJ(32비트당)다. 아래로 갈수록 크고, 느리고, 비싸다.</li>
+      <li>워프의 주소 32개는 32 B 섹터로 병합된다. 연속 4 B 접근은 섹터 4개(100 %), 스트라이드 8 이상이나 무작위는 섹터 32개(12.5 %)다. 병합 효율이 곧 유효 HBM 대역폭이다.</li>
+      <li>공유 메모리는 4 B 워드를 32뱅크에 번갈아 둔다. 스트라이드 \(s\)의 충돌 차수는 \(\gcd(s, 32)\)이며, 전치 타일에 패딩 1열을 넣으면 32-way 충돌이 1-way가 된다. 다포트 SRAM 대신 뱅크와 크로스바를 쓴 대가다.</li>
+      <li>집합 연관 캐시의 LRU 적중률은 작업 집합이 용량을 넘는 순간 절벽처럼 떨어지고, 같은 집합에 몰리는 접근은 연관도로, 스트리밍 오염은 캐시 우회·축출 힌트로 막는다. GPU의 L1은 지연보다 대역폭을 거르는 캐시다.</li>
+      <li>L1과 공유 메모리는 한 SRAM 256 KB를 나눠 쓴다. 공유 메모리를 늘리면 점유율이 오르지만 L1 적중률이 떨어지므로 최적 분할은 커널마다 다르다.</li>
+      <li>데이터 이동 에너지는 약 0.05 pJ/bit/mm로 거리에 비례한다. 32비트 1 mm가 FP32 FMA 두 번, 30 mm가 60번이다. 최대 대역폭에서 HBM 약 177 W는 BF16 연산 약 94 W보다 크다.</li>
+      <li>비동기 복사와 타일 복사 엔진은 레지스터를 거치지 않고 복사를 걸어 둔 채 계산하게 해, 더블 버퍼링으로 지연과 전송을 계산 뒤에 숨긴다. 대신 단 수 × 타일 크기만큼 공유 메모리가 필요하다.</li>
+    </ol>
+  </section>
+
+  <section class="quiz-sec" id="quiz">
+    <h2>확인 퀴즈</h2>
+    <div class="quiz">
+      <div class="quiz-q"><p>1. 워프 32개 스레드가 4 B float를 스트라이드 2 원소로 읽는다(시작 주소는 128 B 정렬). 필요한 32 B 섹터 수와 병합 효율은?</p><div class="opts">
+        <button class="opt">섹터 4개, 100 %</button><button class="opt" data-correct>섹터 8개, 50 %</button><button class="opt">섹터 16개, 25 %</button><button class="opt">섹터 32개, 12.5 %</button>
+      </div><div class="quiz-exp">주소가 0, 8, 16, …, 248 B로 256 B 구간에 걸치므로 섹터 8개(256 B)를 옮기고 그중 128 B만 쓴다. 효율 50 %, 라인은 128 B 2개다.</div></div>
+      <div class="quiz-q"><p>2. 32 × 32 float 타일의 열을 읽을 때, 행 길이를 34(패딩 2열)로 만들면 충돌 차수는?</p><div class="opts">
+        <button class="opt">1-way</button><button class="opt">32-way</button><button class="opt" data-correct>2-way</button><button class="opt">16-way</button>
+      </div><div class="quiz-exp">원소 (r, c)의 워드는 34r + c이고 뱅크는 (34r + c) mod 32 = (2r + c) mod 32다. \(\gcd(34, 32) = 2\)이므로 뱅크 16개만 쓰여 2-way 충돌이 된다. 패딩은 홀수 열(행 길이가 32와 서로소)이어야 한다.</div></div>
+      <div class="quiz-q"><p>3. 64 MB의 데이터 비트를 0.021 µm² 비트셀로만 깔면(주변 회로·ECC 없이) 면적은 약 얼마인가?</p><div class="opts">
+        <button class="opt" data-correct>약 11 mm²</button><button class="opt">약 1.1 mm²</button><button class="opt">약 110 mm²</button><button class="opt">약 22 mm²</button>
+      </div><div class="quiz-exp">\(64 \times 2^{20} \times 8 \approx 5.37\times10^8\)비트 × 0.021 µm² ≈ 1.13 × 10⁷ µm² ≈ 11.3 mm². 배열 효율 0.6과 ECC·태그를 넣으면 약 22 mm²가 된다.</div></div>
+      <div class="quiz-q"><p>4. 최근 공정 세대에서 SRAM 비트셀 면적이 로직 밀도보다 훨씬 느리게 줄어드는 이유로 가장 적절한 것은?</p><div class="opts">
+        <button class="opt">SRAM은 커패시터에 전하를 저장하므로 커패시터를 줄일 수 없다</button><button class="opt">SRAM은 리프레시 회로가 필요해 주변 회로가 커진다</button><button class="opt">SRAM은 EUV 노광을 쓸 수 없다</button><button class="opt" data-correct>최소 크기 트랜지스터 6개로 된 셀이 게이트·금속 피치 한계에 묶여 있고, 문턱 전압 산포 때문에 더 줄이면 최소 동작 전압이 오른다</button>
+      </div><div class="quiz-exp">6T 셀은 이미 최소 트랜지스터와 최소 피치로 그려져 로직처럼 셀 높이·배선 규칙을 바꿔 얻는 이득이 적다. 작은 트랜지스터의 \(V_{th}\) 산포는 셀 안정성을 해쳐 \(V_{min}\)을 올린다. 커패시터와 리프레시는 DRAM의 이야기다.</div></div>
+      <div class="quiz-q"><p>5. 128 KB, 4-way, 128 B 라인 LRU 캐시에 256 KB 재사용 창을 32 B 단위로 반복해서 순서대로 읽는다. 정상 상태 적중률은?</p><div class="opts">
+        <button class="opt">약 50 %</button><button class="opt">약 100 %</button><button class="opt" data-correct>약 75 %</button><button class="opt">0 %</button>
+      </div><div class="quiz-exp">창이 용량보다 크면 LRU는 다음에 쓸 라인을 매번 먼저 내보낸다. 남는 것은 라인 안의 공간 지역성뿐이라 128 B 라인에서 첫 32 B는 미스, 나머지 셋은 적중해 75 %다.</div></div>
+      <div class="quiz-q"><p>6. 32비트 워드 하나를 다이 반대편까지 30 mm 옮기는 에너지(0.05 pJ/bit/mm)는 FP32 FMA(0.8 pJ) 몇 번에 해당하는가?</p><div class="opts">
+        <button class="opt">약 2번</button><button class="opt">약 6번</button><button class="opt">약 600번</button><button class="opt" data-correct>약 60번</button>
+      </div><div class="quiz-exp">0.05 × 32 × 30 = 48 pJ, 48 / 0.8 = 60번이다. BF16 FMA(0.2 pJ)로는 240번이다. 그래서 자주 쓰는 데이터는 연산 유닛 가까이에 둔다.</div></div>
+      <div class="quiz-q"><p>7. 비동기 복사 3단 버퍼에서 타일당 계산 1,024사이클, 전송 864사이클, 지연 200사이클, 복사 발행 48사이클이다. 정상 상태에서 타일 하나에 걸리는 시간은?</p><div class="opts">
+        <button class="opt" data-correct>약 1,024사이클 (계산이 지배)</button><button class="opt">약 2,088사이클 (모두 더함)</button><button class="opt">약 864사이클 (전송이 지배)</button><button class="opt">약 1,224사이클 (계산 + 지연)</button>
+      </div><div class="quiz-exp">타일 간격은 \(\max(T_c, X, (O+L+X+T_c)/s)\) = max(1,024, 864, 2,136/3 ≈ 712) = 1,024다. 복사 한 번(48 + 200 + 864 = 1,112)이 앞선 타일들의 계산 동안 끝나 텐서 코어가 쉬지 않는다. 2단이면 세 번째 항이 1,068로 커져 조금 느려지고, 동기 복사라면 모두 더해 약 2,160사이클이 된다.</div></div>
+      <div class="quiz-q"><p>8. 블록당 스레드 256개, 블록당 공유 메모리 32 KB인 커널을 공유 메모리 몫 228 KB로 띄우면 SM당 블록 수와 그것을 정한 한계는?</p><div class="opts">
+        <button class="opt">8개, 스레드 한계</button><button class="opt" data-correct>7개, 공유 메모리 한계</button><button class="opt">32개, 블록 수 한계</button><button class="opt">4개, L1 용량 한계</button>
+      </div><div class="quiz-exp">스레드 한계는 2048 / 256 = 8, 공유 메모리 한계는 ⌊228 / 32⌋ = 7이므로 7개(워프 56개, 점유율 87.5 %)다. 이때 L1은 256 − 228 = 28 KB만 남는다.</div></div>
+    </div>
+  </section>
+</main>
+<script>
+"use strict";
+/* model:gx */
+var GX = {
+  sm: 144, clk: 1.6e9, subp: 4, lanes: 32, dieMm2: 780, smMm2: 3.2, mtrPerMm2: 118,
+  rfMB: 36, l1MB: 36, l2MB: 64, hbmGB: 144,
+  l2BW: 128 * 64 * 1.6e9, smemBW: 144 * 128 * 1.6e9, hbmBW: 6 * 1024 * 9.6e9 / 8,
+  latL1: 30, latL2: 200, latHBM: 800,
+  e: { rf: 0.5, l1: 1.5, l2: 6, hbmBit: 3, wire: 0.05, fma32: 0.8, bf16: 0.2, fp8: 0.1, int8: 0.05 },
+};
+/* /model:gx */
+
+/* model:sram */
+// 공정 세대별 고밀도 6T 비트셀 면적(µm², 일반적 경향값)과 28 nm급 대비 로직 밀도 배수(약)
+var SRAM_NODES = [
+  { n: "28", cell: 0.120, logic: 1 },
+  { n: "16", cell: 0.074, logic: 2.0 },
+  { n: "10", cell: 0.042, logic: 3.7 },
+  { n: "7", cell: 0.027, logic: 6.3 },
+  { n: "5·4", cell: 0.021, logic: 9.0 },
+  { n: "3", cell: 0.020, logic: 13 },
+  { n: "2", cell: 0.0175, logic: 15 },
+];
+function sramArea(o) {
+  // o: {mb, cell(µm²), eff(배열 효율 0–1), ecc, tags}
+  var bits = o.mb * 1048576 * 8;
+  var raw = bits * (o.ecc ? 1.125 : 1) * (o.tags ? 1.03 : 1);
+  var cellMm2 = (raw * o.cell) / 1e6;
+  var eff = Math.max(0.05, Math.min(1, o.eff));
+  var macroMm2 = cellMm2 / eff;
+  return {
+    bits: bits, rawBits: raw, cellMm2: cellMm2, macroMm2: macroMm2,
+    mbitPerMm2: (bits / 1048576) / macroMm2,          // 사용자 데이터 Mibit/mm²
+    dieFrac: macroMm2 / GX.dieMm2, smEquiv: macroMm2 / GX.smMm2,
+  };
+}
+/* /model:sram */
+
+/* model:hier */
+function hierRows() {
+  var rfBW = GX.sm * GX.subp * GX.lanes * 3 * 4 * GX.clk;   // 피연산자 3개 × 4 B
+  var rows = [
+    { k: "rf", name: "레지스터 파일", cap: GX.rfMB * 1048576, bw: rfBW, lat: 1, pjBit: GX.e.rf / 32 },
+    { k: "l1", name: "L1·공유 메모리", cap: GX.l1MB * 1048576, bw: GX.smemBW, lat: GX.latL1, pjBit: GX.e.l1 / 32 },
+    { k: "l2", name: "L2", cap: GX.l2MB * 1048576, bw: GX.l2BW, lat: GX.latL2, pjBit: GX.e.l2 / 32 },
+    { k: "hbm", name: "HBM", cap: GX.hbmGB * 1e9, bw: GX.hbmBW, lat: GX.latHBM, pjBit: GX.e.hbmBit },
+  ];
+  rows.forEach(function (r) { r.latNs = r.lat / GX.clk * 1e9; r.watt = r.bw * 8 * r.pjBit * 1e-12; });
+  return rows;
+}
+/* /model:hier */
+
+/* model:coalesce */
+function mulberry(seed) { var a = seed >>> 0; return function () { a = (a + 0x6d2b79f5) | 0; var t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function warpAddrs(o) {
+  // o: {pattern:'seq'|'stride'|'rand', elem(B), stride(원소), offset(B), seed}
+  var a = [], r = mulberry(o.seed || 1), base = 4096;
+  for (var t = 0; t < 32; t++) {
+    if (o.pattern === "rand") a.push(base + Math.floor(r() * 65536) * o.elem);
+    else if (o.pattern === "stride") a.push(base + o.offset + t * Math.max(1, o.stride) * o.elem);
+    else a.push(base + o.offset + t * o.elem);
+  }
+  return a;
+}
+function coalesce(addrs, elem) {
+  var sec = new Set(), line = new Set(), bytes = new Set();
+  addrs.forEach(function (a) {
+    for (var b = a; b < a + elem; b += 4) bytes.add(b >> 2);   // 4 B 단위 고유 바이트
+    for (var s = Math.floor(a / 32); s <= Math.floor((a + elem - 1) / 32); s++) sec.add(s);
+    for (var l = Math.floor(a / 128); l <= Math.floor((a + elem - 1) / 128); l++) line.add(l);
+  });
+  var useful = bytes.size * 4, moved = sec.size * 32;
+  return { sectors: Array.from(sec).sort(function (x, y) { return x - y; }), lines: Array.from(line).sort(function (x, y) { return x - y; }),
+    nSec: sec.size, nLine: line.size, useful: useful, moved: moved, eff: useful / moved, effBW: GX.hbmBW * useful / moved };
+}
+/* /model:coalesce */
+
+/* model:bank */
+function gcd(a, b) { a = Math.abs(a); b = Math.abs(b); while (b) { var t = a % b; a = b; b = t; } return a; }
+function bankWords(o) {
+  // o: {pattern:'stride'|'col'|'row'|'bcast'|'rand', stride, pad, seed}; 4 B 워드 주소 32개
+  var w = [], r = mulberry(o.seed || 7), W = 32 + (o.pad || 0);
+  for (var t = 0; t < 32; t++) {
+    if (o.pattern === "col") w.push(t * W + 5);          // 전치: 열 5를 위에서 아래로 읽기
+    else if (o.pattern === "row") w.push(5 * W + t);     // 행 5를 읽기
+    else if (o.pattern === "bcast") w.push(40);
+    else if (o.pattern === "rand") w.push(Math.floor(r() * 2048));
+    else w.push(t * Math.max(0, o.stride));
+  }
+  return w;
+}
+function bankConflict(words) {
+  var banks = []; for (var b = 0; b < 32; b++) banks.push([]);
+  words.forEach(function (x, t) { banks[x % 32].push({ t: t, w: x }); });
+  var degree = 1;
+  banks.forEach(function (list) { var u = new Set(list.map(function (e) { return e.w; })); degree = Math.max(degree, u.size); });
+  return { banks: banks, degree: degree, cycles: degree, eff: 1 / degree, bw: GX.smemBW / degree };
+}
+/* /model:bank */
+
+/* model:cache */
+function cacheTrace(kind, n, wsBytes, seed) {
+  var r = mulberry(seed || 3), out = new Array(n), ws = Math.max(32, wsBytes), lines = Math.max(1, Math.floor(ws / 32));
+  for (var i = 0; i < n; i++) {
+    if (kind === "stream") out[i] = i * 32;
+    else if (kind === "reuse") out[i] = (i * 32) % ws;
+    else if (kind === "rand") out[i] = Math.floor(r() * lines) * 32;
+    else if (kind === "alias") out[i] = (((i >> 1) * 32) % Math.max(32, Math.floor(ws / 64) * 32)) + (i & 1 ? 1048576 : 0);  // 두 배열 A[k], B[k] (1 MiB 간격)
+    else out[i] = i % 2 ? (1 << 30) + (i >> 1) * 32 : ((i >> 1) * 32) % ws;  // mix: 재사용 창 + 스트리밍 번갈아
+  }
+  return out;
+}
+function cacheSim(o) {
+  // o: {capKB, ways(0=완전 연관), line(B), trace[]}
+  var nLines = Math.max(1, Math.floor(o.capKB * 1024 / o.line));
+  var ways = o.ways > 0 ? Math.min(o.ways, nLines) : nLines;
+  var sets = Math.max(1, Math.floor(nLines / ways)), S = [];
+  for (var s = 0; s < sets; s++) S.push(new Map());
+  var hit = 0, tr = o.trace;
+  for (var i = 0; i < tr.length; i++) {
+    var ln = Math.floor(tr[i] / o.line), set = S[ln % sets], tag = Math.floor(ln / sets);
+    if (set.has(tag)) { hit++; set.delete(tag); set.set(tag, 1); }
+    else { if (set.size >= ways) set.delete(set.keys().next().value); set.set(tag, 1); }
+  }
+  return { hits: hit, misses: tr.length - hit, rate: tr.length ? hit / tr.length : 0, sets: sets, ways: ways };
+}
+/* /model:cache */
+
+/* model:energy */
+function moveEnergy(o) {
+  // o: {bits, d(mm), reuse(데이터 한 워드당 연산 수), op:'fma32'|'bf16'|'fp8'}
+  var r = Math.max(1, o.reuse), eMove = GX.e.wire * o.bits * o.d, eOp = GX.e[o.op] * r;
+  // 피크 FMA 속도(FMA/s): FP32 레인 144 × 128, 텐서 코어 144 × 4 × 512 (FP8은 2배)
+  var rate = { fma32: GX.sm * 128 * GX.clk, bf16: GX.sm * 4 * 512 * GX.clk, fp8: GX.sm * 4 * 1024 * GX.clk }[o.op];
+  return { eMove: eMove, eOp1: GX.e[o.op], ratio: eMove / GX.e[o.op], frac: eMove / (eMove + eOp),
+    rate: rate, powerOp: rate * GX.e[o.op] * 1e-12, power: rate * (GX.e[o.op] + eMove / r) * 1e-12 };
+}
+/* /model:energy */
+
+/* model:split */
+var CARVE = [0, 8, 16, 32, 64, 100, 132, 164, 196, 228];
+function splitEval(o) {
+  // o: {carve(KB), smem(블록당 KB), threads, foot(워프당 L1 작업 집합 KB), C(로드 사이 독립 계산 사이클)}
+  var byT = Math.floor(2048 / o.threads), bySm = o.smem > 0 ? Math.floor(o.carve / o.smem) : Infinity;
+  var blocks = Math.max(0, Math.min(32, byT, bySm));
+  var warps = blocks * o.threads / 32, l1 = 256 - o.carve, R = 0.9;
+  var foot = warps * o.foot, h = foot <= 0 ? R : R * Math.min(1, l1 / foot);
+  var lat = h * GX.latL1 + (1 - h) * GX.latL2, C = o.C || 8;
+  var util = warps ? Math.min(1, (warps / 4) * C / (C + lat)) : 0;
+  return { blocks: blocks, warps: warps, occ: warps / 64, l1: l1, hit: h, lat: lat, util: util, limit: bySm < Math.min(32, byT) ? "smem" : byT <= 32 ? "threads" : "blocks" };
+}
+/* /model:split */
+
+/* model:async */
+function asyncSim(o) {
+  // o: {mode:'sync'|'async'|'tma', stages, Tc, bytes, src:'l2'|'hbm', N}
+  var bpc = o.src === "hbm" ? GX.hbmBW / GX.sm / GX.clk : GX.l2BW / GX.sm / GX.clk;
+  var L = o.src === "hbm" ? GX.latHBM : GX.latL2, X = o.bytes / bpc, N = o.N || 12;
+  var st = o.mode === "sync" ? 1 : Math.max(1, o.stages);
+  var ovh = o.mode === "sync" ? 3 * o.bytes / 512 / 4 : o.mode === "async" ? 2 * o.bytes / 512 / 4 : 1;
+  var ev = [], pipe = 0, cEnd = 0, cEnds = [];
+  for (var i = 0; i < N; i++) {
+    var bufFree = i >= st ? cEnds[i - st] : 0;
+    // 동기 복사: 계산 유닛을 쓰는 스레드가 직접 복사하므로 이전 계산이 끝나야 다음 로드를 낸다
+    var issue = o.mode === "sync" ? cEnd : bufFree;
+    var s0 = Math.max(issue, pipe), x0 = s0 + ovh, ready = x0 + L + X;
+    pipe = x0 + X;
+    var c0 = Math.max(ready, cEnd), c1 = c0 + o.Tc;
+    ev.push({ i: i, issue: s0, ovh: ovh, xs: x0 + L, xe: ready, cs: c0, ce: c1 });
+    cEnd = c1; cEnds.push(c1);
+  }
+  var total = cEnd, busy = N * o.Tc;
+  return { ev: ev, total: total, util: busy / total, X: X, L: L, ovh: ovh, smemKB: st * o.bytes / 1024, fits: st * o.bytes <= 228 * 1024, bpc: bpc };
+}
+/* /model:async */
+
+/* ================================================================ UI */
+var small = function (v, u) { return v + "<small> " + u + "</small>"; };
+var pct = function (x, d) { return (x * 100).toFixed(d == null ? 1 : d).replace(/\.0$/, "") + "<small> %</small>"; };
+
+/* ---------------------------------------------------------- 1. SRAM 면적 */
+(function () {
+  var cv = null;
+  var gMB = GP.range("sr-mb", function (v) { return v + " MB"; }, upd);
+  var gN = GP.range("sr-node", function (v) { return SRAM_NODES[v].n + " nm급"; }, upd);
+  var gT = GP.seg("sr-type", upd);
+  var gE = GP.range("sr-eff", function (v) { return v.toFixed(2); }, upd);
+  var cE = document.getElementById("sr-ecc");
+  cE.addEventListener("change", upd);
+  function cur() {
+    var nd = SRAM_NODES[gN()];
+    return sramArea({ mb: gMB(), cell: nd.cell * Number(gT()), eff: gE(), ecc: cE.checked, tags: cE.checked });
+  }
+  function upd() {
+    var r = cur();
+    GP.stat("sr-o-cell", small(GP.fmt(r.cellMm2, 3), "mm²"));
+    GP.stat("sr-o-mac", small(GP.fmt(r.macroMm2, 3), "mm²"));
+    GP.stat("sr-o-die", r.dieFrac > 1 ? "<span class='bad-t'>" + pct(r.dieFrac, 0) + "</span>" : pct(r.dieFrac, 1));
+    GP.stat("sr-o-sm", small(GP.fmt(r.smEquiv, 3), "개"));
+    GP.stat("sr-o-den", small(GP.fmt(r.mbitPerMm2, 3), "Mibit/mm²"));
+    cv && cv.redraw();
+  }
+  upd();
+  cv = GP.canvas("#sr-cv", function (ctx, w, h) {
+    var P = GP.palette(), wide = w >= 560, i0 = gN();
+    var cb = wide ? { x: 56, y: 26, w: w * 0.6 - 70, h: h - 72 } : { x: 56, y: 26, w: w - 72, h: h * 0.56 - 60 };
+    var sr = SRAM_NODES.map(function (n, i) { return [i, SRAM_NODES[0].cell / n.cell]; });
+    var lg = SRAM_NODES.map(function (n, i) { return [i, n.logic]; });
+    GP.chart(ctx, cb, {
+      x: [0, 6], y: [1, 20], logY: true, xTicks: [0, 1, 2, 3, 4, 5, 6], xFmt: function (v) { return SRAM_NODES[Math.round(v)] ? SRAM_NODES[Math.round(v)].n : ""; },
+      yTicks: [1, 2, 5, 10, 20], xLabel: "공정 세대 (nm급)", yLabel: "28 nm급 대비 밀도 (배)",
+      series: [{ data: lg, color: P.compute, width: 2.2, dots: 3, label: "로직 밀도" }, { data: sr, color: P.sram, width: 2.2, dots: 3, label: "SRAM 비트셀 밀도" }],
+      vlines: [{ x: i0, color: P.faint, dash: [4, 3] }],
+      points: [{ x: i0, y: lg[i0][1], color: P.compute, r: 5 }, { x: i0, y: sr[i0][1], color: P.sram, r: 5 }],
+      legend: "tl",
+    });
+    GP.text(ctx, "셀 " + GP.fmt(SRAM_NODES[i0].cell * Number(gT()), 3) + " µm² · 로직/SRAM 간격 " + GP.fmt(lg[i0][1] / sr[i0][1], 2) + "배", cb.x + cb.w, 12, { size: 11.5, color: P.dim, align: "right", baseline: "middle" });
+    // 다이 그림: 26 × 30 mm 안에 이 SRAM 면적을 다이 폭 띠로
+    var r = cur();
+    var bx = wide ? w * 0.6 + 10 : 20, by = wide ? 26 : h * 0.56 + 6, bw = wide ? w * 0.4 - 24 : w - 40, bh = wide ? h - 60 : h * 0.44 - 36;
+    var s = Math.min(bw / 26, bh / 30), dw = 26 * s, dh = 30 * s, dx = bx + (bw - dw) / 2, dy = by;
+    ctx.fillStyle = P.surface; ctx.strokeStyle = P.border; ctx.lineWidth = 1.2;
+    ctx.fillRect(dx, dy, dw, dh); ctx.strokeRect(dx + 0.5, dy + 0.5, dw, dh);
+    var a = Math.min(r.macroMm2, GX.dieMm2), sh = (a / 26) * s, ch = (Math.min(r.cellMm2, GX.dieMm2) / 26) * s, y0 = dy + (dh - sh) / 2;
+    ctx.fillStyle = GP.alpha(P.sram, 0.28); ctx.fillRect(dx, y0, dw, sh);
+    ctx.fillStyle = P.sram; ctx.fillRect(dx, y0 + (sh - ch) / 2, dw, ch);
+    GP.text(ctx, "GX-1 다이 26 × 30 mm", dx + dw / 2, dy + dh + 13, { size: 11.5, color: P.dim, align: "center", baseline: "middle" });
+    GP.text(ctx, GP.fmt(r.macroMm2, 3) + " mm²", dx + dw / 2, Math.max(dy + 12, y0 - 10), { size: 12.5, weight: 700, color: P.text, align: "center", baseline: "middle", halo: true });
+    GP.text(ctx, "진한 띠 = 비트셀, 옅은 띠 = 주변 회로", dx + dw / 2, Math.min(dy + dh - 10, y0 + sh + 12), { size: 11, color: P.dim, align: "center", baseline: "middle", halo: true });
+  }, { height: function (w) { return w >= 560 ? 310 : 470; } });
+})();
+
+/* ---------------------------------------------------------- 2. 계층 비교 */
+(function () {
+  var rows = hierRows(), cv = null, PEAK = GX.sm * 4 * 512 * 2 * GX.clk;
+  var M = {
+    cap: { d: [1e7, 1e12], v: function (r) { return r.cap; }, f: function (r) { return r.k === "hbm" ? "144 GB" : Math.round(r.cap / 1048576) + " MB"; }, t: "용량", txt: "아래로 갈수록 용량이 커진다. 레지스터와 L1은 같은 36 MB지만 L1·공유 메모리는 SM 안의 스레드 블록 전체가 공유한다." },
+    bw: { d: [1e12, 1e15], v: function (r) { return r.bw; }, f: function (r) { return GP.fmt(r.bw / 1e12, 3) + " TB/s"; }, t: "대역폭", txt: "세로 점선은 이 산술 강도에서 텐서 피크를 먹이는 데 필요한 대역폭(피크 ÷ I)이다. 막대가 점선을 넘는 계층만 피크를 먹일 수 있다." },
+    lat: { d: [0.1, 1000], v: function (r) { return r.latNs; }, f: function (r) { return GP.fmt(r.latNs, 3) + " ns"; }, t: "지연", txt: "지연은 1.6 GHz 클럭 기준(레지스터 1, L1 30, L2 200, HBM 800사이클)이다. 지연은 워프 전환과 비동기 복사로 숨긴다." },
+    pj: { d: [0.005, 10], v: function (r) { return r.pjBit; }, f: function (r) { return GP.fmt(r.pjBit, 3) + " pJ/bit"; }, t: "비트당 에너지", txt: "32비트 접근 에너지를 비트당으로 나눈 값이다(레지스터 0.5, L1 1.5, L2 6, HBM 약 100 pJ)." },
+    w: { d: [1, 1000], v: function (r) { return r.watt; }, f: function (r) { return GP.fmt(r.watt, 3) + " W"; }, t: "최대 대역폭 전력", txt: "각 계층을 최대 대역폭으로 돌릴 때의 전력 = 대역폭 × 8 × pJ/bit. HBM 하나가 온칩 셋을 합친 것보다 많다." },
+  };
+  var gM = GP.seg("hi-m", upd), gI = GP.range("hi-i", function (v) { return v + " FLOP/B"; }, upd);
+  function upd() {
+    var m = M[gM()], vals = rows.map(m.v), mx = Math.max.apply(null, vals), mn = Math.min.apply(null, vals);
+    GP.stat("hi-o-r", small(GP.fmt(mx / mn, 3), "배"));
+    var need = PEAK / gI(), ok = rows.filter(function (r) { return r.bw >= need; }).map(function (r) { return r.name; });
+    GP.stat("hi-o-f", ok.length ? ok.join(", ") : "없음");
+    document.getElementById("hi-d").innerHTML = "<b>" + m.t + "</b>: " + m.txt + " 필요 대역폭 = 943.7 TFLOPS ÷ " + gI() + " = " + GP.fmt(need / 1e12, 3) + " TB/s.";
+    cv && cv.redraw();
+  }
+  upd();
+  cv = GP.canvas("#hi-cv", function (ctx, w, h) {
+    var P = GP.palette(), key = gM(), m = M[key], lx = Math.min(130, w * 0.3), x0 = lx + 8, x1 = w - 16;
+    var L0 = Math.log10(m.d[0]), L1 = Math.log10(m.d[1]), X = function (v) { return x0 + (Math.log10(Math.max(v, m.d[0])) - L0) / (L1 - L0) * (x1 - x0); };
+    var top = 30, rh = (h - top - 34) / rows.length;
+    // 눈금
+    for (var e = Math.ceil(L0); e <= L1; e++) {
+      var px = X(Math.pow(10, e));
+      ctx.strokeStyle = P.grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(px, top - 6); ctx.lineTo(px, h - 30); ctx.stroke();
+      GP.text(ctx, "10^{" + e + "}", px, h - 18, { size: 11, color: P.dim, align: "center", baseline: "middle", mono: true });
+    }
+    GP.text(ctx, m.t + " (로그 축)", x0, 12, { size: 12, weight: 700, color: P.text, baseline: "middle" });
+    rows.forEach(function (r, i) {
+      var y = top + i * rh + rh * 0.18, bh = rh * 0.64, v = m.v(r), col = r.k === "hbm" ? P.dram : P.sram;
+      GP.text(ctx, r.name, lx, y + bh / 2, { size: 12.5, weight: 600, color: P.text, align: "right", baseline: "middle" });
+      ctx.fillStyle = GP.alpha(col, 0.85); GP.rrect(ctx, x0, y, Math.max(2, X(v) - x0), bh, 4); ctx.fill();
+      var lab = m.f(r), tw = GP.textWidth(ctx, lab, { size: 12, weight: 700 }), inside = X(v) - x0 > tw + 16;
+      GP.text(ctx, lab, inside ? X(v) - 8 : X(v) + 6, y + bh / 2, { size: 12, weight: 700, color: inside ? "#fff" : P.text, align: inside ? "right" : "left", baseline: "middle" });
+    });
+    if (key === "bw") {
+      var nx = X(PEAK / gI());
+      ctx.save(); ctx.strokeStyle = P.bad; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(nx, top - 4); ctx.lineTo(nx, h - 30); ctx.stroke(); ctx.restore();
+      GP.text(ctx, "필요 " + GP.fmt(PEAK / gI() / 1e12, 3) + " TB/s", Math.min(nx + 4, w - 90), top - 10, { size: 11.5, color: P.bad, baseline: "middle" });
+    }
+  }, { height: 250 });
+})();
+
+/* ---------------------------------------------------------- 3. 병합 */
+(function () {
+  var cv = null, ph = 0, loop = null;
+  var gP = GP.seg("co-p", go), gE = GP.seg("co-e", go);
+  var gS = GP.range("co-s", function (v) { return v + " (" + v * Number(gE()) + " B)"; }, go);
+  var gO = GP.range("co-o", function (v) { return v + " B"; }, go);
+  document.getElementById("co-play").addEventListener("click", function () { ph = 0; loop && loop.start(); });
+  var st = null;
+  function calc() {
+    var elem = Number(gE()), addrs = warpAddrs({ pattern: gP(), elem: elem, stride: gS(), offset: gO(), seed: 11 });
+    var c = coalesce(addrs, elem), idx = {};
+    c.sectors.forEach(function (s, i) { idx[s] = i; });
+    st = { addrs: addrs, elem: elem, c: c, idx: idx };
+  }
+  function go() {
+    gS.refresh();
+    calc();
+    var c = st.c;
+    GP.stat("co-o-sec", small(c.nSec, "개"));
+    GP.stat("co-o-line", small(c.nLine, "개"));
+    GP.stat("co-o-b", c.useful + " / " + small(c.moved, "B"));
+    GP.stat("co-o-eff", c.eff < 0.3 ? "<span class='bad-t'>" + pct(c.eff) + "</span>" : pct(c.eff));
+    GP.stat("co-o-bw", small(GP.fmt(c.effBW / 1e12, 3), "TB/s"));
+    ph = 0; loop && loop.start();
+  }
+  calc();
+  go();
+  cv = GP.canvas("#co-cv", function (ctx, w, h) {
+    if (!st) return;
+    var P = GP.palette(), c = st.c, narrow = w < 560, perRow = narrow ? 16 : 32, tw = (w - 24) / perRow;
+    var thY = function (t) { return 22 + Math.floor(t / perRow) * (tw + 4); }, thX = function (t) { return 12 + (t % perRow) * tw; };
+    var thBot = thY(31) + tw;
+    GP.text(ctx, "워프 스레드 0–31", 12, 10, { size: 11.5, color: P.dim, baseline: "middle" });
+    for (var t = 0; t < 32; t++) {
+      ctx.fillStyle = GP.alpha(P.compute, 0.22); ctx.strokeStyle = P.compute; ctx.lineWidth = 1;
+      GP.rrect(ctx, thX(t) + 1, thY(t), tw - 2, tw - 2, 3); ctx.fill(); ctx.stroke();
+    }
+    // 섹터 격자
+    var N = c.nSec, cols = Math.min(16, Math.max(4, N)), sw = Math.min(56, (w - 24) / cols), sh = 26, gy = thBot + 56;
+    var secX = function (i) { return 12 + (i % cols) * sw; }, secY = function (i) { return gy + Math.floor(i / cols) * (sh + 18); };
+    GP.text(ctx, "옮기는 32 B 섹터 (주소순, 칸 = 4 B)", 12, gy - 12, { size: 11.5, color: P.dim, baseline: "middle" });
+    var lit = GP.clamp((ph - 0.9) / 0.3, 0, 1);
+    var used = {};
+    st.addrs.forEach(function (a) { for (var b = a; b < a + st.elem; b += 4) used[b >> 2] = 1; });
+    c.sectors.forEach(function (s, i) {
+      var x = secX(i), y = secY(i);
+      ctx.fillStyle = GP.alpha(P.data, 0.08 + 0.1 * lit); ctx.fillRect(x + 1, y, sw - 2, sh);
+      for (var k = 0; k < 8; k++) if (used[s * 8 + k]) { ctx.fillStyle = GP.alpha(P.data, 0.35 + 0.6 * lit); ctx.fillRect(x + 1 + k * (sw - 2) / 8, y, (sw - 2) / 8, sh); }
+      ctx.strokeStyle = P.data; ctx.lineWidth = 1; ctx.strokeRect(x + 1.5, y + 0.5, sw - 3, sh);
+      // 같은 128 B 라인은 같은 색 밑줄, 주소가 끊기면 표시
+      var ln = Math.floor(s / 4);
+      ctx.fillStyle = ln % 2 ? P.accent2 : P.accent; ctx.fillRect(x + 1, y + sh + 3, sw - 2, 3);
+      if (i > 0 && c.sectors[i - 1] !== s - 1 && i % cols) { ctx.fillStyle = P.bad; ctx.fillRect(x - 1, y - 4, 2, sh + 8); }
+    });
+    GP.text(ctx, "밑줄 색 = 128 B 라인, 빨간 세로선 = 주소가 끊긴 곳", 12, h - 10, { size: 11, color: P.faint, baseline: "middle" });
+    // 날아가는 주소
+    st.addrs.forEach(function (a, t) {
+      var s = Math.floor(a / 32), i = st.idx[s], k = Math.floor((a % 32) / 4);
+      var u = GP.ease && GP.ease.inOut ? GP.ease.inOut(GP.clamp((ph - t * 0.012) / 0.7, 0, 1)) : GP.clamp((ph - t * 0.012) / 0.7, 0, 1);
+      var x0 = thX(t) + tw / 2, y0 = thY(t) + tw - 2, x1 = secX(i) + 1 + (k + 0.5) * (sw - 2) / 8, y1 = secY(i);
+      if (u > 0 && u < 1) { ctx.strokeStyle = GP.alpha(P.data, 0.25); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke(); }
+      var x = GP.lerp(x0, x1, u), y = GP.lerp(y0, y1, u);
+      if (u < 1) { ctx.fillStyle = P.data; ctx.beginPath(); ctx.arc(x, y, 3, 0, 7); ctx.fill(); }
+    });
+    if (lit > 0) GP.badge(ctx, c.nSec + " 섹터 · " + c.nLine + " 라인 · " + Math.round(c.eff * 1000) / 10 + " %", w - 12, thBot + 26, { align: "right", bg: GP.alpha(c.eff < 0.3 ? P.bad : P.ok, 0.14), fg: c.eff < 0.3 ? P.bad : P.ok, border: c.eff < 0.3 ? P.bad : P.ok, size: 12 });
+  }, { height: function (w) { return w < 560 ? 330 : 250; } });
+  loop = GP.loop(document.getElementById("co-cv"), function (dt) { ph += dt; cv && cv.redraw(); if (ph > 1.4) loop.stop(); });
+})();
+
+/* ---------------------------------------------------------- 4. 뱅크 충돌 */
+(function () {
+  var cv = null, st = null;
+  var gP = GP.seg("bk-p", upd);
+  var gS = GP.range("bk-s", function (v) { return String(v); }, upd);
+  var gD = GP.range("bk-pad", function (v) { return v + "열"; }, upd);
+  function upd() {
+    var p = gP(), words = bankWords({ pattern: p, stride: gS(), pad: gD(), seed: 7 }), r = bankConflict(words), W = 32 + gD();
+    st = { words: words, r: r };
+    GP.stat("bk-o-k", r.degree > 1 ? "<span class='bad-t'>" + r.degree + "-way</span>" : "1-way");
+    GP.stat("bk-o-c", small(r.cycles, "클럭"));
+    GP.stat("bk-o-sm", small(GP.fmt(128 / r.degree, 3), "B/클럭"));
+    GP.stat("bk-o-bw", small(GP.fmt(r.bw / 1e12, 3), "TB/s"));
+    var d = {
+      stride: "스레드 t가 워드 " + gS() + "·t를 읽는다 → 쓰이는 뱅크 " + (gS() === 0 ? 1 : 32 / gcd(gS(), 32)) + "개, gcd(" + gS() + ", 32) = " + (gS() === 0 ? "—(모두 같은 워드)" : gcd(gS(), 32)) + ".",
+      col: "32 × 32 타일, 행 길이 " + W + ". 스레드 t가 원소 (t, 5)를 읽는다 → 워드 " + W + "·t + 5, gcd(" + W + ", 32) = " + gcd(W, 32) + ".",
+      row: "행 5를 읽는다 → 연속한 워드 32개, 패딩과 무관하게 뱅크가 모두 다르다.",
+      bcast: "32개 스레드가 같은 워드 하나를 읽는다 → 한 번 읽어 나눠 준다(충돌 아님).",
+      rand: "워드 0–2047 무작위(고정 난수). 생일 문제처럼 몇 개는 같은 뱅크에 겹친다.",
+    }[p];
+    document.getElementById("bk-d").innerHTML = d;
+    cv && cv.redraw();
+  }
+  upd();
+  cv = GP.canvas("#bk-cv", function (ctx, w, h) {
+    var P = GP.palette(), r = st.r, words = st.words, cw = (w - 24) / 32, x0 = 12;
+    var bankY = 78, stackTop = 92, stackH = h - stackTop - 20, chh = Math.min(18, stackH / Math.max(1, r.degree));
+    GP.text(ctx, "스레드", x0, 9, { size: 11, color: P.dim, baseline: "middle" });
+    GP.text(ctx, "뱅크 0–31 (세로로 쌓인 칸 = 그 뱅크가 읽어야 할 서로 다른 워드)", x0, bankY - 8, { size: 11, color: P.dim, baseline: "middle" });
+    for (var t = 0; t < 32; t++) {
+      var b = words[t] % 32;
+      ctx.strokeStyle = GP.alpha(r.banks[b].length > 1 && new Set(r.banks[b].map(function (e) { return e.w; })).size > 1 ? P.bad : P.data, 0.45);
+      ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x0 + (t + 0.5) * cw, 32); ctx.lineTo(x0 + (b + 0.5) * cw, bankY - 18); ctx.stroke();
+      ctx.fillStyle = GP.alpha(P.compute, 0.25); ctx.strokeStyle = P.compute; ctx.fillRect(x0 + t * cw + 1, 18, cw - 2, 14); ctx.strokeRect(x0 + t * cw + 1.5, 18.5, cw - 3, 13);
+    }
+    for (var k = 0; k < 32; k++) {
+      var list = r.banks[k], uniq = [], seen = {};
+      list.forEach(function (e) { if (!seen[e.w]) { seen[e.w] = 1; uniq.push(e); } });
+      ctx.fillStyle = P.surface; ctx.fillRect(x0 + k * cw + 1, bankY, cw - 2, 8);
+      var bad = uniq.length > 1;
+      uniq.forEach(function (e, j) {
+        ctx.fillStyle = GP.alpha(bad ? P.bad : P.ok, 0.55); ctx.fillRect(x0 + k * cw + 1, stackTop + j * chh, cw - 2, chh - 1);
+      });
+      if (list.length > 1 && uniq.length === 1) GP.text(ctx, "×" + list.length, x0 + (k + 0.5) * cw, stackTop + chh + 9, { size: 10.5, color: P.ok, align: "center", baseline: "middle" });
+      if (k % 8 === 0) GP.text(ctx, String(k), x0 + (k + 0.5) * cw, bankY + 4, { size: 9.5, color: P.dim, align: "center", baseline: "middle", mono: true });
+    }
+    GP.badge(ctx, r.degree + "-way → " + r.degree + "클럭", w - 12, h - 30, { align: "right", bg: GP.alpha(r.degree > 1 ? P.bad : P.ok, 0.14), fg: r.degree > 1 ? P.bad : P.ok, border: r.degree > 1 ? P.bad : P.ok, size: 12 });
+  }, { height: 280 });
+})();
+
+/* ---------------------------------------------------------- 5. 캐시 LRU */
+(function () {
+  var CAPS = [16, 32, 64, 128, 256, 512, 1024, 2048], WS = [16, 48, 96, 192, 256, 512, 1024];
+  var cv = null, res = null;
+  var gC = GP.range("ca-c", function (v) { return CAPS[v] >= 1024 ? CAPS[v] / 1024 + " MB" : CAPS[v] + " KB"; }, sched);
+  var gW = GP.seg("ca-w", sched), gL = GP.seg("ca-l", sched), gP = GP.seg("ca-p", sched);
+  var gWS = GP.range("ca-ws", function (v) { return WS[v] >= 1024 ? WS[v] / 1024 + " MB" : WS[v] + " KB"; }, sched);
+  var run = GP.debounce(calc, 60);
+  function sched() { run(); }
+  function calc() {
+    var ws = WS[gWS()] * 1024, kind = gP(), n = Math.max(30000, Math.round(3 * ws / 32) + 20000);
+    var trace = cacheTrace(kind, n, ws, 3), line = Number(gL()), ways = Number(gW());
+    var cur = CAPS.map(function (c) { return cacheSim({ capKB: c, ways: ways, line: line, trace: trace }); });
+    var full = CAPS.map(function (c) { return cacheSim({ capKB: c, ways: 0, line: line, trace: trace }); });
+    res = { cur: cur, full: full, n: n };
+    var r = cur[gC()];
+    GP.stat("ca-o-h", pct(r.rate));
+    GP.stat("ca-o-sw", r.sets + " × " + r.ways);
+    GP.stat("ca-o-n", small(n.toLocaleString("en-US"), "회"));
+    GP.stat("ca-o-amat", small(GP.fmt(r.rate * GX.latL1 + (1 - r.rate) * GX.latL2, 3), "사이클"));
+    cv && cv.redraw();
+  }
+  calc();
+  cv = GP.canvas("#ca-cv", function (ctx, w, h) {
+    if (!res) return;
+    var P = GP.palette(), kind = gP(), i = gC();
+    var wsKB = WS[gWS()], wl = gW() === "0" ? "완전 연관" : gW() + "-way";
+    var box = { x: 56, y: 24, w: w - 76, h: h - 74 };
+    var ch = GP.chart(ctx, box, {
+      x: [16, 2048], y: [0, 100], logX: true, xTicks: CAPS, xFmt: function (v) { return v >= 1024 ? v / 1024 + "M" : String(v); },
+      xLabel: "캐시 용량 (KB)", yLabel: "적중률 (%)",
+      series: [
+        { data: CAPS.map(function (c, k) { return [c, res.full[k].rate * 100]; }), color: P.dim, width: 1.6, dash: [5, 4], label: "완전 연관" },
+        { data: CAPS.map(function (c, k) { return [c, res.cur[k].rate * 100]; }), color: P.sram, width: 2.4, dots: 3, label: wl + " · " + gL() + " B" },
+      ],
+      vlines: kind === "stream" ? [] : [{ x: wsKB, color: P.warn, dash: [4, 3] }],
+      points: [{ x: CAPS[i], y: res.cur[i].rate * 100, color: P.sram, r: 6, ring: true }],
+      legend: "br",
+    });
+    if (kind !== "stream") GP.text(ctx, "작업 집합 " + (wsKB >= 1024 ? "1 MB" : wsKB + " KB"), ch.X(wsKB) + 4, box.y + box.h * 0.45, { size: 11.5, weight: 600, color: P.warn, baseline: "middle", halo: true });
+  }, { height: 280 });
+})();
+
+/* ---------------------------------------------------------- 6. L1/공유 분할 */
+(function () {
+  var cv = null;
+  var gC = GP.range("sp-c", function (v) { return CARVE[v] + " KB (L1 " + (256 - CARVE[v]) + " KB)"; }, upd);
+  var gS = GP.range("sp-s", function (v) { return v + " KB"; }, upd);
+  var gT = GP.seg("sp-t", upd);
+  var gF = GP.range("sp-f", function (v) { return v + " KB"; }, upd);
+  function ev(c) { return splitEval({ carve: c, smem: gS(), threads: Number(gT()), foot: gF(), C: 8 }); }
+  function upd() {
+    var r = ev(CARVE[gC()]);
+    GP.stat("sp-o-b", small(r.blocks, "개"));
+    GP.stat("sp-o-occ", pct(r.occ));
+    GP.stat("sp-o-h", (256 - CARVE[gC()]) + " KB · " + pct(r.hit, 0));
+    GP.stat("sp-o-l", small(GP.fmt(r.lat, 3), "사이클"));
+    GP.stat("sp-o-u", r.util < 0.7 ? "<span class='bad-t'>" + pct(r.util, 0) + "</span>" : pct(r.util, 0));
+    var best = CARVE.reduce(function (b, c) { return ev(c).util > ev(b).util + 1e-9 ? c : b; }, CARVE[0]);
+    document.getElementById("sp-flag").innerHTML = r.blocks === 0 ? "<b>블록이 하나도 들어가지 않는다</b>: 블록당 공유 메모리가 몫보다 크다." : "발행률이 가장 높은 몫: " + best + " KB · 블록 수 한계: " + { smem: "공유 메모리", threads: "스레드 2,048", blocks: "블록 32" }[r.limit];
+    cv && cv.redraw();
+  }
+  upd();
+  cv = GP.canvas("#sp-cv", function (ctx, w, h) {
+    var P = GP.palette(), rs = CARVE.map(ev), c0 = CARVE[gC()], r0 = ev(c0);
+    GP.chart(ctx, { x: 52, y: 30, w: w - 70, h: h - 80 }, {
+      x: [0, 228], y: [0, 100], xTicks: [0, 32, 64, 100, 132, 164, 196, 228], xLabel: "공유 메모리 몫 (KB) — 나머지가 L1", yLabel: "%",
+      series: [
+        { data: CARVE.map(function (c, k) { return [c, rs[k].occ * 100]; }), color: P.compute, width: 1.8, dash: [5, 4], dots: 2.5, label: "점유율" },
+        { data: CARVE.map(function (c, k) { return [c, rs[k].hit * 100]; }), color: P.sram, width: 2, dots: 2.5, label: "L1 적중률" },
+        { data: CARVE.map(function (c, k) { return [c, rs[k].util * 100]; }), color: P.accent, width: 2.6, dots: 3.5, label: "발행률 U" },
+      ],
+      vlines: [{ x: c0, color: P.faint, dash: [3, 3] }],
+      points: [{ x: c0, y: r0.util * 100, color: P.accent, r: 6, ring: true }],
+      legend: "above",
+    });
+  }, { height: 280 });
+})();
+
+/* ---------------------------------------------------------- 7. 이동 에너지 */
+(function () {
+  var cv = null, OPN = { fma32: "FP32 FMA", bf16: "BF16 FMA", fp8: "FP8 FMA" };
+  var gD = GP.range("en-d", function (v) { return v + " mm"; }, upd);
+  var gB = GP.seg("en-b", upd), gO = GP.seg("en-op", upd);
+  var gR = GP.range("en-r", function (v) { return String(Math.pow(2, v)); }, upd);
+  function cur() { return moveEnergy({ bits: Number(gB()), d: gD(), reuse: Math.pow(2, gR()), op: gO() }); }
+  function upd() {
+    var r = cur();
+    GP.stat("en-o-e", small(GP.fmt(r.eMove, 3), "pJ"));
+    GP.stat("en-o-x", small(GP.fmt(r.ratio, 3), "배"));
+    GP.stat("en-o-f", r.frac > 0.5 ? "<span class='bad-t'>" + pct(r.frac, 0) + "</span>" : pct(r.frac, 0));
+    GP.stat("en-o-p", r.power >= 1000 ? small(GP.fmt(r.power / 1000, 2), "kW") : small(GP.fmt(r.power, 3), "W") + " <small>(연산만 " + GP.fmt(r.powerOp, 3) + " W)</small>");
+    cv && cv.redraw();
+  }
+  upd();
+  cv = GP.canvas("#en-cv", function (ctx, w, h) {
+    var P = GP.palette(), bits = Number(gB()), r = cur(), k = bits / 32, rr = Math.pow(2, gR());
+    var line = []; for (var d = 0.1; d <= 30.001; d += 0.3) line.push([d, GX.e.wire * bits * d]);
+    GP.chart(ctx, { x: 58, y: 18, w: w - 76, h: h - 66 }, {
+      x: [0, 30], y: [0.01, 1000], logY: true, xLabel: "거리 d (mm)", yLabel: bits + "비트 워드 에너지 (pJ)",
+      series: [{ data: line, color: P.data, width: 2.4, label: "배선 " + bits + "비트 × d" }],
+      hlines: [
+        { y: r.eOp1, color: P.tensor, dash: [5, 4], label: OPN[gO()] + " 1번 " + r.eOp1 + " pJ", labelPos: "below" },
+      ].concat(rr > 1 ? [{ y: r.eOp1 * rr, color: P.compute, dash: [2, 3], label: "워드당 연산 " + rr + "번 = " + GP.fmt(r.eOp1 * rr, 3) + " pJ" }] : []),
+      points: [
+        { x: 0.3, y: GX.e.rf * k, color: P.sram, r: 4, label: "RF" },
+        { x: 1, y: GX.e.l1 * k, color: P.sram, r: 4, label: "L1" },
+        { x: 5, y: GX.e.l2 * k, color: P.sram, r: 4, label: "L2" },
+        { x: 20, y: GX.e.hbmBit * bits, color: P.dram, r: 5, label: "HBM" },
+        { x: gD(), y: Math.max(0.011, r.eMove), color: P.data, r: 6, ring: true },
+      ],
+      legend: "br",
+    });
+  }, { height: 290 });
+})();
+
+/* ---------------------------------------------------------- 8. 비동기 복사 */
+(function () {
+  var cv = null, res = null, tcur = 0, loop = null;
+  var gM = GP.seg("as-m", upd), gSt = GP.seg("as-st", upd), gSrc = GP.seg("as-src", upd);
+  var gTc = GP.range("as-tc", function (v) { return v + "사이클"; }, upd);
+  var gB = GP.range("as-b", function (v) { return v + " KB"; }, upd);
+  function upd() {
+    var mode = gM();
+    res = asyncSim({ mode: mode, stages: Number(gSt()), Tc: gTc(), bytes: gB() * 1024, src: gSrc(), N: 12 });
+    GP.stat("as-o-t", small(Math.round(res.total).toLocaleString("en-US"), "사이클"));
+    GP.stat("as-o-u", res.util < 0.6 ? "<span class='bad-t'>" + pct(res.util, 0) + "</span>" : pct(res.util, 0));
+    GP.stat("as-o-x", Math.round(res.X) + " · " + small(res.L, "사이클"));
+    GP.stat("as-o-s", res.fits ? small(GP.fmt(res.smemKB, 3), "KB") : "<span class='bad-t'>" + GP.fmt(res.smemKB, 3) + "<small> KB</small></span>");
+    var f = [];
+    if (mode === "sync" && Number(gSt()) > 1) f.push("동기 복사는 스레드가 직접 기다리므로 단 수와 무관하게 1단처럼 동작한다.");
+    if (!res.fits) f.push("<b>공유 메모리 228 KB 초과</b>: 단 수나 타일을 줄여야 한다.");
+    if (!f.length) f.push(res.X > gTc() ? "전송 X가 계산보다 길다 → 대역폭 제한(상한 " + Math.round(gTc() / res.X * 100) + " %)." : "정상 상태에서 계산이 지배한다.");
+    document.getElementById("as-flag").innerHTML = f.join(" ");
+    tcur = 0; loop && loop.start();
+  }
+  upd();
+  cv = GP.canvas("#as-cv", function (ctx, w, h) {
+    var P = GP.palette(), ev = res.ev, T = res.total, st = gM() === "sync" ? 1 : Number(gSt());
+    var x0 = 74, x1 = w - 12, X = function (t) { return x0 + t / T * (x1 - x0); };
+    var y = 14, rowIss = y, rowMem = y + 24, mh = Math.min(18, 76 / st), rowC = rowMem + st * (mh + 3) + 10, ch = 28;
+    GP.text(ctx, "발행", x0 - 8, rowIss + 7, { size: 11.5, color: P.dim, align: "right", baseline: "middle" });
+    GP.text(ctx, "메모리", x0 - 8, rowMem + st * (mh + 3) / 2, { size: 11.5, color: P.dim, align: "right", baseline: "middle" });
+    GP.text(ctx, "텐서 코어", x0 - 8, rowC + ch / 2, { size: 11.5, color: P.dim, align: "right", baseline: "middle" });
+    ev.forEach(function (e) {
+      ctx.fillStyle = P.ctrl; ctx.fillRect(X(e.issue), rowIss, Math.max(1.5, X(e.issue + e.ovh) - X(e.issue)), 14);
+      var ry = rowMem + (e.i % st) * (mh + 3);
+      ctx.fillStyle = GP.alpha(P.data, 0.22); ctx.fillRect(X(e.issue + e.ovh), ry, X(e.xs) - X(e.issue + e.ovh), mh);
+      ctx.fillStyle = GP.alpha(P.data, 0.85); ctx.fillRect(X(e.xs), ry, X(e.xe) - X(e.xs), mh);
+      ctx.fillStyle = GP.alpha(P.tensor, e.i % 2 ? 0.6 : 0.85); ctx.fillRect(X(e.cs), rowC, X(e.ce) - X(e.cs) - 1, ch);
+      if (X(e.ce) - X(e.cs) > 18) GP.text(ctx, String(e.i), (X(e.cs) + X(e.ce)) / 2, rowC + ch / 2, { size: 11, weight: 700, color: "#fff", align: "center", baseline: "middle" });
+    });
+    // 시간축
+    var ay = rowC + ch + 8;
+    ctx.strokeStyle = P.axis; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x0, ay); ctx.lineTo(x1, ay); ctx.stroke();
+    var step = Math.pow(10, Math.floor(Math.log10(T / 4))); if (T / step > 8) step *= 2; if (T / step > 8) step *= 2.5;
+    for (var t = 0; t <= T; t += step) { ctx.beginPath(); ctx.moveTo(X(t), ay); ctx.lineTo(X(t), ay + 4); ctx.stroke(); GP.text(ctx, String(Math.round(t)), X(t), ay + 13, { size: 10.5, color: P.dim, align: "center", baseline: "middle", mono: true }); }
+    GP.text(ctx, "사이클", x1, ay + 27, { size: 11, color: P.dim, align: "right", baseline: "middle" });
+    // 범례
+    var ly = ay + 46, lx = 12;
+    [[P.ctrl, "복사 명령 발행"], [GP.alpha(P.data, 0.22), "지연 L"], [GP.alpha(P.data, 0.85), "전송 X"], [P.tensor, "타일 계산 T_c"]].forEach(function (it) {
+      ctx.fillStyle = it[0]; ctx.fillRect(lx, ly - 5, 12, 10); lx += 16; lx += GP.text(ctx, it[1], lx, ly, { size: 11, color: P.dim, baseline: "middle" }) + 14;
+    });
+    // 시간 커서
+    var tc = Math.min(tcur, T);
+    ctx.strokeStyle = P.bad; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(X(tc), rowIss - 4); ctx.lineTo(X(tc), ay); ctx.stroke();
+  }, { height: 226 });
+  loop = GP.loop(document.getElementById("as-cv"), function (dt) { tcur += dt * res.total / 3.5; cv && cv.redraw(); if (tcur > res.total) { tcur = res.total; cv && cv.redraw(); loop.stop(); } });
+})();
+</script>
+</body>
+</html>
