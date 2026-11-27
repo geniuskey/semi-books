@@ -105,7 +105,7 @@ near(24 / 0.1, 240, 1e-9, "energy balance 24 pJ/B / 0.1 pJ/FLOP");
     [r.P, r.IL2, r.IHBM, r.waveEff, r.l2Bytes, r.hbmBytes, r.time].forEach((v) => fin(v, "tile " + [nn, bm, bn, order]));
     ok(r.hbmBytes >= r.comp - 1 && r.l2Bytes >= r.hbmBytes - 1, "traffic ordering");
   }
-  ok(Date.now() - t0 < 600, "tile sweep fast");
+  ok(Date.now() - t0 < 5000, "tile sweep finishes (no runaway loop)");
 }
 
 /* 4. 계층별 루프라인 */

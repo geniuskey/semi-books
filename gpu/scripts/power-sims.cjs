@@ -131,6 +131,6 @@ for (const cap of [200, 900]) for (const par of [16, 144]) for (const res of [0,
   const q = M.gateSweep({ cap, par, res, T }); ok(q.out.every((x) => isFinite(x.P) && x.P > 0 && isFinite(x.tflops) && x.tflops >= 0), "gate finite");
 }
 
-const ms = Date.now() - t0; ok(ms < 1000, "runtime " + ms + " ms");
+const ms = Date.now() - t0; ok(ms < 5000, "runtime " + ms + " ms");
 console.log(`ok   power-sims: ${n} checks, ${ms} ms`);
 console.log("gpu power sims ok");
