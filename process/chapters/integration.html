@@ -7,7 +7,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CMOS 공정 통합 · ProcessBook</title>
-<meta name="description" content="단위 공정을 이어 CMOS 트랜지스터를 만든다. STI, 웰, 게이트 스택, LDD, 스페이서, 소스·드레인, 실리사이드, 콘택, 첫 구리 배선까지 40여 단계를 단면으로 한 단계씩 쌓아 올리고, 문턱 전압과 공정 변수의 관계를 계산한다.">
+<meta name="description" content="단위 공정을 이어 CMOS 트랜지스터를 만든다. STI, 웰, 게이트 스택, LDD, 스페이서, 소스·드레인, 실리사이드, 콘택, 첫 구리 배선까지 40여 단계를 단면으로 한 단계씩 쌓아 올리고, 마스크 수·열 예산·자기 정렬·실리사이드 상·스페이서 폭과 문턱 전압을 계산한다.">
 <link rel="icon" type="image/svg+xml" href="../favicon.svg">
 <link rel="stylesheet" href="../css/style.css">
 <script src="../js/common.js"></script>
@@ -34,10 +34,11 @@
     <p class="lead">지금까지 산화, 노광, 식각, 증착, 주입, 열처리, CMP, 배선을 하나씩 따로 배웠다. 실제 팹에서 이것들은 정해진 순서로 줄지어 이어지는 하나의 <strong>공정 흐름</strong><span class="en">(Process flow)</span>이다. 앞 공정의 결과가 뒤 공정의 출발점이 되고, 뒤 공정의 열이 앞 공정의 도펀트를 다시 퍼뜨린다. 이 장에서는 p형 웨이퍼 위에 NMOS와 PMOS 트랜지스터 한 쌍을 만들고 첫 구리 배선(M1)으로 잇기까지, 마흔 개 남짓한 단계를 단면 시뮬레이터로 하나씩 쌓아 올린다. 각 단계는 앞 장에서 배운 모델로 실제로 계산된다.</p>
     <ul class="objectives">
       <li>CMOS 공정의 모듈 순서(소자 분리 → 웰 → 게이트 → 접합 → 실리사이드 → 콘택 → 배선)와 그 이유를 설명한다.</li>
-      <li>자기 정렬(게이트가 소스·드레인의 마스크가 되는 원리)과 스페이서의 역할을 단면에서 확인한다.</li>
-      <li>마스크 수와 공정 단계가 어떻게 쌓이는지 센다.</li>
+      <li>자기 정렬이 오버레이 여유를 없애 수율을 지키는 원리와, 스페이서 폭이 단채널 효과와 직렬 저항 사이에서 정해지는 이유를 계산한다.</li>
+      <li>마스크 수와 공정 단계·사이클 타임이 모듈과 패터닝 방식에 따라 어떻게 쌓이는지 센다.</li>
       <li>채널 도핑·게이트 절연막 두께가 문턱 전압을 어떻게 정하는지 계산한다.</li>
-      <li>열 예산이 앞에서 만든 접합을 어떻게 바꾸는지 이해한다.</li>
+      <li>실리사이드 상이 어닐 온도에 따라 바뀌며 면저항과 접합 누설을 정하는 과정을 따져 본다.</li>
+      <li>공정마다 쌓이는 열 예산이 앞에서 만든 접합을 어떻게 바꾸는지, 왜 뜨거운 공정이 먼저 오는지 계산한다.</li>
     </ul>
   </header>
 
@@ -45,8 +46,30 @@
     <h2>공정 흐름 한눈에 보기</h2>
     <p>CMOS 공정은 모듈 단위로 생각하면 쉽다. 아래 버튼을 누르면 시뮬레이터가 그 모듈의 마지막 단계로 이동한다.</p>
     <div class="mod-grid" id="mods"></div>
-    <div id="sim-cmos"></div>
+    <div class="sim" id="sim-cmos"></div>
     <div class="callout tip"><strong>읽는 요령</strong><p>파란 기운은 n형, 붉은 기운은 p형 도핑이고 진할수록 농도가 높다. 노란 점선이 p-n 접합이다. 커서를 단면 위에 올리면 그 지점의 재질·깊이·순 도핑을 읽을 수 있다. 오른쪽 위 숫자는 지금까지 쓴 마스크(노광) 수다. 실제 28 nm 로직은 마스크 40~60장, 첨단 공정은 70~100장 수준이다. 여기서는 웰·문턱 전압·LDD·소스·드레인을 NMOS/PMOS로 나눠 찍는 최소 구성만 넣었다.</p></div>
+    <p>마스크 한 장은 노광 한 번으로 끝나지 않는다. 감광막 도포·노광·현상·계측에 이어 식각이나 주입, 감광막 제거, 세정이 한 묶음으로 따라와 대략 15~25 단계가 된다. 위 흐름은 최소 구성이라 마스크 10장으로 끝났지만, 실제 칩은 문턱 전압 종류마다 주입 마스크가 늘고, 배선이 10층을 넘으며, 가장 조밀한 층은 한 번에 찍지 못해 여러 장으로 나눠 찍는다(<a href="resist.html">5장</a> 멀티 패터닝). 모듈별로 세어 보자.</p>
+    <div class="sim" id="sim-mask">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>마스크 수 세기: 모듈마다 늘어나는 노광</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="mk-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>배선층 수 <output id="mk-m-out"></output></span><input type="range" id="mk-m" min="4" max="16" step="1" value="10"></label>
+          <label class="ctrl"><span>문턱 전압 종류 <output id="mk-v-out"></output></span><input type="range" id="mk-v" min="1" max="5" step="1" value="3"></label>
+          <label class="ctrl"><span>조밀한 배선층 <output id="mk-t-out"></output></span><input type="range" id="mk-t" min="0" max="6" step="1" value="2"></label>
+          <div class="ctrl"><span>조밀한 층 패터닝 (ArF)</span><div class="seg" id="mk-p"><button data-value="single" class="on">단일</button><button data-value="lele">LELE ×2</button><button data-value="saqp">SAQP+컷 ×3</button></div></div>
+          <label class="check"><input type="checkbox" id="mk-e"> <span>조밀한 층을 EUV 단일 노광으로</span></label>
+          <label class="check"><input type="checkbox" id="mk-io" checked> <span>I/O·아날로그 소자 포함 (+6장)</span></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">총 마스크</span><span class="v" id="mk-o-n">—</span></div>
+        <div class="stat"><span class="k">공정 단계 (마스크당 15~25)</span><span class="v" id="mk-o-s">—</span></div>
+        <div class="stat"><span class="k">팹 사이클 타임 (마스크당 1~1.5일)</span><span class="v" id="mk-o-d">—</span></div>
+        <div class="stat"><span class="k">공개 범위와 비교</span><span class="v" id="mk-o-c">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본 설정(배선 10층, Vt 3종, 조밀 층 2개 단일 노광, I/O 포함)은 42장으로 28 nm급 범위에 든다. 배선이 20장으로 절반 가까이를 차지한다. ② 조밀 층 패터닝을 SAQP+컷으로 바꾸면 그 두 층에서만 8장이 늘고 게이트 컷·콘택이 1장씩 더해져 52장이 된다. ③ 배선 14층·Vt 4종·조밀 층 4개를 SAQP로 찍으면 70장으로 첨단 범위에 들어서고, EUV를 켜면 같은 설계가 54장(−16장)이 된다. ④ Vt 종류를 하나 늘릴 때마다 NMOS·PMOS용 2장이 는다. (기본 Vt는 위 단면처럼 웰 마스크와 함께 찍는다고 보고, 배선층마다 트렌치·비아 2장, 패드 2장, 멀티 패터닝 배수 LELE ×2·SAQP+컷 약 ×3으로 센 교육용 근사다. 실제 첨단 공정에는 핀·MOL·컷 층이 더해진다.)</div>
+    </div>
   </section>
 
   <section id="modules">
@@ -119,8 +142,77 @@
     <p>게이트 절연막(구세대는 SiON 1~2 nm, 지금은 HfO₂ high-k)을 만들고 폴리실리콘을 입혀 가장 미세한 무늬인 게이트를 노광·식각한다. 게이트 길이가 트랜지스터의 성능을 정하므로 이 층의 CD 관리가 가장 엄격하다. 첨단 공정은 여기서 만든 폴리 게이트를 나중에 금속으로 바꾸는 RMG를 쓴다(<a href="advanced.html">13장</a>).</p>
     <h3>④ LDD · 스페이서 · 소스/드레인</h3>
     <p>게이트를 마스크로 얕고 옅은 <span class="term">LDD</span><span class="en">(Lightly Doped Drain)</span>를 주입하면 소스·드레인이 게이트 가장자리에 정확히 맞춰진다. 이것이 <span class="term">자기 정렬</span><span class="en">(Self-aligned)</span>이다. 질화막을 컨포멀하게 입혀 이방성 식각으로 게이트 옆벽에만 남긴 <span class="term">스페이서</span>를 만든 뒤, 다시 그것을 마스크로 깊고 진한 소스·드레인을 주입한다. 그 결과 게이트 바로 옆은 옅고 얕게, 멀리는 진하고 깊게 도핑되어 드레인 쪽 강한 전계(핫 캐리어)를 누그러뜨린다. 스파이크·밀리초 어닐로 활성화한다(<a href="anneal.html">9장</a>).</p>
+    <p>자기 정렬의 값은 반대 경우를 따져 보면 드러난다. 초기 알루미늄 게이트 MOSFET은 소스·드레인을 먼저 확산하고 게이트를 별도 마스크로 그 위에 맞췄다. 정렬 오차, 곧 <span class="term">오버레이</span><span class="en">(Overlay)</span>가 어느 쪽으로 생겨도 게이트가 소스·드레인을 덮도록 게이트를 양쪽으로 여유 m만큼 길게 그려야 했고, 그만큼 겹침 커패시턴스 C<sub>ov</sub>와 면적이 늘었다. 여유가 모자라 한쪽에 틈이 생기면 그 트랜지스터는 켜지지 않는다. 칩에 트랜지스터가 10⁹개라면 십억 개 가운데 가장 나쁜 하나까지 살아야 한다.</p>
+    <div class="formula">$$P_{\text{틈}} = \mathrm{erfc}\!\left(\frac{m+\Delta L}{\sqrt{2}\,\sigma}\right), \qquad Y_{\text{칩}} = \left(1-P_{\text{틈}}\right)^{N} \approx e^{-N P_{\text{틈}}}$$
+      <div class="where">σ는 오버레이 표준편차(3σ 값의 1/3), ΔL은 측면 퍼짐이 만드는 겹침(여기서 5 nm), N은 칩의 트랜지스터 수다. 게이트가 어느 쪽으로 밀려도 반대쪽에 틈이 나므로 양쪽 꼬리를 모두 센다. 자기 정렬이면 겹침이 ΔL로 고정되어 \(P_{\text{틈}} = 0\)이다.</div>
+    </div>
+    <div class="sim" id="sim-sa">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>자기 정렬의 값: 오버레이가 게이트와 소스를 어긋나게 하면</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sa-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>소스·드레인 정렬</span><div class="seg" id="sa-m"><button data-value="mask" class="on">별도 마스크</button><button data-value="sa">자기 정렬</button></div></div>
+          <label class="ctrl"><span>오버레이 3σ <output id="sa-s-out"></output></span><input type="range" id="sa-s" min="2" max="30" step="1" value="10"></label>
+          <label class="ctrl"><span>설계 겹침 여유 m <output id="sa-g-out"></output></span><input type="range" id="sa-g" min="0" max="40" step="1" value="10"></label>
+          <label class="ctrl"><span>칩당 트랜지스터 수 <output id="sa-n-out"></output></span><input type="range" id="sa-n" min="3" max="10" step="0.5" value="9"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">트랜지스터 하나가 틈날 확률</span><span class="v" id="sa-o-p">—</span></div>
+        <div class="stat"><span class="k">칩 수율 (모두 정상)</span><span class="v" id="sa-o-y">—</span></div>
+        <div class="stat"><span class="k">평균 C<sub>ov</sub> (자기 정렬 대비)</span><span class="v" id="sa-o-c">—</span></div>
+        <div class="stat"><span class="k">여유가 늘린 게이트 길이</span><span class="v" id="sa-o-a">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본(별도 마스크, 3σ 10 nm, 여유 10 nm, 10⁹개)에서 트랜지스터 하나가 틈날 확률은 6.8×10⁻⁶뿐이지만 칩 수율은 0 %다. 십억 개 가운데 가장 나쁜 하나는 6.2σ = 20.6 nm 어긋나 5.6 nm 틈이 난다. ② 트랜지스터 수를 10³개로 줄이면 같은 조건에서 수율이 99.3 %다(초기 IC의 규모). ③ 여유를 17 nm로 늘리면 수율이 96.0 %가 되지만 게이트가 34 nm 길어지고(피치의 26 %) C<sub>ov</sub>가 4.4배가 된다. ④ ‘자기 정렬’을 누르면 오버레이와 상관없이 겹침이 5 nm로 고정되고 수율은 100 %다. (트랜지스터마다 독립인 정규 오버레이 오차, 측면 퍼짐 겹침 5 nm, 채널 40 nm, 게이트 피치 130 nm 가정. 실제 오버레이에는 칩 전체가 함께 움직이는 성분이 커서 꼬리 확률을 단순화한 교육용 모델이다.)</div>
+    </div>
+    <p>스페이서 폭은 깊은 소스·드레인을 게이트에서 얼마나 떼어 놓을지 정한다. 깊은 접합의 가장자리는 측면으로 대략 0.7x<sub>j</sub>만큼 퍼지므로, 스페이서가 좁으면 깊은 접합이 게이트 밑까지 들어와 <span class="term">유효 채널 길이</span><span class="en">(L<sub>eff</sub>)</span>가 줄고 V<sub>t</sub>가 떨어진다(단채널 효과). 넓으면 전류가 옅은 LDD를 더 길게 지나야 해 직렬 저항이 는다.</p>
+    <div class="formula">$$L_{\text{eff}} = L_g - 2\max\!\left(\Delta L_{\text{LDD}},\; 0.7\,x_j - w_{sp}\right), \qquad \Delta V_t \approx -V_0\, e^{-L_{\text{eff}}/2\lambda}$$
+    $$R_{\text{ext}} = 2\left(R_{sh}\, w_{sp} + R_{SD}\right), \qquad I_{on} \approx \frac{V_{DD}-V_t}{r_{ch}\, L_{\text{eff}} + R_{\text{ext}}}$$
+      <div class="where">평면 소자의 자연 길이 λ = 8 nm, V₀ = 1.2 V(V<sub>DS</sub> = V<sub>DD</sub> = 1 V, DIBL 포함), ΔL<sub>LDD</sub> = 5 nm, 실리사이드·콘택 저항 R<sub>SD</sub> = 50 Ω·µm, 채널 저항 r<sub>ch</sub> = 12 Ω·µm/nm, 긴 채널 V<sub>t</sub> = 0.35 V로 둔 교육용 모델이다(저항은 폭 1 µm당). 누설 한계를 |ΔV<sub>t</sub>| ≤ 100 mV로 잡으면 L<sub>eff</sub>가 \(2\lambda\ln(V_0/0.1\,\text{V}) \approx 40\) nm보다 길어야 한다.</div>
+    </div>
+    <div class="sim" id="sim-spacer">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>스페이서 폭의 줄다리기: 단채널 효과와 직렬 저항</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sp-cv"></canvas></div>
+        <div class="sim-controls">
+          <label class="ctrl"><span>스페이서 폭 w<sub>sp</sub> <output id="sp-w-out"></output></span><input type="range" id="sp-w" min="0" max="50" step="1" value="24"></label>
+          <label class="ctrl"><span>게이트 길이 L<sub>g</sub> <output id="sp-l-out"></output></span><input type="range" id="sp-l" min="30" max="100" step="1" value="50"></label>
+          <label class="ctrl"><span>깊은 S/D 접합 깊이 x<sub>j</sub> <output id="sp-x-out"></output></span><input type="range" id="sp-x" min="20" max="80" step="1" value="40"></label>
+          <label class="ctrl"><span>LDD 면저항 R<sub>sh</sub> <output id="sp-r-out"></output></span><input type="range" id="sp-r" min="200" max="3000" step="50" value="1000"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">유효 채널 L<sub>eff</sub></span><span class="v" id="sp-o-l">—</span></div>
+        <div class="stat"><span class="k">V<sub>t</sub> 롤오프 ΔV<sub>t</sub></span><span class="v" id="sp-o-v">—</span></div>
+        <div class="stat"><span class="k">외부 저항 R<sub>ext</sub></span><span class="v" id="sp-o-r">—</span></div>
+        <div class="stat"><span class="k">I<sub>on</sub> (최적 시작점 대비)</span><span class="v" id="sp-o-i">—</span></div>
+        <div class="stat"><span class="k">판정</span><span class="v" id="sp-o-x">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본(L<sub>g</sub> 50 nm, x<sub>j</sub> 40 nm, R<sub>sh</sub> 1000 Ω/□)에서 최적 구간은 스페이서 약 23~37 nm이고, 단면 흐름의 24 nm 스페이서는 그 안에 있다. ② 스페이서를 15 nm로 좁히면 깊은 접합이 게이트 밑 13 nm까지 들어와 L<sub>eff</sub>가 24 nm, ΔV<sub>t</sub>가 −268 mV가 된다. I<sub>on</sub>은 약 2200 µA/µm로 커 보이지만 누설 한계를 크게 넘는다. ③ x<sub>j</sub>를 60 nm로 깊게 하면 최적 구간이 약 37 nm 이상으로 밀린다. ④ L<sub>g</sub>를 45 nm로 줄이면 어떤 스페이서로도 |ΔV<sub>t</sub>| ≤ 100 mV를 지키지 못한다. 평면 트랜지스터의 미세화가 막힌 이유이고, 게이트가 채널을 더 세게 잡는 FinFET(<a href="advanced.html">13장</a>)이 λ를 줄여 이 벽을 넘었다. (위 식의 교육용 상수, 롤오프는 첫 지수 항만, 채널 저항은 L<sub>eff</sub>에 비례한다고 본 단순 모델이다. 위 단면은 가로를 늘려 그린 모식도다.)</div>
+    </div>
     <h3>⑤ 실리사이드</h3>
     <p>니켈(또는 코발트·티타늄)을 전면에 입히고 가열하면 드러난 실리콘(소스·드레인, 폴리 게이트 윗면)과만 반응해 저항이 낮은 NiSi가 생긴다. 산화막·질화막 위의 니켈은 반응하지 않으므로 씻어 내면 끝이다. 마스크 없이 정렬되는 <span class="term">살리사이드</span><span class="en">(Self-aligned silicide)</span>다. 소스·드레인의 면저항이 수십~수백 Ω/□에서 수 Ω/□로 떨어진다.</p>
+    <p>실리사이드는 온도에 따라 다른 상이 차례로 생긴다. 니켈은 250 °C 근처에서 Ni₂Si가 먼저 생기고, 350 °C를 넘으면 비저항이 가장 낮은 NiSi(약 15 µΩ·cm)가 되며, 750 °C 근처부터는 다시 비저항이 높은 NiSi₂로 바뀐다. 얇은 NiSi 막은 그보다 낮은 600~700 °C에서 섬처럼 뭉치는 <span class="term">응집</span><span class="en">(Agglomeration)</span>으로 끊어진다. 반응은 실리콘을 먹으며 진행하므로 소모된 실리콘 깊이(니켈 1 nm당 NiSi는 1.83 nm)가 얕은 접합에 닿지 않아야 한다. 티타늄은 좁은 선에서 저저항 C54 상으로 잘 바뀌지 않아 코발트에, 코발트는 실리콘을 많이 먹고(CoSi₂, 3.64 nm) 높은 온도가 필요해 니켈에 자리를 내줬다.</p>
+    <div class="sim" id="sim-sil">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>실리사이드: 온도가 상과 저항을 정한다</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="sl-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>금속</span><div class="seg" id="sl-mt"><button data-value="ni" class="on">Ni</button><button data-value="co">Co</button><button data-value="ti">Ti</button></div></div>
+          <label class="ctrl"><span>금속 두께 <output id="sl-t-out"></output></span><input type="range" id="sl-t" min="5" max="20" step="0.5" value="10"></label>
+          <label class="ctrl"><span>어닐 온도 <output id="sl-T-out"></output></span><input type="range" id="sl-T" min="200" max="900" step="5" value="450"></label>
+          <label class="ctrl"><span>S/D 접합 깊이 x<sub>j</sub> <output id="sl-x-out"></output></span><input type="range" id="sl-x" min="20" max="100" step="1" value="40"></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">상</span><span class="v" id="sl-o-ph">—</span></div>
+        <div class="stat"><span class="k">실리사이드 두께</span><span class="v" id="sl-o-t">—</span></div>
+        <div class="stat"><span class="k">면저항 R<sub>s</sub></span><span class="v" id="sl-o-r">—</span></div>
+        <div class="stat"><span class="k">소모된 실리콘</span><span class="v" id="sl-o-si">—</span></div>
+        <div class="stat"><span class="k">접합까지 남은 거리</span><span class="v" id="sl-o-g">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본(Ni 10 nm, 450 °C, x<sub>j</sub> 40 nm)은 NiSi 22.2 nm, R<sub>s</sub> 6.61 Ω/□, 접합까지 21.7 nm로 안전하다. 반응이 없는 200 °C에서는 금속이 선택 식각에 다 씻겨 R<sub>s</sub> 163 Ω/□의 확산층만 남는다. ② 680 °C로 올리면 상은 그대로 NiSi지만 막이 응집해 R<sub>s</sub>가 44.2 Ω/□로 뛰고, 800 °C에서는 NiSi₂가 실리콘 36.5 nm를 먹고 뾰족하게 파고들어 접합을 뚫는다. ③ Co로 바꿔 750 °C(CoSi₂)를 만들면 R<sub>s</sub>는 5.1 Ω/□로 낮지만 실리콘 36.4 nm를 먹어 접합까지 3.6 nm밖에 남지 않는다. ④ Ni를 20 nm로 두껍게 하면 R<sub>s</sub>는 3.37 Ω/□로 절반이 되지만 접합까지 3.4 nm로 누설 위험이다. (충분히 어닐한 평형 상 순서, 형성 온도는 대략값. 응집 시작 = 580 + 6 × Ni 두께(nm) °C와 응집 뒤 저항 증가는 정성적 근사, NiSi₂ 계면 돌기 10 nm, n⁺ 확산층 0.65 mΩ·cm와 병렬로 계산한 교육용 모델이다.)</div>
+    </div>
     <h3>⑥ 콘택과 첫 배선</h3>
     <p>질화막 식각 정지막(CESL)과 두꺼운 산화막(PMD)을 입히고 CMP로 평탄화한 뒤 소스·드레인 위에 콘택 홀을 뚫어 TiN 라이너와 텅스텐으로 채운다(MOL). 그 위에 첫 구리 배선 M1을 싱글 다마신으로 만든다(<a href="metal.html">11장</a>). 이후의 배선층은 듀얼 다마신을 반복한다.</p>
   </section>
@@ -162,16 +254,40 @@
       <li><strong>평탄화 후 노광</strong>: 미세 노광(게이트, 콘택, 배선) 전에는 반드시 CMP로 표면을 평평하게 해 초점 심도를 확보한다.</li>
       <li><strong>오염 금지 구역</strong>: 금(Au)·구리 같은 금속은 FEOL 장비에 절대 들어가지 않는다. 팹은 장비와 웨이퍼 반송을 FEOL·BEOL로 분리한다.</li>
     </ul>
+    <p>‘뜨거운 것 먼저’를 숫자로 확인해 보자. 열 예산은 단계마다 \(Dt\)가 더해진다(<a href="anneal.html">9장</a>). 소스·드레인 주입 직후의 가우시안 분포는 열을 받을수록 넓어지고, 접합 깊이는 이 분포가 웰·할로 도핑 \(N_B\)와 만나는 깊이다.</p>
+    <div class="formula">$$(Dt)_{\text{tot}} = \sum_i D_0\, e^{-E_a/kT_i}\, t_i, \qquad \sigma^2 = \Delta R_p^2 + 2\,(Dt)_{\text{tot}}, \qquad C(x_j) = N_B$$
+      <div class="where">D₀·E<sub>a</sub>는 9장 표의 고유 확산 값(B 0.76 cm²/s·3.46 eV, As 0.066 cm²/s·3.44 eV)이다. 아레니우스 지수 때문에 붕소는 1050 °C에서 400 °C보다 약 5×10¹²배 빨리 퍼진다. 스파이크 1.5초가 400 °C에서 약 25만 년과 맞먹는 셈이다.</div>
+    </div>
+    <div class="sim" id="sim-tb">
+      <div class="sim-head"><span class="sim-tag">SIMULATOR</span><h3>열 예산은 쌓인다: 접합이 깊어지는 순서</h3></div>
+      <div class="sim-body side">
+        <div class="sim-view"><canvas id="tb-cv"></canvas></div>
+        <div class="sim-controls">
+          <div class="ctrl"><span>소스·드레인</span><div class="seg" id="tb-sp"><button data-value="As" class="on">n⁺ · As 20 keV</button><button data-value="B">p⁺ · B 4 keV</button></div></div>
+          <div class="ctrl"><span>활성화 어닐</span><div class="seg" id="tb-act"><button data-value="spike" class="on">스파이크</button><button data-value="rta">RTA</button><button data-value="ms">밀리초</button><button data-value="furn">퍼니스</button></div></div>
+          <label class="ctrl"><span>배선층 수 (층당 400 °C 1시간) <output id="tb-m-out"></output></span><input type="range" id="tb-m" min="4" max="16" step="1" value="10"></label>
+          <label class="check"><input type="checkbox" id="tb-x"> <span>실수: 접합 뒤에 고온 산화 (1000 °C 30분)</span></label>
+        </div>
+      </div>
+      <div class="sim-readout">
+        <div class="stat"><span class="k">최종 접합 깊이 x<sub>j</sub></span><span class="v" id="tb-o-xj">—</span></div>
+        <div class="stat"><span class="k">열 예산을 지배한 단계</span><span class="v" id="tb-o-dom">—</span></div>
+        <div class="stat"><span class="k">S/D 측면 접합 (게이트 기준)</span><span class="v" id="tb-o-lat">—</span></div>
+        <div class="stat"><span class="k">누적 확산 길이 √(Dt)</span><span class="v" id="tb-o-l">—</span></div>
+      </div>
+      <div class="sim-note">해볼 것: ① 기본(n⁺ As, 스파이크)에서는 실리사이드·콘택·배선 10층·포밍 가스를 다 거쳐도 x<sub>j</sub>가 42.2 → 42.6 nm로 0.4 nm 깊어질 뿐이고, 그 몫은 모두 스파이크다. 뒤 단계 하나하나의 √(Dt)는 10⁻⁵~10⁻⁴ nm다. ② ‘실수’를 켜면 1000 °C 30분 산화 하나가 열 예산의 99.7 %를 차지해 x<sub>j</sub>가 104 nm로 두 배 넘게 깊어지고, 측면 확산이 게이트 밑을 건너 소스와 드레인이 맞닿는다. ③ p⁺(B)로 바꾸면 붕소는 스파이크만으로 √(Dt)가 2.75 nm로 비소의 세 배 넘게 퍼진다. 퍼니스(900 °C 30분)로 활성화하면 x<sub>j</sub>가 92.7 nm가 되고 S/D가 맞닿는다. ④ 배선층을 16층으로 늘려도 x<sub>j</sub>는 그대로다. (9장 고유 확산 계수, 반사 경계 가우시안 + 측면 퍼짐 0.8ΔR<sub>p</sub>, 도즈 3×10¹⁵ cm⁻², 배경 10¹⁸ cm⁻³, 게이트 50 nm·스페이서 24 nm, 스파이크 실효 1.5 s. TED와 농도 의존 확산은 뺐으므로 실제 접합은 이보다 깊다. 교육용.)</div>
+    </div>
   </section>
 
   <section class="keypoints" id="summary">
     <h2>핵심 정리</h2>
     <ol>
       <li>CMOS 흐름: STI → 웰·Vt 주입 → 게이트 스택 → LDD → 스페이서 → 소스·드레인 → 활성화 → 실리사이드 → 콘택 → 배선.</li>
-      <li>게이트와 스페이서가 소스·드레인 주입의 마스크가 되는 자기 정렬이 미세 트랜지스터의 핵심이다.</li>
-      <li>NMOS/PMOS를 나눠 주입하는 단계마다 마스크가 하나씩 든다. 마스크 수는 공정 원가의 직접 지표다.</li>
+      <li>게이트와 스페이서가 소스·드레인 주입의 마스크가 되는 자기 정렬이 미세 트랜지스터의 핵심이다. 별도 마스크로 맞추면 트랜지스터 10⁹개 가운데 가장 나쁜 하나(약 6σ)까지 덮는 여유가 필요하다.</li>
+      <li>NMOS/PMOS를 나눠 주입하는 단계마다 마스크가 하나씩 든다. 마스크 수는 공정 원가와 사이클 타임의 직접 지표이고, 배선층과 멀티 패터닝이 크게 늘리며 EUV 단일 노광이 다시 줄인다.</li>
       <li>문턱 전압은 채널 도핑·게이트 절연막·게이트 일함수·고정 전하로 정해지고, Vt 주입으로 맞춘다.</li>
-      <li>공정 순서는 열 예산, 자기 정렬, 평탄도, 오염 관리가 정한다.</li>
+      <li>스페이서 폭은 단채널 효과(좁을 때)와 직렬 저항(넓을 때)의 줄다리기다. 실리사이드는 NiSi가 안정한 온도 창에서, 소모되는 실리콘이 접합에 닿지 않게 만든다.</li>
+      <li>공정 순서는 열 예산, 자기 정렬, 평탄도, 오염 관리가 정한다. 열 예산은 아레니우스 때문에 가장 뜨거운 단계가 지배하므로 접합을 만든 뒤에는 온도를 낮춘다.</li>
     </ol>
   </section>
 
@@ -190,6 +306,21 @@
       <div class="quiz-q"><p>채널 도핑이 같을 때 게이트 산화막을 얇게 하면 NMOS의 문턱 전압은?</p><div class="opts">
         <button class="opt" data-correct>낮아진다 (공핍 전하 항이 C<sub>ox</sub>에 반비례)</button><button class="opt">높아진다</button><button class="opt">변하지 않는다</button><button class="opt">음수가 된다</button>
       </div><div class="quiz-exp">\(\sqrt{2\varepsilon qN_A 2\phi_F}/C_{ox}\) 항이 줄어든다. 그래서 미세화 때마다 채널 도핑을 다시 맞춘다.</div></div>
+      <div class="quiz-q"><p>배선 14층, Vt 4종, 조밀한 배선층 4개를 SAQP(+컷)로 찍던 설계에서 조밀한 층만 EUV 단일 노광으로 바꾸면, 이 장의 마스크 계산기로 마스크는 어떻게 되나?</p><div class="opts">
+        <button class="opt">4장 준다</button><button class="opt">8장 준다</button><button class="opt" data-correct>16장 준다</button><button class="opt">변하지 않는다</button>
+      </div><div class="quiz-exp">조밀한 층마다 트렌치·비아 2장이 각각 약 3장에서 1장이 되므로 4층 × 2장 × (3 − 1) = 16장이 준다(70 → 54장). 마스크 한 장에 15~25 단계와 1~1.5일의 팹 시간이 따라오므로 원가와 사이클 타임이 함께 준다.</div></div>
+      <div class="quiz-q"><p>소스·드레인을 활성화한 뒤 450 °C 실리사이드·콘택과 400 °C 배선 공정을 합쳐 10시간 넘게 거쳐도 접합 깊이가 거의 그대로인 이유는?</p><div class="opts">
+        <button class="opt">실리사이드가 도펀트를 붙잡아 두기 때문에</button><button class="opt" data-correct>확산 계수가 온도에 지수적으로 줄어(아레니우스) 그 단계들의 Dt를 다 합쳐도 스파이크 활성화의 10⁻⁷배에도 못 미치기 때문에</button><button class="opt">배선 공정은 웨이퍼 뒷면만 데우기 때문에</button><button class="opt">한 번 활성화된 도펀트는 더 이상 확산하지 않기 때문에</button>
+      </div><div class="quiz-exp">붕소의 D는 1050 °C에서 약 5×10⁻¹⁴ cm²/s지만 400 °C에서는 약 10⁻²⁶ cm²/s다. 열 예산은 가장 뜨거운 단계가 지배하므로, 접합을 만든 뒤 1000 °C 30분 산화 같은 고온 단계를 끼워 넣으면 비소 접합이 42.6 nm에서 104 nm로 깊어진다. 그래서 뜨거운 공정을 먼저 한다.</div></div>
+      <div class="quiz-q"><p>트랜지스터 10⁹개를 별도 마스크로 소스·드레인에 맞춘다면(오버레이 3σ = 10 nm, 측면 퍼짐 겹침 5 nm), 칩 수율 90 %에 필요한 설계 겹침 여유 m은 대략?</p><div class="opts">
+        <button class="opt">약 3 nm</button><button class="opt">약 10 nm (3σ면 충분하다)</button><button class="opt" data-correct>약 16.5 nm</button><button class="opt">약 100 nm</button>
+      </div><div class="quiz-exp">트랜지스터 하나의 틈 확률이 약 10⁻¹⁰이어야 하므로 m + ΔL이 약 6.5σ(21.5 nm)여야 한다. 여유만큼 게이트가 길어지고 C<sub>ov</sub>가 커진다. 자기 정렬은 이 여유를 0으로 만든다.</div></div>
+      <div class="quiz-q"><p>니켈 살리사이드를 800 °C로 어닐하면 어떤 일이 생기나?</p><div class="opts">
+        <button class="opt" data-correct>비저항이 높은 NiSi₂로 바뀌고 실리콘을 더 많이(니켈 1 nm당 3.65 nm) 먹으며 뾰족하게 파고들어 얕은 접합을 뚫을 수 있다</button><button class="opt">비저항이 가장 낮은 NiSi가 더 두껍게 자란다</button><button class="opt">니켈이 산화막과도 반응해 게이트와 소스가 단락된다</button><button class="opt">아무 변화가 없다</button>
+      </div><div class="quiz-exp">NiSi는 약 350~700 °C 창에서 안정하고, 얇은 막은 600~700 °C에서 이미 응집해 끊어진다. 그래서 니켈 실리사이드 뒤의 콘택·배선 공정은 모두 그보다 낮은 약 400~450 °C에서 한다.</div></div>
+      <div class="quiz-q"><p>스페이서를 너무 좁게 만들면 어떤 문제가 생기나?</p><div class="opts">
+        <button class="opt">LDD 구간이 길어져 직렬 저항이 커진다</button><button class="opt" data-correct>깊은 소스·드레인이 게이트 밑으로 파고들어 유효 채널이 짧아지고 V<sub>t</sub>가 크게 떨어져 누설이 는다</button><button class="opt">실리사이드가 생기지 않는다</button><button class="opt">게이트 길이가 길어진다</button>
+      </div><div class="quiz-exp">기본 조건(L<sub>g</sub> 50 nm, x<sub>j</sub> 40 nm)에서 스페이서 15 nm면 L<sub>eff</sub>가 24 nm로 줄고 ΔV<sub>t</sub> ≈ −268 mV다. 반대로 너무 넓으면 LDD 직렬 저항이 I<sub>on</sub>을 깎는다. 그 사이(약 23~37 nm)가 최적 구간이다.</div></div>
     </div>
   </section>
 </main>
@@ -397,6 +528,708 @@
       PB.stat("vt-o-w", small(Math.round(r.w * 1e7), "nm"));
       PB.stat("vt-o-i", XS.concHTML(Math.pow(10, gI()) / 30e-7).replace(" cm", "<small> cm").replace(/<\/sup>$/, "</sup></small>"));
     }, { aspect: 0.62, minHeight: 320, maxHeight: 440, hover: true });
+  })();
+
+  /* ================================================================
+     새 실험 공용 도우미 (마스크 · 열 예산 · 자기 정렬 · 실리사이드 · 스페이서)
+     ================================================================ */
+  // 넓은 화면(조작부가 옆)에서는 캔버스 높이를 조작부 높이에 맞추고, 좁은 화면에서는 폭에 비례시킨다.
+  function fitCanvas(canvas, draw, o) {
+    var view = canvas.parentElement, body = canvas.closest(".sim-body"), ctl = body && body.querySelector(".sim-controls");
+    var opts = { height: 0, hover: o.hover };
+    function contentH() {
+      var last = ctl.lastElementChild; if (!last) return 0;
+      return last.getBoundingClientRect().bottom - ctl.getBoundingClientRect().top + (parseFloat(getComputedStyle(ctl).paddingBottom) || 0);
+    }
+    function want() {
+      var w = view.clientWidth || 600;
+      var side = ctl && Math.abs(ctl.getBoundingClientRect().top - view.getBoundingClientRect().top) < 2;
+      return Math.round(side ? PB.clamp(contentH(), o.min, o.max) : PB.clamp(w * o.aspect, o.nmin || o.min, o.nmax || o.max));
+    }
+    opts.height = want();
+    var st = PB.canvas(canvas, draw, opts);
+    function re() { var hh = want(); if (Math.abs(hh - opts.height) > 1) { opts.height = hh; st.resize(); } }
+    if (window.ResizeObserver && ctl) new ResizeObserver(re).observe(ctl);
+    window.addEventListener("resize", re);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(re);
+    return st;
+  }
+  // 값 묶음이 목표를 짧게 따라간다(PB.approach). 움직임이 멈추면 rAF도 멈춘다.
+  function follower(redraw, tau) {
+    var cur = {}, tgt = {}, raf = 0, last = 0;
+    function step(ts) {
+      raf = 0;
+      var dt = last ? Math.min(0.05, (ts - last) / 1000) : 0.016, moving = false; last = ts;
+      Object.keys(tgt).forEach(function (k) {
+        var c = PB.approach(cur[k], tgt[k], dt, tau);
+        if (Math.abs(c - tgt[k]) <= 1e-3 * Math.max(1, Math.abs(tgt[k]))) c = tgt[k]; else moving = true;
+        cur[k] = c;
+      });
+      redraw();
+      if (moving) raf = requestAnimationFrame(step);
+    }
+    return {
+      go: function (t) {
+        var ch = false;
+        Object.keys(t).forEach(function (k) { if (!(k in cur) || !isFinite(cur[k])) cur[k] = t[k]; if (tgt[k] !== t[k]) ch = true; tgt[k] = t[k]; });
+        if (ch && !raf) { last = 0; raf = requestAnimationFrame(step); }
+      },
+      v: function (k) { return cur[k]; }
+    };
+  }
+  function hatch(ctx, x, y, w, h, col, gap) {
+    if (!(w > 0 && h > 0)) return;
+    ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+    ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.beginPath();
+    for (var k = -h; k < w; k += gap || 6) { ctx.moveTo(x + k, y + h); ctx.lineTo(x + k + h, y); }
+    ctx.stroke(); ctx.restore();
+  }
+  // 이름표를 세로로 겹치지 않게 늘어놓는다(최소 간격 gap, [lo, hi] 안).
+  function spread(items, gap, lo, hi) {
+    items.sort(function (a, b) { return a.y - b.y; });
+    for (var it = 0; it < 6; it++) {
+      for (var i = 0; i < items.length; i++) items[i].y = Math.max(items[i].y, i ? items[i - 1].y + gap : lo);
+      for (var j = items.length - 1; j >= 0; j--) items[j].y = Math.min(items[j].y, j < items.length - 1 ? items[j + 1].y - gap : hi);
+    }
+    return items;
+  }
+  // 차트 위쪽 줄에 이름표를 겹치지 않게 놓는다: 같은 줄에서 부딪히면 다음 줄로.
+  function rowLabels(ctx, labels, box) {
+    var placed = [];
+    labels.forEach(function (L) {
+      var tw = PB.textWidth(ctx, L.t, { size: 11.5, weight: 600 }), x0 = L.align === "right" ? L.x - tw : L.align === "center" ? L.x - tw / 2 : L.x;
+      x0 = Math.max(box.x + 3, Math.min(box.x + box.w - tw - 3, x0));
+      for (var row = L.row || 0; row < 5; row++) {
+        var hit = placed.some(function (p) { return p.row === row && x0 < p.x1 + 6 && x0 + tw > p.x0 - 6; });
+        if (hit) continue;
+        placed.push({ row: row, x0: x0, x1: x0 + tw });
+        PB.text(ctx, L.t, x0, box.y + 11 + row * 17, { size: 11.5, weight: 600, color: L.color, align: "left", baseline: "middle", halo: true });
+        break;
+      }
+    });
+  }
+  function word(t, v) { return '<span class="' + (v === "ok" ? "ok-t" : v === "warn" ? "warn-t" : "bad-t") + '">' + t + "</span>"; }
+  // 1.2×10<sup>−6</sup>
+  function supH(x) {
+    if (!(x > 0) || !isFinite(x)) return "0";
+    var e = Math.floor(Math.log10(x)), m = x / Math.pow(10, e);
+    if (+m.toFixed(1) >= 10) { m = 1; e++; }
+    return m.toFixed(1) + "×10<sup>" + String(e).replace("-", "−") + "</sup>";
+  }
+  function niceUp(v) { var e = Math.pow(10, Math.floor(Math.log10(v))), m = v / e; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * e; }
+
+  /* ---------------- 마스크 수 세기 */
+  (function () {
+    /* model:sim-mask */
+    var MKM = (function () {
+      var MULT = { single: 1, lele: 2, saqp: 3 };
+      // o = {metals, vt, tight, pat, euv, io}. 마스크 수는 교육용 근사(모듈별 대표값).
+      function count(o) {
+        var tight = Math.min(o.tight, o.metals), adv = tight > 0 && o.pat !== "single";
+        var duv = MULT[o.pat], m = o.euv ? 1 : duv;
+        var mods = [
+          { k: "sti", n: 1, g: "feol" }, { k: "well", n: 2, g: "feol" }, { k: "vt", n: 2 * (o.vt - 1), g: "feol" },
+          { k: "gate", n: adv ? 2 : 1, g: "feol" }, { k: "ldd", n: 2, g: "feol" }, { k: "sd", n: 2, g: "feol" },
+          { k: "sab", n: 1, g: "feol" }, { k: "ct", n: adv ? 2 : 1, g: "feol" }, { k: "io", n: o.io ? 6 : 0, g: "opt" },
+          { k: "bt", n: 2 * tight, g: "beol" }, { k: "mp", n: 2 * tight * (m - 1), g: "mp" },
+          { k: "bn", n: 2 * (o.metals - tight), g: "beol" }, { k: "pad", n: 2, g: "pad" }
+        ];
+        var total = 0, feol = 0, beol = 0;
+        mods.forEach(function (d) { total += d.n; if (d.g === "feol") feol += d.n; if (d.g === "beol" || d.g === "mp") beol += d.n; });
+        return { mods: mods, total: total, feol: feol, beol: beol, saved: 2 * tight * (duv - m), tight: tight, adv: adv, mult: m,
+          steps: [15 * total, 25 * total], days: [total, 1.5 * total] };
+      }
+      function zone(n) { return n < 40 ? "low" : n <= 60 ? "r28" : n < 70 ? "mid" : n <= 100 ? "adv" : "high"; }
+      return { count: count, zone: zone, MULT: MULT };
+    })();
+    /* /model:sim-mask */
+    var cvEl = document.getElementById("mk-cv"), cv, rr = function () { cv && cv.redraw(); };
+    var gM = PB.range("mk-m", function (v) { return v + "층"; }, rr);
+    var gV = PB.range("mk-v", function (v) { return v + "종"; }, rr);
+    var gT = PB.range("mk-t", function (v) { return v + "층"; }, rr);
+    var gP = PB.seg("mk-p", rr);
+    var eE = document.getElementById("mk-e"), eIO = document.getElementById("mk-io"), tOut = document.getElementById("mk-t-out");
+    eE.addEventListener("change", rr); eIO.addEventListener("change", rr);
+    var NAME = { sti: "STI", well: "웰", vt: "Vt 추가", gate: "게이트", ldd: "LDD·할로", sd: "S/D", sab: "실리사이드 차단", ct: "콘택", io: "I/O·아날로그", bt: "조밀 배선", mp: "멀티 패터닝", bn: "일반 배선", pad: "패드" };
+    var REF = [[40, 60, "28 nm급", "약 40~60"], [70, 100, "첨단", "약 70~100"]];
+    var ZONE = { low: ["40장 미만", ""], r28: ["28 nm급 범위", "약 40~60"], mid: ["28 nm급~첨단 사이", ""], adv: ["첨단 범위", "약 70~100"], high: ["100장 초과", ""] };
+    var fol = follower(rr, 0.14);
+    cv = fitCanvas(cvEl, function (ctx, w, h) {
+      var P = PB.palette(), o = { metals: gM(), vt: gV(), tight: gT(), pat: gP(), euv: eE.checked, io: eIO.checked }, r = MKM.count(o);
+      var tg = { saved: r.saved }; r.mods.forEach(function (d) { tg[d.k] = d.n; }); fol.go(tg);
+      tOut.textContent = r.tight + "층" + (o.tight > r.tight ? " (배선층 수까지)" : "");
+      var narrow = w < 520, top = 30, bot = h - 14, axX = narrow ? 28 : 34, maxN = 110;
+      var Y = function (n) { return bot - n / maxN * (bot - top); };
+      var brX = axX + (narrow ? 64 : 82), colX = brX + 10, colW = narrow ? 38 : 54, cx1 = colX + colW, labX = cx1 + (narrow ? 22 : 34);
+      // 축 · 격자
+      ctx.save();
+      ctx.font = PB.font(11, 400, true); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      for (var n = 0; n <= 100; n += 20) {
+        var yy = Math.round(Y(n)) + 0.5;
+        ctx.strokeStyle = P.grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(axX, yy); ctx.lineTo(cx1 + 6, yy); ctx.stroke();
+        ctx.fillStyle = P.dim; ctx.fillText(String(n), axX - 5, yy);
+      }
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(axX + 0.5, Y(maxN)); ctx.lineTo(axX + 0.5, bot); ctx.stroke();
+      ctx.restore();
+      PB.text(ctx, "(장)", axX - 5, Y(maxN) - 10, { size: 11, color: P.dim, align: "right", baseline: "middle" });
+      // 공개 범위(약값)
+      REF.forEach(function (rf) {
+        var y0 = Y(rf[1]), y1 = Y(rf[0]), ym = (y0 + y1) / 2;
+        ctx.fillStyle = PB.alpha(P.dim, PB.isDark() ? 0.13 : 0.08); ctx.fillRect(brX, y0, cx1 + 6 - brX, y1 - y0);
+        ctx.strokeStyle = P.dim; ctx.lineWidth = 1.2; ctx.beginPath();
+        ctx.moveTo(brX + 5, y0 + 0.5); ctx.lineTo(brX + 0.5, y0 + 0.5); ctx.lineTo(brX + 0.5, y1 - 0.5); ctx.lineTo(brX + 5, y1 - 0.5); ctx.stroke();
+        PB.text(ctx, rf[2], brX - 6, ym - 7, { size: 11.5, weight: 700, color: P.dim, align: "right", baseline: "middle", halo: true });
+        PB.text(ctx, rf[3], brX - 6, ym + 8, { size: 11, color: P.dim, align: "right", baseline: "middle", halo: true });
+      });
+      // 모듈별로 쌓은 기둥(값은 짧게 따라간다)
+      var acc = 0, segs = [], fi = 0, bi = 0;
+      r.mods.forEach(function (d) {
+        var v = Math.max(0, fol.v(d.k) || 0);
+        if (v < 0.02) { acc += v; return; }
+        var col = d.g === "feol" ? PB.alpha(P.accent, fi++ % 2 ? 0.6 : 0.88) : d.g === "beol" ? PB.alpha(P.accent2, bi++ % 2 ? 0.56 : 0.84)
+          : d.g === "mp" ? PB.alpha(P.warn, 0.75) : d.g === "opt" ? PB.alpha(P.dim, 0.5) : PB.alpha(P.dim, 0.3);
+        segs.push({ d: d, a: acc, b: acc + v, col: col }); acc += v;
+      });
+      var tot = acc, sav = Math.max(0, fol.v("saved") || 0);
+      ctx.save(); PB.rrect(ctx, colX, Y(tot), colW, bot - Y(tot), 5); ctx.clip();
+      segs.forEach(function (s) {
+        var y0 = Y(s.b), y1 = Y(s.a);
+        ctx.fillStyle = s.col; ctx.fillRect(colX, y0, colW, y1 - y0);
+        if (s.d.g === "mp") hatch(ctx, colX, y0, colW, y1 - y0, PB.alpha(P.bg, 0.55), 5);
+        ctx.fillStyle = P.bg; ctx.fillRect(colX, y0 - 0.5, colW, 1);
+      });
+      ctx.restore();
+      if (sav > 0.05) {   // EUV로 빠진 멀티 패터닝 몫(점선)
+        var g0 = Y(tot + sav), g1 = Y(tot);
+        hatch(ctx, colX + 2, g0 + 2, colW - 4, g1 - g0 - 4, PB.alpha(P.warn, 0.35), 6);
+        ctx.save(); ctx.setLineDash([4, 3]); ctx.strokeStyle = P.warn; ctx.lineWidth = 1.4; PB.rrect(ctx, colX + 0.5, g0 + 0.5, colW - 1, g1 - g0 - 1.5, 4); ctx.stroke(); ctx.restore();
+      }
+      // 이름표(바깥 열, 지시선)
+      var items = segs.map(function (s) {
+        var d = s.d, t = NAME[d.k];
+        if (d.k === "bt") t += " " + r.tight + "층";
+        if (d.k === "bn") t += " " + (o.metals - r.tight) + "층";
+        if (d.k === "gate" && r.adv) t += "+컷";
+        if (d.k === "mp") t += " ×" + r.mult;
+        var yc = (Y(s.a) + Y(s.b)) / 2;
+        return { y: yc, y0: yc, t: t, n: (d.k === "mp" ? "+" : "") + d.n, col: s.col };
+      });
+      if (sav > 0.05) { var yg = (Y(tot) + Y(tot + sav)) / 2; items.push({ y: yg, y0: yg, t: "EUV로 뺀 몫", n: "−" + r.saved, col: P.warn, ghost: true }); }
+      spread(items, 15, top + 2, bot - 4);
+      items.forEach(function (it) {
+        ctx.strokeStyle = P.faint; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cx1 + 2, it.y0); ctx.lineTo(cx1 + 7, it.y0); ctx.lineTo(labX - 4, it.y); ctx.stroke();
+        PB.rrect(ctx, labX, it.y - 4.5, 9, 9, 2);
+        if (it.ghost) { ctx.save(); ctx.setLineDash([2, 2]); ctx.strokeStyle = it.col; ctx.lineWidth = 1.2; ctx.stroke(); ctx.restore(); }
+        else { ctx.fillStyle = it.col; ctx.fill(); }
+        var tw = PB.text(ctx, it.t, labX + 14, it.y, { size: 12, color: P.text, align: "left", baseline: "middle", halo: true });
+        PB.text(ctx, it.n, labX + 14 + tw + 6, it.y, { size: 12, weight: 700, mono: true, color: it.ghost ? P.warn : P.text, align: "left", baseline: "middle", halo: true });
+      });
+      if (!narrow && w - (labX + 176) > 170) {   // 마스크 1장에 따라오는 공정 묶음
+        var bx0 = labX + 176, bwd = Math.min(220, w - bx0 - 12), STEP = ["세정 · 감광막 도포 · 베이크", "노광 (스캐너)", "노광 후 베이크 · 현상", "계측: CD · 오버레이", "식각 또는 이온 주입", "감광막 제거 · 세정"];
+        var rh2 = Math.min(30, (bot - top - 52) / STEP.length), by0 = (top + bot) / 2 - (STEP.length * rh2 + 44) / 2;
+        PB.text(ctx, "마스크 1장에 따라오는 일", bx0, by0 + 6, { size: 12, weight: 700, color: P.text, align: "left", baseline: "middle" });
+        STEP.forEach(function (t, i) {
+          var yy2 = by0 + 22 + i * rh2;
+          PB.rrect(ctx, bx0, yy2, bwd, rh2 - 8, 6); ctx.fillStyle = PB.alpha(P.accent, i === 1 ? 0.16 : 0.07); ctx.fill(); ctx.strokeStyle = PB.alpha(P.accent, 0.35); ctx.lineWidth = 1; ctx.stroke();
+          PB.text(ctx, t, bx0 + 9, yy2 + (rh2 - 8) / 2 + 0.5, { size: 11.5, color: P.text, align: "left", baseline: "middle" });
+          if (i < STEP.length - 1) PB.arrow(ctx, bx0 + 16, yy2 + rh2 - 8, bx0 + 16, yy2 + rh2, { color: P.dim, width: 1.1, head: 4 });
+        });
+        PB.text(ctx, "→ 약 15~25 단계 · 1~1.5일", bx0, by0 + 22 + STEP.length * rh2 + 8, { size: 12, weight: 700, color: P.accent, align: "left", baseline: "middle" });
+      }
+      PB.badge(ctx, "총 " + r.total + "장", colX + colW / 2, Y(tot) - 13, { size: 12.5, weight: 700, fg: P.accent, bg: PB.alpha(P.bg, 0.92), border: PB.alpha(P.accent, 0.55) });
+      PB.stat("mk-o-n", r.total + "<small>장" + (r.saved ? " · EUV로 −" + r.saved : "") + "</small>");
+      PB.stat("mk-o-s", r.steps[0] + "~" + r.steps[1] + "<small>단계</small>");
+      PB.stat("mk-o-d", r.days[0] + "~" + PB.fmt(r.days[1], 3) + "<small>일</small>");
+      var z = ZONE[MKM.zone(r.total)];
+      PB.stat("mk-o-c", z[0] + (z[1] ? "<small> " + z[1] + "</small>" : ""));
+    }, { min: 340, max: 470, aspect: 1.0, nmin: 350, nmax: 430 });
+  })();
+
+  /* ---------------- 열 예산은 쌓인다 */
+  (function () {
+    /* model:sim-tb */
+    var TBM = (function () {
+      var kB = 8.617e-5, DIF = { B: [0.76, 3.46], As: [0.066, 3.44] };   // 9장 표와 같은 고유 확산 계수
+      function D(sp, Tc) { var d = DIF[sp]; return d[0] * Math.exp(-d[1] / (kB * (Tc + 273.15))); }
+      // 상보 오차 함수(Numerical Recipes erfcc, 상대 오차 < 1.2×10⁻⁷ → 꼬리까지 정확)
+      function erfc(x) {
+        var z = Math.abs(x), t = 1 / (1 + 0.5 * z);
+        var r = t * Math.exp(-z * z - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+        return x >= 0 ? r : 2 - r;
+      }
+      var ACT = { spike: [1050, 1.5], rta: [1000, 10], ms: [1250, 1e-3], furn: [900, 1800] };
+      function steps(act, metals, mistake) {
+        var a = ACT[act], s = [{ k: "act", T: a[0], t: a[1] }];
+        if (mistake) s.push({ k: "ox", T: 1000, t: 1800 });
+        s.push({ k: "sil", T: 450, t: 30 }, { k: "ct", T: 450, t: 600 }, { k: "beol", T: 400, t: metals * 3600 }, { k: "fga", T: 400, t: 1800 });
+        return s;
+      }
+      // 반사 경계 가우시안(9장과 같은 식), 단위 cm
+      function cv(x, Q, Rp, s) { return Q / (Math.sqrt(2 * Math.PI) * s) * (Math.exp(-(x - Rp) * (x - Rp) / (2 * s * s)) + Math.exp(-(x + Rp) * (x + Rp) / (2 * s * s))); }
+      function peak(Q, Rp, s) {
+        var a = 0, b = Rp;
+        for (var i = 0; i < 60; i++) { var m1 = a + (b - a) / 3, m2 = b - (b - a) / 3; if (cv(m1, Q, Rp, s) < cv(m2, Q, Rp, s)) a = m1; else b = m2; }
+        var x = (a + b) / 2; return { x: x, c: cv(x, Q, Rp, s) };
+      }
+      // 농도가 th 이상인 깊이 구간 [위, 아래] (없으면 null)
+      function band(th, Q, Rp, s, pk) {
+        if (!(pk.c >= th)) return null;
+        var lo = pk.x, hi = pk.x + 20 * s, i, m;
+        for (i = 0; i < 60; i++) { m = (lo + hi) / 2; if (cv(m, Q, Rp, s) >= th) lo = m; else hi = m; }
+        var bot = (lo + hi) / 2, top = 0;
+        if (cv(0, Q, Rp, s) < th) { lo = 0; hi = pk.x; for (i = 0; i < 60; i++) { m = (lo + hi) / 2; if (cv(m, Q, Rp, s) >= th) hi = m; else lo = m; } top = (lo + hi) / 2; }
+        return [top, bot];
+      }
+      // 측면 인자: 주입 창이 y < −a, y > a (게이트+스페이서가 가림), 측면 표준편차 sl
+      function lat(y, a, sl) { var r = Math.SQRT2 * sl; return 0.5 * erfc((y + a) / r) + 0.5 * erfc((a - y) / r); }
+      function state(o, Dt) {
+        var Rp = o.Rp * 1e-7, dR = o.dRp * 1e-7, a = (o.Lg / 2 + o.wsp) * 1e-7;
+        var s = Math.sqrt(dR * dR + 2 * Dt), sl = Math.sqrt(0.64 * dR * dR + 2 * Dt), pk = peak(o.Q, Rp, s);
+        var iv = band(o.NB, o.Q, Rp, s, pk), th = o.NB / pk.c, merged = !!iv && lat(0, a, sl) >= th, reach = 0;
+        if (iv && !merged) { var lo = -a - 40 * sl, hi = 0; for (var i = 0; i < 90; i++) { var m = (lo + hi) / 2; if (lat(m, a, sl) >= th) lo = m; else hi = m; } reach = (lo + hi) / 2 + a; }
+        return { Dt: Dt, s: s, sl: sl, pk: pk, xj: iv ? iv[1] : 0, merged: merged, reach: reach, gate: reach - o.wsp * 1e-7, Rp: Rp, a: a };
+      }
+      // o = {sp, Rp, dRp(nm), Q, NB, act, metals, mistake, Lg, wsp(nm)}
+      function run(o) {
+        var st = steps(o.act, o.metals, o.mistake), acc = 0, rows = [{ k: "imp", T: 0, t: 0, Dt: 0, cum: 0, st: state(o, 0) }], dom = null;
+        st.forEach(function (s) { s.Dt = D(o.sp, s.T) * s.t; acc += s.Dt; if (!dom || s.Dt > dom.Dt) dom = s; rows.push({ k: s.k, T: s.T, t: s.t, Dt: s.Dt, cum: acc, st: state(o, acc) }); });
+        return { rows: rows, total: acc, dom: dom, share: dom.Dt / acc, fin: rows[rows.length - 1].st, imp: rows[0].st };
+      }
+      return { D: D, erfc: erfc, cv: cv, band: band, lat: lat, state: state, run: run, steps: steps, ACT: ACT };
+    })();
+    /* /model:sim-tb */
+    var cvEl = document.getElementById("tb-cv"), cv, rr = function () { cv && cv.redraw(); };
+    var gSp = PB.seg("tb-sp", rr), gA = PB.seg("tb-act", rr);
+    var gM = PB.range("tb-m", function (v) { return v + "층"; }, rr);
+    var eX = document.getElementById("tb-x"); eX.addEventListener("change", rr);
+    var LG = 50, WSP = 24, NB = 1e18, Q = 3e15, EIMP = { As: 20, B: 4 };
+    var ACTN = { spike: "스파이크", rta: "RTA", ms: "밀리초", furn: "퍼니스" };
+    function tf(s) { return s < 1 ? +(s * 1000).toPrecision(3) + " ms" : s < 120 ? +s.toPrecision(3) + " s" : s < 7200 ? +(s / 60).toPrecision(3) + "분" : +(s / 3600).toPrecision(3) + "시간"; }
+    function rowName(rw, o) {
+      switch (rw.k) {
+        case "imp": return ["주입 직후", (o.sp === "As" ? "As 20 keV" : "B 4 keV") + " · 3×10^{15}"];
+        case "act": return [ACTN[o.act] + " 활성화", rw.T + " °C · " + (o.act === "spike" ? "실효 " : "") + tf(rw.t)];
+        case "ox": return ["고온 산화 (실수)", "1000 °C · 30분"];
+        case "sil": return ["NiSi 실리사이드", "450 °C · 30 s"];
+        case "ct": return ["W 콘택", "450 °C · 10분"];
+        case "beol": return ["배선 " + o.metals + "층", "400 °C · " + o.metals + "시간"];
+        default: return ["포밍 가스", "400 °C · 30분"];
+      }
+    }
+    var fol = follower(rr, 0.14);
+    // 농도가 N_B 이상인 영역(가로 2 px마다 깊이 구간)
+    function region(o, st, b, s, cx) {
+      var runs = [], cur = null, Rp = o.Rp * 1e-7;
+      for (var px = b.x; px <= b.x + b.w + 1.99; px += 2) {
+        var yn = (px - cx) / s * 1e-7, f = TBM.lat(yn, st.a, st.sl), iv = f > 1e-12 ? TBM.band(o.NB / f, o.Q, Rp, st.s, st.pk) : null;
+        if (iv) { if (!cur) { cur = []; runs.push(cur); } cur.push({ x: Math.min(px, b.x + b.w), t: iv[0] * 1e7, u: iv[1] * 1e7 }); } else cur = null;
+      }
+      return runs;
+    }
+    function bars(ctx, P, R, o, b) {
+      var rows = R.rows, n = rows.length, rh = Math.min(40, (b.h - 46) / n), lw = 118, x0 = b.x + lw + 8, x1 = b.x + b.w - 70;
+      var ax = fol.v("ax"), X = function (v) { return x0 + Math.min(1.08, Math.max(0, v) / ax) * (x1 - x0); }, yb = b.y + 6 + n * rh;
+      ctx.save(); ctx.font = PB.font(11, 400, true); ctx.textAlign = "center"; ctx.textBaseline = "top";
+      PB.ticks(0, ax, false, 3).forEach(function (v) {
+        var px = Math.round(X(v)) + 0.5;
+        ctx.strokeStyle = P.grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(px, b.y + 4); ctx.lineTo(px, yb); ctx.stroke();
+        ctx.fillStyle = P.dim; ctx.fillText(String(Number(v.toPrecision(3))), px, yb + 4);
+      });
+      ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(x0 + 0.5, b.y + 4); ctx.lineTo(x0 + 0.5, yb); ctx.stroke();
+      ctx.restore();
+      PB.text(ctx, "누적 확산 길이 √(Dt) (nm)", (x0 + x1) / 2, yb + 27, { size: 11.5, color: P.dim, align: "center", baseline: "middle" });
+      rows.forEach(function (rw, i) {
+        var yc = b.y + 6 + (i + 0.5) * rh, nm = rowName(rw, o), dom = rw.k === R.dom.k;
+        PB.text(ctx, nm[0], b.x + 6, yc - 7, { size: 12, weight: dom ? 700 : 500, color: rw.k === "ox" ? P.bad : P.text, align: "left", baseline: "middle" });
+        PB.text(ctx, nm[1], b.x + 6, yc + 8, { size: 11, color: P.dim, align: "left", baseline: "middle" });
+        var L = fol.v("L" + rw.k) || 0, Lp = i ? fol.v("L" + rows[i - 1].k) || 0 : 0, th = Math.max(8, Math.min(14, rh - 16));
+        if (L > 0) {
+          var xa = X(Math.min(Lp, L)), xb = X(L);
+          ctx.fillStyle = PB.alpha(P.dim, 0.3); ctx.fillRect(x0 + 1, yc - th / 2, xa - x0 - 1, th);
+          if (xb - xa > 0.3) { ctx.fillStyle = rw.k === "ox" ? P.bad : P.accent; ctx.fillRect(xa, yc - th / 2, xb - xa, th); }
+        }
+        PB.text(ctx, "x_j " + (rw.st.xj * 1e7).toFixed(1), X(L) + 6, yc, { size: 11.5, mono: true, weight: 600, color: rw.st.merged ? P.bad : P.text, align: "left", baseline: "middle" });
+      });
+    }
+    function section(ctx, P, R, o, b) {
+      var s = Math.min(b.w / 220, (b.h - 28) / 164), cx = b.x + b.w / 2, gh = 44, yS = b.y + 22 + gh * s, dmax = (b.y + b.h - 6 - yS) / s;
+      var X = function (yn) { return cx + yn * s; }, Yd = function (d) { return yS + d * s; };
+      var st = TBM.state(o, Math.pow(10, fol.v("lg"))), st0 = R.imp, dop = o.sp === "As" ? "np" : "pp";
+      ctx.save(); ctx.beginPath(); ctx.rect(b.x, yS, b.w, b.y + b.h - yS); ctx.clip();
+      var gs = ctx.createLinearGradient(0, yS, 0, b.y + b.h); gs.addColorStop(0, PB.matColor("si", "1")); gs.addColorStop(1, PB.matColor("si"));
+      ctx.fillStyle = gs; ctx.fillRect(b.x, yS, b.w, b.y + b.h - yS);
+      ctx.restore();
+      ctx.save(); ctx.beginPath(); ctx.rect(b.x + 1.5, yS + 1.2, b.w - 3, b.y + b.h - yS - 2.5); ctx.clip();
+      function path(run) { ctx.beginPath(); run.forEach(function (p, i) { i ? ctx.lineTo(p.x, Yd(p.t)) : ctx.moveTo(p.x, Yd(p.t)); }); for (var i = run.length - 1; i >= 0; i--) ctx.lineTo(run[i].x, Yd(run[i].u)); ctx.closePath(); }
+      region(o, st, b, s, cx).forEach(function (run) {
+        path(run); ctx.fillStyle = PB.alpha(PB.matColor(dop), 0.92); ctx.fill();
+        ctx.strokeStyle = PB.color("junction"); ctx.lineWidth = 2; ctx.stroke();
+      });
+      region(o, st0, b, s, cx).forEach(function (run) { path(run); ctx.setLineDash([5, 4]); ctx.strokeStyle = P.text; ctx.globalAlpha = 0.75; ctx.lineWidth = 1.3; ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1; });
+      ctx.restore();
+      // 게이트 · 스페이서(그림 흐름과 같은 50 nm · 24 nm)
+      var gL = X(-LG / 2), gR = X(LG / 2), sL = X(-LG / 2 - WSP), sR = X(LG / 2 + WSP), gT = yS - gh * s, spT = yS - (gh - 5) * s;
+      ctx.fillStyle = PB.matColor("nit"); ctx.strokeStyle = PB.matColor("nit", "e"); ctx.lineWidth = 1;
+      [[gL, sL], [gR, sR]].forEach(function (p) { ctx.beginPath(); ctx.moveTo(p[0], yS); ctx.lineTo(p[0], spT); ctx.quadraticCurveTo(p[1], spT, p[1], yS); ctx.closePath(); ctx.fill(); ctx.stroke(); });
+      var gp = ctx.createLinearGradient(0, gT, 0, yS); gp.addColorStop(0, PB.matColor("poly", "1")); gp.addColorStop(1, PB.matColor("poly"));
+      ctx.fillStyle = gp; ctx.fillRect(gL, gT, gR - gL, yS - gT - 2); ctx.strokeStyle = PB.matColor("poly", "e"); ctx.strokeRect(gL + 0.5, gT + 0.5, gR - gL - 1, yS - gT - 3);
+      ctx.fillStyle = PB.matColor("hk"); ctx.fillRect(gL, yS - 2, gR - gL, 2);
+      PB.text(ctx, "게이트 50 nm", cx, gT - 9, { size: 11, weight: 600, color: P.dim, align: "center", baseline: "middle" });
+      // x_j 치수(오른쪽 S/D)
+      var xj = st.xj * 1e7, xa = X(Math.min(92, b.w / (2 * s) - 12)), over = xj > dmax;
+      var ye = over ? b.y + b.h - 8 : Yd(xj);
+      PB.arrow(ctx, xa, yS + 2, xa, ye, { color: P.text, width: 1.3, head: 6, both: !over });
+      PB.text(ctx, "x_j " + (R.fin.xj * 1e7).toFixed(1) + " nm" + (over ? " ↓" : ""), xa - 5, Math.min((yS + ye) / 2, b.y + b.h - 26), { size: 11.5, weight: 700, color: P.text, align: "right", baseline: "middle", halo: true });
+      // 게이트 쪽 측면 접합
+      var fin = R.fin, lt = fin.merged ? "소스·드레인 맞닿음" : fin.gate > 0 ? "게이트 밑 " + (fin.gate * 1e7).toFixed(1) + " nm" : "게이트까지 " + (-fin.gate * 1e7).toFixed(1) + " nm";
+      PB.badge(ctx, lt, cx, Math.min(Yd(Math.max(xj, st0.xj * 1e7)) + 18, b.y + b.h - 34), { size: 11.5, weight: 700, fg: fin.merged ? P.bad : P.text, bg: PB.alpha(P.bg, 0.92), border: fin.merged ? PB.alpha(P.bad, 0.6) : P.border });
+      // 범례(아래 왼쪽)
+      var ly = b.y + b.h - 12, lx = b.x + 6;
+      ctx.save(); PB.rrect(ctx, lx - 3, ly - 9, 160, 18, 6); ctx.fillStyle = PB.alpha(P.bg, 0.85); ctx.fill(); ctx.restore();
+      ctx.save(); ctx.lineWidth = 1.3; ctx.setLineDash([5, 4]); ctx.strokeStyle = P.text; ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + 16, ly); ctx.stroke();
+      ctx.setLineDash([]); ctx.lineWidth = 2; ctx.strokeStyle = PB.color("junction"); ctx.beginPath(); ctx.moveTo(lx + 72, ly); ctx.lineTo(lx + 88, ly); ctx.stroke(); ctx.restore();
+      PB.text(ctx, "주입 직후", lx + 20, ly, { size: 11, color: P.dim, align: "left", baseline: "middle" });
+      PB.text(ctx, "최종 접합", lx + 92, ly, { size: 11, color: P.dim, align: "left", baseline: "middle" });
+    }
+    cv = fitCanvas(cvEl, function (ctx, w, h) {
+      var P = PB.palette(), sp = gSp(), rg = XS.range(sp, EIMP[sp]);
+      var o = { sp: sp, Rp: rg.Rp, dRp: rg.dRp, Q: Q, NB: NB, act: gA(), metals: gM(), mistake: eX.checked, Lg: LG, wsp: WSP };
+      var R = TBM.run(o), tg = { lg: Math.log10(R.total) }, Lmax = 0;
+      R.rows.forEach(function (rw) { var L = Math.sqrt(rw.cum) * 1e7; tg["L" + rw.k] = L; Lmax = Math.max(Lmax, L); });
+      tg.ax = niceUp(Math.max(1, Lmax * 1.1)); fol.go(tg);
+      var narrow = w < 560, bw = narrow ? w : Math.round(w * 0.54), bh = narrow ? Math.round(Math.min(h * 0.56, R.rows.length * 34 + 52)) : h;
+      bars(ctx, P, R, o, { x: 0, y: 0, w: bw, h: bh });
+      if (narrow) { ctx.strokeStyle = P.border; ctx.beginPath(); ctx.moveTo(8, bh + 0.5); ctx.lineTo(w - 8, bh + 0.5); ctx.stroke(); }
+      else { ctx.strokeStyle = P.border; ctx.beginPath(); ctx.moveTo(bw + 0.5, 10); ctx.lineTo(bw + 0.5, h - 10); ctx.stroke(); }
+      section(ctx, P, R, o, narrow ? { x: 0, y: bh + 2, w: w, h: h - bh - 2 } : { x: bw + 6, y: 0, w: w - bw - 8, h: h });
+      var fin = R.fin, DN = { act: ACTN[o.act], ox: "고온 산화", sil: "실리사이드", ct: "콘택", beol: "배선", fga: "포밍 가스" };
+      PB.stat("tb-o-xj", (fin.xj * 1e7).toFixed(1) + "<small>nm · 주입 직후 " + (R.imp.xj * 1e7).toFixed(1) + "</small>");
+      PB.stat("tb-o-dom", (R.dom.k === "ox" ? word(DN.ox, "bad") : DN[R.dom.k]) + "<small>Dt의 " + (R.share >= 0.9995 ? "≈100" : (R.share * 100).toFixed(1)) + " %</small>");
+      PB.stat("tb-o-lat", fin.merged ? word("S/D 맞닿음", "bad") : (fin.gate > 0 ? "게이트 밑 " : "게이트까지 ") + Math.abs(fin.gate * 1e7).toFixed(1) + "<small>nm</small>");
+      PB.stat("tb-o-l", PB.fmt(Math.sqrt(R.total) * 1e7, 3) + "<small>nm</small>");
+    }, { min: 300, max: 430, aspect: 1.3, nmin: 450, nmax: 530 });
+  })();
+
+  /* ---------------- 자기 정렬의 값: 오버레이와 수율 */
+  (function () {
+    /* model:sim-sa */
+    var SAM = (function () {
+      function erfc(x) {
+        var z = Math.abs(x), t = 1 / (1 + 0.5 * z);
+        var r = t * Math.exp(-z * z - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+        return x >= 0 ? r : 2 - r;
+      }
+      function erfcInv(p) { var lo = -8, hi = 30; for (var i = 0; i < 120; i++) { var m = (lo + hi) / 2; if (erfc(m) > p) lo = m; else hi = m; } return (lo + hi) / 2; }
+      var C = { dL: 5, Lch: 40, pitch: 130 };   // 측면 퍼짐 겹침 5 nm, 채널 40 nm, 게이트 피치 130 nm
+      // o = {ov3, m, sa, N}: 트랜지스터마다 독립인 정규 오버레이 오차 e ~ N(0, (ov3/3)²)
+      function run(o) {
+        var sg = o.ov3 / 3, worstZ = Math.SQRT2 * erfcInv(Math.LN2 / o.N);   // N개 중 최악 |e|/σ의 중앙값
+        if (o.sa) return { sa: true, sg: sg, mu: C.dL, p: 0, y: 1, worst: 0, worstZ: worstZ, cov: 1, area: 0, Lg: C.Lch + 2 * C.dL, ovL: C.dL, ovR: C.dL };
+        var mu = o.m + C.dL, p = erfc(mu / (Math.SQRT2 * sg)), y = Math.exp(o.N * Math.log1p(-p)), worst = worstZ * sg;
+        return { sa: false, sg: sg, mu: mu, p: p, y: y, worst: worst, worstZ: worstZ, cov: mu / C.dL, area: 2 * o.m / C.pitch, Lg: C.Lch + 2 * C.dL + 2 * o.m, ovL: mu - worst, ovR: mu + worst };
+      }
+      // 칩 수율 Y에 필요한 여유 m (≈ e^{−Np} = Y)
+      function marginFor(ov3, N, Y) { return Math.max(0, Math.SQRT2 * (ov3 / 3) * erfcInv(-Math.log(Y) / N) - C.dL); }
+      return { erfc: erfc, erfcInv: erfcInv, run: run, marginFor: marginFor, C: C };
+    })();
+    /* /model:sim-sa */
+    var cvEl = document.getElementById("sa-cv"), cv, rr = function () { cv && cv.redraw(); };
+    var gMd = PB.seg("sa-m", rr);
+    var gS = PB.range("sa-s", function (v) { return v + " nm"; }, rr);
+    var gG = PB.range("sa-g", function (v) { return v + " nm"; }, rr);
+    var gN = PB.range("sa-n", function (v) { return sci(v).replace(/^1\.0×/, "") + "개"; }, rr);
+    var fol = follower(rr, 0.16);
+    function section(ctx, P, r, rm, b) {
+      var s = Math.min(b.w / 300, (b.h - 34) / 62), cx = b.x + b.w / 2, yS = b.y + 30 + 34 * s, sdD = 26 * s, X = function (x) { return cx + x * s; };
+      var c = fol.v("c"), half = fol.v("half"), Lc = SAM.C.Lch / 2;
+      var gs = ctx.createLinearGradient(0, yS, 0, b.y + b.h); gs.addColorStop(0, PB.matColor("si", "1")); gs.addColorStop(1, PB.matColor("si"));
+      ctx.fillStyle = gs; ctx.fillRect(b.x, yS, b.w, b.y + b.h - yS);
+      // 소스·드레인(채널 40 nm, 안쪽 모서리 둥글게)
+      var rad = Math.min(8 * s, sdD), np = PB.matColor("np");
+      ctx.fillStyle = np; ctx.strokeStyle = PB.color("junction"); ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(b.x, yS); ctx.lineTo(X(-Lc), yS); ctx.lineTo(X(-Lc), yS + sdD - rad); ctx.quadraticCurveTo(X(-Lc), yS + sdD, X(-Lc) - rad, yS + sdD); ctx.lineTo(b.x, yS + sdD); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(X(-Lc), yS); ctx.lineTo(X(-Lc), yS + sdD - rad); ctx.quadraticCurveTo(X(-Lc), yS + sdD, X(-Lc) - rad, yS + sdD); ctx.lineTo(b.x, yS + sdD); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(b.x + b.w, yS); ctx.lineTo(X(Lc), yS); ctx.lineTo(X(Lc), yS + sdD - rad); ctx.quadraticCurveTo(X(Lc), yS + sdD, X(Lc) + rad, yS + sdD); ctx.lineTo(b.x + b.w, yS + sdD); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(X(Lc), yS); ctx.lineTo(X(Lc), yS + sdD - rad); ctx.quadraticCurveTo(X(Lc), yS + sdD, X(Lc) + rad, yS + sdD); ctx.lineTo(b.x + b.w, yS + sdD); ctx.stroke();
+      PB.text(ctx, "소스 n^+", X(-Lc) - 30 * s, yS + sdD / 2 + 1, { size: 11.5, weight: 600, color: P.text, align: "right", baseline: "middle", halo: true });
+      PB.text(ctx, "드레인 n^+", X(Lc) + 30 * s, yS + sdD / 2 + 1, { size: 11.5, weight: 600, color: P.text, align: "left", baseline: "middle", halo: true });
+      // 게이트(어긋남 c, 길이 2·half)
+      var gL = X(c - half), gR = X(c + half), gT = yS - 34 * s;
+      var gp = ctx.createLinearGradient(0, gT, 0, yS); gp.addColorStop(0, PB.matColor("poly", "1")); gp.addColorStop(1, PB.matColor("poly"));
+      ctx.fillStyle = gp; ctx.fillRect(gL, gT, gR - gL, yS - gT - 2); ctx.strokeStyle = PB.matColor("poly", "e"); ctx.lineWidth = 1; ctx.strokeRect(gL + 0.5, gT + 0.5, gR - gL - 1, yS - gT - 3);
+      ctx.fillStyle = PB.matColor("hk"); ctx.fillRect(gL, yS - 2, gR - gL, 2);
+      PB.text(ctx, "게이트 " + Math.round(2 * half) + " nm", (gL + gR) / 2, (gT + yS) / 2, { size: 11.5, weight: 600, color: P.text, align: "center", baseline: "middle", halo: true });
+      // 양쪽 겹침(+) 또는 틈(−)
+      [[-1, -Lc - (c - half)], [1, (c + half) - Lc]].forEach(function (q) {
+        var ov = q[1], side = q[0], ex = side < 0 ? gL : gR, sx = X(side * Lc);
+        if (ov < 0) { ctx.fillStyle = PB.alpha(P.bad, 0.28); ctx.fillRect(Math.min(ex, sx), yS - 1, Math.abs(ex - sx), 5); hatch(ctx, Math.min(ex, sx), yS - 1, Math.abs(ex - sx), 5, P.bad, 3); }
+        var t = ov < 0 ? "틈 " + (-ov).toFixed(1) + " nm" : "겹침 " + ov.toFixed(1) + " nm";
+        PB.text(ctx, t, side < 0 ? Math.min(gL, sx) - 6 : Math.max(gR, sx) + 6, yS - 11, { size: 11.5, weight: 700, color: ov < 0 ? P.bad : P.dim, align: side < 0 ? "right" : "left", baseline: "middle", halo: true });
+      });
+      var head = r.sa ? "자기 정렬: 게이트가 곧 주입 마스크 → 겹침 5 nm 고정" : "칩에서 가장 나쁜 1개: " + rm.worstZ.toFixed(1) + "σ = " + rm.worst.toFixed(1) + " nm 어긋남";
+      PB.badge(ctx, head, cx, b.y + 13, { size: 11.5, weight: 700, fg: r.sa ? P.accent : P.text, bg: PB.alpha(P.bg, 0.92), border: r.sa ? PB.alpha(P.accent, 0.5) : P.border });
+    }
+    cv = fitCanvas(cvEl, function (ctx, w, h) {
+      var P = PB.palette(), sa = gMd() === "sa", o = { ov3: gS(), m: gG(), sa: sa, N: Math.pow(10, gN()) };
+      var r = SAM.run(o), rm = SAM.run({ ov3: o.ov3, m: o.m, sa: false, N: o.N });
+      fol.go({ c: sa ? 0 : rm.worst, half: r.Lg / 2 });
+      var hx = Math.round(PB.clamp(h * 0.4, 128, 170));
+      section(ctx, P, r, rm, { x: 0, y: 0, w: w, h: hx });
+      var box = { x: 58, y: hx + 12, w: w - 58 - 16, h: h - hx - 12 - 46 };
+      var mu = rm.mu, sg = rm.sg, x0 = Math.min(-12, mu - Math.max(4.2 * sg, rm.worst + 4)), x1 = Math.max(30, mu + 4.2 * sg), pdf = [];
+      for (var i = 0; i <= 240; i++) { var x = x0 + (x1 - x0) * i / 240; pdf.push([x, Math.exp(-0.5 * Math.pow((x - mu) / sg, 2)) / (Math.sqrt(2 * Math.PI) * sg)]); }
+      var pmax = 1 / (Math.sqrt(2 * Math.PI) * sg), dL = SAM.C.dL;
+      var vl = [{ x: dL, color: sa ? P.accent : P.accent2, dash: [], width: sa ? 3 : 1.8 }];
+      if (!sa) vl.push({ x: mu - rm.worst, color: P.bad, dash: [4, 3], width: 1.6 });
+      var ch = PB.chart(ctx, box, {
+        x: [x0, x1], y: [0, pmax * 1.32], xLabel: "쪽당 겹침 (nm, 음수 = 틈)", yLabel: "확률 밀도 (1/nm)",
+        series: [{ data: pdf, color: sa ? P.faint : P.accent, width: sa ? 1.6 : 2.6, dash: sa ? [5, 4] : null, fill: !sa, label: "별도 마스크", fmt: function (v) { return PB.num(v, 3) + " /nm"; } }],
+        bands: [{ x0: x0, x1: 0, color: PB.alpha(P.bad, PB.isDark() ? 0.16 : 0.1) }], vlines: vl,
+        hover: { xLabel: "겹침 ", xFmt: function (v) { return v.toFixed(1) + " nm"; } }
+      });
+      rowLabels(ctx, [
+        { t: "틈 → 불량", x: (ch.X(x0) + ch.X(0)) / 2, align: "center", color: P.bad },
+        { t: "별도 마스크: 평균 " + mu.toFixed(0) + " nm, σ " + sg.toFixed(1) + " nm", x: ch.X(mu) + 8, align: "left", color: sa ? P.dim : P.accent },
+        { t: "자기 정렬 5 nm", x: ch.X(dL) + 5, align: "left", color: sa ? P.accent : P.accent2, row: 1 }
+      ].concat(sa ? [] : [{ t: "최악 1개", x: ch.X(mu - rm.worst) - 5, align: "right", color: P.bad, row: 1 }]), ch.box);
+      PB.stat("sa-o-p", sa ? "0<small>자기 정렬</small>" : supH(r.p));
+      var yv = r.y, yt = yv === 1 ? "100" : yv >= 0.9995 ? "99.9+" : yv >= 0.001 ? (yv * 100).toFixed(1) : "≈0";
+      PB.stat("sa-o-y", word(yt, yv >= 0.9 ? "ok" : yv >= 0.5 ? "warn" : "bad") + "<small>%</small>");
+      PB.stat("sa-o-c", "×" + r.cov.toFixed(1) + "<small>쪽당 " + r.mu.toFixed(0) + " nm</small>");
+      PB.stat("sa-o-a", sa ? "0<small>여유 없음</small>" : "+" + 2 * o.m + "<small>nm · 피치의 " + (r.area * 100).toFixed(0) + " %</small>");
+    }, { min: 340, max: 450, aspect: 1.05, nmin: 380, nmax: 450, hover: true });
+  })();
+
+  /* ---------------- 실리사이드: 온도가 상과 저항을 정한다 */
+  (function () {
+    /* model:sim-sil */
+    var SLM = (function () {
+      // 상: [이름, 형성 시작 °C(충분한 시간), ρ µΩ·cm, 소모 Si nm/nm 금속, 실리사이드 nm/nm 금속, 등급]
+      var PH = {
+        ni: [["반응 없음", -1e9, 0, 0, 0, "none"], ["Ni₂Si", 250, 24, 0.91, 1.51, "mid"], ["NiSi", 350, 15, 1.83, 2.22, "good"], ["NiSi₂", 750, 40, 3.65, 3.59, "bad"]],
+        co: [["반응 없음", -1e9, 0, 0, 0, "none"], ["CoSi", 400, 125, 1.82, 2.0, "mid"], ["CoSi₂", 650, 18, 3.64, 3.52, "good"]],
+        ti: [["반응 없음", -1e9, 0, 0, 0, "none"], ["C49 TiSi₂", 550, 65, 2.27, 2.51, "mid"], ["C54 TiSi₂", 750, 15, 2.27, 2.51, "good"]]
+      };
+      var RHO_D = 6.5e-4, SPIKE = 10;   // n⁺ 확산층 비저항(Ω·cm, 10²⁰ cm⁻³), NiSi₂ 뾰족 계면 +10 nm
+      function tAgg(tm) { return 580 + 6 * tm; }   // 얇은 NiSi 응집 시작 온도(교육용 선형 근사)
+      // o = {metal, tm(nm), T(°C), xj(nm)}
+      function run(o) {
+        var ph = PH[o.metal], i = 0, k;
+        for (k = 1; k < ph.length; k++) if (o.T >= ph[k][1]) i = k;
+        var p = ph[i], tSi = o.tm * p[3], tSil = o.tm * p[4], agg = o.metal === "ni" && p[0] === "NiSi" && o.T >= tAgg(o.tm), fAgg = 1;
+        if (agg) { var u = Math.min(1, (o.T - tAgg(o.tm)) / 60); fAgg = 1 + 9 * u * u * (3 - 2 * u); }
+        var dEff = tSi + (p[0] === "NiSi₂" ? SPIKE : 0), gap = o.xj - dEff;
+        var Rsil = i > 0 ? p[2] * 1e-6 / (tSil * 1e-7) * fAgg : Infinity, Rd = o.xj - tSi > 0 ? RHO_D / ((o.xj - tSi) * 1e-7) : Infinity;
+        var Rs = 1 / (1 / Rsil + 1 / Rd), v = i === 0 ? "none" : gap <= 0 ? "short" : gap < 10 ? "bad" : gap < 20 ? "warn" : "ok";
+        return { i: i, ph: p, name: p[0], tSi: tSi, tSil: tSil, agg: agg, fAgg: fAgg, dEff: dEff, gap: gap, Rsil: Rsil, Rd: Rd, Rs: Rs, v: v, tAgg: o.metal === "ni" ? tAgg(o.tm) : null };
+      }
+      return { PH: PH, run: run, tAgg: tAgg, RHO_D: RHO_D, SPIKE: SPIKE };
+    })();
+    /* /model:sim-sil */
+    var cvEl = document.getElementById("sl-cv"), cv, rr = function () { cv && cv.redraw(); };
+    var gMt = PB.seg("sl-mt", rr);
+    var gT = PB.range("sl-t", function (v) { return v.toFixed(1) + " nm"; }, rr);
+    var gTa = PB.range("sl-T", function (v) { return v + " °C"; }, rr);
+    var gX = PB.range("sl-x", function (v) { return v + " nm"; }, rr);
+    var GRADE = function (P, g) { return g === "good" ? PB.alpha(P.ok, 0.34) : g === "bad" ? PB.alpha(P.bad, 0.3) : g === "mid" ? PB.alpha(P.dim, 0.24) : PB.alpha(P.dim, 0.08); };
+    var fol = follower(rr, 0.14);
+    function section(ctx, P, o, r, b) {
+      var s = (b.h - 20) / 160, yS = b.y + 12 + 48 * s, X = function (x) { return b.x + x * s; }, Yd = function (d) { return yS + d * s; }, Wn = b.w / s;
+      var tSil = fol.v("sil"), tSi = fol.v("si"), fAgg = fol.v("agg"), xj = o.xj, reacted = r.i > 0;
+      var gs = ctx.createLinearGradient(0, yS, 0, b.y + b.h); gs.addColorStop(0, PB.matColor("si", "1")); gs.addColorStop(1, PB.matColor("si"));
+      ctx.fillStyle = gs; ctx.fillRect(b.x, yS, b.w, b.y + b.h - yS);
+      // n⁺ 소스·드레인(스페이서 밑에서 시작) + 접합선
+      var x0 = 48, rad = Math.min(xj, 16);
+      ctx.fillStyle = PB.matColor("np"); ctx.beginPath(); ctx.moveTo(X(x0), yS); ctx.lineTo(X(x0), Yd(xj - rad)); ctx.quadraticCurveTo(X(x0), Yd(xj), X(x0 + rad), Yd(xj)); ctx.lineTo(b.x + b.w, Yd(xj)); ctx.lineTo(b.x + b.w, yS); ctx.closePath(); ctx.fill();
+      ctx.save(); ctx.strokeStyle = PB.color("junction"); ctx.lineWidth = 1.8; ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(X(x0), yS); ctx.lineTo(X(x0), Yd(xj - rad)); ctx.quadraticCurveTo(X(x0), Yd(xj), X(x0 + rad), Yd(xj)); ctx.lineTo(b.x + b.w, Yd(xj)); ctx.stroke(); ctx.restore();
+      // 게이트 조각(폴리 34 nm) · 스페이서
+      var gx1 = 36, sx1 = 58, gT = -34;
+      ctx.fillStyle = PB.matColor("nit"); ctx.strokeStyle = PB.matColor("nit", "e"); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(X(gx1), yS); ctx.lineTo(X(gx1), Yd(gT + 3)); ctx.quadraticCurveTo(X(sx1), Yd(gT + 3), X(sx1), yS); ctx.closePath(); ctx.fill(); ctx.stroke();
+      var gp = ctx.createLinearGradient(0, Yd(gT), 0, yS); gp.addColorStop(0, PB.matColor("poly", "1")); gp.addColorStop(1, PB.matColor("poly"));
+      ctx.fillStyle = gp; ctx.fillRect(b.x, Yd(gT), X(gx1) - b.x, yS - Yd(gT) - 2); ctx.fillStyle = PB.matColor("hk"); ctx.fillRect(b.x, yS - 2, X(gx1) - b.x, 2);
+      // 실리사이드: S/D 위(스페이서 바깥)와 게이트 윗면
+      var sil = PB.matColor("sil"), silE = PB.matColor("sil", "e"), up = tSil - tSi;
+      if (reacted) {
+        var gTop = Yd(gT - up), gBot = Yd(Math.min(-2, gT + tSi));
+        ctx.fillStyle = sil; ctx.fillRect(b.x, gTop, X(gx1) - b.x, gBot - gTop); ctx.strokeStyle = silE; ctx.strokeRect(b.x - 1, gTop + 0.5, X(gx1) - b.x + 0.5, gBot - gTop - 1);
+        var top = Yd(-up), botY = Yd(tSi), L0 = X(sx1), L1 = b.x + b.w;
+        if (fAgg > 1.05) {   // 응집: 섬처럼 끊어진 막(부피 보존)
+          var g = 0.5 * Math.min(1, (fAgg - 1) / 9), per = 34 * s, isl = per * (1 - g), th = (botY - top) / (1 - g), mid = (top + botY) / 2;
+          for (var xi = L0; xi < L1; xi += per) { var iw = Math.min(isl, L1 - xi); PB.rrect(ctx, xi, mid - th / 2, iw, th, Math.min(th, iw) / 2); ctx.fillStyle = sil; ctx.fill(); ctx.strokeStyle = silE; ctx.stroke(); }
+        } else {
+          ctx.beginPath(); ctx.moveTo(L0, top); ctx.lineTo(L1, top); ctx.lineTo(L1, botY);
+          if (r.name === "NiSi₂") { var sp = 28 * s; for (var xs = L1; xs > L0 + sp * 0.4; xs -= sp) { ctx.lineTo(xs - sp * 0.15, botY); ctx.lineTo(xs - sp * 0.5, botY + SLM.SPIKE * s); ctx.lineTo(xs - sp * 0.85, botY); } }
+          ctx.lineTo(L0, botY); ctx.closePath(); ctx.fillStyle = sil; ctx.fill(); ctx.strokeStyle = silE; ctx.lineWidth = 1; ctx.stroke();
+        }
+      }
+      // 원래 실리콘 표면
+      ctx.save(); ctx.setLineDash([3, 3]); ctx.strokeStyle = P.text; ctx.globalAlpha = 0.7; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(sx1), yS + 0.5); ctx.lineTo(b.x + b.w, yS + 0.5); ctx.stroke(); ctx.restore();
+      if (!(fAgg > 1.05)) PB.text(ctx, "원래 표면", b.x + b.w - 6, Yd(-Math.max(0, up)) - 9, { size: 11, color: P.dim, align: "right", baseline: "middle", halo: true });
+      // 치수: 실리사이드 두께 · 접합까지 거리
+      var xa = X(sx1) + (b.x + b.w - X(sx1)) * 0.36, vc = r.v === "ok" ? P.ok : r.v === "warn" ? P.warn : P.bad;
+      if (reacted) {
+        var ya = Yd(-up), yb2 = Yd(tSi);
+        if (yb2 - ya > 7) PB.arrow(ctx, xa, ya + 1, xa, yb2 - 1, { color: P.text, width: 1.2, head: 5, both: true });
+        PB.text(ctx, r.name + " " + r.tSil.toFixed(1) + " nm", xa + 7, Math.min((ya + yb2) / 2, Yd(xj) - 10), { size: 11.5, weight: 700, color: P.text, align: "left", baseline: "middle", halo: true });
+        if (r.gap > 0) {
+          var yg0 = Yd(r.dEff), yg1 = Yd(xj);
+          if (yg1 - yg0 > 7) PB.arrow(ctx, xa, yg0 + 1, xa, yg1 - 1, { color: vc, width: 1.5, head: 5, both: true });
+          PB.text(ctx, "접합까지 " + r.gap.toFixed(1) + " nm", xa + 7, Math.max((yg0 + yg1) / 2, Yd(r.dEff) + 8, (ya + yb2) / 2 + 15), { size: 11.5, weight: 700, color: vc, align: "left", baseline: "middle", halo: true });
+        } else PB.badge(ctx, "접합 관통 · 단락", xa + 60, Yd(xj) + 14, { size: 11.5, weight: 700, fg: P.bad, bg: PB.alpha(P.bg, 0.92), border: PB.alpha(P.bad, 0.6) });
+      } else PB.badge(ctx, "반응 없음 → 금속은 선택 식각에서 씻겨 나간다", X(sx1) + (b.x + b.w - X(sx1)) / 2, Yd(Math.min(xj, 40) / 2), { size: 11.5, weight: 700, fg: P.warn, bg: PB.alpha(P.bg, 0.92), border: PB.alpha(P.warn, 0.6) });
+      PB.text(ctx, "x_j " + xj + " nm", X(sx1) + 4, Yd(xj) + 11, { size: 11, weight: 600, color: P.dim, align: "left", baseline: "middle", halo: true });
+    }
+    function phaseBar(ctx, P, o, r, b) {
+      var x0 = b.x + 46, x1 = b.x + b.w - 16, yb = b.y + 34, bh = 22, X = function (T) { return x0 + (T - 200) / 700 * (x1 - x0); };
+      var ph = SLM.PH[o.metal];
+      ph.forEach(function (p, i) {
+        var a = Math.max(200, p[1]), z = i < ph.length - 1 ? ph[i + 1][1] : 900; if (z <= 200) return;
+        var xa = X(a), xb = X(Math.min(900, z));
+        ctx.fillStyle = GRADE(P, p[5]); ctx.fillRect(xa, yb, xb - xa, bh);
+        ctx.fillStyle = P.bg; ctx.fillRect(xb - 0.5, yb, 1, bh);
+        var nm = i ? p[0] : "미반응", tw = PB.textWidth(ctx, nm, { size: 11.5, weight: 700 });
+        if (tw + 8 < xb - xa) PB.text(ctx, nm, (xa + xb) / 2, yb + bh / 2 + 0.5, { size: 11.5, weight: 700, color: p[5] === "bad" ? P.bad : P.text, align: "center", baseline: "middle" });
+      });
+      if (o.metal === "ni") {   // 얇은 NiSi 응집 구간
+        var ta = r.tAgg, xa2 = X(ta), xb2 = X(750);
+        hatch(ctx, xa2, yb, xb2 - xa2, bh, PB.alpha(P.warn, 0.85), 5);
+        ctx.strokeStyle = P.warn; ctx.lineWidth = 1.2; ctx.strokeRect(xa2 + 0.5, yb + 0.5, xb2 - xa2 - 1, bh - 1);
+      }
+      ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.strokeRect(x0 + 0.5, yb + 0.5, x1 - x0 - 1, bh - 1);
+      ctx.save(); ctx.font = PB.font(11, 400, true); ctx.fillStyle = P.dim; ctx.textAlign = "center"; ctx.textBaseline = "top";
+      for (var T = 200; T <= 900; T += 100) { var px = Math.round(X(T)) + 0.5; ctx.strokeStyle = P.axis; ctx.beginPath(); ctx.moveTo(px, yb + bh); ctx.lineTo(px, yb + bh + 4); ctx.stroke(); ctx.fillText(String(T), px, yb + bh + 6); }
+      ctx.restore();
+      PB.text(ctx, "°C", x0 - 15, yb + bh + 12, { size: 11, color: P.dim, align: "right", baseline: "middle" });
+      PB.text(ctx, { ni: "Ni", co: "Co", ti: "Ti" }[o.metal], x0 - 8, yb + bh / 2, { size: 12, weight: 700, color: P.text, align: "right", baseline: "middle" });
+      // 현재 온도 표시
+      var xt = X(o.T);
+      ctx.fillStyle = P.text; ctx.beginPath(); ctx.moveTo(xt, yb + 2); ctx.lineTo(xt - 6, yb - 7); ctx.lineTo(xt + 6, yb - 7); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = P.text; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(xt + 0.5, yb); ctx.lineTo(xt + 0.5, yb + bh); ctx.stroke();
+      var lab = o.T + " °C · " + (r.i ? r.name + " · ρ " + r.ph[2] + " µΩ·cm" + (r.agg ? " · 응집" : "") : "반응 없음");
+      var lw = PB.textWidth(ctx, lab, { size: 11.5, weight: 700 }) + 12;
+      PB.badge(ctx, lab, PB.clamp(xt, b.x + lw / 2 + 4, b.x + b.w - lw / 2 - 4), yb - 19, { size: 11.5, weight: 700, fg: r.agg || r.ph[5] === "bad" ? P.bad : P.text, bg: PB.alpha(P.bg, 0.92) });
+    }
+    cv = fitCanvas(cvEl, function (ctx, w, h) {
+      var P = PB.palette(), o = { metal: gMt(), tm: gT(), T: gTa(), xj: gX() }, r = SLM.run(o);
+      fol.go({ sil: r.tSil, si: r.tSi, agg: r.fAgg });
+      var hb = 78, hx = h - hb;
+      section(ctx, P, o, r, { x: 0, y: 0, w: w, h: hx });
+      ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(8, hx + 0.5); ctx.lineTo(w - 8, hx + 0.5); ctx.stroke();
+      phaseBar(ctx, P, o, r, { x: 0, y: hx, w: w, h: hb });
+      var vw = { ok: ["안전", "ok"], warn: ["주의", "warn"], bad: ["누설 위험", "bad"] };
+      PB.stat("sl-o-ph", r.i === 0 ? word("반응 없음", "warn") : r.agg ? r.name + " " + word("응집", "bad") : r.ph[5] === "bad" ? word(r.name, "bad") : r.name);
+      PB.stat("sl-o-t", r.tSil.toFixed(1) + "<small>nm</small>");
+      PB.stat("sl-o-r", PB.fmt(r.Rs, 3) + "<small>Ω/□</small>");
+      PB.stat("sl-o-si", r.tSi.toFixed(1) + "<small>nm</small>");
+      PB.stat("sl-o-g", r.v === "none" ? o.xj + "<small>nm · 실리사이드 없음</small>" : r.v === "short" ? word("관통", "bad") + "<small>" + (-r.gap).toFixed(1) + " nm 넘음</small>" : r.gap.toFixed(1) + "<small>nm</small> " + word(vw[r.v][0], vw[r.v][1]));
+    }, { min: 340, max: 440, aspect: 1.08, nmin: 380, nmax: 450 });
+  })();
+
+  /* ---------------- 스페이서 폭의 줄다리기 */
+  (function () {
+    /* model:sim-spacer */
+    var SPM = (function () {
+      // 교육용 상수: LDD 겹침 5 nm, 평면 자연 길이 λ = 8 nm, 롤오프 계수 1.2 V(V_DS = V_DD, DIBL 포함),
+      // 긴 채널 V_t 0.35 V, V_DD 1.0 V, 채널 저항 12 Ω·µm/nm, 실리사이드·콘택 50 Ω·µm/쪽, 누설 한계 |ΔV_t| ≤ 100 mV
+      var C = { dLDD: 5, lam: 8, V0: 1.2, Vt0: 0.35, VDD: 1.0, rch: 12, RSD: 50, lim: 0.1, keep: 0.95, wMax: 50 };
+      function dev(Lg, xj, Rsh, w) {
+        var enc = 0.7 * xj - w, dL = Math.max(C.dLDD, enc), Leff = Lg - 2 * dL, pt = Leff <= 0;
+        var dVt = pt ? -C.V0 : -C.V0 * Math.exp(-Leff / (2 * C.lam)), Rext = 2 * (Rsh * w * 1e-3 + C.RSD);
+        var Vt = C.Vt0 + dVt, I = pt ? Infinity : (C.VDD - Vt) / (C.rch * Leff + Rext) * 1e6;
+        return { enc: enc, dL: dL, Leff: Leff, pt: pt, dVt: dVt, Rext: Rext, Vt: Vt, I: I };
+      }
+      var Lreq = 2 * C.lam * Math.log(C.V0 / C.lim);   // |ΔV_t| = 100 mV가 되는 L_eff
+      function band(Lg, xj, Rsh) {
+        if ((Lg - Lreq) / 2 < C.dLDD) return { ok: false, why: "short" };
+        var w0 = Math.max(0, 0.7 * xj - (Lg - Lreq) / 2);
+        if (w0 > C.wMax) return { ok: false, why: "wide", w0: w0 };
+        var I0 = dev(Lg, xj, Rsh, w0).I, lo = w0, hi = C.wMax;
+        if (dev(Lg, xj, Rsh, hi).I >= C.keep * I0) return { ok: true, w0: w0, w1: hi, I0: I0, open: true };
+        for (var i = 0; i < 60; i++) { var m = (lo + hi) / 2; if (dev(Lg, xj, Rsh, m).I >= C.keep * I0) lo = m; else hi = m; }
+        return { ok: true, w0: w0, w1: (lo + hi) / 2, I0: I0, open: false };
+      }
+      return { C: C, dev: dev, band: band, Lreq: Lreq };
+    })();
+    /* /model:sim-spacer */
+    var cvEl = document.getElementById("sp-cv"), cv, rr = function () { cv && cv.redraw(); };
+    var gW = PB.range("sp-w", function (v) { return v + " nm"; }, rr);
+    var gL = PB.range("sp-l", function (v) { return v + " nm"; }, rr);
+    var gX = PB.range("sp-x", function (v) { return v + " nm"; }, rr);
+    var gR = PB.range("sp-r", function (v) { return v + " Ω/□"; }, rr);
+    function schematic(ctx, P, b, Lg, xj, wsp, d) {
+      var sx = b.w / 236, yS = b.y + 36, sy = (b.y + b.h - 6 - yS) / 86, X = function (x) { return b.x + b.w / 2 + x * sx; }, Yd = function (z) { return yS + z * sy; };
+      var gs = ctx.createLinearGradient(0, yS, 0, b.y + b.h); gs.addColorStop(0, PB.matColor("si", "1")); gs.addColorStop(1, PB.matColor("si"));
+      ctx.fillStyle = gs; ctx.fillRect(b.x, yS, b.w, b.y + b.h - yS);
+      var np = PB.matColor("np"), jn = PB.color("junction"), dLDD = SPM.C.dLDD;
+      [-1, 1].forEach(function (sd) {
+        // LDD(얕음, 게이트 밑 5 nm) → 깊은 S/D(스페이서 바깥 + 측면 0.7x_j)
+        var eL = sd * (Lg / 2 - dLDD), eD = sd * (Lg / 2 + wsp - 0.7 * xj), far = sd * 130;
+        ctx.fillStyle = PB.alpha(np, 0.6); ctx.beginPath(); ctx.moveTo(X(far), yS); ctx.lineTo(X(eL), yS); ctx.lineTo(X(eL), Yd(10)); ctx.lineTo(X(far), Yd(10)); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = np; ctx.beginPath(); ctx.moveTo(X(far), yS); ctx.lineTo(X(eD), yS);
+        ctx.ellipse(X(sd * (Lg / 2 + wsp)), yS, 0.7 * xj * sx, xj * sy, 0, sd < 0 ? 0 : Math.PI, sd < 0 ? Math.PI / 2 : Math.PI / 2, sd > 0);
+        ctx.lineTo(X(far), Yd(xj)); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = jn; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(X(eD), yS);
+        ctx.ellipse(X(sd * (Lg / 2 + wsp)), yS, 0.7 * xj * sx, xj * sy, 0, sd < 0 ? 0 : Math.PI, sd < 0 ? Math.PI / 2 : Math.PI / 2, sd > 0);
+        ctx.lineTo(X(far), Yd(xj)); ctx.stroke();
+        // 스페이서
+        var gE = sd * Lg / 2, sE = sd * (Lg / 2 + wsp);
+        ctx.fillStyle = PB.matColor("nit"); ctx.strokeStyle = PB.matColor("nit", "e"); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(X(gE), yS); ctx.lineTo(X(gE), yS - 24); ctx.quadraticCurveTo(X(sE), yS - 24, X(sE), yS); ctx.closePath(); ctx.fill(); if (wsp > 0) ctx.stroke();
+      });
+      var gp = ctx.createLinearGradient(0, yS - 27, 0, yS); gp.addColorStop(0, PB.matColor("poly", "1")); gp.addColorStop(1, PB.matColor("poly"));
+      ctx.fillStyle = gp; ctx.fillRect(X(-Lg / 2), yS - 27, Lg * sx, 25); ctx.strokeStyle = PB.matColor("poly", "e"); ctx.strokeRect(X(-Lg / 2) + 0.5, yS - 26.5, Lg * sx - 1, 24);
+      ctx.fillStyle = PB.matColor("hk"); ctx.fillRect(X(-Lg / 2), yS - 2, Lg * sx, 2);
+      PB.text(ctx, "L_g " + Lg, X(0), yS - 14, { size: 11, weight: 600, color: P.text, align: "center", baseline: "middle", halo: true });
+      // 스페이서 폭 치수(오른쪽 위)
+      if (wsp > 0) { PB.arrow(ctx, X(Lg / 2), yS - 30, X(Lg / 2 + wsp), yS - 30, { color: P.dim, width: 1.1, head: 5, both: true }); }
+      PB.text(ctx, "w_{sp} " + wsp, X(Lg / 2 + wsp) + 5, yS - 30, { size: 11, weight: 600, color: P.dim, align: "left", baseline: "middle", halo: true });
+      PB.text(ctx, "깊은 S/D", X(-112), Yd(Math.max(14, xj * 0.6)), { size: 11, weight: 600, color: P.text, align: "left", baseline: "middle", halo: true });
+      var eL = Lg / 2 - dLDD, eD = Lg / 2 + wsp - 0.7 * xj;
+      if ((eD - eL) * sx > 30) PB.text(ctx, "LDD", X((eL + eD) / 2), Yd(10) + 9, { size: 11, weight: 600, color: P.text, align: "center", baseline: "middle", halo: true });
+      // 유효 채널
+      if (!d.pt) {
+        var ya = Yd(Math.min(16, xj * 0.35) + 6);
+        PB.arrow(ctx, X(-d.Leff / 2), ya, X(d.Leff / 2), ya, { color: P.accent, width: 1.6, head: 6, both: true });
+        PB.text(ctx, "L_{eff} " + d.Leff.toFixed(1) + " nm", X(0), ya + 13, { size: 11.5, weight: 700, color: P.accent, align: "center", baseline: "middle", halo: true });
+      } else PB.badge(ctx, "펀치스루: S/D 맞닿음", X(0), Yd(Math.min(30, xj * 0.6)), { size: 11.5, weight: 700, fg: P.bad, bg: PB.alpha(P.bg, 0.92), border: PB.alpha(P.bad, 0.6) });
+    }
+    cv = fitCanvas(cvEl, function (ctx, w, h) {
+      var P = PB.palette(), Lg = gL(), xj = gX(), Rsh = gR(), wsp = gW(), d = SPM.dev(Lg, xj, Rsh, wsp), bd = SPM.band(Lg, xj, Rsh), C = SPM.C;
+      var hs = Math.round(PB.clamp(h * 0.27, 104, 132));
+      schematic(ctx, P, { x: 0, y: 0, w: w, h: hs }, Lg, xj, wsp, d);
+      var dI = [], dV = [];
+      for (var wv = 0; wv <= C.wMax + 1e-9; wv += 0.25) { var q = SPM.dev(Lg, xj, Rsh, wv); dI.push([wv, q.pt || q.I > 3000 ? NaN : q.I]); dV.push([wv, q.pt ? NaN : q.dVt * 1000]); }
+      var bands = bd.ok ? [{ x0: 0, x1: bd.w0, color: PB.alpha(P.bad, 0.1) }, { x0: bd.w0, x1: bd.w1, color: PB.alpha(P.ok, PB.isDark() ? 0.2 : 0.15) }] : [{ x0: 0, x1: C.wMax, color: PB.alpha(P.bad, 0.1) }];
+      var top2 = hs + 10, rest = h - top2 - 44, h1 = Math.round(rest * 0.54), h2 = rest - h1 - 14, bx = 64, bwd = w - bx - 16;
+      var hov = { xLabel: "w_{sp} = ", xFmt: function (v) { return v.toFixed(1) + " nm"; } };
+      var c1 = PB.chart(ctx, { x: bx, y: top2, w: bwd, h: h1 }, {
+        x: [0, C.wMax], y: [0, 3000], xFmt: function () { return ""; }, yLabel: "I_{on} (µA/µm)", bands: bands,
+        series: [{ data: dI, color: P.accent, width: 2.6, fill: true, label: "I_{on}", fmt: function (v) { return Math.round(v) + " µA/µm"; } }],
+        vlines: [{ x: wsp, color: P.text, dash: [], width: 1.3 }], points: isFinite(d.I) && d.I <= 3000 ? [{ x: wsp, y: d.I, color: P.accent, r: 5 }] : [], hover: hov
+      });
+      var c2 = PB.chart(ctx, { x: bx, y: top2 + h1 + 14, w: bwd, h: h2 }, {
+        x: [0, C.wMax], y: [-400, 0], xLabel: "스페이서 폭 w_{sp} (nm)", yLabel: "ΔV_t (mV)", bands: bands,
+        series: [{ data: dV, color: P.accent2, width: 2.4, label: "ΔV_t", fmt: function (v) { return Math.round(v) + " mV"; } }],
+        hlines: [{ y: -1000 * C.lim, color: P.bad, dash: [5, 4] }], vlines: [{ x: wsp, color: P.text, dash: [], width: 1.3 }],
+        points: !d.pt && d.dVt * 1000 >= -400 ? [{ x: wsp, y: d.dVt * 1000, color: P.accent2, r: 5 }] : [], hover: hov
+      });
+      var lab = [];
+      if (bd.ok) {
+        if (c1.X(bd.w0) - c1.box.x > 70) lab.push({ t: "누설 초과", x: (c1.box.x + c1.X(bd.w0)) / 2, align: "center", color: P.bad });
+        lab.push({ t: "최적 " + bd.w0.toFixed(0) + "~" + (bd.open ? "50+" : bd.w1.toFixed(0)) + " nm", x: (c1.X(bd.w0) + c1.X(bd.w1)) / 2, align: "center", color: P.ok });
+        if (!bd.open && c1.box.x + c1.box.w - c1.X(bd.w1) > 70) lab.push({ t: "저항 손해", x: (c1.X(bd.w1) + c1.box.x + c1.box.w) / 2, align: "center", color: P.warn });
+      } else lab.push({ t: bd.why === "short" ? "L_g가 짧아 어떤 스페이서로도 불가" : "스페이서 50 nm로도 누설 한계 초과", x: c1.box.x + c1.box.w / 2, align: "center", color: P.bad });
+      rowLabels(ctx, lab, c1.box);
+      PB.text(ctx, "누설 한계 −100 mV", c2.box.x + c2.box.w - 4, c2.Y(-100) - 8, { size: 11, weight: 600, color: P.bad, align: "right", baseline: "middle", halo: true });
+      PB.stat("sp-o-l", d.pt ? word("0", "bad") + "<small>맞닿음</small>" : d.Leff.toFixed(1) + "<small>nm</small>");
+      PB.stat("sp-o-v", d.pt ? "—<small>펀치스루</small>" : d.dVt < 0 ? "−" + Math.abs(d.dVt * 1000).toFixed(0) + "<small>mV</small>" : "0<small>mV</small>");
+      PB.stat("sp-o-r", Math.round(d.Rext) + "<small>Ω·µm</small>");
+      PB.stat("sp-o-i", d.pt ? "—" : bd.ok ? Math.round(d.I / bd.I0 * 100) + "<small>% · " + Math.round(d.I) + " µA/µm</small>" : Math.round(d.I) + "<small>µA/µm · 최적 없음</small>");
+      var vd = d.pt ? word("펀치스루", "bad") : !bd.ok ? word(bd.why === "short" ? "L_g 부족" : "단채널 과다", "bad") : -d.dVt > C.lim + 1e-12 ? word("단채널 과다", "bad") : wsp > bd.w1 + 1e-9 ? word("직렬 저항 손해", "warn") : word("최적 구간", "ok");
+      PB.stat("sp-o-x", vd);
+    }, { min: 430, max: 520, aspect: 1.36, nmin: 470, nmax: 540, hover: true });
   })();
 })();
 </script>
